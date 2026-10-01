@@ -1,0 +1,34 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-release-backfill 1  batten 
+.SH NAME
+batten\-release\-backfill \- Dispatch a backfill workflow once per release tag, oldest first, waiting on each run and stopping at the first that does not succeed
+.SH SYNOPSIS
+\fBbatten release backfill\fR [\fB\-\-tag\fR] [\fB\-\-dry\-run\fR] [\fB\-\-poll\-interval\fR] [\fB\-\-max\-polls\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-workflow\fR> <\fB\-\-ref\fR> <\fB\-\-pattern\fR> 
+.SH DESCRIPTION
+Dispatch a backfill workflow once per release tag, oldest first, waiting on each run and stopping at the first that does not succeed
+.SH OPTIONS
+.TP
+\fB\-\-tag\fR \fI<tag>\fR
+A release tag to record (repeatable); absent, every tag the pattern selects, oldest first
+.TP
+\fB\-\-workflow\fR \fI<workflow>\fR
+The workflow file dispatched once per tag
+.TP
+\fB\-\-ref\fR \fI<ref>\fR
+The branch the dispatched runs execute on
+.TP
+\fB\-\-pattern\fR \fI<pattern>\fR
+The glob a release tag matches, as `git tag \-\-list` matches it
+.TP
+\fB\-\-dry\-run\fR
+Print the plan, oldest first, and dispatch nothing
+.TP
+\fB\-\-poll\-interval\fR \fI<poll_interval>\fR
+Seconds between polls; the forge\*(Aqs own interval raises it (default: 5)
+.TP
+\fB\-\-max\-polls\fR \fI<max_polls>\fR
+Polls per tag before its run reads as never finishing (default: 240)
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help

@@ -61,6 +61,60 @@ pub fn append(path: &Path, text: &str) -> std::io::Result<()> {
     file.sync_all()
 }
 
+//MUTANT-SUITE crates/batten/src/durable.rs
+//MUTANT torn-tail-kept|s@^        if last\[0\] != b'\\n' {$@        if false {@|a_torn_tail_is_dropped_before_the_next_append
+/// [`append`] to a LINE store, first dropping a torn tail the file ends with.
+///
+/// **A torn tail survives only until the next append, unless something drops
+/// it** (CLOUD-843, round-2 review). A process killed mid-`write` leaves a final
+/// fragment with no newline, and a line reader drops it — but `O_APPEND` writes
+/// the next record straight after it, so the two become ONE terminated line: a
+/// torn `x … land-stopped` glued to the next container's `h …` reads back as a
+/// whole `x` under the old boot, and swallows the new record too. Truncating to
+/// the last newline first makes the disk agree with what every reader already
+/// discards, so a fragment can never be promoted into a record.
+///
+/// Only a store with ONE writer per file may use it: the truncation and the
+/// append are two operations, and a second writer landing between them would
+/// lose its record. The tail is read only when the last byte is not a newline, so
+/// the common case costs one one-byte read.
+///
+/// # Errors
+///
+/// Returns the I/O error when the file cannot be opened, read, truncated,
+/// written, or synced.
+pub fn append_whole_lines(path: &Path, text: &str) -> std::io::Result<()> {
+    use std::io::{Read as _, Seek as _, SeekFrom};
+    let mut buffer = String::with_capacity(text.len() + 1);
+    buffer.push_str(text);
+    if !buffer.ends_with('\n') {
+        buffer.push('\n');
+    }
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .read(true)
+        .append(true)
+        .open(path)?;
+    let len = file.metadata()?.len();
+    if len > 0 {
+        let mut last = [0_u8; 1];
+        file.seek(SeekFrom::Start(len - 1))?;
+        file.read_exact(&mut last)?;
+        if last[0] != b'\n' {
+            let mut bytes = Vec::new();
+            file.seek(SeekFrom::Start(0))?;
+            file.read_to_end(&mut bytes)?;
+            let whole = bytes
+                .iter()
+                .rposition(|byte| *byte == b'\n')
+                .map_or(0, |at| at + 1);
+            file.set_len(u64::try_from(whole).unwrap_or(0))?;
+        }
+    }
+    file.write_all(buffer.as_bytes())?;
+    file.sync_all()
+}
+
 /// [`append`], creating the file with `mode` on unix when it does not exist.
 ///
 /// For a ledger whose first byte must already be private: a file created at the
@@ -179,6 +233,28 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("scratch");
         dir
+    }
+
+    /// THE GLUE CASE (CLOUD-843, round-2 review): a fragment a killed writer left
+    /// must not become the head of the next record. Plain [`append`] glues them;
+    /// this drops the fragment, keeps every whole line, and appends whole.
+    #[test]
+    fn a_torn_tail_is_dropped_before_the_next_append() {
+        let dir = scratch("torn-tail");
+        let path = dir.join("shard.jsonl");
+        std::fs::write(&path, "h 1400 1500\nx 1600 1500 land-st").expect("plant a torn tail");
+        append_whole_lines(&path, "h 2100 2000").expect("append");
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("read"),
+            "h 1400 1500\nh 2100 2000\n",
+            "the fragment is gone and the new record stands alone"
+        );
+        // A tail that is all fragment leaves nothing before the new record, and a
+        // whole file is appended to untouched.
+        std::fs::write(&path, "x 16").expect("plant a lone fragment");
+        append_whole_lines(&path, "h 1").expect("append");
+        append_whole_lines(&path, "h 2").expect("append");
+        assert_eq!(std::fs::read_to_string(&path).expect("read"), "h 1\nh 2\n");
     }
 
     #[test]

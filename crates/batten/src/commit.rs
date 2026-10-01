@@ -55,6 +55,189 @@ pub struct Commit {
     /// the half-change rule 2 refuses — it reads as though a convention is
     /// recorded when nothing is.
     pub subject_pattern: String,
+    /// Whether every commit in a judged RANGE must name the tracker row it
+    /// serves, and which commits are exempt (CLOUD-843).
+    ///
+    /// Absent is the reading every consumer had before: a range is judged for
+    /// its subjects and nothing else. Present, `commit check <base>..<head>`
+    /// refuses a commit whose message claims no row — see [`judge_claims`].
+    #[serde(default)]
+    pub claims: Option<Claims>,
+}
+
+/// The `[commit.claims]` table: every commit names the row it serves (CLOUD-843).
+///
+/// # The server-side half of a claim
+///
+/// A claim receipt lives in the clone's own git directory and never leaves it,
+/// so no reviewer and no workflow can see it. What a server CAN see is whether
+/// each commit names the issue it serves — the half of the claim that survives a
+/// fresh checkout (CLOUD-431). This repository's `commit-lint` task asked that in
+/// shell, one `claim keys` spawn per commit; the question is this table's now,
+/// asked in process over the range `commit check` already walks.
+///
+/// "Names a row" is `claim keys`' own reading of the WHOLE message — a closing
+/// keyword first, then the first key of each `Refs:` trailer — through the
+/// consumer's `[[pattern]]` grammar, never a key shape spelled here (rule 1).
+/// Claiming is stricter than mentioning: a commit citing a row as evidence has
+/// not thereby become work on it (CLOUD-338/CLOUD-378).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Claims {
+    /// The commits that owe no claim, each a property of the COMMIT rather than
+    /// of its wording: which paths it touched, and who authored it.
+    ///
+    /// Empty by default. An exemption keyed to the file set cannot be claimed by
+    /// a hand-written commit that merely borrows a release's subject, which is why
+    /// the subject is not a column here.
+    #[serde(default)]
+    pub unclaimed: Vec<Unclaimed>,
+}
+
+/// One class of commit that owes no claim.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Unclaimed {
+    /// The row's name, for a reader of the config — never printed per commit.
+    pub id: String,
+    /// A regular expression EVERY path the commit changed must match. A commit
+    /// that changed nothing matches vacuously, as the retired shell's filter did.
+    pub paths: String,
+    /// When set, the commit's AUTHOR address — git's `%ae` — must match this too.
+    ///
+    /// The author rather than the committer, because a forge commits an App's work
+    /// as itself and only the author half names which App wrote it.
+    #[serde(default)]
+    pub author: Option<String>,
+}
+
+/// One commit's claim evidence, gathered by the caller.
+///
+/// Prepared outside for [`judge_admissions`]' reason: the predicate stays a pure
+/// function of what git said, testable without a repository.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Claimant {
+    /// The finding's pointer: a short sha.
+    pub label: String,
+    /// The author identity as git renders it, `Name <address>`.
+    pub author: String,
+    /// Every path the commit changed against its first parent.
+    pub paths: Vec<String>,
+    /// Whether the commit's message claims a row.
+    pub claims: bool,
+}
+
+impl Claims {
+    /// Validate the table at load.
+    ///
+    /// # Errors
+    ///
+    /// A [`UsageError`] (→ exit `1`) for a row with no name or an expression that
+    /// does not compile — refused here, where the error names the row, rather
+    /// than at the gate, where it would be an exemption that silently matches
+    /// nothing and so refuses a class of commit it was written to admit.
+    pub fn validate(&self) -> Result<()> {
+        for row in &self.unclaimed {
+            if row.id.is_empty() {
+                return Err(UsageError::raise(
+                    "commit.claims.unclaimed: a row carries no `id`".to_owned(),
+                ));
+            }
+            row.matchers()?;
+        }
+        Ok(())
+    }
+}
+
+impl Unclaimed {
+    /// The two compiled expressions, the author's where declared.
+    fn matchers(&self) -> Result<(Regex, Option<Regex>)> {
+        let compile = |column: &str, expression: &str| {
+            Regex::new(expression).map_err(|error| {
+                UsageError::raise(format!(
+                    "commit.claims.unclaimed `{}`: `{column}` is not a valid regular expression: {error}",
+                    self.id
+                ))
+            })
+        };
+        let paths = compile("paths", &self.paths)?;
+        let author = match &self.author {
+            Some(expression) => Some(compile("author", expression)?),
+            None => None,
+        };
+        Ok((paths, author))
+    }
+
+    /// Whether this row exempts `commit`.
+    ///
+    /// Both conjuncts, cheapest first: the author is one string, the paths a walk.
+    fn exempts(paths: &Regex, author: Option<&Regex>, commit: &Claimant) -> bool {
+        let address = address_of(commit.author.as_str());
+        let authored = match author {
+            Some(author) => author.is_match(address),
+            None => true,
+        };
+        authored && every_path_matches(paths, &commit.paths)
+    }
+}
+
+/// Whether every path matches `expression` — vacuously so for none.
+fn every_path_matches(expression: &Regex, paths: &[String]) -> bool {
+    for path in paths {
+        if !expression.is_match(path) {
+            return false;
+        }
+    }
+    true
+}
+
+/// The address inside `Name <address>`, or the whole identity when it carries
+/// no angle brackets.
+fn address_of(identity: &str) -> &str {
+    identity
+        .rsplit_once('<')
+        .and_then(|(_, rest)| rest.strip_suffix('>'))
+        .unwrap_or(identity)
+}
+
+/// Judge the claim clause: every commit names the row it serves, unless a
+/// declared exemption covers it (CLOUD-843).
+///
+/// A finding is `<sha8> claim` — the commit and the field, never the subject the
+/// retired shell echoed, which is exactly the payload rule 4 refuses.
+///
+/// # Errors
+///
+/// A [`UsageError`] (→ exit `1`) when an exemption's expression does not
+/// compile. Validated at load too, so this keeps the function total.
+//MUTANT-SUITE crates/batten/src/commit.rs
+//MUTANT unclaimed-commit-passes|s@        if commit.claims {@        if true {@|a_commit_naming_no_row_is_pointed_at_by_field
+//MUTANT exemption-ignores-author|s@            Some(author) => author.is_match(address),@            Some(_) => true,@|a_bot_address_is_required_as_well_as_the_bot_paths
+//MUTANT exemption-ignores-paths|s@        if !expression.is_match(path) {@        if false {@|a_release_row_does_not_exempt_a_commit_touching_code
+pub fn judge_claims(commits: &[Claimant], claims: &Claims) -> Result<Vec<Finding>> {
+    let rows = claims
+        .unclaimed
+        .iter()
+        .map(Unclaimed::matchers)
+        .collect::<Result<Vec<_>>>()?;
+    let mut found = Vec::new();
+    for commit in commits {
+        if commit.claims {
+            continue;
+        }
+        let exempt = rows
+            .iter()
+            .any(|(paths, author)| Unclaimed::exempts(paths, author.as_ref(), commit));
+        if exempt {
+            continue;
+        }
+        found.push(Finding {
+            label: commit.label.clone(),
+            field: "claim".to_owned(),
+            subject: None,
+        });
+    }
+    Ok(found)
 }
 
 /// One commit's judgeable subject, however it was obtained.
@@ -126,6 +309,9 @@ impl Commit {
                  convention"
                     .to_owned(),
             ));
+        }
+        if let Some(claims) = &self.claims {
+            claims.validate()?;
         }
         self.matcher().map(|_| ())
     }
@@ -472,6 +658,7 @@ mod tests {
     fn policy() -> Commit {
         Commit {
             subject_pattern: r"^(feat|fix|chore)([(][a-z]+[)])?!?: .+".to_owned(),
+            claims: None,
         }
     }
 
@@ -538,6 +725,7 @@ mod tests {
     fn an_empty_pattern_is_refused_at_validate() {
         let empty = Commit {
             subject_pattern: String::new(),
+            claims: None,
         };
         assert!(empty.validate().is_err());
     }
@@ -546,6 +734,7 @@ mod tests {
     fn an_uncompilable_pattern_is_refused_at_validate() {
         let broken = Commit {
             subject_pattern: "(unclosed".to_owned(),
+            claims: None,
         };
         assert!(broken.validate().is_err());
     }
@@ -553,6 +742,179 @@ mod tests {
     #[test]
     fn a_valid_table_validates() {
         assert!(policy().validate().is_ok());
+    }
+
+    // --- the claim clause (CLOUD-843) ------------------------------------------
+    //
+    // Pinned over the PREDICATE, as the sequencing clause below is. The tier that
+    // proves `commit check` gathers the evidence — the range walked, the message
+    // read through `claim keys`' grammar, the paths and the author taken off each
+    // commit — is `crates/batten/tests/it/commit_claims.rs`.
+
+    /// This repository's two exemptions, shaped as its `batten.toml` declares
+    /// them — spelled here rather than read, because the subject is the predicate
+    /// and a fixture following the committed table would move with it.
+    fn claims() -> Claims {
+        Claims {
+            unclaimed: vec![
+                Unclaimed {
+                    id: "release".to_owned(),
+                    paths: r"^(Cargo\.(toml|lock)|.*CHANGELOG\.md)$".to_owned(),
+                    author: None,
+                },
+                Unclaimed {
+                    id: "update-bot".to_owned(),
+                    paths: r"^(ci/pipelines/[^/]+\.ya?ml|mise\.(toml|lock)|Cargo\.(toml|lock))$"
+                        .to_owned(),
+                    author: Some(r"\[bot\]@users\.noreply\.github\.com$".to_owned()),
+                },
+            ],
+        }
+    }
+
+    fn claimant(label: &str, author: &str, paths: &[&str], claims: bool) -> Claimant {
+        Claimant {
+            label: label.to_owned(),
+            author: author.to_owned(),
+            paths: paths.iter().map(|path| (*path).to_owned()).collect(),
+            claims,
+        }
+    }
+
+    /// `#MUTANT unclaimed-commit-passes` reddens here: a commit naming no row,
+    /// touching code, by a person, is the finding — as a pointer.
+    #[test]
+    fn a_commit_naming_no_row_is_pointed_at_by_field() {
+        let found = judge_claims(
+            &[claimant(
+                "a1b2c3d4",
+                "Someone <someone@example.com>",
+                &["crates/batten/src/lib.rs"],
+                false,
+            )],
+            &claims(),
+        )
+        .unwrap();
+        assert_eq!(report(&found), "a1b2c3d4 claim\n");
+    }
+
+    /// The mirror: a commit that claims a row is never a finding, whatever it
+    /// touched.
+    #[test]
+    fn a_commit_that_claims_its_row_yields_nothing() {
+        let found = judge_claims(
+            &[claimant(
+                "a1b2c3d4",
+                "Someone <someone@example.com>",
+                &["crates/batten/src/lib.rs"],
+                true,
+            )],
+            &claims(),
+        )
+        .unwrap();
+        assert!(found.is_empty());
+    }
+
+    /// A release commit — version and changelog only — owes no claim, and an
+    /// empty commit matches vacuously, as the retired shell's filter did.
+    #[test]
+    fn a_version_and_changelog_commit_owes_no_claim() {
+        let found = judge_claims(
+            &[
+                claimant(
+                    "aaaaaaaa",
+                    "release-plz <r@example.com>",
+                    &["Cargo.lock", "Cargo.toml", "crates/batten/CHANGELOG.md"],
+                    false,
+                ),
+                claimant("bbbbbbbb", "Someone <someone@example.com>", &[], false),
+            ],
+            &claims(),
+        )
+        .unwrap();
+        assert!(found.is_empty(), "{found:?}");
+    }
+
+    /// `#MUTANT exemption-ignores-paths` reddens here: the release row is a
+    /// property of the file set, so a commit touching code is not exempt.
+    #[test]
+    fn a_release_row_does_not_exempt_a_commit_touching_code() {
+        let found = judge_claims(
+            &[claimant(
+                "aaaaaaaa",
+                "release-plz <r@example.com>",
+                &["Cargo.toml", "crates/batten/src/lib.rs"],
+                false,
+            )],
+            &claims(),
+        )
+        .unwrap();
+        assert_eq!(report(&found), "aaaaaaaa claim\n");
+    }
+
+    /// `#MUTANT exemption-ignores-author` reddens here. The bot row is two
+    /// conjuncts: a workflow-only diff is ordinary human work, so a person
+    /// touching only workflows still owes a claim (CLOUD-431).
+    #[test]
+    fn a_bot_address_is_required_as_well_as_the_bot_paths() {
+        let by_a_person = claimant(
+            "cccccccc",
+            "Someone <someone@example.com>",
+            &["ci/pipelines/build.yml"],
+            false,
+        );
+        let by_the_bot = claimant(
+            "dddddddd",
+            "renovate[bot] <29139614+renovate[bot]@users.noreply.github.com>",
+            &["ci/pipelines/build.yml", "mise.toml"],
+            false,
+        );
+        let found = judge_claims(&[by_a_person, by_the_bot], &claims()).unwrap();
+        assert_eq!(report(&found), "cccccccc claim\n");
+    }
+
+    /// And the bot's address alone is not enough: a bump reaching anything but a
+    /// manifest is not a bump.
+    #[test]
+    fn a_bot_commit_reaching_past_the_manifests_owes_a_claim() {
+        let found = judge_claims(
+            &[claimant(
+                "eeeeeeee",
+                "renovate[bot] <29139614+renovate[bot]@users.noreply.github.com>",
+                &["mise.toml", "crates/batten/src/lib.rs"],
+                false,
+            )],
+            &claims(),
+        )
+        .unwrap();
+        assert_eq!(report(&found), "eeeeeeee claim\n");
+    }
+
+    #[test]
+    fn an_exemption_that_does_not_compile_is_refused_at_validate() {
+        let broken = Claims {
+            unclaimed: vec![Unclaimed {
+                id: "broken".to_owned(),
+                paths: "(unclosed".to_owned(),
+                author: None,
+            }],
+        };
+        assert!(broken.validate().is_err());
+        let nameless = Claims {
+            unclaimed: vec![Unclaimed {
+                id: String::new(),
+                paths: ".*".to_owned(),
+                author: None,
+            }],
+        };
+        assert!(nameless.validate().is_err());
+        assert!(claims().validate().is_ok());
+    }
+
+    #[test]
+    fn an_identity_yields_its_address() {
+        assert_eq!(address_of("A B <a@b.c>"), "a@b.c");
+        assert_eq!(address_of("a@b.c"), "a@b.c");
     }
 
     #[test]

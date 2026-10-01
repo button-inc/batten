@@ -33,7 +33,6 @@ const CANDIDATES: &[&str] = &[
     "ahead",
     "answer",
     "ask",
-    "bats",
     "bind",
     "blocked",
     "bound",

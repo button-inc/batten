@@ -10,9 +10,10 @@ Project-scoped Serena MCP server (LSP-backed semantic navigation/edits). Wired i
 `.mcp.json`. It does **not** "just start" on a cold container — see "Two gates"
 below. Pinned like every tool: `"pipx:serena-agent"`
 in `mise.toml [tools]` (pipx backend installs with pinned `uv`), version in
-`mise.lock`. `.mcp.json` launches it through `mise-tasks/serena-mcp.sh`, a shim
-that records the spawn and then `exec`s the scoped, pinned launch line the file
-still carries verbatim: `mise exec pipx:serena-agent@<v> -- serena
+`mise.lock`. `.mcp.json` launches it through `batten mcp spawn serena --`, which
+records the spawn and then `exec`s the scoped, pinned launch line the file
+still carries verbatim (the shell shim `mise-tasks/serena-mcp.sh` retired onto
+the verb under CLOUD-843): `mise exec pipx:serena-agent@<v> -- serena
 start-mcp-server --context claude-code --project .`. The argv stayed in
 `.mcp.json` on purpose — `mise-pin-agreement` reads the pin out of it.
 
@@ -35,7 +36,7 @@ why the first fix was validated green and Serena stayed absent anyway.
    answers** (CLOUD-714). `mise install` guarantees the files exist; it never
    reads them, and Serena still spends ~1.2 s importing 2,664 `.py` files before
    it opens its own log. That gap is why an absent serena log is _not_ proof the
-   process never ran, and why `mise-tasks/serena-mcp.sh` records the spawn.
+   process never ran, and why `batten mcp spawn` records the spawn.
 
    **And MCP connections ARE retried** — this memory said they are not, on
    CLOUD-196's evidence. Measured 2026-08-19: after failures at 07:05:17 and
@@ -191,9 +192,10 @@ config instead of opening the file that records what happened:
 
 - `~/.cache/claude-cli-nodejs/<cwd with / as ->/mcp-logs-<server>/*.jsonl`, newest
   file. `Successfully connected` = attached. `Connection failed (…)` = the launch
-  lost, and the parenthesised code says how. `mise run mcp-attach-check` is this
-  read with an exit code, and it fires on `UserPromptSubmit` so a lost server is
-  reported in the session's first turn.
+  lost, and the parenthesised code says how. `batten mcp posture` (the
+  `mcp:posture` task, CLOUD-843) is this read with an exit code, and the
+  `mcp-attach-check` handler row runs it at `session-start` (CLOUD-1946) so a lost
+  server is reported before the first turn.
 - Two record shapes mislead, both measured: an `error` **key** usually carries
   routine `Server stderr: INFO …` chatter on a healthy launch, and the failure
   code is **not** fixed at `-32000` — the next real occurrence was
@@ -282,8 +284,8 @@ start is no longer a race.
 ### When Serena does not attach, read the spawn ledger first (CLOUD-714)
 
 `$GIT_DIR/batten-mcp-spawns`, one tab-separated line per launch:
-`<epoch> <server> <pid> <loadavg-1min> <sibling-count>`. `mise run
-mcp-attach-check` compares its newest entry against the connection attempt and
+`<epoch> <server> <pid> <loadavg-1min> <sibling-count>`. `batten mcp posture`
+(`mcp::spawn_ledger`) compares its newest entry against the connection attempt and
 reports one of three things, and the third is the one that keeps the other two
 honest:
 
@@ -291,8 +293,8 @@ honest:
   not answer. The fault is downstream of the spawn.
 - **never-spawned** — the ledger has seen this server before and recorded
   nothing for this attempt. The fault is in the client's spawn path.
-- **unrecorded** — no ledger, or none for this server. _Not_ a verdict: the shim
-  is not wired here, so its silence means nothing.
+- **unrecorded** — no ledger, or none for this server. _Not_ a verdict: the
+  launcher is not wired here, so its silence means nothing.
 
 Do not re-derive this from `/root/.serena/logs/` mtimes. A day went into that on
 2026-08-19 and it cannot answer the question: Serena opens its log ~1.2 s of

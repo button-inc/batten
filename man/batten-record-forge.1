@@ -2,12 +2,21 @@
 .el .ds Aq '
 .TH batten-record-forge 1  batten 
 .SH NAME
-batten\-record\-forge \- Record the forge\*(Aqs check verdicts for one commit, read as `<check> <conclusion>` lines on stdin
+batten\-record\-forge \- Record the forge\*(Aqs check verdicts for one commit, read as `<check> <conclusion>` lines on stdin or with \-\-fetch from the forge
 .SH SYNOPSIS
-\fBbatten record forge\fR [\fB\-h\fR|\fB\-\-help\fR] <\fIref\fR> 
+\fBbatten record forge\fR [\fB\-\-fetch\fR] [\fB\-\-fanin\fR] [\fB\-\-answered\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIref\fR> 
 .SH DESCRIPTION
-Record the forge\*(Aqs check verdicts for one commit, read as `<check> <conclusion>` lines on stdin
+Record the forge\*(Aqs check verdicts for one commit, read as `<check> <conclusion>` lines on stdin or with \-\-fetch from the forge
 .SH OPTIONS
+.TP
+\fB\-\-fetch\fR
+Read the commit\*(Aqs check\-runs from the forge instead of `<check> <conclusion>` lines on stdin
+.TP
+\fB\-\-fanin\fR \fI<fanin>\fR
+With \-\-fetch: record nothing until this check has an answered conclusion
+.TP
+\fB\-\-answered\fR \fI<answered>\fR
+With \-\-fetch: comma\-separated conclusions that constitute an answer; anything else is not recorded
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help

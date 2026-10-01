@@ -42,8 +42,11 @@
 //! added landed reaching nothing or nearly nothing, including all four of #962's
 //! (`cargo_graph`, `durable`, `probe_verdict`, `signer_posture`, all at closure
 //! 1). That is the split's direction holding without anyone steering for it.
-//! * **Nothing between 9 and 23**, which is a real cliff, unlike the one the
-//!   scanner reported in a different place.
+//! * **Nothing between 10 and 23**, which is a real cliff, unlike the one the
+//!   scanner reported in a different place. (It was 9 until CLOUD-843: a module
+//!   that spawns through `exec`, the adapter the spawn rule requires, sits at
+//!   `exec`'s 8 plus itself, and `attestation`, `dist` and `probe` are the
+//!   first plumbing-shaped modules to do so.)
 //!
 //! So the gates below are three: the plumbing must not shrink, the core must not
 //! grow, and the gap must stay empty. Each is falsifiable and none is vacuous —
@@ -65,10 +68,12 @@ use common::at_root;
 
 /// The largest closure that still counts as plumbing.
 ///
-/// Eight, because `pipeline` sits there and the gap above it is fifteen wide.
-/// Any boundary inside the gap would do; this one is the top of the lower
-/// population rather than an arbitrary line through it.
-const PLUMBING_CEILING: usize = 8;
+/// Nine: `exec` and `pipeline` sit at eight, and a module whose only non-leaf
+/// edge is `exec` — the spawn adapter `policy/spawn-adapters.rego` requires —
+/// sits at nine by construction (CLOUD-843). The boundary is still the top of
+/// the lower population rather than an arbitrary line through the gap; raising
+/// it was admitted by a recorded answer, not written here on its own authority.
+const PLUMBING_CEILING: usize = 9;
 
 /// The smallest closure that counts as the decision core.
 ///
@@ -97,6 +102,7 @@ const PLUMBING: &[&str] = &[
     "admission",
     "advisory",
     "arm",
+    "attestation",
     "board",
     "bot",
     "brief",
@@ -108,6 +114,7 @@ const PLUMBING: &[&str] = &[
     "claim",
     "commit",
     "deferral",
+    "dist",
     "durable",
     "effect",
     "environment",
@@ -137,6 +144,7 @@ const PLUMBING: &[&str] = &[
     "pattern",
     "pipeline",
     "pr_watch",
+    "probe",
     "probe_verdict",
     "provision",
     "prune",
@@ -174,7 +182,11 @@ const PLUMBING: &[&str] = &[
 /// The most entangled module reaches 27 of 119. Ratcheting this down is the
 /// split's whole direction, and it is the one number that cannot be improved by
 /// adding modules.
-const DEEPEST_CLOSURE: usize = 27;
+///
+/// Twenty-eight since CLOUD-843: `board_check` evaluates the tracker-hygiene
+/// preset through `policy`, so it sits one layer above the whole core. Raised by
+/// a recorded answer, and the direction of travel is unchanged — down.
+const DEEPEST_CLOSURE: usize = 28;
 
 /// Every top-level module of the library, mapped to the modules it reaches.
 ///

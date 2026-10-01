@@ -1,5 +1,10 @@
 name: Rust
 
+# workflow-shell: CLOUD-843 the step count rises because multi-line shell bodies
+# became one-command steps (argv, `ci step`, or an expression-gated `exit 1`);
+# the shell LINES fell, which `batten census shell` measures. The increase is
+# the retirement's shape, owned here as `workflow add other`'s permit asks.
+
 # The four jobs whose verdict is a pure function of the Rust tree, split out of
 # `ci.yml` so a diff that cannot change their answer does not pay for them
 # (CLOUD-398 slice 2).
@@ -159,10 +164,6 @@ jobs:
             "$LEASE_HEAD_SHA" "$LEASE_HEAD_REF" "$LEASE_RUN_ID" || exit 0
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          # tests/bats — the shell test runner. Without it `mise run test:bats`
-          # has no bats to run.
-          submodules: true
       - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5 (CLOUD-404 retry fix, now a release)
         with:
           # Pinned to `batten.toml`'s `[[provision]]` version (CLOUD-1672). The
@@ -288,13 +289,6 @@ jobs:
             "$LEASE_HEAD_SHA" "$LEASE_HEAD_REF" "$LEASE_RUN_ID" || exit 0
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          # The LIBC must be the only variable, which is this job's entire value.
-          # A missing `tests/bats` would be a second one — `crates/batten/tests`
-          # carries a suite about that path — and it would read as a musl finding,
-          # which is the misattribution this job exists to avoid. The same
-          # sentence, for the same reason, sits on `windows` and `macos`.
-          submodules: true
       - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5 (CLOUD-404 retry fix, now a release)
         with:
           # Pinned to `batten.toml`'s `[[provision]]` version (CLOUD-1672). The
@@ -308,7 +302,9 @@ jobs:
           # fixture that loads that config cannot evaluate ANY rule without hk.
           # `jq` is read at runtime by the mise tasks three more command rules
           # invoke. Neither is about the libc, which is why both belong here.
-          install_args: rust hk aqua:jqlang/jq github:nextest-rs/nextest
+          # opa is `lint_rego.rs`'s instrument: it judges the tracked corpus with
+          # the pinned formatter and fails, as the retired suite did, without it.
+          install_args: rust hk aqua:jqlang/jq github:nextest-rs/nextest aqua:open-policy-agent/opa
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           # A DISTINCT FAMILY, because this target dir holds musl artifacts the
@@ -329,19 +325,23 @@ jobs:
       # one. The alternative is measured on `windows`: three `tests/cli.rs` cases
       # reporting an exit code about a missing tool while naming the rule they
       # meant to test, each costing a round trip to attribute.
-      - name: Assert the declared tools resolve
+      #
+      # ONE STEP PER TOOL, each running it by name: a tool that does not resolve
+      # on PATH fails its own step, and the step's name says which (CLOUD-843).
+      # `cargo nextest` goes through cargo's own subcommand lookup, which is the
+      # resolution the suite depends on.
+      - name: hk resolves on PATH, as install_args declares
         shell: bash
-        run: |
-          set -euo pipefail
-          echo "PATH=$PATH"
-          for tool in hk jq cargo cargo-nextest; do
-            if ! resolved=$(command -v "$tool"); then
-              echo "::error::$tool is declared in install_args but does not resolve on PATH" >&2
-              exit 1
-            fi
-            echo "$tool -> $resolved"
-          done
-          hk --version
+        run: hk --version
+      - name: jq resolves on PATH, as install_args declares
+        shell: bash
+        run: jq --version
+      - name: cargo resolves on PATH, as install_args declares
+        shell: bash
+        run: cargo --version
+      - name: cargo-nextest resolves on PATH, as install_args declares
+        shell: bash
+        run: cargo nextest --version
       - run: mise run test:musl
 
   # The macOS gate. `cargo check` never links, so it cannot see a dependency that
@@ -491,7 +491,7 @@ jobs:
           # completed job on that pull request behind `semver`, and it is in
           # `CI_REQUIRED_CHECKS` — so every ready paid it.
           save-if: false
-      - run: mise run darwin-link ${{ matrix.target }}
+      - run: mise run batten -- ci step --arg-env DOCTOR_TARGETS -- mise run darwin-link --
         env:
           # Exactly the target being linked; doctor's default would also fetch
           # the Windows std that cross-check's own job owns.
@@ -630,8 +630,8 @@ jobs:
   # macOS diverges from Linux in nothing this suite asserts, and `darwin-link`
   # already covers the one Darwin-specific risk.
   #
-  # `test:cargo`, NOT `test`. The bats suites need bash, shellcheck and the
-  # tests/bats submodule; shell-task behaviour is not what this leg is for.
+  # `test:cargo`, NOT `test`: the leg names the one suite it runs, so a task
+  # joining `test` later does not silently widen what this OS leg must pass.
   #
   # A PLAIN JOB, not a one-entry `strategy.matrix`. `darwin-link` carries one so
   # a dropped second leg is a one-word restore; there is no dropped leg here,
@@ -693,7 +693,7 @@ jobs:
       # step's. Read from the pinned binary rather than assumed:
       # `windows_default_inline_shell_args` is "cmd /c", against
       # "sh -c -o errexit" on unix. `[tasks."test:cargo"]` declares no `shell`
-      # and its body is bash — `if [ "$(mise run -q step-receipt check …)" …`
+      # and its body is bash — `if [ "$(cargo run … step check …)" …`
       # — so under cmd the task dies before cargo is ever reached.
       #
       # Set here rather than in mise.toml because this is the only job in the
@@ -754,13 +754,6 @@ jobs:
             "$LEASE_HEAD_SHA" "$LEASE_HEAD_REF" "$LEASE_RUN_ID" || exit 0
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          # The `ci` job runs this same task with the submodule present, and the
-          # whole point of this leg is that the OS is the only variable. A
-          # missing tests/bats would be a second one — `crates/batten/tests`
-          # carries a suite about that path — and it would read as a Windows
-          # finding, which is the misattribution this job exists to avoid.
-          submodules: true
       - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5 (CLOUD-404 retry fix, now a release)
         with:
           # Pinned to `batten.toml`'s `[[provision]]` version (CLOUD-1672). The
@@ -780,7 +773,7 @@ jobs:
           # `ci-tools-check` keeps these names honest against mise.toml but
           # cannot know which a job needs; that is what this comment and the
           # `windows` job's own red run are for. See the ci job for the rest.
-          install_args: rust hk aqua:jqlang/jq github:nextest-rs/nextest
+          install_args: rust hk aqua:jqlang/jq github:nextest-rs/nextest aqua:open-policy-agent/opa
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           # A DISTINCT KEY, because this job's target dir is built by a different
@@ -853,19 +846,23 @@ jobs:
       # attribute. `hk.exe` is at the root of the pinned zip and mise puts its
       # install directory on PATH, so the interesting case is the one where both
       # are true and the spawn still fails; this names which half is missing.
-      - name: Assert the declared tools resolve
+      #
+      # ONE STEP PER TOOL, each running it by name: a tool that does not resolve
+      # on PATH fails its own step, and the step's name says which (CLOUD-843).
+      # `cargo nextest` goes through cargo's own subcommand lookup, which is the
+      # resolution the suite depends on.
+      - name: hk resolves on PATH, as install_args declares
         shell: bash
-        run: |
-          set -euo pipefail
-          echo "PATH=$PATH"
-          for tool in hk jq cargo cargo-nextest; do
-            if ! resolved=$(command -v "$tool"); then
-              echo "::error::$tool is declared in install_args but does not resolve on PATH" >&2
-              exit 1
-            fi
-            echo "$tool -> $resolved"
-          done
-          hk --version
+        run: hk --version
+      - name: jq resolves on PATH, as install_args declares
+        shell: bash
+        run: jq --version
+      - name: cargo resolves on PATH, as install_args declares
+        shell: bash
+        run: cargo --version
+      - name: cargo-nextest resolves on PATH, as install_args declares
+        shell: bash
+        run: cargo nextest --version
 
       # `mise exec`, NOT `mise run test:cargo`, and the difference is the whole
       # of why the last four runs were red.
@@ -993,12 +990,6 @@ jobs:
             "$LEASE_HEAD_SHA" "$LEASE_HEAD_REF" "$LEASE_RUN_ID" || exit 0
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          # The OS must be the only variable, which is this leg's entire value.
-          # A missing `tests/bats` would be a second one — `crates/batten/tests`
-          # carries a suite about that path — and it would read as a Darwin
-          # finding, which is the misattribution this job exists to avoid.
-          submodules: true
       - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5 (CLOUD-404 retry fix, now a release)
         with:
           # Pinned to `batten.toml`'s `[[provision]]` version (CLOUD-1672). The
@@ -1012,7 +1003,7 @@ jobs:
           # config cannot evaluate ANY rule without hk. `jq` is read at runtime
           # by the mise tasks three more command rules invoke. Neither is about
           # the OS, which is why both belong on every leg that runs the suite.
-          install_args: rust hk aqua:jqlang/jq github:nextest-rs/nextest
+          install_args: rust hk aqua:jqlang/jq github:nextest-rs/nextest aqua:open-policy-agent/opa
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           # A DISTINCT FAMILY, for `windows`'s reason rather than by analogy:
@@ -1033,19 +1024,23 @@ jobs:
       # one. The alternative is measured on `windows`: three `tests/cli.rs`
       # cases reporting an exit code about a missing tool while naming the rule
       # they meant to test, each costing a round trip to attribute.
-      - name: Assert the declared tools resolve
+      #
+      # ONE STEP PER TOOL, each running it by name: a tool that does not resolve
+      # on PATH fails its own step, and the step's name says which (CLOUD-843).
+      # `cargo nextest` goes through cargo's own subcommand lookup, which is the
+      # resolution the suite depends on.
+      - name: hk resolves on PATH, as install_args declares
         shell: bash
-        run: |
-          set -euo pipefail
-          echo "PATH=$PATH"
-          for tool in hk jq cargo cargo-nextest; do
-            if ! resolved=$(command -v "$tool"); then
-              echo "::error::$tool is declared in install_args but does not resolve on PATH" >&2
-              exit 1
-            fi
-            echo "$tool -> $resolved"
-          done
-          hk --version
+        run: hk --version
+      - name: jq resolves on PATH, as install_args declares
+        shell: bash
+        run: jq --version
+      - name: cargo resolves on PATH, as install_args declares
+        shell: bash
+        run: cargo --version
+      - name: cargo-nextest resolves on PATH, as install_args declares
+        shell: bash
+        run: cargo nextest --version
 
       # `mise exec`, matching `windows`, and here it is parity rather than the
       # workaround it is there: `[tasks."test:cargo"]`'s body is bash and macOS

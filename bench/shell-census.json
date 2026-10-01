@@ -1,0 +1,1469 @@
+{
+  "manifests": [
+    {
+      "path": "hk.pkl",
+      "line": 415,
+      "lines": 1
+    },
+    {
+      "path": "mise.toml",
+      "line": 729,
+      "unit": "snapshots",
+      "lines": 1
+    },
+    {
+      "path": "mise.toml",
+      "line": 788,
+      "unit": "fix",
+      "lines": 9
+    },
+    {
+      "path": "mise.toml",
+      "line": 839,
+      "unit": "lint:clippy",
+      "lines": 3
+    },
+    {
+      "path": "mise.toml",
+      "line": 863,
+      "unit": "lint:fmt",
+      "lines": 3
+    },
+    {
+      "path": "mise.toml",
+      "line": 875,
+      "unit": "lint:toml",
+      "lines": 4
+    },
+    {
+      "path": "mise.toml",
+      "line": 897,
+      "unit": "lint:deno",
+      "lines": 6
+    },
+    {
+      "path": "mise.toml",
+      "line": 943,
+      "unit": "fmt:deno",
+      "lines": 5
+    },
+    {
+      "path": "mise.toml",
+      "line": 977,
+      "unit": "fix-selection-check",
+      "lines": 26
+    },
+    {
+      "path": "mise.toml",
+      "line": 1048,
+      "unit": "lint:rego",
+      "lines": 9
+    },
+    {
+      "path": "mise.toml",
+      "line": 1098,
+      "unit": "fmt:rego",
+      "lines": 2
+    },
+    {
+      "path": "mise.toml",
+      "line": 1112,
+      "unit": "coverage",
+      "lines": 11
+    },
+    {
+      "path": "mise.toml",
+      "line": 1158,
+      "unit": "scorecard",
+      "lines": 11
+    },
+    {
+      "path": "mise.toml",
+      "line": 1198,
+      "unit": "fuzz",
+      "lines": 24
+    },
+    {
+      "path": "mise.toml",
+      "line": 1278,
+      "unit": "test:filter",
+      "lines": 1
+    },
+    {
+      "path": "mise.toml",
+      "line": 1282,
+      "unit": "test:cargo",
+      "lines": 26
+    },
+    {
+      "path": "mise.toml",
+      "line": 1371,
+      "unit": "test:reference-coverage",
+      "lines": 1
+    },
+    {
+      "path": "mise.toml",
+      "line": 1376,
+      "unit": "test:skill-contract",
+      "lines": 1
+    },
+    {
+      "path": "mise.toml",
+      "line": 1381,
+      "unit": "test:config-schema",
+      "lines": 1
+    },
+    {
+      "path": "mise.toml",
+      "line": 1386,
+      "unit": "test:hook-profile",
+      "lines": 1
+    },
+    {
+      "path": "mise.toml",
+      "line": 1391,
+      "unit": "test:verdict-vocabulary",
+      "lines": 1
+    },
+    {
+      "path": "mise.toml",
+      "line": 1396,
+      "unit": "test:refusal-ceiling",
+      "lines": 1
+    },
+    {
+      "path": "mise.toml",
+      "line": 1401,
+      "unit": "test:config-deprecations",
+      "lines": 1
+    },
+    {
+      "path": "mise.toml",
+      "line": 1425,
+      "unit": "ci-drift",
+      "lines": 1
+    },
+    {
+      "path": "mise.toml",
+      "line": 1450,
+      "unit": "hooks-wiring-check",
+      "lines": 1
+    },
+    {
+      "path": "mise.toml",
+      "line": 1475,
+      "unit": "config-lint",
+      "lines": 1
+    },
+    {
+      "path": "mise.toml",
+      "line": 1511,
+      "unit": "semver",
+      "lines": 1
+    },
+    {
+      "path": "mise.toml",
+      "line": 1688,
+      "unit": "target-prune",
+      "lines": 15
+    },
+    {
+      "path": "mise.toml",
+      "line": 1846,
+      "unit": "policy-test",
+      "lines": 2
+    },
+    {
+      "path": "mise.toml",
+      "line": 1934,
+      "unit": "sbom",
+      "lines": 245
+    },
+    {
+      "path": "mise.toml",
+      "line": 2252,
+      "unit": "sbom-binary-record",
+      "lines": 48
+    },
+    {
+      "path": "mise.toml",
+      "line": 2314,
+      "unit": "sbom-binary",
+      "lines": 21
+    },
+    {
+      "path": "mise.toml",
+      "line": 2345,
+      "unit": "record-sbom",
+      "lines": 86
+    },
+    {
+      "path": "mise.toml",
+      "line": 2541,
+      "unit": "attestation-record",
+      "lines": 80
+    },
+    {
+      "path": "mise.toml",
+      "line": 2670,
+      "unit": "timeout-drift-record",
+      "lines": 82
+    },
+    {
+      "path": "mise.toml",
+      "line": 2906,
+      "unit": "signing-posture-record",
+      "lines": 30
+    },
+    {
+      "path": "mise.toml",
+      "line": 2973,
+      "unit": "signing-posture-check",
+      "lines": 5
+    },
+    {
+      "path": "mise.toml",
+      "line": 2993,
+      "unit": "signing-posture-repair",
+      "lines": 18
+    },
+    {
+      "path": "mise.toml",
+      "line": 3021,
+      "unit": "evaluator-io-record",
+      "lines": 23
+    },
+    {
+      "path": "mise.toml",
+      "line": 3071,
+      "unit": "transcript-corpus-record",
+      "lines": 7
+    },
+    {
+      "path": "mise.toml",
+      "line": 3096,
+      "unit": "macos-link-record",
+      "lines": 8
+    },
+    {
+      "path": "mise.toml",
+      "line": 3117,
+      "unit": "evaluator-closure-record",
+      "lines": 8
+    },
+    {
+      "path": "mise.toml",
+      "line": 3137,
+      "unit": "branch-age-record",
+      "lines": 37
+    },
+    {
+      "path": "mise.toml",
+      "line": 3189,
+      "unit": "done-record",
+      "lines": 39
+    },
+    {
+      "path": "mise.toml",
+      "line": 3237,
+      "unit": "render:cli",
+      "lines": 24
+    },
+    {
+      "path": "mise.toml",
+      "line": 3293,
+      "unit": "checksums",
+      "lines": 40
+    },
+    {
+      "path": "mise.toml",
+      "line": 3391,
+      "unit": "pr-unsubscribed",
+      "lines": 129
+    },
+    {
+      "path": "mise.toml",
+      "line": 3649,
+      "unit": "release-assets-record",
+      "lines": 75
+    },
+    {
+      "path": "mise.toml",
+      "line": 3744,
+      "unit": "release-assets-check",
+      "lines": 3
+    },
+    {
+      "path": "mise.toml",
+      "line": 3763,
+      "unit": "release-due-record",
+      "lines": 37
+    },
+    {
+      "path": "mise.toml",
+      "line": 3826,
+      "unit": "ntia-record",
+      "lines": 34
+    },
+    {
+      "path": "mise.toml",
+      "line": 3872,
+      "unit": "ntia-check",
+      "lines": 7
+    },
+    {
+      "path": "mise.toml",
+      "line": 3906,
+      "unit": "release-backfill",
+      "lines": 96
+    },
+    {
+      "path": "mise.toml",
+      "line": 4041,
+      "unit": "reclaim-census",
+      "lines": 171
+    },
+    {
+      "path": "mise.toml",
+      "line": 4252,
+      "unit": "finding-sink-check",
+      "lines": 93
+    },
+    {
+      "path": "mise.toml",
+      "line": 4390,
+      "unit": "done-pr-check",
+      "lines": 44
+    },
+    {
+      "path": "mise.toml",
+      "line": 4479,
+      "unit": "connector-allow-resolve",
+      "lines": 102
+    },
+    {
+      "path": "mise.toml",
+      "line": 4625,
+      "unit": "mcp-allow-check",
+      "lines": 158
+    },
+    {
+      "path": "mise.toml",
+      "line": 4824,
+      "unit": "mcp-attach-check",
+      "lines": 107
+    },
+    {
+      "path": "mise.toml",
+      "line": 4961,
+      "unit": "gh-preflight",
+      "lines": 69
+    },
+    {
+      "path": "mise.toml",
+      "line": 5062,
+      "unit": "in-progress-drain",
+      "lines": 139
+    },
+    {
+      "path": "mise.toml",
+      "line": 5351,
+      "unit": "board-payloads",
+      "lines": 82
+    },
+    {
+      "path": "mise.toml",
+      "line": 5474,
+      "unit": "released",
+      "lines": 119
+    },
+    {
+      "path": "mise.toml",
+      "line": 5638,
+      "unit": "board-sweep",
+      "lines": 112
+    },
+    {
+      "path": "mise.toml",
+      "line": 5794,
+      "unit": "duplicate-close-record",
+      "lines": 31
+    },
+    {
+      "path": "mise.toml",
+      "line": 5844,
+      "unit": "duplicate-close-check",
+      "lines": 16
+    },
+    {
+      "path": "mise.toml",
+      "line": 5883,
+      "unit": "deferral-record",
+      "lines": 19
+    },
+    {
+      "path": "mise.toml",
+      "line": 5925,
+      "unit": "closing-key-record",
+      "lines": 17
+    },
+    {
+      "path": "mise.toml",
+      "line": 5958,
+      "unit": "nonverdict-record",
+      "lines": 119
+    },
+    {
+      "path": "mise.toml",
+      "line": 6262,
+      "unit": "land-divergence-record",
+      "lines": 197
+    },
+    {
+      "path": "mise.toml",
+      "line": 6655,
+      "unit": "record-verdicts",
+      "lines": 81
+    },
+    {
+      "path": "mise.toml",
+      "line": 6951,
+      "unit": "record-perf",
+      "lines": 19
+    },
+    {
+      "path": "mise.toml",
+      "line": 7004,
+      "unit": "deny",
+      "lines": 3
+    },
+    {
+      "path": "mise.toml",
+      "line": 7074,
+      "unit": "acquisition-bench",
+      "lines": 1
+    },
+    {
+      "path": "mise.toml",
+      "line": 7141,
+      "unit": "address-transport-bench",
+      "lines": 1
+    },
+    {
+      "path": "mise.toml",
+      "line": 7166,
+      "unit": "config-load-bench",
+      "lines": 1
+    },
+    {
+      "path": "mise.toml",
+      "line": 7192,
+      "unit": "refusal-render-bench",
+      "lines": 1
+    },
+    {
+      "path": "mise.toml",
+      "line": 7237,
+      "unit": "install:local",
+      "lines": 5
+    },
+    {
+      "path": "mise.toml",
+      "line": 7339,
+      "unit": "deps-install",
+      "lines": 1
+    },
+    {
+      "path": "mise.toml",
+      "line": 7393,
+      "unit": "deps",
+      "lines": 1
+    },
+    {
+      "path": "mise.toml",
+      "line": 7471,
+      "unit": "session:stamp",
+      "lines": 1
+    },
+    {
+      "path": "mise.toml",
+      "line": 7484,
+      "unit": "session:install",
+      "lines": 1
+    },
+    {
+      "path": "mise.toml",
+      "line": 7514,
+      "unit": "toolchain-check",
+      "lines": 5
+    },
+    {
+      "path": "mise.toml",
+      "line": 7565,
+      "unit": "session:submodules",
+      "lines": 1
+    },
+    {
+      "path": "mise.toml",
+      "line": 7569,
+      "unit": "session:doctor",
+      "lines": 1
+    },
+    {
+      "path": "mise.toml",
+      "line": 7585,
+      "unit": "session:batten",
+      "lines": 1
+    },
+    {
+      "path": "mise.toml",
+      "line": 7640,
+      "unit": "session:git-hooks",
+      "lines": 1
+    },
+    {
+      "path": "mise.toml",
+      "line": 7658,
+      "unit": "session:identity",
+      "lines": 1
+    },
+    {
+      "path": "mise.toml",
+      "line": 7669,
+      "unit": "session:signing",
+      "lines": 1
+    },
+    {
+      "path": "mise.toml",
+      "line": 7678,
+      "unit": "session:wiring",
+      "lines": 1
+    },
+    {
+      "path": "mise.toml",
+      "line": 7734,
+      "unit": "session:census",
+      "lines": 1
+    },
+    {
+      "path": "mise.toml",
+      "line": 7806,
+      "unit": "batten-check",
+      "lines": 6
+    },
+    {
+      "path": "mise.toml",
+      "line": 7889,
+      "unit": "completions",
+      "lines": 4
+    },
+    {
+      "path": "mise.toml",
+      "line": 7920,
+      "unit": "man",
+      "lines": 20
+    },
+    {
+      "path": "mise.toml",
+      "line": 7968,
+      "unit": "schema",
+      "lines": 5
+    },
+    {
+      "path": "mise.toml",
+      "line": 7994,
+      "unit": "zizmor",
+      "lines": 3
+    },
+    {
+      "path": "mise.toml",
+      "line": 8030,
+      "unit": "lock-check",
+      "lines": 10
+    },
+    {
+      "path": "mise.toml",
+      "line": 8170,
+      "unit": "ci-slow-needed",
+      "lines": 1
+    },
+    {
+      "path": "mise.toml",
+      "line": 8191,
+      "unit": "provision:startup",
+      "lines": 1
+    },
+    {
+      "path": "mise.toml",
+      "line": 8313,
+      "unit": "step-receipt",
+      "lines": 167
+    },
+    {
+      "path": "mise.toml",
+      "line": 8525,
+      "unit": "darwin-link",
+      "lines": 1
+    },
+    {
+      "path": "mise.toml",
+      "line": 8529,
+      "unit": "cross-turn",
+      "lines": 1
+    },
+    {
+      "path": "mise.toml",
+      "line": 8533,
+      "unit": "cross-check",
+      "lines": 12
+    },
+    {
+      "path": "mise.toml",
+      "line": 8632,
+      "unit": "test:musl",
+      "lines": 8
+    },
+    {
+      "path": "mise.toml",
+      "line": 8676,
+      "unit": "hk-version",
+      "lines": 8
+    },
+    {
+      "path": "mise.toml",
+      "line": 8690,
+      "unit": "no-docs-tree",
+      "lines": 6
+    },
+    {
+      "path": "mise.toml",
+      "line": 8702,
+      "unit": "no-armed-ripcord",
+      "lines": 6
+    },
+    {
+      "path": "mise.toml",
+      "line": 8726,
+      "unit": "bats-submodule",
+      "lines": 1
+    },
+    {
+      "path": "mise.toml",
+      "line": 8730,
+      "unit": "test:bats",
+      "lines": 49
+    },
+    {
+      "path": "mise.toml",
+      "line": 9116,
+      "unit": "verified",
+      "lines": 13
+    },
+    {
+      "path": "mise.toml",
+      "line": 9171,
+      "unit": "land",
+      "lines": 1
+    },
+    {
+      "path": "mise.toml",
+      "line": 9192,
+      "unit": "linear-check",
+      "lines": 25
+    },
+    {
+      "path": "mise.toml",
+      "line": 9244,
+      "unit": "sonar-gate",
+      "lines": 55
+    },
+    {
+      "path": "mise.toml",
+      "line": 9318,
+      "unit": "checks-green",
+      "lines": 40
+    },
+    {
+      "path": "mise.toml",
+      "line": 9378,
+      "unit": "ci-wait",
+      "lines": 22
+    },
+    {
+      "path": "mise.toml",
+      "line": 9418,
+      "unit": "task-registry",
+      "lines": 1
+    },
+    {
+      "path": "mise.toml",
+      "line": 9448,
+      "unit": "singleton",
+      "lines": 1
+    },
+    {
+      "path": "mise.toml",
+      "line": 9532,
+      "unit": "verify",
+      "lines": 48
+    },
+    {
+      "path": "mise.toml",
+      "line": 9769,
+      "unit": "ci-task-parity",
+      "lines": 1
+    },
+    {
+      "path": "mise.toml",
+      "line": 9791,
+      "unit": "verify:gated",
+      "lines": 51
+    },
+    {
+      "path": "mise.toml",
+      "line": 10096,
+      "unit": "commit-msg",
+      "lines": 1
+    },
+    {
+      "path": "mise.toml",
+      "line": 10157,
+      "unit": "commit-attribution",
+      "lines": 1
+    },
+    {
+      "path": "mise.toml",
+      "line": 10174,
+      "unit": "commit-attribution-msg",
+      "lines": 1
+    },
+    {
+      "path": "mise.toml",
+      "line": 10186,
+      "unit": "attribution-identity",
+      "lines": 1
+    },
+    {
+      "path": "mise.toml",
+      "line": 10238,
+      "unit": "commit-check",
+      "lines": 1
+    },
+    {
+      "path": "mise.toml",
+      "line": 10249,
+      "unit": "commit-lint",
+      "lines": 22
+    },
+    {
+      "path": "mise.toml",
+      "line": 10366,
+      "unit": "release-pr",
+      "lines": 10
+    },
+    {
+      "path": "mise.toml",
+      "line": 10389,
+      "unit": "release",
+      "lines": 1
+    }
+  ],
+  "steps": [
+    {
+      "path": ".github/workflows/auto-bot-land.yml",
+      "line": 240,
+      "lines": 31
+    },
+    {
+      "path": ".github/workflows/auto-bot-land.yml",
+      "line": 402,
+      "lines": 7
+    },
+    {
+      "path": ".github/workflows/auto-bot-land.yml",
+      "line": 432,
+      "lines": 4
+    },
+    {
+      "path": ".github/workflows/auto-bot-land.yml",
+      "line": 455,
+      "lines": 13
+    },
+    {
+      "path": ".github/workflows/auto-bot-land.yml",
+      "line": 483,
+      "lines": 1
+    },
+    {
+      "path": ".github/workflows/auto-bot-land.yml",
+      "line": 510,
+      "lines": 9
+    },
+    {
+      "path": ".github/workflows/auto-bot-land.yml",
+      "line": 557,
+      "lines": 28
+    },
+    {
+      "path": ".github/workflows/auto-bot-land.yml",
+      "line": 606,
+      "lines": 1
+    },
+    {
+      "path": ".github/workflows/auto-bot-land.yml",
+      "line": 634,
+      "lines": 8
+    },
+    {
+      "path": ".github/workflows/auto-bot-land.yml",
+      "line": 652,
+      "lines": 10
+    },
+    {
+      "path": ".github/workflows/auto-release-land.yml",
+      "line": 164,
+      "lines": 22
+    },
+    {
+      "path": ".github/workflows/auto-release-land.yml",
+      "line": 328,
+      "lines": 8
+    },
+    {
+      "path": ".github/workflows/auto-release-land.yml",
+      "line": 361,
+      "lines": 1
+    },
+    {
+      "path": ".github/workflows/auto-release-land.yml",
+      "line": 367,
+      "lines": 1
+    },
+    {
+      "path": ".github/workflows/auto-release-land.yml",
+      "line": 382,
+      "lines": 8
+    },
+    {
+      "path": ".github/workflows/auto-release-land.yml",
+      "line": 406,
+      "lines": 10
+    },
+    {
+      "path": ".github/workflows/branch-hygiene.yml",
+      "line": 66,
+      "lines": 1
+    },
+    {
+      "path": ".github/workflows/cache-sweep.yml",
+      "line": 100,
+      "lines": 24
+    },
+    {
+      "path": ".github/workflows/ci-drift.yml",
+      "line": 60,
+      "lines": 1
+    },
+    {
+      "path": ".github/workflows/ci.yml",
+      "line": 161,
+      "lines": 12
+    },
+    {
+      "path": ".github/workflows/ci.yml",
+      "line": 231,
+      "lines": 10
+    },
+    {
+      "path": ".github/workflows/ci.yml",
+      "line": 287,
+      "lines": 4
+    },
+    {
+      "path": ".github/workflows/ci.yml",
+      "line": 498,
+      "lines": 7
+    },
+    {
+      "path": ".github/workflows/ci.yml",
+      "line": 707,
+      "lines": 12
+    },
+    {
+      "path": ".github/workflows/ci.yml",
+      "line": 882,
+      "lines": 12
+    },
+    {
+      "path": ".github/workflows/ci.yml",
+      "line": 993,
+      "lines": 7
+    },
+    {
+      "path": ".github/workflows/ci.yml",
+      "line": 1066,
+      "lines": 12
+    },
+    {
+      "path": ".github/workflows/ci.yml",
+      "line": 1211,
+      "lines": 1
+    },
+    {
+      "path": ".github/workflows/ci.yml",
+      "line": 1224,
+      "lines": 8
+    },
+    {
+      "path": ".github/workflows/ci.yml",
+      "line": 1307,
+      "lines": 4
+    },
+    {
+      "path": ".github/workflows/commit-lint.yml",
+      "line": 106,
+      "lines": 12
+    },
+    {
+      "path": ".github/workflows/coverage.yml",
+      "line": 78,
+      "lines": 1
+    },
+    {
+      "path": ".github/workflows/coverage.yml",
+      "line": 83,
+      "lines": 9
+    },
+    {
+      "path": ".github/workflows/fast-forward.yml",
+      "line": 125,
+      "lines": 10
+    },
+    {
+      "path": ".github/workflows/fast-forward.yml",
+      "line": 166,
+      "lines": 19
+    },
+    {
+      "path": ".github/workflows/fast-forward.yml",
+      "line": 263,
+      "lines": 3
+    },
+    {
+      "path": ".github/workflows/fast-forward.yml",
+      "line": 272,
+      "lines": 18
+    },
+    {
+      "path": ".github/workflows/fuzz.yml",
+      "line": 100,
+      "lines": 1
+    },
+    {
+      "path": ".github/workflows/fuzz.yml",
+      "line": 105,
+      "lines": 10
+    },
+    {
+      "path": ".github/workflows/hook-latency-drift.yml",
+      "line": 110,
+      "lines": 39
+    },
+    {
+      "path": ".github/workflows/land-divergence.yml",
+      "line": 79,
+      "lines": 1
+    },
+    {
+      "path": ".github/workflows/land-divergence.yml",
+      "line": 82,
+      "lines": 7
+    },
+    {
+      "path": ".github/workflows/linear-release-backfill.yml",
+      "line": 96,
+      "lines": 4
+    },
+    {
+      "path": ".github/workflows/linear-release-backfill.yml",
+      "line": 127,
+      "lines": 1
+    },
+    {
+      "path": ".github/workflows/linear-release-backfill.yml",
+      "line": 135,
+      "lines": 4
+    },
+    {
+      "path": ".github/workflows/mutant.yml",
+      "line": 139,
+      "lines": 1
+    },
+    {
+      "path": ".github/workflows/mutant.yml",
+      "line": 141,
+      "lines": 1
+    },
+    {
+      "path": ".github/workflows/mutant.yml",
+      "line": 147,
+      "lines": 10
+    },
+    {
+      "path": ".github/workflows/nonverdict-rate.yml",
+      "line": 86,
+      "lines": 1
+    },
+    {
+      "path": ".github/workflows/nonverdict-rate.yml",
+      "line": 89,
+      "lines": 7
+    },
+    {
+      "path": ".github/workflows/perf.yml",
+      "line": 95,
+      "lines": 1
+    },
+    {
+      "path": ".github/workflows/perf.yml",
+      "line": 118,
+      "lines": 1
+    },
+    {
+      "path": ".github/workflows/perf.yml",
+      "line": 127,
+      "lines": 1
+    },
+    {
+      "path": ".github/workflows/perf.yml",
+      "line": 145,
+      "lines": 4
+    },
+    {
+      "path": ".github/workflows/perf.yml",
+      "line": 168,
+      "lines": 3
+    },
+    {
+      "path": ".github/workflows/perf.yml",
+      "line": 184,
+      "lines": 9
+    },
+    {
+      "path": ".github/workflows/release-artifacts.yml",
+      "line": 204,
+      "lines": 1
+    },
+    {
+      "path": ".github/workflows/release-artifacts.yml",
+      "line": 212,
+      "lines": 1
+    },
+    {
+      "path": ".github/workflows/release-artifacts.yml",
+      "line": 232,
+      "lines": 1
+    },
+    {
+      "path": ".github/workflows/release-artifacts.yml",
+      "line": 252,
+      "lines": 1
+    },
+    {
+      "path": ".github/workflows/release-artifacts.yml",
+      "line": 259,
+      "lines": 1
+    },
+    {
+      "path": ".github/workflows/release-artifacts.yml",
+      "line": 334,
+      "lines": 1
+    },
+    {
+      "path": ".github/workflows/release-artifacts.yml",
+      "line": 347,
+      "lines": 1
+    },
+    {
+      "path": ".github/workflows/release-artifacts.yml",
+      "line": 356,
+      "lines": 1
+    },
+    {
+      "path": ".github/workflows/release-artifacts.yml",
+      "line": 405,
+      "lines": 1
+    },
+    {
+      "path": ".github/workflows/release-artifacts.yml",
+      "line": 412,
+      "lines": 1
+    },
+    {
+      "path": ".github/workflows/release-assets.yml",
+      "line": 118,
+      "lines": 1
+    },
+    {
+      "path": ".github/workflows/release-assets.yml",
+      "line": 145,
+      "lines": 1
+    },
+    {
+      "path": ".github/workflows/release-plz.yml",
+      "line": 424,
+      "lines": 1
+    },
+    {
+      "path": ".github/workflows/release-plz.yml",
+      "line": 602,
+      "lines": 4
+    },
+    {
+      "path": ".github/workflows/release-plz.yml",
+      "line": 627,
+      "lines": 1
+    },
+    {
+      "path": ".github/workflows/release-plz.yml",
+      "line": 671,
+      "lines": 1
+    },
+    {
+      "path": ".github/workflows/release-plz.yml",
+      "line": 694,
+      "lines": 1
+    },
+    {
+      "path": ".github/workflows/release-plz.yml",
+      "line": 705,
+      "lines": 4
+    },
+    {
+      "path": ".github/workflows/release-plz.yml",
+      "line": 777,
+      "lines": 22
+    },
+    {
+      "path": ".github/workflows/rust.yml",
+      "line": 125,
+      "lines": 12
+    },
+    {
+      "path": ".github/workflows/rust.yml",
+      "line": 270,
+      "lines": 12
+    },
+    {
+      "path": ".github/workflows/rust.yml",
+      "line": 334,
+      "lines": 10
+    },
+    {
+      "path": ".github/workflows/rust.yml",
+      "line": 429,
+      "lines": 12
+    },
+    {
+      "path": ".github/workflows/rust.yml",
+      "line": 494,
+      "lines": 1
+    },
+    {
+      "path": ".github/workflows/rust.yml",
+      "line": 558,
+      "lines": 12
+    },
+    {
+      "path": ".github/workflows/rust.yml",
+      "line": 734,
+      "lines": 12
+    },
+    {
+      "path": ".github/workflows/rust.yml",
+      "line": 858,
+      "lines": 10
+    },
+    {
+      "path": ".github/workflows/rust.yml",
+      "line": 975,
+      "lines": 12
+    },
+    {
+      "path": ".github/workflows/rust.yml",
+      "line": 1038,
+      "lines": 10
+    },
+    {
+      "path": ".github/workflows/sbom-actions-currency.yml",
+      "line": 79,
+      "lines": 59
+    },
+    {
+      "path": ".github/workflows/sbom-actions-currency.yml",
+      "line": 163,
+      "lines": 33
+    },
+    {
+      "path": ".github/workflows/scorecard.yml",
+      "line": 87,
+      "lines": 1
+    },
+    {
+      "path": ".github/workflows/scorecard.yml",
+      "line": 92,
+      "lines": 11
+    },
+    {
+      "path": ".github/workflows/test.yml",
+      "line": 148,
+      "lines": 12
+    },
+    {
+      "path": ".github/workflows/test.yml",
+      "line": 222,
+      "lines": 20
+    },
+    {
+      "path": ".github/workflows/test.yml",
+      "line": 301,
+      "lines": 12
+    },
+    {
+      "path": ".github/workflows/test.yml",
+      "line": 345,
+      "lines": 20
+    },
+    {
+      "path": ".github/workflows/test.yml",
+      "line": 386,
+      "lines": 9
+    },
+    {
+      "path": ".github/workflows/test.yml",
+      "line": 428,
+      "lines": 12
+    },
+    {
+      "path": ".github/workflows/test.yml",
+      "line": 466,
+      "lines": 20
+    },
+    {
+      "path": ".github/workflows/test.yml",
+      "line": 524,
+      "lines": 13
+    },
+    {
+      "path": ".github/workflows/test.yml",
+      "line": 570,
+      "lines": 12
+    },
+    {
+      "path": ".github/workflows/test.yml",
+      "line": 608,
+      "lines": 20
+    },
+    {
+      "path": ".github/workflows/test.yml",
+      "line": 650,
+      "lines": 9
+    },
+    {
+      "path": ".github/workflows/test.yml",
+      "line": 699,
+      "lines": 12
+    },
+    {
+      "path": ".github/workflows/test.yml",
+      "line": 737,
+      "lines": 20
+    },
+    {
+      "path": ".github/workflows/test.yml",
+      "line": 771,
+      "lines": 7
+    },
+    {
+      "path": ".github/workflows/test.yml",
+      "line": 797,
+      "lines": 2
+    },
+    {
+      "path": ".github/workflows/test.yml",
+      "line": 813,
+      "lines": 13
+    },
+    {
+      "path": ".github/workflows/test.yml",
+      "line": 858,
+      "lines": 12
+    },
+    {
+      "path": ".github/workflows/test.yml",
+      "line": 890,
+      "lines": 4
+    },
+    {
+      "path": ".github/workflows/timeout-drift.yml",
+      "line": 85,
+      "lines": 1
+    },
+    {
+      "path": ".github/workflows/zizmor.yml",
+      "line": 121,
+      "lines": 12
+    }
+  ],
+  "files": [
+    {
+      "path": "crates/batten/tests/fixtures/acceptance-corpus/bin/checker.in",
+      "lines": 8
+    },
+    {
+      "path": "crates/batten/tests/fixtures/acceptance-corpus/bin/shape-lint.in",
+      "lines": 7
+    },
+    {
+      "path": "mise-tasks/dist.sh",
+      "lines": 95
+    },
+    {
+      "path": "mise-tasks/graph-check.sh",
+      "lines": 224
+    },
+    {
+      "path": "mise-tasks/ready-cites-check.sh",
+      "lines": 117
+    },
+    {
+      "path": "mise-tasks/ready-lint.sh",
+      "lines": 181
+    },
+    {
+      "path": "mise-tasks/serena-mcp.sh",
+      "lines": 28
+    },
+    {
+      "path": "mise-tasks/spec-ref-check.sh",
+      "lines": 68
+    },
+    {
+      "path": "tests/commit-attribution.bats",
+      "lines": 51
+    },
+    {
+      "path": "tests/commit-convention.bats",
+      "lines": 46
+    },
+    {
+      "path": "tests/cross-check.bats",
+      "lines": 43
+    },
+    {
+      "path": "tests/dist.bats",
+      "lines": 63
+    },
+    {
+      "path": "tests/fixtures/evaluator-io/broken-build",
+      "lines": 5
+    },
+    {
+      "path": "tests/fixtures/evaluator-io/failing-probe",
+      "lines": 8
+    },
+    {
+      "path": "tests/fixtures/evaluator-io/noisy-probe",
+      "lines": 10
+    },
+    {
+      "path": "tests/fixtures/evaluator-io/other-test-failed",
+      "lines": 8
+    },
+    {
+      "path": "tests/git-hook.bats",
+      "lines": 74
+    },
+    {
+      "path": "tests/graph-check.bats",
+      "lines": 808
+    },
+    {
+      "path": "tests/helpers.bash",
+      "lines": 70
+    },
+    {
+      "path": "tests/hk-selection.bats",
+      "lines": 82
+    },
+    {
+      "path": "tests/install.bats",
+      "lines": 302
+    },
+    {
+      "path": "tests/lint-rego.bats",
+      "lines": 41
+    },
+    {
+      "path": "tests/ready-cites-check.bats",
+      "lines": 193
+    },
+    {
+      "path": "tests/ready-lint-deferral.bats",
+      "lines": 99
+    },
+    {
+      "path": "tests/ready-lint.bats",
+      "lines": 636
+    },
+    {
+      "path": "tests/serena-mcp.bats",
+      "lines": 68
+    },
+    {
+      "path": "tests/spawn-census.bats",
+      "lines": 95
+    },
+    {
+      "path": "tests/spec-ref-check.bats",
+      "lines": 86
+    },
+    {
+      "path": "tests/task-fail-closed.bats",
+      "lines": 69
+    },
+    {
+      "path": "tests/verify.bats",
+      "lines": 246
+    },
+    {
+      "path": "tests/zizmor-split.bats",
+      "lines": 51
+    }
+  ],
+  "exempt": [
+    {
+      "path": ".claude/hooks/git-hook.sh",
+      "lines": 12
+    },
+    {
+      "path": "completions/batten.bash",
+      "lines": 13688
+    },
+    {
+      "path": "install.sh",
+      "lines": 307
+    },
+    {
+      "path": "setup.sh",
+      "lines": 69
+    }
+  ],
+  "totals": {
+    "manifests": 3681,
+    "steps": 950,
+    "files": 3882,
+    "exempt": 14076,
+    "total": 8513
+  }
+}

@@ -282,6 +282,31 @@ impl Harness {
         }
     }
 
+    /// The tool through which this host puts a question to its human, if it has
+    /// one (CLOUD-1078).
+    ///
+    /// A host fact for [`Harness::write_tools`]' reason: the consumer cannot be
+    /// asked to name a host's tool inventory. It is what [`crate::asked`] records
+    /// from, and so the ONLY route by which a weakening is admitted — a host that
+    /// answers `None` can admit no weakening at all, which is the safe direction.
+    ///
+    /// Only Claude Code's is surveyed. The neutral [`Harness::ExitCode`] contract
+    /// answers `None` on purpose: it is a caller composing an envelope by hand,
+    /// and a hand-composed answer is precisely the one this route must not
+    /// accept. Every other host answers `None` until its tool is measured, for
+    /// [`Harness::operation_of`]'s reason — a safe unknown over a confident guess.
+    #[must_use]
+    pub const fn question_tool(self) -> Option<&'static str> {
+        match self {
+            Harness::ClaudeCode => Some("AskUserQuestion"),
+            Harness::CodexCli
+            | Harness::GeminiCli
+            | Harness::Cursor
+            | Harness::CopilotCli
+            | Harness::ExitCode => None,
+        }
+    }
+
     /// Classify this host's tool name into the neutral [`Operation`] vocabulary.
     ///
     /// The write arm reuses [`Harness::write_tools`] rather than restating it:
@@ -1877,6 +1902,31 @@ impl Harness {
             // Not a host: the neutral contract is an envelope in and an exit
             // status out, with no file to merge.
             Harness::ExitCode => &[],
+        }
+    }
+
+    /// The **home-relative** tree this host keeps its per-project MCP connection
+    /// logs under, or `None` where nobody has surveyed one (CLOUD-843).
+    ///
+    /// A harness fact for [`Harness::merge_surfaces`]' reason: where a host
+    /// writes its own logs is a fact about the host, and `mcp posture` reads the
+    /// last connection outcome there. The host keys the project directory
+    /// beneath it; that joining is the caller's.
+    ///
+    /// **`None` is unsurveyed, not "keeps none"** — the same reading
+    /// `project_dir_var` takes — so a posture run on such a host says it could
+    /// not look rather than reporting a clean attach.
+    #[must_use]
+    pub const fn mcp_logs(self) -> Option<&'static str> {
+        match self {
+            // Measured on the retired `mcp-attach-check` (CLOUD-316): the CLI
+            // writes `mcp-logs-<server>/<attempt>.jsonl` beneath this tree.
+            Harness::ClaudeCode => Some(".cache/claude-cli-nodejs"),
+            Harness::Cursor
+            | Harness::CopilotCli
+            | Harness::CodexCli
+            | Harness::GeminiCli
+            | Harness::ExitCode => None,
         }
     }
 }
@@ -5183,10 +5233,30 @@ fn modifier_admits(rule: &Rule, envelope: &Envelope) -> bool {
     // verdict exactly where it was before this column existed. The other
     // direction — a could-not-look silently DROPPING the row — would turn a
     // refusal off on precisely the checkouts least able to notice.
-    if let Some(marker) = rule.while_marker.as_deref() {
-        return marker_present(marker);
+    if let Some(marker) = rule.while_marker.as_deref()
+        && !marker_present(marker)
+    {
+        return false;
+    }
+    // THE PUSH IS THE SPEND (CLOUD-843), and it is conjoined rather than an
+    // alternative: a row carrying both fires while the marker exists AND the work
+    // is on no remote. Paid, like the marker, only by a row that declares it.
+    if rule.while_unpushed {
+        return head_unpushed();
     }
     true
+}
+
+/// Whether `HEAD` is committed in this clone and on no remote-tracking ref.
+///
+/// Could-not-look answers `true` — the row stays selected — for the reason
+/// [`marker_present`]'s unreadable arms give: an answer nobody could read must
+/// not switch a refusal off on exactly the checkouts least able to notice.
+fn head_unpushed() -> bool {
+    //MUTANT-SUITE crates/batten/tests/it/punt_receipt.rs
+    //MUTANT push-unread|s@    crate::git::head_on_a_remote(std::path::Path::new(".")) != Some(true)@    true@|a_pushed_head_lifts_the_punt_refusal
+    //MUTANT push-assumed|s@    crate::git::head_on_a_remote(std::path::Path::new(".")) != Some(true)@    false@|an_unpushed_head_after_a_punt_is_refused
+    crate::git::head_on_a_remote(std::path::Path::new(".")) != Some(true)
 }
 
 /// Whether this branch carries `marker` in the receipt store.
@@ -7069,7 +7139,15 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
             // group below, and bounded by how many worktrees exist rather than by
             // anything a row declares. Its subject is the checkout's own hygiene,
             // which is a gate's question and not a question about a command.
-            | crate::facts::Fact::GitWorktrees => None,
+            | crate::facts::Fact::GitWorktrees
+            // CLOUD-843. A tag listing grows with the repository, and the index
+            // family hashes every selected file and walks the checkout — both
+            // unbounded against a per-call budget. Config is the cheap one and
+            // sits here for `GitHead`'s reason below rather than for cost: no
+            // mediated row asks it, so nothing on this path would fill it.
+            | crate::facts::Fact::GitTags
+            | crate::facts::Fact::GitConfig
+            | crate::facts::Fact::GitIndex => None,
             // The other three are cheap enough for this path — one ref read
             // each, under what `Receipts` already spends — and are absent anyway,
             // because NOTHING ON THIS PATH RESOLVES THEM. `facts.rs` classifies
@@ -10639,6 +10717,7 @@ mod tests {
             when_present: None,
             when_value: None,
             while_marker: None,
+            while_unpushed: false,
             key_from: None,
             key_base: None,
             key_shape: None,
@@ -10688,6 +10767,9 @@ mod tests {
             commits: Vec::new(),
             staged: Vec::new(),
             history: Vec::new(),
+            tags: Vec::new(),
+            git_config: Vec::new(),
+            index: Vec::new(),
             state: Vec::new(),
             forge: Vec::new(),
             tools: Vec::new(),

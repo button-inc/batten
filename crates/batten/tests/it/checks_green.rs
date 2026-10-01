@@ -363,3 +363,107 @@ fn the_output_is_a_pointer_and_never_a_log() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// `--sha`: the reading taken in process (CLOUD-843), against the fixture forge.
+//
+// The `checks-green` task's acquisition was `gh api .../check-runs --jq` with
+// every failure mapped to could-not-look. These pin that the verb reads the
+// commit it was NAMED, and that a declined read stays could-not-look rather than
+// collapsing into an empty reading — which would decide as "not yet" and be
+// polled on forever.
+// ---------------------------------------------------------------------------
+
+/// The repository the fixture forge answers for.
+const FETCH_REPO: &str = "acme/widgets";
+
+/// The commit the fetch cases name.
+const FETCH_SHA: &str = "0123456789abcdef0123456789abcdef01234567";
+
+/// A fixture forge whose first answer is `status` over `body`.
+fn forge(name: &str, status: u16, body: &str) -> std::path::PathBuf {
+    let dir = common::scratch(&format!("checks-green-fetch-{name}"));
+    std::fs::write(
+        dir.join("resp.1"),
+        format!("HTTP/2 {status}\ncontent-type: application/json\n\n{body}\n"),
+    )
+    .expect("write the canned answer");
+    dir
+}
+
+/// `batten checks green --sha FETCH_SHA --repo FETCH_REPO` against `forge`.
+fn fetched(forge: &std::path::Path) -> std::process::Output {
+    common::batten()
+        .args(["checks", "green", "--sha", FETCH_SHA, "--repo", FETCH_REPO])
+        .args(roster())
+        .env("BATTEN_REST_FIXTURE", forge)
+        .output()
+        .expect("the compiled binary runs")
+}
+
+#[test]
+fn the_fetched_reading_is_the_named_commits() {
+    let runs = ["ci", "perf", "final"]
+        .iter()
+        .enumerate()
+        .map(|(i, name)| {
+            format!(
+                r#"{{"name": "{name}", "status": "completed", "conclusion": "success", "started_at": "2026-08-12T00:00:00Z", "completed_at": "2026-08-12T00:01:00Z", "id": {}}}"#,
+                i + 1
+            )
+        })
+        .collect::<Vec<_>>();
+    let dir = forge(
+        "green",
+        200,
+        &format!(
+            r#"{{"total_count": {}, "check_runs": [{}]}}"#,
+            runs.len(),
+            runs.join(", ")
+        ),
+    );
+    let out = fetched(&dir);
+    let stdout = common::stdout(&out);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{stdout}{}",
+        common::stderr(&out)
+    );
+    assert!(stdout.contains("checks green: green"), "{stdout}");
+    // THE REQUEST, NOT ONLY THE ANSWER: the fixture serves any path, so a verb
+    // that read some other commit would still print green over this body.
+    let asked = std::fs::read_to_string(dir.join("args")).expect("the forge was asked");
+    assert!(
+        asked.contains(&format!(
+            "repos/{FETCH_REPO}/commits/{FETCH_SHA}/check-runs"
+        )),
+        "{asked}"
+    );
+}
+
+#[test]
+fn a_declined_forge_read_is_could_not_look_never_not_yet() {
+    // An unpushed sha answers 404, and the retired task's `gh api` failure arm
+    // made that could-not-look. Read as an empty reading instead, every required
+    // name would be unregistered: `pending`, exit 2, and a poll with no end.
+    let dir = forge("declined", 404, r#"{"message": "No commit found for SHA"}"#);
+    let out = fetched(&dir);
+    let stdout = common::stdout(&out);
+    let stderr = common::stderr(&out);
+    assert_eq!(out.status.code(), Some(3), "{stdout}{stderr}");
+    assert!(stderr.contains("could not look"), "{stderr}");
+    assert!(!stdout.contains("checks green: pending"), "{stdout}");
+}
+
+#[test]
+fn a_repo_without_a_sha_is_a_usage_error() {
+    // `--repo` names what `--sha` reads. Beside a piped reading it scopes
+    // nothing, and accepting it would let a caller believe it had.
+    let (code, _, stderr) = green(&all_green(), &{
+        let mut args = roster();
+        args.extend(["--repo", FETCH_REPO]);
+        args
+    });
+    assert_eq!(code, 1, "{stderr}");
+}

@@ -215,6 +215,17 @@ declared_modules := {
 	# own instances, which is the drift that put four copies of a percentile
 	# function in this tree in the first place.
 	"arm",
+	# `asked` arrived with CLOUD-1078 and this rule named it before a reviewer did,
+	# once more. It is a LEDGER: it parses what a host reported a human answered,
+	# appends it, and compares two texts of it. It reaches only `git` for the base
+	# blob and HEAD, and `durable` for the append.
+	#
+	# The direction worth naming is upward. `lint` reads it to adjudicate an
+	# admission and `lib` reads it at the hook boundary; it reads neither. An edge
+	# back into `lint` would let the record of an answer know which weakening it
+	# is being asked to admit, and the whole guarantee is that the record says only
+	# what the host showed and what came back.
+	"asked",
 	# `suites` arrived with CLOUD-1753 and this rule named it once more — module
 	# written, its cases green, its tier green, and nobody had placed it.
 	#
@@ -646,18 +657,19 @@ declared_modules := {
 	# `record` call it without the producer's effects reaching the engine: the
 	# spawn stays in the task (house-style §5) and only the reading is here.
 	"probe_verdict",
-	# `signer_posture` arrived with CLOUD-1717, `probe_verdict`'s sibling and
-	# its class: it reaches NOTHING in this crate. It takes the two git config
-	# values as `&str` and never runs `git config` itself, which is what keeps
-	# the reading testable against a scratch path and a developer's real
-	# configuration out of the tests (CLOUD-591's boundary).
+	# `signer_posture` arrived with CLOUD-1717 as `probe_verdict`'s sibling, and
+	# CLOUD-843 gave it ONE edge: `git`, for the in-process config read and the
+	# repo-local write the retired `signing-posture-record` and
+	# `signing-posture-repair` bodies spawned `git config` for. `posture` itself
+	# still reaches nothing and takes the two values as `&str`, which is what keeps
+	# the classification testable against a scratch path and a developer's real
+	# configuration out of its unit tests (CLOUD-591's boundary); `read` and
+	# `repair` are the thin gix-backed shell around it, never a spawn.
 	#
-	# It owns the RECORD'S SHAPE as well as the classification, and that is the
-	# placement rather than scope creep: the shape was a sequence of `printf`
-	# calls in a task body that nothing tested, including the truncation of each
-	# sha to eight characters — which is the difference between a pointer and a
-	# payload. The producer still gathers the facts, because `git config` and
-	# `git rev-list` are spawns §5 keeps outside; what they MEAN is composed here.
+	# It owns the RECORD'S SHAPE as well as the classification: one `signer`
+	# line. The conflict and the signed commits it once also carried are
+	# `input.tree["git-config"]` and `input.tree["commit-meta"]` now, decided by
+	# the `supply-chain` preset.
 	"signer_posture",
 	# `cargo_graph` arrived with CLOUD-1717 and this rule named it, the coverage
 	# clause working an eighteenth time.
@@ -682,6 +694,159 @@ declared_modules := {
 	# functions over `std::fs` and a path. Every module that mutates a file calls
 	# it, so it must sit below all of them, which a leaf does by construction.
 	"durable",
+	# `forge_query` arrived with CLOUD-843's forge-read foundation. It is a
+	# PRODUCER in `record`'s class, and it sits directly above the three modules
+	# it composes: it walks `forge`'s window over `rest`'s transport and writes
+	# through `record`'s named-family store, reaching `landed` for the instant
+	# parser and `receipt` for the formatter rather than growing a third clock.
+	#
+	# IT DECIDES NOTHING, which is what keeps it out of the layer above: whether a
+	# recorded window is healthy is the module that reads the family. And it
+	# reaches the network, so its `hook`, `repair` and `check` edges are forbidden
+	# below for `rest`'s reason — one hop over `rest` is still the network.
+	"forge_query",
+	# `census` arrived with CLOUD-843 and is `ci`'s class: a report over the
+	# tracked tree that the `census shell` verb renders. It reaches `git` for the
+	# tracked paths, `rules` for the one glob semantics the crate has, `config`
+	# for the authority's file name, and `error`/`exit` for its answer. It decides
+	# nothing -- the shell ban is the gate and this is its measurement -- so it
+	# mints no `Finding` and reaches no decider, and it starts no program, which
+	# is what keeps the verb on the derived read-only allowlist.
+	"census",
+	# `ci_signal` arrived with CLOUD-843's `p2-divergence` package, in
+	# `forge_query`'s class: a PRODUCER that walks `forge`'s window over `rest`'s
+	# transport and writes through `record`'s named-family store. It measures the
+	# landing loop and the non-verdict failures and decides neither; the modules
+	# reading its two families do. It reaches the network, so it joins
+	# `forge_query` on every forbidden edge below.
+	"ci_signal",
+	# `dist` arrived with CLOUD-843, retiring `mise-tasks/dist.sh`. An EFFECT verb
+	# in `sbom`'s class: it builds and archives a release binary. It reaches
+	# `exec` for its one spawn shape (`piped_argv`, so the census grows no site),
+	# `cli` for its request, and `error`/`exit` for its answer. It decides nothing
+	# about a tree and mints no `Finding`; `lib` calls its naming rule for
+	# `release install` so the asset name keeps one authority.
+	"dist",
+	# `sbom` arrived with CLOUD-843 and is a PRODUCER in `record`'s class, the
+	# `forge_query` sibling for documents rather than forge reads: it runs the
+	# consumer's inventory tools, rewrites their documents and writes through
+	# `record`'s stores, reaching `resolve` for the committed `[sbom]` table and
+	# `git` for the root. IT DECIDES NOTHING — the supply-chain preset and the
+	# consumer's modules read what it records — and it spawns programs that fetch
+	# pinned sources, so its `hook`, `repair` and `check` edges are forbidden below
+	# for `rest`'s reason.
+	"sbom",
+	# `reclaim` arrived with CLOUD-843, retiring `[tasks.reclaim-census]`: the
+	# `record census` verb's body. `record`'s class -- a SENSOR that appends
+	# through `journal`, folds through it, and resolves the store path through
+	# `record` -- plus `git` for the per-worktree directory and `durable` for the
+	# once-per-boot mark. It decides nothing a gate reads, so its `rules` and
+	# `hook` edges are forbidden below for `forge_query`'s reason.
+	"reclaim",
+	# `step` arrived with CLOUD-843, retiring `[tasks.step-receipt]`, and is
+	# `record`'s class: a cache over the keyed store. It reaches `git` for the
+	# index entries it hashes, `exec` for the one placed boundary its tool argvs
+	# and command run through (it spawns nothing of its own), `record` for the
+	# store, `resolve` for the committed step table and `task` for the phase it
+	# announces. IT DECIDES NOTHING -- a hit spares a re-run and never mints a
+	# `Finding` -- so its edges into the engine that decides are forbidden below,
+	# and a mediated call must not reach a verb that runs a consumer's command.
+	"step",
+	# `step_table` is the `[[step]]` row and its load-time validator, split out
+	# of `step` in review (CLOUD-843). With the type in `step`, `config` reached
+	# `step` and `step` reached `resolve`, so `config -> step -> resolve -> config`
+	# closed a cycle through the `config -> resolve` edge the table forbids --
+	# the one-hop route this file's own standard refuses (CLOUD-1260). Its OWN
+	# edges are `error` for the refusal and `git` for the pathspec predicate
+	# `rules` already shares, neither of them a loader. That is a claim about
+	# DIRECT edges, which is all this table decides: `git -> rules -> config`
+	# still reaches the loader two hops out, through the `config <-> rules`
+	# cycle that predates this row and that the split neither adds to nor
+	# removes. The same holds for `step -> git -> rules` below.
+	"step_table",
+	# `mcp_grant` and `mcp_posture` arrived with CLOUD-843's P5, retiring the
+	# connector and attach programs. They are `mcp`'s readers: they walk the
+	# declared sources through `mcp`, parse a settings file through `rules`'
+	# `parse_node`, and read the spawn ledger `mcp` writes. Neither reaches
+	# `fetch`, and neither decides a mediated call -- `grant --guard` is a
+	# DISPATCHED handler, a separate process the door spawns -- so both are
+	# forbidden `hook` below for `mcp`'s reason.
+	"mcp_grant",
+	"mcp_posture",
+	# `preflight` arrived with the same package, retiring `gh-preflight`. It walks
+	# the consumer's `[[forge.probe]]` rows through `rest`, so it reaches the
+	# network, and its `hook`, `repair` and `check` edges are forbidden below for
+	# `rest`'s reason.
+	"preflight",
+	# `sweep` arrived with CLOUD-843, retiring `[tasks.board-sweep]`. It is a
+	# COMPOSER: it runs the argv a consumer's `[board] sweep` rows declare, through
+	# `exec`'s placed adapter, and folds their exits onto `exit`'s table. It reads
+	# `board` for the row type and nothing else — it decides no gate's predicate,
+	# so it reaches no decider, and because what it runs is consumer-declared its
+	# `hook` and `repair` edges are forbidden below for `repair`'s reason.
+	"sweep",
+	# `tracker_reading` arrived with CLOUD-843 and is `probe_verdict`'s class one
+	# size up: a READING the `record derive` dispatch calls, for the five tracker
+	# families the `tracker-hygiene` preset decides over. It reaches `git` for the
+	# release and trunk walks, `ready` and `race` for the one key grammar and the
+	# one claimed-key authority, `landed` for the one pull-request URL spelling,
+	# and `error` for its refusals. IT DECIDES NOTHING — the preset's modules do —
+	# so its `rules` and `hook` edges are forbidden below for `forge_query`'s
+	# reason: a producer that reached the engine deciding over its record would
+	# be a measurement that knew which verdict it was feeding.
+	"tracker_reading",
+	# `released` arrived with CLOUD-843, retiring `[tasks.released]`'s body. A
+	# READING in `tracker_reading`'s class, for the preset's sixth family: it
+	# reaches `git` for the tag's range, `ready` for the key grammar, and
+	# `board_check` to COMPOSE the board gate's verdict rather than copy its
+	# predicate. It decides nothing over its own record, so its `rules` and
+	# `hook` edges are forbidden below for `forge_query`'s reason.
+	"released",
+	# `release` arrived with CLOUD-843, retiring three release task bodies. A
+	# PRODUCER in `forge_query`'s class: it reads a release over `rest`, hashes
+	# its assets, writes through `record`'s named-family store and polls through
+	# `pr_watch`'s one clock. It decides nothing -- the `release-hygiene` preset
+	# and the consumer's module do -- and it reaches the network, so the mediated
+	# and `check` edges to it are forbidden below for `rest`'s reason.
+	"release",
+	# `attestation` arrived with CLOUD-843, retiring `[tasks.attestation-record]`.
+	# A PRODUCER in `forge_query`'s class: it probes the forge over `rest`, runs
+	# the verifier through `exec`'s one shared spawn, and writes through
+	# `record`'s named-family store. It decides nothing -- the `supply-chain`
+	# preset does -- and it reaches the network, so the mediated and `check`
+	# edges to it are forbidden below for `rest`'s reason.
+	"attestation",
+	# `turn` arrived with CLOUD-843's retirement of `finding-sink-check`. It is a
+	# READING in `probe_verdict`'s class: a pure reduction of a transcript body to
+	# counts, a boolean and call names, plus one receipt read. It decides nothing
+	# — which call is a home is `policy/finding-sink.rego`'s — so it reaches no
+	# decider, and `record` is its only caller.
+	"turn",
+	# `unsubscribe` arrived with the same campaign, retiring `pr-unsubscribed`.
+	# A PRODUCER in `forge_query`'s class: it reaches `fetch` for the one call its
+	# `drop` arm makes and `durable`/`receipt` for the receipt, and decides
+	# nothing — `check`'s verdict is the consumer's module. It reaches the network,
+	# so its `hook`, `repair` and `check` edges are forbidden below.
+	"unsubscribe",
+	# `probe` arrived with the same campaign, retiring `evaluator-io-record`. It
+	# runs the caller's probe command and hands back its status and output, which
+	# is `exec`'s class of effect, so the mediated path must not reach it.
+	"probe",
+	# `board_check` arrived with CLOUD-1221, retiring the three board gates. It
+	# READS and does not decide: it asks `ready` for the one definition of Ready,
+	# reads `board` for the column vocabulary, `landed` for its one reading of a
+	# pull-request URL, `git` for the tracked tree and a deleted path, and `rules`
+	# for the one glob semantics the crate has — then hands that reading to the
+	# `tracker-hygiene` preset through `preset` and `policy`, which is where every
+	# verdict lives. It reads a PAYLOAD SET, which no mediated call carries, so its
+	# `hook` edge is forbidden below — a mediated call reaching a verb that reads
+	# the whole tracked tree is the per-call cost CLOUD-689's ceiling refuses.
+	"board_check",
+	# `ci_step` arrived with CLOUD-843 Phase 4: the runner-file glue a workflow
+	# step used a shell for. It runs a command the caller names, which is
+	# `step`'s class of effect, and writes the runner's files through `durable`.
+	# It decides nothing, so its `rules` and `hook` edges are forbidden below.
+	"ci_step",
 }
 
 # THE FORBIDDEN EDGES, each traceable to prose already in the tree.
@@ -741,9 +906,30 @@ forbidden[from] contains to if {
 		# credential and makes the call — so `hook -> rest` reached the network
 		# by exactly the route the `fetch` entry refuses, one name later. Found
 		# in review.
+		# `sbom` joins on the same ground: it spawns the consumer's inventory
+		# tools, which fetch pinned sources over the network (CLOUD-843).
+		# `forge_query` joins for `rest`'s reason one hop further out (CLOUD-843):
+		# it reaches `rest`, so a mediated call able to reach it reaches the
+		# network by the route the `rest` entry refuses, one name later.
+		# `step` joins for the reason `repair`'s row below states (CLOUD-843):
+		# its `run` arm executes a command the caller names and writes a
+		# receipt, and a mediated call adjudicates cached state -- it never runs
+		# a step. `repair` carries the same entry, since it inherits this set.
+		# `mcp_grant`, `mcp_posture` and `preflight` join for `mcp`'s and
+		# `rest`'s reasons one hop out (CLOUD-843): the first two reach `mcp`, the
+		# third reaches `rest`.
+		# `sweep` joins for `repair`'s reason below (CLOUD-843): it runs argv a
+		# consumer declared, and a mediated call able to reach it would run every
+		# board gate inside CLOUD-689's ceiling.
+		# `unsubscribe` and `probe` join for CLOUD-843: the first reaches the
+		# network through `fetch`, the second runs a caller's program.
+		# `ci_step` joins for `probe`'s reason: it runs a caller's program.
 		"hook": {
 			"fetch", "rest", "mcp", "lease", "gitwrite", "land",
-			"pr_watch", "fast_forward", "main_watch",
+			"pr_watch", "fast_forward", "main_watch", "forge_query", "ci_signal", "sbom",
+			"step",
+			"mcp_grant", "mcp_posture", "preflight", "sweep", "release", "attestation",
+			"unsubscribe", "probe", "ci_step",
 		},
 		# `repair` RUNS A CONSUMER'S DECLARED COMMAND ON THE MEDIATED PATH
 		# (CLOUD-1639), so it inherits `hook`'s set entire and for the same
@@ -766,7 +952,10 @@ forbidden[from] contains to if {
 		# `crate::repair`'s header carry the other half.
 		"repair": {
 			"fetch", "rest", "mcp", "lease", "gitwrite", "land",
-			"pr_watch", "fast_forward", "main_watch",
+			"pr_watch", "fast_forward", "main_watch", "forge_query", "ci_signal", "sbom",
+			"step",
+			"mcp_grant", "mcp_posture", "preflight", "sweep", "release", "attestation",
+			"unsubscribe", "probe", "ci_step",
 		},
 		# `check` NAMES NO MODULE TODAY, so this row is INERT — and that is worth
 		# stating rather than leaving a reader to infer enforcement from a table
@@ -782,7 +971,9 @@ forbidden[from] contains to if {
 		# not fire, which is how a row with no possible subject announces itself.
 		"check": {
 			"lease", "gitwrite", "land",
-			"pr_watch", "fast_forward", "main_watch",
+			"pr_watch", "fast_forward", "main_watch", "forge_query", "ci_signal", "sbom",
+			"preflight", "release", "attestation",
+			"unsubscribe", "probe",
 		},
 		# And the other direction, which is `symbols`' and `pinned`'s row again: the
 		# dispatcher sits below the engine and must not reach the module that
@@ -791,7 +982,10 @@ forbidden[from] contains to if {
 		"mcp": {"hook"},
 		"surface": {"cli", "lib"},
 		"cli": {"lib", "journal"},
-		"config": {"resolve", "trust", "lint", "epoch"},
+		# `config -> step` joins the chain for `step_table`'s reason (CLOUD-843):
+		# `step` reaches `resolve`, so the edge is `config -> resolve` one hop
+		# further out. The loader names the row through the leaf instead.
+		"config": {"resolve", "trust", "lint", "epoch", "step"},
 		"resolve": {"trust", "lint", "epoch"},
 		"trust": {"lint", "epoch"},
 		"lint": {"epoch"},
@@ -875,6 +1069,70 @@ forbidden[from] contains to if {
 		# here is what keeps `arm` consumable by CLOUD-1712's fetched-duration
 		# series without dragging a benchmark runner in behind it.
 		"arm": {"rules", "hook", "perf", "mutate"},
+		# `asked -> {lint, rules, hook}`: the ledger must not reach the deciders
+		# that read it. See its placement above.
+		"asked": {"lint", "rules", "hook"},
+		# `forge_query -> {rules, hook}`, `symbols`' pair for `record`'s reason: a
+		# producer that reached the engine deciding over its record would be a
+		# measurement that knew which verdict it was feeding (CLOUD-843).
+		"forge_query": {"rules", "hook"},
+		# `ci_signal -> {rules, hook}`, for `forge_query`'s reason.
+		"ci_signal": {"rules", "hook"},
+		# `sbom -> {rules, hook}` for the same reason: a producer that reached the
+		# engine deciding over its record would know which verdict it was feeding.
+		"sbom": {"rules", "hook"},
+		# `reclaim -> {rules, hook}`, the same pair for the same reason: the census
+		# is a sensor, and one that reached the engine adjudicating a call would
+		# be a measurement able to decide over what it measures (CLOUD-843).
+		"reclaim": {"rules", "hook"},
+		# `step -> {rules, hook}`, the same pair for the same reason: a cache that
+		# reached the engine deciding over the step it caches would be a receipt
+		# that knew which verdict it was standing in for (CLOUD-843). DIRECT
+		# edges only, stated rather than implied: `step -> git -> rules` remains,
+		# since `index_facts` walks with `rules::tree_files`. What crosses that
+		# hop is a file list, never a verdict; forbidding `step -> git` would
+		# forbid the index read that is the cache's whole key.
+		"step": {"rules", "hook"},
+		# `step_table -> {step, resolve, config, rules, hook}`: the loader's leaf
+		# must name nothing that loads a config or decides, or the cycle it was
+		# split out to break comes back one name later (CLOUD-843). Direct edges,
+		# like every row here; the two-hop `git -> rules -> config` route is the
+		# pre-existing `config <-> rules` cycle, stated at `declared_modules`.
+		"step_table": {"step", "resolve", "config", "rules", "hook"},
+		# `mcp`'s row, for its readers (CLOUD-843): below the engine that
+		# adjudicates a mediated call, never reaching back into it.
+		"mcp_grant": {"hook"},
+		"mcp_posture": {"hook"},
+		"preflight": {"hook"},
+		# `sweep -> {rules, hook}`, `forge_query`'s pair for the composer's reason:
+		# a sweep that reached the engine deciding over one of its gates would be a
+		# second authority on that gate's predicate (CLOUD-843).
+		"sweep": {"rules", "hook"},
+		# `tracker_reading -> {rules, hook}`, `forge_query`'s pair for its reason.
+		"tracker_reading": {"rules", "hook"},
+		# `released -> {rules, hook}`, `tracker_reading`'s pair for its reason.
+		"released": {"rules", "hook"},
+		# `ci_step -> {rules, hook}`, `step`'s pair for its reason: it runs the
+		# command a workflow names, and deciding over a tree is not its business.
+		"ci_step": {"rules", "hook"},
+		# `release -> {rules, hook}`, `forge_query`'s pair for its reason: the
+		# producer of a release record and a checksum manifest must not reach the
+		# engine deciding over them (CLOUD-843).
+		"release": {"rules", "hook"},
+		# `attestation -> {rules, hook}`, `forge_query`'s pair for its reason: the
+		# producer of the attestation record must not reach the engine deciding
+		# over it (CLOUD-843).
+		"attestation": {"rules", "hook"},
+		# `turn`, `unsubscribe` and `probe` -> {rules, hook}, `forge_query`'s pair
+		# for its reason (CLOUD-843): a reading or a producer that reached the
+		# engine deciding over its record would know which verdict it fed.
+		"turn": {"rules", "hook"},
+		"unsubscribe": {"rules", "hook"},
+		"probe": {"rules", "hook"},
+		# `board_check -> hook`, see its placement above: the board verb reads a
+		# payload set and the whole tracked tree, and must not reach the module
+		# that adjudicates a mediated call.
+		"board_check": {"hook"},
 	}
 	some to in targets
 }
@@ -1090,6 +1348,307 @@ test_the_mediated_path_must_not_reach_the_tier_over_the_transport if {
 	count(violation) == 1 with input as judging(
 		"crates/batten/src/hook.rs",
 		[internal("rest", 31)],
+	)
+}
+
+# CLOUD-843's producer, both directions. The mediated call must not reach it —
+# it is `rest` one hop further out — and it must not reach the engine that
+# decides over what it records.
+test_the_mediated_path_must_not_reach_the_forge_query_producer if {
+	count(violation) == 1 with input as judging(
+		"crates/batten/src/hook.rs",
+		[internal("forge_query", 31)],
+	)
+
+	count(violation) == 1 with input as judging(
+		"crates/batten/src/forge_query.rs",
+		[internal("rules", 12)],
+	)
+}
+
+# CLOUD-843's release producer, both directions, `forge_query`'s pair again.
+test_the_mediated_path_must_not_reach_the_release_producer if {
+	count(violation) == 1 with input as judging(
+		"crates/batten/src/hook.rs",
+		[internal("release", 31)],
+	)
+
+	count(violation) == 1 with input as judging(
+		"crates/batten/src/release.rs",
+		[internal("rules", 12)],
+	)
+
+	count(violation) == 0 with input as judging(
+		"crates/batten/src/release.rs",
+		[internal("rest", 10), internal("record", 11), internal("pr_watch", 12), internal("git", 13)],
+	)
+}
+
+# AND THE ARRANGEMENT: the producer composes the window, the transport and the
+# record store, and the verb dispatch reaches it. A table that banned the module
+# outright would satisfy the case above.
+test_the_forge_query_producer_reaches_what_it_composes if {
+	count(violation) == 0 with input as judging(
+		"crates/batten/src/forge_query.rs",
+		[internal("forge", 10), internal("rest", 11), internal("record", 12), internal("landed", 13)],
+	)
+
+	count(violation) == 0 with input as judging(
+		"crates/batten/src/record.rs",
+		[internal("forge_query", 20)],
+	)
+}
+
+# The CI-signal producers, both directions, on `forge_query`'s terms.
+test_the_mediated_path_must_not_reach_the_ci_signal_producers if {
+	count(violation) == 1 with input as judging(
+		"crates/batten/src/hook.rs",
+		[internal("ci_signal", 31)],
+	)
+
+	count(violation) == 1 with input as judging(
+		"crates/batten/src/ci_signal.rs",
+		[internal("rules", 12)],
+	)
+
+	count(violation) == 0 with input as judging(
+		"crates/batten/src/ci_signal.rs",
+		[internal("forge", 10), internal("rest", 11), internal("record", 12), internal("forge_query", 13)],
+	)
+}
+
+# CLOUD-843's SBOM producer, both directions, on `forge_query`'s ground: neither
+# the mediated call nor a repair may reach the tool spawns, and the producer may
+# not reach the engine deciding over its records. And the arrangement it does
+# have — `resolve`, `record`, `git`, `durable` — stays open.
+test_the_sbom_producer_is_bounded_both_ways if {
+	count(violation) == 1 with input as judging(
+		"crates/batten/src/hook.rs",
+		[internal("sbom", 31)],
+	)
+
+	count(violation) == 1 with input as judging(
+		"crates/batten/src/repair.rs",
+		[internal("sbom", 9)],
+	)
+
+	count(violation) == 1 with input as judging(
+		"crates/batten/src/sbom.rs",
+		[internal("rules", 12)],
+	)
+
+	count(violation) == 0 with input as judging(
+		"crates/batten/src/sbom.rs",
+		[internal("resolve", 10), internal("record", 11), internal("git", 12), internal("durable", 13)],
+	)
+}
+
+# CLOUD-843's reclaim census, both halves: the sensor must not reach the engine
+# that adjudicates, and it may reach the journal, the record store's path, the
+# per-worktree git directory and the durable write it composes.
+test_the_reclaim_census_must_not_reach_the_engine if {
+	count(violation) == 1 with input as judging(
+		"crates/batten/src/reclaim.rs",
+		[internal("rules", 12)],
+	)
+
+	count(violation) == 1 with input as judging(
+		"crates/batten/src/reclaim.rs",
+		[internal("hook", 12)],
+	)
+}
+
+test_the_reclaim_census_reaches_what_it_composes if {
+	count(violation) == 0 with input as judging(
+		"crates/batten/src/reclaim.rs",
+		[internal("journal", 10), internal("record", 11), internal("git", 12), internal("durable", 13)],
+	)
+
+	count(violation) == 0 with input as judging(
+		"crates/batten/src/record.rs",
+		[internal("reclaim", 20)],
+	)
+}
+
+# CLOUD-843's step cache, both directions. The mediated call must not reach a
+# verb that runs a consumer's command and writes a receipt, and the cache must
+# not reach the engine that decides over the step it stands in for.
+test_the_mediated_path_must_not_reach_the_step_cache if {
+	count(violation) == 1 with input as judging(
+		"crates/batten/src/hook.rs",
+		[internal("step", 31)],
+	)
+
+	# `repair` inherits `hook`'s set entire, so the edge is refused there too.
+	count(violation) == 1 with input as judging(
+		"crates/batten/src/repair.rs",
+		[internal("step", 32)],
+	)
+
+	count(violation) == 1 with input as judging(
+		"crates/batten/src/step.rs",
+		[internal("rules", 12)],
+	)
+
+	count(violation) == 1 with input as judging(
+		"crates/batten/src/step.rs",
+		[internal("hook", 13)],
+	)
+}
+
+# THE CYCLE THE REVIEW FOUND, closed at both ends (CLOUD-843). The loader must
+# not reach the cache (which reaches `resolve`), and the leaf holding the row
+# must not reach anything that loads a config.
+test_the_loader_must_not_reach_the_step_cache if {
+	count(violation) == 1 with input as judging(
+		"crates/batten/src/config.rs",
+		[internal("step", 765)],
+	)
+
+	count(violation) == 1 with input as judging(
+		"crates/batten/src/step_table.rs",
+		[internal("resolve", 11)],
+	)
+
+	count(violation) == 1 with input as judging(
+		"crates/batten/src/step_table.rs",
+		[internal("config", 12)],
+	)
+
+	count(violation) == 1 with input as judging(
+		"crates/batten/src/step_table.rs",
+		[internal("step", 13)],
+	)
+}
+
+# AND THE ARRANGEMENT THAT REPLACES IT: the loader names the row through the
+# leaf, the leaf reaches only `error` and `git`, and the cache reads the row.
+test_the_loader_reaches_the_step_row_through_the_leaf if {
+	count(violation) == 0 with input as judging(
+		"crates/batten/src/config.rs",
+		[internal("step_table", 765)],
+	)
+
+	count(violation) == 0 with input as judging(
+		"crates/batten/src/step_table.rs",
+		[internal("error", 17), internal("git", 60)],
+	)
+
+	count(violation) == 0 with input as judging(
+		"crates/batten/src/step.rs",
+		[internal("step_table", 83)],
+	)
+}
+
+# AND THE ARRANGEMENT: the cache composes the index, the placed spawn boundary,
+# the keyed store, the committed table and the task registry, and the verb
+# dispatch reaches it. A table that banned the module outright would satisfy the
+# case above.
+test_the_step_cache_reaches_what_it_composes if {
+	count(violation) == 0 with input as judging(
+		"crates/batten/src/step.rs",
+		[internal("git", 10), internal("exec", 11), internal("record", 12), internal("resolve", 13), internal("task", 14)],
+	)
+
+	count(violation) == 0 with input as judging(
+		"crates/batten/src/lib.rs",
+		[internal("step", 20)],
+	)
+}
+
+# CLOUD-843's board sweep, both directions: the mediated call must not reach a
+# composer that runs consumer-declared argv, and the composer must not reach the
+# engine deciding over any gate it runs.
+test_the_mediated_path_must_not_reach_the_board_sweep if {
+	count(violation) == 1 with input as judging(
+		"crates/batten/src/hook.rs",
+		[internal("sweep", 31)],
+	)
+
+	count(violation) == 1 with input as judging(
+		"crates/batten/src/repair.rs",
+		[internal("sweep", 31)],
+	)
+
+	count(violation) == 1 with input as judging(
+		"crates/batten/src/sweep.rs",
+		[internal("rules", 12)],
+	)
+}
+
+# AND THE ARRANGEMENT: the composer reads the row type, spawns through the placed
+# adapter and folds onto the exit table, and the dispatch reaches it.
+test_the_board_sweep_reaches_what_it_composes if {
+	count(violation) == 0 with input as judging(
+		"crates/batten/src/sweep.rs",
+		[internal("board", 10), internal("exec", 11), internal("exit", 12)],
+	)
+
+	count(violation) == 0 with input as judging(
+		"crates/batten/src/lib.rs",
+		[internal("sweep", 20)],
+	)
+}
+
+# CLOUD-843's tracker readings, both directions: the reading must not reach the
+# engine deciding over its record, and it may reach what it composes.
+test_the_tracker_reading_must_not_reach_the_engine_it_feeds if {
+	count(violation) == 1 with input as judging(
+		"crates/batten/src/tracker_reading.rs",
+		[internal("rules", 12)],
+	)
+}
+
+test_the_tracker_reading_reaches_what_it_composes if {
+	count(violation) == 0 with input as judging(
+		"crates/batten/src/tracker_reading.rs",
+		[internal("git", 10), internal("ready", 11), internal("race", 12), internal("landed", 13)],
+	)
+
+	count(violation) == 0 with input as judging(
+		"crates/batten/src/record.rs",
+		[internal("tracker_reading", 20)],
+	)
+}
+
+# CLOUD-843's attestation producer, both directions, `forge_query`'s pair again,
+# and the arrangement it composes, so the table places the module rather than
+# banning it.
+test_the_mediated_path_must_not_reach_the_attestation_producer if {
+	count(violation) == 1 with input as judging(
+		"crates/batten/src/hook.rs",
+		[internal("attestation", 31)],
+	)
+
+	count(violation) == 1 with input as judging(
+		"crates/batten/src/attestation.rs",
+		[internal("rules", 12)],
+	)
+
+	count(violation) == 0 with input as judging(
+		"crates/batten/src/attestation.rs",
+		[internal("rest", 10), internal("record", 11), internal("exec", 12)],
+	)
+}
+
+# CLOUD-1221's placement, both directions. The board verb must not reach the
+# mediated call's adjudicator, and it DOES reach the grammar, the vocabulary and
+# the tracked tree it is built on — a table that banned the module outright would
+# satisfy the first half alone.
+test_the_board_check_must_not_reach_the_mediated_call if {
+	count(violation) == 1 with input as judging(
+		"crates/batten/src/board_check.rs",
+		[internal("hook", 40)],
+	)
+}
+
+test_the_board_check_reaches_what_it_composes if {
+	count(violation) == 0 with input as judging(
+		"crates/batten/src/board_check.rs",
+		[
+			internal("ready", 80), internal("board", 76), internal("git", 290), internal("rules", 285),
+			internal("policy", 400), internal("preset", 395),
+		],
 	)
 }
 

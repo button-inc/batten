@@ -71,7 +71,7 @@ const TAG: &str = "v9.9.9";
 const REPO: &str = "example/pkg";
 
 /// The archive payload: a `batten` executable at the archive root, which is what
-/// `mise-tasks/dist.sh` produces and what the installer requires.
+/// `batten dist` produces and what the installer requires.
 fn tarball(dir: &std::path::Path) -> Vec<u8> {
     let stage = dir.join("stage");
     std::fs::create_dir_all(&stage).unwrap();
@@ -227,7 +227,9 @@ fn install(name: &str, web: &str, target: &str) -> (Option<i32>, String, String,
     let out = Command::new("sh")
         .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/../../install.sh"))
         .env_clear()
-        .env("PATH", std::env::var("PATH").unwrap_or_default())
+        // No `batten` resolvable by name (CLOUD-1951): CI's runner has none, so
+        // an installer that found one here would be reading a different box.
+        .env("PATH", common::ambient_path())
         .env("HOME", dir.to_str().unwrap())
         // The loopback host must not be reached through this container's proxy.
         .env("NO_PROXY", "127.0.0.1,localhost")

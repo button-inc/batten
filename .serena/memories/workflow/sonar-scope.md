@@ -20,9 +20,15 @@ head it landed, so a landed commit accumulates the PR verdict and then main's.
 SHA it reports **main's** verdict as that commit's:
 
 ```
-$ SHA=<any landed sha> REPO=button-inc/batten mise run sonar-gate
-failure  SonarCloud Code Analysis   → exit 1
+$ GH_REPO=button-inc/batten mise run sonar-gate <any landed sha>
+`check grade red`, pointers `SonarCloud Code Analysis` `failure`   → exit 2
 ```
+
+(The task is `batten record query check-runs --input sha=<sha> --input
+'check=<name>'`, the name filtered at the forge, then `batten check --rule 'check
+grade other' --fail-on-warning`; the decision is the `check-verdict` preset,
+CLOUD-843. The scope defect below is unchanged by that port — the query records
+no `details_url`.)
 
 That is trunk's standing `C` (CLOUD-528), not the commit's. Any `verify` over a
 HEAD that has already landed hits it.

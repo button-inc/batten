@@ -35,17 +35,29 @@
 //! with its own basename-stripping and its own ledger logic. The verb takes the
 //! name as an argument, so a second server is an argument.
 //
-// NO RETIREMENT ARM, AND ITS ABSENCE IS THE CORRECTION (CLOUD-1326).
+// THE RETIREMENT ARMS ARE BACK, AND WHAT WAS MISSING LAST TIME IS NOW TRUE
+// (CLOUD-1326, then CLOUD-843).
 //
-// This tier landed carrying `carried:` arms for `mise-tasks/serena-mcp.sh` and
-// `tests/serena-mcp.bats`, which is a claim that the shim's callers had moved to
-// this verb. They had not: the only caller is `.mcp.json`, read by a client that
-// resolves `batten` on `PATH`, and no release ships `mcp spawn`. Both the shim
-// and its suite are tracked again and still hold every claim the arms listed.
+// This tier once carried these arms while the shim's only caller, `.mcp.json`,
+// still named the shim — and the client resolves `batten` on `PATH`, a RELEASE,
+// which did not ship `mcp spawn` then. The arms were withdrawn as a false claim
+// about callers. Both halves have moved since: the release on `PATH` ships the
+// verb, and `.mcp.json` now names `batten mcp spawn serena -- mise exec …`, so
+// the shim has no caller left and retires with its suite.
 //
-// The verb stays — it is the better mechanism and its own properties are asserted
-// below. What it does not yet have is a caller it can actually serve, and a
-// retirement arm is a statement about callers.
+// carried: mise-tasks/serena-mcp.sh crates/batten/src/mcp.rs kind:verb crates/batten/tests/it/mcp_spawn.rs runs:batten+mcp+spawn
+// carried: tests/serena-mcp.bats crates/batten/src/mcp.rs kind:verb crates/batten/tests/it/mcp_spawn.rs
+//
+// carried: "a launch appends one record naming the server, and execs the launch line" crates/batten/tests/it/mcp_spawn.rs
+// carried: "THE SERVER'S PID IS THE SHIM'S — it execs rather than forks" crates/batten/tests/it/mcp_spawn.rs
+// carried: "the record carries five fields: epoch, server, pid, load, siblings" crates/batten/tests/it/mcp_spawn.rs
+// carried: "a launch inside the window counts the earlier one as a sibling" crates/batten/tests/it/mcp_spawn.rs
+// carried: "a launch outside the window counts no sibling" crates/batten/tests/it/mcp_spawn.rs
+// carried: "STDOUT CARRIES ONLY THE SERVER'S BYTES — stdout is the MCP transport" crates/batten/tests/it/mcp_spawn.rs
+// carried: "an unwritable ledger never stops the server from starting" crates/batten/tests/it/mcp_spawn.rs
+// changed: "the server name comes from the shim's own basename, so a second server is a second name" crates/batten/src/mcp.rs kind:verb the name is an ARGUMENT of the verb rather than the program's basename, so a second server is a second argument and never a second copy of a script; asserted by `a_second_server_is_an_argument_rather_than_a_second_script`
+// changed: "the shim is what .mcp.json launches, so the ledger is populated in real sessions" crates/batten/src/mcp.rs kind:verb `.mcp.json` launches `batten mcp spawn serena -- …` rather than the shim; asserted over the committed bytes by `the_committed_config_launches_serena_through_the_verb`
+// carried: "the launch args stay in .mcp.json, so the pin gate still reads them" crates/batten/tests/it/mcp_spawn.rs
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -305,19 +317,69 @@ fn a_launch_line_that_will_not_start_is_a_refusal_and_not_a_silent_success() {
     assert!(text.contains("could not become"), "{text}");
 }
 
-// THE COMMITTED CLIENT CONFIG IS NOT THIS VERB'S CALLER, AND ASSERTING THAT IT
-// WAS IS WHAT BROKE (CLOUD-1326).
+// THE COMMITTED CLIENT CONFIG IS THIS VERB'S CALLER NOW (CLOUD-843).
 //
-// A case here asserted `.mcp.json` names `batten mcp spawn`. The MCP client reads
-// that file with the `batten` on `PATH` — a RELEASE — and no release ships this
-// verb, so the server died at startup with no report and `mem:*` was unreachable
-// for a whole session. The tier was green throughout: it read the committed bytes
-// and found exactly what the commit had written there.
-//
-// The repoint belongs to the release that ships the verb, not to the commit that
-// adds it. `policy/self-image.rego` refuses the class now, so the property this
-// case wanted — the committed config launches something that exists — is a gate's
-// rather than a fixture-blind string compare's.
+// A case here once asserted `.mcp.json` names `batten mcp spawn` while no release
+// shipped the verb, so the server died at startup with no report and `mem:*` was
+// unreachable for a whole session (CLOUD-1326) — green throughout, because it
+// read the committed bytes and found what the commit wrote. The repoint belonged
+// to the release that shipped the verb; that release is the one on `PATH` now, so
+// the repoint landed and this case pins it.
+#[test]
+fn the_committed_config_launches_serena_through_the_verb() {
+    let config: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(at_root(".mcp.json")).unwrap()).unwrap();
+    let serena = &config["mcpServers"]["serena"];
+    assert_eq!(serena["command"], "batten", "{serena}");
+    let args: Vec<&str> = serena["args"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(serde_json::Value::as_str)
+        .collect();
+    assert_eq!(
+        args.get(..4),
+        Some(&["mcp", "spawn", "serena", "--"][..]),
+        "the verb, the server's name, then the launch line: {args:?}"
+    );
+    assert_eq!(
+        args.get(4..6),
+        Some(&["mise", "exec"][..]),
+        "the launch line is the scoped exec it always was: {args:?}"
+    );
+}
+
+#[test]
+fn a_launch_line_carrying_its_own_double_dash_runs_verbatim() {
+    // UNIX ONLY: `mcp spawn` REPLACES this process (`exec`), and a host that
+    // cannot do that is refused by design rather than served by a child; see
+    // `a_host_that_cannot_replace_a_process_refuses_the_launch` for that arm.
+    if !cfg!(unix) {
+        return;
+    }
+    // THE COMMITTED SHAPE. `mise exec <tool> -- serena …` carries a `--` of its
+    // own after the verb's. The trailing list must take it as a word of the
+    // launch line, or the server would start without the argv that scopes it.
+    let (dir, launcher, _) = bench("inner-double-dash");
+    let output = spawn(
+        &dir,
+        "serena",
+        &launcher,
+        &[
+            "exec",
+            "pipx:serena-agent@1.7.0",
+            "--",
+            "serena",
+            "start-mcp-server",
+        ],
+    );
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let text = String::from_utf8_lossy(&output.stdout).into_owned();
+    assert!(
+        text.contains("args=exec pipx:serena-agent@1.7.0 -- serena start-mcp-server"),
+        "the launch line runs verbatim, its own `--` included: {text}"
+    );
+}
 
 #[test]
 fn the_pinned_launch_args_are_still_in_the_committed_config() {

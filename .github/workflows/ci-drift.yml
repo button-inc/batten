@@ -57,10 +57,11 @@ jobs:
       # engine may not do (house-style §5), and this is where the job token
       # already is. A failure reds the job before the gate runs, so a check that
       # could not look never reports agreement.
-      - run: gh api "repos/${{ github.repository }}/rules/branches/${CI_DRIFT_BRANCH:-main}" > host-rules.json
+      - run: mise run batten -- ci step --save host-rules.json --arg-env ENDPOINT -- gh api
         env:
           # The rules API is a repository read; the job token carries it.
           GH_TOKEN: ${{ github.token }}
+          ENDPOINT: repos/${{ github.repository }}/rules/branches/main
       - run: mise run ci-drift
         env:
           CI_DRIFT_RULES: host-rules.json

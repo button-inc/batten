@@ -1,0 +1,40 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-pr-unsubscribed 1  batten 
+.SH NAME
+batten\-pr\-unsubscribed \- Drop this session\*(Aqs webhook subscription to a pull request, attest it, or record and decide the reading
+.SH SYNOPSIS
+\fBbatten pr unsubscribed\fR [\fB\-\-token\-env\fR] [\fB\-\-endpoint\fR] [\fB\-\-tool\fR] [\fB\-\-arguments\fR] [\fB\-\-rule\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-session\-env\fR> <\fB\-\-family\fR> <\fIverb\fR> <\fIpr\fR> 
+.SH DESCRIPTION
+Drop this session\*(Aqs webhook subscription to a pull request, attest it, or record and decide the reading
+.SH OPTIONS
+.TP
+\fB\-\-session\-env\fR \fI<session_env>\fR
+The name of the environment variable holding this host\*(Aqs session id; unset is no session
+.TP
+\fB\-\-token\-env\fR \fI<token_env>\fR
+The name of the environment variable holding the path of the credential file `drop` sends
+.TP
+\fB\-\-endpoint\fR \fI<endpoint>\fR
+The endpoint `drop` calls, with `{session}` where the session id goes
+.TP
+\fB\-\-tool\fR \fI<tool>\fR
+The tool `drop` asks the endpoint to call
+.TP
+\fB\-\-arguments\fR \fI<arguments>\fR
+The tool\*(Aqs arguments `drop` sends: a JSON object whose strings may name {owner}, {repo}, {pr} and {session}
+.TP
+\fB\-\-family\fR \fI<family>\fR
+The record family `check` writes, and the prefix of this session\*(Aqs receipts
+.TP
+\fB\-\-rule\fR \fI<rule>\fR
+The declared rule `check` decides with over the record it writes
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fIverb\fR>
+drop | record | check
+.TP
+<\fIpr\fR>
+The pull request number this verb is about

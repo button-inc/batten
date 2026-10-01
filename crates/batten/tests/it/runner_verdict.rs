@@ -13,7 +13,8 @@
 //! it. Producing a denial would mean running the task against a fixture config,
 //! which `batten-check` has no flag for: it is hard-wired to `cargo run … enforce`
 //! over the working tree. So the honest cheap predicate is the one
-//! `tests/task-fail-closed.bats` already uses for `verify`'s body — read the
+//! `tests/task-fail-closed.bats` used for `verify`'s body until both retired into
+//! `verify_chain.rs` (CLOUD-843) — read the
 //! committed task body and assert the property over it. That suite's own case, *"a
 //! captured exit code is checked and exited on, never merely recorded"*, is this
 //! predicate one task over.
@@ -54,6 +55,19 @@ fn batten_check_body() -> String {
     task_body("batten-check")
 }
 
+/// The `run` entries of `[tasks.batten-check]`, parsed: the body is an argv
+/// chain, so each entry is one command mise runs in order and stops on.
+fn batten_check_entries() -> Vec<String> {
+    let block = common::task_block("batten-check").expect("batten-check is a declared task");
+    let parsed: toml::Value = toml::from_str(&block).expect("a task block is a TOML table");
+    parsed["tasks"]["batten-check"]["run"]
+        .as_array()
+        .expect("batten-check's `run` is an argv chain")
+        .iter()
+        .map(|entry| entry.as_str().expect("each entry is a string").to_owned())
+        .collect()
+}
+
 /// ANTI-VACUITY, and it is not ceremony: every assertion below is over a string
 /// this file located by scanning, so a rename of the table or of the literal
 /// delimiter would leave them all passing over an empty body.
@@ -64,9 +78,26 @@ fn the_batten_check_body_was_found_at_all() {
         body.contains("enforce"),
         "the batten-check body invokes the engine"
     );
+}
+
+/// NOT RECEIPT-GATED, and the reason is what `enforce` reads (CLOUD-843 review).
+///
+/// CHANGED WITH CLOUD-843: the retired body skipped `enforce` on a
+/// `step-receipt` hit keyed to the tracked tree. But `enforce` also reads state
+/// no pathspec names: the record stores under the git directory
+/// (`input.tree.records`), captures, the forge's recorded answers. A record
+/// flipping to a deny value with no tracked change hit the receipt and skipped
+/// the gate. A `[[step]]` row can key only index entries, tool answers and
+/// arguments, so the honest cache for this step is none.
+#[test]
+fn the_engine_is_never_answered_from_a_step_receipt() {
+    let body = batten_check_body();
     assert!(
-        body.contains("step-receipt check"),
-        "the batten-check body is receipt-gated"
+        !body.contains("step run batten-check")
+            && !body.contains("step check batten-check")
+            && !body.contains("step-receipt"),
+        "batten-check must not be receipt-gated: `enforce` reads record and capture \
+         stores outside the tracked tree, which no `[[step]]` row can key"
     );
 }
 
@@ -91,55 +122,45 @@ fn the_engine_invocation_is_not_wrapped_in_a_replacing_guard() {
 }
 
 /// The positive half, and it is what stops the assertion above being satisfiable by
-/// deleting the invocation. The status is captured and re-exited with the SAME
-/// value — a body that captured it and exited `1` would pass a mere "captures `$?`"
-/// test while keeping the defect.
+/// deleting the invocation.
+///
+/// CHANGED WITH CLOUD-843: the capture-and-re-exit (`verdict=$?` / `exit
+/// "$verdict"`) existed only so a receipt could be written after a zero exit.
+/// With no receipt, the engine is the chain's TERMINATING entry, so its code is
+/// the task's with nothing after it to replace one.
 #[test]
-fn the_engine_status_is_captured_and_re_exited_unchanged() {
+fn the_engine_status_is_the_chains_last_entry_so_it_passes_through_unchanged() {
+    let entries = batten_check_entries();
+    assert_eq!(
+        entries.last().map(String::as_str),
+        Some("cargo run --quiet -p batten -- enforce"),
+        "`enforce` must be the last entry, bare, so its code is the task's: {entries:?}"
+    );
     let body = batten_check_body();
     assert!(
-        body.contains("verdict=$?"),
-        "the batten-check body captures the engine's exit status"
-    );
-    assert!(
-        body.contains(r#"exit "$verdict""#),
-        "the batten-check body exits with the status it captured, unchanged"
-    );
-
-    // ORDER IS THE PROPERTY, not mere presence: a capture that is never tested, or
-    // tested after the receipt is written, leaves the defect in place. mise task
-    // bodies do not run under `set -e`, so nothing else enforces this.
-    let capture = body.find("verdict=$?").expect("the capture is present");
-    let propagate = body
-        .find(r#"exit "$verdict""#)
-        .expect("the exit is present");
-    let record = body
-        .find("step-receipt record")
-        .expect("the receipt write is present");
-    assert!(
-        capture < propagate,
-        "the status is captured before it is propagated"
-    );
-    assert!(
-        propagate < record,
-        "a non-zero verdict exits before the receipt is written — a denied run must \
-         leave no receipt, or the next run answers from a cache of the failure"
+        !body.contains("verdict=$?") && !body.contains("|| true"),
+        "no shell remains between the engine and the task's exit to replace its code"
     );
 }
 
-/// CLOUD-407 must stay fixed, and this file is where a reader would look for it:
-/// `verify` deliberately maps a content failure to `1` so its own `2` can mean
-/// "main moved under this branch". CLOUD-1090 preserves a verdict one layer down
-/// and must not be read as licence to reverse that.
+/// CLOUD-407 must stay fixed, and this file is where a reader would look for it.
+///
+/// `verify` used to MAP a content failure to `1` so its own `2` could mean "main
+/// moved under this branch". That mapper retired with its shell (CLOUD-843): the
+/// task is a sequence of steps, each step's code leaves it unchanged — this
+/// file's own principle, a runner transports a verdict rather than replacing it —
+/// and the lap reads "main moved" off the base itself (`land::confirmed`), so a
+/// policy verdict arriving as `2` still stops. What this case pins is the half a
+/// reader could undo here: no step re-numbers a code on its way out.
 #[test]
-fn verify_still_reserves_exit_2_for_the_rebase_race() {
+fn verify_transports_every_step_s_code_rather_than_re_numbering_it() {
     let body = task_body("verify");
     assert!(
-        body.contains("exit 2"),
-        "verify still has an exit-2 path — CLOUD-407's rebase-race signal"
+        body.contains("verify:gated") && body.contains("linear-check"),
+        "the body read is verify's own sequence: {body}"
     );
     assert!(
-        body.contains(r#"if [ "$linear_rc" = 2 ]; then"#),
-        "verify's exit 2 is reached from linear-check's status, not from a gate's verdict"
+        !body.contains("exit "),
+        "no step of verify chooses an exit code of its own: {body}"
     );
 }

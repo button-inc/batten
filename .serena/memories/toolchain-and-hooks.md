@@ -15,8 +15,8 @@ mise — CI, hk, and your shell then run byte-identical commands.
 Common tasks: `mise run test | lint | fmt | fix | ci | cross-check`; `mise tasks`
 lists all. `mise run fmt` is `hk fix --all` and `mise run ci` = `hooks` (`hk
 check --all`) + `deny`, so the gate's step list lives in `hk.pkl` alone — there
-is no second list in `mise.toml` to keep in sync. `mise run test` aggregates
-`test:cargo` + `test:bats`.
+is no second list in `mise.toml` to keep in sync. `mise run test` is
+`test:cargo`; the bats lane retired with the shell (CLOUD-843).
 
 `lint` and `fix` are a symmetric pair, and both aggregate (CLOUD-104):
 
@@ -297,6 +297,12 @@ run"_ — and that one line predicts every downstream refusal. On seeing it run
 `mise run install:local`, then `session:git-hooks` and `session:stamp`, before
 diagnosing anything else.
 
+**The converse also happens.** A reclaim's SessionStart reinstalls the RELEASE
+over a deliberate `install:local` build, and every hook then judges with the
+older engine. This silently dropped three recorded admissions on 2026-09-30.
+Read `mem:workflow/admission-recording` before asking any AskUserQuestion that
+must be recorded, and whenever `.batten/asked.jsonl` is missing after an answer.
+
 ## MCP allow rules: gate only what the repo can verify
 
 `permissions.allow` is matched against the tool name as exposed to the session,
@@ -319,12 +325,14 @@ rule never skips that prompt, at any spelling and at any level: the Claude Code
 permissions docs say so, and #76264's escape 2 records it. No user-facing remedy is known: Claude Code
 Remote is not listed at claude.ai/customize/connectors (owner, 2026-09-28;
 CLOUD-1946 first claimed otherwise, and was wrong). Each call answers
-after an approval. `mcp-allow-check --session` reports every committed grant the
-account still asks for, at session start. Read `mem:connector-allowlist-recovery`'s
+after an approval. `batten mcp posture` (the `mcp-attach-check` handler row,
+CLOUD-843) reports every committed grant the account still asks for, at session
+start. Read `mem:connector-allowlist-recovery`'s
 STOP section before acting on any `MCP tool call requires approval`.
 
-So `mise run mcp-allow-check` (in the shared hk `gate`, globbed on
-`.claude/settings.json`) asserts only what is repo-verifiable: no allow rule
+So the `claude-code-cloud` preset's tree module `mcp-grants-are-honoured.rego`
+(run by `batten check`; the retired `mcp-allow-check` hk step's successor,
+CLOUD-843) asserts only what is repo-verifiable: no allow rule
 globs the server segment, since the CLI accepts a tool-name glob only after a
 literal `mcp__<server>__` prefix and skips anything broader with a warning — a
 rule that reads as a grant and is not one. It deliberately does **not** demand a

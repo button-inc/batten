@@ -5449,6 +5449,12 @@ const CENSUS_CONFIG: &str = concat!(
     // engine renders the cause for this kind, so the row carries only the
     // remediation half. That is also what `policy rule` prints for it.
     "no_fix_reason = \"the row is inert by construction; nothing matches it\"\n",
+    // `census shell`'s minimum input (CLOUD-843): a repository declaring nowhere
+    // shell lives is a usage error, never a zero nobody measured. An exempt glob
+    // alone is a real declaration — the tracked shell files are still counted —
+    // and the fixture carries none, so the census asserts about an empty document.
+    "[census.shell]\n",
+    "exempt = [\"install.sh\"]\n",
 );
 
 /// The session the census points `policy hooks` at.

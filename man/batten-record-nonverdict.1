@@ -1,0 +1,25 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-record-nonverdict 1  batten 
+.SH NAME
+batten\-record\-nonverdict \- Record which recent required\-check failures never reached a verdict
+.SH SYNOPSIS
+\fBbatten record nonverdict\fR [\fB\-\-window\fR] [\fB\-\-required\-check\fR] [\fB\-\-exclude\-job\fR] [\fB\-\-verdict\-step\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.SH DESCRIPTION
+Record which recent required\-check failures never reached a verdict
+.SH OPTIONS
+.TP
+\fB\-\-window\fR \fI<window>\fR
+How many recent failed runs to read, 1 to 100 (default: 30)
+.TP
+\fB\-\-required\-check\fR \fI<required_check>\fR
+A required job, by exact name; only these are counted (repeatable; default: $CI_REQUIRED_CHECKS)
+.TP
+\fB\-\-exclude\-job\fR \fI<exclude_job>\fR
+A job never counted, such as a fan\-in whose failure its siblings cause (repeatable; default: $CI_FANIN_CHECK)
+.TP
+\fB\-\-verdict\-step\fR \fI<verdict_step>\fR
+A step\-name prefix that marks a failed step as verdict\-bearing (repeatable; default: $CI_VERDICT_STEPS)
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help

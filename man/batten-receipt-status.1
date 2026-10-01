@@ -4,10 +4,13 @@
 .SH NAME
 batten\-receipt\-status \- Judge the named check\*(Aqs recorded receipt against HEAD and origin/main
 .SH SYNOPSIS
-\fBbatten receipt status\fR [\fB\-\-key\fR] [\fB\-J\fR|\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIcheck\fR> 
+\fBbatten receipt status\fR [\fB\-\-or\fR] [\fB\-\-key\fR] [\fB\-J\fR|\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIcheck\fR> 
 .SH DESCRIPTION
 Judge the named check\*(Aqs recorded receipt against HEAD and origin/main
 .SH OPTIONS
+.TP
+\fB\-\-or\fR \fI<or>\fR
+Another check whose receipt satisfies this one; any one valid receipt passes (repeatable)
 .TP
 \fB\-\-key\fR [default: head]
 Which git fact the receipt is judged against: the exact commit, or the branch

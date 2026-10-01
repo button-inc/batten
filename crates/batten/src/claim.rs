@@ -409,8 +409,8 @@ fn sequence_refusal(issue: &Issue, description: &str, receipts: &Path) -> Result
     if !receipts.join(SESSION_STAMP).exists() {
         return Ok(Some(Refusal {
             id: issue.id.clone(),
-            rule: "no-session-stamp (run `mise run session:stamp`, or pass \
-                   --bypass-sequence)"
+            rule: "no-session-stamp (a session start through `batten hook` writes it, or \
+                   pass --bypass-sequence)"
                 .to_owned(),
             kind: Kind::Sequence,
         }));
@@ -501,6 +501,29 @@ fn read_baseline(receipt: &Path, store: &Path) -> Result<Option<String>> {
 /// anything else, so its presence means a session began in this clone.
 const SESSION_STAMP: &str = "session-start";
 
+/// Write the session boundary under `receipts` (CLOUD-1991).
+///
+/// **THE ENGINE WRITES WHAT THE ENGINE READS.** [`sequence_refusal`] compares an
+/// issue's `updatedAt` against this file's mtime, and for its whole life the file
+/// was written by a consumer's `mise` task that one `[[hook.handler]]` row
+/// dispatched — so the gate's precondition was a task name a repository had to
+/// know to declare, and a repository that had not refused every claim with
+/// `no-session-stamp`. The write is mechanism with no consumer fact in it: one
+/// empty file at a fixed name under the per-worktree receipt store.
+///
+/// Replaced rather than touched, through [`crate::durable::replace`], so the
+/// mtime is the moment of this call — which is the property the ordering rests
+/// on: refinement must PREDATE the session that implements it.
+///
+/// # Errors
+///
+/// Whatever creating the store or writing the file reports; the caller decides
+/// whether a session start may continue without it.
+pub fn stamp_session(receipts: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(receipts)?;
+    crate::durable::replace(receipts.join(SESSION_STAMP), b"")
+}
+
 /// The prefix `[[mint]] issue-read` writes one file per issue key under.
 const READ_RECEIPT_PREFIX: &str = "issue-read.";
 
@@ -552,77 +575,6 @@ fn is_ready(
 // The claim receipt, and the recovery that re-keys a stranded one.
 // ---------------------------------------------------------------------------
 
-/// The weakenings a groomed body ADMITS, as `<smell> <key>` pairs.
-///
-/// # Why this lives here and not in the gate that reads it
-///
-/// `config lint`'s admission arm needs two sources that must AGREE: a
-/// `Weakens: <smell> <key>` commit trailer, and the groomed body that named the
-/// same pair BEFORE the work started. This is the second one, and the moment it
-/// is computable is exactly this one — a claim holds the groomed body in hand and
-/// the work has not begun. Reading it later is not the same question, because a
-/// body edited after the claim would answer it too.
-///
-/// # The port dropped this, and its own consumer never noticed
-///
-/// `mise-tasks/claim-check.sh` extracted these lines; the migration to this verb
-/// did not carry them, so every receipt since has been silent and
-/// `config-lint`'s groomed half has been unreachable — a trailer alone admitted
-/// anything, which is precisely the "asserted in the change that performs it"
-/// shape house style §8 refuses. CLOUD-841 filed the *lenient-fallback* half of
-/// that defect in 2026-08; this is the half underneath it, and it is why 841's
-/// own note that "`claim-check` must keep minting a receipt … it already does"
-/// read as satisfied while nothing was written.
-///
-/// # The tracker normalises the spelling, so the grammar must not be exact
-///
-/// An author types `**Weakens:** ` and the tracker stores `**Weakens: **` —
-/// the trailing space moves inside the emphasis. The shell anchored on
-/// `\*\*Weakens:\*\*[[:space:]]` and therefore could not have matched a body the
-/// tracker returned, only one typed into a local file. Both spellings are
-/// accepted here for that measured reason rather than for tolerance's sake.
-///
-/// **Pointer-only** (rule 4): the smell id and the config key, never the clause's
-/// prose or the reason it gives.
-fn admitted_weakenings(description: &str) -> Vec<String> {
-    let mut found = Vec::new();
-    for line in description.lines() {
-        // A list marker is optional because a Ready block writes the clause as a
-        // bullet and a plain paragraph is equally valid; the label is what
-        // anchors, and it must be at the start of the line's content so a clause
-        // QUOTED mid-sentence cannot pose as one.
-        let text = line.trim_start();
-        let text = text
-            .strip_prefix("* ")
-            .or_else(|| text.strip_prefix("- "))
-            .unwrap_or(text)
-            .trim_start();
-        let Some(rest) = text
-            .strip_prefix("**Weakens:** ")
-            .or_else(|| text.strip_prefix("**Weakens: **"))
-        else {
-            continue;
-        };
-        // `` `smell` at `key` ``. Split on the backticks rather than a regex: the
-        // key path carries `[` and `]`, which a character class reads as a set,
-        // and this file carries no pattern registry to declare one in.
-        let mut spans = rest.split('`');
-        let (Some(_), Some(smell), Some(joiner), Some(key)) =
-            (spans.next(), spans.next(), spans.next(), spans.next())
-        else {
-            continue;
-        };
-        if joiner.trim() != "at" {
-            continue;
-        }
-        if smell.is_empty() || key.is_empty() {
-            continue;
-        }
-        found.push(format!("{smell} {key}"));
-    }
-    found
-}
-
 /// The filename a claim receipt takes for `branch`.
 ///
 /// A slash is the one character a filename cannot carry and a branch name
@@ -655,37 +607,6 @@ fn carried_ids(receipt: &Path, base: Option<&str>) -> Vec<String> {
         .next()
         .unwrap_or_default()
         .split_whitespace()
-        .map(str::to_owned)
-        .collect()
-}
-
-/// The `weakens` lines a same-base receipt holds for rows this invocation does
-/// not re-groom.
-///
-/// **Carrying the ids alone is not enough, and this is the half that makes the
-/// union useful rather than merely wider.** `config lint`'s groomed reader looks
-/// for `weakens <id> <smell> <key>` in this file (CLOUD-841), and the loop that
-/// writes those lines walks the issues of THIS invocation — so a second `claim
-/// check` carried row one's id forward and dropped row one's groomed clause, and
-/// the refusal it then produces names a smell whose admission is in the tracker
-/// where nothing reads it.
-///
-/// A row named in `issues` is deliberately NOT carried: the payload in hand is
-/// the authority for it, so a clause groomed off the row since the first claim
-/// disappears rather than surviving in a file nobody re-reads. Only the rows this
-/// invocation says nothing about keep what the last one recorded.
-fn carried_weakenings(receipt: &Path, base: Option<&str>, regroomed: &[&str]) -> Vec<String> {
-    let Some(existing) = receipt_on_the_same_base(receipt, base) else {
-        return Vec::new();
-    };
-    existing
-        .lines()
-        .filter(|line| line.starts_with("weakens "))
-        .filter(|line| {
-            line.split_whitespace()
-                .nth(1)
-                .is_some_and(|id| !regroomed.contains(&id))
-        })
         .map(str::to_owned)
         .collect()
 }
@@ -831,31 +752,6 @@ pub fn mint(
             verdict.overridden.len(),
             verdict.overridden.join("; ")
         )?;
-    }
-    // WHAT THE GROOM ADMITTED, one line per pair, keyed by the issue that named
-    // it. `config lint` strips the key back off before matching — which story
-    // groomed a weakening does not change whether THIS one was groomed — and
-    // keeps it because a reader of a refusal needs to know where to look.
-    //
-    // ABSENT IS NOT EMPTY, and the distinction is the whole of CLOUD-841: a
-    // receipt that EXISTS and names nothing is "the groom looked and admitted
-    // nothing", which must refuse; only a receipt that does not exist at all is
-    // "could not look", which falls back to the trailer. That is decided by the
-    // file's existence rather than by this loop writing zero lines, so nothing
-    // here needs a placeholder.
-    let regroomed: Vec<&str> = issues.iter().map(|issue| issue.id.as_str()).collect();
-    for line in carried_weakenings(&dest, base, &regroomed) {
-        writeln!(body, "{line}")?;
-    }
-    for issue in issues {
-        for pair in issue
-            .description
-            .as_deref()
-            .map(admitted_weakenings)
-            .unwrap_or_default()
-        {
-            writeln!(body, "weakens {} {pair}", issue.id)?;
-        }
     }
     writeln!(body, "claimed-at {claimed_at}")?;
     // THE BASE THIS CLAIM WAS MADE AGAINST (CLOUD-516). A branch NAME outlives the
@@ -1123,83 +1019,6 @@ mod tests {
         );
     }
 
-    /// Mint one row that groomed a weakening, so the `weakens` line the union
-    /// has to preserve is actually written.
-    fn mint_groomed(receipts: &Path, id: &str, base: Option<&str>, clause: &str) -> String {
-        let mut row = issue(id, "Todo");
-        row.description = Some(clause.to_owned());
-        let dest = mint(
-            receipts,
-            "user/branch",
-            &[row],
-            &Verdict::default(),
-            &Request::default(),
-            base,
-            "2026-09-01T00:00:00Z",
-        )
-        .unwrap();
-        std::fs::read_to_string(dest).unwrap()
-    }
-
-    /// CARRYING THE ID WITHOUT ITS CLAUSE IS THE HALF THAT LOOKS DONE AND IS NOT
-    /// (CLOUD-1231's third acceptance clause). `config lint`'s groomed reader
-    /// resolves `weakens <id> <smell> <key>` out of this file, and the loop that
-    /// writes those lines walks THIS invocation's issues — so a union over ids
-    /// alone leaves row one claimed and its admission gone, and the refusal that
-    /// follows names a smell whose groom is in the tracker where no gate reads it.
-    #[test]
-    fn a_carried_row_keeps_the_weakening_it_groomed() {
-        let receipts = scratch("carried-weakens");
-        mint_groomed(
-            &receipts,
-            "CLOUD-1",
-            Some("abc123"),
-            "**Weakens:** `rule-predicate-changed` at `rule[x].checks`",
-        );
-        let body = mint_one(&receipts, "CLOUD-2", Some("abc123"));
-        assert!(
-            body.contains("weakens CLOUD-1 rule-predicate-changed rule[x].checks"),
-            "row one's admission survives row two's claim:\n{body}"
-        );
-    }
-
-    /// THE PAYLOAD IN HAND IS THE AUTHORITY FOR THE ROW IT DESCRIBES, which is
-    /// what keeps the carry from becoming a ratchet nobody can lower: re-claiming
-    /// a row whose clause has since been groomed OFF must drop it, not resurrect
-    /// the copy this file happens to hold.
-    #[test]
-    fn a_regroomed_row_takes_the_payloads_answer_rather_than_the_files() {
-        let receipts = scratch("regroomed");
-        mint_groomed(
-            &receipts,
-            "CLOUD-1",
-            Some("abc123"),
-            "**Weakens:** `rule-predicate-changed` at `rule[x].checks`",
-        );
-        let body = mint_one(&receipts, "CLOUD-1", Some("abc123"));
-        assert!(
-            !body.contains("weakens "),
-            "the clause is gone from the row, so it is gone from the receipt:\n{body}"
-        );
-    }
-
-    /// The carry is guarded by the SAME base as the ids, so CLOUD-516's restart
-    /// forgets an admission exactly as it forgets a claim. Without this the two
-    /// halves could disagree, and the direction that over-claims is the one that
-    /// matters: a stale admission silently passes `config lint`.
-    #[test]
-    fn a_restarted_branch_carries_no_earlier_weakening_either() {
-        let receipts = scratch("restarted-weakens");
-        mint_groomed(
-            &receipts,
-            "CLOUD-1",
-            Some("abc123"),
-            "**Weakens:** `rule-predicate-changed` at `rule[x].checks`",
-        );
-        let body = mint_one(&receipts, "CLOUD-2", Some("def456"));
-        assert!(!body.contains("weakens "), "{body}");
-    }
-
     /// ANTI-VACUITY: the union must not turn a re-claim into a duplicate, or the
     /// list grows without bound across the laps a long branch makes.
     #[test]
@@ -1233,55 +1052,6 @@ mod tests {
         mint_one(&receipts, "CLOUD-1", None);
         let body = mint_one(&receipts, "CLOUD-2", None);
         assert_eq!(body.lines().next().unwrap(), "CLOUD-2", "{body}");
-    }
-
-    #[test]
-    fn the_trackers_own_spelling_is_extracted_and_the_authors_is_too() {
-        // BOTH, and the first is the one that decides whether this ships dead.
-        // An author types `**Weakens:** x`; the tracker stores `**Weakens: **x`,
-        // moving the space inside the emphasis. The shell this replaces anchored
-        // on the author's spelling only, so it could not have matched a body the
-        // tracker returned — measured on CLOUD-1265, twice, and visible on every
-        // other bold label in that body.
-        let tracker = "* **Weakens: **`waiver-added` at `waiver[inline-task-bodies-not-growing]`";
-        assert_eq!(
-            admitted_weakenings(tracker),
-            vec!["waiver-added waiver[inline-task-bodies-not-growing]".to_owned()],
-        );
-        let authored = "  **Weakens:** `rule-predicate-changed` at `rule[x].tools`";
-        assert_eq!(
-            admitted_weakenings(authored),
-            vec!["rule-predicate-changed rule[x].tools".to_owned()],
-        );
-    }
-
-    #[test]
-    fn a_body_naming_no_weakening_extracts_nothing() {
-        // The anti-vacuity mirror, and it carries more weight here than usual:
-        // this function's whole job is to make "the groom admitted nothing"
-        // distinguishable from "no groom happened", and an extractor that
-        // returned a row for any body would collapse them the other way.
-        assert!(admitted_weakenings("**Weakens** is discussed here in prose.").is_empty());
-        assert!(admitted_weakenings("Weakens: no-backticks at all").is_empty());
-        assert!(admitted_weakenings("").is_empty());
-    }
-
-    #[test]
-    fn a_clause_quoted_mid_sentence_is_not_a_declaration() {
-        // The label anchors at the start of the line's content, so a body
-        // EXPLAINING the grammar — this repository's own rules files do — cannot
-        // mint an admission by describing one.
-        let quoted = "the clause reads **Weakens:** `x` at `y`, which the gate parses";
-        assert!(admitted_weakenings(quoted).is_empty());
-    }
-
-    #[test]
-    fn the_joiner_is_load_bearing_so_two_code_spans_are_not_a_pair() {
-        // `smell` at `key` is the grammar. Two adjacent spans with anything else
-        // between them is a sentence that happens to carry backticks, and reading
-        // it as a declaration would admit a weakening nobody named.
-        let wrong = "**Weakens:** `smell` and `key`";
-        assert!(admitted_weakenings(wrong).is_empty());
     }
 
     #[test]

@@ -139,3 +139,25 @@ row here, so a new module lands with its line.
 - `receipt.rs` — verification receipts (CLOUD-203): SHA-keyed in-toto statements that a named check passed, stored out-of-tree, plus the grandfathered `$GIT_DIR/batten-receipts/` compat layout.
 - `record.rs` — the WRITE half of the two out-of-tree verdict stores (CLOUD-1265).
 - `severity.rs` — the severity taxonomy (CLOUD-168): one rank table plus the adapter across `RuleSeverity` (config), `AdvisoryTier` (stored) and `ReportLevel` (render).
+- `asked.rs` — the asked ledger (CLOUD-1078): a weakening is admitted only by a human's recorded answer to the host's question tool.
+- `attestation.rs` — `batten record attestation`: a release's attestation posture, recorded for the `supply-chain` preset to decide (CLOUD-843).
+- `board_check.rs` — `batten board check` (CLOUD-1221): the board's columns, dependency graph and citations read into records the `tracker-hygiene` preset decides over.
+- `census.rs` — `batten census shell` (CLOUD-843): every place a consumer still writes shell, counted in code lines as pointers.
+- `ci_signal.rs` — the CI-signal producers (CLOUD-843): landing-loop divergence and non-verdict failures, recorded for the `ci-signal` preset.
+- `ci_step.rs` — `batten ci step` (CLOUD-843): the runner-file glue a workflow step used a shell for, as one argv.
+- `dist.rs` — `batten dist` (CLOUD-843): build a workspace's one release binary for a target and stage its archive.
+- `forge_query.rs` — declared forge reads, recorded for a module to decide over (CLOUD-843).
+- `mcp_grant.rs` — `batten mcp grant`: the committed MCP permissions applied to whichever server name the host exposed.
+- `mcp_posture.rs` — `batten mcp posture`: whether this session's MCP servers are granted and actually attached.
+- `preflight.rs` — `batten doctor forge`: the forge claims this repository's tasks need, probed before any GitHub result is trusted.
+- `probe.rs` — a producer's probe command, run and reduced to what a reading takes from it (CLOUD-843).
+- `reclaim.rs` — the reclaim census (CLOUD-451): whether a landing was in flight when this container was reclaimed.
+- `release.rs` — a published release's own assets, hashed into a manifest and recorded for `release-hygiene` (CLOUD-843).
+- `released.rs` — `batten record derive released`: which tracker rows a release tag shipped, and the board gate's verdict on them.
+- `sbom.rs` — `batten sbom`: the SPDX and CycloneDX inventories of a tree or a built binary (CLOUD-262/263, CLOUD-843).
+- `step.rs` — the step cache (CLOUD-424), retiring `[tasks.step-receipt]` (CLOUD-843).
+- `step_table.rs` — the `[[step]]` row and its load-time validator (CLOUD-843).
+- `sweep.rs` — `batten board sweep`: every board gate a consumer declares, run over one payload set.
+- `tracker_reading.rs` — the readings the `tracker-hygiene` preset decides over, one family per board question.
+- `turn.rs` — the judged turn of a session, reduced to what a module decides over (CLOUD-843).
+- `unsubscribe.rs` — a session's webhook subscription to a pull request: dropped, attested and recorded.

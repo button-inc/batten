@@ -143,6 +143,11 @@ const PRESET_SCOPES: &[(&str, bool)] = &[
     ("ci-hygiene", true),
     ("landing-loop", true),
     ("claude-code-cloud", false),
+    ("ci-signal", true),
+    ("supply-chain", true),
+    ("tracker-hygiene", true),
+    ("release-hygiene", true),
+    ("check-verdict", true),
 ];
 
 /// A row enabling `name` at the scope it is really enabled with.
@@ -560,7 +565,7 @@ fn every_shipped_preset_passes_its_own_suite() {
         // than a gap (CLOUD-857). `preset_row` fabricates a `mediated_call`
         // scope for EVERY preset so one loop can load them all — but
         // `shell spelling wrong` is enabled `scope = "tree"` in this repository and its
-        // two modules decide over files, not commands. Asking them whether a
+        // three modules decide over files, not commands. Asking them whether a
         // test ever passed a compound COMMAND would be judging a surface this
         // helper invented, which is the fabricated-shape defect one level up.
         //
@@ -644,6 +649,156 @@ fn decided(bundle: &policy::Bundle, document: &str) -> Vec<policy::Violation> {
     violations
 }
 
+/// (CLOUD-843) `ci-signal` decides each of its two families for a consumer with no
+/// vocabulary of its own, is green over the ideal window of each, and is silent
+/// where its producer never ran — so enabling the one row judges only the families
+/// a consumer actually produces.
+#[test]
+fn the_ci_signal_preset_decides_both_families_and_is_silent_without_them() {
+    let bundle = loaded("ci-signal", tree_preset_row("signal", "ci-signal"));
+    let verdicts = |found: &[policy::Violation]| -> Vec<String> {
+        let mut ids: Vec<String> = found.iter().map(|v| v.verdict.clone()).collect();
+        ids.sort();
+        ids
+    };
+    let lane = |landings: u32, graded: u32, ff_refused: u32| {
+        format!(
+            r#"{{"tree":{{"records":{{"land-divergence":["window\tsince=2026-08-12T00:00:00Z\tlandings={landings}\tgraded={graded}\tgreen={graded}\tred=0\tcancelled=0\tcancel_p50=0\tpeak_concurrency=1\tqueue_p90=0\tqueue_job_p90=0\tretries=0\tff_refused={ff_refused}\tff_success={landings}\tunreadable=0"]}}}}}}"#
+        )
+    };
+    let job = |nonverdicts: usize| {
+        let mut lines: Vec<String> = (0..nonverdicts)
+            .map(|n| format!("nonverdict\trun={n}\tjob=j{n}\tstep=Set up job"))
+            .collect();
+        lines.push(format!(
+            "window\truns=10\tfailed_jobs={nonverdicts}\tnonverdict={nonverdicts}\tverdict=0\tunreadable=0"
+        ));
+        format!(
+            r#"{{"tree":{{"records":{{"nonverdict":{}}}}}}}"#,
+            serde_json::to_string(&lines).expect("lines")
+        )
+    };
+
+    assert!(
+        decided(&bundle, &lane(1, 1, 0)).is_empty(),
+        "one matrix per landing is linear"
+    );
+    assert_eq!(
+        verdicts(&decided(&bundle, &lane(1, 3, 1))),
+        vec!["branch reach stale", "lane count spent"]
+    );
+    assert!(
+        decided(&bundle, &job(2)).is_empty(),
+        "two is inside the budget"
+    );
+    assert_eq!(
+        verdicts(&decided(&bundle, &job(3))),
+        vec!["job answer missing"; 3],
+        "one finding per job over the budget"
+    );
+    assert!(
+        decided(&bundle, r#"{"tree":{"records":{}}}"#).is_empty(),
+        "no producer ran, so nothing is judged"
+    );
+}
+
+/// (CLOUD-843) `supply-chain` refuses a vacuous binary inventory and one naming a
+/// crate no lockfile declares, is green over a subset, and judges no family of
+/// another shape — for a consumer with no vocabulary of its own.
+#[test]
+fn the_supply_chain_preset_refuses_a_vacuous_or_foreign_binary_inventory() {
+    let bundle = loaded("supply-chain", tree_preset_row("inventory", "supply-chain"));
+    let tree = |crates: &[&str], extra: &str| {
+        let mut lines = vec![String::from("asset\ttool-v1.0.0-x.spdx.json")];
+        lines.extend(crates.iter().map(|c| format!("crate\t{c}")));
+        format!(
+            r#"{{"tree":{{"records":{{"scan":{}{extra}}},"lines":{{"deps.lock":["[[package]]","name = \"alpha\"","version = \"1.0.0\"","","[[package]]","name = \"beta\"","version = \"2.0.0\"","","[[package]]","name = \"gamma\"","version = \"3.0.0\""]}}}}}}"#,
+            serde_json::to_string(&lines).expect("lines")
+        )
+    };
+    let verdicts = |found: &[policy::Violation]| -> Vec<String> {
+        found.iter().map(|v| v.verdict.clone()).collect()
+    };
+
+    let subset = decided(&bundle, &tree(&["alpha 1.0.0", "beta 2.0.0"], ""));
+    assert!(
+        subset.is_empty(),
+        "a subset of the lockfile passes: {subset:?}"
+    );
+
+    let one = decided(&bundle, &tree(&["alpha 1.0.0"], ""));
+    assert_eq!(
+        verdicts(&one),
+        vec!["cargo list empty"],
+        "one crate is vacuous"
+    );
+
+    let foreign = decided(&bundle, &tree(&["alpha 1.0.0", "delta 4.0.0"], ""));
+    assert_eq!(verdicts(&foreign), vec!["cargo list wrong"]);
+
+    // A release's asset list is not an inventory: many assets, no crate.
+    let other = decided(
+        &bundle,
+        &tree(
+            &["alpha 1.0.0", "beta 2.0.0"],
+            r#","release":["asset\ta.tar.gz","asset\tb.tar.gz"]"#,
+        ),
+    );
+    assert!(
+        other.is_empty(),
+        "another family's shape is not judged: {other:?}"
+    );
+}
+
+/// (CLOUD-843) `ci-signal`'s timeout arm decides for a consumer with no
+/// vocabulary of its own: its workflow lives outside the provider's usual
+/// directory, it declares no `[[pattern]]` row, and a slack budget is still read
+/// off its own lines and reported — while a correct one is clean, and a tree
+/// whose producer never ran is silent.
+#[test]
+fn the_ci_signal_preset_reads_a_budget_off_the_consumers_own_lines() {
+    let bundle = loaded("ci-signal-drift", tree_preset_row("signal", "ci-signal"));
+    let legs: Vec<String> = (0..5)
+        .map(|_| {
+            String::from(
+                "row\t{\"conclusion\":\"success\",\"name\":\"build (x86)\",\"run\":3,\"seconds\":120}",
+            )
+        })
+        .chain(std::iter::once(String::from(
+            "window\tstate=whole\tread=5\tkept=5\tmembers=1\ttruncated=0",
+        )))
+        .collect();
+    let document = |declared: u32| {
+        serde_json::json!({"tree": {
+            "lines": {"ci/pipeline.yml": [
+                "name: pipeline",
+                "jobs:",
+                "  build:",
+                format!("    timeout-minutes: {declared} # budget: p95=120s x3"),
+            ]},
+            "records": {
+                "drift-runs": [
+                    "row\t{\"id\":3,\"path\":\"ci/pipeline.yml\"}",
+                    "window\tstate=whole\tread=1\tkept=1\tmembers=1\ttruncated=0",
+                ],
+                "drift-jobs": &legs,
+            },
+        }})
+        .to_string()
+    };
+    assert!(
+        decided(&bundle, &document(6)).is_empty(),
+        "five 120s legs justify exactly 6 minutes"
+    );
+    let slack = decided(&bundle, &document(12));
+    assert_eq!(slack.len(), 1, "one finding for one slack budget");
+    assert_eq!(bundle.attribute(&slack[0]), "bound pin loose");
+    assert!(
+        decided(&bundle, r#"{"tree":{"records":{},"lines":{}}}"#).is_empty(),
+        "no producer ran, so nothing is judged"
+    );
+}
+
 /// (CLOUD-1269) `head grade twice` refuses a judged commit and is
 /// silent on one nothing has looked at.
 ///
@@ -676,6 +831,62 @@ fn the_landing_loop_preset_refuses_a_regrade_and_is_green_by_turns() {
     );
     assert!(
         decided(&bundle, r#"{"tree":{"forge":null}}"#).is_empty(),
+        "could-not-look allows, and without the module's own guard this FAULTS"
+    );
+}
+
+/// (CLOUD-843) `check-verdict` decides for a consumer with no vocabulary of its
+/// own and a check name this repository never posts: an objection is red and
+/// named, a skip is not an answer, a truncated window is never the whole, and a
+/// tree whose producer never ran is silent.
+#[test]
+fn the_check_verdict_preset_decides_for_a_consumer_that_is_not_this_one() {
+    let bundle = loaded("check-verdict", tree_preset_row("verdict", "check-verdict"));
+    let family = |conclusion: &str, window: &str| {
+        let row = serde_json::json!({
+            "status": "completed",
+            "conclusion": conclusion,
+            "name": "lint",
+            "started_at": "2026-08-12T03:00:00Z",
+            "completed_at": "2026-08-12T03:01:00Z",
+            "id": 1,
+        });
+        serde_json::json!({"tree": {"records": {"check-runs": [
+            format!("row\t{row}"),
+            window,
+        ]}}})
+        .to_string()
+    };
+    let whole = "window\tstate=whole\tread=1\tkept=1";
+
+    let red = decided(&bundle, &family("failure", whole));
+    assert_eq!(red.len(), 1, "one objection, one finding");
+    assert_eq!(bundle.attribute(&red[0]), "check grade red");
+
+    let early = decided(&bundle, &family("skipped", whole));
+    assert_eq!(early.len(), 1, "a skip judged nothing");
+    assert_eq!(bundle.attribute(&early[0]), "check grade early");
+
+    // THE ANTI-VACUITY MIRROR, then the two readings that are not verdicts.
+    assert!(
+        decided(&bundle, &family("success", whole)).is_empty(),
+        "a pass is clean"
+    );
+    let partial = decided(
+        &bundle,
+        &family(
+            "success",
+            "window\tstate=truncated\tread=1\tkept=1\ttotal=9\tpages=1",
+        ),
+    );
+    assert_eq!(partial.len(), 1, "a prefix is never the whole");
+    assert_eq!(bundle.attribute(&partial[0]), "check read partial");
+    assert!(
+        decided(&bundle, r#"{"tree":{"records":{}}}"#).is_empty(),
+        "no producer ran, so nothing is judged"
+    );
+    assert!(
+        decided(&bundle, r#"{"tree":{"records":null}}"#).is_empty(),
         "could-not-look allows, and without the module's own guard this FAULTS"
     );
 }

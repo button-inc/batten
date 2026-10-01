@@ -4,8 +4,8 @@
 #
 # THE CLAUSE SET IS THE CHECKER'S, named by its own `--comply` flag
 # (`ntia-conformance-checker`, CLOUD-279 verdict 1). This module owns no clause
-# list: `[tasks.ntia-record]` derives the document through `[tasks.sbom]`
-# into scratch — so the gate never writes the tree it judges, and judges the bytes
+# list: `batten sbom --conformance` derives the document the way `batten sbom`
+# does, into scratch — so the gate never writes the tree it judges, and judges the bytes
 # a release would publish — runs the checker once per standard, and records its
 # EXIT CODE. The spawn stays outside because house style §5 makes `check`
 # incapable of one; what moved in here is the adjudication.

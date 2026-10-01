@@ -1,230 +1,335 @@
-//! `commit grade unsafe` over the compiled binary and the real classification
-//! (CLOUD-669, CLOUD-591, CLOUD-1717).
+//! `commit grade unsafe`'s signing half over the compiled binary: the
+//! `supply-chain` preset, the engine's own signer reading, and the real git
+//! facts it decides over (CLOUD-669, CLOUD-591, CLOUD-1717, CLOUD-843).
 //!
 //! # Why this tier exists and the module's own `test_` rules do not suffice
 //!
-//! `policy/signing-posture.rego` carries eight load-time cases and every one
-//! fabricates its input with `with input as`, which is the shape
-//! `rules/policy-modules.md` warns about.
+//! `signer-is-verifiable.rego` carries its load-time cases, and every one
+//! fabricates its input with `with input as` — the shape
+//! `rules/policy-modules.md` warns about. Since CLOUD-843 the module reads THREE
+//! engine surfaces (a record the engine writes, `input.tree["git-config"]` per
+//! scope and `input.tree["commit-meta"]`'s `signed` bit), so a fabricated input
+//! is three chances to pass over a key nothing fills. Every case here builds a
+//! real repository, a real key file, real config scopes (`GIT_CONFIG_GLOBAL`
+//! points at a scratch file, so a developer's own configuration never reaches a
+//! case) and a real signed commit header, and runs the real binary.
 //!
-//! # And why the SIGNER CLASSIFICATION is driven here
+//! # A consumer that is not this repository
 //!
-//! Seven of the dying suite's twenty-one cases are about exactly which
-//! configurations are unverifiable: an empty key, a directory, an unreadable
-//! file, a path that does not exist, an inline literal, a `/tmp` signer, and a
-//! healthy one. That is the substance — the module's half is two set
-//! memberships — and one of them (`-s` alone being true for a directory) was a
-//! measured defect rather than a hypothetical.
+//! The fixture writes its own `batten.toml` enabling the preset, with no
+//! `[[verdict]]` and no `[[pattern]]` rows: a preset reaches a consumer who wrote
+//! neither, so a case passing only because the harness supplied one would pass
+//! for the wrong reason.
 //!
-//! `crates/batten/src/signer_posture.rs` is the one authority on those branches
-//! and on the record's own shape. Its `#[cfg(test)] mod tests` asserts all seven
-//! arms against scratch paths, plus two the retired program never had — an unset
-//! key, and a signer merely NAMED `/tmpfoo`, which a prefix test without the
-//! separator would have called broken.
+//! # The signer classification
 //!
-//! What stays HERE is the half a unit test cannot reach: that the engine carries
-//! the reading through `record derive` into a record the real module refuses
-//! over. `[tasks.signing-posture-repair]` no longer classifies a second time —
-//! it reads the posture off the record the producer just wrote, so the two
-//! cannot disagree about a checkout they both looked at.
+//! `crates/batten/src/signer_posture.rs` is the one authority on which
+//! configurations are unverifiable, and its `#[cfg(test)] mod tests` asserts all
+//! seven arms against scratch paths. What THIS tier adds is that the engine reads
+//! the checkout's own config (no task hands the values in any more) and carries
+//! the reading into a record the preset refuses over.
+//!
+//! # The gate replay
+//!
+//! `the_retired_conflict_reading_and_the_preset_agree_on_every_scope_pair` runs
+//! the retired producer body's own `git config --type=bool` reads and its `case`
+//! over sixteen (global, local) pairs, and asserts the preset's verdict agrees on
+//! every one — the replay the retirement owes, over the same config files.
 //!
 //! # RETIREMENT LEDGER, PER PATH — what `shell retire partial` reads
 //!
-//! Six cases are not carried and each says why in its own row.
+//! `[tasks.signing-posture-record]` and `[tasks.signing-posture-repair]` retired
+//! under CLOUD-843 onto `record derive signing-posture` and `attribution
+//! signing`; `[tasks.signing-posture-check]` is argv glue over the two verbs.
 //!
-// carried: mise-tasks/signing-posture.sh policy/signing-posture.rego kind:mechanism crates/batten/tests/it/signing_posture.rs
-// carried: tests/signing-posture.bats policy/signing-posture.rego kind:mechanism crates/batten/tests/it/signing_posture.rs
-// carried: "an unsigned range with the override in place passes" policy/signing-posture.rego kind:mechanism
-// carried: "signing with a verifiable signer is left alone" policy/signing-posture.rego kind:mechanism
-// carried: "a commit signed by a VERIFIABLE signer is left alone, header and all" policy/signing-posture.rego kind:mechanism
+// carried: mise-tasks/signing-posture.sh crates/batten/src/policy/presets/supply-chain/signer-is-verifiable.rego crates/batten/tests/it/signing_posture.rs
+// carried: tests/signing-posture.bats crates/batten/src/policy/presets/supply-chain/signer-is-verifiable.rego crates/batten/tests/it/signing_posture.rs
+// carried: "an unsigned range with the override in place passes" crates/batten/src/policy/presets/supply-chain/signer-is-verifiable.rego
+// carried: "signing with a verifiable signer is left alone" crates/batten/src/policy/presets/supply-chain/signer-is-verifiable.rego
+// carried: "a commit signed by a VERIFIABLE signer is left alone, header and all" crates/batten/src/policy/presets/supply-chain/signer-is-verifiable.rego
 // carried: "an empty signing key is what makes it unverifiable" crates/batten/src/signer_posture.rs kind:mechanism crates/batten/tests/it/signing_posture.rs
 // carried: "a signing key that is a directory is unverifiable" crates/batten/src/signer_posture.rs kind:mechanism crates/batten/tests/it/signing_posture.rs
 // carried: "a signing key this checkout cannot read is unverifiable" crates/batten/src/signer_posture.rs kind:mechanism crates/batten/tests/it/signing_posture.rs
 // carried: "a signing key naming a path that does not exist is unverifiable" crates/batten/src/signer_posture.rs kind:mechanism crates/batten/tests/it/signing_posture.rs
 // carried: "an inline public key is a literal, not a path, and is verifiable" crates/batten/src/signer_posture.rs kind:mechanism crates/batten/tests/it/signing_posture.rs
 // carried: "a signer under /tmp is unverifiable because the container reclaims it" crates/batten/src/signer_posture.rs kind:mechanism crates/batten/tests/it/signing_posture.rs
-// carried: "a signed commit in range is refused, and named by short sha" policy/signing-posture.rego kind:mechanism
-// carried: "repairing the config does not excuse a commit already signed" policy/signing-posture.rego kind:mechanism
-// carried: "a missing override is refused when the environment sets signing globally" policy/signing-posture.rego kind:mechanism
-// carried: "a missing override is NOT a finding when nothing sets signing globally" policy/signing-posture.rego kind:mechanism
-// carried: "a local override set to true is refused when the signer is broken" policy/signing-posture.rego kind:mechanism
-// carried: "the refusal echoes no part of the signature block" policy/signing-posture.rego kind:mechanism
-// changed: "--repair leaves a verifiable signer alone rather than switching signing off" mise.toml the write is the WRITE, which a module cannot be, so it stayed a task — `[tasks.signing-posture-repair]` — and its guard is the same shared `crates/batten/src/signer_posture.rs` reading this tier drives. `an_inline_public_key_is_a_literal_not_a_path_and_is_verifiable` pins the branch the guard turns on
-// changed: "--repair writes the override, local only" mise.toml the same split: the write and its scope are the task's, and `git config --local` is the one line that states it
-// changed: "--repair is idempotent" mise.toml idempotence is a property of `git config --local commit.gpgsign false`, which is the task's single write
-// changed: "--repair never writes global config" mise.toml the same boundary `attribution-identity` draws, and it is stated where the write is — a developer's own unrelated repositories are not this repo's business
-// changed: "history before the range is never judged" mise.toml the range is the PRODUCER's — `origin/main..HEAD` by default, the range `commit-attribution` and `commit-lint` already share. The module reads whatever the producer recorded and cannot observe which commits were outside it
-// changed: "outside a git repository it is exit 2, never a silent pass" mise.toml could-not-look is the producer's: it writes NOTHING outside a git repository, and `an_absent_record_says_nothing_rather_than_refusing` is the module's half of that contract
+// carried: "a signed commit in range is refused, and named by short sha" crates/batten/src/policy/presets/supply-chain/signer-is-verifiable.rego
+// carried: "repairing the config does not excuse a commit already signed" crates/batten/src/policy/presets/supply-chain/signer-is-verifiable.rego
+// carried: "a missing override is refused when the environment sets signing globally" crates/batten/src/policy/presets/supply-chain/signer-is-verifiable.rego
+// carried: "a missing override is NOT a finding when nothing sets signing globally" crates/batten/src/policy/presets/supply-chain/signer-is-verifiable.rego
+// carried: "a local override set to true is refused when the signer is broken" crates/batten/src/policy/presets/supply-chain/signer-is-verifiable.rego
+// carried: "the refusal echoes no part of the signature block" crates/batten/src/policy/presets/supply-chain/signer-is-verifiable.rego
+// carried: "history before the range is never judged" crates/batten/src/policy/presets/supply-chain/signer-is-verifiable.rego
+// carried: "--repair leaves a verifiable signer alone rather than switching signing off" crates/batten/src/signer_posture.rs kind:verb crates/batten/tests/it/signing_posture.rs
+// carried: "--repair writes the override, local only" crates/batten/src/signer_posture.rs kind:verb crates/batten/tests/it/signing_posture.rs
+// carried: "--repair is idempotent" crates/batten/src/signer_posture.rs kind:verb crates/batten/tests/it/signing_posture.rs
+// carried: "--repair never writes global config" crates/batten/src/signer_posture.rs kind:verb crates/batten/tests/it/signing_posture.rs
+// changed: "outside a git repository it is exit 2, never a silent pass" crates/batten/src/record.rs kind:mechanism could-not-look is `record derive`'s usage refusal (exit 1) and it writes NOTHING, so the preset — which reads an absent record as silence — says nothing over a tree nobody looked at; `outside_a_repository_the_derivation_refuses_and_records_nothing` and `an_absent_record_says_nothing_rather_than_refusing` are the two halves
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
 
-use common::{git_in, init_repo, run, run_with_stdin, scratch, write};
+use std::path::{Path, PathBuf};
+use std::process::Output;
 
-/// A repository registering the real module against the declared family.
-fn repo(name: &str) -> std::path::PathBuf {
-    let dir = scratch(&format!("signing-posture-{name}"));
-    let module = std::fs::read_to_string("../../policy/signing-posture.rego")
-        .expect("the module this tier exists for");
-    write(&dir, "policy/signing-posture.rego", &module);
-    write(
-        &dir,
-        "batten.toml",
-        r#"version = 1
+use common::{Fixture, git_in, stderr, stdout, write};
+
+/// The consumer row, as a consumer that is not this repository writes it.
+const CONFIG: &str = r#"version = 1
 scope = ["**"]
-
-[[verdict]]
-id = "config carry unsafe"
-gloss = "signing is on with a signer whose key cannot be verified or reproduced"
-class = "A signature that looks like provenance and carries none."
-
-[[verdict.route]]
-id = "task run first"
-kind = "command"
-target = "mise run signing-posture-repair"
-
-[[verdict]]
-id = "commit carry unsafe"
-gloss = "a commit in range carries a gpgsig from a key this repository cannot verify"
-class = "The posture already produced one, and repairing the config does not unsign it."
-
-[[verdict.route]]
-id = "module read first"
-kind = "document"
-target = "policy/signing-posture.rego"
 
 [[rule]]
 id = "commit grade unsafe"
 kind = "policy"
 scope = "tree"
-module = "policy/signing-posture.rego"
+preset = "supply-chain"
+git_config = ["commit.gpgsign"]
+commits = ["origin/main..HEAD"]
 severity = "deny"
 
 [[record]]
 record = "signing-posture"
-writer = "mise run signing-posture-record"
-"#,
+writer = "batten record derive signing-posture"
+"#;
+
+/// A committed consumer with `origin/main` pinned at its base, and a global
+/// config file of the case's own beside it (empty until a case writes one).
+fn repo(name: &str) -> (PathBuf, PathBuf) {
+    let dir = Fixture::new(&format!("signing-posture-{name}"))
+        .config(CONFIG)
+        .file("src/lib.rs", "fn main() {}\n")
+        .git()
+        .base_commit()
+        .build();
+    let global = dir.join(".git").join("case-global.gitconfig");
+    std::fs::write(&global, "").expect("an empty global config");
+    (dir, global)
+}
+
+/// `batten <args>` in `dir`, with git's global scope pointed at `global` and the
+/// system scope off, so the engine reads exactly the scopes the case wrote.
+fn batten_in(dir: &Path, global: &Path, args: &[&str]) -> Output {
+    common::batten()
+        .args(args)
+        .current_dir(dir)
+        .env("GIT_CONFIG_GLOBAL", global)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .output()
+        .expect("run batten")
+}
+
+/// What `git` itself answers under the same scopes — the retired body's reading.
+fn git_scoped(dir: &Path, global: &Path, args: &[&str]) -> String {
+    let output = common::git_command(dir, args)
+        .env("GIT_CONFIG_GLOBAL", global)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .output()
+        .expect("run git");
+    String::from_utf8_lossy(&output.stdout).trim().to_owned()
+}
+
+fn said(output: &Output) -> String {
+    format!("{}{}", stdout(output), stderr(output))
+}
+
+/// A key file this checkout signs with, set in the LOCAL scope. Empty is the
+/// broken case; non-empty is a healthy one.
+fn signing_key(dir: &Path, contents: &str) {
+    let key = dir.join(".git").join("case-key.pub");
+    std::fs::write(&key, contents).expect("write the key");
+    git_in(
+        dir,
+        &[
+            "config",
+            "user.signingkey",
+            key.to_str().expect("utf8 path"),
+        ],
     );
-    init_repo(&dir);
-    git_in(&dir, &["add", "-A"]);
-    git_in(&dir, &["commit", "-qm", "register the module"]);
-    dir
 }
 
-fn record(dir: &std::path::Path, lines: &str) {
-    let written = run_with_stdin(dir, &["record", "named", "signing-posture"], lines);
-    assert!(
-        written.status.success(),
-        "the setup write lands: {}",
-        String::from_utf8_lossy(&written.stderr)
+/// Write a commit carrying a `gpgsig` HEADER on top of HEAD and move `main` to
+/// it, returning its sha.
+///
+/// Written as a raw object by the reference implementation, because a signature
+/// header cannot be produced without a signing program — and the property under
+/// test is the header's presence, never whether a key verifies.
+fn signed_commit(dir: &Path, subject: &str) -> String {
+    let tree = git_in(dir, &["rev-parse", "HEAD^{tree}"]);
+    let parent = git_in(dir, &["rev-parse", "HEAD"]);
+    let identity = "t <t@example.com> 1577934245 +0000";
+    write(
+        dir,
+        ".git/case-signed.raw",
+        &format!(
+            "tree {tree}\nparent {parent}\nauthor {identity}\ncommitter {identity}\n\
+             gpgsig -----BEGIN SSH SIGNATURE-----\n U1NIU0lHnotarealsignature\n \
+             -----END SSH SIGNATURE-----\n\n{subject}\n"
+        ),
     );
+    let sha = git_in(
+        dir,
+        &["hash-object", "-t", "commit", "-w", ".git/case-signed.raw"],
+    );
+    git_in(dir, &["update-ref", "refs/heads/main", &sha]);
+    sha
 }
 
-fn said(decided: &std::process::Output) -> String {
-    format!(
-        "{}{}",
-        String::from_utf8_lossy(&decided.stdout),
-        String::from_utf8_lossy(&decided.stderr)
-    )
+/// `record derive signing-posture`, asserted to land.
+fn derive(dir: &Path, global: &Path) -> String {
+    let written = batten_in(dir, global, &["record", "derive", "signing-posture"]);
+    assert_eq!(
+        written.status.code(),
+        Some(0),
+        "the derivation lands\n{}",
+        said(&written)
+    );
+    stdout(&written)
 }
 
-const BROKEN: &str = "signer broken user.signingkey names an empty file, so the public half cannot be read or published";
+/// Derive, then check the one row, the way `[tasks.signing-posture-check]` does.
+fn gate(dir: &Path, global: &Path) -> Output {
+    derive(dir, global);
+    batten_in(dir, global, &["check", "--rule", "commit grade unsafe"])
+}
 
 // --- the decision, over the engine's own projection --------------------------
 
 #[test]
-fn a_detached_head_records_and_decides_as_ci_checks_it_out() {
-    // CI checks out a detached HEAD by design (CLOUD-1422), so the producer and
-    // the gate both run with no branch. Keyed on the branch alone, the write was
-    // refused and `commit-lint` went red on a clean tree; the record key falls
-    // back to the commit so writer and reader still meet.
-    let dir = repo("detached");
-    let head = git_in(&dir, &["rev-parse", "HEAD"]);
-    git_in(&dir, &["checkout", "--quiet", "--detach", head.trim()]);
-    record(&dir, &format!("{BROKEN}\nsigned 1a2b3c4d\n"));
-
-    let decided = run(&dir, &["check"]);
-    assert_eq!(decided.status.code(), Some(2), "{}", said(&decided));
-    assert!(said(&decided).contains("1a2b3c4d"), "{}", said(&decided));
-}
-
-#[test]
 fn a_signed_commit_in_range_is_refused_and_named_by_short_sha() {
-    let dir = repo("signed");
-    record(&dir, &format!("{BROKEN}\nsigned 1a2b3c4d\n"));
+    let (dir, global) = repo("signed");
+    signing_key(&dir, "");
+    let sha = signed_commit(&dir, "signed in range");
 
-    let decided = run(&dir, &["check"]);
-    assert_eq!(
-        decided.status.code(),
-        Some(2),
-        "a signed commit decides\n{}",
-        String::from_utf8_lossy(&decided.stderr)
+    let decided = gate(&dir, &global);
+    assert_eq!(decided.status.code(), Some(2), "{}", said(&decided));
+    assert!(
+        said(&decided).contains(&sha[..8]),
+        "named by its short sha\n{}",
+        said(&decided)
     );
     assert!(
-        said(&decided).contains("1a2b3c4d"),
-        "and is named by short sha\n{}",
+        !said(&decided).contains(&sha),
+        "and never the full one\n{}",
         said(&decided)
     );
 }
 
 #[test]
-fn signing_with_a_verifiable_signer_is_left_alone() {
-    // THE END STATE CLOUD-591 IS WORKING TOWARD, and this gate must not block it.
-    let dir = repo("verifiable");
-    record(
-        &dir,
-        "signer verifiable\nconfig conflict\nsigned 1a2b3c4d\n",
-    );
+fn a_detached_head_records_and_decides_as_ci_checks_it_out() {
+    // CI checks out a detached HEAD by design (CLOUD-1422), so the producer and
+    // the gate both run with no branch; the record key falls back to the commit
+    // so writer and reader still meet.
+    let (dir, global) = repo("detached");
+    signing_key(&dir, "");
+    let sha = signed_commit(&dir, "signed, detached");
+    git_in(&dir, &["checkout", "--quiet", "--detach", &sha]);
 
-    let quiet = run(&dir, &["check"]);
+    let decided = gate(&dir, &global);
+    assert_eq!(decided.status.code(), Some(2), "{}", said(&decided));
+    assert!(said(&decided).contains(&sha[..8]), "{}", said(&decided));
+}
+
+#[test]
+fn signing_with_a_verifiable_signer_is_left_alone() {
+    // THE END STATE CLOUD-591 IS WORKING TOWARD: a healthy key, signing on
+    // globally, a signed commit in range — and nothing to report.
+    let (dir, global) = repo("verifiable");
+    signing_key(&dir, "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIexample\n");
+    std::fs::write(&global, "[commit]\n\tgpgsign = true\n").expect("global config");
+    signed_commit(&dir, "signed by a healthy key");
+
+    let quiet = gate(&dir, &global);
     assert_eq!(
         quiet.status.code(),
         Some(0),
         "a verifiable signer may sign freely\n{}",
-        String::from_utf8_lossy(&quiet.stderr)
+        said(&quiet)
     );
 }
 
 #[test]
 fn a_missing_override_is_refused_when_the_environment_sets_signing_globally() {
-    let dir = repo("conflict");
-    record(&dir, &format!("{BROKEN}\nconfig conflict\n"));
+    let (dir, global) = repo("conflict");
+    signing_key(&dir, "");
+    std::fs::write(&global, "[commit]\n\tgpgsign = true\n").expect("global config");
 
-    let decided = run(&dir, &["check"]);
-    assert_eq!(decided.status.code(), Some(2), "the conflict decides");
+    let decided = gate(&dir, &global);
+    assert_eq!(decided.status.code(), Some(2), "{}", said(&decided));
+    assert!(
+        said(&decided).contains("commit.gpgsign"),
+        "the setting is the pointer\n{}",
+        said(&decided)
+    );
 }
 
 #[test]
 fn a_missing_override_is_not_a_finding_when_nothing_sets_signing_globally() {
     // A runner has no launcher and no global setting, so an absent local value is
-    // the correct state there. Demanding the override unconditionally would red
-    // every CI run.
-    let dir = repo("runner");
-    record(&dir, &format!("{BROKEN}\n"));
+    // the correct state there.
+    let (dir, global) = repo("runner");
+    signing_key(&dir, "");
 
-    let quiet = run(&dir, &["check"]);
+    let quiet = gate(&dir, &global);
+    assert_eq!(quiet.status.code(), Some(0), "{}", said(&quiet));
+}
+
+#[test]
+fn a_local_override_answers_the_global_setting() {
+    // git's boolean reading on both sides: a global `1` and a local `off`, which
+    // literal `true`/`false` comparisons got wrong in both directions.
+    let (dir, global) = repo("override");
+    signing_key(&dir, "");
+    std::fs::write(&global, "[commit]\n\tgpgsign = 1\n").expect("global config");
+    git_in(&dir, &["config", "commit.gpgsign", "off"]);
+
+    let quiet = gate(&dir, &global);
     assert_eq!(
         quiet.status.code(),
         Some(0),
-        "nothing to override is not a finding\n{}",
-        String::from_utf8_lossy(&quiet.stderr)
+        "the local override answers the global setting\n{}",
+        said(&quiet)
+    );
+}
+
+#[test]
+fn a_local_override_set_to_true_is_refused_when_the_signer_is_broken() {
+    let (dir, global) = repo("local-true");
+    signing_key(&dir, "");
+    git_in(&dir, &["config", "commit.gpgsign", "true"]);
+
+    let decided = gate(&dir, &global);
+    assert_eq!(decided.status.code(), Some(2), "{}", said(&decided));
+    assert!(
+        said(&decided).contains("commit.gpgsign"),
+        "{}",
+        said(&decided)
     );
 }
 
 #[test]
 fn repairing_the_config_does_not_excuse_a_commit_already_signed() {
-    // The whole reason the two classes are separate: `--repair` clears the config
-    // arm and leaves this one firing on whatever was already written.
-    let dir = repo("repaired");
-    record(&dir, &format!("{BROKEN}\nsigned 1a2b3c4d\n"));
+    // The whole reason the two classes are separate: the repair clears the
+    // config arm and leaves this one firing on whatever was already written.
+    let (dir, global) = repo("repaired");
+    signing_key(&dir, "");
+    std::fs::write(&global, "[commit]\n\tgpgsign = true\n").expect("global config");
+    let sha = signed_commit(&dir, "signed before the repair");
 
-    let decided = run(&dir, &["check"]);
-    assert_eq!(decided.status.code(), Some(2), "the commit still decides");
+    let repaired = batten_in(&dir, &global, &["attribution", "signing"]);
+    assert_eq!(repaired.status.code(), Some(0), "{}", said(&repaired));
+
+    let decided = gate(&dir, &global);
+    assert_eq!(decided.status.code(), Some(2), "{}", said(&decided));
     assert!(
-        said(&decided).contains("1a2b3c4d"),
-        "and it is the commit that is named\n{}",
+        said(&decided).contains(&sha[..8]),
+        "the commit is still named\n{}",
+        said(&decided)
+    );
+    assert!(
+        !said(&decided).contains("commit.gpgsign"),
+        "and the config arm is cleared\n{}",
         said(&decided)
     );
 }
@@ -232,179 +337,293 @@ fn repairing_the_config_does_not_excuse_a_commit_already_signed() {
 #[test]
 fn the_refusal_echoes_no_part_of_the_signature_block() {
     // POINTER-ONLY (rule 4): a short SHA and a setting name. A signature block is
-    // a credential artefact this repository does not control, and the record
-    // never carries one — which is where that has to be true.
-    let dir = repo("quiet");
-    record(&dir, &format!("{BROKEN}\nsigned 1a2b3c4d\n"));
+    // a credential artefact this repository does not control.
+    let (dir, global) = repo("quiet");
+    signing_key(&dir, "");
+    signed_commit(&dir, "signed");
 
-    let decided = run(&dir, &["check"]);
-    let reported = said(&decided);
-    assert!(
-        !reported.contains("BEGIN SSH SIGNATURE"),
-        "no signature block reaches the finding\n{reported}"
-    );
-    assert!(
-        !reported.contains("gpgsig "),
-        "and no header line does\n{reported}"
-    );
+    let reported = said(&gate(&dir, &global));
+    assert!(!reported.contains("BEGIN SSH SIGNATURE"), "{reported}");
+    assert!(!reported.contains("notarealsignature"), "{reported}");
+    assert!(!reported.contains("gpgsig "), "{reported}");
 }
 
 #[test]
 fn an_unsigned_range_with_the_override_in_place_passes() {
-    let dir = repo("clean");
-    record(&dir, &format!("{BROKEN}\n"));
+    let (dir, global) = repo("clean");
+    signing_key(&dir, "");
+    std::fs::write(&global, "[commit]\n\tgpgsign = true\n").expect("global config");
+    git_in(&dir, &["config", "commit.gpgsign", "false"]);
+    write(&dir, "src/more.rs", "fn more() {}\n");
+    git_in(&dir, &["add", "-A"]);
+    git_in(&dir, &["commit", "-q", "-m", "an unsigned commit in range"]);
 
-    let quiet = run(&dir, &["check"]);
-    assert_eq!(quiet.status.code(), Some(0), "nothing to report");
+    let quiet = gate(&dir, &global);
+    assert_eq!(quiet.status.code(), Some(0), "{}", said(&quiet));
+}
+
+#[test]
+fn history_before_the_range_is_never_judged() {
+    // RANGE, NEVER HISTORY: a signed commit already on `origin/main` is history
+    // nobody can now unsign, and judging it would make the gate permanently red.
+    let (dir, global) = repo("history");
+    signing_key(&dir, "");
+    signed_commit(&dir, "signed before the range");
+    common::pin_origin_main(&dir);
+
+    let quiet = gate(&dir, &global);
+    assert_eq!(quiet.status.code(), Some(0), "{}", said(&quiet));
 }
 
 #[test]
 fn an_absent_record_says_nothing_rather_than_refusing() {
-    // The producer writes nothing outside a git repository, so a module refusing
-    // here would report a posture in force over a tree it never looked at.
-    let dir = repo("unrecorded");
+    // The signer is the one reading the engine RECORDS, and nobody recorded it:
+    // the preset must not report a posture in force over a signer it never read.
+    let (dir, global) = repo("unrecorded");
+    signing_key(&dir, "");
+    std::fs::write(&global, "[commit]\n\tgpgsign = true\n").expect("global config");
+    signed_commit(&dir, "signed, never recorded");
 
-    let quiet = run(&dir, &["check"]);
+    let quiet = batten_in(&dir, &global, &["check", "--rule", "commit grade unsafe"]);
     assert_eq!(
         quiet.status.code(),
         Some(0),
         "an absent record is silence\n{}",
-        String::from_utf8_lossy(&quiet.stderr)
+        said(&quiet)
     );
+}
+
+// --- the gate replay: the retired producer's conflict reading ----------------
+
+/// The retired body's reading, verbatim in effect: `--type=bool` on the local and
+/// the global scope, and `conflict` iff the local value is not `false` and either
+/// reads `true`.
+fn retired_conflict(dir: &Path, global: &Path) -> bool {
+    let local_setting = git_scoped(
+        dir,
+        global,
+        &[
+            "config",
+            "--type=bool",
+            "--local",
+            "--get",
+            "commit.gpgsign",
+        ],
+    );
+    let inherited = git_scoped(
+        dir,
+        global,
+        &[
+            "config",
+            "--type=bool",
+            "--global",
+            "--get",
+            "commit.gpgsign",
+        ],
+    );
+    local_setting != "false" && format!("{inherited}{local_setting}").contains("true")
+}
+
+#[test]
+fn the_retired_conflict_reading_and_the_preset_agree_on_every_scope_pair() {
+    let (dir, global) = repo("replay");
+    signing_key(&dir, "");
+    derive(&dir, &global);
+    let values = [None, Some("true"), Some("1"), Some("off")];
+    for global_value in values {
+        for local_value in values {
+            match global_value {
+                Some(value) => std::fs::write(&global, format!("[commit]\n\tgpgsign = {value}\n")),
+                None => std::fs::write(&global, ""),
+            }
+            .expect("global config");
+            let _ =
+                common::git_command(&dir, &["config", "--unset-all", "commit.gpgsign"]).output();
+            if let Some(value) = local_value {
+                git_in(&dir, &["config", "commit.gpgsign", value]);
+            }
+            let old = retired_conflict(&dir, &global);
+            let decided = batten_in(&dir, &global, &["check", "--rule", "commit grade unsafe"]);
+            let new = decided.status.code() == Some(2) && said(&decided).contains("commit.gpgsign");
+            assert_eq!(
+                old,
+                new,
+                "global {global_value:?}, local {local_value:?}: the retired body said \
+                 conflict={old}, the preset said {new}\n{}",
+                said(&decided)
+            );
+        }
+    }
 }
 
 // --- the signer classification, over the real verb ---------------------------
 
-/// Drive the REAL reading both tasks run, through the REAL verb.
-///
-/// `crates/batten/src/signer_posture.rs` is the one authority on which
-/// configurations are unverifiable, and its own `#[cfg(test)] mod tests`
-/// asserts all seven arms directly against scratch paths — plus two the retired
-/// program never had: an unset key, and a signer merely NAMED `/tmpfoo`, which
-/// a prefix test without the separator would have called broken.
-///
-/// What THIS tier adds is the half a unit test cannot reach: that the engine
-/// carries that reading, and the record's whole shape, into a record the real
-/// module then refuses over.
-fn derive(dir: &std::path::Path, signingkey: &str, program: &str, signed: &str) -> String {
-    let written = run_with_stdin(
-        dir,
-        &[
-            "record",
-            "derive",
-            "signing-posture",
-            "--input",
-            &format!("signingkey={signingkey}"),
-            "--input",
-            &format!("ssh-program={program}"),
-            "--input",
-            "gpgsign=none",
-            "--input",
-            &format!("signed={signed}"),
-        ],
-        "",
-    );
-    assert!(
-        written.status.success(),
-        "the derivation lands: {}",
-        String::from_utf8_lossy(&written.stderr)
-    );
-    String::from_utf8_lossy(&written.stdout).into_owned()
+#[test]
+fn the_verb_reads_a_broken_signer_off_the_checkouts_own_config() {
+    let (dir, global) = repo("derive-broken");
+    signing_key(&dir, "");
+    let written = derive(&dir, &global);
+    assert!(written.starts_with("signer broken"), "{written}");
+    assert!(written.contains("empty file"), "{written}");
 }
 
 #[test]
-fn the_verb_derives_a_broken_signer_into_a_record_the_module_refuses_over() {
-    let dir = repo("derive-broken");
-    let key = dir.join("key.pub");
-    std::fs::write(&key, "").expect("an empty key is the broken case");
-    let written = derive(
-        &dir,
-        key.to_string_lossy().as_ref(),
-        "",
-        "1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d",
-    );
-    assert!(
-        written.contains("signer broken"),
-        "the reading reaches the record\n{written}"
-    );
-    assert!(
-        written.contains("signed 1a2b3c4d"),
-        "and so does the short sha\n{written}"
-    );
-
-    let decided = run(&dir, &["check"]);
-    assert_eq!(
-        decided.status.code(),
-        Some(2),
-        "a signed commit under a broken signer is the finding\n{}",
-        String::from_utf8_lossy(&decided.stderr)
-    );
-}
-
-#[test]
-fn the_verb_derives_a_verifiable_signer_into_silence() {
-    let dir = repo("derive-verifiable");
-    let written = derive(
-        &dir,
-        "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIexample",
-        "/usr/bin/ssh-keygen",
-        "1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d",
-    );
-    assert!(
-        written.contains("signer verifiable"),
-        "an inline literal is the healthiest form there is\n{written}"
-    );
-
-    let quiet = run(&dir, &["check"]);
-    assert_eq!(
-        quiet.status.code(),
-        Some(0),
-        "a verifiable signer is left alone, signed commits and all\n{}",
-        String::from_utf8_lossy(&quiet.stderr)
-    );
-}
-
-/// POINTER-ONLY THROUGH THE WHOLE PATH (rule 4): neither the key nor the signer
-/// path reaches the record, and neither does a full sha.
-#[test]
-fn no_key_signer_or_full_sha_reaches_the_record() {
-    let dir = repo("derive-quiet");
-    let full = "abcdef0123456789abcdef0123456789abcdef01";
-    let written = derive(&dir, "SECRET-KEY-MATERIAL", "/tmp/SECRET-SIGNER", full);
-    assert!(!written.contains("SECRET-KEY-MATERIAL"), "{written}");
+fn the_verb_reads_a_signer_program_under_tmp_from_the_global_scope() {
+    // THE LAUNCHER'S SHAPE: a signer written to the GLOBAL scope, which a task
+    // passing only local values would never have seen.
+    let (dir, global) = repo("derive-tmp");
+    std::fs::write(
+        &global,
+        "[user]\n\tsigningkey = ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIexample\n\
+         [gpg \"ssh\"]\n\tprogram = /tmp/SECRET-SIGNER\n",
+    )
+    .expect("global config");
+    let written = derive(&dir, &global);
+    assert!(written.starts_with("signer broken"), "{written}");
+    assert!(written.contains("/tmp"), "{written}");
     assert!(!written.contains("SECRET-SIGNER"), "{written}");
-    assert!(!written.contains(full), "{written}");
-    assert!(written.contains("signed abcdef01"), "{written}");
 }
 
-/// A family reads only the inputs it declares, and a misspelling is a usage
-/// error rather than a reading that silently ran on a default.
+#[test]
+fn the_verb_reads_an_unset_key_as_verifiable() {
+    let (dir, global) = repo("derive-unset");
+    assert_eq!(derive(&dir, &global), "signer verifiable\n");
+}
+
+/// POINTER-ONLY THROUGH THE WHOLE PATH (rule 4): the key path never reaches
+/// the record.
+#[test]
+fn no_key_path_reaches_the_record() {
+    let (dir, global) = repo("derive-quiet");
+    signing_key(&dir, "");
+    let written = derive(&dir, &global);
+    assert!(!written.contains("case-key.pub"), "{written}");
+    assert_eq!(written.lines().count(), 1, "{written}");
+}
+
+/// The family reads no inputs now, and a caller still speaking the retired
+/// contract is a usage error rather than a reading that silently ignored it.
 #[test]
 fn an_input_the_family_does_not_read_is_a_usage_error() {
-    let dir = repo("derive-unknown-input");
-    let refused = run_with_stdin(
+    let (dir, global) = repo("derive-unknown-input");
+    let refused = batten_in(
         &dir,
+        &global,
         &[
             "record",
             "derive",
             "signing-posture",
             "--input",
-            "signingkey=",
-            "--input",
-            "ssh-program=",
-            "--input",
-            "gpgsign=none",
-            "--input",
-            "signed=",
-            "--input",
-            "signingkeys=oops",
+            "signingkey=oops",
         ],
-        "",
+    );
+    assert_eq!(refused.status.code(), Some(1), "{}", said(&refused));
+}
+
+#[test]
+fn outside_a_repository_the_derivation_refuses_and_records_nothing() {
+    let dir = common::scratch_outside_tree("batten-signing-posture", "not-a-repo");
+    let global = dir.join("global.gitconfig");
+    std::fs::write(&global, "").expect("global config");
+    let refused = batten_in(&dir, &global, &["record", "derive", "signing-posture"]);
+    assert_eq!(refused.status.code(), Some(1), "{}", said(&refused));
+    assert!(stdout(&refused).is_empty(), "no record printed");
+}
+
+// --- the repair, over the real verb -------------------------------------------
+
+fn local_gpgsign(dir: &Path, global: &Path) -> String {
+    git_scoped(
+        dir,
+        global,
+        &["config", "--local", "--get", "commit.gpgsign"],
+    )
+}
+
+#[test]
+fn the_repair_leaves_a_verifiable_signer_alone_rather_than_switching_signing_off() {
+    let (dir, global) = repo("repair-verifiable");
+    signing_key(&dir, "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIexample\n");
+    let repaired = batten_in(&dir, &global, &["attribution", "signing"]);
+    assert_eq!(repaired.status.code(), Some(0), "{}", said(&repaired));
+    assert!(
+        stderr(&repaired).contains("leaving signing on"),
+        "{}",
+        said(&repaired)
+    );
+    assert_eq!(local_gpgsign(&dir, &global), "", "nothing was written");
+}
+
+#[test]
+fn the_repair_writes_the_override_local_only_and_is_idempotent() {
+    let (dir, global) = repo("repair-broken");
+    signing_key(&dir, "");
+    let global_before = "[commit]\n\tgpgsign = true\n";
+    std::fs::write(&global, global_before).expect("global config");
+
+    for _ in 0..2 {
+        let repaired = batten_in(&dir, &global, &["attribution", "signing"]);
+        assert_eq!(repaired.status.code(), Some(0), "{}", said(&repaired));
+        assert!(
+            stderr(&repaired).contains("signing disabled"),
+            "{}",
+            said(&repaired)
+        );
+        assert!(
+            !said(&repaired).contains("case-key.pub"),
+            "{}",
+            said(&repaired)
+        );
+        assert_eq!(local_gpgsign(&dir, &global), "false");
+    }
+    assert_eq!(
+        std::fs::read_to_string(&global).expect("read the global config"),
+        global_before,
+        "the global scope is never written"
+    );
+}
+
+/// The retired body ran `git config --local commit.gpgsign false`, which writes
+/// the COMMON config, so it held from a linked worktree too. A write keyed on
+/// the worktree-private `.git/worktrees/<name>` directory lands in a file git
+/// never reads: the verb reported "signing disabled" while git kept signing
+/// (CLOUD-843 p10 review). The witness is git itself, asked from the worktree.
+#[test]
+fn the_repair_from_a_linked_worktree_lands_where_git_reads_it() {
+    let (dir, global) = repo("repair-linked");
+    signing_key(&dir, "");
+    std::fs::write(&global, "[commit]\n\tgpgsign = true\n").expect("global config");
+
+    // `scratch` wipes and creates; `git worktree add` wants to create the
+    // directory itself, so it is removed again straight away.
+    let linked = common::scratch("signing-posture-repair-linked-worktree");
+    let _ = std::fs::remove_dir_all(&linked);
+    git_in(
+        &dir,
+        &[
+            "worktree",
+            "add",
+            "--quiet",
+            "--detach",
+            linked.to_str().expect("utf8 path"),
+        ],
+    );
+
+    let repaired = batten_in(&linked, &global, &["attribution", "signing"]);
+    assert_eq!(repaired.status.code(), Some(0), "{}", said(&repaired));
+    assert!(
+        stderr(&repaired).contains("signing disabled"),
+        "{}",
+        said(&repaired)
     );
     assert_eq!(
-        refused.status.code(),
-        Some(1),
-        "an unread input is a usage error\n{}",
-        String::from_utf8_lossy(&refused.stderr)
+        git_scoped(&linked, &global, &["config", "--get", "commit.gpgsign"]),
+        "false",
+        "git, asked from the worktree, must read the override the verb claims it wrote"
+    );
+    assert_eq!(
+        local_gpgsign(&dir, &global),
+        "false",
+        "the override is the repository's local config, shared by every worktree"
     );
 }

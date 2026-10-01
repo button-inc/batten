@@ -151,6 +151,14 @@ const CONTENT: &[Canary] = &[
         // comment above `run_landed_check` claiming it.
         source: "the description of a tracker row read by `landed check`",
     },
+    Canary {
+        tag: "shellbody",
+        // CLOUD-843. The shell census reads every body it counts, and a body is
+        // whatever the consumer wrote — a token, a host name, a path. What it may
+        // emit is a path, a line, a unit's declared name and a count; this is the
+        // byte that decides it.
+        source: "a shell line inside a manifest body or a workflow step the census counts",
+    },
 ];
 
 /// Bytes the caller wrote **as policy**. Only an `Echoes` verb may emit one.
@@ -272,7 +280,28 @@ fn authority(spawning: bool) -> String {
          tasks = \"/nonexistent/{{session}}\"\n\
          \n\
          [epoch]\n\
-         tracked = [\"batten.toml\"]\n",
+         tracked = [\"batten.toml\"]\n\
+         \n\
+         [census.shell]\n\
+         workflows = [\"workflows/*.yml\"]\n\
+         \n\
+         [[census.shell.manifest]]\n\
+         path = \"tasks.toml\"\n\
+         keys = [\"run\"]\n\
+         unit = \"[tasks.\"\n\
+         \n\
+         [sbom]\n\
+         subject = \"subject\"\n\
+         out_dir = \"sbom\"\n\
+         binary_out_dir = \"dist\"\n\
+         \n\
+         [perf.latency]\n\
+         command = ['{latency_bin}', '--version']\n\
+         runs = 1\n\
+         budget_seconds = 0\n\
+         slack_seconds = 5\n\
+         loose_factor = 1\n",
+        latency_bin = env!("CARGO_BIN_EXE_batten"),
         rulepat = canary("rulepat"),
         markertok = canary("markertok"),
         waived = canary("waived"),
@@ -422,6 +451,24 @@ impl Corpus {
             // `**/*.md`) and outside the budget's named file list, so seeding it
             // adds subject matter for exactly one verb.
             .file("landed-merged.tsv", "CLOUD-1120\t726\n")
+            // The two homes `census shell` reads (CLOUD-843), each carrying a
+            // CONTENT canary in the one place the census must count and never
+            // quote: a task body and a workflow step. `emit.sh` above is the
+            // third home, a tracked shell file, and carries its own canaries.
+            .file(
+                "tasks.toml",
+                &format!(
+                    "[tasks.canary]\nrun = '''\necho {}\n'''\n",
+                    canary("shellbody")
+                ),
+            )
+            .file(
+                "workflows/ci.yml",
+                &format!(
+                    "jobs:\n  a:\n    steps:\n      - run: |\n          echo {}\n",
+                    canary("shellbody")
+                ),
+            )
             .file(
                 "transcript.jsonl",
                 &format!(
@@ -710,6 +757,9 @@ const MAY_ANSWER_COULD_NOT_LOOK: &[&str] = &[
     // which is the honest could-not-look and not a verb that emitted nothing
     // because it had nothing to emit.
     "land lap",
+    // `land linear` (CLOUD-1991) resolves the same remote before its fetch, so
+    // on a corpus naming none it stops at that preamble with the same answer.
+    "land linear",
     // THE FIVE PORTS WHOSE SUBJECT IS OUTSIDE THE CORPUS (CLOUD-1716,
     // CLOUD-1753), each here on the bar the paragraph above states: no lighter
     // fixture produces a verdict, and the reason is the corpus rather than the
@@ -738,6 +788,45 @@ const MAY_ANSWER_COULD_NOT_LOOK: &[&str] = &[
     // `doctor target` reaches rustup and the network. A fixture that made it
     // answer would be installing a toolchain target.
     "doctor target",
+    // The divergence producer (CLOUD-843) reaches the forge for a window of runs,
+    // and this corpus names no forge remote and carries no credential — so where
+    // an inherited `$LAND_CI_WORKFLOW` names its workflows it answers
+    // could-not-look at exit 3, on `claim merged`'s terms. Its body is filled;
+    // this is the forge's bar, not the skeleton bar below. Its sibling `record
+    // nonverdict` is NOT here: `run_in` clears `$CI_REQUIRED_CHECKS`, so it
+    // refuses with `Usage` before any request.
+    "record divergence",
+    // `dist` reads its package through `cargo metadata`, which WALKS UP from the
+    // directory it stands in. The corpus carries no manifest of its own, so its
+    // answer is decided by where `scratch` put it, not by the corpus: under a
+    // `CARGO_TARGET_TMPDIR` inside this checkout (the default, and the
+    // integrator's shared target dir) cargo finds THIS repository's workspace and
+    // `--stem` answers exit 0 with batten's own stem — which the assertions still
+    // judge; under a target dir outside any workspace it finds none and answers
+    // could-not-look. The entry is here for that second placement only. Its body
+    // is filled (CLOUD-843), so this is its subject's location, not a skeleton;
+    // giving the corpus a manifest would make every verb that reads one see a
+    // workspace, which is a different corpus.
+    "dist",
+    // CLOUD-843's FOUNDATION SKELETONS, here on a bar of their own and named as
+    // such rather than waved through under the one above: each row's arguments
+    // are final and its body lands with the package retiring the shell it
+    // replaces, so its only answer today is `unimplemented` at exit 3. The
+    // pointer-only assertions still run over that refusal unchanged. THE PACKAGE
+    // THAT FILLS A BODY REMOVES ITS NAME HERE, in the same change — a name left
+    // behind after its verb answers is the widening this list's header forbids.
+    // CLOUD-843, retiring `[tasks.attestation-record]`: it reaches the FORGE,
+    // and this corpus carries no credential, so its honest answer here is the
+    // could-not-look report — asserted pointer-only all the same.
+    "record attestation",
+    // CLOUD-843, retiring `[tasks.release-assets-record]`, on `record
+    // attestation`'s terms: it resolves the release's repository from a forge
+    // remote before any request, and this corpus names none, so its honest
+    // answer is the could-not-look report, asserted pointer-only all the same.
+    "record release",
+    // Retiring `[tasks.checksums]`, on the same terms: it reads the release's
+    // own assets from the forge remote this corpus does not name.
+    "release sums",
 ];
 
 /// One entry per leaf verb of [`SURFACE`], asserted total by
@@ -877,6 +966,13 @@ const CENSUS: &[Verb] = &[
     Verb {
         path: "land lap",
         args: &["refs/heads/main"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    // `land linear` reports a tracking ref and a sha, or a refusal naming them.
+    Verb {
+        path: "land linear",
+        args: &["main"],
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
@@ -1298,6 +1394,16 @@ const CENSUS: &[Verb] = &[
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
+    // CLOUD-843, retiring `gh-preflight`. The corpus declares no
+    // `[[forge.probe]]` row, so this exercises the refusal that names the
+    // missing table — a usage answer, never a probe, and the forge fixture the
+    // sweep points every run at could not answer one anyway.
+    Verb {
+        path: "doctor forge",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
     // CLOUD-1683. The manifest declares one tool the probe does not report, so
     // this exercises the REFUSING arm — where the verdict names its subject and
     // therefore has the most to leak. The probe's own canaries must not survive
@@ -1628,6 +1734,23 @@ const CENSUS: &[Verb] = &[
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
+    // Its signature twin (CLOUD-843): it reports the signer's STATE and the
+    // reason it is broken, never the key path or the signer program.
+    Verb {
+        path: "attribution signing",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    // The attestation producer (CLOUD-843). Its record carries an archive NAME
+    // and a closed verdict token; the verifier's own report — which names the
+    // attesting workflow and signer — is dropped at the spawn.
+    Verb {
+        path: "record attestation",
+        args: &["--binary", "a-binary"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
     Verb {
         path: "worktree status",
         args: &[],
@@ -1647,6 +1770,130 @@ const CENSUS: &[Verb] = &[
     Verb {
         path: "mcp spawn",
         args: &["a-server", "--", "true"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    // CLOUD-843's foundation surface. Every row is `PointerOnly` and that is the
+    // disposition each package inherits rather than one this change chose for
+    // them: a step key, an inventory's asset name, a board pointer, a census
+    // count — none has a reason to carry a byte it read. The skeletons answer
+    // `unimplemented` today (see `MAY_ANSWER_COULD_NOT_LOOK`); the three `step`
+    // arms answer now (an undeclared step is a miss in words, a record with no
+    // pending key a refusal naming only the step); `census shell`
+    // answers now, over the corpus's task body, workflow step and `emit.sh`,
+    // each of which carries a content canary it must count and never quote.
+    Verb {
+        path: "step check",
+        args: &["a-step"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "step record",
+        args: &["a-step"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "step run",
+        args: &["a-step", "--", "true"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "sbom",
+        args: &["--names"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "dist",
+        args: &["x86_64-unknown-linux-gnu", "--stem"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "mcp grant",
+        args: &["mcp__a__b"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "mcp posture",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "board check",
+        args: &[],
+        stdin: Stdin::Board,
+        disposition: Disposition::PointerOnly,
+    },
+    // The board sweep (CLOUD-843, retiring `[tasks.board-sweep]`). The corpus
+    // declares no `[board] sweep` table, so its answer here is the named refusal
+    // — and the pointer-only assertions run over that refusal, which is where a
+    // composer is most tempted to echo the payload it was handed.
+    Verb {
+        path: "board sweep",
+        args: &[],
+        stdin: Stdin::Board,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "record divergence",
+        args: &["--ci-workflow", "ci.yml", "--land-workflow", "land.yml"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "record nonverdict",
+        args: &["--exclude-job", "final", "--verdict-step", "Run mise run "],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "record census note",
+        args: &["h"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "record census record-boot",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    // `--once`, the form the session-start row runs. The corpus records one
+    // boot, so the plain form's only reading here is "no boot predates this one"
+    // — could-not-look, exit 3 since CLOUD-843 folded the report onto §7 — and
+    // listing it under `MAY_ANSWER_COULD_NOT_LOOK` would widen that list for a
+    // fixture choice. `--once` records, reads and exits 0 over the same stores.
+    Verb {
+        path: "record census report",
+        args: &["--once"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "record census tally",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "census shell",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    // The derivations' writer (CLOUD-1991). Driven with `--schema` alone, into a
+    // directory of the corpus's own: the verb writes files and says where, one
+    // `<kind>=<path>` line, and reads nothing of the caller's tree to do it — the
+    // schemas are derived from the config TYPES, as `generate schema`'s row says.
+    Verb {
+        path: "artifacts write",
+        args: &["--schema", "artifacts-out"],
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
@@ -1676,6 +1923,16 @@ const CENSUS: &[Verb] = &[
     Verb {
         path: "wiring reclaim",
         args: &["-n"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    // The clone's commit hooks (CLOUD-1991). Driven with a body the corpus does
+    // not carry, which is the invocation that writes nothing: linking one would
+    // rewrite the fixture's own hooks. The refusal names the caller's operand
+    // and nothing read from the tree.
+    Verb {
+        path: "wiring gate",
+        args: &["no-such-hook-body"],
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
@@ -1817,6 +2074,15 @@ const CENSUS: &[Verb] = &[
     },
     Verb {
         path: "perf gate",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    // The fixture's `[perf.latency]` times this binary's `--version`, so the
+    // verb measures for real and reports a median and a token, never a byte of
+    // what the command printed.
+    Verb {
+        path: "perf latency",
         args: &[],
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
@@ -1967,6 +2233,15 @@ const CENSUS: &[Verb] = &[
         stdin: Stdin::ForgeVerdict,
         disposition: Disposition::PointerOnly,
     },
+    // CLOUD-843's validator door. The fixture declares no `[[rule.tools]]` row,
+    // so this answers the usage refusal naming the id — a pointer — and never
+    // reaches a spawn; what it would record is an exit code, never a report.
+    Verb {
+        path: "record validate",
+        args: &["config-validator"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
     // CLOUD-472. The entry id piped in carries the canary, because an id is the
     // AGENT's own text and is the one thing a refusal here must never echo — a
     // malformed line is reported by its NUMBER and the closed status vocabulary,
@@ -2037,6 +2312,75 @@ const CENSUS: &[Verb] = &[
         path: "record journal",
         args: &["census"],
         stdin: Stdin::ToolVerdict,
+        disposition: Disposition::PointerOnly,
+    },
+    // CLOUD-843's forge-read door. The corpus declares no `[[forge.query]]`, so
+    // this answers the usage refusal — naming the id it was given and nothing
+    // the forge could have said, which is the arm a canary could reach. The
+    // success path writes the reduction to a store and says nothing; that half
+    // is `forge_query.rs`'s own byte-for-byte assertion over the record.
+    Verb {
+        path: "record query",
+        args: &["census"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    // CLOUD-843's release doors (package p8). The corpus is a clone with no forge
+    // remote and no credential, so each answers its refusal — naming what it
+    // could not resolve and nothing a release carries. What each would record or
+    // write on success is `release_assets.rs`'s and `release_backfill.rs`'s own
+    // assertion over the store and the dispatch plan.
+    Verb {
+        path: "record release",
+        args: &["--manifest", "SHA256SUMS", "v0.0.1"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "release sums",
+        args: &["--manifest", "SHA256SUMS", "v0.0.1"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "release backfill",
+        args: &["--workflow", "backfill.yml", "--dry-run"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    // CLOUD-843's probe door. The command is `true`, which reads nothing and
+    // prints nothing; the family is one no reading declares, so the verb answers
+    // its usage refusal naming the family and never a byte of the probe's output.
+    Verb {
+        path: "record probe",
+        args: &["census", "--", "true"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    // CLOUD-843's decide door, over a family no reading declares: the usage
+    // refusal, before anything is written or decided.
+    Verb {
+        path: "record decide",
+        args: &["census", "--rule", "census"],
+        stdin: Stdin::ToolVerdict,
+        disposition: Disposition::PointerOnly,
+    },
+    // CLOUD-518's gate. `check` with a session variable no host sets: the
+    // reading is `-`, and the rule it names is not declared, so the answer is the
+    // rule refusal — naming the id it was given and nothing it read.
+    Verb {
+        path: "pr unsubscribed",
+        args: &[
+            "check",
+            "1",
+            "--session-env",
+            "BATTEN_POINTER_ONLY_NEVER_SET",
+            "--family",
+            "census",
+            "--rule",
+            "census",
+        ],
+        stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
     // Their READ halves. Over this corpus the stores are empty, so the answers
@@ -2130,6 +2474,25 @@ const CENSUS: &[Verb] = &[
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
+    // The per-turn background run (CLOUD-1991). Driven with a pattern no row
+    // declares, which refuses before anything is announced or started — a
+    // corpus run must not leave a detached copy behind.
+    Verb {
+        path: "singleton detach",
+        args: &[
+            "census-detach",
+            "--marker",
+            "detach.marker",
+            "--log",
+            "detach.log",
+            "--pattern",
+            "no-such-pattern-row",
+            "--",
+            "true",
+        ],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
     // -- THE PORTS THIS CAMPAIGN ADDED (CLOUD-1716, CLOUD-1753) ---------------
     //
     // Every one is `PointerOnly`, which is the default disposition and not a
@@ -2151,6 +2514,14 @@ const CENSUS: &[Verb] = &[
     Verb {
         path: "ci suites",
         args: &["--base", "HEAD"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    // `step run`'s reading: a command that writes nothing leaves nothing to
+    // relay, so the verb's own lines are held to the law.
+    Verb {
+        path: "ci step",
+        args: &["--", "true"],
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
@@ -2285,6 +2656,11 @@ fn run_in(corpus: &Corpus, args: &[&str], stdin: Stdin) -> Run {
         // and the only one a census about OUTPUT should be exercising.
         .env("BATTEN_REST_FIXTURE", corpus.home.join("no-answers"))
         .env("XDG_CACHE_HOME", corpus.home.join("cache"))
+        // AND THE BOOT TIME IS PINNED, so the `record census` arms answer the
+        // same on every platform. Without it the boot comes from `/proc/stat`,
+        // which a macOS leg has not got — and `record-boot` there answers
+        // could-not-look for the platform, not for anything this census asks.
+        .env("BATTEN_BOOT_TIME", "1700000000")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -2417,6 +2793,57 @@ fn the_corpus_is_live_subject_matter() {
     assert!(
         !budget.stdout.is_empty(),
         "an over-budget set renders its per-file breakdown"
+    );
+}
+
+/// `board check`'s census row cannot reach a verdict on the shared corpus: that
+/// authority declares no `[[pattern]]` row and no `[board]` table, so the verb
+/// answers `Usage` before it reads a payload, and the sweep's one exit-code
+/// assertion over it ("not 3") holds vacuously. This drives it to its VIOLATION
+/// renderer over the committed vocabulary, with a canary as the refused row's
+/// whole body — the one arm where a body could leak.
+#[test]
+fn board_check_reaches_its_verdict_and_emits_no_body() {
+    let repo = Fixture::new("pointer-only-board-check")
+        .file("Cargo.toml", "[workspace.package]\nversion = \"0.0.125\"\n")
+        .git()
+        .base_commit()
+        .build();
+    let config = scratch("pointer-only-board-check-config");
+    common::write(
+        &config,
+        "batten.toml",
+        &format!(
+            "version = 1\n{}\n{}",
+            common::declared_board(),
+            common::declared_patterns()
+        ),
+    );
+    let body = canary("boardrow");
+    let payload = format!(
+        r#"[{{"id":"CLOUD-1120","status":"Todo","statusType":"unstarted","attachments":[],"relations":{{"blockedBy":[]}},"projectMilestone":{{"id":"m-1","name":"m"}},"description":"{body}"}}]"#
+    );
+    let config_arg = config.display().to_string();
+    let run = common::run_with_stdin(
+        &repo,
+        &["--config-in", config_arg.as_str(), "board", "check"],
+        &payload,
+    );
+    let emitted = format!(
+        "{}{}",
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(
+        run.status.code(),
+        Some(2),
+        "the verb must reach its verdict, or what it did not emit proves nothing: {emitted}"
+    );
+    assert!(emitted.contains("CLOUD-1120 todo-not-ready"), "{emitted}");
+    assert!(
+        !emitted.contains(&body),
+        "board check emitted the refused row's body. Output is a pointer, never the \
+         payload (non-negotiable rule 4): {emitted}"
     );
 }
 

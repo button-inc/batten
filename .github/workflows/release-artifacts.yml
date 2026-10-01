@@ -1,5 +1,10 @@
 name: release-artifacts
 
+# workflow-shell: CLOUD-843 the step count rises because multi-line shell bodies
+# became one-command steps (argv, `ci step`, or an expression-gated `exit 1`);
+# the shell LINES fell, which `batten census shell` measures. The increase is
+# the retirement's shape, owned here as `workflow add other`'s permit asks.
+
 # Build the distributable binaries and attach them to the GitHub release.
 #
 # Until this existed, every release shipped ZERO assets: `mise run release` is
@@ -201,15 +206,21 @@ jobs:
       # against a rustup-installed one on the host.
       - name: Add the Rust target
         if: matrix.build-tool != 'cross'
-        run: rustup target add ${{ matrix.target }}
+        env:
+          TARGET: ${{ matrix.target }}
+        run: mise run batten -- ci step --arg-env TARGET -- rustup target add
       - name: Build and archive
         id: dist
         shell: bash
         # `dist` emits archive=/binary= KEY=VALUE lines, so the per-target
         # binary suffix is decided in one place and never re-derived here.
+        # `batten dist` reads its builder from DIST_BUILD_TOOL when no
+        # `--build-tool` flag names one (CLOUD-843). Both matrix fields travel
+        # through the environment, so neither is expanded into the script text.
         env:
           DIST_BUILD_TOOL: ${{ matrix.build-tool }}
-        run: mise run dist "${{ matrix.target }}" >>"$GITHUB_OUTPUT"
+          DIST_TARGET: ${{ matrix.target }}
+        run: mise run batten -- ci step --outputs --arg-env DIST_TARGET -- mise run dist --
       # UPLOAD FIRST, ATTEST SECOND (CLOUD-258). The reverse order shipped, and
       # every release from v0.0.31 to v0.0.36 attached zero binaries: all seven
       # legs built, then died on the attestation with
@@ -229,7 +240,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ inputs.tag || github.event.release.tag_name }}
-        run: gh release upload "$TAG" "${{ steps.dist.outputs.archive }}" --clobber
+          ARCHIVE: ${{ steps.dist.outputs.archive }}
+        run: mise run batten -- ci step --arg-env TAG --arg-env ARCHIVE -- gh release upload --clobber
       # The binary-level inventory (CLOUD-263), AFTER the upload for CLOUD-258's
       # reason: the archive is already published, so nothing this step does can
       # suppress a binary. It is a step rather than a job — a job costs a billed
@@ -241,7 +253,7 @@ jobs:
       # `cargo-zigbuild` (proven, 85 rust-crate packages recovered from a stripped
       # `dist` binary against 0 from an unwrapped one), and could not be probed
       # against `cross` because that wrapper needs a Docker daemon the probe
-      # container had none of. `mise-tasks/dist.sh` wraps exactly the same two, so a
+      # container had none of. `batten dist` wraps exactly the same two, so a
       # `cross` leg would produce a document cataloging nothing — which
       # `sbom-binary` correctly refuses. The five container legs join when someone
       # runs the same local probe where Docker exists.
@@ -249,14 +261,24 @@ jobs:
         if: matrix.build-tool != 'cross'
         id: sbom
         shell: bash
-        run: mise run sbom-binary "${{ steps.dist.outputs.binary }}" "${{ matrix.target }}" >>"$GITHUB_OUTPUT"
+        env:
+          BINARY: ${{ steps.dist.outputs.binary }}
+          TARGET: ${{ matrix.target }}
+        run: mise run batten -- ci step --outputs --arg-env BINARY --arg-env TARGET -- mise run sbom-binary --
+      # The decision, as its own step so its finding reaches THIS log rather than
+      # the `$GITHUB_OUTPUT` the step above appends to.
+      - name: Refuse an inventory that catalogs nothing
+        if: matrix.build-tool != 'cross'
+        shell: bash
+        run: mise run sbom-binary-check
       - name: Upload the binary SBOM to the release
         if: matrix.build-tool != 'cross'
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ inputs.tag || github.event.release.tag_name }}
-        run: gh release upload "$TAG" "${{ steps.sbom.outputs.sbom }}" --clobber
+          SBOM: ${{ steps.sbom.outputs.sbom }}
+        run: mise run batten -- ci step --arg-env TAG --arg-env SBOM -- gh release upload --clobber
       # Attest the BINARY rather than the archive: the provenance should bind to
       # the executable a user runs, so repackaging cannot launder it (§12 — a
       # trust engine must exceed the ordinary distribution bar, not match it).
@@ -331,7 +353,7 @@ jobs:
       - name: Derive the SBOM from the tagged source
         id: sbom
         shell: bash
-        run: mise run sbom >>"$GITHUB_OUTPUT"
+        run: mise run batten -- ci step --outputs -- mise run sbom
       # The CLI reference rides this job for the reason the SBOM does (CLOUD-171):
       # one platform-independent file, and this job already checks out the tag,
       # runs mise, holds `contents: write` and uploads exactly this shape of
@@ -344,7 +366,7 @@ jobs:
       - name: Render the CLI reference from the tagged surface
         id: reference
         shell: bash
-        run: mise run render:cli >>"$GITHUB_OUTPUT"
+        run: mise run batten -- ci step --outputs -- mise run render:cli
       - name: Upload to the release
         shell: bash
         env:
@@ -353,7 +375,12 @@ jobs:
           SPDX: ${{ steps.sbom.outputs.spdx }}
           CDX: ${{ steps.sbom.outputs.cdx }}
           REFERENCE: ${{ steps.reference.outputs.reference }}
-        run: gh release upload "$TAG" schema/batten.schema.json schema/batten.local.schema.json install.sh "$SPDX" "$CDX" "$REFERENCE" --clobber
+          # Literal paths travel beside the derived ones because `--arg-env`
+          # appends in order and the tag must be the first positional.
+          SCHEMA: schema/batten.schema.json
+          LOCAL_SCHEMA: schema/batten.local.schema.json
+          INSTALLER: install.sh
+        run: mise run batten -- ci step --arg-env TAG --arg-env SCHEMA --arg-env LOCAL_SCHEMA --arg-env INSTALLER --arg-env SPDX --arg-env CDX --arg-env REFERENCE -- gh release upload --clobber
 
   # The checksum manifest (CLOUD-278), the value every packaging channel consumes:
   # a Homebrew formula pins it, an aqua/mise registry entry carries it, and
@@ -401,12 +428,15 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # `batten release sums` reads the credential through `[forge]
+          # credential_names` (CLOUD-843), which names no conventional variable.
+          BATTEN_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ inputs.tag || github.event.release.tag_name }}
-        run: mise run checksums "$TAG" >>"$GITHUB_OUTPUT"
+        run: mise run batten -- ci step --outputs --arg-env TAG -- mise run checksums --
       - name: Upload to the release
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ inputs.tag || github.event.release.tag_name }}
           SUMS: ${{ steps.checksums.outputs.sums }}
-        run: gh release upload "$TAG" "$SUMS" --clobber
+        run: mise run batten -- ci step --arg-env TAG --arg-env SUMS -- gh release upload --clobber

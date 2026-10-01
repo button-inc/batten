@@ -969,6 +969,107 @@ pub enum WeakeningKind {
     /// so a variant inserted among its neighbours shifts every later discriminant
     /// and `semver` reports the whole tail as moved.
     WiringDisarmRemoved,
+    /// `[sbom] actions` is gone, so `batten sbom` skips the actions pass and the
+    /// pinned actions' licence and copyright go back to `NOASSERTION` in a
+    /// published document (CLOUD-843). The REMOVED direction only: declaring
+    /// the table where the base had none adds a pass.
+    SbomActionsRemoved,
+    /// `[sbom.conformance] checker` names a different program, or the table is
+    /// gone. The ntia gate's verdict IS that program's exit code, so a swap to
+    /// any program that exits `0` passes every standard — the reading
+    /// `FactCommandChanged` takes for a fact's command. Appended, as above.
+    SbomCheckerChanged,
+    /// A standard the base asked `[sbom.conformance]` to check is no longer
+    /// asked, so the gate stops judging the document against it. The REMOVED
+    /// direction only: a standard added is one more question. Appended, as above.
+    SbomStandardRemoved,
+    /// `[sbom] inventory` names a different `[[rule.tools]]` row, or none. The
+    /// consumer's inventory module reads the reduction at the row it was written
+    /// for and treats an absent one as nothing to judge, so repointing the key
+    /// at a sibling row blinds the gate while `record` still accepts the write.
+    /// Appended, as above.
+    SbomInventoryChanged,
+    /// `[sbom.conformance] record` names a different family, or the table is
+    /// gone. The conformance module reads the family it was written for, and
+    /// raises only over lines it finds there, so a renamed family passes with
+    /// nothing judged. Appended, as above.
+    SbomRecordChanged,
+    /// A server the base ref's permission file governed under any exposed name
+    /// is no longer governed: its `[mcp] permission_aliases` entry is gone, or no
+    /// `[[mcp.source]]` row's `endpoint_contains` declares it any more, or the
+    /// address that selects it changed (CLOUD-843).
+    ///
+    /// **A silence, not a refusal**, `ForgeCredentialsRemoved`'s shape: `mcp
+    /// grant --guard` refuses a committed deny under a renamed key only while
+    /// the name resolves, so dropping it turns every translated deny into a call
+    /// the pre-tool guard waves through at exit 0, and nothing reports it. A
+    /// CHANGED address is the same loss, because the old key's endpoint stops
+    /// matching; whether the new one governs the right server is not something
+    /// two parsed configs can settle.
+    ///
+    /// The REMOVED direction only: a name added is a translation gained, and the
+    /// key is absent from `OverrideConfig`, so no local file can add one.
+    /// Appended, for this enum's `Ord` reason.
+    McpPermissionAliasRemoved,
+    /// A `[[board.sweep]]` gate the base ref ran and the working tree does not
+    /// (CLOUD-843, retiring `[tasks.board-sweep]`).
+    ///
+    /// A gate is a question the sweep asks of every payload set, so dropping
+    /// one narrows what "the board is coherent" means — the reading
+    /// `StartupRowRemoved` takes of a precondition, keyed on the gate's `name`
+    /// because that is the identity the report prints. An EDITED `run` is not
+    /// compared, for that variant's reason: whether one argv decides more than
+    /// another is a runtime fact about two programs, not something two parsed
+    /// configs can settle (non-negotiable rule 3).
+    ///
+    /// **Appended, never inserted**, for `PerfExemptionAdded`'s reason.
+    BoardSweepGateRemoved,
+    /// A `[[board.sweep]]` gate's `abstains` gained an exit the base ref's did
+    /// not carry (CLOUD-843).
+    ///
+    /// THE ONE EXIT-TABLE MOVE THAT LOWERS A BAR. An exit a row does not
+    /// classify is could-not-look, which OUTRANKS a refusal; an exit it names
+    /// under `refuses` is a refusal; an exit it names under `abstains` ranks BELOW
+    /// a refusal (CLOUD-921). So moving an exit into `abstains` — from either
+    /// place — can only turn a sweep that would have failed louder into one that
+    /// fails quieter, and beside a clean board it is the difference between
+    /// "could not look" and "coherent, but this clone abstained". Narrowing
+    /// `refuses` is NOT this kind: the exit it drops falls to could-not-look,
+    /// which is the stricter lane, so that edit tightens.
+    ///
+    /// **Appended, never inserted**, for `PerfExemptionAdded`'s reason.
+    BoardSweepAbstentionAdded,
+    /// A `[[board.sweep]]` gate's `refuses` gained an exit the base ref's row
+    /// classified in NEITHER lane (CLOUD-843).
+    ///
+    /// The widening mirror of the narrowing `BoardSweepAbstentionAdded` calls a
+    /// tightening. An exit a row does not classify is could-not-look, which
+    /// outranks a refusal; moving it into `refuses` turns a sweep that answered
+    /// "not judged" into one that answers "refused", so a gate that could not
+    /// look reads as a finding against the board. `refuses = [2]` widened to
+    /// `[1, 2]` on an engine-table gate is exactly that: its could-not-look
+    /// laundered into the refusal lane.
+    ///
+    /// An exit the base row ABSTAINED on and the working row refuses is not this
+    /// kind: a refusal outranks an abstention, so that move answers louder.
+    ///
+    /// **Appended, never inserted**, for `PerfExemptionAdded`'s reason.
+    BoardSweepRefusalWidened,
+    /// `[census.shell]` stopped reaching somewhere it reached, or set apart a
+    /// file it did not (CLOUD-1994).
+    ///
+    /// The table became policy-bearing when `shell-hygiene`'s shell ban started
+    /// reading it: the ban judges exactly the homes it declares and admits
+    /// exactly the files it exempts. So a workflow glob removed, a manifest's
+    /// command key or unit header removed, or a whole manifest dropped is a home
+    /// the ban no longer reads — and an exempt glob ADDED is a file it no longer
+    /// refuses. The exempt half is the added direction because that list is
+    /// exemptions, `PerfExemptionAdded`'s reason one table over; it is compared
+    /// only where the base declared a census at all, because a census ARRIVING is
+    /// the ban starting to apply, which is a tightening.
+    ///
+    /// Appended, for the `Ord` reason its neighbours give.
+    ShellCensusNarrowed,
 }
 
 impl WeakeningKind {
@@ -1041,6 +1142,16 @@ impl WeakeningKind {
         WeakeningKind::VerifiedCheckRemoved,
         WeakeningKind::FastForwardLaneAdded,
         WeakeningKind::WiringDisarmRemoved,
+        WeakeningKind::SbomActionsRemoved,
+        WeakeningKind::SbomCheckerChanged,
+        WeakeningKind::SbomStandardRemoved,
+        WeakeningKind::SbomInventoryChanged,
+        WeakeningKind::SbomRecordChanged,
+        WeakeningKind::McpPermissionAliasRemoved,
+        WeakeningKind::BoardSweepGateRemoved,
+        WeakeningKind::BoardSweepAbstentionAdded,
+        WeakeningKind::BoardSweepRefusalWidened,
+        WeakeningKind::ShellCensusNarrowed,
     ];
 
     /// The stable, lowercase identifier used in machine output (§6).
@@ -1064,6 +1175,16 @@ impl WeakeningKind {
             WeakeningKind::LandingPathRemoved => "landing-path-removed",
             WeakeningKind::FastForwardLaneAdded => "fast-forward-lane-added",
             WeakeningKind::WiringDisarmRemoved => "wiring-disarm-removed",
+            WeakeningKind::SbomActionsRemoved => "sbom-actions-removed",
+            WeakeningKind::SbomCheckerChanged => "sbom-checker-changed",
+            WeakeningKind::SbomStandardRemoved => "sbom-standard-removed",
+            WeakeningKind::SbomInventoryChanged => "sbom-inventory-changed",
+            WeakeningKind::SbomRecordChanged => "sbom-record-changed",
+            WeakeningKind::McpPermissionAliasRemoved => "mcp-permission-alias-removed",
+            WeakeningKind::BoardSweepGateRemoved => "board-sweep-gate-removed",
+            WeakeningKind::BoardSweepAbstentionAdded => "board-sweep-abstention-added",
+            WeakeningKind::BoardSweepRefusalWidened => "board-sweep-refusal-widened",
+            WeakeningKind::ShellCensusNarrowed => "shell-census-narrowed",
             WeakeningKind::ReadyCutoverRelaxed => "ready-cutover-relaxed",
             WeakeningKind::PerfExemptionAdded => "perf-exemption-added",
             WeakeningKind::VerbRemoved => "verb-removed",
@@ -1206,22 +1327,28 @@ pub const CENSUS: &[FieldCoverage] = &[
         field: "ready",
         coverage: Coverage::Compared(&[WeakeningKind::ReadyCutoverRelaxed]),
     },
+    // `board` WAS `NotPolicyBearing`, on a reason that was true of the column
+    // vocabulary alone and stays true of it: an override cannot speak to the
+    // table at all (the key is absent from `OverrideConfig` and `resolve` reads
+    // it from the committed authority alone, `epoch`'s structural guarantee), and
+    // a column name has no DIRECTION — renaming a queue is not more or less
+    // permissive as config, because which rows it admits is tracker state rather
+    // than a bar this file sets (CLOUD-1623).
+    //
+    // CLOUD-843 gave the table a sub-table that IS a bar: `[[board.sweep]]`, the
+    // gates `board sweep` runs over every payload set. Between two committed refs
+    // a dropped gate, or an exit moved into `abstains`, narrows what the sweep
+    // judges, and while the whole field read as not policy-bearing that edit was
+    // invisible under `--config-from` — `hook`'s history with `[[hook.handler]]`
+    // repeated one table over. The columns still contribute nothing here; the
+    // field is compared by the one sub-table that can lower a bar.
     FieldCoverage {
         field: "board",
-        coverage: Coverage::NotPolicyBearing(
-            "this board's column vocabulary (CLOUD-1623). It IS read by gates — `claim check` \
-             admits only the ready-queue column and `landed` selects on the pulled and started \
-             ones — so the reason is not that it lacks policy weight. It is that an override \
-             cannot speak to it at all: the key is absent from `OverrideConfig` and `resolve` \
-             reads the table from the committed authority alone, `contract`'s structural \
-             guarantee for `epoch`'s reason. That is what makes the obvious attack unwritable — \
-             an uncommitted layer renaming `ready` to a column every row already sits in would \
-             make every row pullable at once. A weakening row would be the wrong instrument, \
-             `mcp`'s point below: it reports a DIRECTION, and a column name has none. Renaming \
-             a queue is not more or less permissive as config — which rows it admits depends on \
-             where the board has put them, which is tracker state rather than a bar this file \
-             sets",
-        ),
+        coverage: Coverage::Compared(&[
+            WeakeningKind::BoardSweepGateRemoved,
+            WeakeningKind::BoardSweepAbstentionAdded,
+            WeakeningKind::BoardSweepRefusalWidened,
+        ]),
     },
     FieldCoverage {
         field: "perf",
@@ -1349,21 +1476,18 @@ pub const CENSUS: &[FieldCoverage] = &[
              `exec_pattern`, which is compared on its own row",
         ),
     },
+    // COMPARED SINCE CLOUD-843, and only by the one key a gate's verdict reads.
+    // `permission_aliases`, with the `endpoint_contains` selector that resolves
+    // each name, is what lets `mcp grant --guard` refuse a committed deny under a
+    // renamed key, so losing either is a silence. The rest of the table is still
+    // not policy-bearing, for the reason this row used to give whole: a
+    // `[[mcp.source]]` row names the file an endpoint and its headers are
+    // resolved from, and a `[[mcp.result]]` row decides what reaches the CALLER
+    // of `mcp call` — no gate reads either, and the authority they are read from
+    // is guarded structurally, the key being absent from `OverrideConfig`.
     FieldCoverage {
         field: "mcp",
-        coverage: Coverage::NotPolicyBearing(
-            "where a harness keeps its MCP wiring, and what a dispatched method hands back \
-             instead of its payload (CLOUD-1260). No rule's verdict reads it: a `[[mcp.source]]` \
-             row names the file an endpoint and its headers are resolved from, and a \
-             `[[mcp.result]]` row decides what reaches the CALLER of `mcp call` — neither is \
-             read by any gate, so widening a field list produces no finding and narrowing one \
-             suppresses none. What DOES need guarding is the authority the table is read from, \
-             and that is guarded structurally rather than here: the key is absent from \
-             `OverrideConfig`, so an uncommitted file cannot repoint the dispatch at an endpoint \
-             of its own or widen a reduction back to the payload. A weakening row would be the \
-             wrong instrument for that — it reports a direction, where the answer needed is that \
-             the layer cannot speak at all",
-        ),
+        coverage: Coverage::Compared(&[WeakeningKind::McpPermissionAliasRemoved]),
     },
     FieldCoverage {
         field: "capture",
@@ -1476,6 +1600,45 @@ pub const CENSUS: &[FieldCoverage] = &[
         coverage: Coverage::Compared(&[WeakeningKind::WiringDisarmRemoved]),
     },
     FieldCoverage {
+        field: "census",
+        // Policy-bearing since CLOUD-1994: `shell-hygiene`'s shell ban reads this
+        // table as its list of homes and exemptions, so narrowing it lowers a bar.
+        coverage: Coverage::Compared(&[WeakeningKind::ShellCensusNarrowed]),
+    },
+    FieldCoverage {
+        field: "sbom",
+        // FIVE KEYS SET A BAR, and the rest do not. `conformance.checker` and
+        // `conformance.standards` decide the ntia verdict — it is the checker's
+        // exit code per standard — and `actions` decides whether the pinned
+        // actions' licences are filled at all. `inventory` and
+        // `conformance.record` name where the verb stores what a module reads
+        // back at a FIXED key, and a module that finds nothing there judges
+        // nothing, so a rename blinds the gate. The subject, the directories and
+        // the exclusions produce: the gates over the output hold
+        // the documents to committed text the producer cannot edit (`Cargo.lock`'s
+        // sourced entries and the licence table's pins are `line_sources` the
+        // modules read themselves), so an exclusion that dropped a component reads
+        // as a count that disagrees, never as a smaller agreement.
+        coverage: Coverage::Compared(&[
+            WeakeningKind::SbomActionsRemoved,
+            WeakeningKind::SbomCheckerChanged,
+            WeakeningKind::SbomStandardRemoved,
+            WeakeningKind::SbomInventoryChanged,
+            WeakeningKind::SbomRecordChanged,
+        ]),
+    },
+    FieldCoverage {
+        field: "steps",
+        coverage: Coverage::NotPolicyBearing(
+            "the step cache's key table (CLOUD-843): which files and tool answers key a \
+             step's LOCAL receipt. It decides no finding and sets no bar a verdict is read \
+             against — a hit only spares a local re-run, and under CI the cache is off \
+             entirely, so every step whose verdict a landing depends on is re-derived there \
+             whatever this table says. An override cannot reach it either: `batten step` \
+             reads it from the committed authority alone",
+        ),
+    },
+    FieldCoverage {
         field: "provisions",
         coverage: Coverage::Compared(&[WeakeningKind::ProvisionRemoved]),
     },
@@ -1564,7 +1727,7 @@ pub struct Weakening {
 }
 
 impl Weakening {
-    fn new(
+    pub(crate) fn new(
         kind: WeakeningKind,
         key: impl Into<String>,
         base: impl Into<String>,
@@ -1746,6 +1909,7 @@ pub fn weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
     // test fails on any field carrying none.
     found.extend(entry_weakenings(base, working));
     found.extend(scalar_weakenings(base, working));
+    found.extend(shell_census_weakenings(base, working));
 
     found.sort();
     found
@@ -2063,6 +2227,77 @@ fn perf_exemption_weakenings(base: &Config, working: &Config) -> Vec<Weakening> 
     found
 }
 
+/// The shell census's declarations, compared as the ban reads them (CLOUD-1994).
+///
+/// Every home is keyed so a removal names what stopped being read: a workflow
+/// glob by itself, a manifest's command key as `path:key`, its unit header as
+/// `path:header`. The exempt list is compared in the ADDED direction, and only
+/// where the base declared a census — see [`WeakeningKind::ShellCensusNarrowed`].
+fn shell_census_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
+    let kind = WeakeningKind::ShellCensusNarrowed;
+    let shell = |config: &Config| {
+        config
+            .census
+            .as_ref()
+            .and_then(|census| census.shell.clone())
+    };
+    let keys = |census: &crate::census::ShellCensus| -> Vec<String> {
+        census
+            .manifests
+            .iter()
+            .flat_map(|manifest| {
+                manifest
+                    .keys
+                    .iter()
+                    .map(move |key| format!("{}:{key}", manifest.path))
+            })
+            .collect()
+    };
+    let units = |census: &crate::census::ShellCensus| -> Vec<String> {
+        census
+            .manifests
+            .iter()
+            .filter_map(|manifest| {
+                manifest
+                    .unit
+                    .as_ref()
+                    .map(|unit| format!("{}:{unit}", manifest.path))
+            })
+            .collect()
+    };
+    let exempt = |census: &crate::census::ShellCensus| -> Vec<String> {
+        census
+            .exempt
+            .iter()
+            .map(|glob| format!("census.shell.exempt[{glob}]"))
+            .collect()
+    };
+    let Some(was) = shell(base) else {
+        return Vec::new();
+    };
+    let now = shell(working).unwrap_or_default();
+    let mut found = removed_entries(
+        kind,
+        &was.workflows,
+        &now.workflows,
+        "census.shell.workflows",
+    );
+    found.extend(removed_entries(
+        kind,
+        &keys(&was),
+        &keys(&now),
+        "census.shell.manifest",
+    ));
+    found.extend(removed_entries(
+        kind,
+        &units(&was),
+        &units(&now),
+        "census.shell.manifest.unit",
+    ));
+    found.extend(added_entries(kind, &exempt(&was), &exempt(&now)));
+    found
+}
+
 fn cutover_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
     type Cutover = (&'static str, fn(&Config) -> Option<String>);
     const CUTOVERS: &[Cutover] = &[
@@ -2342,6 +2577,54 @@ fn entry_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
     found
 }
 
+/// The declared rows whose removal lowers a bar the base set: hook handlers,
+/// container preconditions and neutralised launchers, each by the same
+/// "a subject the base declared and the working tree does not" reading.
+///
+/// Split out of [`scalar_weakenings`] at that shared reading, so each stays
+/// under `clippy::too_many_lines`.
+fn declared_entries_removed(base: &Config, working: &Config) -> Vec<Weakening> {
+    let mut found = Vec::new();
+    // A `[[hook.handler]]` the base declared and the working tree does not
+    // (CLOUD-898, CLOUD-905). The `hook` field used to have no monotone reading,
+    // on a reason that was true of `[[hook.action]]` alone — "not a bar: removing
+    // one stops something running and adding one runs more, and neither forgives
+    // a finding". A handler is a bar: exiting `2` becomes a `Decision::Deny`, so
+    // deleting one lowers something the base ref set, and while the whole field
+    // read as unreadable that deletion was invisible under `--config-from`.
+    //
+    // Actions still contribute nothing here, which is why the reason above
+    // survives on its own terms rather than being rewritten to cover both — it
+    // simply no longer describes the whole field, and the field is now compared
+    // by the one sub-table that can lower a bar.
+    found.extend(removed_entries(
+        WeakeningKind::HandlerRemoved,
+        &handler_ids(base),
+        &handler_ids(working),
+        "hook.handler",
+    ));
+
+    // The container's declared preconditions (CLOUD-1324), by the same reading.
+    found.extend(removed_entries(
+        WeakeningKind::StartupRowRemoved,
+        &startup_ids(base),
+        &startup_ids(working),
+        "startup",
+    ));
+
+    // The launcher scripts this repository neutralises (CLOUD-1704), by the same
+    // reading again. Keyed on the declared PATH rather than on an id, because
+    // these rows carry no id — the path is what identifies the subject, and two
+    // rows over one path would be one subject declared twice rather than two.
+    found.extend(removed_entries(
+        WeakeningKind::WiringDisarmRemoved,
+        &disarm_paths(base),
+        &disarm_paths(working),
+        "wiring.disarm",
+    ));
+    found
+}
+
 /// Keys whose weakening is a threshold, a presence, or a table's own contents.
 ///
 /// The sibling of [`entry_weakenings`], and the half where direction is the
@@ -2401,42 +2684,42 @@ fn scalar_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
         ));
     }
 
-    // A `[[hook.handler]]` the base declared and the working tree does not
-    // (CLOUD-898, CLOUD-905). The `hook` field used to have no monotone reading,
-    // on a reason that was true of `[[hook.action]]` alone — "not a bar: removing
-    // one stops something running and adding one runs more, and neither forgives
-    // a finding". A handler is a bar: exiting `2` becomes a `Decision::Deny`, so
-    // deleting one lowers something the base ref set, and while the whole field
-    // read as unreadable that deletion was invisible under `--config-from`.
-    //
-    // Actions still contribute nothing here, which is why the reason above
-    // survives on its own terms rather than being rewritten to cover both — it
-    // simply no longer describes the whole field, and the field is now compared
-    // by the one sub-table that can lower a bar.
-    found.extend(removed_entries(
-        WeakeningKind::HandlerRemoved,
-        &handler_ids(base),
-        &handler_ids(working),
-        "hook.handler",
+    found.extend(declared_entries_removed(base, working));
+
+    // The three `[sbom]` keys that set a bar (CLOUD-843). The comparison lives
+    // beside the table it reads, where the producer's mutation rows reach it.
+    found.extend(crate::sbom::weakenings(
+        base.sbom.as_ref(),
+        working.sbom.as_ref(),
     ));
 
-    // The container's declared preconditions (CLOUD-1324), by the same reading.
+    // The gates the board sweep runs (CLOUD-843). A gate gone is a question the
+    // sweep stopped asking, by the reading above; an exit gained under a SAME
+    // gate's `abstains` is the one edit to its exit table that answers quieter
+    // (`WeakeningKind::BoardSweepAbstentionAdded` carries why the others do not).
     found.extend(removed_entries(
-        WeakeningKind::StartupRowRemoved,
-        &startup_ids(base),
-        &startup_ids(working),
-        "startup",
+        WeakeningKind::BoardSweepGateRemoved,
+        &sweep_gate_names(base),
+        &sweep_gate_names(working),
+        "board.sweep",
     ));
-
-    // The launcher scripts this repository neutralises (CLOUD-1704), by the same
-    // reading again. Keyed on the declared PATH rather than on an id, because
-    // these rows carry no id — the path is what identifies the subject, and two
-    // rows over one path would be one subject declared twice rather than two.
-    found.extend(removed_entries(
-        WeakeningKind::WiringDisarmRemoved,
-        &disarm_paths(base),
-        &disarm_paths(working),
-        "wiring.disarm",
+    // Only over gates the BASE ran: a gate the working tree adds is a question
+    // gained, so whatever its own table abstains on, it cannot lower a bar the
+    // base set.
+    found.extend(added_entries(
+        WeakeningKind::BoardSweepAbstentionAdded,
+        &sweep_abstentions(base, base),
+        &sweep_abstentions(working, base),
+    ));
+    // The widening mirror: an exit a SAME gate's `refuses` gained that the base
+    // row classified nowhere was could-not-look, which outranks a refusal
+    // (`WeakeningKind::BoardSweepRefusalWidened`). The base side counts an exit
+    // it abstained on as already classified, because abstention to refusal
+    // answers louder.
+    found.extend(added_entries(
+        WeakeningKind::BoardSweepRefusalWidened,
+        &sweep_classified(base, base),
+        &sweep_refusals(working, base),
     ));
 
     // The judge's privacy boundary (CLOUD-135). Compared from both sides
@@ -2492,7 +2775,60 @@ fn scalar_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
     ));
 
     found.extend(transcript_weakenings(base, working));
+    found.extend(mcp_weakenings(base.mcp.as_ref(), working.mcp.as_ref()));
 
+    found
+}
+
+/// Each server `config` governs under any exposed name, with the addresses that
+/// select it: a `permission_aliases` entry some `endpoint_contains` row declares.
+fn governed_aliases(
+    config: Option<&crate::mcp::McpConfig>,
+) -> std::collections::BTreeMap<String, BTreeSet<String>> {
+    let mut governed = std::collections::BTreeMap::new();
+    let Some(config) = config else {
+        return governed;
+    };
+    for alias in &config.permission_aliases {
+        let needles: BTreeSet<String> = config
+            .sources
+            .iter()
+            .filter_map(|source| source.endpoint_contains.get(alias).cloned())
+            .collect();
+        if !needles.is_empty() {
+            governed.insert(alias.clone(), needles);
+        }
+    }
+    governed
+}
+
+/// A governed MCP name the base ref resolved and the working tree does not, or
+/// resolves by a different address (CLOUD-843).
+///
+/// Keyed on the effective governed set rather than on the list, so deleting the
+/// alias, deleting its selector and deleting `[mcp]` report the same key: each
+/// leaves `mcp grant --guard` silent on a renamed key the base ref refused.
+//MUTANT-SUITE crates/batten/src/trust.rs
+//MUTANT mcp-alias-loss-unseen|s@^    for (alias, needles) in governed_aliases(base) {$@    for (alias, needles) in governed_aliases(None) {@|losing_a_governed_mcp_name_is_a_weakening
+fn mcp_weakenings(
+    base: Option<&crate::mcp::McpConfig>,
+    working: Option<&crate::mcp::McpConfig>,
+) -> Vec<Weakening> {
+    let now = governed_aliases(working);
+    let mut found = Vec::new();
+    for (alias, needles) in governed_aliases(base) {
+        let after = match now.get(&alias) {
+            None => "absent",
+            Some(current) if *current != needles => "changed",
+            Some(_) => continue,
+        };
+        found.push(Weakening::new(
+            WeakeningKind::McpPermissionAliasRemoved,
+            format!("mcp.permission_aliases[{alias}]"),
+            "present",
+            after,
+        ));
+    }
     found
 }
 
@@ -2705,6 +3041,77 @@ fn startup_ids(config: &Config) -> Vec<String> {
 fn disarm_paths(config: &Config) -> Vec<String> {
     config.wiring.as_ref().map_or_else(Vec::new, |wiring| {
         wiring.disarm.iter().map(|row| row.path.clone()).collect()
+    })
+}
+
+/// The board sweep's gate names, which are what identifies a `[[board.sweep]]`
+/// row: the name is what the report prints and what an operator reads a lane
+/// against.
+fn sweep_gate_names(config: &Config) -> Vec<String> {
+    config.board.as_ref().map_or_else(Vec::new, |board| {
+        board.sweep.iter().map(|gate| gate.name.clone()).collect()
+    })
+}
+
+/// Every exit `config`'s sweep gates abstain on, rendered as its own key path,
+/// for the gates `ran` also declares.
+///
+/// Scoped by `ran` so a comparison reads only gates both sides carry: a gate
+/// the working tree ADDS is a question gained, and its table cannot lower a bar
+/// the base set.
+fn sweep_abstentions(config: &Config, ran: &Config) -> Vec<String> {
+    let known = sweep_gate_names(ran);
+    config.board.as_ref().map_or_else(Vec::new, |board| {
+        board
+            .sweep
+            .iter()
+            .filter(|gate| known.contains(&gate.name))
+            .flat_map(|gate| {
+                gate.abstains
+                    .iter()
+                    .map(move |code| format!("board.sweep[{}].abstains[{code}]", gate.name))
+            })
+            .collect()
+    })
+}
+
+/// Every exit `config`'s sweep gates refuse on, rendered as its own key path,
+/// for the gates `ran` also declares — scoped as [`sweep_abstentions`] is, and
+/// for its reason.
+fn sweep_refusals(config: &Config, ran: &Config) -> Vec<String> {
+    sweep_exit_keys(config, ran, |gate| gate.refuses.iter())
+}
+
+/// Every exit `config`'s sweep gates classify in EITHER lane, rendered as a
+/// `refuses` key path so [`sweep_refusals`] of another config compares against
+/// it: an exit moved from `abstains` into `refuses` answers louder, so it must
+/// read as already known rather than as a widening.
+fn sweep_classified(config: &Config, ran: &Config) -> Vec<String> {
+    sweep_exit_keys(config, ran, |gate| {
+        gate.refuses.iter().chain(gate.abstains.iter())
+    })
+}
+
+/// The `board.sweep[<name>].refuses[<code>]` keys for the exits `pick` reads off
+/// each gate `ran` also declares.
+fn sweep_exit_keys<'a, I>(
+    config: &'a Config,
+    ran: &Config,
+    pick: impl Fn(&'a crate::board::SweepGate) -> I,
+) -> Vec<String>
+where
+    I: Iterator<Item = &'a i32>,
+{
+    let known = sweep_gate_names(ran);
+    config.board.as_ref().map_or_else(Vec::new, |board| {
+        board
+            .sweep
+            .iter()
+            .filter(|gate| known.contains(&gate.name))
+            .flat_map(|gate| {
+                pick(gate).map(move |code| format!("board.sweep[{}].refuses[{code}]", gate.name))
+            })
+            .collect()
     })
 }
 
@@ -4077,6 +4484,79 @@ mod tests {
     }
 
     #[test]
+    fn narrowing_the_shell_census_is_a_weakening_and_widening_it_is_not() {
+        // The shell ban reads `[census.shell]` as its homes and its exemptions
+        // (CLOUD-1994), so each way of reading less, or exempting more, is
+        // reported — and BOTH DIRECTIONS are pinned, since a comparison wired
+        // backwards would refuse every branch that declares one more home.
+        let census = |workflows: &str, exempt: &str, manifest: &str| {
+            config(&format!(
+                "[census.shell]\nworkflows = [{workflows}]\nexempt = [{exempt}]\n{manifest}"
+            ))
+        };
+        let manifest =
+            "[[census.shell.manifest]]\npath = \"m.toml\"\nkeys = [\"run\"]\nunit = \"[t.\"\n";
+        let full = census("\"ci/*.yml\"", "\"boot.sh\"", manifest);
+
+        assert_eq!(
+            only(&full, &census("", "\"boot.sh\"", manifest)),
+            Weakening::new(
+                WeakeningKind::ShellCensusNarrowed,
+                "census.shell.workflows[ci/*.yml]",
+                "present",
+                "absent",
+            )
+        );
+        assert_eq!(
+            only(
+                &full,
+                &census("\"ci/*.yml\"", "\"boot.sh\", \"x.sh\"", manifest)
+            ),
+            Weakening::new(
+                WeakeningKind::ShellCensusNarrowed,
+                "census.shell.exempt[x.sh]",
+                "absent",
+                "present",
+            )
+        );
+        assert_eq!(
+            only(
+                &full,
+                &census(
+                    "\"ci/*.yml\"",
+                    "\"boot.sh\"",
+                    "[[census.shell.manifest]]\npath = \"m.toml\"\nkeys = [\"run\"]\n"
+                )
+            ),
+            Weakening::new(
+                WeakeningKind::ShellCensusNarrowed,
+                "census.shell.manifest.unit[m.toml:[t.]",
+                "present",
+                "absent",
+            )
+        );
+        // A whole manifest dropped is its key AND its unit gone.
+        assert_eq!(
+            weakenings(&full, &census("\"ci/*.yml\"", "\"boot.sh\"", "")).len(),
+            2
+        );
+        // And the census deleted outright is every home at once.
+        assert_eq!(weakenings(&full, &config("")).len(), 3);
+
+        // THE OTHER DIRECTION. More homes, fewer exemptions, and a census
+        // arriving where there was none are all the ban reaching further.
+        assert!(weakenings(&census("", "\"boot.sh\"", manifest), &full).is_empty());
+        assert!(
+            weakenings(
+                &census("\"ci/*.yml\"", "\"boot.sh\", \"x.sh\"", manifest),
+                &full
+            )
+            .is_empty()
+        );
+        assert!(weakenings(&config(""), &full).is_empty());
+    }
+
+    #[test]
     fn dropping_a_disarm_row_is_a_weakening_and_adding_one_is_not() {
         // A `[[wiring.disarm]]` row is this repository's judgement that a named
         // launcher script is hostile to its own landing contract (CLOUD-1704), so
@@ -4111,6 +4591,195 @@ mod tests {
             weakenings(&row, &edited).is_empty(),
             "the path is the subject, so a re-worded marker disarms the same script"
         );
+    }
+
+    #[test]
+    fn a_renamed_sbom_store_name_is_a_weakening() {
+        // `[sbom] inventory` and `[sbom.conformance] record` name where
+        // `batten sbom` stores what a consumer module reads back at a FIXED key
+        // (CLOUD-843). A module finding nothing there judges nothing, so a
+        // rename or a drop blinds the gate while the producer still writes.
+        let named = |inventory: &str, record: &str| {
+            config(&format!(
+                "[sbom]\nsubject = \"s\"\nout_dir = \"d\"\nbinary_out_dir = \"d\"\n{inventory}\
+                 [sbom.conformance]\nrecord = \"{record}\"\nchecker = \"c\"\n\
+                 standards = [\"ntia\"]\n"
+            ))
+        };
+        let full = "inventory = \"inv\"\n";
+        let base = named(full, "r");
+        assert!(weakenings(&base, &base).is_empty());
+        // THE STORED NAMES: a module reads each back at a fixed key and judges
+        // nothing when it is absent, so a rename or a drop blinds it.
+        assert_eq!(
+            only(&base, &named(full, "x")),
+            Weakening::new(
+                WeakeningKind::SbomRecordChanged,
+                "sbom.conformance.record",
+                "r",
+                "x",
+            )
+        );
+        assert_eq!(
+            only(&base, &named("inventory = \"sibling\"\n", "r")),
+            Weakening::new(
+                WeakeningKind::SbomInventoryChanged,
+                "sbom.inventory",
+                "inv",
+                "sibling",
+            )
+        );
+        assert_eq!(
+            only(&base, &named("", "r")),
+            Weakening::new(
+                WeakeningKind::SbomInventoryChanged,
+                "sbom.inventory",
+                "inv",
+                "absent",
+            )
+        );
+    }
+
+    #[test]
+    fn the_sbom_keys_that_decide_are_compared_and_the_rest_are_not() {
+        // `[sbom.conformance]`'s checker exit code IS the ntia verdict, so a
+        // swapped checker or a dropped standard lowers the bar; dropping
+        // `actions` skips the pass that fills the pinned actions' licences
+        // (CLOUD-843). BOTH DIRECTIONS, for the reason the disarm case states.
+        let named = |actions: &str, record: &str, checker: &str, standards: &str| {
+            config(&format!(
+                "[sbom]\nsubject = \"s\"\nout_dir = \"d\"\nbinary_out_dir = \"d\"\n{actions}\
+                 [sbom.conformance]\nrecord = \"{record}\"\nchecker = \"{checker}\"\n\
+                 standards = [{standards}]\n"
+            ))
+        };
+        let table =
+            |actions: &str, checker: &str, standards: &str| named(actions, "r", checker, standards);
+        let full = "actions = \"t.tsv\"\ninventory = \"inv\"\n";
+        let base = table(full, "sbomcheck", "\"ntia\", \"fsct\"");
+        assert!(weakenings(&base, &base).is_empty());
+
+        assert_eq!(
+            only(
+                &base,
+                &table("inventory = \"inv\"\n", "sbomcheck", "\"ntia\", \"fsct\"")
+            ),
+            Weakening::new(
+                WeakeningKind::SbomActionsRemoved,
+                "sbom.actions",
+                "present",
+                "absent",
+            )
+        );
+        assert_eq!(
+            only(&base, &table(full, "true", "\"ntia\", \"fsct\"")),
+            Weakening::new(
+                WeakeningKind::SbomCheckerChanged,
+                "sbom.conformance.checker",
+                "sbomcheck",
+                "true",
+            )
+        );
+        assert_eq!(
+            only(&base, &table(full, "sbomcheck", "\"fsct\"")),
+            Weakening::new(
+                WeakeningKind::SbomStandardRemoved,
+                "sbom.conformance.standards[ntia]",
+                "present",
+                "absent",
+            )
+        );
+
+        // The added direction is a new producer or one more question.
+        assert!(weakenings(&config(""), &base).is_empty());
+        let wider = table(full, "sbomcheck", "\"ntia\", \"fsct\", \"x\"");
+        assert!(weakenings(&base, &wider).is_empty());
+
+        // THE PRODUCING KEYS ARE NOT COMPARED: a renamed subject or a moved
+        // directory is caught downstream as a count that disagrees.
+        let moved = config(
+            "[sbom]\nsubject = \"other\"\nout_dir = \"e\"\nbinary_out_dir = \"e\"\n\
+             actions = \"t.tsv\"\ninventory = \"inv\"\n[sbom.conformance]\nrecord = \"r\"\n\
+             checker = \"sbomcheck\"\nstandards = [\"ntia\", \"fsct\"]\n",
+        );
+        assert!(weakenings(&base, &moved).is_empty());
+
+        // The whole table gone is every decision gone at once.
+        let dropped: Vec<WeakeningKind> = weakenings(&base, &config(""))
+            .iter()
+            .map(|found| found.kind)
+            .collect();
+        assert_eq!(
+            dropped,
+            [
+                WeakeningKind::SbomActionsRemoved,
+                WeakeningKind::SbomCheckerChanged,
+                WeakeningKind::SbomRecordChanged,
+                WeakeningKind::SbomStandardRemoved,
+                WeakeningKind::SbomStandardRemoved,
+                WeakeningKind::SbomInventoryChanged,
+            ]
+        );
+    }
+
+    #[test]
+    fn dropping_a_sweep_gate_or_adding_an_abstention_is_a_weakening() {
+        // `[[board.sweep]]` (CLOUD-843) is the one sub-table of `board` that is
+        // a bar. BOTH DIRECTIONS per kind, for the disarm case's reason above.
+        let gate = |extra: &str| {
+            config(&format!(
+                "[[board.sweep]]\nname = \"drain\"\nrun = [\"x\"]\n{extra}"
+            ))
+        };
+        let plain = gate("");
+        assert_eq!(
+            only(&plain, &config("")),
+            Weakening::new(
+                WeakeningKind::BoardSweepGateRemoved,
+                "board.sweep[drain]",
+                "present",
+                "absent",
+            )
+        );
+        assert!(weakenings(&config(""), &plain).is_empty());
+
+        // An exit moved into `abstains` answers quieter, and is reported; taking
+        // it back out is a tightening.
+        let abstaining = gate("abstains = [3]\n");
+        assert_eq!(
+            only(&plain, &abstaining),
+            Weakening::new(
+                WeakeningKind::BoardSweepAbstentionAdded,
+                "board.sweep[drain].abstains[3]",
+                "absent",
+                "present",
+            )
+        );
+        assert!(weakenings(&abstaining, &plain).is_empty());
+
+        // NARROWING `refuses` IS NOT ONE: the exit it drops falls to
+        // could-not-look, which outranks a refusal. And a gate the working tree
+        // ADDS is a question gained, whatever it abstains on.
+        let corpus = gate("refuses = [1, 2]\n");
+        assert!(weakenings(&corpus, &plain).is_empty());
+        assert!(weakenings(&config(""), &abstaining).is_empty());
+
+        // WIDENING `refuses` IS ONE, the mirror of the line above: exit 1 was
+        // unclassified, so could-not-look, and now reads as a refusal.
+        assert_eq!(
+            only(&plain, &corpus),
+            Weakening::new(
+                WeakeningKind::BoardSweepRefusalWidened,
+                "board.sweep[drain].refuses[1]",
+                "absent",
+                "present",
+            )
+        );
+        // But an exit the base ABSTAINED on moving into `refuses` answers
+        // louder, and a gate the working tree adds is a question gained.
+        let abstains_one = gate("abstains = [1]\n");
+        assert!(weakenings(&abstains_one, &corpus).is_empty());
+        assert!(weakenings(&config(""), &corpus).is_empty());
     }
 
     #[test]
@@ -5300,6 +5969,38 @@ mod tests {
         );
     }
 
+    /// CLOUD-843: a governed MCP name is what lets `mcp grant --guard` refuse a
+    /// committed deny under a renamed key, so losing it — by the list, by the
+    /// selector, or by the whole table — is a silence the comparison must name.
+    #[test]
+    fn losing_a_governed_mcp_name_is_a_weakening() {
+        let table = |aliases: &str, needle: &str| {
+            config(&format!(
+                "[mcp]\npermission_aliases = [{aliases}]\n\n[[mcp.source]]\nid = \"s\"\n\
+                 path = \"m.json\"\nnode = \"mcpServers\"\n\n[mcp.source.endpoint_contains]\n\
+                 Box = \"{needle}\"\n"
+            ))
+        };
+        let base = table("\"Box\"", "upstream.test/v1/meta");
+        let lost = Weakening::new(
+            WeakeningKind::McpPermissionAliasRemoved,
+            "mcp.permission_aliases[Box]",
+            "present",
+            "absent",
+        );
+        assert_eq!(only(&base, &table("", "upstream.test/v1/meta")), lost);
+        assert_eq!(only(&base, &config("")), lost);
+        // A changed address stops the old key's endpoint matching: the same loss.
+        assert_eq!(
+            only(&base, &table("\"Box\"", "upstream.test/v2/meta")).working,
+            "changed"
+        );
+        // ANTI-VACUITY: declaring the name is the edit that closes the seam, and
+        // an unchanged table is silent.
+        assert!(weakenings(&table("", "upstream.test/v1/meta"), &base).is_empty());
+        assert!(weakenings(&base, &base).is_empty());
+    }
+
     #[test]
     fn the_pin_evidence_cannot_be_forged() {
         // THE GATE THAT SHIPS WITH THE CLAIM (non-negotiable rule 2, CLOUD-720).
@@ -6148,3 +6849,14 @@ mod tests {
         assert!(!kinds.contains(&WeakeningKind::MintAdded), "got: {kinds:?}");
     }
 }
+
+/*
+The mutations the `[[board.sweep]]` exit-table comparison declares (CLOUD-843).
+Each undoes one half of `BoardSweepRefusalWidened`, and the named case is the
+one that stops discriminating. The named case is this file's own unit tier, so
+the declared suite is this file, `landed.rs`'s reason.
+
+#MUTANT-SUITE crates/batten/src/trust.rs
+#MUTANT sweep-refusal-widening-unread|s@sweep_refusals(working, base)@sweep_refusals(base, base)@|dropping_a_sweep_gate_or_adding_an_abstention_is_a_weakening
+#MUTANT sweep-abstention-to-refusal-flagged|s@gate.refuses.iter().chain(gate.abstains.iter())@gate.refuses.iter().chain(gate.refuses.iter())@|dropping_a_sweep_gate_or_adding_an_abstention_is_a_weakening
+*/

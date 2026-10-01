@@ -41,6 +41,10 @@
 #MUTANT approximated-task-may-run-nowhere|s@\tnot approximated_task_runs_in_ci(task)@\tfalse@|a_declared_approximation_for_a_task_no_job_runs_is_refused
 #
 #MUTANT dist-list-unread|s@\tnot provisions_from_a_list(job)@\tfalse@|a_release_leg_that_installs_everything_is_refused
+#MUTANT sequence-body-unread|s@^body_text(run) := concat@body_text_retired(run) := concat@|a_sequence_body_is_read_entry_by_entry
+#MUTANT bare-cargo-statement-unread|s@^\tstartswith(trimmed, "cargo ")$@\tfalse@|a_test_cargo_body_that_is_the_statement_is_read
+#MUTANT wrapped-cargo-statement-unread|s@^\tstartswith(cmd, "cargo ")$@\tfalse@|a_test_cargo_body_the_step_cache_wraps_is_read
+#MUTANT wrapper-read-as-the-statement|s@^\tnot contains(trimmed, " step run ")$@\ttrue@|a_test_cargo_body_the_step_cache_wraps_is_read
 #MUTANT-SUITE crates/batten/tests/it/ci_parity.rs
 
 # METADATA
@@ -126,9 +130,9 @@ governed if input.tree.documents["mise.toml"].tasks.verify
 # third link would break this loudly, and an evaluator that followed `mise run`
 # calls transitively would be a second authority on the task graph mise owns.
 verify_text := concat("\n", [
-	object.get(input.tree.documents["mise.toml"].tasks, ["verify", "run"], ""),
+	task_run("verify"),
 	concat(" ", object.get(input.tree.documents["mise.toml"].tasks, ["verify", "depends"], [])),
-	object.get(input.tree.documents["mise.toml"].tasks, ["verify:gated", "run"], ""),
+	task_run("verify:gated"),
 	concat(" ", object.get(input.tree.documents["mise.toml"].tasks, ["verify:gated", "depends"], [])),
 ])
 
@@ -199,6 +203,30 @@ violation contains {
 	not contains(verify_text, task)
 	not covered_by_a_lane_verify_runs(task)
 	not approximated_by_a_lane_verify_runs(task)
+	not run_by_a_hook_step_verify_runs(task)
+}
+
+# --- a task an hk step runs, where verify runs the hooks ----------------------
+#
+# `batten-check` is the case, and until CLOUD-843 made `verify` an argv sequence
+# it passed the name search above only because a COMMENT inside the old shell body
+# spelled it. What actually runs it locally is hk: `hk.pkl` declares a step whose
+# `check` is `mise run batten-check`, and `verify` reaches `hooks` (`hk check
+# --all`) through `ci`'s `depends`. So the manifest is asked the question the
+# comment was standing in for, on `covered_by_a_lane_verify_runs`'s terms: ONE
+# declared link, read from hk's own file rather than a walk of the task graph.
+#
+# CODE LINES ONLY, for the header's reason: `hk.pkl` names tasks in comments to
+# explain why they are ABSENT, and a gate that passes on its own documentation is
+# the defect this clause replaces.
+hook_lane := "hooks"
+
+run_by_a_hook_step_verify_runs(task) if {
+	lane_reaches(hook_lane)
+	some line in object.get(input.tree.lines, "hk.pkl", [])
+	not startswith(trim_space(line), "//")
+	some fragment in regex.find_n(data.batten.patterns["mise-run-task"], line, -1)
+	split(fragment, " ")[2] == task
 }
 
 # --- a task verify does not NAME may still be one verify RUNS -----------------
@@ -231,7 +259,19 @@ violation contains {
 # the unfiltered run selects too.
 covering_lane := {"ci:quick": "hooks"}
 
-task_run(name) := object.get(input.tree.documents["mise.toml"].tasks, [name, "run"], "")
+task_run(name) := body_text(object.get(input.tree.documents["mise.toml"].tasks, [name, "run"], ""))
+
+# A BODY IS A STRING OR A SEQUENCE OF STRINGS (CLOUD-843). mise runs a `run`
+# array entry by entry, and `verify`, `verify:gated` and `test:musl` became
+# arrays when their shell retired — so every reader above asks the entries,
+# joined, where a scalar-only read would make each of those bodies undefined and
+# every relation over them silently false.
+body_text(run) := run if is_string(run)
+
+body_text(run) := text if {
+	is_array(run)
+	text := concat("\n", [entry | some entry in run; is_string(entry)])
+}
 
 # NARROWING IS A PREFIX, AND THE DIRECTION IS THE WHOLE SOUNDNESS OF IT. `covered`
 # holds when the COVERING body is a prefix of the covered one — the covered lane
@@ -953,7 +993,7 @@ violation contains {
 #
 # PRESENCE, NOT MEMBERSHIP, and the narrowness is deliberate. Asserting WHICH
 # tools the list must name would make this a second authority on what a release
-# build needs, which is `mise.toml`'s and `dist.sh`'s to answer — the same
+# build needs, which is `mise.toml`'s and `batten dist`'s to answer — the same
 # objection `ci-parity`'s own header raises against re-deriving the task graph
 # here. `ci-tools-check` already holds the other direction, that every name in a
 # list resolves to a `[tools]` entry. What has no gate is the list existing at
@@ -1044,12 +1084,40 @@ violation contains {
 # guard the body wraps it in. A partial rule rather than a function: a body with
 # no such line yields nothing, which is what the could-not-look clause reads.
 task_cargo contains cmd if {
-	body := object.get(input.tree.documents["mise.toml"].tasks, ["test:cargo", "run"], "")
-	some raw in split(body, "\n")
+	some raw in split(task_run("test:cargo"), "\n")
 	trimmed := trim_space(raw)
 	startswith(trimmed, "if ! cargo ")
 	endswith(trimmed, "; then exit 1; fi")
 	cmd := trim_suffix(trim_prefix(trimmed, "if ! "), "; then exit 1; fi")
+}
+
+# THE BODY THAT IS THE STATEMENT (CLOUD-843). A one-argv `test:cargo` needs no
+# guard lifted off it — the whole line is the statement a foreign leg must spell
+# after `mise exec -- `. A step-cache line is EXCLUDED: it starts `cargo run` too,
+# and read whole it would demand the foreign leg spell the cache it has no use for.
+# EVERY `step` verb, not `run` alone: a `step check` or `step record` line is the
+# same cache, and reading one as the statement would call a body that runs no suite
+# a body that states one.
+task_cargo contains trimmed if {
+	some raw in split(task_run("test:cargo"), "\n")
+	trimmed := trim_space(raw)
+	startswith(trimmed, "cargo ")
+	not contains(trimmed, " -- step ")
+}
+
+# AND THE STATEMENT THE STEP CACHE RUNS (CLOUD-843, CLOUD-1891). `test:cargo`
+# ships as `cargo run --quiet -p batten -- step run test:cargo -- <cmd>`: the
+# receipt bracket the retired body spelled in shell, as one verb. Its tail after
+# `step run test:cargo -- ` is what a foreign leg, which has no receipt to
+# consult, must still spell. Split on the WHOLE wrapper rather than on ` -- `,
+# because the `cargo run` spelling carries two of them and the statement may
+# carry a third of its own.
+task_cargo contains cmd if {
+	some raw in split(task_run("test:cargo"), "\n")
+	parts := split(trim_space(raw), " step run test:cargo -- ")
+	count(parts) == 2
+	cmd := parts[1]
+	startswith(cmd, "cargo ")
 }
 
 # Every foreign-runner cargo invocation, EXCLUDING a `--no-run` build. A build
@@ -1312,14 +1380,82 @@ test_a_no_run_build_is_exempt_and_does_not_satisfy_the_term if {
 # A manifest whose `test:cargo` carries no readable cargo line is could-not-look,
 # never a pass: the comparison has lost its right-hand side.
 test_a_task_yielding_no_cargo_line_is_refused if {
-	blind := object.union(sound_manifest.tasks, {"test:cargo": {"run": "mise run -q step-receipt check test:cargo"}})
+	blind := object.union(sound_manifest.tasks, {"test:cargo": {"run": "cargo run --quiet -p batten -- step check test:cargo"}})
 	found := violation with input as swap("mise.toml", object.union(sound_manifest, {"tasks": blind}))
 	some f in found
 	f.verdict == "task read unread"
 }
 
+# THE STATEMENT AS THE WHOLE BODY (CLOUD-843). A one-argv `test:cargo` still
+# yields its statement: a foreign leg spelling it is clean, and one that drifts
+# from it is refused exactly as it was against the guarded form.
+test_a_body_that_is_the_statement_yields_it if {
+	bare := object.union(sound_manifest.tasks, {"test:cargo": {"run": "cargo nextest run --workspace"}})
+	count(violation) == 0 with input as swap("mise.toml", object.union(sound_manifest, {"tasks": bare}))
+}
+
+test_a_foreign_leg_drifting_from_a_bare_statement_is_refused if {
+	bare := object.union(sound_manifest.tasks, {"test:cargo": {"run": "cargo nextest run --workspace --locked"}})
+	found := violation with input as swap("mise.toml", object.union(sound_manifest, {"tasks": bare}))
+	some f in found
+	f.verdict == "cargo spelling other"
+}
+
+# THE STEP CACHE'S TAIL IS THE STATEMENT, in the spelling the tree ships.
+test_a_wrapped_statement_yields_its_tail if {
+	wrapped := object.union(
+		sound_manifest.tasks,
+		{"test:cargo": {"run": "cargo run --quiet -p batten -- step run test:cargo -- cargo nextest run --workspace"}},
+	)
+	count(violation) == 0 with input as swap("mise.toml", object.union(sound_manifest, {"tasks": wrapped}))
+}
+
+# AND IT IS STILL COMPARED: a foreign leg drifting from the wrapped tail refuses.
+test_a_foreign_leg_drifting_from_a_wrapped_statement_is_refused if {
+	wrapped := object.union(
+		sound_manifest.tasks,
+		{"test:cargo": {"run": "cargo run --quiet -p batten -- step run test:cargo -- cargo nextest run --workspace --locked"}},
+	)
+	found := violation with input as swap("mise.toml", object.union(sound_manifest, {"tasks": wrapped}))
+	some f in found
+	f.verdict == "cargo spelling other"
+}
+
+# A SEQUENCE BODY IS READ ENTRY BY ENTRY: `test:musl` as a `run` array still
+# names the triple its approximation rests on.
+test_a_sequence_body_is_read_entry_by_entry if {
+	sequence := object.union(sound_manifest.tasks, {"test:musl": {"run": [
+		"mise run target-ensure x86_64-unknown-linux-musl",
+		"cargo nextest run --workspace --target x86_64-unknown-linux-musl",
+	]}})
+	count(violation) == 0 with input as swap("mise.toml", object.union(sound_manifest, {"tasks": sequence}))
+}
+
 test_a_sound_tree_is_clean if {
 	count(violation) == 0 with input as sound_input
+}
+
+hooked(hk_lines) := out if {
+	wf := {
+		"on": {"pull_request": {"types": ["opened"]}},
+		"jobs": {"ci": {"name": "ci", "runs-on": "ubuntu-latest", "steps": [lease_first, {"run": "mise run smoke"}]}},
+	}
+	base := swap(".github/workflows/ci.yml", wf)
+	out := {"tree": object.union(base.tree, {"lines": object.union(base.tree.lines, {"hk.pkl": hk_lines})})}
+}
+
+test_a_task_an_hk_step_runs_is_one_verify_runs if {
+	found := violation with input as hooked(["  [\"smoke\"] {", "    check = \"mise run smoke\""])
+	every f in found {
+		f.verdict != "task run missing"
+	}
+}
+
+# The regression the clause exists to end: a name in a COMMENT is not a step.
+test_a_task_named_only_in_an_hk_comment_is_refused if {
+	found := violation with input as hooked(["  // `mise run smoke` is not run here"])
+	some f in found
+	f.verdict == "task run missing"
 }
 
 test_a_ci_task_verify_does_not_run_is_refused if {

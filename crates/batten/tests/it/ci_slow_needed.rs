@@ -129,6 +129,56 @@ fn a_base_that_does_not_resolve_refuses_rather_than_guessing() {
     assert_ne!(output.status.code(), Some(2), "and not a no either");
 }
 
+// --- `--head`, the guard the retired task body carried in shell (CLOUD-1991) --
+//
+// carried: "ci-slow-needed: a head that does not carry the checkout's tree is refused, not answered about the checkout" crates/batten/src/lib.rs kind:mechanism crates/batten/tests/it/ci_slow_needed.rs
+// carried: "ci-slow-needed: a head that is the checkout answers the plain question" crates/batten/src/lib.rs kind:mechanism crates/batten/tests/it/ci_slow_needed.rs
+// changed: "ci-slow-needed: the answer is 0 needed, 1 not needed, 2 could not look" mise.toml the task's `case` fold onto the workflow's boolean table retired with its shell line; the task answers on the verb's own table (`0` needed, `2` not needed, `1`/`3` the question could not be asked), and `ci.yml` reads `2` as "not needed"
+
+#[test]
+fn a_head_carrying_the_checkouts_tree_answers_the_plain_question() {
+    let dir = repo("slow-needed-head-same", "crates/demo/src/lib.rs");
+    let output = batten()
+        .args(["ci", "slow-needed", "--base", "base", "--head", "HEAD"])
+        .current_dir(&dir)
+        .output()
+        .expect("run batten ci slow-needed");
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "the named head is the checkout, so the question is the plain one: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn a_head_the_checkout_is_not_standing_on_is_refused_rather_than_answered() {
+    // `base` carries a different tree from the checkout by construction: the
+    // fixture's second commit changed a file on top of it.
+    let dir = repo("slow-needed-head-other", "crates/demo/src/lib.rs");
+    let output = batten()
+        .args(["ci", "slow-needed", "--base", "base", "--head", "base"])
+        .current_dir(&dir)
+        .output()
+        .expect("run batten ci slow-needed");
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "a head that is not the checkout is a statement about the invocation"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("does not carry this checkout's tree"),
+        "and the refusal names why: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        output.stdout.is_empty(),
+        "no verdict about the checkout is printed in its place"
+    );
+}
+
 // --- The gate over the list itself -------------------------------------------
 //
 // The retired program's `--probe` mode, now a rule over declared config. These

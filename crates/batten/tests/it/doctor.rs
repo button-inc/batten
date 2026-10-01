@@ -875,21 +875,47 @@ fn doctor_writes_no_file() {
     assert_eq!(fs::read_dir(&dir).expect("read dir").count(), before);
 }
 
+/// Consumer #1: the self-check Batten ships, run against Batten's own tree.
+///
+/// **THE TREE, NOT THE HOST'S SESSION.** The `transcript` check reads
+/// `.claude/.transcript.jsonl`, a link the host points at its own live session
+/// log: absent on every CI runner, and torn locally whenever a container reclaim
+/// interrupts a write (measured 2026-09-30: three undecodable lines, one per
+/// reclaim). Counting it here made local `verify` red in exactly the sessions CI
+/// cannot reproduce, over a file no commit can repair. Its verdicts are pinned by
+/// the three `transcript` cases below, torn, absent and readable alike.
 #[test]
 fn this_repository_is_healthy() {
-    // Consumer #1: the self-check Batten ships, run against Batten's own tree.
     let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let output = batten()
-        .arg("doctor")
+        .args(["doctor", "--json"])
         .current_dir(&repo)
         .output()
         .expect("run batten doctor");
-    assert_eq!(
-        output.status.code(),
-        Some(0),
-        "this repository fails its own doctor: {}",
-        stdout(&output)
+    let report: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("the report is JSON");
+    let checks = report["checks"].as_array().expect("checks");
+    // Excluding a check this run never saw would pass vacuously.
+    let transcript = checks
+        .iter()
+        .find(|check| check["name"] == "transcript")
+        .expect("doctor reports the transcript check");
+    let failing: Vec<&serde_json::Value> = checks
+        .iter()
+        .filter(|check| check["ok"] != true && check["name"] != "transcript")
+        .map(|check| &check["name"])
+        .collect();
+    assert!(
+        failing.is_empty(),
+        "this repository fails its own doctor: {failing:?}"
     );
+    if transcript["ok"] == true {
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "every check ok, yet doctor did not exit 0"
+        );
+    }
 }
 
 // --- the declared evidence capability (CLOUD-1035) ---------------------------

@@ -14,7 +14,9 @@
 # function-shaped (four: `ci-slow-needed`, `darwin-link`, `task-registry`,
 # `singleton`), so the rule's first run refuses nothing and there is no legacy
 # population for an exception to grow around — the reason `cfg-gated-test.rego`
-# had to be a ratchet does not hold here.
+# had to be a ratchet does not hold here. CLOUD-1991 retired all four shells: an
+# argument is now bound by the task's `usage` spec or appended to an argv, so
+# no body reads a positional at all and the rule guards the shape's return.
 #
 # THE RESIDUE IS NAMED. Only a one-line `run = "` body is read: a `'''` body or a
 # `file =` script reads its arguments differently and is out of scope. An awk

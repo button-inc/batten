@@ -72,13 +72,26 @@ fn task_body(task: &str) -> String {
     body
 }
 
-fn stamp_of(task: &str, body: &str) -> String {
-    body.split_whitespace()
-        .find_map(|word| word.strip_prefix("BENCH_METRIC="))
+/// The stamp one bench task sets, read from its `env` table.
+///
+/// THE TABLE, NOT A `VAR=` PREFIX, since CLOUD-1991 retired the prefix: it made
+/// each body a shell line, and a task's own `env` reaches the example's process
+/// exactly as the prefix did. Read by PARSING the task's own block, because a
+/// substring scan for the name would be satisfied by the comment that explains it.
+fn stamp_of(task: &str) -> String {
+    let block = common::task_block(task).unwrap_or_else(|| panic!("{task} is a declared task"));
+    let parsed: toml::Value = toml::from_str(&block).expect("a task block is a TOML table");
+    parsed
+        .get("tasks")
+        .and_then(toml::Value::as_table)
+        .and_then(|tasks| tasks.values().next())
+        .and_then(|declared| declared.get("env"))
+        .and_then(|env| env.get("BENCH_METRIC"))
+        .and_then(toml::Value::as_str)
         .unwrap_or_else(|| {
             panic!(
-                "[tasks.{task}] sets BENCH_METRIC — without it perf-record stamps \
-                 the invocation series' default and the two become diffable"
+                "[tasks.{task}] sets BENCH_METRIC in its env — without it perf-record \
+                 stamps the invocation series' default and the two become diffable"
             )
         })
         .to_owned()
@@ -87,7 +100,7 @@ fn stamp_of(task: &str, body: &str) -> String {
 #[test]
 fn every_bench_series_is_stamped_with_its_own_metric() {
     for (task, _) in BENCH_TASKS {
-        let stamp = stamp_of(task, &task_body(task));
+        let stamp = stamp_of(task);
         assert!(
             !stamp.is_empty(),
             "[tasks.{task}]: an empty stamp is the default by another route"
@@ -111,7 +124,7 @@ fn every_bench_series_is_stamped_with_its_own_metric() {
 fn no_two_bench_series_share_a_stamp() {
     let mut seen: Vec<(&str, String)> = Vec::new();
     for (task, _) in BENCH_TASKS {
-        let stamp = stamp_of(task, &task_body(task));
+        let stamp = stamp_of(task);
         if let Some((other, _)) = seen.iter().find(|(_, taken)| *taken == stamp) {
             panic!(
                 "[tasks.{task}] and [tasks.{other}] both stamp `{stamp}`: their \

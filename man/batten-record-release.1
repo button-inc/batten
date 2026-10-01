@@ -1,0 +1,19 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-record-release 1  batten 
+.SH NAME
+batten\-record\-release \- Record a published release\*(Aqs assets, its checksum manifest\*(Aqs entries, and the entries whose bytes disagree
+.SH SYNOPSIS
+\fBbatten record release\fR [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-manifest\fR> [\fItag\fR] 
+.SH DESCRIPTION
+Record a published release\*(Aqs assets, its checksum manifest\*(Aqs entries, and the entries whose bytes disagree
+.SH OPTIONS
+.TP
+\fB\-\-manifest\fR \fI<manifest>\fR
+The checksum manifest\*(Aqs file name, as the release carries it
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+[\fItag\fR]
+The release\*(Aqs tag; empty or absent is the latest release

@@ -1,0 +1,16 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-record-validate 1  batten 
+.SH NAME
+batten\-record\-validate \- Run a declared tool row\*(Aqs `run` argv and record its exit code under the row\*(Aqs key
+.SH SYNOPSIS
+\fBbatten record validate\fR [\fB\-h\fR|\fB\-\-help\fR] <\fIid\fR> 
+.SH DESCRIPTION
+Run a declared tool row\*(Aqs `run` argv and record its exit code under the row\*(Aqs key
+.SH OPTIONS
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fIid\fR>
+The `[[rule.tools]]` id whose argv runs and whose verdict is recorded

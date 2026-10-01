@@ -20,7 +20,10 @@ batten\-record\-tool(1)
 Record a declared tool row\*(Aqs verdict, read as `<name> <token>` lines on stdin
 .TP
 batten\-record\-forge(1)
-Record the forge\*(Aqs check verdicts for one commit, read as `<check> <conclusion>` lines on stdin
+Record the forge\*(Aqs check verdicts for one commit, read as `<check> <conclusion>` lines on stdin or with \-\-fetch from the forge
+.TP
+batten\-record\-validate(1)
+Run a declared tool row\*(Aqs `run` argv and record its exit code under the row\*(Aqs key
 .TP
 batten\-record\-named(1)
 Record one named family under this branch, read from stdin
@@ -45,6 +48,30 @@ Record this branch\*(Aqs plan, read as `<id> <status>` lines on stdin
 .TP
 batten\-record\-closes(1)
 Record which rows this branch\*(Aqs pull request body closes, read on stdin
+.TP
+batten\-record\-query(1)
+Run a declared `[[forge.query]]` read and record its reduction as the family it names
+.TP
+batten\-record\-probe(1)
+Run a probe command and record the family\*(Aqs reading of its exit status and output
+.TP
+batten\-record\-decide(1)
+Derive a family\*(Aqs reading, record it without echoing it, and decide over it with the named rules
+.TP
+batten\-record\-divergence(1)
+Record how far the landing loop diverged from linear over a window of runs
+.TP
+batten\-record\-nonverdict(1)
+Record which recent required\-check failures never reached a verdict
+.TP
+batten\-record\-attestation(1)
+Record a release\*(Aqs attestation posture and what the verifier says of each archive\*(Aqs binary
+.TP
+batten\-record\-census(1)
+Record whether a landing was in flight when a container was replaced, and read the verdict back
+.TP
+batten\-record\-release(1)
+Record a published release\*(Aqs assets, its checksum manifest\*(Aqs entries, and the entries whose bytes disagree
 .TP
 batten\-record\-help(1)
 Print this message or the help of the given subcommand(s)

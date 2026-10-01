@@ -334,7 +334,7 @@ impl std::fmt::Display for Record {
 impl Record {
     /// The record line WITHOUT the `arm=` field, which is `perf`'s own shape.
     ///
-    /// **The reader is `record tool perf-p95`, and it is a contract.** An
+    /// **The reader is `record tool perf-p95 --pick path=p95`, and it is a contract.** An
     /// absolute measurement has one arm, so an `arm=` field on it would name a
     /// distinction that does not exist — and `perf-assert` budgets by `path`.
     /// Same units, same rounding and the same field order as the paired form, so
@@ -3066,9 +3066,92 @@ pub fn refusal_render_report(
     out
 }
 
+/// What `batten perf latency` concluded about a command's wall clock against a
+/// declared budget (CLOUD-843, retiring `hook-latency-drift.yml`'s inline body).
+///
+/// **BOTH DIRECTIONS ARE DRIFT.** A budget that only complained about slowness
+/// would let every number rot upward: the command gets faster, nobody
+/// re-derives the budget, and the ceiling stops bounding anything. So a median
+/// under the loose floor is reported exactly as loudly as one over the ceiling,
+/// and neither says a branch is at fault — the number needs re-deriving.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Latency {
+    /// Inside `[budget / loose_factor, budget + slack]`.
+    Within,
+    /// Over `budget + slack`: the command has grown.
+    Tight,
+    /// Under `budget / loose_factor`: the budget has stopped bounding anything.
+    Loose,
+}
+
+impl Latency {
+    /// The stable token a reader greps for (§6), never a measurement.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Within => "within",
+            Self::Tight => "drift-tight",
+            Self::Loose => "drift-loose",
+        }
+    }
+}
+
+/// The median of whole-second samples, or `None` for no samples.
+///
+/// The LOWER median for an even count — the `(n + 1) / 2`-th smallest, which is
+/// the retired body's `sed -n "$(((RUNS + 1) / 2))p"` over the sorted list.
+/// Whole seconds throughout: the budget is in whole seconds, and a fractional
+/// median would imply a precision the instrument does not have.
+#[must_use]
+pub fn median_seconds(samples: &[u64]) -> Option<u64> {
+    let mut sorted = samples.to_vec();
+    sorted.sort_unstable();
+    let at = sorted.len().div_ceil(2).checked_sub(1)?;
+    sorted.get(at).copied()
+}
+
+//MUTANT-SUITE crates/batten/src/perf.rs
+//MUTANT latency-ceiling-without-slack|s@    if median > budget.saturating_add(slack) {@    if median > budget {@|a_median_inside_the_slack_is_within
+//MUTANT latency-loose-unread|s@    } else if median < budget / loose_factor.max(1) {@    } else if false {@|a_median_under_the_loose_floor_is_drift
+/// The verdict over a median, with the retired body's integer arithmetic: the
+/// ceiling is `budget + slack` and the floor `budget / loose_factor`.
+#[must_use]
+pub fn latency_verdict(median: u64, budget: u64, slack: u64, loose_factor: u64) -> Latency {
+    if median > budget.saturating_add(slack) {
+        Latency::Tight
+    } else if median < budget / loose_factor.max(1) {
+        Latency::Loose
+    } else {
+        Latency::Within
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_median_is_the_lower_middle_of_the_sorted_samples() {
+        assert_eq!(median_seconds(&[8, 7, 9]), Some(8));
+        assert_eq!(median_seconds(&[9, 7]), Some(7));
+        assert_eq!(median_seconds(&[5]), Some(5));
+        assert_eq!(median_seconds(&[]), None);
+    }
+
+    #[test]
+    fn a_median_inside_the_slack_is_within() {
+        assert_eq!(latency_verdict(15, 15, 10, 3), Latency::Within);
+        assert_eq!(latency_verdict(25, 15, 10, 3), Latency::Within);
+        assert_eq!(latency_verdict(26, 15, 10, 3), Latency::Tight);
+    }
+
+    #[test]
+    fn a_median_under_the_loose_floor_is_drift() {
+        assert_eq!(latency_verdict(5, 15, 10, 3), Latency::Within);
+        assert_eq!(latency_verdict(4, 15, 10, 3), Latency::Loose);
+        assert_eq!(Latency::Loose.as_str(), "drift-loose");
+        assert_eq!(Latency::Tight.as_str(), "drift-tight");
+    }
 
     /// The base arm's binary lives under the pair profile, the one the head arm
     /// is built under, and that profile is not `release`.

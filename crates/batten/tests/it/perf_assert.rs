@@ -403,3 +403,109 @@ fn the_committed_readme_publishes_the_budgets_this_module_enforces() {
          enforces — move both together:\n{answer}"
     );
 }
+
+// --- the writer's own reduction: `record tool --pick` (CLOUD-1991) ----------
+//
+// `[tasks.record-perf]` was an `awk` program reducing `perf measure`'s lines to
+// `<path> <p95>` in front of this writer. The reduction is the writer's now, so
+// these cases feed it the measurement's OWN shape and read the verdict back.
+//
+// The body's two refusals carry over: a reduction that yields nothing records
+// nothing (its exit 2 is the engine's could-not-look 3 now), and only a line
+// opening with `path=` is a record line, the `/^path=/` guard.
+
+/// `perf measure`'s own line shape for every budgeted path, inside budget.
+fn measured() -> String {
+    [
+        ("noop", "2.4"),
+        ("check", "2.7"),
+        ("hook", "3.0"),
+        ("passthrough", "2.2"),
+        ("posttool", "2.3"),
+        ("wired", "8.4"),
+    ]
+    .iter()
+    .fold(String::new(), |mut lines, (path, p95)| {
+        let _ = writeln!(lines, "path={path} p50=1.9 p95={p95} mean=2.0 runs=30");
+        lines
+    })
+}
+
+/// Run the reducing writer over `lines`, as `[tasks.record-perf]` now does.
+fn record_picked(dir: &Path, lines: &str) -> std::process::Output {
+    run_with_stdin(
+        dir,
+        &["record", "tool", "perf-p95", "--pick", "path=p95"],
+        lines,
+    )
+}
+
+#[test]
+fn a_picked_measurement_is_the_record_the_gate_reads() {
+    let dir = repo("picked-clean", Some(&agreeing_readme()));
+    let written = record_picked(&dir, &measured());
+    assert!(written.status.success(), "{}", stderr(&written));
+    let answer = findings(&dir);
+    assert!(
+        answer.trim().is_empty(),
+        "the reduced measurement is the clean record:\n{answer}"
+    );
+
+    let over = repo("picked-over", Some(&agreeing_readme()));
+    let written = record_picked(
+        &over,
+        &measured().replace("path=noop p50=1.9 p95=2.4", "path=noop p50=1.9 p95=150"),
+    );
+    assert!(written.status.success(), "{}", stderr(&written));
+    let answer = findings(&over);
+    assert!(
+        answer.contains("path measure late"),
+        "the token is the p95 field, not another one:\n{answer}"
+    );
+}
+
+#[test]
+fn a_picked_measurement_skips_a_line_that_does_not_open_with_the_name() {
+    // A PAIRED record opens with `arm=`, and taking it for an absolute one would
+    // put a comparison's arm in the budget. Here it is the only `noop` line, so
+    // skipping it leaves `noop` unmeasured — a finding — and taking it would be
+    // a silent pass.
+    let dir = repo("picked-paired", Some(&agreeing_readme()));
+    let lines = measured().replace(
+        "path=noop p50=1.9 p95=2.4 mean=2.0 runs=30",
+        "arm=head path=noop p50=1.9 p95=2.4 mean=2.0 runs=30",
+    );
+    let written = record_picked(&dir, &lines);
+    assert!(written.status.success(), "{}", stderr(&written));
+    let answer = findings(&dir);
+    assert!(
+        answer.contains("path measure partial"),
+        "a line that does not open with the name is not a record line:\n{answer}"
+    );
+}
+
+#[test]
+fn a_picked_measurement_with_no_record_line_is_could_not_look() {
+    // AN EMPTY REDUCTION FAILS RATHER THAN RECORDING SILENCE: an empty record is
+    // a PRESENT record carrying no path, which the module would read as a
+    // finding whose cause is the producer. Could-not-look, and nothing written.
+    let dir = repo("picked-empty", Some(&agreeing_readme()));
+    let written = record_picked(&dir, "hyperfine: nothing measured\n");
+    assert_eq!(written.status.code(), Some(3), "{}", stderr(&written));
+    let answer = findings(&dir);
+    assert!(
+        answer.trim().is_empty(),
+        "nothing was recorded, so the module abstains:\n{answer}"
+    );
+}
+
+#[test]
+fn a_pick_naming_no_token_key_is_a_usage_error() {
+    let dir = repo("picked-usage", Some(&agreeing_readme()));
+    let written = run_with_stdin(
+        &dir,
+        &["record", "tool", "perf-p95", "--pick", "path"],
+        &measured(),
+    );
+    assert_eq!(written.status.code(), Some(1), "{}", stderr(&written));
+}

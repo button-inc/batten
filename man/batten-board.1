@@ -1,0 +1,23 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-board 1  batten 
+.SH NAME
+batten\-board \- Whether the board\*(Aqs columns and graph tell the truth about the work
+.SH SYNOPSIS
+\fBbatten board\fR [\fB\-h\fR|\fB\-\-help\fR] <\fIsubcommands\fR>
+.SH DESCRIPTION
+Whether the board\*(Aqs columns and graph tell the truth about the work
+.SH OPTIONS
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.SH SUBCOMMANDS
+.TP
+batten\-board\-check(1)
+Refuse a board whose columns, graph or citations lie, and print the ready frontier
+.TP
+batten\-board\-sweep(1)
+Run every declared board gate over one payload set and report the set of refusals
+.TP
+batten\-board\-help(1)
+Print this message or the help of the given subcommand(s)

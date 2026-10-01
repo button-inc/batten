@@ -1,93 +1,364 @@
-//! `[tasks.record-verdicts]`'s forge filter, over the task's own committed body
-//! (CLOUD-1965).
+//! `[tasks.record-verdicts]`' successors, over the compiled binary (CLOUD-1265,
+//! CLOUD-1707, CLOUD-1965; the body retired under CLOUD-843).
 //!
-//! The task body also runs every declared validator and `batten` itself, so it is
-//! not driven whole here. What decides whether a check-run is recorded as a
-//! GRADING is the one `--jq` program handed to `gh api`, and that program is
-//! extracted from the committed body and run with `jq` over fixture check-runs —
-//! so the case asserts the bytes mise hands bash, never a copy of them.
+//! The task body ran every declared validator, reduced hk's two plans with `jq`,
+//! and piped a `gh api --jq` reduction of HEAD's check-runs into `record forge`.
+//! Each arm has a home now: the validators are `record validate` over the
+//! `[[rule.tools]]` rows' own `run` argv (`tool_verdict_facts.rs` drives it),
+//! the plan join is `policy/hook-profile.rego`'s over two acquired plans
+//! (`hook_profile.rs`), and the forge arm is `record forge --fetch`, which this
+//! file drives against the `BATTEN_REST_FIXTURE` forge.
+//!
+//! # What #1054 established, carried
+//!
+//! That open pull request pinned the forge filter by extracting the committed
+//! `--jq` program and running it. The program is gone, and the two cases it added
+//! are carried here against the verb: an UNANSWERED conclusion — cancelled,
+//! skipped, pending — is not recorded as a grading, and an answered one of either
+//! colour still is.
+//!
+//! # The step receipt, carried into the verb
+//!
+//! The body also held CLOUD-1891's receipt: validators whose inputs had not
+//! moved were not re-run, and a receipt was written only over a clean store. The
+//! successor keeps both rules inside `record validate` — a question already
+//! answered `0` over the same bytes, tool, version AND argv is not asked again,
+//! and a non-zero answer never is held — and the last three cases here are that
+//! receipt's discrimination.
+//!
+// carried: "[tasks.record-verdicts]" crates/batten/src/record.rs kind:mechanism crates/batten/tests/it/record_verdicts.rs
+// carried: "an unanswered conclusion is not recorded as a grading" crates/batten/src/record.rs kind:mechanism
+// carried: "an answered conclusion is still recorded" crates/batten/src/record.rs kind:mechanism
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
 
-use std::io::Write as _;
-use std::process::Stdio;
+use std::path::{Path, PathBuf};
+use std::process::Output;
 
-/// The `--jq` program of the check-runs read, exactly as committed.
-fn forge_filter() -> String {
-    let body = common::task_body("record-verdicts");
-    let line = body
-        .lines()
-        .find(|line| line.contains("--jq '.check_runs"))
-        .expect("record-verdicts reads the forge's check-runs through --jq");
-    let start = line.find("--jq '").expect("a --jq program") + "--jq '".len();
-    let rest = &line[start..];
-    let end = rest.find("' 2>").expect("the program is single-quoted");
-    rest[..end].to_owned()
+use common::{git_in, init_repo, scratch, stderr, stdout, write};
+
+/// The repository the fixture forge answers for.
+const REPO: &str = "acme/widgets";
+
+/// The answered set this repository declares in `CI_ANSWERED_CONCLUSIONS`.
+const ANSWERED: &str = "success,neutral,failure,timed_out,action_required";
+
+/// A committed repository, and its fixture forge.
+fn consumer(name: &str) -> (PathBuf, PathBuf) {
+    let dir = scratch(&format!("record-verdicts-{name}"));
+    init_repo(&dir);
+    write(&dir, "batten.toml", "version = 1\n");
+    git_in(&dir, &["add", "-A"]);
+    git_in(&dir, &["commit", "-qm", "a commit to grade"]);
+    (dir, scratch(&format!("record-verdicts-{name}-forge")))
 }
 
-/// The `name<TAB>conclusion` lines the committed filter keeps for `runs`.
-#[expect(
-    clippy::disallowed_types,
-    reason = "stays: the subject is a jq program the task hands to a spawned gh, so running it is a spawn by definition"
-)]
-fn kept(runs: &str) -> Vec<String> {
-    let mut child = std::process::Command::new("jq")
-        .args(["-r", &forge_filter()])
-        .env(
-            "CI_ANSWERED_CONCLUSIONS",
-            common::task_env("CI_ANSWERED_CONCLUSIONS"),
-        )
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .spawn()
-        .expect("jq runs");
-    child
-        .stdin
-        .take()
-        .expect("a stdin")
-        .write_all(runs.as_bytes())
-        .expect("write the fixture");
-    let out = child.wait_with_output().expect("jq finishes");
-    assert!(out.status.success(), "the committed filter runs under jq");
-    String::from_utf8(out.stdout)
-        .expect("utf-8")
-        .lines()
-        .map(str::to_owned)
-        .collect()
+/// One check-run as the endpoint returns it, concluding the instant it started.
+fn run(name: &str, conclusion: Option<&str>, started: &str, id: u64) -> String {
+    run_until(name, conclusion, started, started, id)
 }
 
-fn one(name: &str, conclusion: Option<&str>) -> String {
-    let conclusion = conclusion.map_or_else(|| "null".to_owned(), |value| format!("\"{value}\""));
+/// One check-run as the endpoint returns it, with its own conclusion stamp —
+/// `null` while it has not concluded.
+fn run_until(
+    name: &str,
+    conclusion: Option<&str>,
+    started: &str,
+    completed: &str,
+    id: u64,
+) -> String {
+    let conclusion =
+        conclusion.map_or_else(|| String::from("null"), |value| format!("\"{value}\""));
+    let (status, completed) = if conclusion == "null" {
+        ("in_progress", String::from("null"))
+    } else {
+        ("completed", format!("\"{completed}\""))
+    };
     format!(
-        "{{\"check_runs\":[{{\"name\":\"{name}\",\"conclusion\":{conclusion},\
-         \"started_at\":\"2026-09-28T00:00:00Z\",\"id\":1}}]}}"
+        r#"{{"name": "{name}", "status": "{status}", "conclusion": {conclusion}, "started_at": "{started}", "completed_at": {completed}, "id": {id}, "output": {{"summary": "a log nobody declared"}}}}"#
     )
 }
 
+/// The forge answers HEAD's check-runs with `runs`, on one page.
+fn forge_answers(forge: &Path, runs: &[String]) {
+    std::fs::write(
+        forge.join("resp.1"),
+        format!(
+            "HTTP/2 200\ncontent-type: application/json\n\n{{\"total_count\": {}, \"check_runs\": [{}]}}\n",
+            runs.len(),
+            runs.join(", ")
+        ),
+    )
+    .expect("write the canned answer");
+}
+
+/// `record forge HEAD --fetch` against the fixture forge.
+fn fetch(dir: &Path, forge: &Path, fanin: Option<&str>) -> Output {
+    let mut command = common::batten();
+    command
+        .args(["record", "forge", "HEAD", "--fetch", "--answered", ANSWERED])
+        .env("GH_REPO", REPO)
+        .env("BATTEN_REST_FIXTURE", forge)
+        .current_dir(dir);
+    if let Some(fanin) = fanin {
+        command.args(["--fanin", fanin]);
+    }
+    command.output().expect("the compiled binary runs")
+}
+
+/// The forge record for HEAD, or `None` where nothing was written.
+fn recorded(dir: &Path) -> Option<String> {
+    let sha = git_in(dir, &["rev-parse", "HEAD"]);
+    std::fs::read_to_string(batten::forge::record_path(&dir.join(".git"), sha.trim())).ok()
+}
+
+fn said(out: &Output) -> String {
+    format!("{}{}", stdout(out), stderr(out))
+}
+
 /// **A `cancelled` fan-in judged nothing, so it is not recorded** (CLOUD-1965).
-///
-/// The filter excluded the literal `skipped` alone, so a cancelled `final` was
-/// written as `final cancelled` and read by `head grade twice` and
-/// `forge-verdict-required` as the forge having graded the commit. Membership in
-/// the declared `CI_ANSWERED_CONCLUSIONS` is the one list `checks_green` also
-/// reads, so the two cannot disagree about what counts as an answer again.
 #[test]
 fn an_unanswered_conclusion_is_not_recorded_as_a_grading() {
-    assert!(kept(&one("final", Some("cancelled"))).is_empty());
-    assert!(kept(&one("final", Some("skipped"))).is_empty());
-    assert!(
-        kept(&one("final", None)).is_empty(),
-        "pending is not a grading"
-    );
+    for (name, conclusion) in [
+        ("cancelled", Some("cancelled")),
+        ("skipped", Some("skipped")),
+        ("pending", None),
+    ] {
+        let (dir, forge) = consumer(name);
+        forge_answers(
+            &forge,
+            &[run("final", conclusion, "2026-09-28T00:00:00Z", 1)],
+        );
+        let written = fetch(&dir, &forge, None);
+        assert_eq!(written.status.code(), Some(0), "{}", said(&written));
+        assert_eq!(
+            recorded(&dir).as_deref(),
+            Some(""),
+            "a `{name}` fan-in is not a grading"
+        );
+    }
 }
 
 /// The anti-vacuity half: a real verdict of either colour is still recorded, or
 /// the fix is satisfied by recording nothing at all.
 #[test]
 fn an_answered_conclusion_is_still_recorded() {
-    assert_eq!(kept(&one("final", Some("success"))), vec!["final\tsuccess"]);
-    assert_eq!(kept(&one("final", Some("failure"))), vec!["final\tfailure"]);
+    for conclusion in ["success", "failure"] {
+        let (dir, forge) = consumer(conclusion);
+        forge_answers(
+            &forge,
+            &[run("final", Some(conclusion), "2026-09-28T00:00:00Z", 1)],
+        );
+        let written = fetch(&dir, &forge, Some("final"));
+        assert_eq!(written.status.code(), Some(0), "{}", said(&written));
+        assert_eq!(
+            recorded(&dir).as_deref(),
+            Some(format!("final {conclusion}\n").as_str())
+        );
+    }
+}
+
+#[test]
+fn the_latest_run_per_name_wins_by_completion_then_start() {
+    // A re-run adds a second run under the same name, and the reader folds a
+    // record into a map — so the producer must choose by recency, never by
+    // listing order, and by `checks green`'s recency (CLOUD-1662). The two runs
+    // OVERLAP: the failure started first and concluded last, so a key led by
+    // `started_at` would pick the success, and the last-listed row is the
+    // success too. A higher id does not make a run newer either.
+    let (dir, forge) = consumer("latest");
+    forge_answers(
+        &forge,
+        &[
+            run_until(
+                "final",
+                Some("failure"),
+                "2026-09-28T01:00:00Z",
+                "2026-09-28T03:00:00Z",
+                2,
+            ),
+            run_until(
+                "final",
+                Some("success"),
+                "2026-09-28T02:00:00Z",
+                "2026-09-28T02:30:00Z",
+                9,
+            ),
+        ],
+    );
+    let written = fetch(&dir, &forge, Some("final"));
+    assert_eq!(written.status.code(), Some(0), "{}", said(&written));
+    assert_eq!(recorded(&dir).as_deref(), Some("final failure\n"));
+}
+
+/// A repository declaring one validator row whose argv is `run`.
+///
+/// `mkdir` is the validator because its answer MOVES with the tree it runs in:
+/// the first run creates the directory and answers `0`, and any second run over
+/// the same tree answers non-zero. So whether the verb asked again is readable
+/// off the record alone.
+fn validating(name: &str, run: &str) -> PathBuf {
+    let dir = scratch(&format!("record-verdicts-{name}"));
+    init_repo(&dir);
+    write(&dir, "subject.toml", "key = \"value\"\n");
+    write(
+        &dir,
+        "batten.toml",
+        &format!(
+            "version = 1\n\n[[rule]]\nid = \"tool judge dirty\"\nkind = \"policy\"\nscope = \"tree\"\nmodule = \"validator-verdict-clean.rego\"\nseverity = \"deny\"\n\n[[rule.tools]]\nid = \"config-validator\"\ntool = \"checker\"\nversion = \"1.1.0\"\ninput = \"subject.toml\"\nrun = {run}\n"
+        ),
+    );
+    write(
+        &dir,
+        "validator-verdict-clean.rego",
+        &std::fs::read_to_string(common::at_root("policy/validator-verdict-clean.rego"))
+            .expect("the shipped module"),
+    );
+    dir
+}
+
+/// `record validate config-validator`, and the one record it keeps.
+fn validated(dir: &Path) -> (Output, Option<String>) {
+    let mut command = common::batten();
+    command
+        .args(["record", "validate", "config-validator"])
+        .current_dir(dir);
+    let out = command.output().expect("the compiled binary runs");
+    let store = dir.join(".git").join("batten-tools");
+    let body = std::fs::read_dir(&store).ok().and_then(|entries| {
+        entries
+            .filter_map(Result::ok)
+            .find(|entry| entry.path().is_file())
+            .and_then(|entry| std::fs::read_to_string(entry.path()).ok())
+    });
+    (out, body)
+}
+
+/// THE RECEIPT, CARRIED (CLOUD-1891). The retired body skipped its validators
+/// when the bytes they read had not moved, so `verify` did not re-run what the
+/// hk steps had just run. A second ask over the same bytes and the same argv is
+/// answered from the clean record — had `mkdir` run again, it would have
+/// answered non-zero.
+#[test]
+fn a_clean_answer_over_the_same_bytes_and_argv_is_not_asked_again() {
+    let dir = validating("receipt", r#"["mkdir", "asked"]"#);
+    let (first, body) = validated(&dir);
+    assert_eq!(first.status.code(), Some(0), "{}", said(&first));
+    assert_eq!(body.as_deref(), Some("exit 0\n"));
+    let (second, body) = validated(&dir);
+    assert_eq!(second.status.code(), Some(0), "{}", said(&second));
+    assert_eq!(body.as_deref(), Some("exit 0\n"), "{}", said(&second));
+}
+
+/// THE RECEIPT IS KEYED ON THE ARGV TOO, which the record key is not: a
+/// consumer who changes the validator's flags has asked a different question
+/// of the same bytes, and a clean answer to the old one is not its answer.
+#[test]
+fn a_moved_argv_is_asked_again_over_the_same_bytes() {
+    let dir = validating("receipt-argv", r#"["mkdir", "asked"]"#);
+    let (first, _) = validated(&dir);
+    assert_eq!(first.status.code(), Some(0), "{}", said(&first));
+    let config = std::fs::read_to_string(dir.join("batten.toml")).expect("the config");
+    write(
+        &dir,
+        "batten.toml",
+        &config.replace(r#"["mkdir", "asked"]"#, r#"["mkdir", "asked", "again"]"#),
+    );
+    let (second, body) = validated(&dir);
+    assert_eq!(second.status.code(), Some(0), "{}", said(&second));
+    assert_ne!(
+        body.as_deref(),
+        Some("exit 0\n"),
+        "the moved argv ran, and `asked` already existed"
+    );
+}
+
+/// AND A NON-ZERO ANSWER IS NEVER HELD: a flake reads the same as a finding, so
+/// the next ask runs again rather than replaying it until an input moves.
+#[test]
+fn a_non_zero_answer_is_asked_again() {
+    let dir = validating("receipt-dirty", r#"["mkdir", "asked"]"#);
+    std::fs::create_dir(dir.join("asked")).expect("pre-create, so the first ask fails");
+    let (first, body) = validated(&dir);
+    assert_eq!(first.status.code(), Some(0), "{}", said(&first));
+    assert_ne!(body.as_deref(), Some("exit 0\n"));
+    std::fs::remove_dir(dir.join("asked")).expect("clear the cause");
+    let (second, body) = validated(&dir);
+    assert_eq!(second.status.code(), Some(0), "{}", said(&second));
+    assert_eq!(body.as_deref(), Some("exit 0\n"), "{}", said(&second));
+}
+
+#[test]
+fn nothing_is_written_until_the_fan_in_has_answered() {
+    // The fan-in gates writing AT ALL: a record present without it is what
+    // `forge-verdict-required` refuses, on local `verify` and inside CI's own
+    // run alike.
+    let (dir, forge) = consumer("fanin-pending");
+    forge_answers(
+        &forge,
+        &[
+            run("lint", Some("success"), "2026-09-28T00:00:00Z", 1),
+            run("final", None, "2026-09-28T00:00:00Z", 2),
+        ],
+    );
+    let written = fetch(&dir, &forge, Some("final"));
+    assert_eq!(written.status.code(), Some(0), "{}", said(&written));
+    assert_eq!(recorded(&dir), None, "no record before the fan-in answers");
+}
+
+#[test]
+fn a_name_with_whitespace_is_dropped_and_counted_never_mangled() {
+    let (dir, forge) = consumer("spaced");
+    forge_answers(
+        &forge,
+        &[
+            run(
+                "action (ubuntu-latest)",
+                Some("success"),
+                "2026-09-28T00:00:00Z",
+                1,
+            ),
+            run("final", Some("success"), "2026-09-28T00:00:00Z", 2),
+        ],
+    );
+    let written = fetch(&dir, &forge, Some("final"));
+    assert_eq!(written.status.code(), Some(0), "{}", said(&written));
+    assert_eq!(recorded(&dir).as_deref(), Some("final success\n"));
+    assert!(
+        stderr(&written).contains("1 check-run name"),
+        "{}",
+        said(&written)
+    );
+    assert!(
+        !said(&written).contains("ubuntu-latest"),
+        "rule 4: {}",
+        said(&written)
+    );
+}
+
+#[test]
+fn a_forge_that_will_not_answer_is_could_not_look_and_writes_nothing() {
+    let (dir, forge) = consumer("refused");
+    std::fs::write(
+        forge.join("resp.1"),
+        "HTTP/2 403\ncontent-type: application/json\n\n{\"message\": \"no\"}\n",
+    )
+    .expect("write the refusal");
+    let refused = fetch(&dir, &forge, Some("final"));
+    assert_eq!(refused.status.code(), Some(3), "{}", said(&refused));
+    assert_eq!(recorded(&dir), None);
+}
+
+#[test]
+fn a_qualifier_without_fetch_is_a_usage_error() {
+    let (dir, _) = consumer("usage");
+    let mut command = common::batten();
+    command
+        .args(["record", "forge", "HEAD", "--fanin", "final"])
+        .current_dir(&dir);
+    let refused = command.output().expect("the compiled binary runs");
+    assert_eq!(refused.status.code(), Some(1), "{}", said(&refused));
 }

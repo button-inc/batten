@@ -1,0 +1,19 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-record-census-note 1  batten 
+.SH NAME
+batten\-record\-census\-note \- Append a landing\*(Aqs beat or its deliberate stop under this container\*(Aqs boot
+.SH SYNOPSIS
+\fBbatten record census note\fR [\fB\-h\fR|\fB\-\-help\fR] <\fIkind\fR> [\fIreason\fR] 
+.SH DESCRIPTION
+Append a landing\*(Aqs beat or its deliberate stop under this container\*(Aqs boot
+.SH OPTIONS
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fIkind\fR>
+h for a landing\*(Aqs beat, x for a deliberate stop
+.TP
+[\fIreason\fR]
+Why the loop stopped, one word, recorded beside an x

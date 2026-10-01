@@ -19,7 +19,8 @@ name: land-divergence
 # THIS MUST NOT RUN IN THE GATE OR IN `verify`. It is a property of the world,
 # and a property of the world must not red a branch. Two things hold that now
 # (CLOUD-1717): the producer below is in no gate list, and the row that replaced
-# the decider is `severity = "warn"`, so `lane grade other` reports without
+# the decider is `severity = "warn"`, so `bound grade other` (the
+# `ci-signal` preset, CLOUD-843) reports without
 # failing any run that does not ask it to. This job is the one caller that asks.
 
 on:
@@ -70,23 +71,17 @@ jobs:
       #
       # GH_TOKEN through env, never interpolated into the run block: a `${{ }}`
       # expansion is textual substitution into the shell script, which zizmor
-      # gates at high severity.
+      # gates at high severity. The window's start travels the same way, as
+      # `BATTEN_DIVERGENCE_SINCE`, which the verb reads when `--since` is absent;
+      # the two workflows are `mise.toml [env]`'s `LAND_CI_WORKFLOW` and
+      # `LAND_WORKFLOW` (CLOUD-843).
       - name: Measure the landing loop's divergence from linear
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           BATTEN_DIVERGENCE_SINCE: ${{ inputs.since }}
-        run: mise run land-divergence-record > "$RUNNER_TEMP/divergence.txt"
-      - name: Publish the records
-        shell: bash
-        run: |
-          {
-            echo '### land-divergence'
-            echo
-            echo '```'
-            cat "$RUNNER_TEMP/divergence.txt"
-            echo '```'
-          } >>"$GITHUB_STEP_SUMMARY"
+        # `ci step` publishes the records to the job summary from the run itself.
+        run: mise run batten -- ci step --summary land-divergence -- mise run batten -- record divergence
       # Always, so the records above are published even when a budget is broken —
       # the number is the point, and a summary that only appears on green is a
       # report nobody reads at the moment it matters.
@@ -99,4 +94,4 @@ jobs:
       - name: Judge the divergence against its budgets
         if: always()
         shell: bash
-        run: mise run batten -- check --rule 'lane grade other' --fail-on-warning
+        run: mise run batten -- check --rule 'bound grade other' --fail-on-warning

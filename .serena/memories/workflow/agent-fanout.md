@@ -2,7 +2,7 @@
 
 Read when: running more than one agent session against this repo at once, or
 deciding whether to. The gates this protocol leans on are `batten ready lint`
-(never the frozen `mise run ready-lint`, which passes rows it refuses) and `mise run graph-check` (CLOUD-179, CLOUD-175); the board model is
+and `batten board check` (CLOUD-179, CLOUD-175; both shell ancestors retired under CLOUD-1221); the board model is
 `mem:workflow/board-states`.
 
 ## GOVERNING RULE: one container, one checkout, NO WORKTREES (CLOUD-2026)
@@ -81,8 +81,9 @@ following them re-derived hand dispatch.
   connectors ignore `permissions.allow`; closed not-planned) and
   [#96638](https://github.com/anthropics/claude-code/issues/96638) (plan mode
   re-prompts on every call to a parameterized MCP tool; open).
-- `mcp-allow-check --session` reports the unenforceable committed grants at
-  session start. It says the prompt stands, not how to clear it.
+- `batten mcp posture` (the `mcp-attach-check` handler row; it replaced
+  `mcp-allow-check --session` under CLOUD-843) reports the unenforceable
+  committed grants at session start. It says the prompt stands, not how to clear it.
 - Re-test after a client upgrade rather than trusting any memory, this one
   included.
 
@@ -129,7 +130,7 @@ work, it only makes work _claimable_. Coordination is entirely board state.
   the race — write **nothing** (nulling the winner's assignee would clobber the
   claim) and take the next frontier issue.
 - **The frontier is computed, never guessed**: pipe the active columns'
-  `get_issue(includeRelations: true)` payloads to `mise run graph-check`. Every
+  `get_issue(includeRelations: true)` payloads to `batten board check`. Every
   session computing it independently gets the same answer; that shared
   determinism is what replaces a dispatcher.
 - **Ready-block edits go through anchored `patch` ops only** — a whole-
@@ -553,8 +554,9 @@ structurally unable to make.
 shipped tag — spelling the placeholder in angle brackets makes it a redirect and the line
 dies with a shell syntax error before `mise` is ever reached. Then pipe the In
 Review closure back through it (`get_issue` payloads carrying `attachments`,
-`description` and `relations` — `board-payloads` recovers them byte-perfect from
-the transcript) for the conjunction with `graph-check`; then `done-check` to
+`description` and `relations` — the capture store holds them byte-perfect, and
+`batten board sweep --issue <key>...` hands each key's newest stored read to every
+declared board gate at once) for the conjunction with `graph-check`; then `done-check` to
 confirm no Done outran its release. Shipping a ref is **necessary, not
 sufficient** — read each row's own Acceptance against the released tree before
 promoting it. CLOUD-807 was once Done with none of its acceptance met, and a

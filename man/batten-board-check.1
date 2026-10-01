@@ -1,0 +1,22 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-board-check 1  batten 
+.SH NAME
+batten\-board\-check \- Refuse a board whose columns, graph or citations lie, and print the ready frontier
+.SH SYNOPSIS
+\fBbatten board check\fR [\fB\-\-issue\fR] [\fB\-\-cites\fR] [\fB\-\-refs\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.SH DESCRIPTION
+Refuse a board whose columns, graph or citations lie, and print the ready frontier
+.SH OPTIONS
+.TP
+\fB\-\-issue\fR \fI<issue>\fR
+Read this issue\*(Aqs payload from the capture store rather than stdin (repeatable)
+.TP
+\fB\-\-cites\fR
+Judge each payload\*(Aqs Ready\-block citations against the tree instead of the graph
+.TP
+\fB\-\-refs\fR
+Judge the tree\*(Aqs clause citations against the payloads instead of the graph
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help

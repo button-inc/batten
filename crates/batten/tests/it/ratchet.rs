@@ -2018,8 +2018,8 @@ fn removing_an_inline_body_never_violates_either_row() {
 // honest deletion has no landable form at either.
 // withdrawn: tests/container-setup.bats .claude/container-setup.sh the wrapper it covered is withdrawn in this same change and nothing replaced it — there is no policy surface and no compiled-binary test to name, which is what makes this a withdrawal rather than a port
 
-// subsumed: "a binary installed off PATH is refused, not reported ready" tests/install.bats
-// changed: "the GitHub hosts are fenced in NO_PROXY before anything is fetched" tests/install.bats the proxy is handled by honouring the declared CA bundle now, not by fencing NO_PROXY — same problem, different and narrower mechanism, covered by three cases there
+// subsumed: "a binary installed off PATH is refused, not reported ready" crates/batten/tests/it/install_script.rs
+// changed: "the GitHub hosts are fenced in NO_PROXY before anything is fetched" crates/batten/tests/it/install_script.rs the proxy is handled by honouring the declared CA bundle now, not by fencing NO_PROXY — same problem, different and narrower mechanism, covered by three cases there
 // withdrawn: "THE DEFAULT: a checkout beside it is NOT used, the release is" the wrapper chose between a checked-out and a fetched install.sh; with no wrapper there is no choice to make
 // withdrawn: "the checkout is usable only by opting in, for an unreleased change" the opt-in existed only to override the wrapper's own default
 // withdrawn: "the opt-in with no checkout to opt into is could-not-look, not a silent fetch" an error path of that opt-in, which is gone with it

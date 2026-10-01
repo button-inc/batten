@@ -1,0 +1,19 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-record-query 1  batten 
+.SH NAME
+batten\-record\-query \- Run a declared `[[forge.query]]` read and record its reduction as the family it names
+.SH SYNOPSIS
+\fBbatten record query\fR [\fB\-\-input\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIid\fR> 
+.SH DESCRIPTION
+Run a declared `[[forge.query]]` read and record its reduction as the family it names
+.SH OPTIONS
+.TP
+\fB\-\-input\fR \fI<input>\fR
+A `<name>=<value>` binding for one of the query\*(Aqs own placeholders (repeatable)
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fIid\fR>
+The `[[forge.query]]` id, which is also the record family written

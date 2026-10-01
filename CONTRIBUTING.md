@@ -23,8 +23,7 @@ and git hooks run through [`hk`](https://hk.jdx.dev) (see `hk.pkl`). Once:
 
 ```bash
 mise install     # provision the pinned Rust toolchain and hk
-git submodule update --init  # tests/bats — the shell test runner
-.claude/hooks/session-start.sh  # all three of the above, plus the git hooks
+.claude/hooks/session-start.sh  # all of the above, plus the git hooks
 ```
 
 Prefer the last line: it performs every per-clone step, and `mise run doctor`

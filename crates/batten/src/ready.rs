@@ -538,6 +538,44 @@ impl Grammar {
     }
 }
 
+/// The grammar's rows, lent to the sibling gates over the same bodies
+/// (CLOUD-1221).
+///
+/// `batten board check` judges a SET of payloads — the columns they sit in, the
+/// graph between them, and the citations each body makes against the tree — and
+/// every one of those questions opens a Ready block, finds a clause label or
+/// names an issue key exactly as this module does. Lending the compiled rows
+/// rather than resolving them a second time is what keeps one definition of each:
+/// the three shell programs that asked these questions before carried their own
+/// copies, and `spec-ref-check` said so in its header as a cost.
+impl Grammar {
+    /// The opener row: where a Ready block begins.
+    #[must_use]
+    pub fn opener(&self) -> &Regex {
+        &self.opener
+    }
+
+    /// The clause-label row: where a clause begins.
+    #[must_use]
+    pub fn clause_label(&self) -> &Regex {
+        &self.clause_label
+    }
+
+    /// The issue-key row, as written, for a caller composing it into a wider
+    /// expression — a status claim is a key followed by a column word.
+    #[must_use]
+    pub fn key_expression(&self) -> &str {
+        self.key.as_str()
+    }
+
+    /// The tracker's mention markup stripped, so the stored and rendered forms of
+    /// a body are one case for a sibling scan too.
+    #[must_use]
+    pub fn without_mentions(&self, text: &str) -> String {
+        self.strip_mentions(text)
+    }
+}
+
 /// Compile an expression this module owns.
 ///
 /// **Only the two that are not consumer vocabulary reach this** — the
@@ -841,6 +879,14 @@ pub fn workspace_version(root: &Path) -> Result<String> {
     )))
 }
 
+// CLOUD-806's two arms, carried off the retired `mise-tasks/ready-lint.sh`
+// (CLOUD-1221). The first drops the body emission, so a consumer reading the
+// derived fact silently gets nothing and cannot tell that from an empty body. The
+// second takes it back on the `no-ready-block` refusal, which is where it was
+// first written: the fact then exists for refined rows only, and an unrefined
+// row's stray citation — the likeliest kind — becomes invisible.
+//MUTANT emission-dropped|s@^    report.emissions.push(emit_keys($@    std::mem::drop(emit_keys(@|the_bodys_cited_keys_are_emitted_before_any_verdict
+//MUTANT emission-after-the-verdict|s@^            rule: "no-ready-block".to_owned(),$@            rule: { report.emissions.clear(); "no-ready-block".to_owned() },@|the_bodys_cited_keys_are_emitted_before_any_verdict
 /// Lint one payload against the checkable Ready clauses.
 ///
 /// **The order of the checks is the order of the report**, and it is the shell
@@ -1058,6 +1104,14 @@ pub fn lint(grammar: &Grammar, payload: &Payload, root: &Path) -> Result<Report>
     Ok(report)
 }
 
+// Carried off the retired `mise-tasks/ready-lint.sh` (CLOUD-1221). The first
+// restores the whole-line read of the break marker, so a clause DENYING a break
+// is read as declaring one again — the CLOUD-852 defect; its discriminating case
+// is a `no bump` type, since a releasable one collapses to the same answer either
+// way. The second drops the unqualified-denial refusal, which is the whole
+// failure CLOUD-842 reversed: the five landed rows were silent, not warned.
+//MUTANT break-read-off-the-whole-line|s@^    let breaking = type_token.contains('!')@    let breaking = bump_line.contains('!')@|the_break_marker_is_read_off_the_type_token_and_never_off_the_line
+//MUTANT break-claim-refusal-dropped|s@^    if grammar.break_denial.is_match(bump_line) .*{$@    if false {@|a_negative_break_claim_must_name_the_surface_it_denies_about
 /// §6: the commit type and the bump must agree, and a break denial must name a
 /// surface.
 fn check_bump(
@@ -1188,6 +1242,10 @@ fn check_bump(
     Ok(())
 }
 
+// Carried off the retired `mise-tasks/ready-lint.sh` (CLOUD-1221): the mutation
+// drops the deny conjunct, so every gate-introducing block is demanded a replay —
+// including the `warn` ones the clause deliberately leaves alone.
+//MUTANT replay-demanded-of-a-warn-gate|s@^    if !grammar.gate_intro.is_match(block) .. !grammar.deny_severity.is_match(block) {$@    if !grammar.gate_intro.is_match(block) {@|a_deny_gate_owes_a_replay_and_a_warn_gate_does_not
 /// §7: a new deny gate reports its firing rate before its severity is chosen.
 ///
 /// CLOUD-751. Showing a gate CAN fail on a fixture (CLOUD-418) is a different

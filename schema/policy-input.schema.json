@@ -84,10 +84,28 @@
                 "author": {
                   "type": "string"
                 },
+                "authored": {
+                  "type": "string"
+                },
                 "commit": {
                   "type": "string"
                 },
+                "committed": {
+                  "type": "string"
+                },
                 "committer": {
+                  "type": "string"
+                },
+                "paths": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "signed": {
+                  "type": "boolean"
+                },
+                "subject": {
                   "type": "string"
                 },
                 "trailers": {
@@ -101,7 +119,7 @@
             },
             "type": "array"
           },
-          "description": "Fact::CommitMeta (CLOUD-1187). Declared range -> each commit's IDENTITY fields: `commit` the sha, `author` and `committer` as `Name <email>`, `trailers` as whole `Key: value` lines. THERE IS NO MESSAGE BODY AND NO DIFF, and none can be added by accident -- `git::CommitMeta` has no such field, so non-negotiable rule 4 is decided by the type rather than by this projection remembering to drop something. A range whose endpoints do not resolve is ABSENT rather than an empty list, matching `git-ranges`: `no commits in this range` and `I could not look` are the two answers a history gate must keep apart. Declared separately from `git-ranges` because this peels an object per commit, and a row wanting subjects must not pay for that.",
+          "description": "Fact::CommitMeta (CLOUD-1187, widened by CLOUD-843). Declared range -> each NON-MERGE commit's identity fields: `commit` the sha, `subject` git's `%s`, `author` and `committer` as `Name <email>`, `authored` and `committed` as fixed-width ISO-8601 UTC, `signed` whether the commit HEADER carries a signature (`gpgsig`/`gpgsig-sha256`; presence, never validity), `paths` the sorted repo-relative paths it changed against its first parent (`show --name-only`), and `trailers` as whole `Key: value` lines. THERE IS NO MESSAGE BODY AND NO HUNK, and none can be added by accident -- `git::CommitMeta` has no such field, so non-negotiable rule 4 is decided by the type rather than by this projection remembering to drop something. A range whose endpoints do not resolve is ABSENT rather than an empty list, matching `git-ranges`: `no commits in this range` and `I could not look` are the two answers a history gate must keep apart. Declared separately from `git-ranges` because this peels an object and diffs a tree per commit, and a row wanting subjects must not pay for that.",
           "type": [
             "object",
             "null"
@@ -125,6 +143,64 @@
             "type": "object"
           },
           "description": "Fact::Forge (CLOUD-1154). Declared SHA -> the forge's check verdicts for it, as `name -> conclusion` TOKENS. Read back from a record a producer wrote OUTSIDE the engine: the engine opens no socket, which `evaluator-io-check` gates. KEYED BY SHA -- a record taken against a different commit is not evidence about this one, so it is simply not in the map; that keying is the safety property and the difference between reading a verdict and inheriting a stale one. Tokens only -- a check's name and its conclusion, never a check-run body or an annotation. NULL when no row declared a SHA and when no record store is readable; a declared SHA with no record is ABSENT from the map, and a declared SHA whose record holds no checks is present with an EMPTY object. Those three are different answers and a gate that confuses them reports green on a commit nothing ever judged.",
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "git-config": {
+          "additionalProperties": {
+            "additionalProperties": false,
+            "properties": {
+              "effective": {
+                "additionalProperties": false,
+                "properties": {
+                  "boolean": {
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "value": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
+              "scopes": {
+                "additionalProperties": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "boolean": {
+                      "type": [
+                        "boolean",
+                        "null"
+                      ]
+                    },
+                    "value": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "type": [
+                    "object",
+                    "null"
+                  ]
+                },
+                "type": "object"
+              }
+            },
+            "type": "object"
+          },
+          "description": "Fact::GitConfig (CLOUD-843). Declared key -> how git resolves it. `effective` is the value in force (git's last-one-wins across every scope), NULL when no scope sets the key -- an ANSWER, because the config was read. `scopes` is scope -> the value that scope sets, keyed by git's own names (`system`, `global`, `local`, `worktree`, `command`); a scope that does not set the key is ABSENT. Each value carries `value`, the raw text or NULL for an IMPLICIT key written with no `=`, and `boolean`, git's `--type=bool` reading or NULL when the text is not a boolean git accepts -- normalised by git's own parser, so `1`, `on` and `yes` read true and `0`, `off`, `no` and the empty string read false. Only DECLARED keys are ever read, which is what keeps a credential in a config file off this document. NULL for the whole fact when no row declared a key or the repository could not be opened.",
           "type": [
             "object",
             "null"
@@ -175,6 +251,52 @@
             "type": "array"
           },
           "description": "Fact::GitHistory (CLOUD-1200). Declared query id -> the commits its PATTERN matched: every tag matching a glob, or the commits that added or deleted a path. This is the half `git-refs` and `git-ranges` cannot reach -- they resolve what a rule NAMES, and here the answer set is not knowable at declaration time. Each entry is a sha, a subject, and the tag name for a tag query: a history fact widens WHICH commits are visible, never WHAT one carries, so there is no body and no hunk. NULL when no row declared a pattern AND when the repository is SHALLOW -- a shallow clone cannot see the history a path query walks, and a truncated walk reported as a result is a gate deciding over history it could not see. A declared pattern that matched nothing is present with an EMPTY list, which is a real answer and not could-not-look.",
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "git-index": {
+          "additionalProperties": {
+            "additionalProperties": false,
+            "properties": {
+              "diverged": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "entries": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "mode": {
+                      "type": "string"
+                    },
+                    "oid": {
+                      "type": "string"
+                    },
+                    "path": {
+                      "type": "string"
+                    },
+                    "stage": {
+                      "type": "integer"
+                    }
+                  },
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "untracked": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "type": "object"
+          },
+          "description": "Fact::GitIndex (CLOUD-843). Declared pathspec -> what the INDEX records under it and whether the working tree still agrees. `entries` is `git ls-files -s -- <spec>`: `path`, `mode` (six octal digits), `oid` and `stage` (0, or 1-3 for a conflict's sides), in index order. `diverged` is `git diff --name-only -- <spec>`: tracked paths edited, deleted, re-typed, with a flipped executable bit where core.fileMode is on, or unmerged -- compared by content hash, with clean/smudge filters NOT applied, so it can over-report and never under-report. `untracked` is `git ls-files --others --exclude-standard -- <spec>` on the crate's one tree walker. Pathspecs are git's without magic: a literal selects itself and everything beneath it, a wildcard is git's wildmatch with `*` crossing `/`, `.` is everything; a `:`-magic spec is refused at load. Paths only -- never a byte of any file. NULL when no row declared a pathspec or the index could not be read; an EMPTY list in any member is an answer.",
           "type": [
             "object",
             "null"
@@ -248,6 +370,40 @@
               "type": "integer"
             }
           },
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "git-tags": {
+          "additionalProperties": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "annotated": {
+                  "type": "boolean"
+                },
+                "commit": {
+                  "type": "string"
+                },
+                "committed": {
+                  "type": "string"
+                },
+                "created": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "tag": {
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "description": "Fact::GitTags (CLOUD-843). Declared glob -> every tag it matches, by `git tag --list`'s own wildmatch over the short name: `tag` the name, `commit` the commit it peels to, `annotated` whether a tag object exists, `created` when it was cut (the tagger's time for an annotated tag, the commit's committer time for a lightweight one -- git's `creatordate`) and `committed` the commit's committer date. Dates are fixed-width ISO-8601 UTC, so `<` orders them. `created` is NULL for an annotated tag whose header carries no tagger, never a fabricated instant. Sorted by tag name, byte order; version order is a decision and belongs to the module. A glob that matched nothing is PRESENT with an EMPTY list, which is an answer. No tag message ever -- prose, which rule 4 refuses. NULL when no row declared a glob or the references could not be read. Unlike `git-history` this does NOT null on a shallow clone: a listing walks no history.",
           "type": [
             "object",
             "null"
@@ -426,6 +582,12 @@
                         "null"
                       ]
                     },
+                    "reasonKinds": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
                     "status": {
                       "type": "string"
                     }
@@ -443,7 +605,7 @@
               "null"
             ]
           },
-          "description": "Fact::Plan (CLOUD-949). Declared id -> the adopted gate runner's EFFECTIVE plan for that surface, acquired from the runner rather than re-derived. Bound to the invocation, the tool version and an `inputFingerprint` over HEAD and every differing path's current bytes -- HEAD alone is insufficient, because dirty and index state change the selection without moving HEAD. `required` and `prohibitedProfiles` are the consumer's own row, carried alongside so a module compares two halves of one document. Pointer-only: a step's identity, its status, the reason KIND, its order, its group and a file COUNT -- never a command, a matched path, or a reason's prose. An id absent from the map could not be acquired, which is a reacquire and never a clean plan.",
+          "description": "Fact::Plan (CLOUD-949). Declared id -> the adopted gate runner's EFFECTIVE plan for that surface, acquired from the runner rather than re-derived. Bound to the invocation, the tool version and an `inputFingerprint` over HEAD and every differing path's current bytes -- HEAD alone is insufficient, because dirty and index state change the selection without moving HEAD. `required` and `prohibitedProfiles` are the consumer's own row, carried alongside so a module compares two halves of one document. Pointer-only: a step's identity, its status, the reason KIND (the first reason's, and every reason's in `reasonKinds`), its order, its group and a file COUNT -- never a command, a matched path, or a reason's prose. An id absent from the map could not be acquired, which is a reacquire and never a clean plan.",
           "type": [
             "object",
             "null"

@@ -1639,6 +1639,34 @@ pub fn preapprove(bundle: &Bundle, input: &str) -> Look<Vec<String>> {
     Look::Is(ids)
 }
 
+/// Every string a set- or array-valued rule named `rule` holds under the
+/// package, for a verb that reads a bundle's NON-REFUSAL answer beside its
+/// violations (CLOUD-1221).
+///
+/// **Not a second refusal channel, and that is why it is a different function
+/// rather than a wider [`deny`].** `batten board check` evaluates the
+/// `tracker-hygiene` preset over its own reading and prints a ready frontier
+/// and a set of honest exclusions: the preset decides both, and neither is a
+/// refusal, so neither may ride `violation` — the registry holds refusals, and
+/// a frontier row declared as a class would read as one. What comes back here
+/// never becomes a `Finding` and never moves an exit code by itself.
+///
+/// Could-not-look on a fault and on a shape this cannot read, for [`deny`]'s
+/// reason: an empty answer and an unreadable one are different facts. An absent
+/// rule is an EMPTY answer, which is `collect_string_list`'s reading of a
+/// package that simply does not define it.
+#[must_use]
+pub fn strings(bundle: &Bundle, input: &str, rule: &str) -> Look<Vec<String>> {
+    let mut engine = bundle.engine.clone();
+    if engine.set_input_json(input).is_err() {
+        return Look::CouldNotLook;
+    }
+    let Ok(answered) = engine.eval_query(PACKAGE_QUERY.to_owned(), false) else {
+        return Look::CouldNotLook;
+    };
+    collect_string_list(&answered, &bundle.packages, rule).map_or(Look::CouldNotLook, Look::Is)
+}
+
 /// The `.rego` modules inside an enabled bundle root, in sorted order.
 ///
 /// # Why enumerating here does not reopen §8

@@ -109,6 +109,26 @@ fn a_report_in_verifys_depends_is_refused_over_the_binary() {
     );
 }
 
+/// `#MUTANT report-sequence-body-unread` reddens here (CLOUD-843). `verify` is a
+/// `run` array now, and a report named in any one entry is on the landing path
+/// exactly as it was in the scalar body — so the parsed SEQUENCE has to be read,
+/// not only the string form a scalar body parses to.
+#[test]
+fn a_report_in_one_entry_of_a_sequence_body_is_refused_over_the_binary() {
+    let dir = report_repo(
+        "report-in-sequence",
+        "[tasks.verify]\nrun = [\"mise run target-prune:lap\", \"mise run coverage\"]\n",
+        None,
+    );
+    let output = check(&dir);
+    assert_eq!(output.status.code(), Some(2), "{}", stdout(&output));
+    assert!(
+        stdout(&output).contains("mise.toml"),
+        "the finding points at the manifest: {}",
+        stdout(&output)
+    );
+}
+
 #[test]
 fn a_report_run_by_a_pull_request_workflow_is_refused() {
     let dir = report_repo(

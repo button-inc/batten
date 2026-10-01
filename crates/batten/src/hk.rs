@@ -125,7 +125,8 @@ pub const PLAN_FLAGS: &[&str] = &["--all", "--plan", "--json"];
 /// comparison from a shell that does not set it reads as drift.
 ///
 /// Measured on this repository's own `ci` job (CLOUD-947), which sets
-/// `HK_SKIP_STEPS: test:bats,batten-check` so those two run in their own lanes:
+/// `HK_SKIP_STEPS: test:bats,batten-check` so those two ran in their own lanes
+/// (the first retired under CLOUD-843):
 /// `hk drift` there reported both steps restatused on two surfaces and refused,
 /// over an artifact and a config that had not moved.
 ///
@@ -311,8 +312,20 @@ pub fn project(value: &serde_json::Value) -> Look<Surface> {
     ) else {
         return Look::CouldNotLook;
     };
-    let Some(profiles) = string_list(value.get("profiles")) else {
-        return Look::CouldNotLook;
+    // ABSENT IS THE EMPTY LIST HERE, and only here. The pinned runner omits the
+    // `profiles` key when no profile is enabled — measured on hk 1.56.1 under
+    // `--profile '!slow'` — rather than printing `[]`, so reading absence as
+    // could-not-look left every fast-tier plan unacquired and the two-tier gate
+    // silent on exactly the plan it exists to compare. A PRESENT key that is not a
+    // list of strings is still refused.
+    let profiles = match value.get("profiles") {
+        None => Vec::new(),
+        present => {
+            let Some(profiles) = string_list(present) else {
+                return Look::CouldNotLook;
+            };
+            profiles
+        }
     };
     let Some(groups) = groups_in(value.get("groups")) else {
         return Look::CouldNotLook;
@@ -578,14 +591,31 @@ fn version(root: &Path) -> Look<String> {
     }
 }
 
-/// Ask the pinned binary for one surface's plan.
-fn plan(root: &Path, surface: &[&str]) -> Look<serde_json::Value> {
+/// A query's profiles as the runner's own words, `--profile <p>` each.
+// THE PROFILE WORDS REACH THE RUNNER (CLOUD-843): dropped, the fast plan is the
+// full plan, the slow tier reads empty, and `tier list empty` refuses a
+// correctly wired gate.
+//MUTANT-SUITE crates/batten/tests/it/hook_profile.rs
+//MUTANT profile-words-dropped|s@^    for profile in profiles {$@    for profile in profiles.iter().take(0) {@|this_repositorys_two_tier_gate_is_wired_today
+fn profile_words(profiles: &[String]) -> Vec<String> {
+    let mut words = Vec::with_capacity(profiles.len() * 2);
+    for profile in profiles {
+        words.push(String::from("--profile"));
+        words.push(profile.clone());
+    }
+    words
+}
+
+/// Ask the pinned binary for one surface's plan, with any extra words the
+/// declared query adds (its `--profile` pairs).
+fn plan(root: &Path, surface: &[&str], extra: &[String]) -> Look<serde_json::Value> {
     #[expect(
         clippy::disallowed_types,
         reason = "stays: the contract IS the pinned binary's own answer, so acquiring it runs that binary — the classification, not an accident of it (CLOUD-947)"
     )]
     let spawned = std::process::Command::new(TOOL)
         .args(surface)
+        .args(extra)
         .args(PLAN_FLAGS)
         .current_dir(root)
         // See [`CALLER_SKIP`]: the contract is the config's plan, and this
@@ -625,7 +655,7 @@ pub fn resolve(root: &Path) -> Look<Contract> {
     };
     let mut surfaces = Vec::with_capacity(SURFACES.len());
     for argv in SURFACES {
-        let Look::Is(value) = plan(root, argv) else {
+        let Look::Is(value) = plan(root, argv, &[]) else {
             return Look::CouldNotLook;
         };
         let Look::Is(surface) = project(&value) else {
@@ -684,6 +714,16 @@ pub struct PlanQuery {
     /// Profiles whose presence makes the plan unusable for this consumer.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub prohibited_profiles: Vec<String>,
+    /// Profiles to ask the runner about, each passed as `--profile <p>`
+    /// (CLOUD-843).
+    ///
+    /// **The runner's own grammar, including its negation** (`!slow`), so a
+    /// consumer can ask what the gate plans with a tier switched OFF — the only
+    /// reading that shows which steps declare that tier, since a step excluded
+    /// for a missing profile is by construction a step that declared it. The
+    /// answer stays hk's: this passes the words and parses nothing.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub profile: Vec<String>,
 }
 
 impl PlanQuery {
@@ -722,6 +762,16 @@ pub struct PlannedStep {
     /// for a missing profile and one excluded by a glob miss are different
     /// findings, and the kind is the only field that separates them.
     pub reason_kind: Option<String>,
+    /// EVERY reason's kind, in the runner's order (CLOUD-843).
+    ///
+    /// `reason_kind` answers "why this status", which is the first reason's.
+    /// A question about MEMBERSHIP — did this step declare the tier the plan
+    /// switched off — is answered by any reason, and the retired `jq` join asked
+    /// it that way (`any(.reasons[]?; .kind == "profile_exclude")`). Reading
+    /// only the first would drop a step whose runner listed another reason
+    /// ahead of the profile out of the tier, silently.
+    #[serde(default)]
+    pub reason_kinds: Vec<String>,
     /// Position in the plan.
     pub order_index: u64,
     /// The parallel group it belongs to.
@@ -783,13 +833,23 @@ pub fn planned_steps(value: &serde_json::Value) -> Look<Vec<PlannedStep>> {
         ) else {
             return Look::CouldNotLook;
         };
-        let (Some(order_index), Some(parallel_group_id)) = (
-            entry.get("orderIndex").and_then(serde_json::Value::as_u64),
-            entry
-                .get("parallelGroupId")
-                .and_then(serde_json::Value::as_str),
-        ) else {
+        let Some(order_index) = entry.get("orderIndex").and_then(serde_json::Value::as_u64) else {
             return Look::CouldNotLook;
+        };
+        // ABSENT IS NO GROUP, not could-not-look: the pinned runner omits
+        // `parallelGroupId` (and the plan's `groups`) when there is only one step
+        // to schedule — measured on hk 1.56.1 — so a one-step plan was never
+        // acquired and a tier that evaporated down to it read as clean. A PRESENT
+        // id that is not a string is still refused. The contract projection keeps
+        // its own `groups` requirement: this repository's plan always has several.
+        let parallel_group_id = match entry.get("parallelGroupId") {
+            None => "",
+            Some(id) => {
+                let Some(id) = id.as_str() else {
+                    return Look::CouldNotLook;
+                };
+                id
+            }
         };
         steps.push(PlannedStep {
             name: name.to_owned(),
@@ -804,6 +864,7 @@ pub fn planned_steps(value: &serde_json::Value) -> Look<Vec<PlannedStep>> {
                 .and_then(|reason| reason.get("kind"))
                 .and_then(serde_json::Value::as_str)
                 .map(str::to_owned),
+            reason_kinds: reason_kinds(entry),
             order_index,
             parallel_group_id: parallel_group_id.to_owned(),
             // Absent is zero here rather than could-not-look: the runner omits
@@ -818,6 +879,23 @@ pub fn planned_steps(value: &serde_json::Value) -> Look<Vec<PlannedStep>> {
         return Look::CouldNotLook;
     }
     Look::Is(steps)
+}
+
+/// Every reason's KIND token on one plan entry, in the runner's order; a reason
+/// carrying no kind contributes nothing, since a kind is the only field a
+/// decision may read (rule 4).
+//MUTANT later-reasons-dropped|s@^    for reason in reasons {$@    for reason in reasons.iter().take(1) {@|a_step_whose_profile_is_not_its_first_reason_is_still_in_the_tier
+fn reason_kinds(entry: &serde_json::Value) -> Vec<String> {
+    let Some(reasons) = entry.get("reasons").and_then(serde_json::Value::as_array) else {
+        return Vec::new();
+    };
+    let mut kinds = Vec::with_capacity(reasons.len());
+    for reason in reasons {
+        if let Some(kind) = reason.get("kind").and_then(serde_json::Value::as_str) {
+            kinds.push(kind.to_owned());
+        }
+    }
+    kinds
 }
 
 /// The digest binding a plan to the tree it was taken over.
@@ -873,7 +951,8 @@ pub fn acquire(root: &Path, query: &PlanQuery) -> Look<Planned> {
     let Look::Is(fingerprint) = fingerprint(root) else {
         return Look::CouldNotLook;
     };
-    let Look::Is(value) = plan(root, argv) else {
+    let extra = profile_words(&query.profile);
+    let Look::Is(value) = plan(root, argv, &extra) else {
         return Look::CouldNotLook;
     };
     let (Some(hook), Some(run_type)) = (
@@ -882,8 +961,20 @@ pub fn acquire(root: &Path, query: &PlanQuery) -> Look<Planned> {
     ) else {
         return Look::CouldNotLook;
     };
-    let Some(profiles) = string_list(value.get("profiles")) else {
-        return Look::CouldNotLook;
+    // ABSENT IS THE EMPTY LIST HERE, and only here. The pinned runner omits the
+    // `profiles` key when no profile is enabled — measured on hk 1.56.1 under
+    // `--profile '!slow'` — rather than printing `[]`, so reading absence as
+    // could-not-look left every fast-tier plan unacquired and the two-tier gate
+    // silent on exactly the plan it exists to compare. A PRESENT key that is not a
+    // list of strings is still refused.
+    let profiles = match value.get("profiles") {
+        None => Vec::new(),
+        present => {
+            let Some(profiles) = string_list(present) else {
+                return Look::CouldNotLook;
+            };
+            profiles
+        }
     };
     let Look::Is(steps) = planned_steps(&value) else {
         return Look::CouldNotLook;
@@ -894,8 +985,9 @@ pub fn acquire(root: &Path, query: &PlanQuery) -> Look<Planned> {
         profiles,
         invocation: argv
             .iter()
-            .chain(PLAN_FLAGS.iter())
             .map(|word| (*word).to_owned())
+            .chain(extra.iter().cloned())
+            .chain(PLAN_FLAGS.iter().map(|word| (*word).to_owned()))
             .collect(),
         tool_version,
         // ABSENT rather than could-not-look: a repository that has not committed
@@ -1523,9 +1615,13 @@ mod tests {
         assert_eq!(project(&empty), Look::CouldNotLook);
     }
 
+    /// `profiles` is not in this list, because the runner omits it when no
+    /// profile is enabled (hk 1.56.1, `--profile '!slow'`): absent is the empty
+    /// list, and a PRESENT key that is not a list of strings is the refusal —
+    /// `a_misshapen_profiles_key_is_could_not_look` below.
     #[test]
     fn a_plan_missing_a_key_is_could_not_look() {
-        for key in ["hook", "runType", "profiles", "groups", "steps"] {
+        for key in ["hook", "runType", "groups", "steps"] {
             let mut broken = plan_document();
             let Some(object) = broken.as_object_mut() else {
                 panic!("the fixture is an object")
@@ -1536,6 +1632,32 @@ mod tests {
                 Look::CouldNotLook,
                 "a plan with no `{key}` cannot be projected"
             );
+        }
+    }
+
+    #[test]
+    fn an_absent_profiles_key_is_no_profile_enabled() {
+        let mut bare = plan_document();
+        let Some(object) = bare.as_object_mut() else {
+            panic!("the fixture is an object")
+        };
+        object.remove("profiles");
+        let Look::Is(surface) = project(&bare) else {
+            panic!("a plan the runner printed with no profile enabled must project")
+        };
+        assert!(surface.profiles.is_empty());
+    }
+
+    #[test]
+    fn a_misshapen_profiles_key_is_could_not_look() {
+        for misshapen in [
+            serde_json::json!("slow"),
+            serde_json::json!([1]),
+            serde_json::json!(null),
+        ] {
+            let mut broken = plan_document();
+            broken["profiles"] = misshapen;
+            assert_eq!(project(&broken), Look::CouldNotLook);
         }
     }
 

@@ -338,10 +338,6 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          # The reader checks out the submodule for the reason its own comment
-          # gives — `crates/batten/tests` carries a suite about that path — so a
-          # writer without it fills a different build's artifacts.
-          submodules: true
           persist-credentials: false
       - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5 (CLOUD-404 retry fix, now a release)
         with:
@@ -351,8 +347,9 @@ jobs:
           version: 2026.9.1
           # What the `musl` job installs, for its stated reason: `tests/cli.rs`
           # materializes fixtures carrying this repository's `batten.toml`, whose
-          # rules spawn hk and jq.
-          install_args: rust hk aqua:jqlang/jq github:nextest-rs/nextest
+          # rules spawn hk and jq; opa for `lint_rego.rs`, which judges the
+          # corpus with the pinned formatter and fails where it is absent.
+          install_args: rust hk aqua:jqlang/jq github:nextest-rs/nextest aqua:open-policy-agent/opa
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         # Read by the compile step below; `ci-local-parity` property 17 holds the
         # `id` and the guard together.
@@ -421,7 +418,7 @@ jobs:
       # Compile only when there is nothing to restore, as every warm job here
       # does. `DOCTOR_TARGETS` must match the reader's or this fills a different
       # target's artifacts.
-      - run: mise run darwin-link ${{ matrix.target }}
+      - run: mise run batten -- ci step --arg-env DOCTOR_TARGETS -- mise run darwin-link --
         if: steps.rust-cache.outputs.cache-hit != 'true'
         env:
           DOCTOR_TARGETS: ${{ matrix.target }}
@@ -568,6 +565,10 @@ jobs:
       pull-requests: write
     env:
       GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}
+      # A BOOLEAN, NEVER THE SECRET: a step's `if:` cannot read `secrets`, so the
+      # guard below reads whether one is set through this, and the value itself
+      # never leaves the secrets context.
+      RELEASE_PLZ_TOKEN_SET: ${{ secrets.RELEASE_PLZ_TOKEN != '' }}
     steps:
       # THE `||` IS A SILENT DOWNGRADE, AND THIS IS WHERE IT STOPS BEING ONE
       # (CLOUD-94). `${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}`
@@ -595,15 +596,13 @@ jobs:
       # here would go stale on a rename and says nothing a fork check does not.
       # The App migration does not retire this guard — a missing
       # APP_ID/APP_PRIVATE_KEY lands in the identical `||`.
-      - name: The release credential must not fall back silently
-        if: github.event.repository.fork != true
-        env:
-          RELEASE_PLZ_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
-        run: |
-          if [ -z "$RELEASE_PLZ_TOKEN" ]; then
-            echo "::error:: RELEASE_PLZ_TOKEN is empty, so every credential below would fall back to the default job token. GitHub fires no workflow events for it, so the tag this cuts would reach no release-artifacts run and publish with no binaries (CLOUD-1789). Set the secret; do not remove this guard." >&2
-            exit 1
-          fi
+      #
+      # The predicate is the step's `if:`, so the body is only the failure: it
+      # runs, and fails, exactly when the secret is empty on the canonical
+      # repository (CLOUD-843). The name is the message a failed run shows.
+      - name: RELEASE_PLZ_TOKEN is empty, so every credential below would fall back to the default job token and the tag would publish with no binaries (CLOUD-1789) - set the secret, do not remove this guard
+        if: github.event.repository.fork != true && env.RELEASE_PLZ_TOKEN_SET != 'true'
+        run: exit 1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
@@ -618,15 +617,21 @@ jobs:
       # release-plz clones the repo into a temp dir; `git fetch origin main` there
       # has no credentials (actions/checkout's auth lives only on the main clone),
       # so it cannot rebase the release branch onto main — the PR is then re-opened
-      # on a stale base and can never fast-forward. A global insteadOf with the
+      # on a stale base and can never fast-forward. An insteadOf carrying the
       # token gives every github.com git operation (including that temp clone) a
-      # credential.
-      - name: Authenticate git to github.com for release-plz's internal clone
-        env:
-          GH_PAT: ${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}
-        run: git config --global url."https://x-access-token:${GH_PAT}@github.com/".insteadOf "https://github.com/"
+      # credential. It travels as `GIT_CONFIG_*` environment on the two steps
+      # that clone, which git reads as configuration, so no step writes a global
+      # config and no later step inherits the credential.
       - run: mise run release
+        env:
+          GIT_CONFIG_COUNT: 1
+          GIT_CONFIG_KEY_0: url.https://x-access-token:${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}@github.com/.insteadOf
+          GIT_CONFIG_VALUE_0: https://github.com/
       - run: mise run release-pr
+        env:
+          GIT_CONFIG_COUNT: 1
+          GIT_CONFIG_KEY_0: url.https://x-access-token:${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}@github.com/.insteadOf
+          GIT_CONFIG_VALUE_0: https://github.com/
       # CLOUD-618. THE TAG IS PUSHED FROM A CLONE THIS CHECKOUT CANNOT SEE, so
       # without this step the resolver below finds nothing and every tracking step
       # skips — green, silent, and wrong.
@@ -645,10 +650,11 @@ jobs:
       # releases from `v0.0.78` to `v0.0.110`.
       #
       # AFTER `release-pr`, NOT BEFORE IT, and that is load-bearing rather than
-      # arbitrary: `[tasks.release-pr]` picks its `--registry-manifest-path`
-      # baseline with `git describe --tags --abbrev=0`, so fetching earlier would
-      # silently move that baseline from the previous tag to the one just pushed.
-      # That is a different change and does not belong in this one.
+      # arbitrary: `release-pr` takes its baseline from the latest release tag
+      # this checkout carries (`release-plz.toml`'s `git_only`, CLOUD-1991), so
+      # fetching earlier would silently move that baseline from the previous tag
+      # to the one just pushed. That is a different change and does not belong
+      # in this one.
       #
       # No `shell:` key, so the default `bash -e {0}` applies and a failed fetch
       # FAILS the step. That is the point: the alternative is a resolver guessing
@@ -662,13 +668,13 @@ jobs:
       # of truth for what shipped — Linear receives a projection, never a second
       # list.
       #
-      # NO `shell:` KEY, deliberately. The default is `bash -e {0}` and an
-      # explicit `shell: bash` would add `-o pipefail`, under which the empty case
-      # — no tag at HEAD, so `grep` exits 1 — would kill the step instead of
-      # yielding the empty string every consumer below is written to handle.
+      # THE EMPTY CASE IS AN EMPTY VALUE, never a failure: no release tag at
+      # HEAD prints nothing, `--capture` writes `tag=` for it, and every consumer
+      # below is written to handle the empty string. `git tag --list` filters to
+      # release tags itself, so there is no pipeline whose status could hide one.
       - name: Resolve the release tag this push shipped
         id: release-tag
-        run: echo "tag=$(git tag --points-at HEAD | grep -E '^v[0-9]' | head -n1)" >>"$GITHUB_OUTPUT"
+        run: mise run batten -- ci step --capture tag -- git tag --points-at HEAD --list v[0-9]*
       # THE SCHEMA IS A RELEASE ASSET, SO A STALE BINARY CAN REASON ABOUT THE
       # WORLD IT IS BEHIND (CLOUD-1572).
       #
@@ -691,7 +697,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.release-tag.outputs.tag }}
-        run: gh release upload "$TAG" schema/batten.schema.json --clobber
+          SCHEMA: schema/batten.schema.json
+        run: mise run batten -- ci step --arg-env TAG --arg-env SCHEMA -- gh release upload --clobber
 
       # An empty secret must FAIL a tagged push, never skip tracking quietly. The
       # silent form is the one that costs a release: the job stays green, the
@@ -702,11 +709,9 @@ jobs:
         if: steps.release-tag.outputs.tag != ''
         env:
           LINEAR_ACCESS_KEY: ${{ secrets.LINEAR_ACCESS_KEY }}
-        run: |
-          if [ -z "$LINEAR_ACCESS_KEY" ]; then
-            echo "::error:: LINEAR_ACCESS_KEY is empty, so this tagged push would ship untracked. Set the secret; do not remove this guard." >&2
-            exit 1
-          fi
+        # An empty key means this tagged push would ship untracked: set the
+        # secret, do not remove this guard.
+        run: mise run batten -- ci step --require-env LINEAR_ACCESS_KEY -- true
       # TWO INVOCATIONS, AND THE SECOND IS NOT OPTIONAL. `sync` records the
       # release object and attaches the `CLOUD-*` issues whose identifiers appear
       # in the tag's commit range. The `batten` pipeline is `type: scheduled`, so
@@ -765,7 +770,16 @@ jobs:
       #
       # Tags are available because the checkout above is fetch-depth 0. A default
       # checkout has none, and every tag would look absent.
+      #
+      # TWO STEPS AND NO SHELL (CLOUD-843). `ci step --summary` fences what
+      # `released` prints into the run summary, `--arg-env` hands it the tag as
+      # one argument, and `--stdin /dev/null` is the refs-only arm: it reports
+      # what the tag shipped and decides nothing, because this job holds no
+      # tracker credential to fetch the payloads the deciding arm needs. The
+      # sweep that decides is `batten board sweep` (CLOUD-825), run from a session
+      # that can read the board. The step's `if:` is the empty-tag branch.
       - name: Report which issues this release shipped
+        if: steps.release-tag.outputs.tag != ''
         env:
           # CLOUD-618 replaced this step's inline `git tag --points-at` copy with
           # the shared output, so the summary and the Linear release record can
@@ -774,26 +788,7 @@ jobs:
           # is zizmor's template-injection finding, and the step above this one
           # already carries the same shape for the same reason.
           TAG: ${{ steps.release-tag.outputs.tag }}
-        run: |
-          tag="$TAG"
-          if [ -z "$tag" ]; then
-            echo "No release tag at HEAD — this push shipped nothing." >>"$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-          {
-            echo "## Issues shipped by $tag"
-            echo
-            echo '```'
-            mise run released "$tag" </dev/null
-            echo '```'
-            echo
-            echo "Move any of these that are still In Review to Done — this is the only"
-            echo "transition that sets Done, and \`mise run done-check\` fails on one set early."
-            echo
-            echo "This is the refs-only arm: it reports what the tag shipped and decides"
-            echo "nothing. It cannot do more from here — a workflow job holds no tracker"
-            echo "credential, so it cannot fetch the payloads the deciding arm needs. The"
-            echo "sweep is \`mise run board-sweep\` (CLOUD-825), run from a session that can"
-            echo "read the board; it hands this same task a payload set, which is what"
-            echo "reaches \`graph-check\` and \`ready-lint\` behind it."
-          } >>"$GITHUB_STEP_SUMMARY"
+        run: mise run batten -- ci step --summary "Issues this release tag shipped - move any still In Review to Done, the only transition that sets Done, which done-check refuses early" --stdin /dev/null --arg-env TAG -- mise run released
+      - name: Say that this push shipped nothing
+        if: steps.release-tag.outputs.tag == ''
+        run: mise run batten -- ci step --summary "No release tag at HEAD - this push shipped nothing" -- true

@@ -45,8 +45,8 @@
 # spelling as `mise run release-assets-check`.
 #
 # The two query flags below exist so `mise run install-check` can compare this
-# script against `mise-tasks/dist.sh` by RUNNING both rather than by scraping
-# either. Archive naming is `dist`'s to own; this file must agree with it, and
+# script against `batten dist`'s naming rule by RUNNING this script rather than
+# by scraping it. Archive naming is `dist`'s to own; this file must agree with it, and
 # `--asset-name` is how that agreement is made computable.
 set -eu
 
@@ -80,7 +80,7 @@ BIN=batten
 # whole release matrix: `x86_64-pc-windows-gnu` ships a .zip for a platform with
 # no POSIX shell, and is served by `cargo binstall` or mise instead. That
 # exclusion is stated here once — `install-check` derives it from
-# `mise-tasks/dist.sh`'s own `is_windows_target` rather than restating it, so the
+# `batten dist`'s own `is_windows_target` rather than restating it, so the
 # two cannot drift.
 supported_targets() {
 	cat <<-'EOF'
@@ -123,9 +123,9 @@ die() {
 	exit "$1"
 }
 
-# The asset name for a (version, target). `mise-tasks/dist.sh` is the authority for
+# The asset name for a (version, target). `batten dist` is the authority for
 # this shape; the agreement between the two is asserted by `install-check`,
-# which runs both rather than reading either.
+# which runs this script and asks the engine's rule rather than reading either.
 asset_name() {
 	case "$2" in
 	*-windows-*) printf '%s-v%s-%s.zip\n' "$BIN" "$1" "$2" ;;
@@ -663,7 +663,7 @@ main() {
 		die 1 "cannot replace $dest/$BIN."
 	}
 
-	# KEY=VALUE, the same shape `mise-tasks/dist.sh` emits, so a caller can consume
+	# KEY=VALUE, the same shape `batten dist` emits, so a caller can consume
 	# this without parsing prose.
 	echo "installed=$dest/$BIN"
 	echo "version=$tag"

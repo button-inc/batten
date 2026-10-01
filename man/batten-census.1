@@ -1,0 +1,20 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-census 1  batten 
+.SH NAME
+batten\-census \- Count what this repository declares it is retiring, as pointers
+.SH SYNOPSIS
+\fBbatten census\fR [\fB\-h\fR|\fB\-\-help\fR] <\fIsubcommands\fR>
+.SH DESCRIPTION
+Count what this repository declares it is retiring, as pointers
+.SH OPTIONS
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.SH SUBCOMMANDS
+.TP
+batten\-census\-shell(1)
+Count every shell line in the declared manifests, workflows and shell files, as pointers
+.TP
+batten\-census\-help(1)
+Print this message or the help of the given subcommand(s)

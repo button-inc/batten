@@ -17,8 +17,10 @@
 //! the validator stays a command on PATH — §9's prior-art disposition. What moves
 //! in here is not the run but the RECORDING of what it said: a `mise` task or a CI
 //! step runs the tool, reduces its answer to `<name> <token>` lines, and pipes
-//! them here. Nothing in this module spawns anything, and
-//! `evaluator-io-check` stays the gate on that.
+//! them here. Nothing in this module spawns a VALIDATOR, and
+//! `evaluator-io-check` stays the gate on that. The one child it can start is
+//! `cargo metadata`, for a graph-reading family asked to `resolve` its own graph
+//! (CLOUD-1991), and that goes through the placed `exec` adapter.
 //!
 //! # The caller cannot supply a digest, because there is no argument for one
 //!
@@ -142,6 +144,95 @@ fn declared(overrides: &Overrides) -> Result<Vec<ToolQuery>> {
 /// line carries no token. An internal error when the store cannot be written.
 pub fn run_tool(id: &str, overrides: &Overrides) -> Result<ExitCode> {
     let text = verdict_lines()?;
+    store_tool(id, &text, overrides)?;
+    Ok(ExitCode::Success)
+}
+
+/// Record a declared tool row's verdict out of `key=value` measurement lines
+/// (CLOUD-1991, retiring `[tasks.record-perf]`'s `awk` reduction).
+///
+/// `pick` is `<name-key>=<token-key>`: every stdin line that OPENS with
+/// `<name-key>=` and carries both fields becomes the record line
+/// `<name> <token>`, and every other line is skipped — a measurement's own
+/// output shape, reduced by the writer rather than by a pipeline in front of
+/// it. The keys are the caller's, so no producer's field names reach the core.
+///
+/// # Errors
+///
+/// A [`UsageError`] for a `pick` that is not two non-empty keys, and every
+/// refusal [`run_tool`] makes. An internal error (could-not-look, exit `3`) when
+/// no line reduces: an empty record would be a PRESENT record carrying no name,
+/// which a module reads as a finding whose cause is the producer.
+pub fn run_tool_picked(id: &str, pick: &str, overrides: &Overrides) -> Result<ExitCode> {
+    let Some((name, token)) = pick
+        .split_once('=')
+        .filter(|(name, token)| !name.is_empty() && !token.is_empty())
+    else {
+        return Err(UsageError::raise(format!(
+            "record tool {id}: `--pick {pick}` is not `<name-key>=<token-key>`"
+        )));
+    };
+    let text = picked(&verdict_lines()?, name, token);
+    if text.is_empty() {
+        return Err(anyhow::anyhow!(
+            "record tool {id}: could not look: no line on stdin opens with `{name}=` and carries `{token}=`; nothing recorded"
+        ));
+    }
+    store_tool(id, &text, overrides)?;
+    Ok(ExitCode::Success)
+}
+
+/// The `<name> <token>` lines `pick` reduces `raw` to, in order.
+///
+/// A line counts only when it OPENS with `<name>=` — so a paired record
+/// (`arm=… path=…`) is not taken for an absolute one — and carries a non-empty
+/// value for both keys. A key given twice on one line reads its LAST value, the
+/// reading the retired `awk` program made.
+fn picked(raw: &str, name: &str, token: &str) -> String {
+    let opener = format!("{name}=");
+    let mut reduced = String::new();
+    for line in raw.lines().filter(|line| line.starts_with(&opener)) {
+        let mut named = None;
+        let mut value = None;
+        for (key, field) in line
+            .split_whitespace()
+            .filter_map(|field| field.split_once('='))
+        {
+            if key == name {
+                named = Some(field);
+            }
+            if key == token {
+                value = Some(field);
+            }
+        }
+        if let (Some(named), Some(value)) = (named, value)
+            && !named.is_empty()
+            && !value.is_empty()
+        {
+            reduced.push_str(named);
+            reduced.push(' ');
+            reduced.push_str(value);
+            reduced.push('\n');
+        }
+    }
+    reduced
+}
+
+// The reduction's mutation rows, each caught by the compiled case it names in
+// the perf tier, which drives the real writer and reads the record back.
+//MUTANT-SUITE crates/batten/tests/it/perf_assert.rs
+//MUTANT pick-any-line|s@^    for line in raw.lines().filter(|line| line.starts_with(&opener)) {$@    for line in raw.lines() {@|a_picked_measurement_skips_a_line_that_does_not_open_with_the_name
+//MUTANT pick-empty-recorded|s@^    if text.is_empty() {$@    if false {@|a_picked_measurement_with_no_record_line_is_could_not_look
+
+/// Record `text` under the declared tool row `id`: [`run_tool`]'s tail, shared with
+/// [`run_tool_picked`] and with an in-process producer, so a verb that reduced a
+/// tool's output itself (CLOUD-843's `sbom --record`) keys the record the same way
+/// the piped doors do — one composition of the key, in one place.
+///
+/// # Errors
+///
+/// As [`run_tool`].
+pub(crate) fn store_tool(id: &str, text: &str, overrides: &Overrides) -> Result<()> {
     let rows = declared(overrides)?;
     let Some(row) = rows.into_iter().find(|row| row.id == id) else {
         return Err(UsageError::raise(format!(
@@ -164,17 +255,242 @@ pub fn run_tool(id: &str, overrides: &Overrides) -> Result<ExitCode> {
 
     let key = tools::record_key(&row, &tools::digest(&bytes));
     let git_dir = git::git_dir(Path::new("."))?;
-    store(&tools::record_path(&git_dir, &key), validated(&text)?)?;
+    store(&tools::record_path(&git_dir, &key), validated(text)?)
+}
+
+/// Run a declared tool row's `run` argv and record the exit code it answered
+/// under the row's key (CLOUD-843, retiring `[tasks.record-verdicts]`' validator
+/// arms).
+///
+/// **The exit code is the whole reduction**, `exit <n>`, and what it MEANS is the
+/// consumer's module: the engine does not know which validator treats `1` as a
+/// finding and which as a crash, and a vocabulary of `clean`/`error` spelled here
+/// would be one consumer's reading built into every consumer's binary. The
+/// tool's own report goes to the terminal through [`crate::exec::run_in`] and
+/// never into the record (rule 4).
+///
+/// The key is composed over the bytes of the row's `input` as they stood when
+/// the tool was started, with the same two functions [`run_tool`] and the reader
+/// use.
+///
+/// **A question already answered `0` is not asked again** — see
+/// [`already_clean`] — which is the step receipt the retired body kept, so a
+/// `verify` that follows the hk steps over the same bytes pays nothing twice.
+///
+/// # Errors
+///
+/// A [`UsageError`] when no row declares `id`, when it declares no `run`, or when
+/// its `input` will not read. Could-not-look — the argv would not start, or ended
+/// without an exit code — records NOTHING and answers [`ExitCode::Internal`]: a
+/// validator that never ran has no verdict, and recording one would be the
+/// could-not-look-as-a-finding shape this family exists to keep apart.
+pub fn run_validate(id: &str, overrides: &Overrides, err: &mut dyn Write) -> Result<ExitCode> {
+    let rows = declared(overrides)?;
+    let Some(row) = rows.into_iter().find(|row| row.id == id) else {
+        return Err(UsageError::raise(format!(
+            "no `[[rule.tools]]` row declares the id `{id}`, so there is no key to record under"
+        )));
+    };
+    if row.run.is_empty() {
+        return Err(UsageError::raise(format!(
+            "the `[[rule.tools]]` row `{id}` declares no `run` argv, so there is nothing to validate with"
+        )));
+    }
+    let root = git::repo_root(Path::new("."))?;
+    let Ok(bytes) = std::fs::read(root.join(&row.input)) else {
+        return Err(UsageError::raise(format!(
+            "cannot read `{}`, the input row `{id}` names, so no verdict can be keyed to it",
+            row.input
+        )));
+    };
+    let key = tools::record_key(&row, &tools::digest(&bytes));
+    let git_dir = git::git_dir(Path::new("."))?;
+    let record = tools::record_path(&git_dir, &key);
+    let receipt = git_dir.join(RECEIPTS).join(&key);
+    let asked = tools::digest(row.run.join("\0").as_bytes());
+    if already_clean(&record, &receipt, &asked) {
+        writeln!(
+            err,
+            "record validate {id}: these bytes already answered 0 to this argv; not asked again"
+        )?;
+        return Ok(ExitCode::Success);
+    }
+    let code = match crate::exec::run_in(&root, &row.run) {
+        Ok(ExitCode::Success) => Some(0),
+        Ok(_) => None,
+        Err(error) => error
+            .downcast_ref::<crate::error::Passthrough>()
+            .map(|passthrough| passthrough.0),
+    };
+    let Some(code) = code else {
+        writeln!(
+            err,
+            "batten: record validate {id}: could not look: the declared `run` did not start or gave no exit code"
+        )?;
+        return Ok(ExitCode::Internal);
+    };
+    // THE RECEIPT GOES FIRST AND COMES BACK LAST, `forge::conditional_get`'s
+    // commit-point order: an interruption between the two writes leaves no
+    // receipt, which costs one re-run and never replays a stale answer.
+    if let Err(error) = std::fs::remove_file(&receipt)
+        && error.kind() != std::io::ErrorKind::NotFound
+    {
+        return Err(error).context("remove a stale validate receipt");
+    }
+    store(&record, &format!("exit {code}\n"))?;
+    if code == 0 {
+        store(&receipt, &asked)?;
+    }
     Ok(ExitCode::Success)
+}
+
+/// Where `record validate` keeps the argv each clean record was answered to,
+/// under the git directory and beside — never inside — the tool store, so the
+/// reader's keyed lookup can never mistake one for a verdict.
+const RECEIPTS: &str = "batten-tools-asked";
+
+/// Whether this exact question — these bytes, this tool at this version, this
+/// argv — was already answered `0` (CLOUD-843, carrying CLOUD-1891's step
+/// receipt out of `[tasks.record-verdicts]`).
+///
+/// **The retired receipt's two rules, kept.** It skipped a validator only when
+/// the inputs it read were unchanged, and it wrote a receipt only over a CLEAN
+/// store, because "a network flake reads the same as a bad config" and an error
+/// held under a receipt "replays forever until an input moves". So a record
+/// that is anything but `exit 0` is always asked again, and so is one whose
+/// argv moved: the key carries the tool, its pinned version and the input's
+/// digest, and the receipt carries the argv the key does not.
+///
+/// `0` here is not a verdict. What a code MEANS is the consumer's module; this
+/// only declines to re-ask a question whose last answer was the process
+/// convention for success, which is the one answer a flake cannot forge.
+//
+// THE RECEIPT'S DISCRIMINATION, over the compiled binary: skipping the check
+// re-runs a validator whose inputs did not move, and an unkeyed argv replays an
+// answer to a question nobody is asking.
+//MUTANT receipt-never-read|s@^    if already_clean(.record, .receipt, .asked) {$@    if false {@|a_clean_answer_over_the_same_bytes_and_argv_is_not_asked_again
+//MUTANT receipt-ignores-argv|s@^    let same_argv = .*$@    let same_argv = std::fs::metadata(receipt).is_ok();@|a_moved_argv_is_asked_again_over_the_same_bytes
+fn already_clean(record: &Path, receipt: &Path, asked: &str) -> bool {
+    let answered_zero = std::fs::read_to_string(record).is_ok_and(|body| body == "exit 0\n");
+    let same_argv = std::fs::read_to_string(receipt).is_ok_and(|held| held == asked);
+    answered_zero && same_argv
+}
+
+/// The forge's latest ANSWERED conclusion per check name, as `forge-verdict`
+/// records spell them (CLOUD-1707, CLOUD-1965).
+///
+/// **Latest per name, by `checks green`'s own choice of it**: a re-run adds a
+/// second run under the same name, and the reader folds a record into a map, so
+/// the line that wins must be chosen here by recency rather than by listing
+/// order. The choice is [`crate::checks_green::winner`] itself — `completed_at`
+/// first, then `started_at`, then `id`, with a completed-but-unanswered twin
+/// never burying a verdict it raced — rather than a second ordering beside it: a
+/// key led by `started_at` picks the other run of an overlapping pair
+/// (CLOUD-1662), and the record and `checks green` would then speak for one name
+/// with two conclusions.
+///
+/// **Answered only, and membership is the caller's declared set**: a `skipped`
+/// draft-era check, a `cancelled` fan-in and a pending run all judged nothing,
+/// and recording any of them as a conclusion is how this producer twice wrote a
+/// could-not-look as a verdict. The set is the one `checks green` reads, so the
+/// two agree on what counts as an answer AND on which run is the latest.
+//
+// THE FORGE ARM'S DISCRIMINATION (CLOUD-843), each over the compiled binary and
+// the fixture forge: an unanswered conclusion recorded as a grading
+// (CLOUD-1965), a run other than `checks green`'s latest winning, a record
+// written before the fan-in answers, and a spaced name mangled into the record.
+//MUTANT-SUITE crates/batten/tests/it/record_verdicts.rs
+//MUTANT unanswered-recorded|s@^    answered.contains(.conclusion)$@    true@|an_unanswered_conclusion_is_not_recorded_as_a_grading
+//MUTANT listing-order-wins|s@^        if let Some(run) = crate::checks_green::winner(.group, .owned) {$@        if let Some(run) = group.last().copied() {@|the_latest_run_per_name_wins_by_completion_then_start
+//MUTANT fanin-ungated|s@^        && !graded.contains_key(fanin)$@        \&\& false@|nothing_is_written_until_the_fan_in_has_answered
+//MUTANT spaced-name-kept|s@^        if name.chars().any(char::is_whitespace) {$@        if false {@|a_name_with_whitespace_is_dropped_and_counted_never_mangled
+#[must_use]
+pub fn graded(runs: &[crate::checks_green::Run], answered: &[&str]) -> BTreeMap<String, String> {
+    let owned: Vec<String> = answered.iter().map(|word| (*word).to_owned()).collect();
+    let mut grouped: BTreeMap<&str, Vec<&crate::checks_green::Run>> = BTreeMap::new();
+    for run in runs {
+        grouped.entry(run.name.as_str()).or_default().push(run);
+    }
+    let mut latest: BTreeMap<&str, &crate::checks_green::Run> = BTreeMap::new();
+    for (name, group) in grouped {
+        if let Some(run) = crate::checks_green::winner(&group, &owned) {
+            latest.insert(name, run);
+        }
+    }
+    latest
+        .into_iter()
+        .filter(|(_, run)| answers(answered, &run.conclusion))
+        .map(|(name, run)| (name.to_owned(), run.conclusion.clone()))
+        .collect()
+}
+
+/// Whether `conclusion` is one of the declared answers.
+fn answers(answered: &[&str], conclusion: &str) -> bool {
+    answered.contains(&conclusion)
+}
+
+/// The record body [`graded`] conclusions spell, or `None` while the fan-in has
+/// not answered — and how many names could not be spelled.
+///
+/// **The fan-in gates writing AT ALL.** It is the check every other required job
+/// feeds, so until it has an answered conclusion the forge has not finished
+/// judging the commit, and a partial record would be a record PRESENT without a
+/// passing fan-in — which `forge-verdict-required` refuses, on local `verify` and
+/// inside CI's own run alike. Absent is could-not-look, the correct reading for
+/// both.
+///
+/// **A name with whitespace has no spelling here** and is dropped rather than
+/// mangled: the record splits `<name> <token>` on the first whitespace run, so
+/// `action (ubuntu-latest) success` would record the name `action`.
+#[must_use]
+pub fn forge_body(
+    graded: &BTreeMap<String, String>,
+    fanin: Option<&str>,
+) -> Option<(String, usize)> {
+    if let Some(fanin) = fanin
+        && !graded.contains_key(fanin)
+    {
+        return None;
+    }
+    let mut body = String::new();
+    let mut dropped = 0_usize;
+    for (name, conclusion) in graded {
+        if name.chars().any(char::is_whitespace) {
+            dropped += 1;
+            continue;
+        }
+        body.push_str(name);
+        body.push(' ');
+        body.push_str(conclusion);
+        body.push('\n');
+    }
+    Some((body, dropped))
 }
 
 /// Record the forge's verdicts for one commit.
 ///
+/// Piped `<check> <conclusion>` lines by default. With `fetch`, the check-runs
+/// are read from the forge in process through [`crate::pr_watch::read`] — the
+/// same paginated client `pr watch` and `land` read — reduced by [`graded`] over
+/// `answered`, and gated on `fanin` by [`forge_body`] (CLOUD-843, retiring the
+/// forge arm of `[tasks.record-verdicts]`).
+///
 /// # Errors
 ///
-/// A [`UsageError`] when `reference` resolves to no commit, or when a piped line
-/// carries no token. An internal error when the store cannot be written.
-pub fn run_forge(reference: &str, _overrides: &Overrides) -> Result<ExitCode> {
+/// A [`UsageError`] when `reference` resolves to no commit, when a piped line
+/// carries no token, or when `--fanin`/`--answered` are given without `--fetch`
+/// or `--fetch` without `--answered`. An internal error when the store cannot be
+/// written. A forge that could not be read is could-not-look: nothing is
+/// recorded and the answer is [`ExitCode::Internal`].
+pub fn run_forge(
+    reference: &str,
+    fetch: Option<&Fetch>,
+    _overrides: &Overrides,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    if let Some(fetch) = fetch {
+        return run_forge_fetch(reference, fetch, err);
+    }
     let text = verdict_lines()?;
     // RESOLVED, never taken literally, because the reader keys on a sha and a
     // producer naturally holds a ref. Recording under the ref's own spelling would
@@ -187,6 +503,114 @@ pub fn run_forge(reference: &str, _overrides: &Overrides) -> Result<ExitCode> {
 
     let git_dir = git::git_dir(Path::new("."))?;
     store(&forge::record_path(&git_dir, &sha), validated(&text)?)?;
+    Ok(ExitCode::Success)
+}
+
+/// What `record forge --fetch` reads the forge with.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Fetch {
+    /// The check whose answered conclusion gates writing at all, if any.
+    pub fanin: Option<String>,
+    /// The conclusions that constitute an answer.
+    pub answered: Vec<String>,
+}
+
+/// Hold `record forge`'s three flags to one of its two shapes.
+///
+/// # Errors
+///
+/// A [`UsageError`] for a qualifier without `--fetch`, a `--fetch` with no
+/// `--answered` set — every conclusion would then be a non-answer and the record
+/// could never be written — or an empty `--fanin`, which names no check.
+fn forge_fetch(
+    fetch: bool,
+    fanin: Option<String>,
+    answered: Option<&str>,
+) -> Result<Option<Fetch>> {
+    if !fetch {
+        if fanin.is_some() || answered.is_some() {
+            return Err(UsageError::raise(String::from(
+                "record forge: `--fanin` and `--answered` qualify a `--fetch` reading; a piped verdict was already reduced",
+            )));
+        }
+        return Ok(None);
+    }
+    let answered: Vec<String> = answered
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|word| !word.is_empty())
+        .map(str::to_owned)
+        .collect();
+    if answered.is_empty() {
+        return Err(UsageError::raise(String::from(
+            "record forge --fetch: `--answered` names no conclusion, so no check-run could ever count as graded",
+        )));
+    }
+    if fanin.as_deref().is_some_and(|name| name.trim().is_empty()) {
+        return Err(UsageError::raise(String::from(
+            "record forge --fetch: `--fanin` is empty, so it names no check to gate on",
+        )));
+    }
+    Ok(Some(Fetch { fanin, answered }))
+}
+
+/// `record forge --fetch`: read the commit's check-runs from the forge and
+/// record their answered conclusions, gated on the fan-in.
+fn run_forge_fetch(reference: &str, fetch: &Fetch, err: &mut dyn Write) -> Result<ExitCode> {
+    let root = Path::new(".");
+    let Some(sha) = git::resolve_ref(root, reference)? else {
+        return Err(UsageError::raise(format!(
+            "`{reference}` resolves to no commit, so there is no sha to key this verdict to"
+        )));
+    };
+    let Some(repo) = crate::repo_slug(root) else {
+        writeln!(
+            err,
+            "batten: record forge: could not look: no forge remote names the repository"
+        )?;
+        return Ok(ExitCode::Internal);
+    };
+    let config = crate::pr_watch::Config {
+        sha: sha.clone(),
+        repo,
+        interval: crate::pr_watch::DEFAULT_INTERVAL,
+        progress: None,
+    };
+    let Some(answer) = crate::pr_watch::read(&config, None) else {
+        writeln!(
+            err,
+            "batten: record forge: could not look: the forge did not answer for the check-runs"
+        )?;
+        return Ok(ExitCode::Internal);
+    };
+    if !answer.is_reading() {
+        writeln!(
+            err,
+            "batten: record forge: could not look: the forge answered status {} for the check-runs",
+            answer.status
+        )?;
+        return Ok(ExitCode::Internal);
+    }
+    let runs = crate::pr_watch::runs_from_body(&answer.body);
+    let answered: Vec<&str> = fetch.answered.iter().map(String::as_str).collect();
+    let conclusions = graded(&runs, &answered);
+    let Some((body, dropped)) = forge_body(&conclusions, fetch.fanin.as_deref()) else {
+        writeln!(
+            err,
+            "record forge: the fan-in has no answered conclusion yet; nothing recorded"
+        )?;
+        return Ok(ExitCode::Success);
+    };
+    // A COUNT, never the names (rule 4), so the limit stays visible.
+    if dropped > 0 {
+        writeln!(
+            err,
+            "record forge: {dropped} check-run name(s) carry whitespace and have no spelling in a forge record; dropped"
+        )?;
+    }
+    let git_dir = git::git_dir(root)?;
+    store(&forge::record_path(&git_dir, &sha), &body)?;
     Ok(ExitCode::Success)
 }
 
@@ -256,7 +680,19 @@ pub fn run(
     match command {
         crate::cli::RecordCommand::Suites { write } => run_suites(write, out, err),
         crate::cli::RecordCommand::Tool { id } => run_tool(&id, overrides),
-        crate::cli::RecordCommand::Forge { reference } => run_forge(&reference, overrides),
+        crate::cli::RecordCommand::ToolPicked { id, pick } => {
+            run_tool_picked(&id, &pick, overrides)
+        }
+        crate::cli::RecordCommand::Validate { id } => run_validate(&id, overrides, err),
+        crate::cli::RecordCommand::Forge {
+            reference,
+            fetch,
+            fanin,
+            answered,
+        } => {
+            let fetch = forge_fetch(fetch, fanin, answered.as_deref())?;
+            run_forge(&reference, fetch.as_ref(), overrides, err)
+        }
         crate::cli::RecordCommand::Plan => run_plan(),
         crate::cli::RecordCommand::Closes => run_closes(overrides),
         crate::cli::RecordCommand::Named { family } => run_named(&family),
@@ -267,6 +703,55 @@ pub fn run(
         crate::cli::RecordCommand::Journal { family } => run_journal(&family),
         crate::cli::RecordCommand::Show { family, key } => run_keyed_show(&family, &key, out),
         crate::cli::RecordCommand::Fold { family } => run_journal_show(&family, out),
+        crate::cli::RecordCommand::Query { id, inputs } => {
+            crate::forge_query::run(&id, &inputs, overrides, err)
+        }
+        crate::cli::RecordCommand::Probe {
+            family,
+            inputs,
+            command,
+        } => run_probe(&family, &inputs, &command, overrides, out),
+        // `record decide` writes here and then DECIDES, which needs the check
+        // runner and the output mode this dispatcher is not handed; the binary's
+        // own dispatch takes the arm before it reaches this one.
+        crate::cli::RecordCommand::Decide { .. } => Err(UsageError::raise(
+            "record decide: reached without its decision; it is dispatched by the binary",
+        )),
+        crate::cli::RecordCommand::Divergence {
+            ci_workflow,
+            land_workflow,
+            since,
+            max_pages,
+        } => crate::ci_signal::run_divergence(
+            ci_workflow.as_deref(),
+            land_workflow.as_deref(),
+            since.as_deref(),
+            max_pages.as_deref(),
+            out,
+            err,
+        ),
+        crate::cli::RecordCommand::Nonverdict {
+            window,
+            required_checks,
+            exclude_jobs,
+            verdict_steps,
+        } => crate::ci_signal::run_nonverdict(
+            window.as_deref(),
+            &required_checks,
+            &exclude_jobs,
+            &verdict_steps,
+            out,
+            err,
+        ),
+        crate::cli::RecordCommand::Census { command } => crate::reclaim::run(command, out, err),
+        crate::cli::RecordCommand::Release { tag, manifest } => {
+            crate::release::run_record(tag.as_deref(), &manifest, err)
+        }
+        crate::cli::RecordCommand::Attestation {
+            tag,
+            binary,
+            verifier,
+        } => crate::attestation::run(tag.as_deref(), &binary, verifier.as_deref(), err),
     }
 }
 
@@ -577,6 +1062,13 @@ const KEYED_STORE: &str = "batten-records";
 /// Where the append-and-fold family stores its shards.
 const JOURNAL_STORE: &str = "batten-journals";
 
+/// A journal family's store directory under `git_dir` — the one spelling of
+/// where `record journal` / `record fold` keep a family, so an in-process
+/// writer (the reclaim census) lands where `record fold` reads.
+pub(crate) fn journal_store(git_dir: &Path, family: &str) -> PathBuf {
+    git_dir.join(JOURNAL_STORE).join(family)
+}
+
 /// A family name that cannot escape its store.
 ///
 /// **A path component, checked rather than trusted.** The family and the key both
@@ -584,7 +1076,7 @@ const JOURNAL_STORE: &str = "batten-journals";
 /// record outside the store the reader looks in — which is not a security
 /// boundary here so much as a silent miss: the write succeeds, the read finds
 /// nothing, and the gate reads clean.
-fn safe_component(what: &str, value: &str) -> Result<String> {
+pub(crate) fn safe_component(what: &str, value: &str) -> Result<String> {
     let clean = value.trim();
     if clean.is_empty()
         || clean == "."
@@ -600,7 +1092,12 @@ fn safe_component(what: &str, value: &str) -> Result<String> {
     Ok(clean.to_owned())
 }
 
-/// The non-document inputs a family was handed, as a key/value map.
+/// The `--input <key>=<value>` tokens a `record` leaf was handed, as a map.
+///
+/// Shared by `record derive` and `record query` (CLOUD-843) rather than parsed
+/// twice: both take the same flag spelling, and two parsers of one token shape
+/// are two answers to whether `a=b=c` binds `a` — `verb` only names the leaf in
+/// the refusal.
 ///
 /// # Errors
 ///
@@ -608,22 +1105,22 @@ fn safe_component(what: &str, value: &str) -> Result<String> {
 /// key given twice — a repeated key is a caller who believes both values are in
 /// effect, and silently keeping one would run the reading on an input nobody
 /// asked for.
-fn derive_inputs(inputs: &[String]) -> Result<BTreeMap<String, String>> {
+pub(crate) fn inputs_of(verb: &str, inputs: &[String]) -> Result<BTreeMap<String, String>> {
     let mut parsed = BTreeMap::new();
     for token in inputs {
         let Some((key, value)) = token.split_once('=') else {
             return Err(UsageError::raise(format!(
-                "record derive: `--input {token}` is not `<key>=<value>`"
+                "{verb}: `--input {token}` is not `<key>=<value>`"
             )));
         };
         if key.is_empty() {
-            return Err(UsageError::raise(
-                "record derive: an input with no key names nothing".to_owned(),
-            ));
+            return Err(UsageError::raise(format!(
+                "{verb}: an input with no key names nothing"
+            )));
         }
         if parsed.insert(key.to_owned(), value.to_owned()).is_some() {
             return Err(UsageError::raise(format!(
-                "record derive: input `{key}` was given twice"
+                "{verb}: input `{key}` was given twice"
             )));
         }
     }
@@ -696,8 +1193,8 @@ fn declared_pattern(
 /// nothing when the document will not parse, because an absent record means
 /// "the producer did not run" and must not be spelled the same way as a graph
 /// that resolved and found nothing.
-fn graph_on_stdin(family: &str) -> Result<crate::cargo_graph::Graph> {
-    let raw = verdict_lines()?;
+fn graph_on_stdin(family: &str, document: Option<&str>) -> Result<crate::cargo_graph::Graph> {
+    let raw = document_or_stdin(document)?;
     let meta: serde_json::Value = serde_json::from_str(&raw).map_err(|_| {
         UsageError::raise(format!(
             "record derive {family}: stdin is not a `cargo metadata` document"
@@ -706,45 +1203,322 @@ fn graph_on_stdin(family: &str) -> Result<crate::cargo_graph::Graph> {
     Ok(crate::cargo_graph::Graph::from_metadata(&meta))
 }
 
+/// The `cargo metadata` document a graph-reading family reads: on stdin, or
+/// resolved here when the caller names `resolve` (CLOUD-1991).
+///
+/// # Why the resolution moved in
+///
+/// The two producer tasks were a `cargo metadata` spawn piped into this verb,
+/// behind a fixture switch — shell whose only job was to connect one argv's
+/// stdout to another's stdin. `resolve=<triple>` resolves the graph for that
+/// platform (`--filter-platform`), and `resolve=any` for every platform, which
+/// are the two questions the two families ask. Omitting it keeps the stdin
+/// route, which is how a recorded graph still reaches the walk.
+///
+/// ALWAYS `--locked`: the question is about the COMMITTED resolution, and a
+/// producer allowed to update the lockfile answers "what would upstream give me
+/// today". The spawn is `crate::exec::piped_argv`'s, the placed adapter, so
+/// the inventory does not grow; `cargo` is the toolchain's own name and names no
+/// consumer.
+///
+/// COULD-NOT-LOOK IS AN INTERNAL ERROR (exit `3`), never an empty graph: a
+/// resolution that failed or answered something unparseable writes nothing, so
+/// the module reads an absent record as "the producer did not run".
+fn graph_for(
+    inputs: &BTreeMap<String, String>,
+    family: &str,
+    document: Option<&str>,
+) -> Result<crate::cargo_graph::Graph> {
+    let Some(platform) = inputs.get("resolve") else {
+        return graph_on_stdin(family, document);
+    };
+    if platform.trim().is_empty() {
+        return Err(UsageError::raise(format!(
+            "record derive {family}: `--input resolve=` names no platform; a target triple, or `any`"
+        )));
+    }
+    let mut argv: Vec<String> = ["cargo", "metadata", "--locked", "--format-version", "1"]
+        .iter()
+        .map(|word| (*word).to_owned())
+        .collect();
+    if platform != "any" {
+        argv.push("--filter-platform".to_owned());
+        argv.push(platform.clone());
+    }
+    let Some((0, raw)) = crate::exec::piped_argv(
+        Path::new("."),
+        &argv,
+        "",
+        crate::exec::Diagnostics::Drop,
+        &[],
+    ) else {
+        return Err(anyhow::anyhow!(
+            "record derive {family}: could not look: `cargo metadata` did not resolve the graph; nothing recorded"
+        ));
+    };
+    let meta: serde_json::Value = serde_json::from_str(&raw).map_err(|_| {
+        anyhow::anyhow!(
+            "record derive {family}: could not look: `cargo metadata` answered no document; nothing recorded"
+        )
+    })?;
+    Ok(crate::cargo_graph::Graph::from_metadata(&meta))
+}
+
+// The resolution's mutation rows. Each is caught by the compiled case it names,
+// which drives a scratch crate through the real `cargo`.
+//MUTANT-SUITE crates/batten/tests/it/evaluator_closure.rs
+//MUTANT resolve-unlocked|s@\["cargo", "metadata", "--locked", "--format-version", "1"\]@["cargo", "metadata", "--format-version", "1"]@|a_resolution_that_would_rewrite_the_lockfile_is_could_not_look
+//MUTANT resolve-ignored|s@^    let Some(platform) = inputs.get("resolve") else {$@    let Some(platform) = inputs.get("no-such-input") else {@|the_engine_resolves_a_locked_crate_itself
+
 /// Derive one family's record from its input and write it.
 ///
 /// The engine applies the READING; the effects that produced the input stay in
-/// the producer task (house-style §5), so nothing here spawns.
+/// the producer task (house-style §5), with one exception a family opts into:
+/// `--input resolve=` asks a graph-reading family to resolve its own
+/// `cargo metadata` document (CLOUD-1991).
 ///
 /// # Errors
 ///
 /// A [`UsageError`] for an unknown family, a malformed or missing input, a
 /// family that is not a single path component, a repository with no branch to
 /// key on, or a tree that is not a repository; an internal error when the store
-/// cannot be written.
+/// cannot be written, or when a requested resolution could not look.
 pub fn run_derive(
     family: &str,
     inputs: &[String],
     overrides: &Overrides,
     out: &mut dyn std::io::Write,
 ) -> Result<ExitCode> {
-    let inputs = derive_inputs(inputs)?;
-    let derived = derive_reading(family, &inputs, overrides)?;
+    let inputs = inputs_of("record derive", inputs)?;
+    // THE TRACKER FAMILIES ARE CLEARED BEFORE ANY OF THEM IS READ (CLOUD-843).
+    // One preset row decides over all five, so a record another tracker question
+    // left on this branch would otherwise answer beside this one — and a reading
+    // that refuses would leave its own previous record answering as current.
+    // Clearing first makes both absences true: the store holds this answer or
+    // nothing.
+    // `released` is the preset's sixth family and is cleared with the five, for
+    // the same reason: one row decides over all of them.
+    if crate::tracker_reading::is_family(family) || family == crate::released::FAMILY {
+        for sibling in crate::tracker_reading::FAMILIES
+            .iter()
+            .chain(&[crate::released::FAMILY])
+        {
+            clear_named("record derive", sibling)?;
+        }
+    }
+    let derived = derive_reading(family, &inputs, overrides, None)?;
     let family = safe_component("family", family)?;
     store_derived(&family, &derived)?;
     emit_derived(&derived, out)
+}
+
+/// The input a reading consumes: the document a caller already holds, or stdin.
+///
+/// `record derive` reads its document from stdin because the producer that
+/// wrote it ran in a task. `record probe` runs the producer itself and hands its
+/// output here instead, so the reading is one function over either source.
+fn document_or_stdin(document: Option<&str>) -> Result<String> {
+    match document {
+        Some(given) => Ok(given.to_owned()),
+        None => verdict_lines(),
+    }
+}
+
+/// The input key a probe's exit status is supplied under.
+const PROBE_STATUS: &str = "status";
+
+/// Run a probe command and derive a family's reading from what it answered
+/// (CLOUD-843, retiring `[tasks.evaluator-io-record]`).
+///
+/// [`run_derive`] with the producer moved IN: the command's exit status is the
+/// `status` input and its combined output is the document, so a caller needs no
+/// temporary file, no captured status and no pipe. The reading, the store and
+/// the emitted tokens are `record derive`'s own.
+///
+/// # Errors
+///
+/// A [`UsageError`] for a `status` the caller tried to supply (it is the
+/// command's to answer), an empty command, an unknown family or a malformed
+/// input; an internal error for a command that will not start or a store that
+/// cannot be written. NOTHING is written on any error, so a stale record is
+/// never refreshed by a probe that did not run.
+pub fn run_probe(
+    family: &str,
+    inputs: &[String],
+    command: &[String],
+    overrides: &Overrides,
+    out: &mut dyn std::io::Write,
+) -> Result<ExitCode> {
+    let mut inputs = inputs_of("record probe", inputs)?;
+    if inputs.contains_key(PROBE_STATUS) {
+        return Err(UsageError::raise(
+            "record probe: `status` is the command's own exit, never an input",
+        ));
+    }
+    let family = safe_component("family", family)?;
+    let ran = crate::probe::run(command)?;
+    inputs.insert(PROBE_STATUS.to_owned(), ran.status.to_string());
+    let derived = derive_reading(&family, &inputs, overrides, Some(&ran.log))?;
+    store_derived(&family, &derived)?;
+    emit_derived(&derived, out)
+}
+
+/// The family whose reading is a session's judged turn (CLOUD-843, retiring
+/// `[tasks.finding-sink-check]`).
+///
+/// Its own name here for the reason every family arm below carries one: the
+/// reading is this engine's, and the consumer names the rule that decides.
+const TURN_FAMILY: &str = "turn-writes";
+
+/// What `record decide` wrote before the caller decides over it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Decision {
+    /// The reading is recorded.
+    Recorded,
+    /// The reading is recorded and holds no turn, so there is nothing to judge.
+    Empty,
+    /// Nothing could be read, and any stale record is removed, so the module is
+    /// silent. The reason is a fixed pointer, never a byte of the input.
+    Abstained(&'static str),
+}
+
+/// Derive one family's reading and write it WITHOUT emitting it, for a caller
+/// that decides over it next (`record decide`).
+///
+/// **Silent on stdout, unlike `record derive`, and that is the point.** A
+/// `stop` handler's stdout on a passing exit is advisory text the host shows,
+/// so a reading echoed there would be said on every turn. The decision's own
+/// output is the only thing this verb says.
+///
+/// **Transient**: the dispatcher removes the record once the decision is made
+/// ([`clear_named`]), so a reading never answers a later `check` or `enforce`.
+///
+/// # Errors
+///
+/// As [`run_derive`]: a [`UsageError`] for an unknown family, a malformed input
+/// or a tree with no branch to key on; an internal error for an unwritable store.
+pub fn decide_record(family: &str, inputs: &[String], overrides: &Overrides) -> Result<Decision> {
+    let inputs = inputs_of("record decide", inputs)?;
+    let family = safe_component("family", family)?;
+    if family != TURN_FAMILY {
+        let derived = derive_reading(&family, &inputs, overrides, None)?;
+        store_named("record decide", &family, &derived)?;
+        return Ok(Decision::Recorded);
+    }
+    // OUTSIDE A CHECKOUT THERE IS NO STORE TO DECIDE OVER, and a `stop` handler
+    // runs wherever the session stands: could-not-look, which the handler door
+    // reads as a pass, never a usage error said on every turn.
+    if git::git_dir(Path::new(".")).is_err() {
+        return Ok(Decision::Abstained(
+            "not a git repository, so no record store",
+        ));
+    }
+    match turn_reading(&family, &inputs, overrides)? {
+        None => {
+            clear_named("record decide", &family)?;
+            Ok(Decision::Abstained("no readable transcript"))
+        }
+        Some((body, turns)) => {
+            store_named("record decide", &family, &body)?;
+            Ok(if turns == 0 {
+                Decision::Empty
+            } else {
+                Decision::Recorded
+            })
+        }
+    }
+}
+
+/// The judged turn's reading, or `None` where the transcript could not be read.
+///
+/// Every input names a consumer fact (non-negotiable rule 1): `citation` and
+/// `key` are `[[pattern]]` row ids — the second must carry a `key` group —
+/// `fields` the comma-separated input fields a direct call names its row by,
+/// `receipt` the read-receipt family, and `field` the 1-indexed field of it that
+/// holds the row's column.
+///
+/// # Errors
+///
+/// A [`UsageError`] for a missing, unaccepted or malformed input, or an
+/// undeclared pattern row.
+fn turn_reading(
+    family: &str,
+    inputs: &BTreeMap<String, String>,
+    overrides: &Overrides,
+) -> Result<Option<(String, usize)>> {
+    only_these_inputs(
+        inputs,
+        family,
+        &["citation", "key", "fields", "receipt", "field"],
+    )?;
+    let config = resolve::resolve(Path::new("."), overrides)?;
+    let citation = declared_pattern(
+        &config.patterns,
+        family,
+        required_input(inputs, family, "citation")?,
+    )?;
+    let key_row = required_input(inputs, family, "key")?;
+    let key = declared_pattern(&config.patterns, family, key_row)?;
+    if !key.capture_names().any(|name| name == Some("key")) {
+        return Err(UsageError::raise(format!(
+            "record derive {family}: `[[pattern]]` row `{key_row}` has no `key` group"
+        )));
+    }
+    let fields: Vec<String> = required_input(inputs, family, "fields")?
+        .split(',')
+        .map(str::trim)
+        .filter(|field| !field.is_empty())
+        .map(str::to_owned)
+        .collect();
+    let receipt = safe_component("receipt", required_input(inputs, family, "receipt")?)?;
+    let raw = required_input(inputs, family, "field")?;
+    let field: usize = raw.parse().ok().filter(|field| *field > 0).ok_or_else(|| {
+        UsageError::raise(format!(
+            "record derive {family}: field `{raw}` is not a 1-indexed field number"
+        ))
+    })?;
+    let stdin = verdict_lines()?;
+    let Some(path) = crate::turn::transcript_of(&stdin) else {
+        return Ok(None);
+    };
+    let Ok(body) = std::fs::read_to_string(&path) else {
+        return Ok(None);
+    };
+    let vocabulary = crate::turn::Vocabulary {
+        citation: &citation,
+        key: &key,
+        fields: &fields,
+    };
+    let crate::turn::Reading::Read(turn) = crate::turn::read(&body, &vocabulary) else {
+        return Ok(None);
+    };
+    let git_dir = git::git_dir(Path::new(".")).ok();
+    let rendered = crate::turn::render(&turn, &|row: &str| {
+        crate::turn::column(git_dir.as_deref(), &receipt, field, row)
+    });
+    Ok(Some((rendered, turn.turns)))
 }
 
 /// The READING for one family, from its declared inputs and whatever is on stdin.
 ///
 /// Split out of [`run_derive`] because the two halves grow at different rates:
 /// this one gains an arm per producer, and the store-and-emit tail below it is
-/// fixed. Nothing here spawns — house-style §5 keeps a producer's effects in the
-/// task, and what arrives is already a reading's worth of input.
+/// fixed. Nothing here spawns except the one resolution `graph_for` owns —
+/// house-style §5 keeps a producer's effects in the task, and what arrives is
+/// otherwise already a reading's worth of input.
 ///
 /// # Errors
 ///
 /// A [`UsageError`] for an unknown family, or a malformed, missing or
 /// unaccepted input.
+///
+/// `document` is the input a family reads from stdin when the caller already
+/// holds it — `record probe`'s captured output — and `None` reads stdin.
 fn derive_reading(
     family: &str,
     inputs: &BTreeMap<String, String>,
     overrides: &Overrides,
+    document: Option<&str>,
 ) -> Result<String> {
     let derived = match family {
         "evaluator-io-probe" => {
@@ -756,27 +1530,27 @@ fn derive_reading(
                 ))
             })?;
             let test = required_input(inputs, family, "test")?;
-            let log = verdict_lines()?;
+            let log = document_or_stdin(document)?;
             format!(
                 "{}\n",
                 crate::probe_verdict::verdict(status, &log, test).token()
             )
         }
         "signing-posture" => {
-            only_these_inputs(
-                inputs,
-                family,
-                &["signingkey", "ssh-program", "gpgsign", "signed"],
-            )?;
-            let signingkey = required_input(inputs, family, "signingkey")?;
-            let program = required_input(inputs, family, "ssh-program")?;
-            // THE TWO ABSENT-MEANS-NOTHING INPUTS. A producer that found no
-            // conflict and no signed commit still sends both, empty; treating an
-            // omitted input as "no" here would make "the producer did not look"
-            // and "the producer looked and found none" the same record.
-            let conflict = required_input(inputs, family, "gpgsign")? == "conflict";
-            let signed = required_input(inputs, family, "signed")?;
-            crate::signer_posture::record(signingkey, program, conflict, signed)
+            // NO INPUTS SINCE CLOUD-843. The task body that ran `git config` and
+            // handed the two values over retired; the engine reads them through
+            // gix itself, which is a read of this checkout rather than a spawn, so
+            // house-style §5's reason for keeping the gathering outside is gone.
+            // An input here is a caller still speaking the retired contract, and
+            // it is refused rather than silently ignored.
+            only_these_inputs(inputs, family, &[])?;
+            let posture = crate::signer_posture::read(Path::new(".")).map_err(|_| {
+                UsageError::raise(format!(
+                    "record derive {family}: not a git repository, so the signer posture could \
+                     not be read. Nothing recorded."
+                ))
+            })?;
+            crate::signer_posture::record(&posture)
         }
         "transcript-corpus" => {
             only_these_inputs(inputs, family, &["root", "threshold", "exclude"])?;
@@ -806,8 +1580,40 @@ fn derive_reading(
             let sessions = crate::transcript::census(root, exclude);
             format!("sessions {sessions}\nthreshold {threshold}\n")
         }
-        "evaluator-closure" => evaluator_closure_reading(inputs, family, overrides)?,
-        "macos-link" => macos_link_reading(inputs, family, overrides)?,
+        "evaluator-closure" => evaluator_closure_reading(inputs, family, overrides, document)?,
+        "macos-link" => macos_link_reading(inputs, family, overrides, document)?,
+        // The `tracker-hygiene` preset's five readings (CLOUD-843). The module
+        // owns the reading; this arm hands it the consumer's pattern table, the
+        // checkout it walks, and stdin — nothing here spawns.
+        // CLOUD-843's retirement of `[tasks.released]`: the tag's range and the
+        // composed board gate, read in process. A terminal on stdin is the
+        // retired body's `[[ -t 0 ]]`: no payloads, so the tag's refs alone.
+        crate::released::FAMILY => {
+            let config = resolve::resolve(Path::new("."), overrides)?;
+            let stdin = if std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+                String::new()
+            } else {
+                verdict_lines()?
+            };
+            crate::released::reading(
+                inputs,
+                config.board.as_ref(),
+                &config.patterns,
+                Path::new("."),
+                &stdin,
+            )?
+        }
+        tracker if crate::tracker_reading::is_family(tracker) => {
+            let config = resolve::resolve(Path::new("."), overrides)?;
+            let stdin = verdict_lines()?;
+            crate::tracker_reading::reading(
+                tracker,
+                inputs,
+                &config.patterns,
+                Path::new("."),
+                &stdin,
+            )?
+        }
         // AN UNKNOWN FAMILY IS A USAGE ERROR, never a record written under a name
         // nothing reads. A producer whose family was renamed would otherwise go on
         // writing happily into a key no module has looked at since.
@@ -833,13 +1639,15 @@ fn derive_reading(
 /// # Errors
 ///
 /// A [`UsageError`] for a missing or unaccepted input, an undeclared
-/// `[[pattern]]` row, or stdin that is not a `cargo metadata` document.
+/// `[[pattern]]` row, or stdin that is not a `cargo metadata` document; an
+/// internal error when a `resolve` the engine ran could not look.
 fn evaluator_closure_reading(
     inputs: &BTreeMap<String, String>,
     family: &str,
     overrides: &Overrides,
+    document: Option<&str>,
 ) -> Result<String> {
-    only_these_inputs(inputs, family, &["roots", "bears"])?;
+    only_these_inputs(inputs, family, &["roots", "bears", "resolve"])?;
     let config = resolve::resolve(Path::new("."), overrides)?;
     let evaluator = declared_pattern(
         &config.patterns,
@@ -851,7 +1659,7 @@ fn evaluator_closure_reading(
         family,
         required_input(inputs, family, "bears")?,
     )?;
-    let graph = graph_on_stdin(family)?;
+    let graph = graph_for(inputs, family, document)?;
 
     // THE SCOPE IS THE EVALUATOR'S SUB-CLOSURE, NOT THE WORKSPACE'S, and
     // that was measured before it was written because the obvious
@@ -896,13 +1704,15 @@ fn evaluator_closure_reading(
 /// # Errors
 ///
 /// A [`UsageError`] for an unaccepted input, an undeclared `[[pattern]]` row, or
-/// stdin that is not a `cargo metadata` document.
+/// stdin that is not a `cargo metadata` document; an internal error when a
+/// `resolve` the engine ran could not look.
 fn macos_link_reading(
     inputs: &BTreeMap<String, String>,
     family: &str,
     overrides: &Overrides,
+    document: Option<&str>,
 ) -> Result<String> {
-    only_these_inputs(inputs, family, &["framework", "vendored"])?;
+    only_these_inputs(inputs, family, &["framework", "vendored", "resolve"])?;
     let config = resolve::resolve(Path::new("."), overrides)?;
     let framework = declared_pattern(
         &config.patterns,
@@ -914,7 +1724,7 @@ fn macos_link_reading(
         family,
         required_input(inputs, family, "vendored")?,
     )?;
-    let graph = graph_on_stdin(family)?;
+    let graph = graph_for(inputs, family, document)?;
 
     // THE WALK STARTS AT THE WORKSPACE MEMBERS, because the question is
     // about everything this tree builds — unlike `evaluator-closure`,
@@ -986,10 +1796,11 @@ fn emit_derived(derived: &str, out: &mut dyn std::io::Write) -> Result<ExitCode>
     // `record named` prints nothing and this does: `named` cannot tell a verdict
     // from a payload, because it never looked at one.
     //
-    // It matters beyond symmetry. A producer task composes: `evaluator-io-record`
-    // branches on `probe failed` to mint its step receipt, and a verb that
-    // swallowed its own answer would force the task to read the record store back
-    // — a second reader of a path `recorder::record_path` is the one authority on.
+    // It matters beyond symmetry. A producer task composes: a caller that
+    // branches on the reading it just derived reads it here, and a verb that
+    // swallowed its own answer would force the caller to read the record store
+    // back — a second reader of a path `recorder::record_path` is the one
+    // authority on.
     out.write_all(derived.as_bytes())?;
     Ok(ExitCode::Success)
 }
@@ -1027,24 +1838,98 @@ fn emit_derived(derived: &str, out: &mut dyn std::io::Write) -> Result<ExitCode>
 pub fn run_named(family: &str) -> Result<ExitCode> {
     let family = safe_component("family", family)?;
     let raw = verdict_lines()?;
+    store_named("record named", &family, &raw)?;
+    Ok(ExitCode::Success)
+}
+
+/// The path one named family's record lives at for this branch.
+///
+/// **The one composition of that path for every verb that writes the policy
+/// store** (CLOUD-843). `record named` read its body from stdin and composed the
+/// path inline; `record query` computes its body in process, and a second inline
+/// composition would be a second spelling of the key the projection reads — the
+/// drift CLOUD-1300's claim partition exists to close.
+///
+/// # Errors
+///
+/// A [`UsageError`] naming `verb` when this is not a git repository or HEAD
+/// resolves to no commit, so there is nothing to key on.
+fn named_path(verb: &str, family: &str) -> Result<PathBuf> {
     let root = Path::new(".");
     let git_dir = git::git_dir(root).map_err(|_| {
-        UsageError::raise(
-            "record named: not a git repository, so there is nothing to key on".to_owned(),
-        )
+        UsageError::raise(format!(
+            "{verb}: not a git repository, so there is nothing to key on"
+        ))
     })?;
     let Ok(branch) = git::record_key(root) else {
-        return Err(UsageError::raise(
-            "record named: HEAD resolves to no commit, so there is nothing to key the record on"
-                .to_owned(),
-        ));
+        return Err(UsageError::raise(format!(
+            "{verb}: HEAD resolves to no commit, so there is nothing to key the record on"
+        )));
     };
     let claim = claim_of(&git_dir, &branch);
-    store(
-        &crate::recorder::record_path(&git_dir, &family, &branch, claim.as_deref()),
-        &raw,
-    )?;
-    Ok(ExitCode::Success)
+    Ok(crate::recorder::record_path(
+        &git_dir,
+        family,
+        &branch,
+        claim.as_deref(),
+    ))
+}
+
+/// Write one named family's record for this branch, whole.
+///
+/// `family` must already be a single path component; the callers hold it to
+/// [`safe_component`] first, which is where a bad name is a usage error.
+///
+/// # Errors
+///
+/// As [`named_path`], and an internal error when the store cannot be written.
+pub(crate) fn store_named(verb: &str, family: &str, body: &str) -> Result<()> {
+    store(&named_path(verb, family)?, body)
+}
+
+/// Read one named family's record for this branch back, or `None` where none
+/// was written (CLOUD-843).
+///
+/// **The same path [`store_named`] writes**, so a producer that fans out over an
+/// earlier producer's rows reads exactly what the projection hands a module —
+/// never a second composition of the key.
+///
+/// # Errors
+///
+/// As [`named_path`], and an internal error when a record exists and will not
+/// read — which is not the same answer as one that is absent.
+pub(crate) fn load_named(verb: &str, family: &str) -> Result<Option<String>> {
+    let path = named_path(verb, family)?;
+    match std::fs::read_to_string(&path) {
+        Ok(body) => Ok(Some(body)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error).with_context(|| format!("read the record {}", path.display())),
+    }
+}
+
+/// Remove one named family's record for this branch, where one exists.
+///
+/// **For a producer that could not look** (CLOUD-843). An absent record is how
+/// could-not-look reads on the policy surface, and a producer that failed while
+/// a previous run's record still sat in the store would leave that record
+/// answering as the current reading — a module cannot tell a stale window from
+/// a fresh one, because the clock is not on its surface. Removing it makes the
+/// absence true. A record that was never there is already absent, so that is not
+/// an error.
+///
+/// # Errors
+///
+/// As [`named_path`], and an internal error when an existing record cannot be
+/// removed.
+pub(crate) fn clear_named(verb: &str, family: &str) -> Result<()> {
+    let path = named_path(verb, family)?;
+    match std::fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => {
+            Err(error).with_context(|| format!("remove the stale record {}", path.display()))
+        }
+    }
 }
 
 /// The record path for one (family, key) pair.
@@ -1059,6 +1944,26 @@ fn keyed_path(git_dir: &Path, family: &str, key: &str) -> PathBuf {
         .join(KEYED_STORE)
         .join(family)
         .join(crate::tools::digest(key.as_bytes()))
+}
+
+/// One keyed record's value, or `None` where it is absent or unreadable.
+///
+/// **The in-process door onto the store `record keyed`/`record show` spell on
+/// argv** (CLOUD-843). `batten step` keys its receipts here, and composing the
+/// path a second time beside [`keyed_path`] would be a second spelling of the key
+/// the two verbs share. `family` must already be a single path component.
+pub(crate) fn keyed_read(git_dir: &Path, family: &str, key: &str) -> Option<String> {
+    std::fs::read_to_string(keyed_path(git_dir, family, key)).ok()
+}
+
+/// Write one keyed record's value whole, through the same store as
+/// [`run_keyed`]. `family` must already be a single path component.
+///
+/// # Errors
+///
+/// An internal error when the store cannot be written.
+pub(crate) fn keyed_write(git_dir: &Path, family: &str, key: &str, value: &str) -> Result<()> {
+    store(&keyed_path(git_dir, family, key), value)
 }
 
 /// Put one value into the keyed family, read from stdin.
@@ -1107,7 +2012,7 @@ pub fn run_journal(family: &str) -> Result<ExitCode> {
         )));
     }
     let git_dir = git::git_dir(Path::new("."))?;
-    let store_dir = git_dir.join(JOURNAL_STORE).join(&family);
+    let store_dir = journal_store(&git_dir, &family);
     let shard = crate::journal::shard_id(Path::new("."));
     crate::journal::append_line(&store_dir, &shard, record)?;
     Ok(ExitCode::Success)
@@ -1150,7 +2055,7 @@ pub fn run_keyed_show(family: &str, key: &str, out: &mut dyn std::io::Write) -> 
 pub fn run_journal_show(family: &str, out: &mut dyn std::io::Write) -> Result<ExitCode> {
     let family = safe_component("family", family)?;
     let git_dir = git::git_dir(Path::new("."))?;
-    let store_dir = git_dir.join(JOURNAL_STORE).join(&family);
+    let store_dir = journal_store(&git_dir, &family);
     match crate::journal::fold_lines(&store_dir) {
         crate::journal::Fold::Nothing => writeln!(out, "nothing")?,
         crate::journal::Fold::Records(records) => {

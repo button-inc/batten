@@ -35,11 +35,22 @@
 //! half unreadable, which is the condition being named. Each test carries its
 //! own reason, so the refusal says which one.
 //!
-//! # The two config values arrive as arguments
+//! # The two config values are read here, in process
 //!
-//! This module never runs `git config`. The producer task reads both values and
-//! hands them over, which is what keeps the reading testable against a scratch
-//! path and keeps a developer's real configuration out of the tests.
+//! [`read`] resolves `user.signingkey` and `gpg.ssh.program` through
+//! [`crate::git::config_value`] — gix, across every scope git consults, no spawn —
+//! and hands them to [`posture`], which stays a pure function of the two strings
+//! so a scratch path exercises every arm without a repository. The producer task
+//! that used to run `git config` and pass the values in retired under CLOUD-843.
+//!
+//! # What is NOT here any more
+//!
+//! The record once also carried `config conflict` and one `signed <sha>` line per
+//! signed commit in range, both gathered in a task body. Those are git facts the
+//! engine now projects directly (`input.tree["git-config"]`,
+//! `input.tree["commit-meta"]`), and deciding the conflict between scopes is the
+//! `supply-chain` preset's (`signer-is-verifiable.rego`). What stays is the one
+//! reading a module cannot make: whether a PATH names a readable, non-empty file.
 
 use std::path::Path;
 
@@ -123,33 +134,78 @@ pub fn posture(signingkey: &str, program: &str) -> Posture {
     Posture::Verifiable
 }
 
-/// Compose the whole `signing-posture` record.
+/// Read the signing configuration git resolves for `dir`, and classify it.
 ///
-/// THE RECORD'S SHAPE IS A READING TOO, and it used to be a sequence of `printf`
-/// calls in a task body that nothing tested — including the truncation of each
-/// sha to eight characters, which is the difference between a pointer and a
-/// payload (rule 4). The producer still gathers the facts, because `git config`
-/// and `git rev-list` are spawns and house-style §5 keeps those outside the
-/// engine; what they MEAN is composed here.
+/// Effective values, across every scope, exactly as `git config --get` read
+/// them in the retired producer: the question is what WILL sign, and a key
+/// inherited from a wider scope signs as surely as a local one. An unset key is
+/// the empty string, which [`posture`] reads as nothing being signed with it.
 ///
-/// `signed` arrives as full shas, comma-separated, and empty entries are
-/// dropped — a producer whose range held no commits sends an empty string
-/// rather than omitting the input, and an empty sha is not a signed commit.
+/// # Errors
+///
+/// Raises when `dir` is not inside a repository this binary can open — the
+/// could-not-look the retired producer spelled as exit 2 and wrote nothing on.
+pub fn read(dir: &Path) -> anyhow::Result<Posture> {
+    let signingkey = crate::git::config_value(dir, "user.signingkey")?.unwrap_or_default();
+    let program = crate::git::config_value(dir, "gpg.ssh.program")?.unwrap_or_default();
+    Ok(posture(&signingkey, &program))
+}
+
+/// What [`repair`] did to this checkout.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Repair {
+    /// The signer is verifiable, so signing was left on.
+    LeftOn,
+    /// The signer is broken for this reason, and signing is now off locally.
+    Disabled(&'static str),
+}
+
+impl Repair {
+    /// The one-line report, pointer-only: the reason, never the key or signer.
+    #[must_use]
+    pub fn line(&self) -> String {
+        match self {
+            Repair::LeftOn => "attribution: signer is verifiable, leaving signing on".to_owned(),
+            Repair::Disabled(why) => {
+                format!("attribution: signing disabled in this checkout — {why}")
+            }
+        }
+    }
+}
+
+/// Switch signing off in THIS checkout when its signer cannot be verified or
+/// reproduced (CLOUD-669), retiring `[tasks.signing-posture-repair]`.
+///
+/// It fires ONLY against the broken configuration: disabling signing
+/// unconditionally would also switch off a correctly configured signer, which is
+/// the outcome CLOUD-591 is working toward. Local-only, never global — the
+/// narrowing is [`crate::git::set_config_local`]'s own — and local beats global,
+/// which matters because a launcher may rewrite global every session.
+///
+/// # Errors
+///
+/// Raises when `dir` is not a repository, or when the local write fails; a
+/// repair that did not happen is never reported as one.
+pub fn repair(dir: &Path) -> anyhow::Result<Repair> {
+    match read(dir)? {
+        Posture::Verifiable => Ok(Repair::LeftOn),
+        Posture::Broken(why) => {
+            crate::git::set_config_local(dir, "commit.gpgsign", "false")?;
+            Ok(Repair::Disabled(why))
+        }
+    }
+}
+
+/// The whole `signing-posture` record: one `signer <token>` line.
+///
+/// ONE LINE, and the narrowing is the CLOUD-843 split rather than a loss: the
+/// conflict and the signed commits are facts the module reads straight off the
+/// tree now, so the record carries only what no projection can — the file tests
+/// behind the key. Pointer-only (rule 4): the token names WHY, never the key.
 #[must_use]
-pub fn record(signingkey: &str, program: &str, gpgsign_conflict: bool, signed: &str) -> String {
-    let mut lines = format!("signer {}\n", posture(signingkey, program).token());
-    if gpgsign_conflict {
-        lines.push_str("config conflict\n");
-    }
-    for sha in signed.split(',').filter(|sha| !sha.is_empty()) {
-        // EIGHT CHARACTERS, and it is the pointer-only law rather than brevity:
-        // the record names WHICH commit without carrying the object.
-        let short: String = sha.chars().take(8).collect();
-        lines.push_str("signed ");
-        lines.push_str(&short);
-        lines.push('\n');
-    }
-    lines
+pub fn record(posture: &Posture) -> String {
+    format!("signer {}\n", posture.token())
 }
 
 #[cfg(test)]
@@ -261,62 +317,20 @@ mod tests {
     // --- the record's own shape -------------------------------------------
 
     #[test]
-    fn a_healthy_signer_with_nothing_else_is_one_line() {
+    fn a_healthy_signer_is_one_verifiable_line() {
         assert_eq!(
-            super::record(LITERAL, SIGNER, false, ""),
+            super::record(&posture(LITERAL, SIGNER)),
             "signer verifiable\n"
         );
     }
 
+    /// One line whatever the reason, and the reason never carries the key.
     #[test]
-    fn the_conflict_line_appears_only_when_the_producer_found_one() {
-        assert_eq!(
-            super::record(LITERAL, SIGNER, true, ""),
-            "signer verifiable\nconfig conflict\n"
-        );
-    }
-
-    /// EIGHT CHARACTERS, and the full sha never reaches the record.
-    #[test]
-    fn a_signed_commit_is_named_by_its_short_sha_and_never_the_full_one() {
-        let full = "1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d";
-        let written = super::record(LITERAL, SIGNER, false, full);
-        assert_eq!(written, "signer verifiable\nsigned 1a2b3c4d\n");
-        assert!(!written.contains(full), "{written}");
-    }
-
-    #[test]
-    fn several_signed_commits_each_get_a_line_in_the_order_given() {
-        let written = super::record(LITERAL, SIGNER, false, "aaaaaaaabbbb,ccccccccdddd");
-        assert_eq!(
-            written,
-            "signer verifiable\nsigned aaaaaaaa\nsigned cccccccc\n"
-        );
-    }
-
-    /// AN EMPTY LIST IS NOT ONE EMPTY ENTRY. A producer whose range held no
-    /// commits sends `signed=`, and a `signed ` line with nothing after it would
-    /// be a commit the module then tried to name.
-    #[test]
-    fn an_empty_signed_list_contributes_no_line() {
-        assert_eq!(
-            super::record(LITERAL, SIGNER, false, ""),
-            "signer verifiable\n"
-        );
-        assert_eq!(
-            super::record(LITERAL, SIGNER, false, ",,"),
-            "signer verifiable\n"
-        );
-    }
-
-    /// A sha SHORTER than eight characters is taken whole rather than panicking
-    /// on a byte index the string does not have.
-    #[test]
-    fn a_short_sha_is_taken_whole() {
-        assert_eq!(
-            super::record(LITERAL, SIGNER, false, "abc"),
-            "signer verifiable\nsigned abc\n"
-        );
+    fn a_broken_signer_is_one_line_naming_why_and_never_the_key() {
+        let written = super::record(&posture("/nowhere/at/all/key.pub", SIGNER));
+        assert!(written.starts_with("signer broken "), "{written}");
+        assert_eq!(written.lines().count(), 1, "{written}");
+        assert!(!written.contains("/nowhere/at/all"), "{written}");
     }
 
     /// Pointer-only (rule 4): the reason never carries the key or the signer.

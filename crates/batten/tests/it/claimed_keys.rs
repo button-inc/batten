@@ -11,16 +11,19 @@
 // behaviour in a governed suite rather than a fixture precondition, which
 // `shell edit refused` will not admit and should not.
 //
-// `ported` RATHER THAN `withdrawn`, and the subject is why: `in-progress-drain.sh`
-// SURVIVES, so `died()` cannot hold and a withdrawal has nothing to name. The
-// property each case carried — the gather answering with rows, and the gather
-// refusing a truncated or empty forge answer — is asserted here over the leaf
-// itself, which is what makes this a port.
+// `ported` RATHER THAN `withdrawn`, and the subject is why: when these cases
+// moved, the drain still lived as a `mise.toml` task, so `died()` could not hold
+// and a withdrawal had nothing to name. The property each case carried — the
+// gather answering with rows, and the gather refusing a truncated or empty forge
+// answer — is asserted here over the leaf itself, which is what makes this a port.
 //
-// WHAT DID NOT MOVE, said plainly: the drain's TRANSLATION of that refusal into
-// its own exit 2 rather than a clean short sweep. It belongs to the drain's own
-// port, and naming it here is what stops a reader assuming the half they cannot
-// see is still covered.
+// THE DRAIN'S HALF HAS SINCE MOVED TOO (CLOUD-843). `[tasks.in-progress-drain]`
+// is retired into `batten landed abandoned --gather`, which reads the merged set
+// through the same `merged_pr_lines` body `claim merged` prints, and renders a
+// failed gather as its own could-not-look (exit 3) rather than a clean short
+// sweep. That translation is asserted over the binary in `in_progress_drain.rs`
+// (`a_gather_whose_merged_pull_requests_cannot_be_read_is_could_not_look`), which
+// is where a reader looking for the half this file does not cover will find it.
 // ported: "with no DRAIN_MERGED_PRS the drain gathers evidence rather than refusing" crates/batten/tests/it/claimed_keys.rs subject:mise.toml
 // ported: "a failed gather is could-not-look, never a short sweep" crates/batten/tests/it/claimed_keys.rs subject:mise.toml
 // carried: mise-tasks/claimed-keys.sh crates/batten/src/race.rs kind:mechanism crates/batten/tests/it/claimed_keys.rs runs:batten+claim+keys

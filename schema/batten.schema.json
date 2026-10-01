@@ -70,6 +70,17 @@
         }
       ]
     },
+    "census": {
+      "description": "The measurements this consumer declares over its own tree (CLOUD-843):\nwhere it writes shell, and which files must stay shell. Absent means the\ncensus has nothing declared to read, which `batten census shell` refuses\nrather than reporting a zero it never measured.\n\nConsumer-specific by nature, for `wiring`'s reason: a manifest path, a\nworkflow glob and an exempt file are somebody's layout, and non-negotiable\nrule 1 keeps those out of `crates/batten`. The grammar of \"is this line\nshell\" is the engine's; where to look is this table's. The type and the\nreading are [`crate::census`].",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Census"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "ci": {
       "description": "The merge contract this repository commits to (CLOUD-54), **derived**\nfrom the host ruleset. Absent means the contract is not projected here;\npresent, it is what `config lint --host-rules` compares against. The host\nis always the authority — this is a copy a gate polices, never a second\nplace the fact is decided.",
       "anyOf": [
@@ -427,6 +438,17 @@
         "$ref": "#/$defs/Rule"
       }
     },
+    "sbom": {
+      "description": "What `batten sbom` inventories and under which names (CLOUD-843).\nAbsent means the verb has no subject to name, which it refuses rather\nthan guessing one.\n\nConsumer-specific for `census`'s reason: the subject's name, where its\ndocuments land, which paths a scan skips and where its licence table\nlives are somebody's layout. The derivation is the engine's; the type and\nthe reading are [`crate::sbom`].",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SbomDeclared"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "scope": {
       "description": "The paths policy applies to, as an **ordered include/exclude list**: a\nplain glob includes, a `!`-prefixed glob excludes, and an exclude beats\nan include (CLOUD-37). Absent or empty means the set is empty — nothing\nis in scope — not \"everything\", because a set that silently defaults to\nuniversal membership is the widening a policy engine must never do.\n\nNot to be confused with [`Rule::scope`] ([`crate::rules::RuleScope`]),\nwhich is a per-rule axis saying *where a rule looks*. The two share a\ntoken and nothing else; their vocabularies never cross, exactly as\nseverity's three axes do not (see [`crate::severity`]).",
       "type": "array",
@@ -439,6 +461,13 @@
       "type": "array",
       "items": {
         "$ref": "#/$defs/Startup"
+      }
+    },
+    "step": {
+      "description": "The step cache's table (CLOUD-424, CLOUD-843): each step a caller brackets\nwith `batten step`, the pathspecs whose index entries key its receipt and\nthe tool argvs whose answers do. Empty means no step is declared, so every\n`batten step` call is a miss that records nothing.\n\nConsumer-specific by nature, for `startup`'s reason: which steps a\nrepository runs and what each reads are facts about that repository\n(non-negotiable rule 1). Read from the committed authority alone, never\nlayered. The row and its validator are [`crate::step_table`]; the cache\nthat reads the table back lives above this loader and is not named here.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Step"
       }
     },
     "strictness": {
@@ -735,8 +764,36 @@
       "description": "The `[board]` table: this consumer's column vocabulary.\n\n# Why this table exists (non-negotiable rule 1)\n\n[`crate::landed`] and [`crate::claim`] decide over a board's COLUMN NAMES —\nwhich column is the ready queue, which means \"pulled\", which mean \"somebody\nhas this, or it landed, or it shipped\". Those are one tracker's words. Linear\nships `Todo`/`In Progress`/`In Review`/`Done`; Jira ships `To Do`/`In\nDevelopment`; a GitHub Project ships whatever the owner typed.\n\nCarried as engine constants they were rule 1's violation in its worst form.\nOff this board every comparison is false, so `is_started` never fires, the\nlanded-honesty sweep reports **zero findings over a board full of dishonest\ncolumns**, and `claim` never refuses. A gate that cannot fire is\nindistinguishable from a gate that found nothing, which is the one failure\nthis whole module family exists to avoid.\n\n# Absent is could-not-look, never a default\n\nAn undeclared table does **not** fall back to this repository's own words.\nA default would reinstate the violation with an extra step and make the dead\npath byte-identical to the working one again — the exact shape that let the\nconstants survive. A verb needing a column this table does not declare says\nso, by name, and decides nothing.\n\n# Why values and not `[[pattern]]` rows\n\n[`crate::config::Ready`]'s reason (CLOUD-472), and one more directly: a\ncolumn is matched by\nEQUALITY against the string the tracker echoes back, never by a regex over\nit. The pattern registry exists so one CONCEPT has one spelling; a literal\nthe round trip returns verbatim is a value.",
       "type": "object",
       "properties": {
+        "cites_corpus": {
+          "description": "The tracked paths a Ready block's citations are resolved against\n(CLOUD-826), as globs.\n\nAbsent is could-not-look for `board check --cites`, never \"every path\":\nwhich trees hold this consumer's tests and sources is its own layout.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "cites_exclude": {
+          "description": "Globs carved OUT of [`Board::cites_corpus`] — the vacuity guard.\n\nA fixture that quotes a citation is not the thing cited, and a gate that\nresolved a citation against a quotation of it would pass the very row it\nexists to refuse.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "cites_prospective": {
+          "description": "The marker written after a backticked path to declare it PROSPECTIVE —\nabsent by design, because the row exists to write it (CLOUD-920).\n\nMatched together with its path, so one marker elsewhere in a block cannot\nexcuse every citation in it. Absent means no path is prospective, which is\nthe strict direction: an unmarked absence stays a refusal.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "in_progress": {
           "description": "The column meaning \"pulled\": somebody is on this now.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "move_receipt": {
+          "description": "The receipt check a coherent `batten board check` mints, one file per\njudged key (CLOUD-512).\n\nNamed here rather than in the crate because which check a move guard\nreads is this consumer's receipt vocabulary. Absent mints nothing, and the\nverdict is unchanged: a receipt is the trigger a guard reads, never part of\nwhat the board check decides.",
           "type": [
             "string",
             "null"
@@ -749,6 +806,20 @@
             "null"
           ]
         },
+        "refs_exclude": {
+          "description": "Globs of tracked paths whose clause citations `board check --refs` does\nNOT scan (CLOUD-809) — a file that quotes a known-bad citation as its own\nregression witness, which would otherwise report itself forever.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "retired_types": {
+          "description": "The subset of [`Board::settled_types`] that settles a blocker by RETIRING\nit rather than completing it (CLOUD-477's second decision).\n\nA dependent over one of these still reaches the frontier, and the reason\nis put on the record: a blocker that was cancelled may have taken the\ndependent's premise with it. Empty is a legitimate answer here — it only\ndecides whether that note is spoken.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "review": {
           "description": "The column a row whose branch is behind git is asked to move back to.",
           "type": [
@@ -756,11 +827,25 @@
             "null"
           ]
         },
+        "settled_types": {
+          "description": "The status TYPES that SETTLE a blocker, so its dependent may reach the\nready frontier (CLOUD-477, read by `batten board check`).\n\n**Types rather than column names, and the reason is a measured defect.**\nThe frontier used to resolve a blocker by NAME, so every column the name\nmatch was not told about fell into the catch-all and blocked — including\nthe terminal ones meaning \"this will never be done, and that is settled\",\nwhich starved their dependents off the frontier permanently. A tracker\nstamps each column with a type, and the type is what survives a rename.\n\nThe review column settles a blocker by NAME on top of this set, because\non a board where it shares its type with the pulled column a type-only\nrule would starve every row behind landed-but-unreleased work.\n\nAn EMPTY set is undeclared, for [`Board::started`]'s reason: a set that\nmatches nothing would hold every row off the frontier and read as \"nothing\nis ready\".",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "started": {
           "description": "Every column meaning \"somebody has this, or it has landed, or it has\nshipped\".\n\n**The released column belongs in this set, and leaving it out was a\nmeasured defect** (CLOUD-1458). The engine constant this replaces read\n`[\"In Progress\", \"In Review\"]`, so a declined key that reached the\nreleased column escaped the sweep entirely — and released is where the\nclaim is strongest and the lie therefore costs most. Measured on that\ngate's own two rows: CLOUD-186 and CLOUD-1127 were declined with\n`DO-NOT-CLOSE` in the body of the pull request that landed the module,\nadvanced by the merge, moved back by hand, and advanced to the released\ncolumn by a release 2026-09-05T02:52:56Z — past the far edge of a\npredicate written the day before.\n\nThe ready-queue columns stay OUT: a declined key sitting there is\n`DO-NOT-CLOSE` working, and refusing it would make the marker unwritable.",
           "type": "array",
           "items": {
             "type": "string"
+          }
+        },
+        "sweep": {
+          "description": "The gates `batten board sweep` runs over ONE payload set, in order\n(CLOUD-825, retiring `[tasks.board-sweep]` under CLOUD-843).\n\n**Declared here rather than known to the engine** (non-negotiable rule 1):\nwhich gates a board has, and which argv reaches each, are this consumer's\nfacts. Read from the committed authority alone, like every other key in\nthis table — an uncommitted layer that could drop a gate from the sweep\nwould narrow what \"the board is coherent\" means without a trace.\n\nEmpty is undeclared, and the verb refuses rather than reporting a clean\nboard over zero gates.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SweepGate"
           }
         }
       },
@@ -1002,6 +1087,24 @@
         }
       ]
     },
+    "Census": {
+      "description": "The `[census]` table: the measurements a consumer declares over its own tree.",
+      "type": "object",
+      "properties": {
+        "shell": {
+          "description": "Where this repository writes shell, for `batten census shell`. Absent\nmeans the census has nothing declared to read, which the verb refuses\nrather than reporting a zero it did not measure.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ShellCensus"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
     "Channel": {
       "description": "The `[advisory]` table: what ONE emission of the whole channel may cost.\n\n**The channel, not the producer**, which is the whole of this row. Absent\nmeans unenforced, on `[budget]`'s reading — a threshold nobody declared is\nnot a threshold of zero — so a consumer that has not adopted it emits exactly\nwhat it emitted before.",
       "type": "object",
@@ -1066,6 +1169,21 @@
         "required_checks"
       ]
     },
+    "Claims": {
+      "description": "The `[commit.claims]` table: every commit names the row it serves (CLOUD-843).\n\n# The server-side half of a claim\n\nA claim receipt lives in the clone's own git directory and never leaves it,\nso no reviewer and no workflow can see it. What a server CAN see is whether\neach commit names the issue it serves — the half of the claim that survives a\nfresh checkout (CLOUD-431). This repository's `commit-lint` task asked that in\nshell, one `claim keys` spawn per commit; the question is this table's now,\nasked in process over the range `commit check` already walks.\n\n\"Names a row\" is `claim keys`' own reading of the WHOLE message — a closing\nkeyword first, then the first key of each `Refs:` trailer — through the\nconsumer's `[[pattern]]` grammar, never a key shape spelled here (rule 1).\nClaiming is stricter than mentioning: a commit citing a row as evidence has\nnot thereby become work on it (CLOUD-338/CLOUD-378).",
+      "type": "object",
+      "properties": {
+        "unclaimed": {
+          "description": "The commits that owe no claim, each a property of the COMMIT rather than\nof its wording: which paths it touched, and who authored it.\n\nEmpty by default. An exemption keyed to the file set cannot be claimed by\na hand-written commit that merely borrows a release's subject, which is why\nthe subject is not a column here.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Unclaimed"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
     "Column": {
       "description": "One column of a record.",
       "type": "object",
@@ -1123,6 +1241,18 @@
       "description": "The `[commit]` table: what a commit subject must look like here.\n\nConsumer-specific by nature (non-negotiable rule 1): the engine holds the\nmatcher, this table holds the answer. Which type words a repository admits,\nand whether it requires a scope, are that repository's business.",
       "type": "object",
       "properties": {
+        "claims": {
+          "description": "Whether every commit in a judged RANGE must name the tracker row it\nserves, and which commits are exempt (CLOUD-843).\n\nAbsent is the reading every consumer had before: a range is judged for\nits subjects and nothing else. Present, `commit check <base>..<head>`\nrefuses a commit whose message claims no row — see [`judge_claims`].",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Claims"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "subject_pattern": {
           "description": "The regular expression every non-merge commit's subject must match.\n\nRequired when the table is present: a `[commit]` declaring no pattern is\nthe half-change rule 2 refuses — it reads as though a convention is\nrecorded when nothing is.",
           "type": "string"
@@ -1757,6 +1887,30 @@
       },
       "additionalProperties": false
     },
+    "Each": {
+      "description": "A `[[forge.query]]` row's fan-out: one walk per distinct value at `field`\nin the rows of the family `query` recorded, bound to the placeholder\n`input` (CLOUD-843).",
+      "type": "object",
+      "properties": {
+        "field": {
+          "description": "Which of the source row's `select` paths holds a member's value, spelled\nexactly as that row declares it.\n\nA recorded row carries each selected path as ONE flat key — `commit.sha`\nis a key, not an object — so this is looked up whole rather than walked,\nand a path the source never selected is refused at load, where it can be\nfixed, rather than read as could-not-look on every run.",
+          "type": "string"
+        },
+        "input": {
+          "description": "The placeholder each member binds, and the key it is recorded under on\nevery row its walk kept.",
+          "type": "string"
+        },
+        "query": {
+          "description": "The `[[forge.query]]` id whose recorded rows supply the members.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "query",
+        "field",
+        "input"
+      ]
+    },
     "Effect": {
       "type": "string",
       "enum": [
@@ -2049,6 +2203,20 @@
           "type": "array",
           "items": {
             "type": "string"
+          }
+        },
+        "probe": {
+          "description": "The claims this consumer's tasks need from the credential, each with the\nread endpoint that proves it, which `batten doctor forge` probes\n(CLOUD-843, retiring `gh-preflight`).\n\n**Declared HERE, interpreted in [`crate::preflight`]**, for `query`'s\nreason directly above: which endpoints a consumer calls and which claim\neach needs are the consumer's facts, and walking them is mechanism.\n\n**No weakening comparison in `trust.rs`, and the absence is argued.** A\nprobe row is a DIAGNOSIS, not a gate: dropping one makes the report\nshorter and refuses nothing it refused before, because no verdict any rule\nrenders reads it.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Probe"
+          }
+        },
+        "query": {
+          "description": "The paginated reads this consumer declares, each recorded by\n`batten record query <id>` (CLOUD-843).\n\n**Declared HERE, interpreted in [`crate::forge_query`]**, and the split is\nthe layering rather than a filing accident: this table is the `[forge]`\nsection and this module is its owner, while the template grammar, the\nwalk and the reduction reach `git`, `forge` and `record` — edges this\nmodule, which reaches `fetch` alone, must not grow. So the rows are plain\ndata here and every reading of them is that module's.\n\n**No weakening comparison in `trust.rs`, and the absence is argued.**\nDeleting a row is LOUD rather than silent: the `[[record]]` row that\ndeclares its family still names `record query <id>` as the writer, and\nthat invocation then exits 1 on an id nothing declares. Editing a row's\nendpoint, window or reduction changes WHAT is measured, and none of those\nhas a monotone reading a raise-only clamp could order.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Query"
           }
         }
       },
@@ -2400,6 +2568,35 @@
         }
       ]
     },
+    "Manifest": {
+      "description": "One manifest whose command strings are counted.",
+      "type": "object",
+      "properties": {
+        "keys": {
+          "description": "The keys whose values are commands, as they are spelled before ` = `.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "path": {
+          "description": "The manifest's repo-relative path.",
+          "type": "string"
+        },
+        "unit": {
+          "description": "The header prefix that opens one named unit — a task table, say. Every\nshell line between one such header and the next is that unit's. Absent,\neach shell line is reported on its own.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "keys"
+      ]
+    },
     "Marker": {
       "description": "One suppression marker declared in `batten.toml`.\n\nThe two fields are deliberately separate axes: `id` is the stable name a\ncount is reported under and may not change when the spelling does, while\n`token` is the literal text scanned for. Collapsing them would make every\nre-spelling of a marker look like a brand-new one whose count starts at\nzero — the ratchet defeated by a rename.",
       "type": "object",
@@ -2430,6 +2627,13 @@
       "description": "The `[mcp]` table: where the wiring lives, and what to return instead of a\npayload.",
       "type": "object",
       "properties": {
+        "permission_aliases": {
+          "description": "Server names whose committed permission rules apply under WHATEVER key the\nhost exposes the server as this session (CLOUD-191, CLOUD-843).\n\nEach is a name some `[[mcp.source]]` row's `endpoint_contains` declares,\nbecause the endpoint is the only thing that identifies a renamed server:\n`mcp grant` finds the exposed key's endpoint, matches it to one of these\nnames, and applies the committed `permissions` rules written for that name.\n`mcp posture` reads the same list for the grants a connector would still\nprompt for.\n\n**A LIST, and deliberately not every `endpoint_contains` name.** A name here\nturns a committed allow rule into a pre-approval under a key nobody\ncommitted. A server the host authorises at its own connector layer must not\nbe translated, or the translation grants what the host did not — so the\nconsumer states which servers its permission file governs, rather than the\nengine inferring it from a selector written for dispatch.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "result": {
           "description": "What to return instead of a method's full response.\n\nA method with no row here is dispatched and returned whole.",
           "type": "array",
@@ -2752,6 +2956,17 @@
           "items": {
             "$ref": "#/$defs/PerfExempt"
           }
+        },
+        "latency": {
+          "description": "The wall-clock budget `batten perf latency` holds a command to\n(CLOUD-843). Absent means the verb has nothing to time, which it refuses\nrather than reporting a measurement it never took.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PerfLatency"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "additionalProperties": false
@@ -2785,6 +3000,51 @@
         "reason"
       ]
     },
+    "PerfLatency": {
+      "description": "One command's wall-clock budget, in whole seconds.\n\nCONSUMER DATA, for `[perf.exempt]`'s reason: which command a repository\ntimes and what it may cost are that repository's facts, and non-negotiable\nrule 1 keeps them out of `crates/batten`. The budget is a ceiling DERIVED\nfrom measurement, never a target chosen in advance, and re-deriving it is a\ndeliberate commit the verb's drift report prompts.",
+      "type": "object",
+      "properties": {
+        "budget_seconds": {
+          "description": "The budget, in whole seconds.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "command": {
+          "description": "The command, as an argv. Its exit status is IGNORED: a red run still\ntakes time, and this measures cost rather than correctness.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "loose_factor": {
+          "description": "A median under `budget_seconds / loose_factor` is drift too: the budget\nhas stopped bounding anything.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "runs": {
+          "description": "How many times to run it; the verdict reads the median.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "slack_seconds": {
+          "description": "Seconds over the budget a median may reach before it is drift, so a\nshared runner's noise does not cry wolf.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "command",
+        "runs",
+        "budget_seconds",
+        "slack_seconds",
+        "loose_factor"
+      ]
+    },
     "PlanQuery": {
       "description": "One declared plan query: which surface to ask about, and what a module needs\nto decide over the answer.\n\n**`required` and `prohibited_profiles` are CONSUMER facts** and live in the\nrow rather than in this crate (non-negotiable rule 1). They are projected\nalongside the acquired plan so the module compares two halves of one document\nrather than reaching for a second source — the same shape a `[[rule.tools]]`\nrow's `id` gives its module.",
       "type": "object",
@@ -2796,6 +3056,13 @@
         "id": {
           "description": "The key this plan is projected under in `input.tree.plan`.",
           "type": "string"
+        },
+        "profile": {
+          "description": "Profiles to ask the runner about, each passed as `--profile <p>`\n(CLOUD-843).\n\n**The runner's own grammar, including its negation** (`!slow`), so a\nconsumer can ask what the gate plans with a tier switched OFF — the only\nreading that shows which steps declare that tier, since a step excluded\nfor a missing profile is by construction a step that declared it. The\nanswer stays hk's: this passes the words and parses nothing.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         },
         "prohibited_profiles": {
           "description": "Profiles whose presence makes the plan unusable for this consumer.",
@@ -2816,6 +3083,35 @@
       "required": [
         "id",
         "hook"
+      ]
+    },
+    "Probe": {
+      "description": "One `[[forge.probe]]` row: a claim the credential must carry, and the\nendpoint that proves it (CLOUD-843).\n\n**Read-only by construction.** A row whose `probe` is `false` is DECLARED and\nreported as never probed — a write cannot be tested without performing it,\nand an endpoint that needs an existing object may answer 404 for want of one.",
+      "type": "object",
+      "properties": {
+        "claim": {
+          "description": "The claim the endpoint needs, as the forge names it in a refusal —\n`checks=read`, `pull_requests=write`.",
+          "type": "string"
+        },
+        "endpoint": {
+          "description": "The API-relative endpoint, no leading slash, with `{owner}` and `{repo}`\nresolved from the checkout's forge remote. A query string is allowed:\na probe asks for one row, not a collection.",
+          "type": "string"
+        },
+        "probe": {
+          "description": "Whether the endpoint is probed. `false` declares the claim and never\ncalls the endpoint.",
+          "type": "boolean",
+          "default": true
+        },
+        "used_by": {
+          "description": "Which of the consumer's tasks need the claim, for the report.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "endpoint",
+        "claim",
+        "used_by"
       ]
     },
     "Production": {
@@ -3104,6 +3400,90 @@
       "required": [
         "warm",
         "cold"
+      ]
+    },
+    "Query": {
+      "description": "One `[[forge.query]]` row: a declared, paginated REST read and the reduction\na producer records from it (CLOUD-843).\n\n# Why a row rather than a verb per measurement\n\nEleven shell bodies each re-derived the same four things — an endpoint with\nthe repository spliced in, a pagination walk, a date cut-off and a `jq`\nprojection — and three of them got the truncation wrong three different ways\n([`crate::forge`]'s header). One declared row per read puts the consumer's\nfacts (which endpoint, which fields, which window) in the committed authority\nand leaves the mechanism in the engine, which is non-negotiable rule 1's split\nexactly: nothing here names an endpoint, and nothing in `batten.toml` walks a\npage.\n\nThe row's `id` is also the RECORD FAMILY it writes, and a `[[record]]` row\nmust declare that family — a query nothing projects would write a store no\nmodule can read, which is CLOUD-1810's dead gate one table over, refused at\nload rather than discovered as a green run.",
+      "type": "object",
+      "properties": {
+        "each": {
+          "description": "Walk this row once per value another row's record holds (CLOUD-843).\n\n**The fan-out a single endpoint cannot express**: a run's jobs, a\nbranch's tip commit. The shell bodies this absorbs looped `gh api` over the\nids an earlier `gh api` printed; declaring the loop names which family the\nmembers come from, so the walk is the engine's and the members are a\nrecord a module can also read.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Each"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "endpoint": {
+          "description": "The API-relative endpoint, with no leading slash and no query string,\ne.g. `repos/{owner}/{repo}/actions/runs`.\n\n`{owner}` and `{repo}` are resolved from the checkout's forge remote;\n`{since}` is the window's cut-off instant where `since` is declared; any\nother `{name}` is bound by `record query --input name=value`. A\nplaceholder nobody binds is a usage error, never a literal brace on the\nwire — the forge client this replaces expanded `{owner}/{repo}` itself,\nand a port that inherited the spelling without the expansion 404'd on\nevery call (`land_forge_reads.rs`).",
+          "type": "string"
+        },
+        "id": {
+          "description": "The query's name, which `record query` takes and which is also the record\nfamily it writes. One path component.",
+          "type": "string"
+        },
+        "max_pages": {
+          "description": "The page budget. Required and at least 1, for [`crate::forge::window`]'s\nreason: every caller that took a default took a different one.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "params": {
+          "description": "Further query-string parameters, as `name = \"template\"`. Values take the\nsame placeholders as `endpoint` and are percent-encoded after binding.\n\n`page` and `per_page` are the walk's own and are refused here.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "per_page": {
+          "description": "Rows asked for per page, `1..=100`.\n\nRequired, because it is also the walk's END-OF-COLLECTION signal where\nthe endpoint states no count: a page shorter than this is the last. The\nforge silently clamps above 100, so a larger value would make every full\npage look short and end the walk after one page reporting it whole.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "rows": {
+          "description": "Where the rows are in the response body: absent means the body IS the\narray; a key names the array an object wraps, e.g. `workflow_runs`.\n\nNamed rather than sniffed, for [`crate::forge::Shape`]'s reason. A wrong\nanswer is loud rather than silent: an object read as bare is not an array,\nwhich the walk reports as could-not-look.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "select": {
+          "description": "The reduction: which fields of each row are recorded, as dot-separated\npaths (`head_commit.id`, `pull_requests.0.number`).\n\nRequired and non-empty. The whole row is NEVER recorded — a forge row\ncarries titles, bodies and URLs, and non-negotiable rule 4 is decided\nhere, at the declaration, rather than hoped for at every reader. A path\nthat resolves to nothing records `null`, so every row has every key.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "since": {
+          "description": "A trailing time window over the rows, and whether it may end the walk.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Since"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "span": {
+          "description": "Durations derived from the instants a row carries (CLOUD-843).\n\nArithmetic over instants is the one reduction a module cannot make — no\nclock and no date parser reach the policy surface — so it is declared\nhere and computed by the producer, beside the fields it reads.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Span"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "endpoint",
+        "per_page",
+        "max_pages",
+        "select"
       ]
     },
     "Read": {
@@ -3609,7 +3989,7 @@
           ]
         },
         "captured": {
-          "description": "The reductions this policy row reads out of the capture store,\n**declared** (CLOUD-1188).\n\nEach row becomes an entry of `input.tree.captured` under its own `id`,\ncarrying the REDUCTION it asked for — a boolean, a count, or a bounded\ntoken — and never the response it came from. A row declares what to reduce\nand how, because handing a module a payload would put a tracker's prose on\nthe policy input where any predicate could lift it into a pointer.\n\n**The store, never stdin**: a stdin-fed fact is dropped by the surface\ntable before projection, is context re-sent every turn, and is invisible to\nthe step-receipt key — three independent refusals, any one of which is\nenough.",
+          "description": "The reductions this policy row reads out of the capture store,\n**declared** (CLOUD-1188).\n\nEach row becomes an entry of `input.tree.captured` under its own `id`,\ncarrying the REDUCTION it asked for — a boolean, a count, or a bounded\ntoken — and never the response it came from. A row declares what to reduce\nand how, because handing a module a payload would put a tracker's prose on\nthe policy input where any predicate could lift it into a pointer.\n\n**The store, never stdin**: a stdin-fed fact is dropped by the surface\ntable before projection, is context re-sent every turn, and is invisible to\nthe `batten step` key — three independent refusals, any one of which is\nenough.",
           "type": "array",
           "items": {
             "$ref": "#/$defs/CaptureQuery"
@@ -3794,6 +4174,13 @@
             "$ref": "#/$defs/GitRead"
           }
         },
+        "git_config": {
+          "description": "The config KEYS this policy row reads, **declared** (CLOUD-843).\n\nEach becomes an entry of `input.tree[\"git-config\"]` carrying the value in\nforce and the value each scope sets, with git's boolean reading of each.\nResolved across every scope git consults, because the question a signing\nposture asks is a conflict BETWEEN scopes.\n\n**The declaration is the secrecy bound.** A config file can carry a\ncredential; a key no row names is never read. A key git could not address\n(`section.name` at least) is refused at load.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "glob": {
           "description": "The glob selecting which files the rule inspects, matched against\nrepo-relative paths (`/`-separated). `**` matches any run of path\nsegments, `*` and `?` match within a single segment.\n\nOptional at the type level and required per-kind: a file kind cannot load\nwithout it, and [`RuleKind::Shape`] — which inspects no files — rejects it.",
           "type": [
@@ -3818,6 +4205,13 @@
             "string",
             "null"
           ]
+        },
+        "index": {
+          "description": "The PATHSPECS this policy row reads the index under, **declared**\n(CLOUD-843).\n\nEach becomes an entry of `input.tree[\"git-index\"]` under the spec as\nwritten, carrying the index entries it selects (path, mode, oid, stage),\nthe selected tracked paths the working tree has diverged from, and the\nuntracked paths beneath it. git's pathspec rules without magic; a\n`:`-magic spec is refused at load rather than read as a literal that\nselects nothing.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         },
         "invocation_sources": {
           "description": "The same, glob-selected (CLOUD-914).\n\nShips WITH its literal column rather than arriving a row later, which is\nthe asymmetry `line_sources` records having to fix: a gate over call\nsites is a gate over many files by construction, so the enumerated\nspelling would go stale the first time a module was added.",
@@ -3996,13 +4390,18 @@
             "null"
           ],
           "enum": [
+            "check-verdict",
             "ci-hygiene",
+            "ci-signal",
             "claude-code-cloud",
             "commit-hygiene",
             "landing-loop",
             "mise",
             "pinned-toolchain",
+            "release-hygiene",
             "shell-hygiene",
+            "tracker-hygiene",
+            "supply-chain",
             "trunk-based"
           ]
         },
@@ -4174,6 +4573,13 @@
           "description": "Whether this policy row reads the **resolved-symbol** fact (CLOUD-760).\n\nA bare flag rather than a path list, because the fact is one whole-crate\nvalue: a delegated analyser resolves names across the compilation, and\nasking it about one file would be asking a different, cheaper question\nthat [`Rule::invocations`] already answers.\n\n**Declared rather than ambient, and here the reason is the cost class.**\nThis is the first `Cost::Effect` fact — resolving it RUNS `cargo clippy`\nover the crate, which is seconds rather than the milliseconds every other\nfact costs. Every git fact is declared for a bill CLOUD-851 measured at\n2.103x; this one would be far worse, and a run that paid it without being\nasked would make `check` unusable.",
           "type": "boolean"
         },
+        "tags": {
+          "description": "The tag GLOBS this policy row lists, **declared** (CLOUD-843).\n\nEach becomes an entry of `input.tree[\"git-tags\"]` under the glob as\nwritten, carrying every tag it matches — by `git tag --list`'s own match —\nwith the commit each peels to and when it was cut. A glob matching nothing\nis present with an empty list, which is an answer; `null` is the\nreferences that could not be read.\n\nNot [`Rule::history`]'s tag query: that family nulls on a shallow clone,\nbecause a path query walks history, and a tag listing walks none.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "tasks": {
           "description": "The task manifests this row reads, **declared** (CLOUD-856).\n\nParsed ONCE at session start and recorded; the mediated call reads the\nrecord. `Fact::Document` stays unresolvable on that path because a\ndocument is unbounded there, and this is how the one predicate that\ngenuinely needs a manifest gets it without putting a parse on the hot\npath.\n\nThe manifest's own bytes key the record, so a manifest that moves\ninvalidates it by construction.",
           "type": "array",
@@ -4290,6 +4696,10 @@
             "string",
             "null"
           ]
+        },
+        "while_unpushed": {
+          "description": "Fire only while `HEAD` exists in this clone and on no remote-tracking ref\n(CLOUD-843).\n\n**The harm a punt row names, measured rather than proxied.** `turn mint\nahead` refuses because work \"committed nowhere but this container\" dies\nwith a reclaim, and its remedy says a push is what makes stopping safe —\nbut nothing it selected on read a push. Its only lever was a `verify`\nreceipt for `HEAD`, and on a tree that compiles only after edits that\nreceipt cannot be earned without the writes the row refuses: a deadlock\nwhose sole exit, a head-bound admission, every commit voids.\n\nConjoined with the other modifiers, so a row carrying `while_marker` too\nfires while the marker exists AND `HEAD` is unpushed. Could-not-look\nselects the row, the direction `while_marker`'s own unreadable arms take:\nan unknown answer must not switch a refusal off.",
+          "type": "boolean"
         }
       },
       "additionalProperties": false,
@@ -4419,6 +4829,117 @@
         }
       ]
     },
+    "SbomConformance": {
+      "description": "The `[sbom.conformance]` table.",
+      "type": "object",
+      "properties": {
+        "checker": {
+          "description": "The checker program, run as `<checker> <document> --comply <standard>\n--output json --output-file <report>`.",
+          "type": "string"
+        },
+        "record": {
+          "description": "The record family the checker's answers are written under.",
+          "type": "string"
+        },
+        "standards": {
+          "description": "The standards asked, in order. Never empty.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "record",
+        "checker",
+        "standards"
+      ]
+    },
+    "SbomDeclared": {
+      "description": "The `[sbom]` table (CLOUD-843).",
+      "type": "object",
+      "properties": {
+        "actions": {
+          "description": "The pinned-actions licence table, repository-relative. Absent skips the\nactions pass; declared and unreadable is could-not-look.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "binary_out_dir": {
+          "description": "Where a binary's asset is written, relative to the repository root unless\nabsolute.",
+          "type": "string"
+        },
+        "conformance": {
+          "description": "What `--conformance` runs and where it records.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SbomConformance"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "exclude": {
+          "description": "Paths the tree scan skips, passed to the scanner verbatim.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "inventory": {
+          "description": "The `[[rule.tools]]` row `--record` keys its reduction under.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "out_dir": {
+          "description": "Where the tree's two documents are written, relative to the repository\nroot unless absolute.",
+          "type": "string"
+        },
+        "subject": {
+          "description": "The subject's name: the documents' source name, and the stem both the\ntree's documents and a binary's asset are named from.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "subject",
+        "out_dir",
+        "binary_out_dir"
+      ]
+    },
+    "ShellCensus": {
+      "description": "`[census.shell]`: the homes shell may live in, and the files that must stay\nshell.",
+      "type": "object",
+      "properties": {
+        "exempt": {
+          "description": "Paths that must stay shell because nothing else can run where they do, as\nglobs. Still measured, reported apart, and never totalled.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "manifest": {
+          "description": "Manifests whose command strings are counted, one row per file.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Manifest"
+          }
+        },
+        "workflows": {
+          "description": "Workflow files whose `run:` steps are counted, as globs over tracked paths.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
     "Signature": {
       "description": "A declared signature: what makes a class exact.\n\n**Consumer config, and none of its content may be a literal in this crate**\n(non-negotiable rule 1). The engine holds the matcher; which codes and which\nprogram-specific patterns are recognised is the repository's own answer.",
       "type": "object",
@@ -4442,6 +4963,32 @@
         "class",
         "code",
         "family"
+      ]
+    },
+    "Since": {
+      "description": "A `[[forge.query]]` row's time window: keep the rows whose `field` is an\nRFC 3339 instant no older than `seconds` before the producer's clock.\n\nThe clock is the PRODUCER's (house style §5): a module sees the rows already\nwindowed and the cut-off as a token in the record, and `Fact::Instant` stays\n`null` on every policy surface.",
+      "type": "object",
+      "properties": {
+        "field": {
+          "description": "The row field carrying the instant, as a dot-separated path.",
+          "type": "string"
+        },
+        "seconds": {
+          "description": "The window's length, back from now, in seconds. At least 1.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "stop": {
+          "description": "The collection is ordered newest-first on `field`, so the first row older\nthan the cut-off ends the walk.\n\n**A claim only the consumer can make**, which is why it defaults off: a\nwalk that stopped on a collection that was NOT so ordered would report a\nprefix as the whole window ([`crate::forge::Stop`]).",
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "field",
+        "seconds"
       ]
     },
     "Sink": {
@@ -4537,6 +5084,52 @@
         "path"
       ]
     },
+    "Span": {
+      "description": "One duration a `[[forge.query]]` row derives from its instants (CLOUD-843).",
+      "type": "object",
+      "properties": {
+        "from": {
+          "description": "The dot-separated path of the RFC 3339 instant the span starts at.",
+          "type": "string"
+        },
+        "name": {
+          "description": "The key the duration is recorded under. A placeholder-shaped name, so it\ncan never be mistaken for a dotted `select` path.",
+          "type": "string"
+        },
+        "to": {
+          "description": "The dot-separated path of the instant it ends at; absent is the\nproducer's clock, which is how an AGE is declared.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "unit": {
+          "description": "What the duration counts.",
+          "$ref": "#/$defs/SpanUnit",
+          "default": "seconds"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "from"
+      ]
+    },
+    "SpanUnit": {
+      "description": "What a [`Span`] counts.",
+      "oneOf": [
+        {
+          "description": "Whole seconds between the two instants.",
+          "type": "string",
+          "const": "seconds"
+        },
+        {
+          "description": "UTC calendar days between the two instants' dates — a civil-day count,\nso an instant at 23:59 and one at 00:01 the next day are one day apart.",
+          "type": "string",
+          "const": "days"
+        }
+      ]
+    },
     "Startup": {
       "description": "One declared precondition, and optionally the fix for it.",
       "type": "object",
@@ -4578,6 +5171,39 @@
         "check"
       ]
     },
+    "Step": {
+      "description": "One declared step: what its verdict depends on.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "The step's name, as its caller passes it to `batten step`.",
+          "type": "string"
+        },
+        "inputs": {
+          "description": "Git pathspecs (no `:` magic) whose INDEX entries are key material. `.`\nis the whole tracked tree.\n\nThe index rather than the worktree, and the worktree must agree with it\nover the set: a diverged or untracked path under a spec is no key at all.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "tools": {
+          "description": "Programs, as argv, whose stdout is key material: a tool's version, or\nthe declaration of the step's own command. Each must exit 0 and print\nsomething, or there is no key.",
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "inputs",
+        "tools"
+      ]
+    },
     "Strictness": {
       "description": "How strictly Batten applies its gates — the ordered, policy-bearing key the\n§8 raise-only rule is defined over.\n\nThe ordering **is** the policy semantics: `Permissive < Standard < Strict`,\nso \"tighten\" is the computable predicate `candidate >= current` rather than a\njudgement call. Derived `Ord` follows declaration order, which is why the\nvariants are declared weakest-first; [`tests::strictness_orders_weakest_first`]\npins that so a reordering cannot silently invert the clamp.\n\nResolution is this issue's deliverable (CLOUD-29); the verbs that *read* the\nresolved value attach as they land (`--fail-on-warning` is CLOUD-49).",
       "oneOf": [
@@ -4596,6 +5222,47 @@
           "type": "string",
           "const": "strict"
         }
+      ]
+    },
+    "SweepGate": {
+      "description": "One gate the board sweep runs (CLOUD-843).\n\n**Each row carries its own exit table**, because the gates a consumer\ncomposes do not share one. The engine's verbs answer `2` for a refusal; the\ncorpus a retirement campaign is still draining answers `1`. A composer that\nassumed either would read the other's refusal as could-not-look, or its\ncould-not-look as a refusal — the two answers a board sweep most needs apart.\n\nEvery exit a row does not classify — and a gate that could not be run at all\n— is COULD NOT LOOK. That is the safe direction: an unclassified answer never\nreads as a clean board.",
+      "type": "object",
+      "properties": {
+        "abstains": {
+          "description": "The exits meaning the gate cannot answer on THIS CLONE — a property of the\ncheckout rather than of the board, so a refusal elsewhere still outranks\nit (CLOUD-921).",
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "int32"
+          }
+        },
+        "name": {
+          "description": "The name the report prints for this gate.",
+          "type": "string"
+        },
+        "refuses": {
+          "description": "The exits meaning the gate REFUSED the board. The engine's violation,\n`2`, when the row names none.",
+          "type": "array",
+          "default": [
+            2
+          ],
+          "items": {
+            "type": "integer",
+            "format": "int32"
+          }
+        },
+        "run": {
+          "description": "The argv the gate runs with the payload set on stdin. The first word\nresolves on `PATH`; nothing here is a shell string.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "run"
       ]
     },
     "TaskQuery": {
@@ -4628,6 +5295,13 @@
         "input": {
           "description": "The repository-relative path whose bytes the verdict was taken over.\n\nIts digest is the third component of the key, so a verdict goes stale by\nconstruction the moment the file changes — the anti-staleness half, and\nthe one a `status: clean` marker alone could never provide.\n\nUnreadable, or outside the tree, is [`Look::CouldNotLook`]: the id is\nabsent from the map, never present with an empty verdict.",
           "type": "string"
+        },
+        "run": {
+          "description": "The argv that takes this verdict, run by `batten record validate <id>`\nfrom the repository root (CLOUD-843).\n\n**Optional, and a row without one is still read**: a producer outside the\nengine may still pipe its verdict to `record tool`. Declared, the argv is\nthe consumer's and never the engine's — which validator, with which\nflags, over which file is this repository's fact (non-negotiable rule 1),\nand what reaches the record is the EXIT CODE and nothing the tool printed.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         },
         "tool": {
           "description": "The tool's name, as the producer wrote it into the record's key.",
@@ -4695,6 +5369,33 @@
         }
       },
       "additionalProperties": false
+    },
+    "Unclaimed": {
+      "description": "One class of commit that owes no claim.",
+      "type": "object",
+      "properties": {
+        "author": {
+          "description": "When set, the commit's AUTHOR address — git's `%ae` — must match this too.\n\nThe author rather than the committer, because a forge commits an App's work\nas itself and only the author half names which App wrote it.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "id": {
+          "description": "The row's name, for a reader of the config — never printed per commit.",
+          "type": "string"
+        },
+        "paths": {
+          "description": "A regular expression EVERY path the commit changed must match. A commit\nthat changed nothing matches vacuously, as the retired shell's filter did.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "paths"
+      ]
     },
     "Unpack": {
       "description": "How to get the binary out of the fetched artifact.",

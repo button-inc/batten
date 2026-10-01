@@ -109,7 +109,7 @@
 // withdrawn: "harness self-test: skewed writers still both roll back (CI spawn-skew shape)" the same self-test at a different spawn skew
 //
 // One case of a SURVIVING suite, deleted because it names a dying path.
-// changed: "CLOUD-498: every receipt-gated call site invokes the task BY PATH" mise.toml the case greps `mise-tasks/darwin-link.sh` for `mise run step-receipt`, so it dies with that file while `tests/step-receipt.bats` lives on. Its surviving half — that `mise.toml` carries no `mise run step-receipt` and that at least eight call sites invoke the program by path — is a property of the committed `mise.toml`, and the count rises rather than falls when darwin-link's body lands there
+// changed: "CLOUD-498: every receipt-gated call site invokes the task BY PATH" mise.toml the case greps `mise-tasks/darwin-link.sh` for `mise run step-receipt`, so it dies with that file while `tests/step-receipt.bats` lives on. Its surviving half — that `mise.toml` carries no `mise run step-receipt` and that at least eight call sites invoke the program by path — is a property of the committed `mise.toml`, and the count rises rather than falls when darwin-link's body lands there. Since CLOUD-843 retired `[tasks.step-receipt]` onto `batten step`, that half is `step_receipt.rs`'s `every_step_a_task_names_is_declared_and_the_retired_task_is_gone`, over the same committed `mise.toml`
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]

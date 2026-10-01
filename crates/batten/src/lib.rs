@@ -13,11 +13,16 @@ pub mod admission;
 pub mod advisory;
 pub mod agent;
 pub mod arm;
+pub mod asked;
+pub mod attestation;
 pub mod attribution;
 pub mod baseline;
 /// The board's column vocabulary, resolved from config rather than held as
 /// engine constants (non-negotiable rule 1, CLOUD-1623).
 pub mod board;
+/// Whether the board's columns, its dependency graph and its citations tell the
+/// truth about the work (CLOUD-1221).
+pub mod board_check;
 pub mod bot;
 pub mod brief;
 pub mod budget;
@@ -27,8 +32,13 @@ pub mod capture;
 pub mod captured;
 pub mod cargo_graph;
 pub mod carry;
+pub mod census;
 pub mod checks_green;
 pub mod ci;
+/// The CI-signal producers — landing divergence and non-verdict failures —
+/// walked over the forge and recorded for a module to decide over (CLOUD-843).
+pub mod ci_signal;
+pub mod ci_step;
 pub mod claim;
 pub mod cli;
 pub mod codemod;
@@ -43,6 +53,7 @@ pub mod deferral;
 pub mod design;
 pub mod disk_watch;
 pub mod dispatch;
+pub mod dist;
 pub mod doctor;
 pub mod drain;
 pub mod durable;
@@ -60,6 +71,9 @@ pub mod fast_forward;
 pub mod fetch;
 pub mod findings;
 pub mod forge;
+/// Declared `[[forge.query]]` reads, walked and reduced into a record family a
+/// module decides over (CLOUD-843).
+pub mod forge_query;
 pub mod git;
 pub mod gitwrite;
 pub mod graph;
@@ -88,6 +102,8 @@ pub mod lint;
 pub mod main_watch;
 pub mod markers;
 pub mod mcp;
+pub mod mcp_grant;
+pub mod mcp_posture;
 pub mod mint;
 pub mod minted;
 pub mod mutate;
@@ -103,7 +119,9 @@ pub mod pinned;
 pub mod pipeline;
 pub mod policy;
 pub mod pr_watch;
+pub mod preflight;
 pub mod preset;
+pub mod probe;
 pub mod probe_verdict;
 pub mod propose;
 pub mod provision;
@@ -111,10 +129,13 @@ pub mod prune;
 pub mod race;
 pub mod ready;
 pub mod receipt;
+pub mod reclaim;
 pub mod record;
 pub mod recorder;
 pub mod redirect;
 pub mod refusal;
+pub mod release;
+pub mod released;
 pub mod remedy;
 pub mod render;
 pub mod repair;
@@ -123,6 +144,7 @@ pub mod rest;
 pub mod review;
 pub mod ripcord;
 pub mod rules;
+pub mod sbom;
 pub mod scratch;
 pub mod secret;
 pub mod secrets;
@@ -146,20 +168,32 @@ pub mod tokens;
 
 pub mod startup;
 pub mod state;
+/// The step cache (CLOUD-424): a step answered from its receipt when its exact
+/// declared inputs, arguments and tools already passed.
+pub mod step;
+/// The `[[step]]` row and its load-time validator: a leaf the loader reaches
+/// without reaching the cache (CLOUD-843).
+pub mod step_table;
 pub mod stop;
 pub mod store;
 /// The per-suite cost corpus, derived from the report the runner already wrote.
 pub mod suites;
 pub mod surface;
+pub mod sweep;
 /// What a long-running task is doing, recorded where it can be read without a log.
 pub mod task;
 /// The task runner's argv, from a receipt minted outside the mediated call.
 pub mod taskset;
 /// Third-party tool verdicts, keyed to (tool, pinned version, input digest).
 pub mod tools;
+/// The `tracker-hygiene` preset's readings: tracker payloads and a pull request
+/// body, reduced to the record families its modules decide over (CLOUD-843).
+pub mod tracker_reading;
 pub mod transcript;
 pub mod traversal;
 pub mod trust;
+pub mod turn;
+pub mod unsubscribe;
 /// The `use` graph: which module reaches which, resolved through the root's own
 /// re-export table.
 pub mod uses;
@@ -274,7 +308,7 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
             unjudgeable,
         }) => Ok(exit::ExitCode::combine(findings, unjudgeable)),
         Some(Command::ShowAgent { json }) => run_show_agent(json, &overrides, out),
-        Some(Command::Doctor { command }) => run_doctor(&command, out, err),
+        Some(Command::Doctor { command }) => run_doctor(&command, &overrides, out, err),
         // `init` reads no config — it is the verb that exists because there is
         // none — so the §8 chain is deliberately not threaded through it.
         Some(Command::Init { dry_run }) => run_init(dry_run, mode, out, err),
@@ -437,12 +471,236 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         // input, which is exactly the committed authority a `--config-from` is
         // meant to pin. That is also what stops a caller keying a record to
         // anything the config does not already declare (CLOUD-1265).
+        // `record decide` writes and then DECIDES, so it is taken here, where the
+        // check runner and the output mode are in hand (CLOUD-843).
+        Some(Command::Record {
+            command:
+                cli::RecordCommand::Decide {
+                    family,
+                    inputs,
+                    rules,
+                },
+        }) => run_record_decide(&family, &inputs, &rules, mode, &overrides, out, err),
         Some(Command::Record { command }) => record::run(command, &overrides, out, err),
         Some(Command::Ci { command }) => run_ci(&command, &overrides, out, err),
-        Some(Command::Release { command }) => run_release(&command, &overrides, out, err),
+        // `install` is the engine's own contract check; the leaves CLOUD-843
+        // retired onto (`sums`, `backfill`) are `release.rs`'s.
+        Some(Command::Release { command }) => match command {
+            cli::ReleaseCommand::Install => run_release(&overrides, out, err),
+            other => release::run(other, out, err),
+        },
         Some(Command::Bench { command }) => run_bench(command, out, err),
+        // CLOUD-843's foundation surface: the arguments are final, and each body
+        // lands with the package that retires the shell it replaces. Until then
+        // the verb is could-not-look, never a pass.
+        // The step table is read from the keyed tree's own committed authority
+        // alone, so the verb takes no `overrides`: which files key a receipt is
+        // not a question a local layer, a `--config-from` ref or a `--config-in`
+        // directory may answer, because a narrower set is a receipt that answers
+        // for bytes nobody checked.
+        Some(Command::Step { command }) => match command {
+            cli::StepCommand::Check { step, args } => crate::step::run_check(&step, &args, out),
+            cli::StepCommand::Record { step, args } => {
+                crate::step::run_record(&step, &args, out, err)
+            }
+            cli::StepCommand::Run {
+                step,
+                args,
+                command,
+            } => crate::step::run_step(&step, &args, &command, err),
+        },
+        // The §8 chain supplies the `[sbom]` declarations from the committed
+        // authority alone; the tree is the repository root's.
+        Some(Command::Sbom(request)) => {
+            let options = sbom::Options {
+                names: request.names,
+                binary: request.binary,
+                target: request.target,
+                out_dir: request.out_dir,
+                record: request.record,
+                conformance: request.conformance,
+            };
+            sbom::run(&options, &overrides, out, err)
+        }
+        // The workspace is `cargo metadata`'s answer from where the verb stands;
+        // the §8 chain supplies nothing, because what a build is called is the
+        // package's own declaration rather than a policy question.
+        Some(Command::Dist(request)) => dist::run(
+            &request.target,
+            request.stem,
+            request.build_tool.as_deref(),
+            out,
+            err,
+        ),
+        Some(Command::Board { command }) => match command {
+            cli::BoardCommand::Check {
+                issues,
+                cites,
+                refs,
+            } => run_board_check(&issues, cites, refs, &overrides, out, err),
+            cli::BoardCommand::Sweep { issues } => run_board_sweep(&issues, &overrides, out, err),
+        },
+        // The census is the one foundation verb that answers today: the §8 chain
+        // supplies the declaration, and the tree is the WORKING TREE's — the
+        // manifests and workflows it counts are files this branch changes, so a
+        // linked worktree is measured, never the main checkout beside it
+        // (`git::worktree_root`'s rule: committed files are the working tree's,
+        // state is the repository's). Measured: rooted on `repo_root`, a
+        // retirement package's worktree reported its base's census unchanged.
+        Some(Command::Census { command }) => match command {
+            cli::CensusCommand::Shell { json } => {
+                let resolved = resolve::resolve(Path::new("."), &overrides)?;
+                // The WORKTREE's tree: what a branch counts is what it carries,
+                // and a linked worktree rooted on the repository would count the
+                // main checkout's shell instead (CLOUD-843).
+                let root = git::worktree_root(Path::new("."))?;
+                let declared = resolved
+                    .census
+                    .as_ref()
+                    .and_then(|census| census.shell.as_ref());
+                census::run_shell(declared, &root, json, out)
+            }
+        },
+        Some(Command::Artifacts { command }) => run_artifacts(&command, out),
     }
 }
+
+/// `batten artifacts write` (CLOUD-1991): the committed derivations of the
+/// command surface, each written where the caller names.
+///
+/// # A WRITE verb beside `generate`, never a flag on it
+///
+/// `generate` is `read` STRUCTURALLY — every renderer returns bytes and the
+/// redirect that refreshes a committed artifact was the caller's, in a `mise`
+/// task body. That redirect was shell, and the retirement of shell is what
+/// moves it here. A `--out` flag on `generate` would make its effect an argument,
+/// which house-style §5 refuses (an effect is per command, never per invocation),
+/// and would put a writer under a noun on the read-only allowlist. So the writer
+/// is its own noun, declared `write`, and `generate` keeps its promise.
+///
+/// # The same bytes, by construction
+///
+/// Each derivation is the SAME call `generate` makes — `clap_complete::generate`,
+/// [`render::man`], the four schema functions, [`render::markdown`] — so the
+/// committed artifact and the drift gates that diff it against `generate` cannot
+/// disagree. Every file goes through [`crate::durable::replace`], so a failed
+/// write leaves the previous artifact whole rather than truncated.
+///
+/// # Errors
+///
+/// A usage error when nothing is named; otherwise whatever a render, a directory
+/// or a write reports.
+fn run_artifacts(command: &cli::ArtifactsCommand, out: &mut dyn Write) -> Result<ExitCode> {
+    match command {
+        cli::ArtifactsCommand::Write(request) => run_artifacts_write(request, out),
+    }
+}
+
+/// Every command path under `commands`, depth first — the pages `man` owes.
+fn spec_paths(commands: &[spec::CommandSpec], into: &mut Vec<String>) {
+    for command in commands {
+        into.push(command.path.clone());
+        spec_paths(&command.subcommands, into);
+    }
+}
+
+/// The writer behind [`run_artifacts`]; one arm per derivation, in a fixed order
+/// so the pointer lines are byte-stable.
+///
+/// # Errors
+///
+/// As [`run_artifacts`].
+fn run_artifacts_write(request: &cli::ArtifactsWrite, out: &mut dyn Write) -> Result<ExitCode> {
+    if request.completions.is_none()
+        && request.man.is_none()
+        && request.schema.is_none()
+        && request.reference.is_none()
+    {
+        return Err(UsageError::raise(
+            "artifacts write: name at least one of --completions, --man, --schema or \
+             --reference",
+        ));
+    }
+    let root = surface::command();
+
+    if let Some(dir) = request.completions.as_deref() {
+        let dir = Path::new(dir);
+        std::fs::create_dir_all(dir)?;
+        for (shell, name) in [
+            (clap_complete::Shell::Bash, "bash"),
+            (clap_complete::Shell::Zsh, "zsh"),
+            (clap_complete::Shell::Fish, "fish"),
+        ] {
+            let mut script: Vec<u8> = Vec::new();
+            clap_complete::generate(shell, &mut surface::command(), "batten", &mut script);
+            crate::durable::replace(dir.join(format!("batten.{name}")), script)?;
+        }
+        writeln!(out, "completions={}", dir.display())?;
+    }
+
+    if let Some(dir) = request.man.as_deref() {
+        let dir = Path::new(dir);
+        std::fs::create_dir_all(dir)?;
+        // CLEARED FIRST, because the page set SHRINKS when a verb is removed, and
+        // an overwrite-only refresh would leave the removed verb's page installable
+        // and documenting a command that no longer parses. Only `*.1` is removed:
+        // the directory is the caller's, and what else lives there is not ours.
+        for entry in std::fs::read_dir(dir)? {
+            let path = entry?.path();
+            if path.extension().is_some_and(|ext| ext == "1") {
+                std::fs::remove_file(&path)?;
+            }
+        }
+        let program = root.get_name().to_owned();
+        let mut paths: Vec<String> = vec![String::new()];
+        spec_paths(&spec::describe(&root).subcommands, &mut paths);
+        for path in &paths {
+            let selected = (!path.is_empty()).then_some(path.as_str());
+            let page = render::man(&root, selected)?;
+            let name = format!("{}.1", render::page_name(&program, path));
+            crate::durable::replace(dir.join(name), page)?;
+        }
+        writeln!(out, "man={} pages={}", dir.display(), paths.len())?;
+    }
+
+    if let Some(dir) = request.schema.as_deref() {
+        let dir = Path::new(dir);
+        std::fs::create_dir_all(dir)?;
+        for (name, body) in [
+            ("batten.schema.json", config::schema()?),
+            ("batten.local.schema.json", config::override_schema()?),
+            ("policy-input.schema.json", policy::tree_input_schema()?),
+            ("policy-call.schema.json", policy::call_input_schema()?),
+        ] {
+            crate::durable::replace(dir.join(name), format!("{body}\n"))?;
+        }
+        writeln!(out, "schema={}", dir.display())?;
+    }
+
+    if let Some(path) = request.reference.as_deref() {
+        let text = render::markdown(&spec::describe(&root));
+        // AN EMPTY FILE UPLOADS EXACTLY AS WELL AS A FULL ONE, so an empty render
+        // is refused rather than published. Unreachable over a declared surface,
+        // and kept because the publish step downstream cannot tell the difference.
+        if text.trim().is_empty() {
+            return Err(UsageError::raise(
+                "artifacts write: the reference rendered empty; refusing to write a file \
+                 that says nothing",
+            ));
+        }
+        let path = Path::new(path);
+        if let Some(parent) = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        {
+            std::fs::create_dir_all(parent)?;
+        }
+        crate::durable::replace(path, text)?;
+        writeln!(out, "reference={}", path.display())?;
+    }
+    Ok(ExitCode::Success)
+}
+
 /// A scratch directory that removes itself, however its owner leaves.
 ///
 /// `Drop` rather than a call before each `return`, because [`run_bench`] has
@@ -621,6 +879,7 @@ fn release_survey(
     matrix: &std::collections::BTreeSet<String>,
     binstall: &install::Binstall,
     repo: &str,
+    name: &str,
     version: &str,
     ask: &dyn Fn(&str, &[&str]) -> Result<String>,
     err: &mut dyn Write,
@@ -634,18 +893,11 @@ fn release_survey(
     let mut installable: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
 
     for target in matrix {
-        let stem = ask("mise-tasks/dist.sh", &["--stem", target])?
-            .trim()
-            .to_owned();
-        if stem.is_empty() {
-            writeln!(
-                err,
-                "::error:: release install: mise-tasks/dist.sh --stem {target} printed nothing. \
-                 Its naming is what every other reader agrees with; if it cannot be asked, \
-                 nothing here has been checked."
-            )?;
-            return Ok(None);
-        }
+        // `dist`'s own stem rule, asked in process: the naming contract has one
+        // authority and it is `dist::archive_stem`, which the release build
+        // itself calls. The name is the package's, read from its manifest, so
+        // no consumer's crate name is spelled here.
+        let stem = dist::archive_stem(name, version, target);
 
         // The archive suffix is the BINSTALL manifest's answer, which is the one
         // cargo acts on. Deriving it from the triple here would put a second
@@ -692,7 +944,7 @@ fn release_survey(
         }
 
         let expected = format!("{repo}/releases/download/v{version}/{dist_name}");
-        let resolved = binstall.resolve(repo, "batten", version, target)?;
+        let resolved = binstall.resolve(repo, name, version, target)?;
         if resolved != expected {
             found.push(install::Disagreement::BinstallUrl {
                 target: target.clone(),
@@ -721,12 +973,10 @@ fn release_survey(
 /// `Internal` rather than a refusal, because a gate that could not look must not
 /// report a contract it never checked.
 fn run_release(
-    command: &cli::ReleaseCommand,
     overrides: &Overrides,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
-    let cli::ReleaseCommand::Install = *command;
     let root = git::repo_root(Path::new("."))?;
     let root = Path::new(&root);
 
@@ -779,20 +1029,22 @@ fn run_release(
         )?;
         return Ok(ExitCode::Internal);
     };
-    let (Some(repo), Some(version)) = (
+    let (Some(repo), Some(version), Some(name)) = (
         install::manifest_scalar(&workspace, "repository"),
         install::manifest_scalar(&workspace, "version"),
+        install::manifest_scalar(&manifest, "name"),
     ) else {
         writeln!(
             err,
-            "::error:: release install: the workspace manifest declares no repository or no \
-             version, so binstall's placeholders cannot be resolved."
+            "::error:: release install: the manifests declare no repository, no version or no \
+             package name, so binstall's placeholders cannot be resolved."
         )?;
         return Ok(ExitCode::Internal);
     };
 
-    // The two interim spawns. Both programs are wave 2's; when they are engine
-    // code this asks a function and the contract is unchanged.
+    // The one interim spawn. `install.sh` stays shell because it runs before
+    // the engine exists; `dist`'s naming is engine code now and is asked as a
+    // function inside `release_survey`.
     //
     // THROUGH `exec::piped`, NOT A `Command::new` HERE. `lib` is the CLI
     // dispatch and `policy/spawn-adapters.rego` deliberately does not place it:
@@ -821,7 +1073,7 @@ fn run_release(
         return Ok(ExitCode::Internal);
     }
 
-    let survey = release_survey(&matrix, &binstall, &repo, &version, &ask, err)?;
+    let survey = release_survey(&matrix, &binstall, &repo, &name, &version, &ask, err)?;
     let Some((mut found, installable)) = survey else {
         return Ok(ExitCode::Internal);
     };
@@ -2238,15 +2490,53 @@ fn run_mcp(
         // Returns only on failure; success replaces this process.
         return exec::become_argv(command).map(|never| match never {});
     }
+    // CLOUD-843: the connector and attach programs, retired onto the engine.
+    if let cli::McpCommand::Grant {
+        tool,
+        guard,
+        aliases,
+        config,
+        settings,
+    } = command
+    {
+        return run_mcp_grant(
+            &McpGrantRequest {
+                tool: tool.as_deref(),
+                guard: *guard,
+                aliases: *aliases,
+                wiring: config.as_deref(),
+                settings: settings.as_deref(),
+            },
+            overrides,
+            out,
+            err,
+        );
+    }
+    if let cli::McpCommand::Posture {
+        settings,
+        config,
+        logs,
+        spawns,
+    } = command
+    {
+        return run_mcp_posture(
+            settings.as_deref(),
+            config.as_deref(),
+            logs.as_deref(),
+            spawns.as_deref(),
+            overrides,
+            err,
+        );
+    }
     let cli::McpCommand::Call {
         server,
         method,
         params,
     } = command
     else {
-        // Unreachable: the enum has two variants and the first is handled above.
-        // A refusal rather than a panic, on this module's own rule that an
-        // impossible parse is still answered rather than aborted.
+        // Unreachable: every other variant is handled above. A refusal rather
+        // than a panic, on this module's own rule that an impossible parse is
+        // still answered rather than aborted.
         return Err(UsageError::raise(
             "mcp: no sub-verb resolved from this invocation".to_owned(),
         ));
@@ -2316,6 +2606,127 @@ fn run_mcp(
         out,
         err,
     )
+}
+
+/// What `mcp grant` was asked, as the surface parsed it.
+struct McpGrantRequest<'a> {
+    /// The tool name to resolve, where neither mode flag was given.
+    tool: Option<&'a str>,
+    /// Read a hook payload on stdin and answer on the handler contract.
+    guard: bool,
+    /// List each live key's governed name.
+    aliases: bool,
+    /// A host-injected wiring file, read in place of each source's own path.
+    wiring: Option<&'a str>,
+    /// The settings file to judge, instead of the committed one.
+    settings: Option<&'a str>,
+}
+
+/// The permission settings `mcp grant` and `mcp posture` judge.
+///
+/// The operand where one was given, else the committed file the MCP permission
+/// grammar belongs to — a harness fact the hook table already owns, read from
+/// there rather than spelled a second time here.
+fn mcp_settings(repo: &Path, given: Option<&str>) -> PathBuf {
+    if let Some(given) = given {
+        return PathBuf::from(given);
+    }
+    match hook::Harness::ClaudeCode.wiring().map(|wiring| wiring.file) {
+        Some(hook::WiringFile::Key { path, .. } | hook::WiringFile::Whole(path)) => repo.join(path),
+        None => repo.to_path_buf(),
+    }
+}
+
+/// `batten mcp grant` (CLOUD-843, retiring `connector-allow-resolve`).
+///
+/// # Errors
+///
+/// Outside a checkout, or under a config that will not resolve — except under
+/// `--guard`, where every degradation is silence at exit 0: a pre-tool handler
+/// that could not look must neither grant nor refuse.
+fn run_mcp_grant(
+    request: &McpGrantRequest<'_>,
+    overrides: &Overrides,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let loaded = git::repo_root(Path::new(".")).and_then(|repo| {
+        resolve::resolve(Path::new("."), overrides)
+            .map(|resolved| (repo, resolved.mcp.unwrap_or_default()))
+    });
+    let (repo, config) = match loaded {
+        Ok(loaded) => loaded,
+        Err(_) if request.guard => return Ok(ExitCode::Success),
+        Err(error) => return Err(error),
+    };
+    let settings = mcp_settings(&repo, request.settings);
+    let inputs = mcp_grant::Inputs {
+        config: &config,
+        repo_root: &repo,
+        settings: &settings,
+        wiring: request.wiring.map(Path::new),
+    };
+    let mut stdin = String::new();
+    let ask = if request.guard {
+        // UNREADABLE STDIN IS SILENCE, never a refusal of the event: the payload
+        // is the host's, and a guard that could not read it has nothing to apply.
+        let _ = std::io::stdin().read_to_string(&mut stdin);
+        mcp_grant::Ask::Guard
+    } else if request.aliases {
+        mcp_grant::Ask::Aliases
+    } else {
+        mcp_grant::Ask::Tool(request.tool.unwrap_or_default())
+    };
+    mcp_grant::run_grant(&inputs, ask, &stdin, out, err)
+}
+
+/// `batten mcp posture` (CLOUD-843, retiring `mcp-attach-check` and
+/// `mcp-allow-check --session`).
+///
+/// # Errors
+///
+/// Outside a checkout, under a config that will not resolve, or over a settings
+/// file that exists and will not parse.
+fn run_mcp_posture(
+    settings: Option<&str>,
+    wiring: Option<&str>,
+    logs: Option<&str>,
+    spawns: Option<&str>,
+    overrides: &Overrides,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let repo = git::repo_root(Path::new("."))?;
+    let config = resolve::resolve(Path::new("."), overrides)?
+        .mcp
+        .unwrap_or_default();
+    let settings = mcp_settings(&repo, settings);
+    let inputs = mcp_grant::Inputs {
+        config: &config,
+        repo_root: &repo,
+        settings: &settings,
+        wiring: wiring.map(Path::new),
+    };
+    let session = mcp_posture::Session {
+        logs: logs.map(PathBuf::from).or_else(mcp_log_root),
+        spawns: spawns
+            .map(PathBuf::from)
+            .or_else(|| mcp::spawn_ledger(&repo)),
+    };
+    mcp_posture::run(&inputs, &session, err)
+}
+
+/// Where the host keeps THIS project's MCP connection logs, or `None`.
+///
+/// The home-relative tree is the harness table's fact
+/// ([`hook::Harness::mcp_logs`]); the host keys it by the working directory with
+/// every separator written as `-`, which is the host's layout rather than a
+/// consumer's.
+fn mcp_log_root() -> Option<PathBuf> {
+    let tree = hook::Harness::ClaudeCode.mcp_logs()?;
+    let home = std::env::var_os("HOME").filter(|home| !home.is_empty())?;
+    let project = std::env::current_dir().ok()?;
+    let key = project.to_string_lossy().replace('/', "-");
+    Some(PathBuf::from(home).join(tree).join(key))
 }
 
 /// What `mcp call` has in hand once the exchange has completed.
@@ -2553,9 +2964,30 @@ fn run_target(
     // "is there a manifest beside it" discriminator is a question about the
     // caller's directory, and it decides nothing if the path was rewritten first.
     let here = Path::new(".");
-    let resolved = resolve::resolve(here, overrides)?;
     let cli::TargetCommand::Prune { yes, dry_run, root } = command;
-    let Some(declared) = resolved.prune.as_ref() else {
+    // A BUILD THE CONFIG HAS OUTRUN STILL RECLAIMS (CLOUD-843). The retired task
+    // body answered a whole-file refusal by building the engine, which spends
+    // disk on the one input this verb exists to make room for. The `[prune]`
+    // table alone is what the reclaim needs, and it is still read strictly —
+    // see `prune::declared_alone` — so this reaches only a refusal about some
+    // OTHER table; anything the committed file cannot yield keeps the original
+    // error.
+    let declared = match resolve::resolve(here, overrides) {
+        Ok(resolved) => resolved.prune,
+        Err(problem) => {
+            let Some(alone) = prune::declared_alone(here) else {
+                return Err(problem);
+            };
+            output::message(
+                mode,
+                output::Verbosity::Normal,
+                err,
+                "target prune: this build cannot load the whole config, so it reclaims by the committed [prune] table alone",
+            )?;
+            Some(alone)
+        }
+    };
+    let Some(declared) = declared.as_ref() else {
         // A repository that declares no `[prune]` has no floor to judge against,
         // and inventing one would be the core holding a number about somebody
         // else's build. Not a refusal: nothing was asked for.
@@ -3131,6 +3563,7 @@ fn run_landed(
             refs,
             instant,
             max_idle_days,
+            gather,
         } => run_landed_abandoned(
             overrides,
             &AbandonAsk {
@@ -3140,6 +3573,7 @@ fn run_landed(
                 refs: refs.as_deref(),
                 instant: instant.as_deref(),
                 max_idle_days: max_idle_days.as_deref(),
+                gather,
             },
             mode,
             out,
@@ -3160,6 +3594,177 @@ struct AbandonAsk<'a> {
     refs: Option<&'a str>,
     instant: Option<&'a str>,
     max_idle_days: Option<&'a str>,
+    /// Acquire every arm above that names no file (CLOUD-843).
+    gather: bool,
+}
+
+/// Pages of 100 the branch listing may walk before it refuses as truncated.
+const BRANCH_PAGES: u32 = 50;
+
+/// What `landed abandoned --gather` acquired for itself, arm by arm (CLOUD-843,
+/// retiring `[tasks.in-progress-drain]`'s gather).
+///
+/// `None` is an arm the caller named a file for, which the gather never
+/// overrides: an explicit file is the caller's evidence, and silently replacing
+/// it with a fresher reading would make a fixture unrepeatable.
+#[derive(Debug, Default)]
+struct Gathered {
+    claimed: Option<std::collections::BTreeSet<String>>,
+    merged: Option<std::collections::BTreeSet<String>>,
+    refs: Option<std::collections::BTreeSet<String>>,
+}
+
+// The gather's mutations (CLOUD-843, retiring `[tasks.in-progress-drain]`). Each
+// drops one gathered arm, or launders one arm's could-not-look into an empty
+// reading, and the named case is the compiled tier that stops discriminating;
+// `board sweep`'s `--issue` read is the last two rows.
+//MUTANT gather-trunk-ignored|s@        evidence.claimed.extend(keys.iter().cloned());@        let _ = keys;@|an_in_progress_issue_whose_commits_are_on_main_is_landed_unswept
+//MUTANT gather-merged-ignored|s@        evidence.merged.extend(keys.iter().cloned());@        let _ = keys;@|the_merged_set_is_gathered_when_no_file_names_it
+//MUTANT gather-refs-ignored|s@            Ok(names) => gathered.refs = Some(names),@            Ok(_) => {}@|the_remote_branch_list_is_gathered_and_an_empty_one_could_not_look
+//MUTANT gather-trunk-unread-is-empty|s@git::messages_reachable_from(root, &trunk)@Some(String::new())@|a_gather_that_cannot_read_the_trunk_is_could_not_look
+//MUTANT gather-trunk-hardcoded|s@worktree::land_target(root, config.must_land_on.as_deref())@Ok::<_, anyhow::Error>(Some(String::from("origin/main")))@|the_gather_reads_the_declared_trunk_not_origin_main
+//MUTANT gather-merged-failure-is-empty|s@            Err(why) => return Ok(Err(format!("merged pull requests: {why}"))),@            Err(_) => gathered.merged = Some(std::collections::BTreeSet::new()),@|a_gather_whose_merged_pull_requests_cannot_be_read_is_could_not_look
+//MUTANT sweep-issue-read-dropped|s@        stream.push_str(&text);@        let _ = \&text;@|several_ids_are_resolved_in_one_sweep
+//MUTANT sweep-issue-reads-the-write|s@    let tools = \[READ_TOOL.to_owned()\];@    let tools = [READ_TOOL.to_owned(), WRITE_TOOL.to_owned()];@|a_later_save_issue_response_does_not_displace_the_read_the_sweep_hands_its_gates
+
+/// Acquire every evidence arm the caller named no file for.
+///
+/// **Each arm is the authority its file used to come from, consulted rather
+/// than copied.** The trunk's closing keys are [`race::claimed_from`] with
+/// [`race::Source::ClosingOnly`] over the trunk's whole history — the task piped
+/// `git log --format=%B origin/main` into `claim keys --closing-only`, which is
+/// that call. The merged set is [`merged_pr_lines`], `claim merged`'s own body.
+/// The branches are the forge's listing, which is what `git ls-remote --heads`
+/// read, through the vendored client rather than a spawn.
+///
+/// **ONE TRUNK AND ONE REPOSITORY FOR ALL THREE ARMS** (review of CLOUD-843's
+/// port). The trunk is [`worktree::land_target`] — the consumer's declared
+/// `must_land_on`, else the remote's recorded default — which is the answer
+/// `worktree status` and the baseline already read; a literal `origin/main` here
+/// was a second answer, and on any consumer whose trunk is named otherwise it
+/// made the drain could-not-look forever. Both forge arms derive their
+/// repository from [`repo_slug`], so a consumer pointing `LAND_LOCK_REMOTE` or
+/// `GH_REPO` at another repository reads its merged pull requests and its
+/// branches from the SAME one rather than one from each.
+///
+/// # Errors
+///
+/// The outer `Result` is config and the checkout. The inner `Err` is a gather
+/// that could not finish — an unresolvable trunk, a forge that did not answer, a
+/// truncated or empty listing — which the verb renders as could-not-look: a
+/// thinner evidence set would read landed rows as live and live branches as
+/// dead, and both push a row toward ABANDONED.
+fn gather_evidence(
+    root: &Path,
+    ask: &AbandonAsk<'_>,
+    overrides: &Overrides,
+) -> Result<std::result::Result<Gathered, String>> {
+    let mut gathered = Gathered::default();
+    if ask.claimed.is_none() {
+        let config = resolve::resolve(Path::new("."), overrides)?;
+        let Some(trunk) = worktree::land_target(root, config.must_land_on.as_deref())? else {
+            return Ok(Err(
+                "no trunk to read: `must_land_on` is not declared and the remote records no \
+                 default branch, so which keys the trunk closes cannot be read"
+                    .to_owned(),
+            ));
+        };
+        let Some(log) = git::messages_reachable_from(root, &trunk) else {
+            return Ok(Err(format!(
+                "{trunk} did not resolve, or its history could not be walked to the end, so \
+                 which keys the trunk closes cannot be read"
+            )));
+        };
+        let grammar = board_grammar(overrides)?;
+        gathered.claimed = Some(
+            race::claimed_from("", "", &log, "", &grammar, race::Source::ClosingOnly)
+                .into_iter()
+                .collect(),
+        );
+    }
+    if ask.merged_prs.is_none() {
+        match merged_pr_lines(root, MERGED_PR_LIMIT, overrides)? {
+            Ok(lines) => {
+                gathered.merged = Some(
+                    lines
+                        .iter()
+                        .filter_map(|line| line.split('\t').next())
+                        .map(str::to_owned)
+                        .collect(),
+                );
+            }
+            Err(why) => return Ok(Err(format!("merged pull requests: {why}"))),
+        }
+    }
+    if ask.refs.is_none() {
+        match remote_branches(root) {
+            Ok(names) => gathered.refs = Some(names),
+            Err(why) => {
+                return Ok(Err(format!(
+                    "the remote's branches: {why}. On a forge this listing does not reach, \
+                     name the branches with --refs instead"
+                )));
+            }
+        }
+    }
+    Ok(Ok(gathered))
+}
+
+/// Every branch name the remote carries, from the forge's listing.
+///
+/// Could-not-look, as the retired task's `git ls-remote` reading was, on: no
+/// repository to ask about, a forge that did not answer, a walk that did not
+/// reach the end, and a listing with no branch at all — which cannot be true of
+/// a repository with a trunk, and read as empty would make every claim's branch
+/// read as gone.
+///
+/// **A FORGE LISTING, NOT A GIT TRANSPORT, and that narrows who can gather this
+/// arm.** The retired `git ls-remote --heads` worked against any remote git's
+/// own credential could reach; this reads the forge's REST listing through the
+/// vendored client, so it starts no program and the verb stays a `read` — but a
+/// consumer whose forge does not serve that listing gets could-not-look here on
+/// every run. That is the safe direction, and the arm is not lost to them:
+/// `--refs <file>` still takes the names, and an arm the caller names a file for
+/// is never gathered.
+fn remote_branches(root: &Path) -> std::result::Result<std::collections::BTreeSet<String>, String> {
+    let Some(slug) = repo_slug(root) else {
+        return Err("no remote this can derive a repository from".to_owned());
+    };
+    let git_dir = git::git_dir(root).map_err(|failure| failure.to_string())?;
+    let rows = match forge::window(
+        &git_dir,
+        &format!("repos/{slug}/branches"),
+        &[("per_page", "100")],
+        forge::Shape::Bare,
+        BRANCH_PAGES,
+    ) {
+        forge::Window::Whole(rows) => rows,
+        forge::Window::Truncated { read, .. } => {
+            return Err(format!(
+                "the walk read {read} branch(es) and did not reach the end — a truncated list \
+                 makes a live branch read as gone"
+            ));
+        }
+        forge::Window::CouldNotLook { endpoint, status } => {
+            return Err(format!(
+                "the forge did not answer for {endpoint} (status {})",
+                status.map_or_else(|| String::from("none"), |code| code.to_string())
+            ));
+        }
+    };
+    let names: std::collections::BTreeSet<String> = rows
+        .iter()
+        .filter_map(|row| row.get("name").and_then(serde_json::Value::as_str))
+        .map(str::to_owned)
+        .collect();
+    if names.is_empty() {
+        return Err(
+            "the remote reports no branches at all, which cannot be true of a repository with \
+             a trunk"
+                .to_owned(),
+        );
+    }
+    Ok(names)
 }
 
 /// Sweep a board for columns that contradict git and the forge.
@@ -3333,6 +3938,74 @@ fn run_landed_check(
     Ok(ExitCode::Violation)
 }
 
+/// The evidence `landed abandoned` decides over: the caller's files where it
+/// named them, else what `--gather` read, else absent and said so.
+///
+/// Split out of [`run_landed_abandoned`] at the seam between reading the board
+/// and assembling what rescues a claim, so each stays under
+/// `clippy::too_many_lines`.
+///
+/// # Errors
+///
+/// [`UsageError`] when a named evidence file cannot be read.
+fn abandon_evidence(
+    ask: &AbandonAsk<'_>,
+    gathered: &Gathered,
+    mode: Mode,
+    err: &mut dyn Write,
+) -> Result<(landed::Evidence, std::collections::BTreeSet<String>)> {
+    let mut evidence = landed::Evidence::default();
+    if let Some(path) = ask.claimed {
+        for (key, _) in evidence_file(path, "--claimed")? {
+            evidence.claimed.insert(key);
+        }
+    } else if let Some(keys) = &gathered.claimed {
+        evidence.claimed.extend(keys.iter().cloned());
+    } else {
+        // ABSENCE IS A READING, AND HERE IT LEANS THE UNSAFE WAY. On the sibling
+        // arm a missing `--claimed` under-reports; on this one it does the
+        // opposite, because landedness is what RESCUES a claim — a key whose
+        // only landing is a closing keyword on `main` reads as unlanded, and an
+        // unlanded stale row with no PR and no branch reads as ABANDONED.
+        //
+        // The predecessor could not reach this state: `landed-check.sh` read
+        // `main`'s log itself, so arm one was always live behind the drain.
+        // Taking it as a file makes it omittable, and a sweep that ran without
+        // it says so rather than reporting a column it half-checked.
+        output::message(
+            mode,
+            Verbosity::Normal,
+            err,
+            "landed: no --claimed evidence, so a key whose only landing is a closing keyword on \
+             main reads as unlanded — and an unlanded idle claim reads as abandoned. Supply \
+             `claimed-keys --closing-only` output to decide on all three arms.",
+        )?;
+    }
+    if let Some(path) = ask.merged_prs {
+        for (key, _) in evidence_file(path, "--merged-prs")? {
+            evidence.merged.insert(key);
+        }
+    } else if let Some(keys) = &gathered.merged {
+        evidence.merged.extend(keys.iter().cloned());
+    }
+    if let Some(path) = ask.landed_by {
+        for (key, reference) in evidence_file(path, "--landed-by")? {
+            evidence
+                .asserted
+                .insert(key, reference.unwrap_or_else(|| "no ref given".to_owned()));
+        }
+    }
+    let mut refs = std::collections::BTreeSet::new();
+    if let Some(path) = ask.refs {
+        for (name, _) in evidence_file(path, "--refs")? {
+            refs.insert(name);
+        }
+    } else if let Some(names) = &gathered.refs {
+        refs.extend(names.iter().cloned());
+    }
+    Ok((evidence, refs))
+}
+
 /// Sweep a board for claims nobody is serving (CLOUD-1513).
 ///
 /// # Errors
@@ -3352,13 +4025,18 @@ fn run_landed_abandoned(
     // ABANDONED — the sweep over-reports, and an over-reporting drain is the one
     // that gets switched off. `--claimed` and `--landed-by` fail the safe way
     // and stay optional.
-    let Some(merged_prs) = ask.merged_prs else {
+    //
+    // `--gather` is the one other way to satisfy it: the verb reads the same
+    // merged-PR authority `claim merged` does, and a gather that cannot finish
+    // is could-not-look below rather than an empty arm.
+    if ask.merged_prs.is_none() && !ask.gather {
         return Err(UsageError::raise(
             "landed: no --merged-prs evidence, so every row a merged pull request closed would \
-             read as an abandoned claim. Supply `<CLOUD-id><TAB><pr-number>` lines."
+             read as an abandoned claim. Supply `<CLOUD-id><TAB><pr-number>` lines, or pass \
+             --gather to read them from the forge."
                 .to_owned(),
         ));
-    };
+    }
 
     // THE CLOCK IS THE BOUNDARY'S. An instant the caller names is parsed here
     // and refused here; absent, the system clock answers — and either way the
@@ -3393,47 +4071,22 @@ fn run_landed_abandoned(
     })?;
     let claims = landed::claims_from(&value)?;
 
-    let mut evidence = landed::Evidence::default();
-    if let Some(path) = ask.claimed {
-        for (key, _) in evidence_file(path, "--claimed")? {
-            evidence.claimed.insert(key);
+    // THE GATHER RUNS AFTER THE PAYLOAD READS, so a caller piping the wrong
+    // thing is told so without a forge round trip first — the order the retired
+    // `[tasks.in-progress-drain]` kept.
+    let gathered = if ask.gather {
+        match gather_evidence(&board_root(), ask, overrides)? {
+            Ok(gathered) => gathered,
+            Err(why) => {
+                writeln!(err, "batten: landed abandoned: could not look: {why}")?;
+                return Ok(ExitCode::Internal);
+            }
         }
     } else {
-        // ABSENCE IS A READING, AND HERE IT LEANS THE UNSAFE WAY. On the sibling
-        // arm a missing `--claimed` under-reports; on this one it does the
-        // opposite, because landedness is what RESCUES a claim — a key whose
-        // only landing is a closing keyword on `main` reads as unlanded, and an
-        // unlanded stale row with no PR and no branch reads as ABANDONED.
-        //
-        // The predecessor could not reach this state: `landed-check.sh` read
-        // `main`'s log itself, so arm one was always live behind the drain.
-        // Taking it as a file makes it omittable, and a sweep that ran without
-        // it says so rather than reporting a column it half-checked.
-        output::message(
-            mode,
-            Verbosity::Normal,
-            err,
-            "landed: no --claimed evidence, so a key whose only landing is a closing keyword on \
-             main reads as unlanded — and an unlanded idle claim reads as abandoned. Supply \
-             `claimed-keys --closing-only` output to decide on all three arms.",
-        )?;
-    }
-    for (key, _) in evidence_file(merged_prs, "--merged-prs")? {
-        evidence.merged.insert(key);
-    }
-    if let Some(path) = ask.landed_by {
-        for (key, reference) in evidence_file(path, "--landed-by")? {
-            evidence
-                .asserted
-                .insert(key, reference.unwrap_or_else(|| "no ref given".to_owned()));
-        }
-    }
-    let mut refs = std::collections::BTreeSet::new();
-    if let Some(path) = ask.refs {
-        for (name, _) in evidence_file(path, "--refs")? {
-            refs.insert(name);
-        }
-    }
+        Gathered::default()
+    };
+
+    let (evidence, refs) = abandon_evidence(ask, &gathered, mode, err)?;
 
     // THE COLUMN THE DRAIN SELECTS ON, demanded for `run_landed_check`'s reason
     // and with a sharper edge here: every candidate is chosen BY this column, so
@@ -3591,6 +4244,50 @@ fn parse_run(line: &str) -> Option<checks_green::Run> {
     })
 }
 
+/// `checks green --sha`: one commit's check runs, read from the forge in process
+/// (CLOUD-843), or `None` once a could-not-look has been said on `err`.
+///
+/// The same [`pr_watch::read`] `record forge --fetch` and `land` read, so the
+/// three cannot disagree on which runs a commit carries. EVERY FAILURE IS
+/// COULD-NOT-LOOK, as the retired `checks-green` task's `gh api` arm made it: no
+/// answer, and an answer that is not a reading (a 404 for an unpushed sha, a 401,
+/// a 5xx) alike. An empty `runs` from a declined request would otherwise read as
+/// a head no workflow has registered for — "not yet", which a caller polls on
+/// forever rather than hearing that it could not look.
+//
+//MUTANT-SUITE crates/batten/tests/it/checks_green.rs
+//MUTANT declined-read-as-empty|s@^    if !answer.is_reading() {$@    if false {@|a_declined_forge_read_is_could_not_look_never_not_yet
+//MUTANT fetch-ignores-sha|s@^        sha: sha.to_owned(),$@        sha: String::from("HEAD"),@|the_fetched_reading_is_the_named_commits
+fn checks_green_fetch(
+    sha: &str,
+    repo: Option<String>,
+    err: &mut dyn Write,
+) -> Result<Option<Vec<checks_green::Run>>> {
+    let config = pr_watch::Config {
+        sha: sha.to_owned(),
+        // `--repo` first, then the checkout's remote — `pr watch`'s order.
+        repo: repo.unwrap_or_else(|| repo_or_placeholder(Path::new("."))),
+        interval: pr_watch::DEFAULT_INTERVAL,
+        progress: None,
+    };
+    let Some(answer) = pr_watch::read(&config, None) else {
+        writeln!(
+            err,
+            "::error:: checks green: could not look: the forge did not answer for {sha}'s check runs. A reading this gate cannot take is not a pass."
+        )?;
+        return Ok(None);
+    };
+    if !answer.is_reading() {
+        writeln!(
+            err,
+            "::error:: checks green: could not look: the forge answered status {} for {sha}'s check runs. A reading this gate cannot take is not a pass.",
+            answer.status
+        )?;
+        return Ok(None);
+    }
+    Ok(Some(pr_watch::runs_from_body(&answer.body)))
+}
+
 fn run_checks(
     command: ChecksCommand,
     out: &mut dyn Write,
@@ -3601,12 +4298,31 @@ fn run_checks(
         absent_ok,
         answered,
         fanin,
+        sha,
+        repo,
         json,
     } = command;
 
-    let mut raw = String::new();
-    std::io::stdin().read_to_string(&mut raw)?;
-    let runs: Vec<checks_green::Run> = raw.lines().filter_map(parse_run).collect();
+    let runs: Vec<checks_green::Run> = if let Some(sha) = sha {
+        match checks_green_fetch(&sha, repo, err)? {
+            Some(runs) => runs,
+            None => return Ok(ExitCode::Internal),
+        }
+    } else {
+        let mut raw = String::new();
+        std::io::stdin().read_to_string(&mut raw)?;
+        // `--repo` QUALIFIES A FETCH. Beside a piped reading it would be a
+        // repository nobody reads, which a caller could take for a scope. Refused
+        // AFTER the pipe is drained, so a writer is never cut off mid-reading.
+        if repo.is_some() {
+            writeln!(
+                err,
+                "::error:: checks green: --repo names the repository `--sha` reads; a piped reading was already taken"
+            )?;
+            return Ok(ExitCode::Usage);
+        }
+        raw.lines().filter_map(parse_run).collect()
+    };
 
     let roster = checks_green::Roster {
         required: roster_field(Some(&required)),
@@ -3717,7 +4433,17 @@ fn run_receipt(
     match command {
         ReceiptCommand::Clean => receipt::run_clean(out, err),
         ReceiptCommand::Record { check } => receipt::run_record(&check, mode, err),
-        ReceiptCommand::Status { check, key, json } => receipt::run_status(&check, key, json, out),
+        // `--or` absent is the single-check reading every earlier caller makes,
+        // through the same walk: a one-element disjunction IS `run_status`.
+        ReceiptCommand::Status {
+            check,
+            or,
+            key,
+            json,
+        } => {
+            let checks: Vec<String> = std::iter::once(check).chain(or).collect();
+            receipt::run_status_any(&checks, key, json, out)
+        }
         ReceiptCommand::Verified => receipt::run_verified(out),
     }
 }
@@ -3826,6 +4552,27 @@ fn run_singleton(
             task::singleton_release(&git_dir, &task);
             Ok(ExitCode::Success)
         }
+        SingletonCommand::Detach {
+            task,
+            marker,
+            log,
+            pattern,
+            attached,
+            command,
+        } => {
+            let detach = Detach {
+                task: &task,
+                marker: Path::new(&marker),
+                log: Path::new(&log),
+                pattern: &pattern,
+                command: &command,
+            };
+            if attached {
+                run_detached_copy(&git_dir, &detach)
+            } else {
+                run_detach(&detach, out)
+            }
+        }
         SingletonCommand::Acquire {
             task,
             pid,
@@ -3845,6 +4592,146 @@ fn run_singleton(
         }
     }
 }
+
+/// One `singleton detach` request, borrowed from the parsed command.
+struct Detach<'a> {
+    task: &'a str,
+    marker: &'a Path,
+    log: &'a Path,
+    pattern: &'a str,
+    command: &'a [String],
+}
+
+/// How many pointer lines a failure carries into the next turn.
+///
+/// The window cost of a failing run is bounded here, and nowhere downstream:
+/// `hookcost::judge` REPORTS an over-budget hook rather than truncating it, so a
+/// compiler's whole output would otherwise reach the agent's context.
+const DETACH_POINTERS: usize = 3;
+
+/// The `[[pattern]]` row `singleton detach` selects pointer lines with.
+fn detach_pattern(id: &str) -> Result<regex::Regex> {
+    let config = resolve::resolve(Path::new("."), &Overrides::default())?;
+    let row = config
+        .patterns
+        .iter()
+        .find(|row| row.id == id)
+        .ok_or_else(|| {
+            UsageError::raise(format!(
+                "singleton detach: no `[[pattern]]` row declares `{id}`"
+            ))
+        })?;
+    regex::Regex::new(&row.regex).map_err(|_| {
+        UsageError::raise(format!(
+            "singleton detach: `[[pattern]]` row `{id}` will not compile"
+        ))
+    })
+}
+
+/// `singleton detach`: announce and clear the previous run's failure, start the
+/// attached copy, and return without waiting (CLOUD-1731, CLOUD-1991).
+///
+/// STDOUT, because a handler's advisory is its stdout and stderr goes to a log
+/// nobody opens. CLEARED once announced, so one failure is said once rather than
+/// every turn until it is fixed. The pattern is resolved HERE, before anything
+/// starts, so a misdeclared row is this invocation's usage error rather than a
+/// background copy failing where no one reads it. Starting the copy is silent on
+/// failure: a turn's own check must never be the reason the turn stops.
+///
+/// # Errors
+///
+/// A [`UsageError`] for a `[[pattern]]` id that resolves to no compiling row;
+/// an internal error when the announcement cannot be written.
+fn run_detach(request: &Detach<'_>, out: &mut dyn Write) -> Result<ExitCode> {
+    detach_pattern(request.pattern)?;
+    if let Ok(said) = std::fs::read_to_string(request.marker) {
+        write!(out, "{said}")?;
+        let _ = std::fs::remove_file(request.marker);
+    }
+    let Ok(program) = std::env::current_exe() else {
+        return Ok(ExitCode::Success);
+    };
+    let mut args: Vec<String> = vec![
+        "singleton".to_owned(),
+        "detach".to_owned(),
+        request.task.to_owned(),
+        "--marker".to_owned(),
+        request.marker.to_string_lossy().into_owned(),
+        "--log".to_owned(),
+        request.log.to_string_lossy().into_owned(),
+        "--pattern".to_owned(),
+        request.pattern.to_owned(),
+        "--attached".to_owned(),
+        "--".to_owned(),
+    ];
+    args.extend(request.command.iter().cloned());
+    exec::detached(&program, &args, &[]);
+    Ok(ExitCode::Success)
+}
+
+/// The attached copy: take the lock for THIS pid, run the command, write its
+/// whole output to the log, and on a failure leave the capped pointers for the
+/// next invocation to announce.
+///
+/// A lock another copy holds is not an error: that copy's run is this turn's
+/// check, and a second one would only race it. Every exit is `0` — nobody waits
+/// on this process, so a code would reach no one; what it has to say is the
+/// marker.
+///
+/// # Errors
+///
+/// A [`UsageError`] for a `[[pattern]]` id that resolves to no compiling row.
+fn run_detached_copy(git_dir: &Path, request: &Detach<'_>) -> Result<ExitCode> {
+    let pattern = detach_pattern(request.pattern)?;
+    let own = std::process::id().to_string();
+    match task::singleton_acquire(
+        git_dir,
+        request.task,
+        &own,
+        std::time::Duration::from_millis(100),
+    ) {
+        task::Claim::Taken | task::Claim::Reclaimed(_) => {}
+        _ => return Ok(ExitCode::Success),
+    }
+    let ran = exec::piped_argv(
+        Path::new("."),
+        request.command,
+        "",
+        exec::Diagnostics::Keep,
+        &[],
+    );
+    let (code, said) = ran.unwrap_or((-1, String::new()));
+    let _ = durable::replace(request.log, &said);
+    if code != 0 {
+        let mut marker = format!(
+            "::error:: {}: `{}` did not pass\n",
+            request.task,
+            request.command.join(" ")
+        );
+        for line in said
+            .lines()
+            .filter(|line| pattern.is_match(line))
+            .take(DETACH_POINTERS)
+        {
+            marker.push_str("  ");
+            marker.push_str(line);
+            marker.push('\n');
+        }
+        marker.push_str("  (full output: ");
+        marker.push_str(&request.log.to_string_lossy());
+        marker.push_str(")\n");
+        let _ = durable::replace(request.marker, marker);
+    }
+    task::singleton_release(git_dir, request.task);
+    Ok(ExitCode::Success)
+}
+
+// The per-turn run's mutation rows, each caught by the compiled case it names
+// in the tier that drives both halves over a scratch repository.
+//MUTANT-SUITE crates/batten/tests/it/turn_cross_check.rs
+//MUTANT marker-not-cleared|s@^        let _ = std::fs::remove_file(request.marker);$@        let _ = request.marker;@|the_failure_is_announced_on_stdout_and_then_cleared
+//MUTANT pointers-uncapped|s@^            .take(DETACH_POINTERS)$@            .take(usize::MAX)@|the_pointers_are_capped_and_name_the_full_log
+//MUTANT lock-not-consulted|s@^        _ => return Ok(ExitCode::Success),$@        _ => {}@|a_copy_already_holding_the_lock_leaves_the_run_to_it
 
 /// The boundary's own clock, as whole seconds since the epoch.
 ///
@@ -3874,6 +4761,100 @@ fn supplied_epoch(raw: Option<&str>) -> Result<u64> {
         .map_err(|_| UsageError::raise("--instant takes a whole number of seconds since the epoch"))
 }
 
+/// `record decide`: derive and write a family's reading, then decide over it
+/// with the named rules, exactly as `check --rule` would (CLOUD-843).
+///
+/// An abstention is could-not-look: the stale record is gone, the reason goes to
+/// stderr as a fixed pointer, and nothing is decided — exit `0` with nothing on
+/// stdout, which a `stop` handler's door reads as a pass.
+fn run_record_decide(
+    family: &str,
+    inputs: &[String],
+    rules: &[String],
+    mode: Mode,
+    overrides: &Overrides,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    match record::decide_record(family, inputs, overrides)? {
+        record::Decision::Abstained(why) => {
+            writeln!(err, "batten: record decide {family}: abstained — {why}")?;
+            return Ok(ExitCode::Success);
+        }
+        // ANTI-VACUITY: a reading that holds nothing to judge says so, so a gate
+        // that cannot fire is never mistaken for one that found nothing.
+        record::Decision::Empty => {
+            writeln!(
+                err,
+                "batten: record decide {family}: no turns — nothing to judge"
+            )?;
+        }
+        record::Decision::Recorded => {}
+    }
+    let flags = cli::CheckFlags {
+        rule: rules.to_vec(),
+        ..cli::CheckFlags::default()
+    };
+    let decided = run_check(&flags, mode, overrides, out, err);
+    // THE READING ANSWERS THE DECISION IT WAS WRITTEN FOR, AND NO LATER ONE.
+    // Left in the store, a firing's record went on refusing every `check` and
+    // `enforce` over the whole ruleset until the next `stop` rewrote it — the
+    // previous turn's stranding turned into a blocker at `verify` and `land`,
+    // which the retired body (stderr and an exit code, no record) never was.
+    // Removed whatever the decision said, so no rule reads it afterwards.
+    //MUTANT-SUITE crates/batten/tests/it/finding_sink.rs
+    //MUTANT decided-record-kept|s@^    record::clear_named("record decide", \&record::safe_component("family", family)?)?;$@@|a_decided_record_never_answers_a_later_check
+    record::clear_named("record decide", &record::safe_component("family", family)?)?;
+    decided
+}
+
+/// `pr unsubscribed <drop|record|check> <pr>` (CLOUD-518, CLOUD-790; retired off
+/// `[tasks.pr-unsubscribed]` under CLOUD-843). The mechanism is
+/// [`unsubscribe`]'s; `check`'s decision is the consumer's rule.
+fn run_pr_unsubscribed(
+    request: &cli::UnsubscribedRequest,
+    overrides: &Overrides,
+    mode: Mode,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let verb = unsubscribe::Verb::parse(&request.verb)?;
+    let pr = unsubscribe::pr_number(&request.pr)?;
+    let host = unsubscribe::Host {
+        session_env: request.session_env.clone(),
+        token_env: request.token_env.clone(),
+        endpoint: request.endpoint.clone(),
+        tool: request.tool.clone(),
+        arguments: request.arguments.clone(),
+        family: record::safe_component("family", &request.family)?,
+    };
+    let git_dir = git::git_dir(Path::new(".")).map_err(|_| {
+        UsageError::raise("pr unsubscribed: not a git repository, so there is no receipt store")
+    })?;
+    match verb {
+        unsubscribe::Verb::Drop => unsubscribe::drop_subscription(&git_dir, &host, pr, out),
+        unsubscribe::Verb::Record => {
+            let mut answer = String::new();
+            std::io::stdin().read_to_string(&mut answer)?;
+            unsubscribe::record(&git_dir, &host, pr, &answer, out, err)
+        }
+        unsubscribe::Verb::Check => {
+            let Some(rule) = request.rule.clone() else {
+                return Err(UsageError::raise(
+                    "pr unsubscribed check: needs `--rule <id>`, the rule that decides over the record",
+                ));
+            };
+            let reading = unsubscribe::reading(&git_dir, &host, pr);
+            record::store_named("pr unsubscribed", &host.family, &reading)?;
+            let flags = cli::CheckFlags {
+                rule: vec![rule],
+                ..cli::CheckFlags::default()
+            };
+            run_check(&flags, mode, overrides, out, err)
+        }
+    }
+}
+
 fn run_pr(
     command: PrCommand,
     overrides: &Overrides,
@@ -3888,6 +4869,9 @@ fn run_pr(
             PrCommand::Link { pr, key } => return run_pr_link(&pr, &key, overrides, mode, err),
             PrCommand::Ensure { pr } => return run_pr_ensure(&pr, overrides, mode, err),
             PrCommand::Closes { pr } => return run_pr_closes(&pr, overrides, mode, err),
+            PrCommand::Unsubscribed(request) => {
+                return run_pr_unsubscribed(&request, overrides, mode, out, err);
+            }
             PrCommand::Watch {
                 sha,
                 repo,
@@ -3945,6 +4929,17 @@ fn run_pr(
         }
     };
 
+    // A REF THIS CHECKOUT KNOWS IS RESOLVED, AND ANYTHING ELSE PASSES THROUGH
+    // (CLOUD-843). `--sha HEAD` is how the consumer's `ci-wait` names its own
+    // working tree now that no shell reads it for the verb — still the caller
+    // naming its subject, which is what `WAIT_SHA`'s required flag keeps. A full
+    // sha resolves to itself; a sha this clone has never fetched, or a directory
+    // that is no checkout, reaches the forge exactly as it was written, where a
+    // bad one is refused as it always was.
+    let sha = match git::resolve_ref(Path::new("."), &sha) {
+        Ok(Some(resolved)) => resolved,
+        Ok(None) | Err(_) => sha,
+    };
     let config = pr_watch::Config {
         sha,
         // `--repo` FIRST, THEN THE REMOTE, and the placeholder only where neither
@@ -4430,10 +5425,6 @@ fn run_claim_merged(
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
-    let cannot_look = |err: &mut dyn Write, why: &str| -> Result<ExitCode> {
-        writeln!(err, "batten: claim merged: {why}")?;
-        Ok(ExitCode::Internal)
-    };
     let limit = match limit {
         Some(raw) => match raw.trim().parse::<usize>() {
             Ok(parsed) if parsed > 0 => parsed,
@@ -4447,10 +5438,47 @@ fn run_claim_merged(
         },
         None => MERGED_PR_LIMIT,
     };
+    match merged_pr_lines(repo, limit, overrides)? {
+        Ok(lines) => {
+            for line in lines {
+                writeln!(out, "{line}")?;
+            }
+            Ok(ExitCode::Success)
+        }
+        Err(why) => {
+            writeln!(err, "batten: claim merged: {why}")?;
+            Ok(ExitCode::Internal)
+        }
+    }
+}
 
-    let remotes = git::remote_fact(repo)?.remotes;
-    let Some(slug) = remotes.get("origin").and_then(|url| race::slug_of(url)) else {
-        return cannot_look(err, "no origin remote this can derive a repository from");
+/// `<key>\t<number>` for every key a merged pull request body CLOSES, or why the
+/// reading could not be made.
+///
+/// Lifted out of [`run_claim_merged`] so `landed abandoned --gather` reads the
+/// SAME authority rather than a second copy of it (CLOUD-338: both sides of a
+/// landed-ness comparison come out of one extraction). Every could-not-look the
+/// verb documents is an `Err` here, and the verb renders it.
+///
+/// # Errors
+///
+/// The outer `Result` is config resolution and the checkout; the inner one is
+/// the forge's answer.
+fn merged_pr_lines(
+    repo: &Path,
+    limit: usize,
+    overrides: &resolve::Overrides,
+) -> Result<std::result::Result<std::collections::BTreeSet<String>, String>> {
+    // [`repo_slug`], never a second derivation: `landed abandoned --gather` reads
+    // the remote's branches through it, and two arms asking two repositories —
+    // `GH_REPO` or `LAND_LOCK_REMOTE` for one, `origin` for the other — would
+    // judge one repository's claims against another's merges.
+    let Some(slug) = repo_slug(repo) else {
+        return Ok(Err(
+            "no remote this can derive a repository from (`GH_REPO`, else the \
+             `LAND_LOCK_REMOTE` remote, else `origin`)"
+                .to_owned(),
+        ));
     };
     let git_dir = git::git_dir(repo)?;
     // ONE PAGE OF 100 PER LAP, so the budget is stated in pull requests rather
@@ -4466,23 +5494,17 @@ fn run_claim_merged(
     ) {
         forge::Window::Whole(rows) => rows,
         forge::Window::Truncated { read, .. } => {
-            return cannot_look(
-                err,
-                &format!(
-                    "the walk read {read} pull request(s) and did not reach the end — the answer \
-                     is truncated, and a truncated evidence file makes landed work read as live. \
-                     Raise --limit above {limit} and run again"
-                ),
-            );
+            return Ok(Err(format!(
+                "the walk read {read} pull request(s) and did not reach the end — the answer \
+                 is truncated, and a truncated evidence file makes landed work read as live. \
+                 Raise --limit above {limit} and run again"
+            )));
         }
         forge::Window::CouldNotLook { endpoint, status } => {
-            return cannot_look(
-                err,
-                &format!(
-                    "the forge did not answer for {endpoint} (status {})",
-                    status.map_or_else(|| String::from("none"), |code| code.to_string())
-                ),
-            );
+            return Ok(Err(format!(
+                "the forge did not answer for {endpoint} (status {})",
+                status.map_or_else(|| String::from("none"), |code| code.to_string())
+            )));
         }
     };
 
@@ -4494,21 +5516,20 @@ fn run_claim_merged(
         .filter(|row| row.get("merged_at").is_some_and(|at| !at.is_null()))
         .collect();
     if merged.is_empty() {
-        return cannot_look(
-            err,
+        return Ok(Err(
             "the forge reports no merged pull requests at all, which cannot be true of a \
-             repository with a trunk — a reachability problem, not an empty answer",
-        );
+             repository with a trunk — a reachability problem, not an empty answer"
+                .to_owned(),
+        ));
     }
 
     let grammar = board_grammar(overrides)?;
     let mut lines: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for row in merged {
         let Some(number) = row.get("number").and_then(serde_json::Value::as_u64) else {
-            return cannot_look(
-                err,
-                "a pull request in the reading carries no usable number",
-            );
+            return Ok(Err(
+                "a pull request in the reading carries no usable number".to_owned(),
+            ));
         };
         let body = row
             .get("body")
@@ -4518,10 +5539,7 @@ fn run_claim_merged(
             lines.insert(format!("{key}\t{number}"));
         }
     }
-    for line in lines {
-        writeln!(out, "{line}")?;
-    }
-    Ok(ExitCode::Success)
+    Ok(Ok(lines))
 }
 
 fn run_claim_bot(
@@ -4802,6 +5820,94 @@ fn board_grammar(overrides: &Overrides) -> Result<ready::Grammar> {
         ))
 }
 
+/// `batten board check`: whether the board's columns, graph and citations tell
+/// the truth about the work (CLOUD-1221, retiring `mise-tasks/graph-check.sh`,
+/// `mise-tasks/ready-cites-check.sh` and `mise-tasks/spec-ref-check.sh`).
+///
+/// The payloads come from stdin, or — under `--issue` — out of the capture store,
+/// which hands over the bytes the tracker returned rather than text somebody
+/// re-typed. Everything the verb decides with is the consumer's declaration,
+/// resolved here once; [`board_check`] reads the set and the `tracker-hygiene`
+/// preset it evaluates holds every predicate.
+///
+/// # Errors
+///
+/// [`UsageError`] when an `--issue` has no stored read, when stdin cannot be
+/// read, or when the consumer has not declared the vocabulary the asked question
+/// needs.
+fn run_board_check(
+    issues: &[String],
+    cites: bool,
+    refs: bool,
+    overrides: &Overrides,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let config = resolve::resolve(Path::new("."), overrides)?;
+    let grammar = board_grammar(overrides)?;
+    let root = board_root();
+    let text = if issues.is_empty() {
+        let mut raw = String::new();
+        std::io::stdin().read_to_string(&mut raw)?;
+        raw
+    } else {
+        board_check_payloads(&root, issues)?
+    };
+    board_check::run(
+        &board_check::Ask {
+            text: &text,
+            cites,
+            refs,
+            now: boundary_epoch(),
+        },
+        &board_check::Declared {
+            board: config.board.as_ref(),
+            patterns: &config.patterns,
+            grammar: &grammar,
+            root: &root,
+        },
+        out,
+        err,
+    )
+}
+
+/// Each key's newest stored READ, as one stream of payloads.
+///
+/// [`READ_TOOL`] alone, where `ready lint --issue` also takes the write's
+/// response: the board check reads RELATIONS and attachments, and a write's
+/// response omits the relations — so letting a later write displace the read
+/// would hand the gate a poorer payload than the one the tracker served
+/// (CLOUD-782).
+///
+/// **A key with no stored read is could-not-look, never skipped**: a set short
+/// one row is exactly the closure the graph refuses to judge by guessing.
+fn board_check_payloads(root: &Path, issues: &[String]) -> Result<String> {
+    let tools = [READ_TOOL.to_owned()];
+    let mut stream = String::new();
+    for key in issues {
+        let selector = capture::Selector {
+            tools: &tools,
+            key,
+            key_at: DEFAULT_KEY_AT,
+        };
+        let Some(found) = capture::find(root, &selector)? else {
+            return Err(UsageError::raise(format!(
+                "board check: no stored {READ_TOOL} read for {key} in this repository's capture \
+                 store — read the row and the capture mints itself, then run this again"
+            )));
+        };
+        let bytes = capture::read(root, &found.capture)?;
+        let text = String::from_utf8(bytes).map_err(|_| {
+            UsageError::raise(format!(
+                "board check: the stored response for {key} is not UTF-8"
+            ))
+        })?;
+        stream.push_str(&text);
+        stream.push('\n');
+    }
+    Ok(stream)
+}
+
 fn run_claim(
     command: ClaimCommand,
     mode: Mode,
@@ -5023,6 +6129,84 @@ fn parse_json(text: &str) -> Result<serde_json::Value> {
             "the input is not a get_issue payload with a .description field".to_owned(),
         )
     })
+}
+
+/// `batten board sweep`: every gate the committed `[board] sweep` table
+/// declares, run over one payload set and reported as a set (CLOUD-825,
+/// retiring `[tasks.board-sweep]` under CLOUD-843).
+///
+/// The payload set is stdin, or — with `--issue` — each key's newest READ out
+/// of the capture store, which is what retired `[tasks.board-payloads]`: the
+/// sweep pays the fetch once because the fetch already stored the bytes, and no
+/// agent re-types a payload (CLOUD-526). A key with no stored read is refused by
+/// name, never skipped: sweeping a short closure is what every board gate
+/// refuses.
+///
+/// # Errors
+///
+/// [`UsageError`] for an undeclared or malformed table, an unreadable or empty
+/// payload set, and a key the store holds no read for — each could-not-look
+/// about the INPUT, before any gate runs.
+fn run_board_sweep(
+    issues: &[String],
+    overrides: &Overrides,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let config = resolve::resolve(Path::new("."), overrides)?;
+    let gates = config
+        .board
+        .as_ref()
+        .map(|board| board.sweep.as_slice())
+        .unwrap_or_default();
+    if let Some(why) = sweep::malformed(gates) {
+        return Err(UsageError::raise(format!("board sweep: {why}")));
+    }
+    let root = board_root();
+    let text = if issues.is_empty() {
+        let mut raw = String::new();
+        std::io::stdin().read_to_string(&mut raw)?;
+        raw
+    } else {
+        stored_payloads(&root, issues)?
+    };
+    let (payload, count) =
+        sweep::prepare(&text).map_err(|why| UsageError::raise(format!("board sweep: {why}")))?;
+    sweep::run(&root, gates, &payload, count, out, err)
+}
+
+/// Each key's newest stored READ, as one stream of payloads.
+///
+/// [`READ_TOOL`] alone, where `ready lint --issue` also takes the write's
+/// response: a board gate reads RELATIONS and attachments, and a write's
+/// response is shape-identical across `id`, `status` and `attachments` while
+/// omitting `relations` — so letting a later write displace the read would hand
+/// the gates a poorer payload than the one the tracker served (CLOUD-782).
+fn stored_payloads(root: &Path, issues: &[String]) -> Result<String> {
+    let tools = [READ_TOOL.to_owned()];
+    let mut stream = String::new();
+    for key in issues {
+        let selector = capture::Selector {
+            tools: &tools,
+            key,
+            key_at: DEFAULT_KEY_AT,
+        };
+        let Some(found) = capture::find(root, &selector)? else {
+            return Err(UsageError::raise(format!(
+                "board sweep: no stored {READ_TOOL} read for {key} in this repository's capture \
+                 store — read the row and the capture mints itself, then run this again"
+            )));
+        };
+        let bytes = capture::read(root, &found.capture)?;
+        let text = String::from_utf8(bytes).map_err(|_| {
+            UsageError::raise(format!(
+                "board sweep: the stored response for {key} is not UTF-8"
+            ))
+        })?;
+        stream.push_str(&text);
+        stream.push('\n');
+    }
+    Ok(stream)
 }
 
 /// The tool whose response carries an issue body as read.
@@ -5532,6 +6716,16 @@ fn run_wiring(
             dry_run,
             check,
         } => run_wiring_reclaim(*yes, *dry_run, *check, mode, overrides, err),
+        cli::WiringCommand::Gate { body } => {
+            let linked = wiring::link_commit_gate(Path::new("."), body)?;
+            output::message(
+                mode,
+                output::Verbosity::Normal,
+                err,
+                &format!("wiring gate: {linked} commit hook(s) linked to {body}"),
+            )?;
+            Ok(ExitCode::Success)
+        }
     }
 }
 
@@ -7514,7 +8708,77 @@ fn run_perf(
                 }
             }
         }
+        cli::PerfCommand::Latency => run_perf_latency(root, overrides, out, err),
     }
+}
+
+/// `perf latency`: time `[perf.latency]`'s command and report drift (CLOUD-843).
+///
+/// THE CLOCK AND THE SPAWN ARE HERE, THE VERDICT IS [`perf::latency_verdict`]'s,
+/// so the decision is pure over the samples it is handed. Each run's exit status
+/// is ignored — a red run still takes time, and this measures cost rather than
+/// correctness — but a command that cannot START is could-not-look, exit 3: an
+/// absent program must never collapse into a fast pass.
+///
+/// Pointer-only per rule 4: the median, the budget and the verdict token, never
+/// a line of the command's output, which is discarded.
+fn run_perf_latency(
+    root: &Path,
+    overrides: &Overrides,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let config = resolve::resolve(Path::new("."), overrides)?;
+    let Some(latency) = config.perf.and_then(|perf| perf.latency) else {
+        writeln!(
+            err,
+            "::error:: perf latency: no `[perf.latency]` is declared, so there is no command to \
+             time and no budget to hold it to. unmeasurable"
+        )?;
+        return Ok(ExitCode::Internal);
+    };
+    let mut samples = Vec::new();
+    for _ in 0..latency.runs {
+        let started = std::time::Instant::now();
+        if exec::piped_argv(root, &latency.command, "", exec::Diagnostics::Drop, &[]).is_none() {
+            writeln!(
+                err,
+                "::error:: perf latency: `{}` could not be started, so there is no timing to \
+                 judge. unmeasurable",
+                latency.command.first().map_or("", String::as_str)
+            )?;
+            return Ok(ExitCode::Internal);
+        }
+        samples.push(started.elapsed().as_secs());
+    }
+    let Some(median) = perf::median_seconds(&samples) else {
+        writeln!(
+            err,
+            "::error:: perf latency: no run produced a timing. unmeasurable"
+        )?;
+        return Ok(ExitCode::Internal);
+    };
+    let verdict = perf::latency_verdict(
+        median,
+        latency.budget_seconds,
+        latency.slack_seconds,
+        latency.loose_factor,
+    );
+    writeln!(
+        out,
+        "perf latency: {} median {median}s over {} run(s), budget {}s (+{}s slack, {}x loose floor)",
+        verdict.as_str(),
+        samples.len(),
+        latency.budget_seconds,
+        latency.slack_seconds,
+        latency.loose_factor,
+    )?;
+    Ok(match verdict {
+        perf::Latency::Within => ExitCode::Success,
+        // A report, not a branch's fault: the number needs re-deriving in a
+        // commit of its own, which is what exit 2 asks a reader to go and do.
+        perf::Latency::Tight | perf::Latency::Loose => ExitCode::Violation,
+    })
 }
 
 /// The accepted regressions the committed authority declares, or none.
@@ -7845,6 +9109,81 @@ fn run_land(
             };
             run_land_lap(root, &url, reference, &branch, out, err)
         }
+        cli::LandCommand::Linear { reference } => {
+            let Some(url) = land_remote(root, err)? else {
+                return Ok(ExitCode::Internal);
+            };
+            run_land_linear(root, &url, reference, out, err)
+        }
+    }
+}
+
+/// `batten land linear <reference>` (CLOUD-1991): is HEAD built on the reference's
+/// CURRENT tip, so its pull request can fast-forward-land?
+///
+/// # The retired shell, clause by clause
+///
+/// The `linear-check` task body fetched `+refs/heads/main:refs/remotes/origin/main`
+/// after deepening a shallow clone, refused on a fetch that failed or a ref that
+/// still would not resolve, and compared `git merge-base origin/main HEAD` against
+/// the fetched tip. Each clause is here, through [`land::advance`] — the fetch a
+/// lap already makes, so "the trunk as the landing loop sees it" has one reading:
+///
+/// * **THE FETCH FAILS CLOSED.** A fetch that does not complete is could-not-look
+///   (`3`), never a comparison against a stale tracking ref — the false green that
+///   once minted a receipt the ready guard accepted.
+/// * **A SHALLOW CLONE IS REFUSED, NOT DEEPENED.** The body unshallowed first; the
+///   in-process fetch sends `have` lines from local history and cannot deepen, and
+///   ancestry over a truncated history answers wrong in exactly one direction. So a
+///   shallow clone is could-not-look, naming the remedy, rather than a verdict.
+/// * **BEHIND IS THE VERDICT (`2`)**, which is what the body's `exit 2` was and what
+///   a caller branching on "rebase needed" reads. Linear is `0`.
+///
+/// The receipt the body minted is NOT minted here: which receipt names this
+/// question is the consumer's vocabulary, so the task records it after a `0`.
+///
+/// # Errors
+///
+/// Only a write failure on either channel; every failure to look is an exit code.
+fn run_land_linear(
+    root: &Path,
+    url: &str,
+    reference: &str,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    //MUTANT-SUITE crates/batten/tests/it/linear_check.rs
+    //MUTANT linear-shallow-trusted|s@^    if git::is_shallow(root).unwrap_or(true) {$@    if false {@|a_shallow_clone_is_could_not_look_and_names_the_remedy
+    //MUTANT linear-fetch-failure-trusted|s@return Ok(ExitCode::Internal); // the fetch did not complete$@return Ok(ExitCode::Success);@|a_fetch_that_cannot_complete_is_could_not_look_and_never_a_pass
+    if git::is_shallow(root).unwrap_or(true) {
+        writeln!(
+            err,
+            "::error:: land linear: this clone is shallow (or unreadable), so ancestry against \
+             {reference} is unanswerable; deepen it with `git fetch --unshallow` and ask again"
+        )?;
+        return Ok(ExitCode::Internal);
+    }
+    let tracking = land::tracking_ref(reference);
+    let tip = match land::advance(root, url, reference, &tracking) {
+        Ok(tip) => tip,
+        Err(error) => {
+            writeln!(
+                err,
+                "::error:: land linear: could not fetch {reference}, so linearity is \
+                 unverifiable; not reading a stale {tracking}: {error:#}"
+            )?;
+            return Ok(ExitCode::Internal); // the fetch did not complete
+        }
+    };
+    if gitwrite::carries(root, &tip, "HEAD") {
+        writeln!(out, "land linear: HEAD is built on {tracking} ({tip})")?;
+        Ok(ExitCode::Success)
+    } else {
+        writeln!(
+            err,
+            "::error:: land linear: HEAD is not rebased on the current {tracking} ({tip})"
+        )?;
+        Ok(ExitCode::Violation)
     }
 }
 
@@ -8315,6 +9654,100 @@ fn run_land_lap(
         return Ok(ExitCode::Violation);
     };
 
+    // THE RECLAIM CENSUS'S WINDOW, opened and closed HERE and nowhere inside the
+    // laps (CLOUD-843, round-2 review). See `land_census_window`. After the
+    // singleton, because the census store is this worktree's and the singleton is
+    // what makes this the one landing in it: a second land refused above wrote
+    // nothing, so it cannot mask a live one.
+    let beat_note = std::env::var("LEASE_BEAT_NOTE").unwrap_or_default();
+    let stop_note = std::env::var("LEASE_STOP_NOTE").unwrap_or_default();
+    let run = Laps {
+        root,
+        url,
+        reference,
+        branch,
+        budget: laps,
+        pipeline,
+        guard: &guard,
+    };
+    land_census_window(root, &beat_note, &stop_note, || {
+        run_land_laps(run, out, err)
+    })
+}
+
+//MUTANT landing-start-unnoted|s@^    note_declared(root, begin_note);$@@|a_landing_notes_its_start_and_every_chosen_end
+//MUTANT landing-end-unnoted|s@^    note_declared(root, stop_note);$@@|a_landing_notes_its_start_and_every_chosen_end
+/// Run `laps` inside the reclaim census's window: a beat before, a stop after.
+///
+/// **THE STOP IS WRITTEN WHERE THE LANDING ENDS, never where a lap does**
+/// (CLOUD-843, round-2 review). It used to ride on `lease_hand_back`, and every
+/// lap that reached `Step::Lease` and then lapped hands its lease back through
+/// `unwind_lap` — so the census read `x` in the middle of a landing still running,
+/// and a container killed in the next lap's replay or verify, which take
+/// minutes, read as *stopped on purpose*. The false-idle reading the census exists
+/// to rule out. Here the landing has returned — landed, stopped, refused, stood
+/// down or out of laps — so nothing this process does follows the stop.
+///
+/// **THE BEAT OPENS THE WINDOW, AND IS ITS ONLY BEAT** (CLOUD-843, round-3
+/// review). It is written before any lease is held and before any lap, so a
+/// landing that followed an earlier landing's `x` under the same boot reads as in
+/// flight from its first instruction. Nothing after it and before the stop can
+/// change the census verdict — `reclaim::classify` reads only the kind of the
+/// last record under the boot — so the lap's [`Heartbeat`] writes no census note
+/// at all; one there would also fire in the hand-stepping `land wait`, which has
+/// no window to close it.
+///
+/// Never on an exit path (CLOUD-491): a kill never returns from `laps`, so it
+/// reaches neither note after the first, and the last record stays a beat. An
+/// `Err` is a return like any other — the process chose to stop — so it is
+/// noted too. Both argvs are the consumer's, for [`note_release`]'s reason.
+///
+/// # Errors
+///
+/// Whatever `laps` returned; the notes are best-effort and never an error.
+fn land_census_window(
+    root: &Path,
+    begin_note: &str,
+    stop_note: &str,
+    laps: impl FnOnce() -> Result<ExitCode>,
+) -> Result<ExitCode> {
+    note_declared(root, begin_note);
+    let ended = laps();
+    note_declared(root, stop_note);
+    ended
+}
+
+/// The landing the lap loop runs, gathered for `clippy::too_many_arguments` —
+/// [`Asked`]'s reason, one level up: these are the landing's identity, fixed
+/// before the first lap.
+struct Laps<'run> {
+    root: &'run Path,
+    url: &'run str,
+    reference: &'run str,
+    branch: &'run str,
+    /// How many laps the landing may spend.
+    budget: u32,
+    pipeline: pipeline::Pipeline,
+    /// Held by the caller for the whole landing; each step publishes its phase.
+    guard: &'run LandSingleton,
+}
+
+/// The lap loop, split from [`run_land_lap`] so the census window can close
+/// around every way it returns (see [`land_census_window`]).
+///
+/// # Errors
+///
+/// Only for a stream that will not accept output.
+fn run_land_laps(run: Laps<'_>, out: &mut dyn Write, err: &mut dyn Write) -> Result<ExitCode> {
+    let Laps {
+        root,
+        url,
+        reference,
+        branch,
+        budget: laps,
+        pipeline,
+        guard,
+    } = run;
     // ONE POLL FOR THE WHOLE LANDING, held outside the lap loop so lap 2 onward
     // send the validator lap 1 was given. Rebuilt per lap it was a fresh
     // unconditional ask every time — see `land::stale`'s own header, which
@@ -9646,7 +11079,11 @@ fn landed_for_real(root: &Path, url: &str, branch: &str, out: &mut dyn Write) ->
 ///
 /// `None` is could-not-look and callers must say so rather than reporting a
 /// verdict about the branch.
-fn repo_slug(root: &Path) -> Option<String> {
+///
+/// `pub(crate)` since CLOUD-843: `forge_query` binds a `[[forge.query]]` row's
+/// `{owner}`/`{repo}` from it, and a second derivation of the slug would be a
+/// second answer to which repository a forge read is about.
+pub(crate) fn repo_slug(root: &Path) -> Option<String> {
     if let Ok(declared) = std::env::var("GH_REPO")
         && !declared.trim().is_empty()
     {
@@ -11417,6 +12854,17 @@ impl<'clone> Heartbeat<'clone> {
     /// landing becomes unstealable again, which is the defect this row exists to
     /// close. The tick answers *is the loop going round*; the lease is asking *is
     /// the world moving*.
+    ///
+    /// # IT WRITES NO RECLAIM-CENSUS NOTE (CLOUD-843, round-3 review)
+    ///
+    /// The census's window is [`land_census_window`]'s: a beat before the first
+    /// lap, a stop where the landing returns, and nothing in between can change
+    /// its verdict — `reclaim::classify` reads only the KIND of the last record
+    /// under the boot, and inside the window that is already a beat. A beat here
+    /// was therefore redundant inside a landing and WRONG outside one: the
+    /// hand-stepping `land wait` builds this heartbeat with no window around it,
+    /// so a beat it wrote was never followed by a stop and the next container read
+    /// a finished wait as *a landing was in flight*.
     fn beat(&self, observed: u64) {
         let Some(terms) = self.terms.as_ref() else {
             return;
@@ -12264,6 +13712,10 @@ fn run_lease_hold(
         .and_then(|pid| pid.parse::<u32>().ok());
     let marker =
         std::env::var("LAND_LOCK_HOLDER_MARKER").unwrap_or_else(|_| String::from("batten land"));
+    // The consumer's reclaim-census beat and stop, read once: see
+    // `lease_renewed` and `lease_hold_bail`.
+    let beat_note = std::env::var("LEASE_BEAT_NOTE").unwrap_or_default();
+    let stop_note = std::env::var("LEASE_STOP_NOTE").unwrap_or_default();
     let mut misses = 0_u32;
     loop {
         // The interval is the lease's own `beat`, and the loop's exit condition is
@@ -12291,7 +13743,7 @@ fn run_lease_hold(
                 "lease: the land holding this lease (pid {pid}) is gone; releasing rather than \
                  renewing for nobody"
             )?;
-            lease_hand_back(root, terms, &holder, now);
+            lease_hold_bail(root, terms, &holder, now, HoldEnd::HolderGone, &stop_note);
             return Ok(ExitCode::Violation);
         }
         // The complementary case, and the one liveness cannot see: the land is
@@ -12315,7 +13767,7 @@ fn run_lease_hold(
                 "lease: the land holding this lease {why}; releasing and stopping it rather than \
                  holding the fleet"
             )?;
-            lease_hand_back(root, terms, &holder, now);
+            lease_hold_bail(root, terms, &holder, now, HoldEnd::Stalled, &stop_note);
             lease_bail_reason(&git_dir, &why);
             // Re-corroborated immediately before the signal, never inferred from
             // the probe at the top of this beat: pids recycle inside twenty
@@ -12357,7 +13809,7 @@ fn run_lease_hold(
         let token = progress.map(lease::Progress::token);
         let renewed = lease::renewal(terms, body, token.as_deref(), now);
         if let Ok(lease::Outcome::Applied) = lease::cas(terms, &observed, &renewed, now) {
-            lease_receipt(root, &body.branch, now + terms.ttl);
+            lease_renewed(root, &body.branch, now + terms.ttl, &beat_note);
             misses = 0;
         } else {
             // A REJECTED SWAP AND A FAILED PUSH ARE ONE ARM HERE, deliberately.
@@ -12383,6 +13835,15 @@ fn run_lease_hold(
 /// **Never fatal, in either direction.** This runs on the paths that are already
 /// ending; a clone that cannot reach the remote here has a problem, but the caller
 /// is stopping anyway and reporting it would replace the reason it is stopping.
+///
+/// **It writes NO census note, and that is the round-2 correction** (CLOUD-843).
+/// Its callers do not all choose to stop: the lap hands its lease back on every
+/// lap that reached `Step::Lease` and then laps, in the middle of a landing still
+/// running, and `lease hold`'s first bail fires because the land it served is
+/// GONE. A stop written here read both as *stopped on purpose*. The landing's stop
+/// is [`land_census_window`]'s, where the landing returns; `lease hold`'s is
+/// [`lease_hold_bail`]'s, on the one bail it chose; `lease release`'s is
+/// [`note_release`]'s.
 fn lease_hand_back(root: &Path, terms: &lease::Terms, holder: &str, now: i64) {
     let Ok(observed) = lease::observe(terms) else {
         return;
@@ -12395,6 +13856,40 @@ fn lease_hand_back(root: &Path, terms: &lease::Terms, holder: &str, now: i64) {
     }
     if lease::cas(terms, &observed, &lease::tombstone(body), now).is_ok() {
         lease_receipt_clear(root, &body.branch);
+    }
+}
+
+/// Why `lease hold` is letting go, which decides whether the census hears a stop.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HoldEnd {
+    /// The land it served is gone — killed, OOM'd, reaped. NOT a chosen stop: it
+    /// is the one path that detects a dead lander, and CLOUD-491 forbids reading
+    /// that as deliberate.
+    HolderGone,
+    /// The land is alive and stalled, and this holder stops it. A chosen stop:
+    /// the landing ends because the heartbeat decided so.
+    Stalled,
+}
+
+//MUTANT hold-gone-noted-as-stop|s@^    if end == HoldEnd::Stalled {$@    if true {@|a_hold_notes_a_stop_only_where_it_chose_one
+//MUTANT hold-stall-unnoted|s@^    if end == HoldEnd::Stalled {$@    if false {@|a_hold_notes_a_stop_only_where_it_chose_one
+/// `lease hold`'s bail: hand the lease back, then note the stop iff it was CHOSEN.
+///
+/// After the hand-back, so nothing this process writes follows the stop. The
+/// note is written whatever the tombstone did: a stall bail stops its land either
+/// way, and gating the note on the swap would leave that landing's last beat
+/// reading as a container death.
+fn lease_hold_bail(
+    root: &Path,
+    terms: &lease::Terms,
+    holder: &str,
+    now: i64,
+    end: HoldEnd,
+    stop_note: &str,
+) {
+    lease_hand_back(root, terms, holder, now);
+    if end == HoldEnd::Stalled {
+        note_declared(root, stop_note);
     }
 }
 
@@ -12444,11 +13939,36 @@ fn lease_bail_reason(git_dir: &Path, why: &str) {
 /// Silent and best-effort in every direction. A census note that could not be
 /// written is not a reason to fail a release that already succeeded.
 fn note_release(root: &Path) {
-    let declared = std::env::var("LEASE_STOP_NOTE").unwrap_or_default();
-    let Some(argv) = land::body_gates(&declared).into_iter().next() else {
+    note_declared(root, &std::env::var("LEASE_STOP_NOTE").unwrap_or_default());
+}
+
+/// Spawn the first argv `declared` names, silently and best-effort.
+fn note_declared(root: &Path, declared: &str) {
+    let Some(argv) = land::body_gates(declared).into_iter().next() else {
         return;
     };
     let _ = exec::piped_argv(root, &argv, "", exec::Diagnostics::Keep, &[]);
+}
+
+//MUTANT renewal-writes-no-beat|s@^    note_declared(root, beat_note);$@@|an_applied_renewal_writes_its_receipt_and_the_declared_beat
+/// `lease hold`'s renewal that applied: its receipt, then the consumer's
+/// reclaim-census beat (`$LEASE_BEAT_NOTE`, read once by the hold loop and
+/// passed as `beat_note`). After the receipt, so a beat never claims a hold the
+/// remote refused.
+///
+/// **This is the UNREACHED holder's half** — nothing in the tree runs `lease
+/// hold` today. What makes the census's positive reading, *a landing was in
+/// flight when the container went*, reachable for a landing is
+/// [`land_census_window`]'s opening beat (CLOUD-843); the lap's own heartbeat
+/// notes nothing, since no beat inside that window can change the verdict.
+///
+/// The argv is the consumer's for [`note_release`]'s reason: the beat and the
+/// stop are one census, and only the consumer knows it keeps one. The hold's stop
+/// is [`lease_hold_bail`]'s, and only on the bail it chose — never on an exit
+/// path (CLOUD-491).
+fn lease_renewed(root: &Path, branch: &str, expires: i64, beat_note: &str) {
+    lease_receipt(root, branch, expires);
+    note_declared(root, beat_note);
 }
 
 /// `lease release`: a tombstone, never a delete.
@@ -13298,6 +14818,50 @@ fn commit_label(sha: &str) -> String {
     sha.chars().take(8).collect()
 }
 
+/// The claim clause's evidence, gathered over `range` (CLOUD-843).
+///
+/// Range mode only, and that is the retired `commit-lint` body's own scope: a
+/// pending message has no commit yet, and its claim is the claim RECEIPT's
+/// question at the edit rather than this one at the range.
+///
+/// Each commit's paths and author come off [`git::metadata_facts`] — merges
+/// excluded, exactly as `rev-list --no-merges` excluded them — and whether its
+/// message claims a row is `claim keys`' reading, [`race::claimed_from`] over the
+/// whole message through the consumer's grammar, asked in process rather than
+/// spawned per commit.
+///
+/// # Errors
+///
+/// A range the walk cannot read, a commit it cannot peel, or a grammar the
+/// config does not declare — each a could-not-look, never a clean pass over
+/// commits nobody read.
+fn commit_claims(
+    range: &str,
+    claims: &commit::Claims,
+    overrides: &Overrides,
+) -> Result<Vec<commit::Finding>> {
+    let root = Path::new(".");
+    let grammar = board_grammar(overrides)?;
+    let walked = git::metadata_facts(root, &[range.to_owned()])?;
+    let Some(commits) = walked.get(range) else {
+        return Err(UsageError::raise(format!(
+            "commit check: `{range}` did not resolve, so no commit's claim could be read"
+        )));
+    };
+    let mut claimants = Vec::with_capacity(commits.len());
+    for meta in commits {
+        let record = git::commit_record(root, &meta.commit)?;
+        let claimed = race::claimed_from("", "", &record.body, "", &grammar, race::Source::All);
+        claimants.push(commit::Claimant {
+            label: commit_label(&meta.commit),
+            author: meta.author.clone(),
+            paths: meta.paths.clone(),
+            claims: !claimed.is_empty(),
+        });
+    }
+    commit::judge_claims(&claimants, claims)
+}
+
 fn run_commit_check(
     json: bool,
     range: Option<&str>,
@@ -13332,9 +14896,13 @@ fn run_commit_check(
         (None, Some(message)) => vec![commit::read_message(Path::new(message))?],
     };
 
-    let mut findings = commit_policy(overrides)?.judge(&subjects)?;
+    let policy = commit_policy(overrides)?;
+    let mut findings = policy.judge(&subjects)?;
     findings.extend(commit_admissions(range, message, overrides)?);
     findings.extend(commit_arm_sequencing(range, message, overrides)?);
+    if let (Some(range), Some(claims)) = (range, policy.claims.as_ref()) {
+        findings.extend(commit_claims(range, claims, overrides)?);
+    }
 
     if json {
         // Emitted unconditionally, including for a clean run: JSON that is
@@ -13377,7 +14945,26 @@ fn run_attribution(
             run_attribution_tagger(&tag, json, overrides, out)
         }
         AttributionCommand::Identity => run_attribution_identity(overrides, err),
+        AttributionCommand::Signing => run_attribution_signing(err),
     }
+}
+
+/// Switch signing off in this checkout when its signer is broken (CLOUD-669,
+/// retiring `[tasks.signing-posture-repair]` under CLOUD-843).
+///
+/// The report goes to stderr for `attribution identity`'s reason: it is a
+/// statement about what Batten did to the clone, not a verdict. Outside a
+/// repository this refuses and writes nothing — the retired body's exit 2.
+fn run_attribution_signing(err: &mut dyn Write) -> Result<ExitCode> {
+    let repaired = signer_posture::repair(Path::new(".")).map_err(|_| {
+        UsageError::raise(
+            "attribution signing: not a git repository, or its config could not be written, \
+             so the signing posture was left as it was"
+                .to_owned(),
+        )
+    })?;
+    writeln!(err, "{}", repaired.line())?;
+    Ok(ExitCode::Success)
 }
 
 /// Judge who cut one tag (CLOUD-1794).
@@ -14779,6 +16366,14 @@ fn admit_mediated(decision: hook::Decision, out: &mut dyn Write) -> Result<hook:
     // the `admit(...)` route CLOUD-1823 declared could never fire — the
     // declaration took the general hook hatch away and nothing replaced it.
     //
+    // THE SUBJECT IS THE REFUSAL'S ARTIFACTS, JOINED BY `,`, WHEN IT NAMES ANY
+    // (`refusal::admission_subject`), and the class token only when it names none.
+    // A receipt refusal names its artifacts — `turn mint ahead`'s line renders
+    // `verify commit`, which binds as `verify,commit` — and `override request`
+    // canonicalises a subject copied off that line to the same string. Minting
+    // against the class token instead binds a subject this lookup never asks for:
+    // measured, two such admissions were issued and spent and admitted nothing.
+    //
     // The class token is a subject both sides can name without reading the call,
     // so no payload reaches the refusal. What pins the admission to a situation is
     // the anchor below: `Anchor::Call { head }`, the head a receipt is keyed to, so
@@ -15094,6 +16689,9 @@ fn collect_batch_advice(
     err: &mut dyn Write,
     advice: &mut Vec<advisory::Advice>,
 ) -> Result<()> {
+    // FIRST, AND THE ORDER IS THE PREDICATE (CLOUD-1991): the stamp dates the
+    // session, so it is written before any declared handler provisions anything.
+    stamp_session(envelope);
     if Some(envelope.event) == harness.capabilities().degrade(hook::Event::PostToolBatch) {
         drain_advisories(envelope, overrides, mode, err, advice)?;
     }
@@ -15110,6 +16708,30 @@ fn collect_batch_advice(
     repair_startup_rows(envelope, overrides);
     report_container_health(envelope, overrides, advice);
     Ok(())
+}
+
+/// Write the session boundary `claim check` dates refinement against (CLOUD-1991).
+///
+/// **The engine reads it, so the engine writes it.** It was a consumer `mise`
+/// task (`session:stamp`) dispatched by one declared handler row — a shell line
+/// whose only job was to resolve the per-worktree git directory and truncate one
+/// file, and a precondition of an engine gate that a repository had to know to
+/// declare. Written here, before [`dispatch_handlers`] runs a single row, every
+/// session start through `batten hook` dates itself, in any repository.
+///
+/// Fails open and silently, like every other side effect at this boundary: a
+/// session start is not a call being adjudicated, and a clone with no readable
+/// git directory is one where `claim check` reports the missing stamp itself.
+fn stamp_session(envelope: &hook::Envelope) {
+    if envelope.event != hook::Event::SessionStart {
+        return;
+    }
+    let Ok(git_dir) = git::git_dir(hook_authority_root()) else {
+        return;
+    };
+    // `RECEIPT_DIR` under the PER-WORKTREE directory, which is where
+    // `run_claim_check` reads it: a linked worktree dates its own session.
+    let _stamped = claim::stamp_session(&git_dir.join(RECEIPT_DIR));
 }
 
 /// Record what the pin provides, once per session (CLOUD-1028).
@@ -16371,6 +17993,10 @@ fn record_post_tool(
     // command, so it fires on exactly the calls the conjunct above excludes: an
     // MCP call carries no command and is the whole point here.
     record_mints(overrides, envelope);
+    // CLOUD-1078's: the host's question tool, and nothing configured. What it
+    // records is the only thing `config lint` accepts as admitting a weakening,
+    // so it is keyed to a HOST fact rather than to a row a branch could edit.
+    record_asked(envelope, harness);
     // THE APPROVAL RECEIPT (CLOUD-1978): the owner's answer to a question naming
     // drafted dispatch prompts by digest. Read from the result — what the host
     // recorded from the human — never from the input the caller filled.
@@ -17373,6 +18999,58 @@ fn mint_receipts(
     }
 }
 
+/// Record the human's answer to a host question into the asked ledger
+/// (CLOUD-1078).
+///
+/// Selected by [`hook::Harness::question_tool`] and by nothing a config can
+/// name, so no branch can widen what counts as an answer. The record is read off
+/// the RESULT — the host's report of what was shown and chosen — and never off
+/// the input, which the agent wrote. Silent on every failure, as every recorder
+/// on this boundary is: the admission that reads the ledger refuses again.
+fn record_asked(envelope: &hook::Envelope, harness: hook::Harness) {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since_epoch| since_epoch.as_secs());
+    record_asked_at(
+        harness,
+        &envelope.raw_tool,
+        &envelope.result,
+        hook_authority_root(),
+        now,
+    );
+}
+
+/// The one selector-and-write both [`record_asked`] and the integration tier
+/// reach, so the tier proves the boundary rather than a copy of it.
+fn record_asked_at(
+    harness: hook::Harness,
+    raw_tool: &str,
+    result: &serde_json::Value,
+    root: &Path,
+    now: u64,
+) -> usize {
+    if harness.question_tool() != Some(raw_tool) {
+        return 0;
+    }
+    facts::payload_in(result)
+        .and_then(|payload| asked::record(root, &payload, now).ok())
+        .unwrap_or(0)
+}
+
+/// [`record_asked`] reached from the integration tier, for
+/// [`mint_receipts_for_test`]'s reason: the half that writes the ledger and the
+/// half that reads it must be shown to agree through the real boundary.
+#[doc(hidden)]
+#[must_use]
+pub fn record_asked_for_test(
+    harness: hook::Harness,
+    raw_tool: &str,
+    result: &serde_json::Value,
+    root: &Path,
+) -> usize {
+    record_asked_at(harness, raw_tool, result, root, 0)
+}
+
 fn record_mints(overrides: &Overrides, envelope: &hook::Envelope) {
     // THERE IS NO CHEAP GATE HERE, AND THE TWO THAT WERE TRIED WERE BOTH WRONG
     // (CLOUD-1484).
@@ -17780,6 +19458,12 @@ fn run_exec(
             })?;
     }
     settings.continue_on_error = settings.continue_on_error || request.continue_on_error;
+    // `--tracked` NARROWS TO NOTHING BY RUNNING NOTHING (CLOUD-1991), the `-r` of
+    // the `xargs -0 -r` it retires: a formatter handed no path would walk the
+    // whole tree instead, which is the reach the flag exists to bound.
+    let Some(command) = exec_tracked_command(request)? else {
+        return Ok(ExitCode::Success);
+    };
     // THE LOCK IS HELD ACROSS THE CHILD, AND THE GUARD IS WHAT MAKES THAT TRUE
     // ON EVERY RETURN (CLOUD-1710). A wrapped command that fails comes back as
     // `Err(Passthrough)`, so releasing after the call would leak the lock on
@@ -17793,7 +19477,95 @@ fn run_exec(
     // The report goes to the ERROR channel, never `out`: stdout belongs to the
     // wrapped command (CLOUD-285), so a pointer line there would corrupt a
     // document the caller may be parsing.
-    exec::run_with(&request.command, &patterns, &settings, err)
+    exec::run_with(&command, &patterns, &settings, err)
+}
+
+/// The child's argv with `--tracked`'s paths appended, or `None` when the
+/// pathspecs selected nothing (CLOUD-1991).
+///
+/// # The retired shell, and what each clause of it becomes
+///
+/// Five task bodies spelled `git ls-files -z <spec> | xargs -0 -r <tool>`, so a
+/// formatter never reached a deliberately corrupt fixture a suite wrote under an
+/// ignored `target/`. The INDEX is the selection — [`git::index_facts`], the same
+/// projection a policy row's `index` column reads, so "tracked" means one thing
+/// in this crate — and `-r` is the `None` arm. `--except` is the `:!:` exclusions
+/// those bodies carried: a magic pathspec is refused here exactly as
+/// [`git::pathspec_is_supported`] refuses it for a row, rather than read as a
+/// literal that selects nothing and reports a clean run.
+///
+/// # Root-relative, so it runs from the root
+///
+/// Index paths are relative to the repository root, and `git ls-files` printed
+/// them relative to the caller's directory. The two agree only at the root, so a
+/// caller anywhere else is refused rather than handed paths that name different
+/// files — the silent wrong answer the refusal exists to prevent.
+///
+/// # Errors
+///
+/// [`UsageError`] for an `--except` with no `--tracked`, a `:::` bundle, a magic
+/// pathspec, a malformed glob, or a caller outside the root; otherwise whatever
+/// reading the index reports.
+fn exec_tracked_command(request: &cli::ExecRequest) -> Result<Option<Vec<String>>> {
+    if request.tracked.is_empty() {
+        if !request.except.is_empty() {
+            return Err(UsageError::raise(
+                "exec: --except narrows what --tracked selected; name the selection with --tracked",
+            ));
+        }
+        return Ok(Some(request.command.clone()));
+    }
+    if request
+        .command
+        .iter()
+        .any(|word| word == exec::BUNDLE_SEPARATOR)
+    {
+        return Err(UsageError::raise(
+            "exec: --tracked appends to one command, and a `:::` bundle carries several",
+        ));
+    }
+    if let Some(spec) = request
+        .tracked
+        .iter()
+        .find(|spec| !git::pathspec_is_supported(spec))
+    {
+        return Err(UsageError::raise(format!(
+            "exec: --tracked `{spec}` is not a plain pathspec; exclude with --except instead"
+        )));
+    }
+    let mut builder = globset::GlobSetBuilder::new();
+    for glob in &request.except {
+        let parsed = globset::Glob::new(glob).map_err(|error| {
+            UsageError::raise(format!("exec: --except `{glob}` is not a glob: {error}"))
+        })?;
+        builder.add(parsed);
+    }
+    let except = builder
+        .build()
+        .map_err(|error| UsageError::raise(format!("exec: --except: {error}")))?;
+
+    // THIS CHECKOUT'S root, never `repo_root`, which answers with the common
+    // dir's parent: in a linked worktree that is the MAIN checkout, whose paths
+    // would name another tree's files — `index_facts` reads its own workdir for
+    // the same reason.
+    let root = git::worktree_root(Path::new("."))?;
+    let here = std::env::current_dir()?;
+    if here.canonicalize()? != root.canonicalize()? {
+        return Err(UsageError::raise(
+            "exec: --tracked appends root-relative paths, so it runs from the repository root",
+        ));
+    }
+    let paths: std::collections::BTreeSet<String> = git::index_facts(&root, &request.tracked)?
+        .into_values()
+        .flat_map(|fact| fact.entries.into_iter().map(|entry| entry.path))
+        .filter(|path| !except.is_match(path))
+        .collect();
+    if paths.is_empty() {
+        return Ok(None);
+    }
+    let mut command = request.command.clone();
+    command.extend(paths);
+    Ok(Some(command))
 }
 
 /// What `--lock` asked for, as the value [`exec::hold`] takes.
@@ -21027,12 +22799,9 @@ fn run_config(
             // wins, exactly as before. Absent one, a CLAIMED branch is armed at its
             // fork point — see `claimed_fork_point` for why that base and not the
             // trunk's tip, and why only a claimed branch.
-            let (base, armed_by_claim) = match overrides.config_from.as_deref() {
-                Some(explicit) => (Some(explicit.to_owned()), false),
-                None => match claimed_fork_point(Path::new("."), overrides) {
-                    Some(fork) => (Some(fork), true),
-                    None => (None, false),
-                },
+            let base = match overrides.config_from.as_deref() {
+                Some(explicit) => Some(explicit.to_owned()),
+                None => claimed_fork_point(Path::new("."), overrides),
             };
             // The date the expiry smell is computed against, read once at this
             // boundary and threaded in as data (`waiver`'s module docs say why).
@@ -21075,26 +22844,13 @@ fn run_config(
             let Some(base) = base.as_deref() else {
                 return Ok(ExitCode::verdict(!smells.is_empty()));
             };
-            let groomed = lint::groom(
-                // `git_dir`, not `common_dir`: a claim is a per-worktree
-                // fact, and `claim::mint` writes it under the same one.
-                &git::git_dir(Path::new("."))?.join("batten-receipts"),
-                git::current_branch(Path::new("."))?.as_deref(),
-            );
-            let mut declared = lint::declared(Path::new("."), base)?;
-            // THE CLAIM-ARMED RUN ASKS ONE QUESTION, THE BOARD'S. It runs where no
-            // commit message exists yet — pre-commit, before the author writes the
-            // trailer the change will carry — so demanding the trailer here would
-            // refuse a correctly declared weakening. What this surface CAN decide
-            // is whether the groom admitted the smell before the work reached a
-            // commit, and that is the half that shapes a design: a weakening the
-            // board never saw is refused at the edit, not a lap later. The
-            // trailer's agreement with the groom stays with the explicit-base
-            // callers, `verify` and CI, where the message is a commit.
-            if armed_by_claim && let lint::Groom::Read(admitted) = &groomed {
-                declared.extend(admitted.iter().cloned());
-            }
-            let adjudicated = lint::admissions(&smells, &declared, &groomed);
+            // ONE SOURCE, THE SAME AT EVERY SURFACE (CLOUD-1078). The ledger is in
+            // the working tree, so the pre-commit run, `verify` and CI all read the
+            // answer the human gave — before any commit exists and after it lands
+            // on a runner alike. The claim-armed and explicit-base runs differ only
+            // in which base they compare against, which the arm above decided.
+            let ledger = asked::added_since(Path::new("."), base)?;
+            let adjudicated = lint::admissions(&smells, &ledger);
             let refused = adjudicated
                 .iter()
                 .filter(|(_, admission)| *admission == lint::Admission::Refused)
@@ -21129,10 +22885,12 @@ fn run_config(
 /// misconfigured" as a deny (§7).
 fn run_doctor(
     command: &cli::DoctorCommand,
+    overrides: &Overrides,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
     match *command {
+        cli::DoctorCommand::Forge => run_doctor_forge(overrides, out),
         cli::DoctorCommand::Diagnose { json } => run_diagnose(json, out),
         cli::DoctorCommand::Hooks { json } => run_doctor_hooks(json, out),
         cli::DoctorCommand::Mediator { json } => run_doctor_mediator(json, out),
@@ -21145,6 +22903,25 @@ fn run_doctor(
         cli::DoctorCommand::Target { ref target } => doctor::run_target(target, out, err),
         cli::DoctorCommand::Config { json } => run_doctor_config(json, out),
     }
+}
+
+/// Does the forge credential carry the claims this repository's tasks declare
+/// (CLOUD-843, retiring `gh-preflight`)?
+///
+/// The probe table is the COMMITTED authority's `[[forge.probe]]` rows, never a
+/// layered one: which claims a repository's tasks need is a fact about the
+/// repository, and a local file that could drop a row could make a missing claim
+/// read as a clean diagnosis. The slug is [`repo_slug`]'s, the one answer to
+/// which repository a forge read is about.
+fn run_doctor_forge(overrides: &Overrides, out: &mut dyn Write) -> Result<ExitCode> {
+    let config = resolve::committed(Path::new("."), overrides)?;
+    let probes = config
+        .forge
+        .as_ref()
+        .map(|forge| forge.probe.as_slice())
+        .unwrap_or_default();
+    let slug = repo_slug(Path::new("."));
+    preflight::run(probes, slug.as_deref(), &|path| rest::get(path, None), out)
 }
 
 /// Is every tool this manifest declares actually installed (CLOUD-1683)?
@@ -21207,7 +22984,52 @@ fn run_ci(
     match *command {
         cli::CiCommand::SlowNeeded { ref base } => run_ci_slow_needed(base, overrides, out, err),
         cli::CiCommand::Suites { ref base } => run_ci_suites(base, overrides, out, err),
+        cli::CiCommand::SlowNeededAt { ref base, ref head } => {
+            run_ci_slow_needed_at(base, head, overrides, out, err)
+        }
+        // The runner's file glue a step used a shell for (CLOUD-843, Phase 4).
+        // It reads no policy, so the §8 chain supplies nothing.
+        cli::CiCommand::Step(ref request) => ci_step::run(request, out, err),
     }
+}
+
+/// `ci slow-needed --head <rev>` (CLOUD-1991): the plain question, asked by a
+/// caller that names the head it believes the checkout carries.
+///
+/// # The diff is the checkout's, so the head is ASSERTED, never ignored
+///
+/// A `pull_request` job checks out GitHub's merge commit, never the PR head, so
+/// the diff is taken against the checkout. Where the named head carries the
+/// checkout's tree the two questions are one — landing is fast-forward, so a
+/// landable head is already on its base. Where they differ the caller is asking
+/// about a head it is not standing on, which this cannot answer, and answering
+/// about the checkout instead would be a verdict on a different change. So it is
+/// refused as a statement about the invocation, the same reading the retired task
+/// body gave it in shell.
+///
+/// # Errors
+///
+/// Propagates a failure to open the repository, or a write failure on either
+/// channel.
+fn run_ci_slow_needed_at(
+    base: &str,
+    head: &str,
+    overrides: &Overrides,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let root = git::repo_root(Path::new("."))?;
+    let named = git::resolve_ref(Path::new(&root), &format!("{head}^{{tree}}"))?;
+    let checkout = git::resolve_ref(Path::new(&root), "HEAD^{tree}")?;
+    if named.is_none() || named != checkout {
+        writeln!(
+            err,
+            "::error:: ci slow-needed: {head} does not carry this checkout's tree, and the \
+             diff is taken against the checkout."
+        )?;
+        return Ok(ExitCode::Usage);
+    }
+    run_ci_slow_needed(base, overrides, out, err)
 }
 
 /// Which bats suites a diff can move (CLOUD-886), ported off
@@ -21920,5 +23742,128 @@ mod tests {
             clean_run_notice(false, false, true, 0, 0).unwrap(),
             "checked 0 rule(s) — nothing to report"
         );
+    }
+
+    /// THE LIVE DEFECT (CLOUD-843): an applied renewal wrote no census beat, so
+    /// "a landing was in flight" was unreachable in production. The renewal arm
+    /// is exercised here rather than through `lease hold`, because the hold loop
+    /// reaches its lease over smart HTTP and no offline seam exists
+    /// (`tests/it/lease_health.rs` states why none is added). What this pins is
+    /// the arm the loop calls on `Applied`: the receipt AND the declared beat.
+    #[test]
+    fn an_applied_renewal_writes_its_receipt_and_the_declared_beat() {
+        // `touch` is the declared note command this case stubs with, and no such
+        // program ships on Windows; the case compiles there and says so (`cfg!`,
+        // never `#[cfg]`, so the off-unix arm is type-checked on every host).
+        if !cfg!(unix) {
+            return;
+        }
+        let root =
+            std::env::temp_dir().join(format!("batten-lease-renewed-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        crate::gitwrite::init_on_main(&root).unwrap();
+        let beat = root.join("beat");
+        lease_renewed(&root, "claude/x", 42, &format!("touch {}", beat.display()));
+        assert!(
+            beat.exists(),
+            "the declared beat ran on the applied renewal"
+        );
+        let receipt = lease_receipt_path(&root, "claude/x").unwrap();
+        assert_eq!(std::fs::read_to_string(receipt).unwrap(), "42\n");
+        // And a consumer that declares no beat gets nothing spawned.
+        let _ = std::fs::remove_file(&beat);
+        lease_renewed(&root, "claude/x", 43, "");
+        assert!(!beat.exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A scratch clone for the census-note cases, and the marker file a declared
+    /// `touch` note would create in it.
+    fn census_scratch(name: &str) -> (PathBuf, PathBuf) {
+        let root =
+            std::env::temp_dir().join(format!("batten-census-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        crate::gitwrite::init_on_main(&root).unwrap();
+        let marker = root.join("noted");
+        (root, marker)
+    }
+
+    /// THE PRODUCTION STOP (CLOUD-843, round-2 review): the landing writes its
+    /// stop where it RETURNS, never where a lap hands its lease back — a lap that
+    /// laps is a landing still running, and a stop written there read as *stopped
+    /// on purpose* through the next lap's replay and verify. The window's opening
+    /// beat is pinned in the same case: without it, a landing following an
+    /// earlier `x` under one boot read as idle until its first wait.
+    ///
+    /// `Err` is asserted as well as `Ok`: an error is the process choosing to
+    /// stop, and a stop left unwritten there reads as a container death.
+    #[test]
+    fn a_landing_notes_its_start_and_every_chosen_end() {
+        // `touch` is the declared note command this case stubs with, and no such
+        // program ships on Windows; the case compiles there and says so (`cfg!`,
+        // never `#[cfg]`, so the off-unix arm is type-checked on every host).
+        if !cfg!(unix) {
+            return;
+        }
+        let (root, started) = census_scratch("window");
+        let stopped = root.join("stopped");
+        let begin = format!("touch {}", started.display());
+        let stop = format!("touch {}", stopped.display());
+        let ended = land_census_window(&root, &begin, &stop, || {
+            assert!(
+                started.exists(),
+                "the beat opens the window, before any lap"
+            );
+            assert!(!stopped.exists(), "no stop while the laps still run");
+            Ok(ExitCode::Violation)
+        });
+        assert_eq!(
+            ended.unwrap(),
+            ExitCode::Violation,
+            "the laps' answer, unchanged"
+        );
+        assert!(stopped.exists(), "the landing's return is its chosen stop");
+        std::fs::remove_file(&started).unwrap();
+        std::fs::remove_file(&stopped).unwrap();
+        let failed = land_census_window(&root, &begin, &stop, || Err(anyhow::anyhow!("stdout")));
+        assert!(failed.is_err(), "the laps' error, unchanged");
+        assert!(
+            stopped.exists(),
+            "an error is a return, and a return is a stop"
+        );
+        // And a consumer that declares neither gets nothing spawned.
+        std::fs::remove_file(&started).unwrap();
+        std::fs::remove_file(&stopped).unwrap();
+        let _ = land_census_window(&root, "", "", || Ok(ExitCode::Success));
+        assert!(!started.exists() && !stopped.exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// `lease hold`'s bails (CLOUD-843, round-2 review): the stall bail CHOSE to
+    /// stop its land and notes it; the holder-gone bail detected a DEAD land, and
+    /// a stop there is the false "on purpose" CLOUD-491 forbids. The remote does
+    /// not parse as a URL, so the hand-back fails before any network and the
+    /// note is still decided by the bail alone.
+    #[test]
+    fn a_hold_notes_a_stop_only_where_it_chose_one() {
+        // `touch` is the declared note command this case stubs with, and no such
+        // program ships on Windows; the case compiles there and says so (`cfg!`,
+        // never `#[cfg]`, so the off-unix arm is type-checked on every host).
+        if !cfg!(unix) {
+            return;
+        }
+        let (root, marker) = census_scratch("hold-bail");
+        let terms = lease::Terms {
+            remote: String::from("not a remote"),
+            ..lease::Terms::default()
+        };
+        let note = format!("touch {}", marker.display());
+        lease_hold_bail(&root, &terms, "someone", 42, HoldEnd::HolderGone, &note);
+        assert!(!marker.exists(), "a dead lander is not a chosen stop");
+        lease_hold_bail(&root, &terms, "someone", 42, HoldEnd::Stalled, &note);
+        assert!(marker.exists(), "stopping a stalled lander is");
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

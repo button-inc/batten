@@ -119,8 +119,9 @@ so re-test after a client upgrade and report if it still fails.
   [#67371](https://github.com/anthropics/claude-code/issues/67371) (closed as
   not planned) and [#96638](https://github.com/anthropics/claude-code/issues/96638)
   (open) are the same class.
-- **`mcp-allow-check --session` reports the unenforceable grants at session
-  start.** It tells you the prompt will stand, never how to clear it.
+- **`batten mcp posture` reports the unenforceable grants at session start**
+  (the `mcp-attach-check` handler row; it replaced `mcp-allow-check --session`
+  under CLOUD-843). It tells you the prompt will stand, never how to clear it.
 - **Sibling sessions only when the owner asks a grooming session to dispatch.**
   Hand dispatch (`CLOUD-731`, `CLOUD-784`, `CLOUD-839`) was recorded under the
   false premise; it is the fallback when an asked-for dispatch cannot run.
@@ -236,7 +237,9 @@ with all its tools; this session did not bind them._ `ListMcpResourcesTool`
 NOTHING here — the only evidence is a call returning "No such tool available".
 
 **Sensor gap — FILED 2026-09-02 as CLOUD-1359.** Both `mcp-attach-check` and
-`mcp-allow-check` pass green through this. Neither compares the injected
+`mcp-allow-check` (retired by CLOUD-843 into `batten mcp posture` and the
+`claude-code-cloud` preset's `mcp-grants-are-honoured.rego`) passed green through
+this. Neither compares the injected
 config's `tools[].name` against the tools the session can actually call, which
 is the one comparison that catches it — and `connector-allow-resolve` already
 reads that file, so only the predicate is missing.
@@ -281,7 +284,7 @@ body.
   list one for one (measured 2026-09-27). It says nothing about a server that
   claude.ai does not list, such as Claude Code Remote.
 - **A gate can be green while the connector is unreachable.** `mcp-allow-check`
-  passed throughout the session where writes were denied, because it was
+  (since retired, CLOUD-843) passed throughout the session where writes were denied, because it was
   checking a name nothing was using. A gate over settings cannot see which name
   is live; only the injected config can.
 

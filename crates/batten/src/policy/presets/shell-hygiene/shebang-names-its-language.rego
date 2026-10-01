@@ -19,6 +19,17 @@
 # which is what a vendored preset may contain (non-negotiable rule 1). The
 # consumer's `line_sources` glob decides which files are judged, and its
 # `exclude` decides which are deliberate.
+
+# METADATA
+# description: |
+#   Bound to the TREE surface for the whole `batten.shell_hygiene` package, this
+#   module and `sibling-resolves.rego` both: one block per package, since OPA
+#   refuses a redeclaration.
+#   THE BRACKETS ARE NOT STYLE: the schema file carries a hyphen, so the dotted
+#   form is a parse error reported as `invalid schema reference`.
+#   THIS BLOCK IS YAML AND MUST STAY THE LAST COMMENT BLOCK BEFORE `package`.
+# schemas:
+#   - input: schema["policy-input.schema"]
 package batten.shell_hygiene
 
 import rego.v1

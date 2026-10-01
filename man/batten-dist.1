@@ -1,0 +1,22 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-dist 1  batten 
+.SH NAME
+batten\-dist \- Build the release binary for a target and stage its archive, printing KEY=VALUE pointers to both
+.SH SYNOPSIS
+\fBbatten dist\fR [\fB\-\-stem\fR] [\fB\-\-build\-tool\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fItarget\fR> 
+.SH DESCRIPTION
+Build the release binary for a target and stage its archive, printing KEY=VALUE pointers to both
+.SH OPTIONS
+.TP
+\fB\-\-stem\fR
+Print the target\*(Aqs asset stem and exit, without building
+.TP
+\fB\-\-build\-tool\fR \fI<build_tool>\fR
+How to build for the target: cargo, cross or zigbuild (default: $DIST_BUILD_TOOL, else cargo)
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fItarget\fR>
+The target triple to build, which must already be installed

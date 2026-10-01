@@ -416,6 +416,9 @@ mod tests {
                 // separate row rather than covered by the noun because
                 // `attribution identity` shares that noun and writes .git/config.
                 "attribution tagger".to_owned(),
+                // `board check` LEFT this list with its body (CLOUD-1221): a
+                // coherent graph mints the move receipt a guard reads, so it is
+                // `write`, `claim check`'s class, and not a read-only entry.
                 // Both navigation verbs are on it, and the `capture` noun above
                 // them is not: the noun is unclassified because `capture prune`
                 // removes, which is the fail-safe reading a consumer treating an
@@ -423,6 +426,11 @@ mod tests {
                 "capture find".to_owned(),
                 "capture list".to_owned(),
                 "capture show".to_owned(),
+                // The shell census (CLOUD-843), noun AND verb, `commit`'s reading:
+                // its whole subtree reads — declared manifests and tracked files —
+                // and starts nothing, so the noun smuggles no write.
+                "census".to_owned(),
+                "census shell".to_owned(),
                 "check".to_owned(),
                 // The VERB only, and the `checks` noun above it is not here
                 // (CLOUD-1143). The noun is unclassified for `capture`'s reason
@@ -489,6 +497,12 @@ mod tests {
                 // task runner grades a value that runner's env block has already
                 // corrected.
                 "doctor egress".to_owned(),
+                // WHETHER THE FORGE CREDENTIAL CARRIES THE CLAIMS THE TASKS NEED
+                // (CLOUD-843, retiring `gh-preflight`). `read`: GETs against the
+                // endpoints the committed `[[forge.probe]]` rows name, beside
+                // `lease carries`' two forge reads. A row declaring a write claim is
+                // reported and never called, so nothing here performs one.
+                "doctor forge".to_owned(),
                 // Whether this checkout's commit path runs the gate (CLOUD-1398).
                 // `read`, and structurally so: it resolves a directory through
                 // git's own config and stats two files. Nothing is EXECUTED, and
@@ -564,6 +578,13 @@ mod tests {
                 // `git ls-remote`, so this arm starts no program either. That
                 // was the design constraint the flag exists to satisfy.
                 //
+                // `--gather` (CLOUD-843) keeps it: the verb may now acquire the
+                // arms itself, but from the trunk's history in process and from
+                // the forge through the vendored client — `claim merged`'s own
+                // route — so it still starts no program. A forge that client
+                // cannot list is could-not-look on that arm, and `--refs` is
+                // still how such a consumer supplies it.
+                //
                 // Before its sibling because the list is compared SORTED, not as
                 // a set: `abandoned` precedes `check`.
                 "landed abandoned".to_owned(),
@@ -595,6 +616,12 @@ mod tests {
                 // read and the noun row smuggles no write (CLOUD-84).
                 "lint".to_owned(),
                 "lint brief".to_owned(),
+                // The two MCP readers (CLOUD-843), and never the `mcp` noun: `call`
+                // reaches the network and `spawn` execs. `grant` resolves names
+                // through two files and a payload; `posture` reads the settings, the
+                // host's logs and the spawn ledger. Neither starts a program.
+                "mcp grant".to_owned(),
+                "mcp posture".to_owned(),
                 // CLOUD-1267. Only the CENSUS is on the allowlist: it is one
                 // pass over the declarations, reading what each gate declares
                 // and answering whether every one is enforced or exempt. Both
@@ -652,6 +679,9 @@ mod tests {
                 // it belongs here beside `receipt status` rather than with
                 // `receipt record`.
                 "receipt verified".to_owned(),
+                // The reclaim census's fold (CLOUD-843): it reads the boot list and
+                // the log and writes nothing, where its three siblings record.
+                "record census tally".to_owned(),
                 // The read half of the out-of-tree verdict stores (CLOUD-1713).
                 // `record` itself is the write band and is absent here on
                 // purpose; these two leaves fold and print what is already
@@ -776,9 +806,19 @@ mod tests {
             // stable id stays `hook` — a rename moves the spelling, never the
             // identity.
             "adjudicate".to_owned(),
+            // The committed derivations' writer (CLOUD-1991), retiring the
+            // redirects four task bodies carried in shell. Absent from the
+            // read-only allowlist by construction: the leaf is `write` and the
+            // noun is unclassified, so `generate` stays the one read emitter.
+            "artifacts".to_owned(),
+            "artifacts write".to_owned(),
             "attribution".to_owned(),
             "attribution check".to_owned(),
             "attribution identity".to_owned(),
+            // CLOUD-843, retiring `[tasks.signing-posture-repair]`: the signature
+            // half of `attribution identity`'s repo-local write, off the
+            // read-only allowlist for the same reason.
+            "attribution signing".to_owned(),
             // CLOUD-1789. The third verb under the noun, and the one that reads
             // an identity nothing else in this tree could: an annotated tag's
             // TAGGER, which is a different identity from the author and committer
@@ -799,6 +839,14 @@ mod tests {
             // it prices.
             "bench".to_owned(),
             "bench tokens".to_owned(),
+            // The board discipline's verb (CLOUD-843). The noun is unclassified
+            // because the tracker-hygiene packages may hang recording arms under it.
+            "board".to_owned(),
+            "board check".to_owned(),
+            // Every declared board gate over one payload set (CLOUD-825),
+            // retiring `[tasks.board-sweep]`. Unclassified: it runs the argv the
+            // consumer's `[board] sweep` rows declare.
+            "board sweep".to_owned(),
             // The handle-navigation noun (CLOUD-121). `capture show`, not a
             // bare `show`: §2 is noun-verb and lists no bare `show`, and the
             // noun is what gives lifecycle (`prune`) somewhere to live.
@@ -807,6 +855,9 @@ mod tests {
             "capture list".to_owned(),
             "capture prune".to_owned(),
             "capture show".to_owned(),
+            // The shell census (CLOUD-843): the bash retirement's measurement.
+            "census".to_owned(),
+            "census shell".to_owned(),
             "check".to_owned(),
             // The green-verdict noun and its verb (CLOUD-1143), ported off
             // `mise-tasks/checks-green.sh` on the terms `claim` below
@@ -827,6 +878,10 @@ mod tests {
             // diff and the declared headers and runs nothing.
             "ci".to_owned(),
             "ci slow-needed".to_owned(),
+            // The runner-file glue a workflow step used a shell for (CLOUD-843,
+            // Phase 4). OFF the read-only allowlist: it runs the command it is
+            // handed, so its effect is `step run`'s, not a reader's.
+            "ci step".to_owned(),
             "ci suites".to_owned(),
             // The pull-time claim noun (CLOUD-1121), ported off
             // `mise-tasks/claim-check.sh` on the terms `semver` below
@@ -855,9 +910,13 @@ mod tests {
             "defects query".to_owned(),
             "design".to_owned(),
             "design audit".to_owned(),
+            // The release-artifact packager (CLOUD-843), retiring `dist.sh`.
+            "dist".to_owned(),
             "doctor".to_owned(),
             "doctor config".to_owned(),
             "doctor egress".to_owned(),
+            // The forge-credential diagnosis (CLOUD-843), retiring `gh-preflight`.
+            "doctor forge".to_owned(),
             "doctor gate".to_owned(),
             "doctor hooks".to_owned(),
             "doctor mediator".to_owned(),
@@ -929,6 +988,10 @@ mod tests {
             // it inherits the widest effect of the steps it sequences.
             "land fast-forward".to_owned(),
             "land lap".to_owned(),
+            // CLOUD-1991: the `linear-check` task body's question, through the
+            // fetch the lap already makes. `write` for that fetch, and so absent
+            // from the read-only allowlist.
+            "land linear".to_owned(),
             "land push".to_owned(),
             "land replay".to_owned(),
             "land verify".to_owned(),
@@ -979,6 +1042,10 @@ mod tests {
             // for any consumer reading an entry as a prefix (CLOUD-121).
             "mcp".to_owned(),
             "mcp call".to_owned(),
+            // The two MCP readers (CLOUD-843): the allowlist resolver and the
+            // session posture check. Both on the read-only allowlist above.
+            "mcp grant".to_owned(),
+            "mcp posture".to_owned(),
             // CLOUD-1753's port of the MCP launcher shim. A LEAF under the noun
             // rather than a noun of its own, and that placement is the port's one
             // improvement: the retired shell read the server out of its own file
@@ -1032,6 +1099,9 @@ mod tests {
             // CLOUD-1163 unit 10. `compare` is the subtree's one `read` member.
             "perf compare".to_owned(),
             "perf gate".to_owned(),
+            // `hook-latency-drift.yml`'s inline measurement, retired under
+            // CLOUD-843. `unclassified`: it times whatever `[perf.latency]` names.
+            "perf latency".to_owned(),
             // The measurement (CLOUD-172), retired out of `mise-tasks/perf.sh`
             // under CLOUD-1753. Not read-only: it builds and runs the benchmark.
             "perf measure".to_owned(),
@@ -1067,6 +1137,10 @@ mod tests {
             "pr ensure".to_owned(),
             "pr file".to_owned(),
             "pr link".to_owned(),
+            // CLOUD-518's gate and actor (CLOUD-843, retiring
+            // `[tasks.pr-unsubscribed]`). Every arm writes, so it is off the
+            // read-only allowlist.
+            "pr unsubscribed".to_owned(),
             "pr watch".to_owned(),
             "provision".to_owned(),
             "provision apply".to_owned(),
@@ -1101,12 +1175,29 @@ mod tests {
             // CLOUD-1190 inverts those when the imperative grammar lands, and
             // a third row spelled the old way would be a third row to invert.
             "record".to_owned(),
+            // A release's attestation posture and each archive's verifier verdict
+            // (CLOUD-843, retiring `[tasks.attestation-record]`): a forge read,
+            // a verifier spawn and a store write, so off the read-only allowlist.
+            "record attestation".to_owned(),
+            // The reclaim census (CLOUD-843, retiring `reclaim-census`). Three
+            // leaves record; `tally` folds and is on the read-only allowlist.
+            "record census".to_owned(),
+            "record census note".to_owned(),
+            "record census record-boot".to_owned(),
+            "record census report".to_owned(),
+            "record census tally".to_owned(),
             "record closes".to_owned(),
+            // Derive, write silently, then decide (CLOUD-843, retiring
+            // `[tasks.finding-sink-check]`): the write band, off the allowlist.
+            "record decide".to_owned(),
             // CLOUD-1717's READING door, and the write band is where it belongs:
             // it applies a reading the engine owns and WRITES the result, so it
             // is absent from the read-only allowlist above for `record named`'s
-            // reason. The spawn its input comes from stays in the task.
+            // reason. The spawn its input comes from stays in the task, except the
+            // `cargo metadata` a graph family may `resolve` itself (CLOUD-1991).
             "record derive".to_owned(),
+            // The land-divergence producer (CLOUD-843), a forge-window write.
+            "record divergence".to_owned(),
             // The two READ leaves of this noun (CLOUD-1713). They fold and
             // print what the write leaves already stored, which is why they —
             // alone under `record` — are also on the read-only allowlist above.
@@ -1122,9 +1213,24 @@ mod tests {
             // branch, which `Fact::Records` projects. The two leaves above it
             // are task stores read back only by `record show`/`record fold`.
             "record named".to_owned(),
+            // The non-verdict producer (CLOUD-843, retiring `nonverdict-record`),
+            // a forge-window write beside `record divergence`.
+            "record nonverdict".to_owned(),
             // The plan a branch declared, so `plan-complete` decides over a
             // record rather than over a transcript it cannot re-read.
             "record plan".to_owned(),
+            // `record derive` with the probe run moved in (CLOUD-843, retiring
+            // `[tasks.evaluator-io-record]`). It runs the caller's command, so
+            // it is unclassified and off the allowlist.
+            "record probe".to_owned(),
+            // CLOUD-843's forge-read door. The write band for `record derive`'s
+            // reason, and more so: it reaches the network as well as the store,
+            // so it is absent from the read-only allowlist above.
+            "record query".to_owned(),
+            // A release's assets and its manifest's verdict (CLOUD-843, retiring
+            // `release-assets-record`'s reading): a forge read and a store write,
+            // so off the allowlist for `record query`'s reason.
+            "record release".to_owned(),
             "record show".to_owned(),
             // The per-suite cost corpus (CLOUD-352), whose store is a COMMITTED
             // file rather than the out-of-tree record tree: its reader is a
@@ -1132,13 +1238,24 @@ mod tests {
             // expensive.
             "record suites".to_owned(),
             "record tool".to_owned(),
+            // CLOUD-843's validator door: it RUNS the row's declared argv, so it
+            // is unclassified and off the read-only allowlist, `exec`'s way.
+            "record validate".to_owned(),
             // The release-install contract (CLOUD-65), retired out of
             // `mise-tasks/install-check.sh` under CLOUD-1716. It asks the three
             // authorities that name a release asset and compares them; it is
             // absent from the read-only allowlist because it still runs the two
             // interim programs it compares.
             "release".to_owned(),
+            // The backfill sweep (CLOUD-843, retiring `release-backfill`): every
+            // dispatch runs the consumer's own workflow, so it is unclassified.
+            "release backfill".to_owned(),
             "release install".to_owned(),
+            // The checksum manifest (CLOUD-843, retiring `checksums`): a forge
+            // read and a file write, off the allowlist.
+            "release sums".to_owned(),
+            // The SBOM producer (CLOUD-843): a write verb, off the allowlist.
+            "sbom".to_owned(),
             // The API-compatibility noun (CLOUD-1050), ported off
             // `mise-tasks/semver.sh` when CLOUD-1059 made editing a shell
             // rule refusable. §2 gains the noun in the same change, which is
@@ -1159,6 +1276,9 @@ mod tests {
             "show agent".to_owned(),
             "singleton".to_owned(),
             "singleton acquire".to_owned(),
+            // The per-turn background run (CLOUD-1991, retiring `cross-turn`):
+            // unclassified, since it runs the command it is handed.
+            "singleton detach".to_owned(),
             "singleton release".to_owned(),
             "spec".to_owned(),
             // The container's declared preconditions (CLOUD-1324) — §9's
@@ -1176,6 +1296,12 @@ mod tests {
             "state migrate".to_owned(),
             "state record".to_owned(),
             "state settle".to_owned(),
+            // The step cache (CLOUD-843, retiring `step-receipt`). All four rows
+            // are unclassified: `run` executes the command it is handed.
+            "step".to_owned(),
+            "step check".to_owned(),
+            "step record".to_owned(),
+            "step run".to_owned(),
             // The build-tree noun (CLOUD-1030), ported off
             // `mise-tasks/target-prune.sh` for `semver`'s reason above. Both
             // rows are `Effect::Destructive` and so are deliberately absent
@@ -1216,6 +1342,11 @@ mod tests {
             // `Destructive` because its subject is a file shared by every
             // checkout on the box.
             "wiring".to_owned(),
+            // The clone's own commit hooks, linked to a checked-in body
+            // (CLOUD-1991, retiring `[tasks."session:git-hooks"]`). `write`, not
+            // `destructive`: its subject is this clone's hooks directory, which
+            // the repository's `[[startup]]` row already authorises it to repair.
+            "wiring gate".to_owned(),
             "wiring reclaim".to_owned(),
             "worktree".to_owned(),
             "worktree status".to_owned(),

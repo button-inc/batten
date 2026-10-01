@@ -1,5 +1,10 @@
 name: test
 
+# workflow-shell: CLOUD-843 the step count rises because multi-line shell bodies
+# became one-command steps (argv, `ci step`, or an expression-gated `exit 1`);
+# the shell LINES fell, which `batten census shell` measures. The increase is
+# the retirement's shape, owned here as `workflow add other`'s permit asks.
+
 # The shipped Action's own self-test (CLOUD-68, extended by CLOUD-110).
 # `action.yml` is the one thing in this repository that no `mise` task can
 # exercise: its contract is what a GitHub runner does with it, so the only honest
@@ -215,43 +220,27 @@ jobs:
       # one file that is not materialized: it is the specification, not payload,
       # and writing it into the tree would put a file in front of the globs under
       # test.
-      - name: Materialize the clean fixture at the workspace root
+      # ONE `cp` PER FILE, NAMED, rather than a loop over `*.in`: each fixture is
+      # exactly a `batten.toml.in` and a `lib.rs.in`, so the list is short and a
+      # missing source fails its `cp` loudly — the empty-materialization case the
+      # loop's counter guarded (CLOUD-843).
+      - name: Materialize the clean fixture's config at the workspace root
         shell: bash
-        env:
-          FIXTURE: action/crates/batten/tests/fixtures/repos/forbid-clean
-        run: |
-          set -euo pipefail
-          shopt -s nullglob
-          found=0
-          for f in "$FIXTURE"/*.in; do
-            base=$(basename "$f")
-            # An `[ … ] && continue` here would be a `set -e` footgun for no
-            # gain; the `if` says the same thing and cannot bite.
-            if [ "$base" = expected.in ]; then
-              continue
-            fi
-            cp "$f" "${GITHUB_WORKSPACE}/${base%.in}"
-            found=$((found + 1))
-          done
-          # A materializer that silently copied nothing would leave the action
-          # running against an empty directory, and `check` with no batten.toml
-          # is exit 1 — a red job, but for the wrong reason and pointing at the
-          # wrong file.
-          [ "$found" -gt 0 ] || {
-            echo "::error::no fixture files materialized from $FIXTURE" >&2
-            exit 1
-          }
+        run: cp action/crates/batten/tests/fixtures/repos/forbid-clean/batten.toml.in batten.toml
 
-          # The sparse list above is an allow list, and an allow list widened by
-          # hand is one nobody re-checks. This is the sensor on it: the fixture's
-          # glob is `**/*.rs`, so any `.rs` file reaching the checkout would be
-          # judged as if it were fixture content, and the job would go red — or,
-          # worse for a `warn` rule, quietly wrong. Pointer only, never the line.
-          stray=$(find action -name '*.rs' -print -quit)
-          [ -z "$stray" ] || {
-            echo "::error::$stray is inside the fixture's \`**/*.rs\` glob — narrow the sparse-checkout list rather than the fixture." >&2
-            exit 1
-          }
+      - name: Materialize the clean fixture's source at the workspace root
+        shell: bash
+        run: cp action/crates/batten/tests/fixtures/repos/forbid-clean/lib.rs.in lib.rs
+
+      # The sparse list above is an allow list, and an allow list widened by
+      # hand is one nobody re-checks. This is the sensor on it: the fixture's
+      # glob is `**/*.rs`, so any `.rs` file reaching the checkout would be
+      # judged as if it were fixture content, and the job would go red — or,
+      # worse for a `warn` rule, quietly wrong. `hashFiles` is empty exactly when
+      # no file matches, so the expression is the whole predicate.
+      - name: A .rs file inside action/ sits in the fixture's **/*.rs glob, so narrow the sparse-checkout list rather than the fixture
+        if: ${{ hashFiles('action/**/*.rs') != '' }}
+        run: exit 1
 
       # THE ACCEPTANCE CRITERION, EXECUTED. No `with:` — not an empty one, none
       # at all. Every input falls back to its default, so this resolves the
@@ -336,33 +325,25 @@ jobs:
       # reaching two fixtures in one job is the honest shape. It also removes the
       # need for the stray-`.rs` sensor: a rule's glob is rooted at the working
       # directory, so `action/` is outside every one of them.
-      - name: Materialize the fixtures
+      - name: Make the fixture directories
         shell: bash
-        env:
-          CORPUS: action/crates/batten/tests/fixtures/repos
-          CLEAN: forbid-clean
-          CASE: forbid-deny
-        run: |
-          set -euo pipefail
-          shopt -s nullglob
-          materialize() {
-            local fixture="$1" dest="$2" f base found=0
-            mkdir -p "$dest"
-            for f in "$CORPUS/$fixture"/*.in; do
-              base=$(basename "$f")
-              if [ "$base" = expected.in ]; then
-                continue
-              fi
-              cp "$f" "$dest/${base%.in}"
-              found=$((found + 1))
-            done
-            [ "$found" -gt 0 ] || {
-              echo "::error::no fixture files materialized from $CORPUS/$fixture" >&2
-              exit 1
-            }
-          }
-          materialize "$CLEAN" "$GITHUB_WORKSPACE/clean"
-          materialize "$CASE" "$GITHUB_WORKSPACE/case"
+        run: mkdir clean case
+
+      - name: Materialize the clean fixture's config
+        shell: bash
+        run: cp action/crates/batten/tests/fixtures/repos/forbid-clean/batten.toml.in clean/batten.toml
+
+      - name: Materialize the clean fixture's source
+        shell: bash
+        run: cp action/crates/batten/tests/fixtures/repos/forbid-clean/lib.rs.in clean/lib.rs
+
+      - name: Materialize the case fixture's config
+        shell: bash
+        run: cp action/crates/batten/tests/fixtures/repos/forbid-deny/batten.toml.in case/batten.toml
+
+      - name: Materialize the case fixture's source
+        shell: bash
+        run: cp action/crates/batten/tests/fixtures/repos/forbid-deny/lib.rs.in case/lib.rs
 
       # The liveness control. If this is not 0 the Action is broken upstream of
       # the verb, and the assertion below would be reading a code nobody produced.
@@ -378,21 +359,16 @@ jobs:
           working-directory: case
           fail: "false"
 
-      - name: Assert the codes
-        shell: bash
-        env:
-          CLEAN_CODE: ${{ steps.clean.outputs.exit-code }}
-          CASE_CODE: ${{ steps.case.outputs.exit-code }}
-        run: |
-          set -euo pipefail
-          [ "$CLEAN_CODE" = 0 ] || {
-            echo "::error::the clean fixture returned $CLEAN_CODE, not 0 — the Action is broken upstream of the verb, so nothing below this proves anything." >&2
-            exit 1
-          }
-          [ "$CASE_CODE" = 2 ] || {
-            echo "::error::a policy violation returned $CASE_CODE, not 2. Exit 2 is the policy verdict on every surface (house-style §7)." >&2
-            exit 1
-          }
+      # EACH CODE IS ITS OWN STEP, AND THE COMPARISON IS THE STEP'S `if:`. The
+      # expression decides and `exit 1` is the whole body, so the step's name is
+      # the message a failed run shows — no shell reads a code (CLOUD-843).
+      - name: The clean fixture must exit 0, or the Action is broken upstream of the verb and nothing below proves anything (it returned ${{ steps.clean.outputs.exit-code }})
+        if: ${{ steps.clean.outputs.exit-code != '0' }}
+        run: exit 1
+
+      - name: A policy violation must exit 2, the policy verdict on every surface per house-style §7 (it returned ${{ steps.case.outputs.exit-code }})
+        if: ${{ steps.case.outputs.exit-code != '2' }}
+        run: exit 1
 
   action-deny:
     name: action-deny
@@ -457,33 +433,25 @@ jobs:
             Cargo.toml
             crates/batten/tests/fixtures/repos
 
-      - name: Materialize the fixtures
+      - name: Make the fixture directories
         shell: bash
-        env:
-          CORPUS: action/crates/batten/tests/fixtures/repos
-          CLEAN: forbid-clean
-          CASE: shape-mediated-call
-        run: |
-          set -euo pipefail
-          shopt -s nullglob
-          materialize() {
-            local fixture="$1" dest="$2" f base found=0
-            mkdir -p "$dest"
-            for f in "$CORPUS/$fixture"/*.in; do
-              base=$(basename "$f")
-              if [ "$base" = expected.in ]; then
-                continue
-              fi
-              cp "$f" "$dest/${base%.in}"
-              found=$((found + 1))
-            done
-            [ "$found" -gt 0 ] || {
-              echo "::error::no fixture files materialized from $CORPUS/$fixture" >&2
-              exit 1
-            }
-          }
-          materialize "$CLEAN" "$GITHUB_WORKSPACE/clean"
-          materialize "$CASE" "$GITHUB_WORKSPACE/case"
+        run: mkdir clean case
+
+      - name: Materialize the clean fixture's config
+        shell: bash
+        run: cp action/crates/batten/tests/fixtures/repos/forbid-clean/batten.toml.in clean/batten.toml
+
+      - name: Materialize the clean fixture's source
+        shell: bash
+        run: cp action/crates/batten/tests/fixtures/repos/forbid-clean/lib.rs.in clean/lib.rs
+
+      - name: Materialize the case fixture's config
+        shell: bash
+        run: cp action/crates/batten/tests/fixtures/repos/shape-mediated-call/batten.toml.in case/batten.toml
+
+      - name: Materialize the case fixture's source
+        shell: bash
+        run: cp action/crates/batten/tests/fixtures/repos/shape-mediated-call/lib.rs.in case/lib.rs
 
       - uses: ./action
         id: clean
@@ -515,26 +483,17 @@ jobs:
           stdin: '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"ls -la"}}'
           fail: "false"
 
-      - name: Assert the codes
-        shell: bash
-        env:
-          CLEAN_CODE: ${{ steps.clean.outputs.exit-code }}
-          DENIED_CODE: ${{ steps.denied.outputs.exit-code }}
-          ALLOWED_CODE: ${{ steps.allowed.outputs.exit-code }}
-        run: |
-          set -euo pipefail
-          [ "$CLEAN_CODE" = 0 ] || {
-            echo "::error::the clean fixture returned $CLEAN_CODE, not 0 — the Action is broken upstream of the verb, so nothing below this proves anything." >&2
-            exit 1
-          }
-          [ "$DENIED_CODE" = 2 ] || {
-            echo "::error::a denied mediated call returned $DENIED_CODE, not 2. Every host reads 2 as deny, so a wrong code here changes an enforcement outcome rather than a report." >&2
-            exit 1
-          }
-          [ "$ALLOWED_CODE" = 0 ] || {
-            echo "::error::an unmatched command returned $ALLOWED_CODE, not 0 — the deny above proves nothing if this policy denies everything." >&2
-            exit 1
-          }
+      - name: The clean fixture must exit 0, or the Action is broken upstream of the verb and nothing below proves anything (it returned ${{ steps.clean.outputs.exit-code }})
+        if: ${{ steps.clean.outputs.exit-code != '0' }}
+        run: exit 1
+
+      - name: A denied mediated call must exit 2, since every host reads 2 as deny and a wrong code changes an enforcement outcome (it returned ${{ steps.denied.outputs.exit-code }})
+        if: ${{ steps.denied.outputs.exit-code != '2' }}
+        run: exit 1
+
+      - name: An unmatched command must exit 0, or the deny above proves nothing because the policy denies everything (it returned ${{ steps.allowed.outputs.exit-code }})
+        if: ${{ steps.allowed.outputs.exit-code != '0' }}
+        run: exit 1
 
   action-usage:
     name: action-usage
@@ -599,33 +558,25 @@ jobs:
             Cargo.toml
             crates/batten/tests/fixtures/repos
 
-      - name: Materialize the fixtures
+      - name: Make the fixture directories
         shell: bash
-        env:
-          CORPUS: action/crates/batten/tests/fixtures/repos
-          CLEAN: forbid-clean
-          CASE: missing-severity
-        run: |
-          set -euo pipefail
-          shopt -s nullglob
-          materialize() {
-            local fixture="$1" dest="$2" f base found=0
-            mkdir -p "$dest"
-            for f in "$CORPUS/$fixture"/*.in; do
-              base=$(basename "$f")
-              if [ "$base" = expected.in ]; then
-                continue
-              fi
-              cp "$f" "$dest/${base%.in}"
-              found=$((found + 1))
-            done
-            [ "$found" -gt 0 ] || {
-              echo "::error::no fixture files materialized from $CORPUS/$fixture" >&2
-              exit 1
-            }
-          }
-          materialize "$CLEAN" "$GITHUB_WORKSPACE/clean"
-          materialize "$CASE" "$GITHUB_WORKSPACE/case"
+        run: mkdir clean case
+
+      - name: Materialize the clean fixture's config
+        shell: bash
+        run: cp action/crates/batten/tests/fixtures/repos/forbid-clean/batten.toml.in clean/batten.toml
+
+      - name: Materialize the clean fixture's source
+        shell: bash
+        run: cp action/crates/batten/tests/fixtures/repos/forbid-clean/lib.rs.in clean/lib.rs
+
+      - name: Materialize the case fixture's config
+        shell: bash
+        run: cp action/crates/batten/tests/fixtures/repos/missing-severity/batten.toml.in case/batten.toml
+
+      - name: Materialize the case fixture's source
+        shell: bash
+        run: cp action/crates/batten/tests/fixtures/repos/missing-severity/lib.rs.in case/lib.rs
 
       # THE CONTROL THIS JOB CANNOT DO WITHOUT. A missing or unexecutable binary
       # also exits 1, so without a clean run proving the install worked, this job
@@ -642,21 +593,13 @@ jobs:
           working-directory: case
           fail: "false"
 
-      - name: Assert the codes
-        shell: bash
-        env:
-          CLEAN_CODE: ${{ steps.clean.outputs.exit-code }}
-          CASE_CODE: ${{ steps.case.outputs.exit-code }}
-        run: |
-          set -euo pipefail
-          [ "$CLEAN_CODE" = 0 ] || {
-            echo "::error::the clean fixture returned $CLEAN_CODE, not 0 — a 1 below would then be an install failure wearing a config error's code." >&2
-            exit 1
-          }
-          [ "$CASE_CODE" = 1 ] || {
-            echo "::error::an unloadable config returned $CASE_CODE, not 1. Exit 1 is fail-loud-do-not-block: it must never be the deny code." >&2
-            exit 1
-          }
+      - name: The clean fixture must exit 0, or a 1 below is an install failure wearing a config error's code (it returned ${{ steps.clean.outputs.exit-code }})
+        if: ${{ steps.clean.outputs.exit-code != '0' }}
+        run: exit 1
+
+      - name: An unloadable config must exit 1, fail-loud-do-not-block, never the deny code (it returned ${{ steps.case.outputs.exit-code }})
+        if: ${{ steps.case.outputs.exit-code != '1' }}
+        run: exit 1
 
   action-internal:
     name: action-internal
@@ -728,33 +671,25 @@ jobs:
             Cargo.toml
             crates/batten/tests/fixtures/repos
 
-      - name: Materialize the fixtures
+      - name: Make the fixture directories
         shell: bash
-        env:
-          CORPUS: action/crates/batten/tests/fixtures/repos
-          CLEAN: forbid-clean
-          CASE: forbid-deny
-        run: |
-          set -euo pipefail
-          shopt -s nullglob
-          materialize() {
-            local fixture="$1" dest="$2" f base found=0
-            mkdir -p "$dest"
-            for f in "$CORPUS/$fixture"/*.in; do
-              base=$(basename "$f")
-              if [ "$base" = expected.in ]; then
-                continue
-              fi
-              cp "$f" "$dest/${base%.in}"
-              found=$((found + 1))
-            done
-            [ "$found" -gt 0 ] || {
-              echo "::error::no fixture files materialized from $CORPUS/$fixture" >&2
-              exit 1
-            }
-          }
-          materialize "$CLEAN" "$GITHUB_WORKSPACE/clean"
-          materialize "$CASE" "$GITHUB_WORKSPACE/case"
+        run: mkdir clean case
+
+      - name: Materialize the clean fixture's config
+        shell: bash
+        run: cp action/crates/batten/tests/fixtures/repos/forbid-clean/batten.toml.in clean/batten.toml
+
+      - name: Materialize the clean fixture's source
+        shell: bash
+        run: cp action/crates/batten/tests/fixtures/repos/forbid-clean/lib.rs.in clean/lib.rs
+
+      - name: Materialize the case fixture's config
+        shell: bash
+        run: cp action/crates/batten/tests/fixtures/repos/forbid-deny/batten.toml.in case/batten.toml
+
+      - name: Materialize the case fixture's source
+        shell: bash
+        run: cp action/crates/batten/tests/fixtures/repos/forbid-deny/lib.rs.in case/lib.rs
 
       # An internal failure is a file Batten cannot READ inside a rule's glob:
       # `rules::forbid_in_file` surfaces the I/O error, and `main.rs` maps
@@ -766,16 +701,16 @@ jobs:
       # it never established. Measured while writing this: a `chmod -R a+rX`
       # ordered after the `chmod 000` silently re-granted read and turned the
       # whole measurement into a 0.
-      - name: Make the file unreadable, and prove that it is
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd "$GITHUB_WORKSPACE/case"
-          chmod 000 lib.rs
-          if [ -r lib.rs ]; then
-            echo "::error::lib.rs is still readable after chmod 000 — this runner defeats the precondition (running as root?), so a 3 here would prove nothing. Fix the precondition rather than the assertion." >&2
-            exit 1
-          fi
+      - name: Make the file unreadable
+        working-directory: case
+        run: chmod 000 lib.rs
+
+      # The sensor, as its own step: `test` exits non-zero while the file is still
+      # readable, which is a root runner defeating the precondition — fix the
+      # precondition rather than the assertion.
+      - name: Prove lib.rs is unreadable, or a 3 below would prove nothing (a root runner defeats chmod 000)
+        working-directory: case
+        run: test ! -r lib.rs
 
       - uses: ./action
         id: clean
@@ -793,10 +728,8 @@ jobs:
       # ties the 3 above to the unreadable file rather than to anything else the
       # fixture happens to contain.
       - name: Restore the file and re-run
-        shell: bash
-        run: |
-          set -euo pipefail
-          chmod u+r,g+r,o+r "$GITHUB_WORKSPACE/case/lib.rs"
+        working-directory: case
+        run: chmod u+r,g+r,o+r lib.rs
 
       - uses: ./action
         id: readable
@@ -804,26 +737,17 @@ jobs:
           working-directory: case
           fail: "false"
 
-      - name: Assert the codes
-        shell: bash
-        env:
-          CLEAN_CODE: ${{ steps.clean.outputs.exit-code }}
-          CASE_CODE: ${{ steps.case.outputs.exit-code }}
-          READABLE_CODE: ${{ steps.readable.outputs.exit-code }}
-        run: |
-          set -euo pipefail
-          [ "$CLEAN_CODE" = 0 ] || {
-            echo "::error::the clean fixture returned $CLEAN_CODE, not 0 — the Action is broken upstream of the verb, so nothing below this proves anything." >&2
-            exit 1
-          }
-          [ "$CASE_CODE" = 3 ] || {
-            echo "::error::a file Batten could not read returned $CASE_CODE, not 3. Exit 3 is fail-loud-do-not-block, and it must be distinguishable from the policy verdict — a check that could not look is not a check that found nothing." >&2
-            exit 1
-          }
-          [ "$READABLE_CODE" = 2 ] || {
-            echo "::error::the same fixture readable returned $READABLE_CODE, not 2 — without this the 3 above is not tied to the unreadable file." >&2
-            exit 1
-          }
+      - name: The clean fixture must exit 0, or the Action is broken upstream of the verb and nothing below proves anything (it returned ${{ steps.clean.outputs.exit-code }})
+        if: ${{ steps.clean.outputs.exit-code != '0' }}
+        run: exit 1
+
+      - name: A file Batten could not read must exit 3, distinguishable from the policy verdict (it returned ${{ steps.case.outputs.exit-code }})
+        if: ${{ steps.case.outputs.exit-code != '3' }}
+        run: exit 1
+
+      - name: The same fixture readable must exit 2, which ties the 3 above to the unreadable file (it returned ${{ steps.readable.outputs.exit-code }})
+        if: ${{ steps.readable.outputs.exit-code != '2' }}
+        run: exit 1
 
   action-final:
     name: action-final
@@ -884,11 +808,11 @@ jobs:
       # (CLOUD-351). Three conclusions rather than one `= success` per job:
       # `contains` cannot express "all", so the equivalent is "none of the
       # not-success ones", and that set is exhaustive for a `needs` result.
+      #
+      # THE PREDICATE IS THE STEP'S `if:`, so no shell reads it: the step runs,
+      # and fails, only when some `needs` result is not success (CLOUD-843). Each
+      # needed job's own result is on the run page, which is what the dump of
+      # `toJSON(needs)` this replaced printed.
       - name: Assert every variant passed
-        env:
-          RESULTS: ${{ toJSON(needs) }}
-        run: |
-          echo "$RESULTS"
-          [ "${{ contains(needs.*.result, 'failure') }}" = "false" ] &&
-            [ "${{ contains(needs.*.result, 'cancelled') }}" = "false" ] &&
-            [ "${{ contains(needs.*.result, 'skipped') }}" = "false" ]
+        if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped') }}
+        run: exit 1

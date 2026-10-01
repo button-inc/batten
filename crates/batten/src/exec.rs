@@ -2101,6 +2101,9 @@ pub(crate) fn detached(program: &Path, args: &[String], env: &[(&str, &str)]) {
     drop(builder.spawn());
 }
 
+// Carried from the retired shim's `forks-instead-of-execing` row (CLOUD-843): a
+// fork leaves the recorded pid pointing at a process that is not the server.
+//MUTANT spawn-forks-instead-of-execing|s@    let failed = command.exec();@    let failed = match command.status() { Ok(_) => std::process::exit(0), Err(error) => error };@|the_servers_pid_is_this_processs_it_execs_rather_than_forks
 /// Become `argv`: replace this process, or say why it could not be.
 ///
 /// # Why this is a THIRD shape beside `piped` and `detached`
@@ -2203,6 +2206,12 @@ pub(crate) enum Diagnostics {
     Drop,
     /// Fold stderr in after stdout. For a caller reporting a gate's own reason.
     Keep,
+    /// Leave stderr on this process's own stderr, uncaptured (CLOUD-843). For a
+    /// caller that PARSES stdout and must still show the child's diagnostics as
+    /// they arrive — `batten ci step` running a build whose log is the step's
+    /// only evidence when it fails. Neither folding it in (the parse breaks) nor
+    /// dropping it (the failure is silent) is right there.
+    Pass,
 }
 
 impl Diagnostics {
@@ -2210,6 +2219,7 @@ impl Diagnostics {
         match self {
             Self::Drop => Stdio::null(),
             Self::Keep => Stdio::piped(),
+            Self::Pass => Stdio::inherit(),
         }
     }
 }

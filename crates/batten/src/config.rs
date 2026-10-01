@@ -740,6 +740,40 @@ pub struct Config {
     /// validator and the write are [`crate::wiring`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wiring: Option<crate::wiring::Wiring>,
+    /// The measurements this consumer declares over its own tree (CLOUD-843):
+    /// where it writes shell, and which files must stay shell. Absent means the
+    /// census has nothing declared to read, which `batten census shell` refuses
+    /// rather than reporting a zero it never measured.
+    ///
+    /// Consumer-specific by nature, for `wiring`'s reason: a manifest path, a
+    /// workflow glob and an exempt file are somebody's layout, and non-negotiable
+    /// rule 1 keeps those out of `crates/batten`. The grammar of "is this line
+    /// shell" is the engine's; where to look is this table's. The type and the
+    /// reading are [`crate::census`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub census: Option<crate::census::Census>,
+    /// What `batten sbom` inventories and under which names (CLOUD-843).
+    /// Absent means the verb has no subject to name, which it refuses rather
+    /// than guessing one.
+    ///
+    /// Consumer-specific for `census`'s reason: the subject's name, where its
+    /// documents land, which paths a scan skips and where its licence table
+    /// lives are somebody's layout. The derivation is the engine's; the type and
+    /// the reading are [`crate::sbom`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sbom: Option<crate::sbom::Declared>,
+    /// The step cache's table (CLOUD-424, CLOUD-843): each step a caller brackets
+    /// with `batten step`, the pathspecs whose index entries key its receipt and
+    /// the tool argvs whose answers do. Empty means no step is declared, so every
+    /// `batten step` call is a miss that records nothing.
+    ///
+    /// Consumer-specific by nature, for `startup`'s reason: which steps a
+    /// repository runs and what each reads are facts about that repository
+    /// (non-negotiable rule 1). Read from the committed authority alone, never
+    /// layered. The row and its validator are [`crate::step_table`]; the cache
+    /// that reads the table back lives above this loader and is not named here.
+    #[serde(default, rename = "step", skip_serializing_if = "Vec::is_empty")]
+    pub steps: Vec<crate::step_table::Step>,
 }
 
 /// The `[perf]` table: accepted invocation-latency regressions (CLOUD-1163
@@ -773,6 +807,36 @@ pub struct Perf {
     /// cannot exempt anything.
     #[serde(default, rename = "exempt", skip_serializing_if = "Vec::is_empty")]
     pub exempt: Vec<PerfExempt>,
+    /// The wall-clock budget `batten perf latency` holds a command to
+    /// (CLOUD-843). Absent means the verb has nothing to time, which it refuses
+    /// rather than reporting a measurement it never took.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latency: Option<PerfLatency>,
+}
+
+/// One command's wall-clock budget, in whole seconds.
+///
+/// CONSUMER DATA, for `[perf.exempt]`'s reason: which command a repository
+/// times and what it may cost are that repository's facts, and non-negotiable
+/// rule 1 keeps them out of `crates/batten`. The budget is a ceiling DERIVED
+/// from measurement, never a target chosen in advance, and re-deriving it is a
+/// deliberate commit the verb's drift report prompts.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PerfLatency {
+    /// The command, as an argv. Its exit status is IGNORED: a red run still
+    /// takes time, and this measures cost rather than correctness.
+    pub command: Vec<String>,
+    /// How many times to run it; the verdict reads the median.
+    pub runs: u32,
+    /// The budget, in whole seconds.
+    pub budget_seconds: u64,
+    /// Seconds over the budget a median may reach before it is drift, so a
+    /// shared runner's noise does not cry wolf.
+    pub slack_seconds: u64,
+    /// A median under `budget_seconds / loose_factor` is drift too: the budget
+    /// has stopped bounding anything.
+    pub loose_factor: u64,
 }
 
 /// One accepted regression: a path, its raised ratio, an expiry and a reason.
@@ -810,9 +874,28 @@ impl Perf {
     /// # Errors
     ///
     /// A row with an empty path or reason, a non-positive ratio, or an expiry
-    /// that is not `YYYY-MM-DD`. Each is a table that would decide the wrong
+    /// that is not `YYYY-MM-DD`; a `[perf.latency]` with no program to time, or
+    /// a zero `runs` or `loose_factor`. Each is a table that would decide the wrong
     /// thing rather than fail, which is CLOUD-253's rule for every table here.
     pub fn validate(&self) -> Result<()> {
+        if let Some(latency) = &self.latency {
+            if latency
+                .command
+                .first()
+                .is_none_or(|program| program.trim().is_empty())
+            {
+                return Err(UsageError::raise(
+                    "[perf.latency]: `command` must name a program to time".to_owned(),
+                ));
+            }
+            if latency.runs == 0 || latency.loose_factor == 0 {
+                return Err(UsageError::raise(
+                    "[perf.latency]: `runs` and `loose_factor` must be at least 1; a zero is a \
+                     measurement that decides nothing"
+                        .to_owned(),
+                ));
+            }
+        }
         for (index, row) in self.exempt.iter().enumerate() {
             let at = format!("[[perf.exempt]] #{}", index + 1);
             if row.path.trim().is_empty() {
@@ -2060,6 +2143,14 @@ fn validate_sections(config: &Config) -> Result<()> {
         Native::RecordTableRefused,
         crate::record::validate(&config.records, &config.recorders),
     )?;
+    // `[[forge.query]]` rows (CLOUD-843), AFTER the record table because each
+    // row writes a family a `[[record]]` row must declare, and that refusal is
+    // only honest once the declarations are known to be well formed. A plain
+    // `?` rather than `under(..)`: `[forge]` is a singleton table, which the
+    // `Vec<T>` census does not reach, exactly as `[ci]` and `[perf]` below.
+    if let Some(forge) = &config.forge {
+        crate::forge_query::validate(&forge.query, &config.records)?;
+    }
     // `[budget]` is a table rather than a list, so the census below (which scans
     // `Vec<T>` fields) does not reach it — but the failure it guards against is
     // the same one: a table that parses and gates nothing. A `[budget]` header
@@ -2120,10 +2211,33 @@ fn validate_sections(config: &Config) -> Result<()> {
     if let Some(wiring) = &config.wiring {
         wiring.validate().map_err(UsageError::raise)?;
     }
+    // A census row that counts nothing while reading as covered — a manifest with
+    // no command key, an unparseable glob — is refused at load, where the key is
+    // named, rather than read as a tree with no shell in it (CLOUD-843).
+    if let Some(shell) = config
+        .census
+        .as_ref()
+        .and_then(|census| census.shell.as_ref())
+    {
+        shell.validate()?;
+    }
+    // An `[sbom]` table whose subject or record names could not be a path
+    // component would fail at the first write, after a minute of scanning; it is
+    // refused at load, where the key is named (CLOUD-843).
+    if let Some(sbom) = &config.sbom {
+        sbom.validate()?;
+    }
     // `[transcript]` is a table too, so the census does not reach it either; the
     // guarded failure is a `path` key present and blank, which would resolve to
     // the repository root and read as an unparseable transcript (CLOUD-95).
     crate::transcript::validate(config.transcript.as_ref())?;
+    // A step row keying nothing, trusting no tool, or reading a pathspec this
+    // build cannot — each a receipt that answers for bytes nobody checked — is
+    // refused here, where the row is named (CLOUD-843).
+    under(
+        Native::StepTableRefused,
+        crate::step_table::validate(&config.steps),
+    )?;
     // A pin that can never match, a name that owns a cache path twice, an empty
     // required field: each is refused here rather than at fetch time, where the
     // failure would blame the artifact for a typo in this file.
@@ -3754,6 +3868,15 @@ impl Config {
             // guessing a path would be exactly the consumer identifier rule 1
             // keeps out.
             wiring: None,
+            // An authority declaring no census declares nowhere shell lives; the
+            // verb says so rather than counting a tree it was told nothing about.
+            census: None,
+            // No subject declared, so `batten sbom` has nothing to name.
+            sbom: None,
+            // An authority declaring no steps keys no receipt: every `batten step`
+            // call is a miss that runs the step and records nothing, which is the
+            // cache off rather than a cache answering for anything.
+            steps: Vec::new(),
         }
     }
 }
@@ -3859,6 +3982,7 @@ fn default_rules() -> Vec<Rule> {
         when_present: None,
         when_value: None,
         while_marker: None,
+        while_unpushed: false,
         key_from: None,
         key_base: None,
         key_shape: None,
@@ -3881,6 +4005,9 @@ fn default_rules() -> Vec<Rule> {
         commits: Vec::new(),
         staged: Vec::new(),
         history: Vec::new(),
+        tags: Vec::new(),
+        git_config: Vec::new(),
+        index: Vec::new(),
         state: Vec::new(),
         forge: Vec::new(),
         tools: Vec::new(),
@@ -4237,6 +4364,11 @@ mod tests {
             "records",
             "crate::record::validate(",
             Native::RecordTableRefused,
+        ),
+        (
+            "steps",
+            "crate::step_table::validate(",
+            Native::StepTableRefused,
         ),
     ];
 

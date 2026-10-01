@@ -143,6 +143,58 @@ expression: stdout_of(&output)
       "subcommands": []
     },
     {
+      "path": "artifacts",
+      "id": "artifacts",
+      "about": "Write the committed derivations of the command surface",
+      "effect": "unclassified",
+      "data_channel": false,
+      "flags": [],
+      "subcommands": [
+        {
+          "path": "artifacts write",
+          "id": "artifacts.write",
+          "about": "Write completions, man pages, schemas or the CLI reference where the caller names",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "completions",
+              "short": null,
+              "long": "completions",
+              "takes_value": true,
+              "positional": false,
+              "help": "Write the bash, zsh and fish completion scripts into this directory"
+            },
+            {
+              "name": "man",
+              "short": null,
+              "long": "man",
+              "takes_value": true,
+              "positional": false,
+              "help": "Write one man page per command into this directory, removing stale pages"
+            },
+            {
+              "name": "reference",
+              "short": null,
+              "long": "reference",
+              "takes_value": true,
+              "positional": false,
+              "help": "Write the markdown CLI reference to this file"
+            },
+            {
+              "name": "schema",
+              "short": null,
+              "long": "schema",
+              "takes_value": true,
+              "positional": false,
+              "help": "Write the config and policy-input JSON Schemas into this directory"
+            }
+          ],
+          "subcommands": []
+        }
+      ]
+    },
+    {
       "path": "attribution",
       "id": "attribution",
       "about": "What produced commits may carry about the tooling that made them",
@@ -196,6 +248,15 @@ expression: stdout_of(&output)
           "path": "attribution identity",
           "id": "attribution.identity",
           "about": "Set this clone's repo-local git identity when it is unset or denied",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [],
+          "subcommands": []
+        },
+        {
+          "path": "attribution signing",
+          "id": "attribution.signing",
+          "about": "Switch signing off in this clone when its signer cannot be verified or reproduced",
           "effect": "write",
           "data_channel": false,
           "flags": [],
@@ -277,6 +338,68 @@ expression: stdout_of(&output)
               "takes_value": false,
               "positional": false,
               "help": "Diff a fresh run against the committed table instead of writing it"
+            }
+          ],
+          "subcommands": []
+        }
+      ]
+    },
+    {
+      "path": "board",
+      "id": "board",
+      "about": "Whether the board's columns and graph tell the truth about the work",
+      "effect": "unclassified",
+      "data_channel": false,
+      "flags": [],
+      "subcommands": [
+        {
+          "path": "board check",
+          "id": "board.check",
+          "about": "Refuse a board whose columns, graph or citations lie, and print the ready frontier",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "cites",
+              "short": null,
+              "long": "cites",
+              "takes_value": false,
+              "positional": false,
+              "help": "Judge each payload's Ready-block citations against the tree instead of the graph"
+            },
+            {
+              "name": "issue",
+              "short": null,
+              "long": "issue",
+              "takes_value": true,
+              "positional": false,
+              "help": "Read this issue's payload from the capture store rather than stdin (repeatable)"
+            },
+            {
+              "name": "refs",
+              "short": null,
+              "long": "refs",
+              "takes_value": false,
+              "positional": false,
+              "help": "Judge the tree's clause citations against the payloads instead of the graph"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "path": "board sweep",
+          "id": "board.sweep",
+          "about": "Run every declared board gate over one payload set and report the set of refusals",
+          "effect": "unclassified",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "issue",
+              "short": null,
+              "long": "issue",
+              "takes_value": true,
+              "positional": false,
+              "help": "Read this issue's payload from the capture store rather than stdin (repeatable)"
             }
           ],
           "subcommands": []
@@ -454,6 +577,34 @@ expression: stdout_of(&output)
       ]
     },
     {
+      "path": "census",
+      "id": "census",
+      "about": "Count what this repository declares it is retiring, as pointers",
+      "effect": "read",
+      "data_channel": false,
+      "flags": [],
+      "subcommands": [
+        {
+          "path": "census shell",
+          "id": "census.shell",
+          "about": "Count every shell line in the declared manifests, workflows and shell files, as pointers",
+          "effect": "read",
+          "data_channel": true,
+          "flags": [
+            {
+              "name": "json",
+              "short": "J",
+              "long": "json",
+              "takes_value": false,
+              "positional": false,
+              "help": "Emit byte-stable JSON instead of pointer lines"
+            }
+          ],
+          "subcommands": []
+        }
+      ]
+    },
+    {
       "path": "check",
       "id": "check",
       "about": "Run the applicable read-only gates against the repository",
@@ -543,12 +694,28 @@ expression: stdout_of(&output)
               "help": "Emit byte-stable JSON instead of pointer lines"
             },
             {
+              "name": "repo",
+              "short": null,
+              "long": "repo",
+              "takes_value": true,
+              "positional": false,
+              "help": "The repository to read, in the forge client's own spelling"
+            },
+            {
               "name": "required",
               "short": null,
               "long": "required",
               "takes_value": true,
               "positional": false,
               "help": "Comma-separated check names that carry a verdict about this repository"
+            },
+            {
+              "name": "sha",
+              "short": null,
+              "long": "sha",
+              "takes_value": true,
+              "positional": false,
+              "help": "Read this commit's check runs from the forge instead of a reading on stdin"
             }
           ],
           "subcommands": []
@@ -577,6 +744,104 @@ expression: stdout_of(&output)
               "takes_value": true,
               "positional": false,
               "help": "The revision this checkout is diffed against"
+            },
+            {
+              "name": "head",
+              "short": null,
+              "long": "head",
+              "takes_value": true,
+              "positional": false,
+              "help": "The revision whose tree the checkout must carry; refused when it does not"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "path": "ci step",
+          "id": "ci.step",
+          "about": "Run one command and write its step outputs, run summary or mapped verdict to the runner's files",
+          "effect": "unclassified",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "arg_env",
+              "short": null,
+              "long": "arg-env",
+              "takes_value": true,
+              "positional": false,
+              "help": "Append this variable's value to the command as one argument, in order; unset or empty is refused (repeatable)"
+            },
+            {
+              "name": "capture",
+              "short": null,
+              "long": "capture",
+              "takes_value": true,
+              "positional": false,
+              "help": "Write the first line of the command's stdout to the runner's step outputs under this key"
+            },
+            {
+              "name": "command",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The command, after `--`: its code is the verb's unless an --on row maps it"
+            },
+            {
+              "name": "on",
+              "short": null,
+              "long": "on",
+              "takes_value": true,
+              "positional": false,
+              "help": "Map an exit code to the verdict's value as <code>=<value>; a mapped code exits 0 (repeatable)"
+            },
+            {
+              "name": "outputs",
+              "short": null,
+              "long": "outputs",
+              "takes_value": false,
+              "positional": false,
+              "help": "Append the command's KEY=VALUE stdout lines to the runner's step-output file"
+            },
+            {
+              "name": "require_env",
+              "short": null,
+              "long": "require-env",
+              "takes_value": true,
+              "positional": false,
+              "help": "Refuse the step before running anything when this variable is unset or empty, naming it and never its value (repeatable)"
+            },
+            {
+              "name": "save",
+              "short": null,
+              "long": "save",
+              "takes_value": true,
+              "positional": false,
+              "help": "Also write the command's stdout to this path, for a later step to read"
+            },
+            {
+              "name": "stdin",
+              "short": null,
+              "long": "stdin",
+              "takes_value": true,
+              "positional": false,
+              "help": "Feed this file to the command's standard input"
+            },
+            {
+              "name": "summary",
+              "short": null,
+              "long": "summary",
+              "takes_value": true,
+              "positional": false,
+              "help": "Fence the tail of the command's output into the runner's run summary under this title"
+            },
+            {
+              "name": "verdict",
+              "short": null,
+              "long": "verdict",
+              "takes_value": true,
+              "positional": false,
+              "help": "The step-output key a mapped exit code is written under"
             }
           ],
           "subcommands": []
@@ -1022,6 +1287,40 @@ expression: stdout_of(&output)
       ]
     },
     {
+      "path": "dist",
+      "id": "dist",
+      "about": "Build the release binary for a target and stage its archive, printing KEY=VALUE pointers to both",
+      "effect": "unclassified",
+      "data_channel": false,
+      "flags": [
+        {
+          "name": "build_tool",
+          "short": null,
+          "long": "build-tool",
+          "takes_value": true,
+          "positional": false,
+          "help": "How to build for the target: cargo, cross or zigbuild (default: $DIST_BUILD_TOOL, else cargo)"
+        },
+        {
+          "name": "stem",
+          "short": null,
+          "long": "stem",
+          "takes_value": false,
+          "positional": false,
+          "help": "Print the target's asset stem and exit, without building"
+        },
+        {
+          "name": "target",
+          "short": null,
+          "long": null,
+          "takes_value": true,
+          "positional": true,
+          "help": "The target triple to build, which must already be installed"
+        }
+      ],
+      "subcommands": []
+    },
+    {
       "path": "doctor",
       "id": "doctor",
       "about": "Diagnose whether Batten can run in this repository",
@@ -1072,6 +1371,15 @@ expression: stdout_of(&output)
               "help": "Emit byte-stable JSON instead of pointer lines"
             }
           ],
+          "subcommands": []
+        },
+        {
+          "path": "doctor forge",
+          "id": "doctor.forge",
+          "about": "Diagnose whether the forge credential carries the claims this repository's tasks declare",
+          "effect": "read",
+          "data_channel": false,
+          "flags": [],
           "subcommands": []
         },
         {
@@ -1250,6 +1558,14 @@ expression: stdout_of(&output)
           "help": "Run the rest of a `:::` bundle after a command fails"
         },
         {
+          "name": "except",
+          "short": null,
+          "long": "except",
+          "takes_value": true,
+          "positional": false,
+          "help": "Drop the tracked paths this glob matches from what --tracked selected"
+        },
+        {
           "name": "format",
           "short": null,
           "long": "format",
@@ -1312,6 +1628,14 @@ expression: stdout_of(&output)
           "takes_value": false,
           "positional": false,
           "help": "Copy the child's streams onto Batten's own, as well as capturing them"
+        },
+        {
+          "name": "tracked",
+          "short": null,
+          "long": "tracked",
+          "takes_value": true,
+          "positional": false,
+          "help": "Append the tracked paths this pathspec selects to the command; run nothing if none"
         }
       ],
       "subcommands": []
@@ -1507,6 +1831,24 @@ expression: stdout_of(&output)
           "subcommands": []
         },
         {
+          "path": "land linear",
+          "id": "land.linear",
+          "about": "Whether this head is built on the reference's current tip, so it can fast-forward",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "reference",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The remote reference to replay onto"
+            }
+          ],
+          "subcommands": []
+        },
+        {
           "path": "land push",
           "id": "land.push",
           "about": "Push this branch to its own ref, under receive-pack's compare-and-swap",
@@ -1600,6 +1942,14 @@ expression: stdout_of(&output)
               "takes_value": true,
               "positional": false,
               "help": "`<CLOUD-id>` lines a commit on origin/main closes, from `claimed-keys --closing-only`"
+            },
+            {
+              "name": "gather",
+              "short": null,
+              "long": "gather",
+              "takes_value": false,
+              "positional": false,
+              "help": "Acquire each evidence arm no file was named for: the trunk's closing keys, merged pull requests, and the remote's branches"
             },
             {
               "name": "instant",
@@ -1964,6 +2314,98 @@ expression: stdout_of(&output)
           "subcommands": []
         },
         {
+          "path": "mcp grant",
+          "id": "mcp.grant",
+          "about": "Apply the committed MCP permissions to whichever server name the host exposed this session",
+          "effect": "read",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "aliases",
+              "short": null,
+              "long": "aliases",
+              "takes_value": false,
+              "positional": false,
+              "help": "List the portable alias each server in the injected config resolves to"
+            },
+            {
+              "name": "config",
+              "short": null,
+              "long": "config",
+              "takes_value": true,
+              "positional": false,
+              "help": "The host-injected MCP config to resolve server names through"
+            },
+            {
+              "name": "guard",
+              "short": null,
+              "long": "guard",
+              "takes_value": false,
+              "positional": false,
+              "help": "Read a hook payload on stdin and refuse the call the committed settings deny"
+            },
+            {
+              "name": "settings",
+              "short": null,
+              "long": "settings",
+              "takes_value": true,
+              "positional": false,
+              "help": "The permission settings file to judge, instead of the declared one"
+            },
+            {
+              "name": "tool",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The tool name to resolve, as `mcp__<server>__<tool>`; absent under --guard or --aliases"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "path": "mcp posture",
+          "id": "mcp.posture",
+          "about": "Refuse an enabled MCP server this session did not attach, or a grant the connector would still prompt for",
+          "effect": "read",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "config",
+              "short": null,
+              "long": "config",
+              "takes_value": true,
+              "positional": false,
+              "help": "The host-injected MCP config to resolve server names through"
+            },
+            {
+              "name": "logs",
+              "short": null,
+              "long": "logs",
+              "takes_value": true,
+              "positional": false,
+              "help": "The host's MCP connection log tree, instead of the one it keeps for this project"
+            },
+            {
+              "name": "settings",
+              "short": null,
+              "long": "settings",
+              "takes_value": true,
+              "positional": false,
+              "help": "The permission settings file to judge, instead of the declared one"
+            },
+            {
+              "name": "spawns",
+              "short": null,
+              "long": "spawns",
+              "takes_value": true,
+              "positional": false,
+              "help": "The spawn ledger `mcp spawn` appends to, instead of this clone's"
+            }
+          ],
+          "subcommands": []
+        },
+        {
           "path": "mcp spawn",
           "id": "mcp.spawn",
           "about": "Record that a client actually spawned this server, then exec the launch line unchanged",
@@ -2174,6 +2616,15 @@ expression: stdout_of(&output)
               "help": "Measure HEAD against itself, so the ratio is the noise floor rather than a comparison"
             }
           ],
+          "subcommands": []
+        },
+        {
+          "path": "perf latency",
+          "id": "perf.latency",
+          "about": "Time the command `[perf.latency]` declares and report a median that has drifted from its budget, in either direction",
+          "effect": "unclassified",
+          "data_channel": false,
+          "flags": [],
           "subcommands": []
         },
         {
@@ -2455,6 +2906,88 @@ expression: stdout_of(&output)
           "subcommands": []
         },
         {
+          "path": "pr unsubscribed",
+          "id": "pr.unsubscribed",
+          "about": "Drop this session's webhook subscription to a pull request, attest it, or record and decide the reading",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "arguments",
+              "short": null,
+              "long": "arguments",
+              "takes_value": true,
+              "positional": false,
+              "help": "The tool's arguments `drop` sends: a JSON object whose strings may name {owner}, {repo}, {pr} and {session}"
+            },
+            {
+              "name": "endpoint",
+              "short": null,
+              "long": "endpoint",
+              "takes_value": true,
+              "positional": false,
+              "help": "The endpoint `drop` calls, with `{session}` where the session id goes"
+            },
+            {
+              "name": "family",
+              "short": null,
+              "long": "family",
+              "takes_value": true,
+              "positional": false,
+              "help": "The record family `check` writes, and the prefix of this session's receipts"
+            },
+            {
+              "name": "pr",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The pull request number this verb is about"
+            },
+            {
+              "name": "rule",
+              "short": null,
+              "long": "rule",
+              "takes_value": true,
+              "positional": false,
+              "help": "The declared rule `check` decides with over the record it writes"
+            },
+            {
+              "name": "session_env",
+              "short": null,
+              "long": "session-env",
+              "takes_value": true,
+              "positional": false,
+              "help": "The name of the environment variable holding this host's session id; unset is no session"
+            },
+            {
+              "name": "token_env",
+              "short": null,
+              "long": "token-env",
+              "takes_value": true,
+              "positional": false,
+              "help": "The name of the environment variable holding the path of the credential file `drop` sends"
+            },
+            {
+              "name": "tool",
+              "short": null,
+              "long": "tool",
+              "takes_value": true,
+              "positional": false,
+              "help": "The tool `drop` asks the endpoint to call"
+            },
+            {
+              "name": "verb",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "drop | record | check"
+            }
+          ],
+          "subcommands": []
+        },
+        {
           "path": "pr watch",
           "id": "pr.watch",
           "about": "Poll a head's check runs until the required set answers, then report the verdict",
@@ -2531,7 +3064,7 @@ expression: stdout_of(&output)
               "long": "sha",
               "takes_value": true,
               "positional": false,
-              "help": "The commit whose check runs to read"
+              "help": "The commit whose check runs to read — a sha, or a ref this checkout resolves"
             }
           ],
           "subcommands": []
@@ -2685,6 +3218,14 @@ expression: stdout_of(&output)
               "takes_value": true,
               "positional": false,
               "help": "Which git fact the receipt is judged against: the exact commit, or the branch"
+            },
+            {
+              "name": "or",
+              "short": null,
+              "long": "or",
+              "takes_value": true,
+              "positional": false,
+              "help": "Another check whose receipt satisfies this one; any one valid receipt passes (repeatable)"
             }
           ],
           "subcommands": []
@@ -2709,12 +3250,152 @@ expression: stdout_of(&output)
       "flags": [],
       "subcommands": [
         {
+          "path": "record attestation",
+          "id": "record.attestation",
+          "about": "Record a release's attestation posture and what the verifier says of each archive's binary",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "binary",
+              "short": null,
+              "long": "binary",
+              "takes_value": true,
+              "positional": false,
+              "help": "The binary's file name inside each archive (a `.exe` suffix also matches)"
+            },
+            {
+              "name": "tag",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The release tag to judge; absent is the latest release"
+            },
+            {
+              "name": "verifier",
+              "short": null,
+              "long": "verifier",
+              "takes_value": true,
+              "positional": false,
+              "help": "The program that downloads the release and verifies each binary (default: gh)"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "path": "record census",
+          "id": "record.census",
+          "about": "Record whether a landing was in flight when a container was replaced, and read the verdict back",
+          "effect": "unclassified",
+          "data_channel": false,
+          "flags": [],
+          "subcommands": [
+            {
+              "path": "record census note",
+              "id": "record.census.note",
+              "about": "Append a landing's beat or its deliberate stop under this container's boot",
+              "effect": "write",
+              "data_channel": false,
+              "flags": [
+                {
+                  "name": "kind",
+                  "short": null,
+                  "long": null,
+                  "takes_value": true,
+                  "positional": true,
+                  "help": "h for a landing's beat, x for a deliberate stop"
+                },
+                {
+                  "name": "reason",
+                  "short": null,
+                  "long": null,
+                  "takes_value": true,
+                  "positional": true,
+                  "help": "Why the loop stopped, one word, recorded beside an x"
+                }
+              ],
+              "subcommands": []
+            },
+            {
+              "path": "record census record-boot",
+              "id": "record.census.record-boot",
+              "about": "Record this container's boot, once",
+              "effect": "write",
+              "data_channel": false,
+              "flags": [],
+              "subcommands": []
+            },
+            {
+              "path": "record census report",
+              "id": "record.census.report",
+              "about": "Say whether a landing was in flight when the previous container was replaced",
+              "effect": "write",
+              "data_channel": false,
+              "flags": [
+                {
+                  "name": "once",
+                  "short": null,
+                  "long": "once",
+                  "takes_value": false,
+                  "positional": false,
+                  "help": "Report once per boot: record that this boot's verdict was read, and stay silent after"
+                }
+              ],
+              "subcommands": []
+            },
+            {
+              "path": "record census tally",
+              "id": "record.census.tally",
+              "about": "Count every recorded replacement by what it interrupted",
+              "effect": "read",
+              "data_channel": false,
+              "flags": [],
+              "subcommands": []
+            }
+          ]
+        },
+        {
           "path": "record closes",
           "id": "record.closes",
           "about": "Record which rows this branch's pull request body closes, read on stdin",
           "effect": "write",
           "data_channel": false,
           "flags": [],
+          "subcommands": []
+        },
+        {
+          "path": "record decide",
+          "id": "record.decide",
+          "about": "Derive a family's reading, record it without echoing it, and decide over it with the named rules",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "family",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The record family, which selects the reading and is the key a module reads it under"
+            },
+            {
+              "name": "input",
+              "short": null,
+              "long": "input",
+              "takes_value": true,
+              "positional": false,
+              "help": "A `<key>=<value>` input this family needs beyond stdin (repeatable)"
+            },
+            {
+              "name": "rule",
+              "short": null,
+              "long": "rule",
+              "takes_value": true,
+              "positional": false,
+              "help": "The declared rule that decides over the record just written (repeatable, at least one)"
+            }
+          ],
           "subcommands": []
         },
         {
@@ -2744,6 +3425,48 @@ expression: stdout_of(&output)
           "subcommands": []
         },
         {
+          "path": "record divergence",
+          "id": "record.divergence",
+          "about": "Record how far the landing loop diverged from linear over a window of runs",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "ci_workflow",
+              "short": null,
+              "long": "ci-workflow",
+              "takes_value": true,
+              "positional": false,
+              "help": "The workflow file whose runs are the graded CI runs (default: $LAND_CI_WORKFLOW)"
+            },
+            {
+              "name": "land_workflow",
+              "short": null,
+              "long": "land-workflow",
+              "takes_value": true,
+              "positional": false,
+              "help": "The workflow file whose runs are the landing bot's answers (default: $LAND_WORKFLOW)"
+            },
+            {
+              "name": "max_pages",
+              "short": null,
+              "long": "max-pages",
+              "takes_value": true,
+              "positional": false,
+              "help": "Pages of runs to read per workflow before the window reads as truncated (default: 10)"
+            },
+            {
+              "name": "since",
+              "short": null,
+              "long": "since",
+              "takes_value": true,
+              "positional": false,
+              "help": "The window's start, ISO-8601 (default: 24 hours before now)"
+            }
+          ],
+          "subcommands": []
+        },
+        {
           "path": "record fold",
           "id": "record.fold",
           "about": "Fold a journal family: `nothing`, its records, or `unreadable <path>`",
@@ -2764,10 +3487,34 @@ expression: stdout_of(&output)
         {
           "path": "record forge",
           "id": "record.forge",
-          "about": "Record the forge's check verdicts for one commit, read as `<check> <conclusion>` lines on stdin",
+          "about": "Record the forge's check verdicts for one commit, read as `<check> <conclusion>` lines on stdin or with --fetch from the forge",
           "effect": "write",
           "data_channel": false,
           "flags": [
+            {
+              "name": "answered",
+              "short": null,
+              "long": "answered",
+              "takes_value": true,
+              "positional": false,
+              "help": "With --fetch: comma-separated conclusions that constitute an answer; anything else is not recorded"
+            },
+            {
+              "name": "fanin",
+              "short": null,
+              "long": "fanin",
+              "takes_value": true,
+              "positional": false,
+              "help": "With --fetch: record nothing until this check has an answered conclusion"
+            },
+            {
+              "name": "fetch",
+              "short": null,
+              "long": "fetch",
+              "takes_value": false,
+              "positional": false,
+              "help": "Read the commit's check-runs from the forge instead of `<check> <conclusion>` lines on stdin"
+            },
             {
               "name": "ref",
               "short": null,
@@ -2842,12 +3589,140 @@ expression: stdout_of(&output)
           "subcommands": []
         },
         {
+          "path": "record nonverdict",
+          "id": "record.nonverdict",
+          "about": "Record which recent required-check failures never reached a verdict",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "exclude_job",
+              "short": null,
+              "long": "exclude-job",
+              "takes_value": true,
+              "positional": false,
+              "help": "A job never counted, such as a fan-in whose failure its siblings cause (repeatable; default: $CI_FANIN_CHECK)"
+            },
+            {
+              "name": "required_check",
+              "short": null,
+              "long": "required-check",
+              "takes_value": true,
+              "positional": false,
+              "help": "A required job, by exact name; only these are counted (repeatable; default: $CI_REQUIRED_CHECKS)"
+            },
+            {
+              "name": "verdict_step",
+              "short": null,
+              "long": "verdict-step",
+              "takes_value": true,
+              "positional": false,
+              "help": "A step-name prefix that marks a failed step as verdict-bearing (repeatable; default: $CI_VERDICT_STEPS)"
+            },
+            {
+              "name": "window",
+              "short": null,
+              "long": "window",
+              "takes_value": true,
+              "positional": false,
+              "help": "How many recent failed runs to read, 1 to 100 (default: 30)"
+            }
+          ],
+          "subcommands": []
+        },
+        {
           "path": "record plan",
           "id": "record.plan",
           "about": "Record this branch's plan, read as `<id> <status>` lines on stdin",
           "effect": "write",
           "data_channel": false,
           "flags": [],
+          "subcommands": []
+        },
+        {
+          "path": "record probe",
+          "id": "record.probe",
+          "about": "Run a probe command and record the family's reading of its exit status and output",
+          "effect": "unclassified",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "command",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The probe command, after `--`: its exit status is the `status` input and its output the document"
+            },
+            {
+              "name": "family",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The record family, which selects the reading and is the key a module reads it under"
+            },
+            {
+              "name": "input",
+              "short": null,
+              "long": "input",
+              "takes_value": true,
+              "positional": false,
+              "help": "A `<key>=<value>` input this family needs beyond stdin (repeatable)"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "path": "record query",
+          "id": "record.query",
+          "about": "Run a declared `[[forge.query]]` read and record its reduction as the family it names",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "id",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The `[[forge.query]]` id, which is also the record family written"
+            },
+            {
+              "name": "input",
+              "short": null,
+              "long": "input",
+              "takes_value": true,
+              "positional": false,
+              "help": "A `<name>=<value>` binding for one of the query's own placeholders (repeatable)"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "path": "record release",
+          "id": "record.release",
+          "about": "Record a published release's assets, its checksum manifest's entries, and the entries whose bytes disagree",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "manifest",
+              "short": null,
+              "long": "manifest",
+              "takes_value": true,
+              "positional": false,
+              "help": "The checksum manifest's file name, as the release carries it"
+            },
+            {
+              "name": "tag",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The release's tag; empty or absent is the latest release"
+            }
+          ],
           "subcommands": []
         },
         {
@@ -2908,6 +3783,32 @@ expression: stdout_of(&output)
               "takes_value": true,
               "positional": true,
               "help": "The `[[rule.tools]]` id whose verdict is being recorded"
+            },
+            {
+              "name": "pick",
+              "short": null,
+              "long": "pick",
+              "takes_value": true,
+              "positional": false,
+              "help": "Reduce `key=value` lines: `<name-key>=<token-key>` names the field that labels a record line and the one that scores it"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "path": "record validate",
+          "id": "record.validate",
+          "about": "Run a declared tool row's `run` argv and record its exit code under the row's key",
+          "effect": "unclassified",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "id",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The `[[rule.tools]]` id whose argv runs and whose verdict is recorded"
             }
           ],
           "subcommands": []
@@ -2917,11 +3818,77 @@ expression: stdout_of(&output)
     {
       "path": "release",
       "id": "release",
-      "about": "Answer whether a release is installable as it says it is",
+      "about": "Answer whether a release is installable as it says it is, hash its assets, and backfill its tracking",
       "effect": "unclassified",
       "data_channel": false,
       "flags": [],
       "subcommands": [
+        {
+          "path": "release backfill",
+          "id": "release.backfill",
+          "about": "Dispatch a backfill workflow once per release tag, oldest first, waiting on each run and stopping at the first that does not succeed",
+          "effect": "unclassified",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "dry_run",
+              "short": null,
+              "long": "dry-run",
+              "takes_value": false,
+              "positional": false,
+              "help": "Print the plan, oldest first, and dispatch nothing"
+            },
+            {
+              "name": "max_polls",
+              "short": null,
+              "long": "max-polls",
+              "takes_value": true,
+              "positional": false,
+              "help": "Polls per tag before its run reads as never finishing (default: 240)"
+            },
+            {
+              "name": "pattern",
+              "short": null,
+              "long": "pattern",
+              "takes_value": true,
+              "positional": false,
+              "help": "The glob a release tag matches, as `git tag --list` matches it"
+            },
+            {
+              "name": "poll_interval",
+              "short": null,
+              "long": "poll-interval",
+              "takes_value": true,
+              "positional": false,
+              "help": "Seconds between polls; the forge's own interval raises it (default: 5)"
+            },
+            {
+              "name": "ref",
+              "short": null,
+              "long": "ref",
+              "takes_value": true,
+              "positional": false,
+              "help": "The branch the dispatched runs execute on"
+            },
+            {
+              "name": "tag",
+              "short": null,
+              "long": "tag",
+              "takes_value": true,
+              "positional": false,
+              "help": "A release tag to record (repeatable); absent, every tag the pattern selects, oldest first"
+            },
+            {
+              "name": "workflow",
+              "short": null,
+              "long": "workflow",
+              "takes_value": true,
+              "positional": false,
+              "help": "The workflow file dispatched once per tag"
+            }
+          ],
+          "subcommands": []
+        },
         {
           "path": "release install",
           "id": "release.install",
@@ -2930,8 +3897,108 @@ expression: stdout_of(&output)
           "data_channel": false,
           "flags": [],
           "subcommands": []
+        },
+        {
+          "path": "release sums",
+          "id": "release.sums",
+          "about": "Hash a published release's own assets into a checksum manifest, never the manifest itself",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "manifest",
+              "short": null,
+              "long": "manifest",
+              "takes_value": true,
+              "positional": false,
+              "help": "The checksum manifest's file name, as the release carries it"
+            },
+            {
+              "name": "names",
+              "short": null,
+              "long": "names",
+              "takes_value": false,
+              "positional": false,
+              "help": "Print the manifest's path as sums=<path> and exit, with no tag, network or download"
+            },
+            {
+              "name": "out_dir",
+              "short": null,
+              "long": "out-dir",
+              "takes_value": true,
+              "positional": false,
+              "help": "Write the manifest under this directory (default: checksums)"
+            },
+            {
+              "name": "tag",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The release's tag; empty or absent is the latest release"
+            }
+          ],
+          "subcommands": []
         }
       ]
+    },
+    {
+      "path": "sbom",
+      "id": "sbom",
+      "about": "Derive the SPDX and CycloneDX inventories of this tree, or of a built binary, under the names its release assets carry",
+      "effect": "write",
+      "data_channel": false,
+      "flags": [
+        {
+          "name": "binary",
+          "short": null,
+          "long": "binary",
+          "takes_value": true,
+          "positional": false,
+          "help": "Inventory this built binary from its own bytes instead of the tree"
+        },
+        {
+          "name": "conformance",
+          "short": null,
+          "long": "conformance",
+          "takes_value": false,
+          "positional": false,
+          "help": "Derive the SPDX document into scratch and record the declared checker's exit code per standard"
+        },
+        {
+          "name": "names",
+          "short": null,
+          "long": "names",
+          "takes_value": false,
+          "positional": false,
+          "help": "Print the asset names as KEY=VALUE lines and exit, without scanning"
+        },
+        {
+          "name": "out_dir",
+          "short": null,
+          "long": "out-dir",
+          "takes_value": true,
+          "positional": false,
+          "help": "Write the documents under this directory instead of the declared one"
+        },
+        {
+          "name": "record",
+          "short": null,
+          "long": "record",
+          "takes_value": false,
+          "positional": false,
+          "help": "Derive the tree's documents twice into scratch and record their counts under the declared tool row"
+        },
+        {
+          "name": "target",
+          "short": null,
+          "long": "target",
+          "takes_value": true,
+          "positional": false,
+          "help": "The target triple the binary was built for, which names its asset"
+        }
+      ],
+      "subcommands": []
     },
     {
       "path": "semver",
@@ -3035,6 +4102,64 @@ expression: stdout_of(&output)
               "takes_value": true,
               "positional": false,
               "help": "Milliseconds between the two sightings a reclaim requires"
+            },
+            {
+              "name": "task",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The task's name, which is what the lock is keyed by"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "path": "singleton detach",
+          "id": "singleton.detach",
+          "about": "Run a command in the background under a task's lock, and report the previous run's failure",
+          "effect": "unclassified",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "attached",
+              "short": null,
+              "long": "attached",
+              "takes_value": false,
+              "positional": false,
+              "help": "Run as the background copy the announcing invocation starts: take the lock, run the command, record a failure"
+            },
+            {
+              "name": "command",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The command to run in the background, after `--`"
+            },
+            {
+              "name": "log",
+              "short": null,
+              "long": "log",
+              "takes_value": true,
+              "positional": false,
+              "help": "Where the background run's whole output is written"
+            },
+            {
+              "name": "marker",
+              "short": null,
+              "long": "marker",
+              "takes_value": true,
+              "positional": false,
+              "help": "Where a failed run's pointers wait, announced and cleared by the next invocation"
+            },
+            {
+              "name": "pattern",
+              "short": null,
+              "long": "pattern",
+              "takes_value": true,
+              "positional": false,
+              "help": "The `[[pattern]]` row whose matching output lines are the failure's pointers"
             },
             {
               "name": "task",
@@ -3195,6 +4320,102 @@ expression: stdout_of(&output)
               "takes_value": true,
               "positional": true,
               "help": "The stored finding's identity, as `state list` prints it"
+            }
+          ],
+          "subcommands": []
+        }
+      ]
+    },
+    {
+      "path": "step",
+      "id": "step",
+      "about": "Answer a step from its receipt when its exact inputs, arguments and tools already passed",
+      "effect": "unclassified",
+      "data_channel": false,
+      "flags": [],
+      "subcommands": [
+        {
+          "path": "step check",
+          "id": "step.check",
+          "about": "Say hit or miss for a step's inputs, arguments and tools, and remember the key a record must match",
+          "effect": "unclassified",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "arg",
+              "short": null,
+              "long": "arg",
+              "takes_value": true,
+              "positional": false,
+              "help": "A value the step's verdict depends on beyond its inputs, keyed in order (repeatable)"
+            },
+            {
+              "name": "step",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The step's name, as the consumer's step table declares it"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "path": "step record",
+          "id": "step.record",
+          "about": "Record that a step passed, refusing when its inputs changed since the paired check",
+          "effect": "unclassified",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "arg",
+              "short": null,
+              "long": "arg",
+              "takes_value": true,
+              "positional": false,
+              "help": "A value the step's verdict depends on beyond its inputs, keyed in order (repeatable)"
+            },
+            {
+              "name": "step",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The step's name, as the consumer's step table declares it"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "path": "step run",
+          "id": "step.run",
+          "about": "Run a step's command only when its receipt misses, and record the receipt when it passes",
+          "effect": "unclassified",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "arg",
+              "short": null,
+              "long": "arg",
+              "takes_value": true,
+              "positional": false,
+              "help": "A value the step's verdict depends on beyond its inputs, keyed in order (repeatable)"
+            },
+            {
+              "name": "command",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The step's command, after `--`: run only on a miss, recorded only when it exits 0"
+            },
+            {
+              "name": "step",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The step's name, as the consumer's step table declares it"
             }
           ],
           "subcommands": []
@@ -3464,6 +4685,24 @@ expression: stdout_of(&output)
       "flags": [],
       "subcommands": [
         {
+          "path": "wiring gate",
+          "id": "wiring.gate",
+          "about": "Link this clone's two commit hooks to a hook body the repository checks in",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "body",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The hook body to link, relative to the repository root"
+            }
+          ],
+          "subcommands": []
+        },
+        {
           "path": "wiring reclaim",
           "id": "wiring.reclaim",
           "about": "Remove non-batten hook registrations from this host's merged surfaces",
@@ -3542,6 +4781,14 @@ expression: stdout_of(&output)
       "path": "capture show"
     },
     {
+      "id": "census",
+      "path": "census"
+    },
+    {
+      "id": "census.shell",
+      "path": "census shell"
+    },
+    {
       "id": "check",
       "path": "check"
     },
@@ -3616,6 +4863,10 @@ expression: stdout_of(&output)
     {
       "id": "doctor.egress",
       "path": "doctor egress"
+    },
+    {
+      "id": "doctor.forge",
+      "path": "doctor forge"
     },
     {
       "id": "doctor.gate",
@@ -3706,6 +4957,14 @@ expression: stdout_of(&output)
       "path": "lint brief"
     },
     {
+      "id": "mcp.grant",
+      "path": "mcp grant"
+    },
+    {
+      "id": "mcp.posture",
+      "path": "mcp posture"
+    },
+    {
       "id": "mutate.census",
       "path": "mutate census"
     },
@@ -3768,6 +5027,10 @@ expression: stdout_of(&output)
     {
       "id": "receipt.verified",
       "path": "receipt verified"
+    },
+    {
+      "id": "record.census.tally",
+      "path": "record census tally"
     },
     {
       "id": "record.fold",

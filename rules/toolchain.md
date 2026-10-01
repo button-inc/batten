@@ -5,11 +5,12 @@ These load when you touch the workshop; deeper detail is in
 
 **Use mise for everything** — tools via `[tools]`, env via `[env]`, commands as
 `[tasks]` run with `mise run`; never a bare `cargo`/`export`/one-off install, so
-CI, hk, and your shell run byte-identical commands. Per clone: `mise install`,
-`git submodule update --init` (bats, in `tests/bats`), and the git hooks — none
-of the three left to a human remembering a prose list, because each is a
-`session:*` task that `batten.toml` declares as a `[[hook.handler]] on =
+CI, hk, and your shell run byte-identical commands. Per clone: `mise install`
+and the git hooks — neither left to a human remembering a prose list, because
+each is a `session:*` task that `batten.toml` declares as a `[[hook.handler]] on =
 "session-start"` and `doctor` asserts afterwards (CLOUD-476, CLOUD-312 row 10).
+The third step was the vendored bats runner in `tests/bats`, which retired with
+the shell suite under CLOUD-843.
 
 **The provisioning order and its bounds are `batten.toml`'s, not a script's.**
 The `on = "session-start"` handler rows ARE the sequence: declaration order is running
@@ -272,19 +273,24 @@ that touched a workflow still spent a runner and re-drafting did not close the
 tap (CLOUD-240).
 
 **The expensive steps answer from per-step receipts (CLOUD-424).** The cargo
-chain, `test:bats`, `deny`, `zizmor`, `msrv`, `cross-check`, `darwin-link` and
-`batten-check` route through `mise run step-receipt`: a content-addressed
-receipt in the keyed record store (`batten record keyed|show steps`), keyed by the step's input files (index
-blob ids), its task body read from `mise tasks info`, its tools' live
-`--version` output, and any argument. Same inputs, same command, same toolchain
-⇒ same verdict, so a hit skips the step — which is what makes a rebase-only lap
-cheap. This is not test-impact selection: nothing is inferred, and any key that
-cannot be computed runs the step (fail closed). Under CI the cache neither hits
-nor records — CI confirms independently. A `check` answers `hit` or `miss` in
-words at exit 0, so `mise run` never prints a failure line over a miss
-(CLOUD-498). Spec table and rationale in `mise.toml` `[tasks.step-receipt]`;
-decision table in `crates/batten/tests/it/step_receipt.rs`. Wrap a step only
-when its cost dwarfs the ~1.5s a check/record pair costs through `mise run`.
+chain, `deny`, `cross-check`, `darwin-link` and `semver` route
+through `batten step`: a content-addressed receipt in the
+keyed record store, keyed by the step's input files (index blob ids), each
+declared tool argv's stdout (a `--version`, or `mise tasks info` for a shell
+body), any `--arg`, and under `step run` the command itself. Same inputs, same
+command, same toolchain ⇒ same verdict, so a hit skips the step — which is what
+makes a rebase-only lap cheap. This is not test-impact selection: nothing is
+inferred, and any key that cannot be computed runs the step (fail closed). Under
+CI the cache neither hits nor records — CI confirms independently. A `check`
+answers `hit` or `miss` in words at exit 0 (CLOUD-498); `step run` is the pair
+composed, so an argv caller writes no shell around it. The step table is
+`[[step]]` in `batten.toml`; the mechanism is `crates/batten/src/step.rs` and
+the decision table `crates/batten/tests/it/step_receipt.rs`. Wrap a step only
+when its cost dwarfs the engine call around it — `lint:fmt` and `zizmor` are not
+wrapped for exactly that reason — and only when a row can NAME everything its
+verdict reads. `batten-check` is not wrapped: `enforce` reads the record and
+capture stores under the git directory, which no pathspec keys, so a receipt
+over the tree answered `hit` after a record flipped to a deny value.
 
 Two defects got it here (CLOUD-235, then CLOUD-238), and the second is the
 instructive one. First the refusal was invisible — the predicate's history is in
@@ -301,26 +307,23 @@ assertion, so an unexercised path cannot go dead again.
 The board gates follow the agents-fetch-gates-decide pattern — each is a pure
 function of stdin (`get_issue` payloads piped in by the caller, since no tracker
 credential exists), so live runs need board data but their bats suites run
-unconditionally in the gate. `mise-tasks/` is the authoritative list; don't
+unconditionally in the gate. `batten --help` is the authoritative list; don't
 restate a count here, which is how "three `PreToolUse` hooks" went stale. `batten ready lint --issue <key>` is the Ready
-gate; `mise run ready-lint` is its frozen shell ancestor, lacks the claims-block clause, and passes rows the
-compiled gate refuses (CLOUD-1395) — never cite it as the verdict. The ancestor validates an issue's Ready
+gate, the one definition of Ready (its shell ancestor retired under CLOUD-1221). It validates an issue's Ready
 block: only the clauses _present_ (restating all eight is forbidden by the DoR
 doc), and it holds §8 to `blockedBy` _claims_ against the real relations. Every
 token it anchors on — which openers name a block, which line is the `(§6)`
 clause rather than a house-style cross-reference, which code span is the commit
-type — is defined once, in `mise-tasks/ready-lint.sh`'s comments beside the pattern
-that implements it. Read it there; a restatement here is a copy that drifts, and
-CLOUD-290 was an author rediscovering the real grammar by experiment. **Reading
-that file is free and editing it is a governed act** — it is a `mise-tasks/*.sh`
-under `shell-retirement`, so the two shapes above are the whole of what a change
-to it may be. `mise run
+type — is a `[[pattern]]` row in `batten.toml`, commented beside the expression,
+and `crates/batten/src/ready.rs` holds the predicate. Read them there; a
+restatement here is a copy that drifts, and CLOUD-290 was an author rediscovering
+the real grammar by experiment. `mise run
 claim-check` is the pull-time half: pipe the payload for the issue you mean to
 pull and it exits non-zero on `not-todo`, `assigned`, or `has-pr` (a PR already
 attached — someone published before the column moved). The automation will not
-claim for you; it fires on the PR event, which is the end of the work. `mise run
-graph-check` enforces the board discipline (`In Progress ⇒ assignee`,
-`In Review ⇒ a linked PR attachment`, `Todo ⇒ ready-lint exits 0` — the queue is
+claim for you; it fires on the PR event, which is the end of the work. `batten
+board check` enforces the board discipline (`In Progress ⇒ assignee`,
+`In Review ⇒ a linked PR attachment`, `Todo ⇒ ready lint passes` — the queue is
 a column claim like the other two, CLOUD-375 — acyclic and non-dangling
 `blockedBy`) and
 emits the ready frontier + WIP count on stdout — the same command gates and
@@ -331,12 +334,14 @@ schedules, so every session computes the same frontier. Fan-out protocol:
 run"** (CLOUD-327). `$CI_REQUIRED_CHECKS` in `mise.toml [env]` names the checks
 that carry a verdict about this repository, and `land`'s `graded_runs` reads the
 same value, so the two cannot drift. **An external analyzer stays out of that
-roster and is gated inside `final` instead** (CLOUD-441): `mise run sonar-gate`
-judges the one check-run by name, in CI and in `verify`. It is not a job, so
-`needs:` cannot reach it and `ci-local-parity` would reject its name; it is not
-draft-gated either, so `graded_runs` counting it would read a draft-era skip set
-as answered. Absent is a pass there for the `zizmor` reason; exit 3 passes in
-`verify` (an unpushed HEAD has no verdict) and fails in CI after a bounded retry. **Each name is judged by its LATEST run**
+roster** (CLOUD-441): it is not a job, so `needs:` cannot reach it and
+`ci-local-parity` would reject its name; it is not draft-gated either, so
+`graded_runs` counting it would read a draft-era skip set as answered. Nothing in
+the landing path reads it since CLOUD-897 (`ci.yml`'s `final` says why);
+`mise run sonar-gate <sha>` judges its one check-run by name, by hand, through the
+`check-verdict` preset. Absent is a pass there for the `zizmor` reason; red and
+no-answer-yet both exit 2 and the verdict token says which, and a SHA the remote
+has never seen is could-not-look at 3. **Each name is judged by its LATEST run**
 (CLOUD-436): a SHA accumulates a check-run per event, so a PR created as a draft
 carries its `opened`-event skip set forever, and judging the union let that
 residue veto a verdict that already existed — an unbounded poll over a green
@@ -767,16 +772,16 @@ mentions this issue", which is not "work began" — a commit can continue,
 document, cite or defer. It only ever moves forward into In Progress, so it
 dragged an issue back out of In Review and left two others stranded (CLOUD-186).
 
-`mise run spec-ref-check` is the same pattern aimed at the tree rather than the
+`batten board check --refs` is the same pattern aimed at the tree rather than the
 board: it refuses a `CLOUD-<n> §N` citation in a tracked file when the piped issue
 declares no clause `N`. Enumerate what to fetch with
 `git grep -hoE "CLOUD-[0-9]+'?s? §[0-9]+"` and pipe those `get_issue` payloads.
 It **refutes and never confirms**, which is load-bearing rather than stylistic: a
 Ready block may legitimately omit a clause — CLOUD-45 has no §4, CLOUD-80 no §3 or
 §5 — so a sparse set is not a defect and a citation of a missing one is. Sub-numbers
-resolve to their parent. An issue cited but absent from the payload is exit `2`,
+resolve to their parent. An issue cited but absent from the payload is exit `3`,
 never a silent pass. The transcription hazard CLOUD-469 records runs the OPPOSITE
-way here than in `graph-check`: a shortened body carries fewer clause labels, so it
+way here than in the graph: a shortened body carries fewer clause labels, so it
 manufactures findings rather than hiding them — which is why a projected
 `list_issues` is not a valid input, its descriptions being truncated.
 
@@ -792,7 +797,7 @@ hook and refuses before the commit exists. Findings are pointers (`<sha8>
 author`, `<sha8> trailer:<key>`) and never the matched text, because everything
 it reads is content someone wanted suppressed. The policy is `[attribution]` in
 `batten.toml` — patterns, the carve-out, and the accountable identity — never a
-literal in the crate, and `tests/commit-attribution.bats` asserts both the
+literal in the crate, and `crates/batten/tests/it/commit_wiring.rs` asserts both the
 wiring and that no configured pattern matches anything under `crates/`. **The
 emptiness of `trailer_allow` is this repo's posture**, not an unfinished config:
 silent-with-records, so every disclosure trailer is refused. `mise run
@@ -862,11 +867,12 @@ so it lives here with the rest of the workshop detail.)
 ## The gate
 
 `mise-tasks/` scripts are real programs and they are a **retiring** layer, not a
-maintained one: `shfmt`, `shellcheck` and `test:bats` run in the same hk gate as
-the Rust steps, and what those steps hold is the programs that are still there —
-never a licence to keep one alive by editing it. Touching one has two shapes and
-the section above is which. `mise run test` aggregates
-`test:cargo` + `test:bats`. Every config format is formatted and validated there
+maintained one: `shfmt` and `shellcheck` run in the same hk gate as the Rust
+steps, and what those steps hold is the programs that are still there — never a
+licence to keep one alive by editing it. Touching one has two shapes and the
+section above is which. `mise run test` is `test:cargo`: the shell suite
+(`test:bats`) retired under CLOUD-843, each of its suites onto a compiled tier
+under `crates/batten/tests/it` with its ledger. Every config format is formatted and validated there
 too — `taplo` (TOML), `pkl` + `pkl format` (`hk.pkl`, so a malformed gate fails
 at check time rather than when a hook tries to run), `prettier` (Markdown, with
 `CHANGELOG.md` in `.prettierignore` because release-plz owns it), `actionlint`
@@ -936,9 +942,12 @@ state it never refreshed, which is a silent false green and worse than no gate.
 how three wrong comments landed** (CLOUD-1085, measured 2026-09-01). A task that
 declares NO `shell =` gets the default and `-e` with it, so there a bare failing
 command aborts the body where it stands rather than falling through. `test:bats`
-is such a task and its own comments claimed the opposite for their whole life;
-`verify` and `verify:gated` declare `shell = "bash -c"` and are the case this
-section is about. Guard either way — under `-e` the guard is what lets a step name
+was such a task until CLOUD-843 retired it, and its own comments claimed the
+opposite for their whole life;
+`verify` and `verify:gated` declared `shell = "bash -c"` and were the case this
+section is about, until CLOUD-843 made both `run` arrays — mise stops an array
+at its first failing step, so the shape that needs no guard is the one to reach
+for first. Guard a body either way — under `-e` the guard is what lets a step name
 its own failure instead of inheriting mise's — but do not carry "every line runs"
 across to a body that declared nothing.
 
@@ -971,9 +980,10 @@ A third instance was the caller, not a script: `verify`'s own body called
 `linear-check` and `commit-lint` unguarded, so a `main` that moved under the
 branch left it running commit-lint against a stale `BASE_SHA`, writing the
 receipt `ready-guard` honours, and printing `fast-forward-green` — `gh pr ready`
-allowed, and CI minutes spent, on work that failed its own pre-flight. Guarded
-now, with `tests/task-fail-closed.bats` asserting the body carries no bare `mise
-run` call and reaches its receipt write only past the guards.
+allowed, and CI minutes spent, on work that failed its own pre-flight. It was
+guarded, then retired to a `run` array (CLOUD-843): each step's failure stops the
+sequence, and `crates/batten/tests/it/verify_chain.rs` asserts every step is
+argv and the receipt write is the last step, past every gate.
 
 The rule: **a gate step that cannot run must exit non-zero and leave no
 receipt.** Prefer `if ! cmd; then echo "::error:: …" >&2; exit 1; fi` over a

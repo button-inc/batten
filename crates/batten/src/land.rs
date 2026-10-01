@@ -1137,6 +1137,15 @@ pub enum Refusal {
     /// It carries no remedy because there is nothing for an operator to do — the
     /// next lap's replay IS the remedy, which is what makes this a lap rather
     /// than a stop.
+    ///
+    /// **A GATE'S `2` IS A CLAIM, AND THE LAP NOW CHECKS IT** (CLOUD-843). The
+    /// consumer's `verify` stopped being a shell mapper that re-numbered every
+    /// other refusal to `1`; it is a sequence of steps whose failing step's code
+    /// leaves unchanged, so a policy verdict can arrive as `2` too — the CLOUD-407
+    /// shape, where a refused tree lapped to the backstop. Whether trunk moved is
+    /// a fact this module can READ, so [`confirmed`] asks the base once before a
+    /// `2` becomes this variant, and a `2` the base did not move under is a
+    /// refusal of the tree.
     Moved,
     /// The gate died of something that is not this branch's doing, matching a
     /// declared `[[verify_environment_pattern]]`.
@@ -1443,8 +1452,14 @@ pub fn verify_raced(
         }
     }
     if watched.is_none() && disk.is_none() {
-        return verify(root, branch, command, published, environment);
+        // No trunk to read, so a gate's "main moved" cannot be confirmed — and
+        // an unconfirmed `2` is a refusal of the tree (see [`confirmed`]).
+        return verify(root, branch, command, published, environment)
+            .map(|verified| confirmed(verified, None));
     }
+    // The race below MOVES `watched` into the watcher arm; the gate's own answer
+    // is confirmed against the same base afterwards, so it keeps a copy.
+    let confirm_against = watched.clone();
 
     let (tx, rx) = std::sync::mpsc::channel();
     // A SECOND CHANNEL FOR THE CANCEL'S OWN ANSWER, because it is a different
@@ -1488,6 +1503,40 @@ pub fn verify_raced(
     }
     let tree = disk_tree.as_deref().unwrap_or(root);
 
+    settle_race(
+        &Settle {
+            root,
+            branch,
+            head,
+            tree,
+            escalated: escalated.load(std::sync::atomic::Ordering::Relaxed),
+            confirm_against: confirm_against.as_ref(),
+            reclaimed: &reclaimed_rx,
+        },
+        raced,
+    )
+}
+
+/// What [`settle_race`] needs from the lap that raced, bundled so its signature
+/// stays readable.
+struct Settle<'a> {
+    root: &'a Path,
+    branch: &'a str,
+    head: String,
+    /// Where the disk arm reclaims, which a volume refusal names.
+    tree: &'a Path,
+    /// Whether the disk loop escalated while the gate ran.
+    escalated: bool,
+    confirm_against: Option<&'a (&'a crate::main_watch::Config, String)>,
+    /// Whether the cancel actually stopped the gate.
+    reclaimed: &'a std::sync::mpsc::Receiver<bool>,
+}
+
+/// The race's answer as this lap's verdict, recorded (CLOUD-318, CLOUD-1937).
+///
+/// Split out of [`verify_raced`] at the seam between running the race and
+/// reading its result, so each stays under `clippy::too_many_lines`.
+fn settle_race(settle: &Settle<'_>, raced: Option<Raced>) -> Result<Verified> {
     match raced {
         // A FAILURE AFTER A MID-GATE ESCALATION IS THE VOLUME'S (CLOUD-1937). The
         // escalation drops regrowable roots a running suite may be reading —
@@ -1497,32 +1546,42 @@ pub fn verify_raced(
         Some(Raced::Gate(Ok(Verified::Refused {
             sha,
             cause: Refusal::Tree,
-        }))) if escalated.load(std::sync::atomic::Ordering::Relaxed) => {
+        }))) if settle.escalated => {
             let verified = Verified::Refused {
                 sha,
                 cause: Refusal::Environment {
                     remedy: format!(
                         "the disk loop dropped regrowable caches under {} while this gate ran, so its failure is the volume's — run the lap again",
-                        tree.display()
+                        settle.tree.display()
                     ),
                 },
             };
-            append(root, branch, std::slice::from_ref(&verified.line()))?;
+            append(
+                settle.root,
+                settle.branch,
+                std::slice::from_ref(&verified.line()),
+            )?;
             Ok(verified)
         }
         Some(Raced::Disk(reclaimed)) => {
-            let verified = exhausted(head, tree, &reclaimed);
-            append(root, branch, std::slice::from_ref(&verified.line()))?;
+            let verified = exhausted(settle.head.clone(), settle.tree, &reclaimed);
+            append(
+                settle.root,
+                settle.branch,
+                std::slice::from_ref(&verified.line()),
+            )?;
             Ok(verified)
         }
-        Some(Raced::Gate(answer)) => answer,
+        Some(Raced::Gate(answer)) => {
+            answer.map(|verified| confirmed(verified, settle.confirm_against))
+        }
         // RECORDED LIKE ANY OTHER REFUSAL, through the one arm that already maps
         // to a LAP rather than a stop (CLOUD-318). The lap does not need to learn
         // a new outcome to act on this — it needs the one it already laps on, and
         // `progress` maps `Refusal::Moved` there.
         Some(Raced::Moved(base)) => {
             let verified = Verified::Refused {
-                sha: head,
+                sha: settle.head.clone(),
                 cause: Refusal::Moved,
             };
             // TWO LINES, BOTH ARMS, for the reason `record_wait`'s signature
@@ -1531,10 +1590,10 @@ pub fn verify_raced(
             // so a module over them has nothing to decide. The base it moved to
             // is the pointer; whether the kill landed is the half that says this
             // mechanism is live rather than merely present.
-            let reclaimed = reclaimed_rx.try_recv().unwrap_or(false);
+            let reclaimed = settle.reclaimed.try_recv().unwrap_or(false);
             append(
-                root,
-                branch,
+                settle.root,
+                settle.branch,
                 &[
                     verified.line(),
                     format!("{LAP_RECORD} gate-cancelled {base} {reclaimed}"),
@@ -1548,6 +1607,57 @@ pub fn verify_raced(
         None => Err(crate::error::UsageError::raise(String::from(
             "land: the raced gate answered nothing — neither the gate nor the base watcher reported, so this lap has no verdict to act on",
         ))),
+    }
+}
+
+/// Keep a gate's "main moved" only where this lap's own reading of the base
+/// agrees (CLOUD-843).
+///
+/// # A `2` from the gate is a claim about the base, and the base is readable
+///
+/// [`verify`] reads a gate's exit `2` as [`Refusal::Moved`] because the
+/// consumer's gate reserved that code for "main moved under this branch"
+/// (CLOUD-318). That reservation was a shell mapper re-numbering every other
+/// refusal to `1`, and it retired: the gate is a sequence of steps now, and a
+/// step's code leaves it unchanged — so a POLICY VERDICT can arrive as `2` as
+/// well, which is CLOUD-407's measured defect: a refused tree read as the rebase
+/// race, lapped until the backstop, with its `path:line` pointers unread.
+///
+/// The base is not something a code has to carry. It is the fact [`stale`] and
+/// the watcher arm already read, through the same conditional endpoint, so this
+/// asks it ONCE after a `2` and keeps [`Refusal::Moved`] only when the answer is
+/// that the base this lap replayed onto has moved. Otherwise the `2` is what every
+/// other refusal is: a verdict about the tree, which stops the lap.
+///
+/// # Could-not-look confirms nothing, and that is the stopping direction
+///
+/// With no trunk to read — no forge slug, or a read that did not answer — the
+/// claim is unconfirmed and the refusal stays the tree's. A lap that stopped
+/// where it could have lapped costs one re-run; a lap that lapped a refused tree
+/// costs the whole budget, which is the defect this exists to keep closed.
+//MUTANT-SUITE crates/batten/src/land.rs
+//MUTANT unconfirmed-move-laps|s@                cause: if moved { Refusal::Moved } else { Refusal::Tree },@                cause: Refusal::Moved,@|an_unconfirmed_move_is_a_refusal_of_the_tree
+fn confirmed(
+    verified: Verified,
+    watched: Option<&(&crate::main_watch::Config, String)>,
+) -> Verified {
+    match verified {
+        Verified::Refused {
+            sha,
+            cause: Refusal::Moved,
+        } => {
+            let moved = watched.is_some_and(|(trunk, replayed_onto)| {
+                let mut poll = crate::main_watch::Poll::default();
+                let answer = crate::main_watch::read(trunk, poll.etag());
+                let _pace = poll.absorb(answer.as_ref(), trunk.interval);
+                poll.moved(replayed_onto).is_some()
+            });
+            Verified::Refused {
+                sha,
+                cause: if moved { Refusal::Moved } else { Refusal::Tree },
+            }
+        }
+        other => other,
     }
 }
 
@@ -3283,6 +3393,50 @@ mod lap_tests {
         assert_eq!(progress(Step::Push, Internal), Progress::Stop);
     }
 
+    /// **A GATE'S `2` WITH NO BASE TO READ IS A REFUSAL OF THE TREE** (CLOUD-843),
+    /// and `#MUTANT unconfirmed-move-laps` reddens here.
+    ///
+    /// The consumer's `verify` no longer re-numbers a policy verdict to `1`, so a
+    /// `2` is not by itself evidence that trunk moved; reading it as that is
+    /// CLOUD-407's lap-to-the-backstop over a refused tree.
+    #[test]
+    fn an_unconfirmed_move_is_a_refusal_of_the_tree() {
+        let claimed = super::Verified::Refused {
+            sha: String::from("abc"),
+            cause: super::Refusal::Moved,
+        };
+        assert_eq!(
+            super::confirmed(claimed, None),
+            super::Verified::Refused {
+                sha: String::from("abc"),
+                cause: super::Refusal::Tree,
+            },
+            "a claim about the base that nothing confirmed stops the lap"
+        );
+    }
+
+    /// The mirror: confirmation reaches the ONE cause it exists for. A clean gate,
+    /// a refusal of the tree and an environment refusal pass through untouched.
+    #[test]
+    fn confirmation_leaves_every_other_answer_alone() {
+        let untouched = [
+            super::Verified::Clean(String::from("abc")),
+            super::Verified::Refused {
+                sha: String::from("abc"),
+                cause: super::Refusal::Tree,
+            },
+            super::Verified::Refused {
+                sha: String::from("abc"),
+                cause: super::Refusal::Environment {
+                    remedy: String::from("reclaim"),
+                },
+            },
+        ];
+        for verified in untouched {
+            assert_eq!(super::confirmed(verified.clone(), None), verified);
+        }
+    }
+
     /// AND THE GATE'S OWN VERDICT STILL STOPS, which is the anti-vacuity half.
     ///
     /// Without it, "`Verify` laps on `Internal`" could be satisfied by a table
@@ -3409,6 +3563,8 @@ mod lap_tests {
         // sets the same names.
         crate::rest::declare(crate::rest::Forge {
             credential_names: vec![String::from("GH_TOKEN"), String::from("GITHUB_TOKEN")],
+            query: Vec::new(),
+            probe: Vec::new(),
         });
         let config = crate::pr_watch::Config {
             sha: String::from("0000000000000000000000000000000000000000"),

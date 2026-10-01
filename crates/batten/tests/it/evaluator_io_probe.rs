@@ -38,6 +38,16 @@
 // carried: "a probe build that failed to COMPILE is could-not-look, not the pass" crates/batten/src/probe_verdict.rs kind:mechanism crates/batten/tests/it/evaluator_io_probe.rs
 // carried: "a probe build where the named test never ran is could-not-look" crates/batten/src/probe_verdict.rs kind:mechanism crates/batten/tests/it/evaluator_io_probe.rs
 // carried: "the probe build's own output never reaches the gate's output" crates/batten/src/probe_verdict.rs kind:mechanism crates/batten/tests/it/evaluator_io_probe.rs
+// carried: tests/fixtures/evaluator-io/failing-probe crates/batten/src/probe_verdict.rs kind:mechanism crates/batten/tests/it/evaluator_io_probe.rs
+// carried: tests/fixtures/evaluator-io/broken-build crates/batten/src/probe_verdict.rs kind:mechanism crates/batten/tests/it/evaluator_io_probe.rs
+// carried: tests/fixtures/evaluator-io/other-test-failed crates/batten/src/probe_verdict.rs kind:mechanism crates/batten/tests/it/evaluator_io_probe.rs
+// carried: tests/fixtures/evaluator-io/noisy-probe crates/batten/src/probe_verdict.rs kind:mechanism crates/batten/tests/it/evaluator_io_probe.rs
+// carried: "[tasks.evaluator-io-record] body" crates/batten/src/probe.rs kind:verb crates/batten/tests/it/evaluator_io_probe.rs
+// carried: "the probe's exit status and output reach the reading, never the record" crates/batten/src/probe.rs kind:verb crates/batten/tests/it/evaluator_io_probe.rs
+// carried: "a derivation that could not run is not a probe that said nothing" crates/batten/src/probe.rs kind:verb crates/batten/tests/it/evaluator_io_probe.rs
+// changed: "EVALUATOR_IO_PROBE_CMD overrides the probe invocation" crates/batten/src/probe.rs the command IS the argv after `record probe ... --`, so a caller or tier names its own probe without an environment seam
+// changed: "a probe a signal ended is derived as non-zero with no harness line" crates/batten/src/probe.rs the spawn is `exec::piped_argv`'s, which answers could-not-look for a child with no exit code, so `record probe` exits 3 and the task fails rather than recording `probe unread`
+// changed: "a step-receipt hit writes probe failed without building" mise.toml the task no longer consults the step cache: `batten step run` is another package's body, and a hit there must still leave this record
 // changed: "the refusal names the test to fix" batten.toml the retired program printed `<file> <test-name>`; the engine renders `<file> <rule-id>`, because `rules/policy-modules.md` makes the first path-bearing subject the finding's pointer whatever order the subjects are declared in. That is non-negotiable rule 5 — one output contract, no per-verb exception — so the test name moved to the `[[verdict]]` row's gloss and to the JSON channel, where a reader still meets it
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
@@ -351,5 +361,129 @@ fn a_family_with_no_declared_reading_is_a_usage_error() {
         Some(1),
         "an undeclared family is a usage error\n{}",
         said(&refused)
+    );
+}
+
+// --- the producer itself, `record probe` (CLOUD-843) ------------------------------
+
+/// The harness's own failure listing for the named test, as the probe build
+/// prints it when the test goes red — the pass.
+const HARNESS_FAILED: &str = "failures:\\n    no_evaluator_feature_admits_io\\n\\ntest result: FAILED. 0 passed; 1 failed\\n";
+
+/// `record probe` over a stub probe: `sh -c <script>` stands in for the build.
+fn probe(dir: &std::path::Path, script: &str) -> std::process::Output {
+    run(
+        dir,
+        &[
+            "record",
+            "probe",
+            "evaluator-io-probe",
+            "--input",
+            "test=no_evaluator_feature_admits_io",
+            "--",
+            "sh",
+            "-c",
+            script,
+        ],
+    )
+}
+
+#[test]
+fn the_probe_verb_derives_a_real_failure_into_the_pass() {
+    // The exit status is the command's own: 101 with the harness listing is the
+    // probe falsifying the assertion, which is the pass.
+    let dir = repo("probe-failed");
+    let written = probe(&dir, &format!("printf '{HARNESS_FAILED}'; exit 101"));
+    assert!(written.status.success(), "{}", said(&written));
+    let quiet = run(&dir, &["check"]);
+    assert_eq!(quiet.status.code(), Some(0), "{}", said(&quiet));
+}
+
+#[test]
+fn the_probe_verb_reads_the_harness_line_on_either_stream() {
+    let dir = repo("probe-stderr");
+    let written = probe(&dir, &format!("printf '{HARNESS_FAILED}' >&2; exit 101"));
+    assert!(written.status.success(), "{}", said(&written));
+    let quiet = run(&dir, &["check"]);
+    assert_eq!(quiet.status.code(), Some(0), "{}", said(&quiet));
+}
+
+#[test]
+fn the_probe_verb_derives_a_green_probe_and_a_compile_failure_into_refusals() {
+    let dir = repo("probe-passed");
+    let written = probe(&dir, "exit 0");
+    assert!(written.status.success(), "{}", said(&written));
+    assert_eq!(run(&dir, &["check"]).status.code(), Some(2));
+
+    let dir = repo("probe-unread");
+    let written = probe(
+        &dir,
+        "echo 'error[E0432]: SECRET_MODULE_BODY' >&2; exit 101",
+    );
+    assert!(written.status.success(), "{}", said(&written));
+    assert!(
+        !said(&written).contains("SECRET_MODULE_BODY"),
+        "no byte of the probe's output is emitted\n{}",
+        said(&written)
+    );
+    assert_eq!(run(&dir, &["check"]).status.code(), Some(2));
+}
+
+/// THE STATUS IS THE COMMAND'S. A caller supplying one could hand the reading
+/// an exit the probe never produced.
+#[test]
+fn the_probe_verb_refuses_a_supplied_status_and_a_command_that_will_not_start() {
+    let dir = repo("probe-status");
+    let refused = run(
+        &dir,
+        &[
+            "record",
+            "probe",
+            "evaluator-io-probe",
+            "--input",
+            "status=0",
+            "--input",
+            "test=x",
+            "--",
+            "true",
+        ],
+    );
+    assert_eq!(refused.status.code(), Some(1), "{}", said(&refused));
+
+    let absent = run(
+        &dir,
+        &[
+            "record",
+            "probe",
+            "evaluator-io-probe",
+            "--input",
+            "test=x",
+            "--",
+            "batten-no-such-probe-program",
+        ],
+    );
+    assert_eq!(absent.status.code(), Some(3), "{}", said(&absent));
+    // Nothing was recorded, so the module is silent rather than passing on a
+    // reading nobody took.
+    assert_eq!(run(&dir, &["check"]).status.code(), Some(0));
+}
+
+/// The task is the verb: one argv running the real probe build.
+#[test]
+fn the_task_is_the_probe_verb() {
+    let text = std::fs::read_to_string(common::at_root("mise.toml")).expect("the manifest");
+    let parsed: toml::Value = toml::from_str(&text).expect("mise.toml parses");
+    let run_line = parsed["tasks"]["evaluator-io-record"]["run"]
+        .as_str()
+        .expect("the task is one argv string");
+    assert!(
+        run_line.contains(
+            "-- record probe evaluator-io-probe --input test=no_evaluator_feature_admits_io -- cargo test"
+        ),
+        "{run_line}"
+    );
+    assert!(
+        run_line.contains("--features probe-evaluator-io"),
+        "{run_line}"
     );
 }

@@ -6,16 +6,17 @@
 //! # Three statements of one contract, with nothing comparing them
 //!
 //! `install.sh` resolves an asset name, `[package.metadata.binstall]` resolves a
-//! URL, and `mise-tasks/dist.sh` decides what the release is actually called. A
+//! URL, and `batten dist` decides what the release is actually called. A
 //! rename in `dist` is a build that still passes and an install path that 404s
 //! at the only moment anyone would notice, which is on a user's machine.
 //!
 //! # THE CONTRACT IS PROVED BY ASKING, NOT BY SCRAPING
 //!
 //! `dist` owns archive naming and `install.sh` owns which targets it installs
-//! and what it will ask for, so this asks each of them through the query flags
-//! they already publish (`dist --stem`, `install.sh --targets`,
-//! `install.sh --asset-name`). The one restatement that cannot be avoided is the
+//! and what it will ask for, so this asks each of them: `dist` in process
+//! (`dist::archive_stem`, the rule `batten dist` names its archives with), and
+//! `install.sh` through the query flags it publishes (`--targets`,
+//! `--asset-name`). The one restatement that cannot be avoided is the
 //! binstall manifest — cargo reads TOML, not a shell function — so that template
 //! is resolved here and compared against what the release is named.
 //!

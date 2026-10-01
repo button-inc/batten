@@ -92,7 +92,8 @@ jobs:
       # singletons. `|| true` because on the first run the ref does not exist,
       # and a missing ref is the empty series rather than a failure.
       - name: Fetch the existing series
-        run: git fetch origin "refs/notes/perf:refs/notes/perf" || true
+        continue-on-error: true
+        run: git fetch origin refs/notes/perf:refs/notes/perf
       - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5 (CLOUD-404 retry fix, now a release)
         with:
           # Pinned to `batten.toml`'s `[[provision]]` version (CLOUD-1672). The
@@ -109,13 +110,17 @@ jobs:
           # would thrash.
           # The profile is part of the key too — see `ci.yml`'s `ci` job.
           shared-key: perf-
-      # Redirected into a file and read back, never piped into the gate. A
-      # pipeline hands its exit status to the LAST stage, so `perf |
-      # perf-assert` would discard exactly the measurement failure that must
-      # stop this job — the false-green shape `mise run run-shape-guard` refuses
-      # locally, and no less wrong in a workflow.
+      # Saved into a file and read back, never piped into the gate. A pipeline
+      # hands its exit status to the LAST stage, so `perf | perf-assert` would
+      # discard exactly the measurement failure that must stop this job — the
+      # false-green shape `mise run run-shape-guard` refuses locally, and no less
+      # wrong in a workflow.
+      #
+      # `ci step` publishes the records to the job summary here, BEFORE the
+      # assertion, so a run that breaks its budget still shows what it measured:
+      # the records are the evidence for the failure.
       - name: Measure
-        run: mise run perf >"$RUNNER_TEMP/perf.txt"
+        run: mise run batten -- ci step --save target/perf.txt --summary "Invocation cost - budgets are enforced by mise run perf-assert, see README, Performance" -- mise run perf
       # Two steps where there was one, because the measurement and the verdict
       # are now on opposite sides of the engine boundary (CLOUD-1321). The
       # producer reduces the records to a p95 per path and files them under a key
@@ -124,7 +129,7 @@ jobs:
       # bytes that have since changed lives under a different key and does not
       # answer, which is the staleness the redirect below could never state.
       - name: Record the measurement
-        run: mise run record-perf <"$RUNNER_TEMP/perf.txt"
+        run: mise run batten -- ci step --stdin target/perf.txt -- mise run record-perf
       - name: Assert the budget
         run: mise run perf-assert
       # THE SEED FOR EVERY PULL REQUEST'S BASE ARM, WRITTEN HERE BECAUSE ONLY
@@ -142,11 +147,7 @@ jobs:
       # measurement that broke its budget is a defect to fix, and a seed carried
       # forward from it would spread the defect to every pull request.
       - name: Stage the base-arm seed
-        run: |
-          mise run perf-seed
-          rm -rf target/perf/base-seed
-          mkdir -p target/perf/base-seed
-          cp -a target/perf-arm target/perf/base-seed/perf-arm
+        run: mise run perf-seed
       # A save collision on an existing key is the ORDINARY case — the key moves
       # only when `mise.lock` or `Cargo.lock` does — and "if the provided `key`
       # matches an existing cache, a new cache is not created". That is a
@@ -164,34 +165,19 @@ jobs:
       #
       # `perf-record` refuses to run off the trunk by itself, so the schedule's
       # main-only guarantee is belt and braces rather than the only guard.
+      #
+      # The note's identity travels in the environment git reads it from, so the
+      # step sets no repository config.
       - name: Record the series
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          mise run perf-record <"$RUNNER_TEMP/perf.txt"
+        run: mise run batten -- ci step --stdin target/perf.txt -- mise run perf-record
         env:
           BENCH_RUNNER: ubuntu-latest
+          GIT_AUTHOR_NAME: github-actions[bot]
+          GIT_AUTHOR_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+          GIT_COMMITTER_NAME: github-actions[bot]
+          GIT_COMMITTER_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
       # Its own step, so a push that fails is distinguishable from a measurement
       # that failed. The refspec is explicit and singular: this job may write the
       # series and nothing else.
       - name: Push the series
         run: git push origin "refs/notes/perf:refs/notes/perf"
-      # Always, including on a budget violation: the records are the evidence
-      # for the failure, and a run that fails without publishing what it measured
-      # sends the reader to re-run it by hand.
-      - name: Publish the records
-        if: always()
-        run: |
-          {
-            echo '## Invocation cost'
-            echo
-            # Double-quoted with escaped backticks, not single-quoted: a
-            # backtick pair inside single quotes reads as legacy command
-            # substitution to shellcheck (SC2016), which actionlint runs over
-            # every `run:` block.
-            echo "Budgets are enforced by \`mise run perf-assert\` — see README, Performance."
-            echo
-            echo '```'
-            cat "$RUNNER_TEMP/perf.txt"
-            echo '```'
-          } >>"$GITHUB_STEP_SUMMARY"

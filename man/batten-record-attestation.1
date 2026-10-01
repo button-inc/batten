@@ -1,0 +1,22 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-record-attestation 1  batten 
+.SH NAME
+batten\-record\-attestation \- Record a release\*(Aqs attestation posture and what the verifier says of each archive\*(Aqs binary
+.SH SYNOPSIS
+\fBbatten record attestation\fR [\fB\-\-verifier\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-binary\fR> [\fItag\fR] 
+.SH DESCRIPTION
+Record a release\*(Aqs attestation posture and what the verifier says of each archive\*(Aqs binary
+.SH OPTIONS
+.TP
+\fB\-\-binary\fR \fI<binary>\fR
+The binary\*(Aqs file name inside each archive (a `.exe` suffix also matches)
+.TP
+\fB\-\-verifier\fR \fI<verifier>\fR
+The program that downloads the release and verifies each binary (default: gh)
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+[\fItag\fR]
+The release tag to judge; absent is the latest release

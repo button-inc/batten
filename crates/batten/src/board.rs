@@ -108,6 +108,119 @@ pub struct Board {
     /// `DO-NOT-CLOSE` working, and refusing it would make the marker unwritable.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub started: Vec<String>,
+    /// The gates `batten board sweep` runs over ONE payload set, in order
+    /// (CLOUD-825, retiring `[tasks.board-sweep]` under CLOUD-843).
+    ///
+    /// **Declared here rather than known to the engine** (non-negotiable rule 1):
+    /// which gates a board has, and which argv reaches each, are this consumer's
+    /// facts. Read from the committed authority alone, like every other key in
+    /// this table — an uncommitted layer that could drop a gate from the sweep
+    /// would narrow what "the board is coherent" means without a trace.
+    ///
+    /// Empty is undeclared, and the verb refuses rather than reporting a clean
+    /// board over zero gates.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sweep: Vec<SweepGate>,
+    /// The status TYPES that SETTLE a blocker, so its dependent may reach the
+    /// ready frontier (CLOUD-477, read by `batten board check`).
+    ///
+    /// **Types rather than column names, and the reason is a measured defect.**
+    /// The frontier used to resolve a blocker by NAME, so every column the name
+    /// match was not told about fell into the catch-all and blocked — including
+    /// the terminal ones meaning "this will never be done, and that is settled",
+    /// which starved their dependents off the frontier permanently. A tracker
+    /// stamps each column with a type, and the type is what survives a rename.
+    ///
+    /// The review column settles a blocker by NAME on top of this set, because
+    /// on a board where it shares its type with the pulled column a type-only
+    /// rule would starve every row behind landed-but-unreleased work.
+    ///
+    /// An EMPTY set is undeclared, for [`Board::started`]'s reason: a set that
+    /// matches nothing would hold every row off the frontier and read as "nothing
+    /// is ready".
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub settled_types: Vec<String>,
+    /// The subset of [`Board::settled_types`] that settles a blocker by RETIRING
+    /// it rather than completing it (CLOUD-477's second decision).
+    ///
+    /// A dependent over one of these still reaches the frontier, and the reason
+    /// is put on the record: a blocker that was cancelled may have taken the
+    /// dependent's premise with it. Empty is a legitimate answer here — it only
+    /// decides whether that note is spoken.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub retired_types: Vec<String>,
+    /// The receipt check a coherent `batten board check` mints, one file per
+    /// judged key (CLOUD-512).
+    ///
+    /// Named here rather than in the crate because which check a move guard
+    /// reads is this consumer's receipt vocabulary. Absent mints nothing, and the
+    /// verdict is unchanged: a receipt is the trigger a guard reads, never part of
+    /// what the board check decides.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub move_receipt: Option<String>,
+    /// The tracked paths a Ready block's citations are resolved against
+    /// (CLOUD-826), as globs.
+    ///
+    /// Absent is could-not-look for `board check --cites`, never "every path":
+    /// which trees hold this consumer's tests and sources is its own layout.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cites_corpus: Vec<String>,
+    /// Globs carved OUT of [`Board::cites_corpus`] — the vacuity guard.
+    ///
+    /// A fixture that quotes a citation is not the thing cited, and a gate that
+    /// resolved a citation against a quotation of it would pass the very row it
+    /// exists to refuse.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cites_exclude: Vec<String>,
+    /// The marker written after a backticked path to declare it PROSPECTIVE —
+    /// absent by design, because the row exists to write it (CLOUD-920).
+    ///
+    /// Matched together with its path, so one marker elsewhere in a block cannot
+    /// excuse every citation in it. Absent means no path is prospective, which is
+    /// the strict direction: an unmarked absence stays a refusal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cites_prospective: Option<String>,
+    /// Globs of tracked paths whose clause citations `board check --refs` does
+    /// NOT scan (CLOUD-809) — a file that quotes a known-bad citation as its own
+    /// regression witness, which would otherwise report itself forever.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub refs_exclude: Vec<String>,
+}
+
+/// One gate the board sweep runs (CLOUD-843).
+///
+/// **Each row carries its own exit table**, because the gates a consumer
+/// composes do not share one. The engine's verbs answer `2` for a refusal; the
+/// corpus a retirement campaign is still draining answers `1`. A composer that
+/// assumed either would read the other's refusal as could-not-look, or its
+/// could-not-look as a refusal — the two answers a board sweep most needs apart.
+///
+/// Every exit a row does not classify — and a gate that could not be run at all
+/// — is COULD NOT LOOK. That is the safe direction: an unclassified answer never
+/// reads as a clean board.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct SweepGate {
+    /// The name the report prints for this gate.
+    pub name: String,
+    /// The argv the gate runs with the payload set on stdin. The first word
+    /// resolves on `PATH`; nothing here is a shell string.
+    pub run: Vec<String>,
+    /// The exits meaning the gate REFUSED the board. The engine's violation,
+    /// `2`, when the row names none.
+    #[serde(default = "default_refuses")]
+    pub refuses: Vec<i32>,
+    /// The exits meaning the gate cannot answer on THIS CLONE — a property of the
+    /// checkout rather than of the board, so a refusal elsewhere still outranks
+    /// it (CLOUD-921).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub abstains: Vec<i32>,
+}
+
+/// The engine's own violation exit, which is what a row naming no refusal
+/// table is read against.
+fn default_refuses() -> Vec<i32> {
+    vec![2]
 }
 
 /// The columns a landing or claim decision reads, each already proven present.
@@ -240,6 +353,8 @@ mod tests {
                 "In Review".to_owned(),
                 "Done".to_owned(),
             ],
+            sweep: Vec::new(),
+            ..Board::default()
         }
     }
 
@@ -275,6 +390,8 @@ mod tests {
             in_progress: Some("In Development".to_owned()),
             review: Some("Under Review".to_owned()),
             started: vec!["In Development".to_owned(), "Shipped".to_owned()],
+            sweep: Vec::new(),
+            ..Board::default()
         };
         let columns = Columns::resolve(Some(&board));
         assert_eq!(columns.ready().unwrap(), "To Do");
@@ -287,6 +404,24 @@ mod tests {
             ["In Development".to_owned(), "Shipped".to_owned()],
             "resolution must not smuggle this repository's vocabulary into another board's set"
         );
+    }
+
+    /// A sweep row that names no refusal table is read against the ENGINE's
+    /// violation exit, and one that names its own keeps exactly what it named —
+    /// the corpus's `1` must not be widened back to `[1, 2]`.
+    #[test]
+    fn a_sweep_row_reads_its_own_exit_table_or_the_engines() {
+        let board: Board = toml::from_str(
+            "[[sweep]]\nname = \"engine\"\nrun = [\"x\"]\n\n\
+             [[sweep]]\nname = \"corpus\"\nrun = [\"y\"]\nrefuses = [1]\nabstains = [3]\n",
+        )
+        .unwrap();
+        let engine = board.sweep.first().unwrap();
+        assert_eq!(engine.refuses, vec![2]);
+        assert!(engine.abstains.is_empty());
+        let corpus = board.sweep.get(1).unwrap();
+        assert_eq!(corpus.refuses, vec![1]);
+        assert_eq!(corpus.abstains, vec![3]);
     }
 
     /// An empty set is could-not-look, never "nothing counts as started" — the

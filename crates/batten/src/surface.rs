@@ -1248,6 +1248,148 @@ const DERIVE_INPUT: FlagDecl = FlagDecl {
     value: ValueDecl::StrMany,
 };
 
+/// `record forge --fetch`: read the commit's check-runs in process rather than
+/// take reduced lines on stdin (CLOUD-843, retiring the forge arm of
+/// `[tasks.record-verdicts]`).
+const FORGE_FETCH: FlagDecl = FlagDecl {
+    id: "fetch",
+    long: Some("fetch"),
+    short: None,
+    help: "Read the commit's check-runs from the forge instead of `<check> <conclusion>` lines on stdin",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Bool,
+};
+
+/// `record forge --fetch --fanin <check>`: the check whose answered conclusion
+/// gates writing any record at all.
+const FORGE_FANIN: FlagDecl = FlagDecl {
+    id: "fanin",
+    long: Some("fanin"),
+    short: None,
+    help: "With --fetch: record nothing until this check has an answered conclusion",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
+/// `record forge --fetch --answered <list>`: the conclusions that constitute an
+/// answer, the consumer's own set and never a list spelled in this crate.
+const FORGE_ANSWERED: FlagDecl = FlagDecl {
+    id: "answered",
+    long: Some("answered"),
+    short: None,
+    help: "With --fetch: comma-separated conclusions that constitute an answer; anything else is not recorded",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
+/// A `<name>=<value>` binding for one of a `[[forge.query]]` row's own
+/// placeholders (CLOUD-843).
+///
+/// `DERIVE_INPUT`'s spelling and its `StrMany` reason, with its own help: what a
+/// key MEANS here is a placeholder in the row's endpoint or parameters, and a key
+/// the row names no placeholder for is a usage error rather than an ignored
+/// value. `owner`, `repo` and `since` are the engine's to bind and are refused.
+const QUERY_INPUT: FlagDecl = FlagDecl {
+    id: "input",
+    long: Some("input"),
+    short: None,
+    help: "A `<name>=<value>` binding for one of the query's own placeholders (repeatable)",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::StrMany,
+};
+
+/// The probe command on `record probe`, after the mandatory `--` (CLOUD-843).
+const PROBE_COMMAND: FlagDecl = FlagDecl::trailing(
+    "command",
+    "The probe command, after `--`: its exit status is the `status` input and its output the document",
+);
+
+/// `--rule <id>` on `record decide`: `check`'s narrowing, and REQUIRED, because a
+/// decision with no rule to make it would be a silent pass (CLOUD-843).
+const DECIDE_RULE: FlagDecl = FlagDecl {
+    help: "The declared rule that decides over the record just written (repeatable, at least one)",
+    required: true,
+    ..CHECK_RULE
+};
+
+/// `<verb>` on `pr unsubscribed`: which of its three arms runs.
+const UNSUBSCRIBED_VERB: FlagDecl = FlagDecl::positional("verb", "drop | record | check");
+
+/// `--session-env <NAME>` on `pr unsubscribed`: the NAME of the variable, never
+/// its value, on `[[mcp.source]]`'s discipline (non-negotiable rule 1).
+const UNSUBSCRIBED_SESSION_ENV: FlagDecl = FlagDecl {
+    required: true,
+    ..FlagDecl::valued(
+        "session_env",
+        "session-env",
+        "The name of the environment variable holding this host's session id; unset is no session",
+    )
+};
+
+/// `--token-env <NAME>` on `pr unsubscribed`: the credential is named, never carried.
+const UNSUBSCRIBED_TOKEN_ENV: FlagDecl = FlagDecl::valued(
+    "token_env",
+    "token-env",
+    "The name of the environment variable holding the path of the credential file `drop` sends",
+);
+
+/// `--endpoint <URL>` on `pr unsubscribed`: the host's address, with `{session}`.
+const UNSUBSCRIBED_ENDPOINT: FlagDecl = FlagDecl::valued(
+    "endpoint",
+    "endpoint",
+    "The endpoint `drop` calls, with `{session}` where the session id goes",
+);
+
+/// `--tool <NAME>` on `pr unsubscribed`: the tool `drop` asks the endpoint to call.
+const UNSUBSCRIBED_TOOL: FlagDecl =
+    FlagDecl::valued("tool", "tool", "The tool `drop` asks the endpoint to call");
+
+/// `--arguments <JSON>` on `pr unsubscribed`: the tool's argument shape is the
+/// HOST's, so the consumer writes it (non-negotiable rule 1).
+const UNSUBSCRIBED_ARGUMENTS: FlagDecl = FlagDecl::valued(
+    "arguments",
+    "arguments",
+    "The tool's arguments `drop` sends: a JSON object whose strings may name {owner}, {repo}, {pr} and {session}",
+);
+
+/// `--family <NAME>` on `pr unsubscribed`: the family `check` records, and the
+/// receipts' filename prefix.
+const UNSUBSCRIBED_FAMILY: FlagDecl = FlagDecl {
+    required: true,
+    ..FlagDecl::valued(
+        "family",
+        "family",
+        "The record family `check` writes, and the prefix of this session's receipts",
+    )
+};
+
+/// `--rule <id>` on `pr unsubscribed`: the rule `check` decides with.
+const UNSUBSCRIBED_RULE: FlagDecl = FlagDecl::valued(
+    "rule",
+    "rule",
+    "The declared rule `check` decides with over the record it writes",
+);
+
 /// `--rule <id>` on `enforce`: the same narrowing, on the verb that spawns.
 ///
 /// # This reverses a recorded decision, and that decision named its condition
@@ -1403,6 +1545,57 @@ const SINGLETON_TASK: FlagDecl = FlagDecl::positional(
     "The task's name, which is what the lock is keyed by",
 );
 
+/// `--marker <path>` on `singleton detach`: where a failed run's pointers wait.
+const DETACH_MARKER: FlagDecl = FlagDecl {
+    required: true,
+    ..FlagDecl::valued(
+        "marker",
+        "marker",
+        "Where a failed run's pointers wait, announced and cleared by the next invocation",
+    )
+};
+
+/// `--log <path>` on `singleton detach`: where the run's whole output goes.
+const DETACH_LOG: FlagDecl = FlagDecl {
+    required: true,
+    ..FlagDecl::valued(
+        "log",
+        "log",
+        "Where the background run's whole output is written",
+    )
+};
+
+/// `--pattern <id>` on `singleton detach`: which output lines are pointers.
+///
+/// A `[[pattern]]` ID rather than a regex on argv: what a failure line looks
+/// like is the consumer's fact, declared once in its authority.
+const DETACH_PATTERN: FlagDecl = FlagDecl {
+    required: true,
+    ..FlagDecl::valued(
+        "pattern",
+        "pattern",
+        "The `[[pattern]]` row whose matching output lines are the failure's pointers",
+    )
+};
+
+/// `--attached` on `singleton detach`: this invocation is the background copy.
+///
+/// VISIBLE, though no caller is expected to type it: the announcing invocation
+/// starts the copy with it. Hidden is reserved for the diagnostic rungs
+/// (`only_a_diagnostic_rung_is_hidden`), and a flag that changes what a verb does
+/// is documented rather than tucked away, so its help says who passes it.
+const DETACH_ATTACHED: FlagDecl = FlagDecl::switch(
+    "attached",
+    "attached",
+    "Run as the background copy the announcing invocation starts: take the lock, run the command, record a failure",
+);
+
+/// The command `singleton detach` runs in the background, after `--`.
+const DETACH_COMMAND: FlagDecl = FlagDecl::trailing(
+    "command",
+    "The command to run in the background, after `--`",
+);
+
 /// `--recheck-ms <n>` on `singleton acquire`: the pause between the two
 /// sightings a reclaim requires.
 ///
@@ -1446,6 +1639,27 @@ const TASK_PROGRAM_ROOT: FlagDecl = FlagDecl {
     global: false,
     positional: false,
     required: true,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
+/// `record tool --pick <name>=<token>` (CLOUD-1991): reduce `key=value`
+/// measurement lines to `<name> <token>` in the writer.
+///
+/// ONE VALUE CARRYING BOTH KEYS rather than two flags, because the pair is one
+/// decision — which field names a line and which one scores it — and two flags
+/// could be half-given. Optional: absent, stdin is already record lines, which
+/// is every caller this leaf had before it.
+const TOOL_PICK: FlagDecl = FlagDecl {
+    id: "pick",
+    long: Some("pick"),
+    short: None,
+    help: "Reduce `key=value` lines: `<name-key>=<token-key>` names the field that labels a record line and the one that scores it",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
     hidden: false,
     rung: Rung::None,
     value: ValueDecl::Str,
@@ -2085,6 +2299,27 @@ const SLOW_BASE: FlagDecl = FlagDecl {
     value: ValueDecl::Str,
 };
 
+/// `--head <rev>` on `ci slow-needed` (CLOUD-1991).
+///
+/// The diff is always taken against the CHECKOUT, which in a `pull_request` job
+/// is the merge commit and elsewhere is `HEAD`. A caller naming a head asserts
+/// the two carry one tree, and a head that does not is refused as a usage error
+/// rather than silently answered about the checkout instead. This was the retired
+/// task body's shell guard; it is the verb's own argument now.
+const SLOW_HEAD: FlagDecl = FlagDecl {
+    id: "head",
+    long: Some("head"),
+    short: None,
+    help: "The revision whose tree the checkout must carry; refused when it does not",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
 const CLAIMED: FlagDecl = FlagDecl {
     id: "claimed",
     long: Some("claimed"),
@@ -2124,13 +2359,20 @@ const DECLINED: FlagDecl = FlagDecl {
 /// The remote's branch names, one per line. **Evidence rather than a spawn, and
 /// that is what keeps the arm on the read-only allowlist**: `spec.rs` admits
 /// `landed check` there precisely because it "starts no program", so resolving
-/// this with a `git ls-remote` would take the arm off it. The program being
-/// retired gathered them itself; gathering is the caller's half of
-/// agents-fetch-gates-decide, where a credential belongs.
+/// this with a `git ls-remote` would take the arm off it.
 ///
-/// Absent is an empty list, which is a legitimate reading: a repository whose
-/// branches the caller did not gather cannot rescue any claim, and the refusal
-/// for a gather that FAILED belongs to the caller that ran it.
+/// Since CLOUD-843 the verb can also acquire the names itself, under `--gather`
+/// — through the forge's REST listing and the vendored client, which is still
+/// no program started, so the verb stays `read` the way `claim merged` (a forge
+/// read by the same client) is. That listing is one forge's; a consumer whose
+/// forge does not serve it gathers could-not-look on this arm and names the
+/// branches here instead — `git ls-remote --heads` output reduced to names,
+/// from whatever credential the caller holds. A file named here is never
+/// replaced by a gathered reading.
+///
+/// Absent without `--gather` is an empty list, which is a legitimate reading: a
+/// repository whose branches the caller did not gather cannot rescue any claim,
+/// and the refusal for a gather that FAILED belongs to the caller that ran it.
 const REFS: FlagDecl = FlagDecl {
     id: "refs",
     long: Some("refs"),
@@ -2144,6 +2386,27 @@ const REFS: FlagDecl = FlagDecl {
     rung: Rung::None,
     value: ValueDecl::Str,
 };
+
+/// `--gather` on `landed abandoned` (CLOUD-843, retiring
+/// `[tasks.in-progress-drain]`).
+///
+/// A SWITCH over the arms rather than a replacement for them: an arm the caller
+/// names a file for is read from that file, and only an arm left unnamed is
+/// acquired — the trunk's closing keys from the declared trunk's (`must_land_on`)
+/// history in process, the merged pull requests and the remote's branches from
+/// the forge through the vendored client, both from the one repository
+/// `GH_REPO` / `LAND_LOCK_REMOTE` resolve. Off, every arm keeps its
+/// caller-supplied contract unchanged. A gather that cannot finish is
+/// could-not-look, never a thinner evidence set.
+///
+/// Still `read`: every acquisition is in process or through the vendored forge
+/// client, so the verb starts no program — the property its place on the
+/// read-only allowlist rests on.
+const GATHER: FlagDecl = FlagDecl::switch(
+    "gather",
+    "gather",
+    "Acquire each evidence arm no file was named for: the trunk's closing keys, merged pull requests, and the remote's branches",
+);
 
 /// `--instant <ISO-8601>` on `landed abandoned` (CLOUD-1513).
 ///
@@ -2308,15 +2571,41 @@ const ANSWERED_CONCLUSIONS: FlagDecl = FlagDecl {
 /// picks its own subject would answer about a commit the caller never named, and
 /// the caller — which knows whether it means its working tree, a lease holder's
 /// head, or a commit it just pushed — is the one place that distinction exists.
+///
+/// A REF IS ACCEPTED AND RESOLVED, which keeps that property rather than bending
+/// it (CLOUD-843): `--sha HEAD` is still the caller naming its subject, spelled
+/// the way a caller with no shell to run `rev-parse` can spell it.
 const WAIT_SHA: FlagDecl = FlagDecl {
     id: "sha",
     long: Some("sha"),
     short: None,
-    help: "The commit whose check runs to read",
+    help: "The commit whose check runs to read — a sha, or a ref this checkout resolves",
     env: EnvDecl::None,
     global: false,
     positional: false,
     required: true,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
+/// `--sha` on `checks green`: read this commit's check runs from the forge
+/// instead of taking a reading on stdin (CLOUD-843).
+///
+/// Optional, where `pr watch`'s is required, because absent keeps the verb's
+/// original shape — a pure decision over a piped reading — byte for byte. Taken
+/// literally rather than resolved, for [`WAIT_SHA`]'s reason: the caller knows
+/// which commit it means, and resolving would also start a program the `read`
+/// row promises this verb never starts.
+const CHECKS_SHA: FlagDecl = FlagDecl {
+    id: "sha",
+    long: Some("sha"),
+    short: None,
+    help: "Read this commit's check runs from the forge instead of a reading on stdin",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
     hidden: false,
     rung: Rung::None,
     value: ValueDecl::Str,
@@ -2514,6 +2803,547 @@ const ADOPT_FROM: FlagDecl = FlagDecl {
     rung: Rung::None,
     value: ValueDecl::Str,
 };
+
+// --- CLOUD-843's foundation surface ------------------------------------------
+//
+// The verbs the bash retirement's packages fill, declared ONCE with their final
+// arguments so every package builds against a fixed surface rather than each
+// inventing its own spelling. A row may answer "unimplemented" (exit 3) until its
+// package lands; its arguments may not move. Two shapes recur, so they are
+// constructors here rather than eleven struct literals repeating nine columns.
+
+impl FlagDecl {
+    /// An optional `--long <value>` flag with no env equivalent.
+    const fn valued(id: &'static str, long: &'static str, help: &'static str) -> Self {
+        FlagDecl {
+            id,
+            long: Some(long),
+            short: None,
+            help,
+            env: EnvDecl::None,
+            global: false,
+            positional: false,
+            required: false,
+            hidden: false,
+            rung: Rung::None,
+            value: ValueDecl::Str,
+        }
+    }
+
+    /// An optional boolean `--long` switch with no env equivalent.
+    const fn switch(id: &'static str, long: &'static str, help: &'static str) -> Self {
+        FlagDecl {
+            value: ValueDecl::Bool,
+            ..FlagDecl::valued(id, long, help)
+        }
+    }
+}
+
+/// `--or <check>` on `receipt status` (CLOUD-843): another check whose receipt
+/// answers the same question, any ONE valid receipt passing.
+///
+/// THE DISJUNCTION `verify` USED TO SPELL IN SHELL. A branch is claimed by a
+/// refined issue, by an allowlisted bot, or by a licence carry (CLOUD-431,
+/// CLOUD-693, CLOUD-1295) — three receipt kinds that attest three different
+/// things, which is why they stay three rather than one widened kind. Each is
+/// still judged by the one predicate, `receipt::branch_validity`, so the
+/// staleness rule CLOUD-516 put on the first holds for all of them.
+///
+/// REPEATABLE AND ORDERED, for `ValueDecl::StrMany`'s reason: a second `--or`
+/// silently replacing the first would drop a kind the caller named.
+const RECEIPT_OR: FlagDecl = FlagDecl {
+    value: ValueDecl::StrMany,
+    ..FlagDecl::valued(
+        "or",
+        "or",
+        "Another check whose receipt satisfies this one; any one valid receipt passes (repeatable)",
+    )
+};
+
+/// `<step>` on the three `step` arms: the name a `[[step]]` row declares.
+/// `--outputs` on `ci step`: append the command's `KEY=VALUE` lines to the
+/// runner's output file.
+const CI_STEP_OUTPUTS: FlagDecl = FlagDecl::switch(
+    "outputs",
+    "outputs",
+    "Append the command's KEY=VALUE stdout lines to the runner's step-output file",
+);
+
+/// `--summary <title>` on `ci step`.
+const CI_STEP_SUMMARY: FlagDecl = FlagDecl::valued(
+    "summary",
+    "summary",
+    "Fence the tail of the command's output into the runner's run summary under this title",
+);
+
+/// `--save <path>` on `ci step`.
+const CI_STEP_SAVE: FlagDecl = FlagDecl::valued(
+    "save",
+    "save",
+    "Also write the command's stdout to this path, for a later step to read",
+);
+
+/// `--stdin <path>` on `ci step`.
+const CI_STEP_STDIN: FlagDecl = FlagDecl::valued(
+    "stdin",
+    "stdin",
+    "Feed this file to the command's standard input",
+);
+
+/// `--verdict <key>` on `ci step`.
+const CI_STEP_VERDICT: FlagDecl = FlagDecl::valued(
+    "verdict",
+    "verdict",
+    "The step-output key a mapped exit code is written under",
+);
+
+/// `--on <code>=<value>` on `ci step`, REPEATABLE AND ORDERED: each row maps
+/// one exit code, and a mapped code exits 0.
+const CI_STEP_ON: FlagDecl = FlagDecl {
+    value: ValueDecl::StrMany,
+    ..FlagDecl::valued(
+        "on",
+        "on",
+        "Map an exit code to the verdict's value as <code>=<value>; a mapped code exits 0 (repeatable)",
+    )
+};
+
+/// `--require-env <NAME>` on `ci step`, REPEATABLE: a variable that must be set
+/// and non-empty before the command runs. Its value is never printed.
+const CI_STEP_REQUIRE_ENV: FlagDecl = FlagDecl {
+    value: ValueDecl::StrMany,
+    ..FlagDecl::valued(
+        "require_env",
+        "require-env",
+        "Refuse the step before running anything when this variable is unset or empty, naming it and never its value (repeatable)",
+    )
+};
+
+/// `--capture <key>` on `ci step`.
+const CI_STEP_CAPTURE: FlagDecl = FlagDecl::valued(
+    "capture",
+    "capture",
+    "Write the first line of the command's stdout to the runner's step outputs under this key",
+);
+
+/// `--arg-env <NAME>` on `ci step`, REPEATABLE AND ORDERED: each appends one
+/// variable's value to the command as a single argument.
+const CI_STEP_ARG_ENV: FlagDecl = FlagDecl {
+    value: ValueDecl::StrMany,
+    ..FlagDecl::valued(
+        "arg_env",
+        "arg-env",
+        "Append this variable's value to the command as one argument, in order; unset or empty is refused (repeatable)",
+    )
+};
+
+/// The command on `ci step`, after the mandatory `--`.
+const CI_STEP_COMMAND: FlagDecl = FlagDecl::trailing(
+    "command",
+    "The command, after `--`: its code is the verb's unless an --on row maps it",
+);
+
+const STEP_NAME: FlagDecl = FlagDecl::positional(
+    "step",
+    "The step's name, as the consumer's step table declares it",
+);
+
+/// `--arg <value>` on the three `step` arms (CLOUD-424's `--arg`, carried over).
+///
+/// REPEATABLE AND ORDERED, for `ValueDecl::StrMany`'s reason: each occurrence is
+/// one more thing the step's verdict depends on beyond its input files — a target
+/// triple, a base tree's id — and the key hashes them in the order written, so a
+/// second `--arg` silently replacing the first would key two different runs alike.
+const STEP_ARG: FlagDecl = FlagDecl {
+    value: ValueDecl::StrMany,
+    ..FlagDecl::valued(
+        "arg",
+        "arg",
+        "A value the step's verdict depends on beyond its inputs, keyed in order (repeatable)",
+    )
+};
+
+/// The step's own command on `step run`, after the mandatory `--`.
+const STEP_COMMAND: FlagDecl = FlagDecl::trailing(
+    "command",
+    "The step's command, after `--`: run only on a miss, recorded only when it exits 0",
+);
+
+/// `--names` on `sbom`: answer the asset names without scanning anything.
+const SBOM_NAMES: FlagDecl = FlagDecl::switch(
+    "names",
+    "names",
+    "Print the asset names as KEY=VALUE lines and exit, without scanning",
+);
+
+/// `--binary <path>` on `sbom`: inventory a built binary instead of the tree.
+const SBOM_BINARY: FlagDecl = FlagDecl::valued(
+    "binary",
+    "binary",
+    "Inventory this built binary from its own bytes instead of the tree",
+);
+
+/// `--target <triple>` on `sbom`: the triple a binary was built for.
+///
+/// It names the binary's asset through `dist`'s stem rule, so it is what
+/// `--names` answers with when a binary's asset, not the tree's, is asked about.
+const SBOM_TARGET: FlagDecl = FlagDecl::valued(
+    "target",
+    "target",
+    "The target triple the binary was built for, which names its asset",
+);
+
+/// `--out-dir <dir>` on `sbom`.
+const SBOM_OUT_DIR: FlagDecl = FlagDecl::valued(
+    "out_dir",
+    "out-dir",
+    "Write the documents under this directory instead of the declared one",
+);
+
+/// `--record` on `sbom`: derive twice into scratch and record the reduction.
+///
+/// The producer half of the inventory gate (retiring `[tasks.record-sbom]`):
+/// two derivations, because stability is one of the counts, and scratch rather
+/// than the declared directory, because a producer that rewrote what it measures
+/// could not measure it twice.
+const SBOM_RECORD: FlagDecl = FlagDecl::switch(
+    "record",
+    "record",
+    "Derive the tree's documents twice into scratch and record their counts under the declared tool row",
+);
+
+/// `--conformance` on `sbom`: derive into scratch and record the checker's exit
+/// code per declared standard (retiring `[tasks.ntia-record]`).
+const SBOM_CONFORMANCE: FlagDecl = FlagDecl::switch(
+    "conformance",
+    "conformance",
+    "Derive the SPDX document into scratch and record the declared checker's exit code per standard",
+);
+
+/// `<target>` on `dist`: the triple to build.
+const DIST_TARGET: FlagDecl = FlagDecl::positional(
+    "target",
+    "The target triple to build, which must already be installed",
+);
+
+/// `--stem` on `dist`: the asset's name, without building.
+///
+/// The naming contract has readers besides the build — an installer resolving
+/// an asset, the binary SBOM naming its own — and a flag answering it is what
+/// keeps them from re-spelling it.
+const DIST_STEM: FlagDecl = FlagDecl::switch(
+    "stem",
+    "stem",
+    "Print the target's asset stem and exit, without building",
+);
+
+/// `--build-tool <tool>` on `dist`.
+const DIST_BUILD_TOOL: FlagDecl = FlagDecl::valued(
+    "build_tool",
+    "build-tool",
+    "How to build for the target: cargo, cross or zigbuild (default: $DIST_BUILD_TOOL, else cargo)",
+);
+
+/// `[tool]` on `mcp grant`: the tool name to resolve.
+const MCP_TOOL: FlagDecl = FlagDecl::positional_optional(
+    "tool",
+    "The tool name to resolve, as `mcp__<server>__<tool>`; absent under --guard or --aliases",
+);
+
+/// `--guard` on `mcp grant`: decide the call a hook payload on stdin names.
+const MCP_GUARD: FlagDecl = FlagDecl::switch(
+    "guard",
+    "guard",
+    "Read a hook payload on stdin and refuse the call the committed settings deny",
+);
+
+/// `--aliases` on `mcp grant`: the portable alias each live server resolves to.
+const MCP_ALIASES: FlagDecl = FlagDecl::switch(
+    "aliases",
+    "aliases",
+    "List the portable alias each server in the injected config resolves to",
+);
+
+/// `--config <file>` on the MCP arms: the host-injected MCP config.
+const MCP_CONFIG: FlagDecl = FlagDecl::valued(
+    "config",
+    "config",
+    "The host-injected MCP config to resolve server names through",
+);
+
+/// `--settings <file>` on the MCP arms: the permission settings to judge.
+const MCP_SETTINGS: FlagDecl = FlagDecl::valued(
+    "settings",
+    "settings",
+    "The permission settings file to judge, instead of the declared one",
+);
+
+/// `--logs <dir>` on `mcp posture`: the host's MCP connection log tree.
+const MCP_LOGS: FlagDecl = FlagDecl::valued(
+    "logs",
+    "logs",
+    "The host's MCP connection log tree, instead of the one it keeps for this project",
+);
+
+/// `--spawns <file>` on `mcp posture`: the ledger `mcp spawn` appends to.
+const MCP_SPAWNS: FlagDecl = FlagDecl::valued(
+    "spawns",
+    "spawns",
+    "The spawn ledger `mcp spawn` appends to, instead of this clone's",
+);
+
+/// `--issue <key>` on `board check`, repeatable.
+///
+/// The board is many rows where `ready lint` judges one, so this is `ISSUE`'s
+/// store read made repeatable rather than a second flag: absent, the payloads
+/// arrive on stdin exactly as they always have.
+const BOARD_ISSUE: FlagDecl = FlagDecl {
+    value: ValueDecl::StrMany,
+    ..FlagDecl::valued(
+        "issue",
+        "issue",
+        "Read this issue's payload from the capture store rather than stdin (repeatable)",
+    )
+};
+
+/// `--cites` on `board check` (CLOUD-826, retiring `mise-tasks/ready-cites-check.sh`).
+///
+/// A switch rather than a verb of its own: it is the same payload set read the
+/// same way, asked a different question, and a second verb would be a second
+/// place the set's reading could drift.
+const BOARD_CITES: FlagDecl = FlagDecl::switch(
+    "cites",
+    "cites",
+    "Judge each payload's Ready-block citations against the tree instead of the graph",
+);
+
+/// `--refs` on `board check` (CLOUD-809, retiring `mise-tasks/spec-ref-check.sh`).
+const BOARD_REFS: FlagDecl = FlagDecl::switch(
+    "refs",
+    "refs",
+    "Judge the tree's clause citations against the payloads instead of the graph",
+);
+
+/// `--ci-workflow <file>` on `record divergence`.
+///
+/// A flag rather than a literal: which workflow carries the graded CI runs is the
+/// consumer's fact (rule 1), and a default would be a name out of one
+/// repository's `.github`. Absent, the verb reads `$LAND_CI_WORKFLOW`, and it
+/// refuses when neither names one.
+const DIVERGENCE_CI: FlagDecl = FlagDecl::valued(
+    "ci_workflow",
+    "ci-workflow",
+    "The workflow file whose runs are the graded CI runs (default: $LAND_CI_WORKFLOW)",
+);
+
+/// `--land-workflow <file>` on `record divergence`, for the same reason; absent,
+/// the verb reads `$LAND_WORKFLOW`, the variable `land fast-forward` reads.
+const DIVERGENCE_LAND: FlagDecl = FlagDecl::valued(
+    "land_workflow",
+    "land-workflow",
+    "The workflow file whose runs are the landing bot's answers (default: $LAND_WORKFLOW)",
+);
+
+/// `--since <instant>` on `record divergence`: the window's start.
+const DIVERGENCE_SINCE: FlagDecl = FlagDecl::valued(
+    "since",
+    "since",
+    "The window's start, ISO-8601 (default: 24 hours before now)",
+);
+
+/// `[tag]` on `record attestation`: the release to judge.
+const ATTESTATION_TAG: FlagDecl = FlagDecl::positional_optional(
+    "tag",
+    "The release tag to judge; absent is the latest release",
+);
+
+/// `--binary <name>` on `record attestation`: the file the verifier judges.
+///
+/// Required, and the consumer's: which executable a release attests is a fact
+/// about that consumer, never a name the engine may carry (rule 1).
+const ATTESTATION_BINARY: FlagDecl = FlagDecl {
+    required: true,
+    ..FlagDecl::valued(
+        "binary",
+        "binary",
+        "The binary's file name inside each archive (a `.exe` suffix also matches)",
+    )
+};
+
+/// `--verifier <program>` on `record attestation`.
+const ATTESTATION_VERIFIER: FlagDecl = FlagDecl::valued(
+    "verifier",
+    "verifier",
+    "The program that downloads the release and verifies each binary (default: gh)",
+);
+
+/// `--max-pages <n>` on `record divergence`: the walk's bound per workflow.
+const DIVERGENCE_MAX_PAGES: FlagDecl = FlagDecl::valued(
+    "max_pages",
+    "max-pages",
+    "Pages of runs to read per workflow before the window reads as truncated (default: 10)",
+);
+
+/// `--window <n>` on `record nonverdict`: how many recent failed runs to read.
+const NONVERDICT_WINDOW: FlagDecl = FlagDecl::valued(
+    "window",
+    "window",
+    "How many recent failed runs to read, 1 to 100 (default: 30)",
+);
+
+/// `--required-check <name>` on `record nonverdict`, repeatable: the roster a
+/// failed job must be on to be counted, which is the consumer's fact. Absent,
+/// the verb reads `$CI_REQUIRED_CHECKS`, comma-separated, the roster `land`
+/// already reads, and refuses when neither names one.
+const NONVERDICT_REQUIRED: FlagDecl = FlagDecl {
+    value: ValueDecl::StrMany,
+    ..FlagDecl::valued(
+        "required_check",
+        "required-check",
+        "A required job, by exact name; only these are counted (repeatable; default: $CI_REQUIRED_CHECKS)",
+    )
+};
+
+/// `--exclude-job <name>` on `record nonverdict`, repeatable: a job whose
+/// failure its siblings manufacture, such as a fan-in, which is the consumer's
+/// name to give. Absent, the verb reads `$CI_FANIN_CHECK`, the fan-in `land`
+/// already reads.
+const NONVERDICT_EXCLUDE: FlagDecl = FlagDecl {
+    value: ValueDecl::StrMany,
+    ..FlagDecl::valued(
+        "exclude_job",
+        "exclude-job",
+        "A job never counted, such as a fan-in whose failure its siblings cause (repeatable; default: $CI_FANIN_CHECK)",
+    )
+};
+
+/// `--verdict-step <prefix>` on `record nonverdict`, repeatable: how a job
+/// renders a verdict is the consumer's fact. Absent, the verb reads
+/// `$CI_VERDICT_STEPS`, comma-separated, and refuses when neither names one —
+/// with no prefix every failure would read as a non-verdict.
+const NONVERDICT_STEP: FlagDecl = FlagDecl {
+    value: ValueDecl::StrMany,
+    ..FlagDecl::valued(
+        "verdict_step",
+        "verdict-step",
+        "A step-name prefix that marks a failed step as verdict-bearing (repeatable; default: $CI_VERDICT_STEPS)",
+    )
+};
+
+/// `[tag]` on `release sums` and `record release`: the release to read.
+///
+/// Optional, and EMPTY reads as absent: a workflow passes the tag quoted, so the
+/// argument always arrives, and "no tag" there means the latest release.
+const RELEASE_TAG: FlagDecl = FlagDecl::positional_optional(
+    "tag",
+    "The release's tag; empty or absent is the latest release",
+);
+
+/// `--manifest <name>` on `release sums` and `record release`.
+///
+/// REQUIRED, and a flag rather than a literal: the manifest's file name is the
+/// consumer's (rule 1), declared once in its own configuration and handed here.
+const RELEASE_MANIFEST: FlagDecl = FlagDecl {
+    required: true,
+    ..FlagDecl::valued(
+        "manifest",
+        "manifest",
+        "The checksum manifest's file name, as the release carries it",
+    )
+};
+
+/// `--out-dir <dir>` on `release sums`.
+const RELEASE_OUT_DIR: FlagDecl = FlagDecl::valued(
+    "out_dir",
+    "out-dir",
+    "Write the manifest under this directory (default: checksums)",
+);
+
+/// `--names` on `release sums`: answer the manifest's path and nothing else.
+const RELEASE_NAMES: FlagDecl = FlagDecl::switch(
+    "names",
+    "names",
+    "Print the manifest's path as sums=<path> and exit, with no tag, network or download",
+);
+
+/// `--tag <tag>` on `release backfill`, repeatable and ordered.
+const BACKFILL_TAG: FlagDecl = FlagDecl {
+    value: ValueDecl::StrMany,
+    ..FlagDecl::valued(
+        "tag",
+        "tag",
+        "A release tag to record (repeatable); absent, every tag the pattern selects, oldest first",
+    )
+};
+
+/// `--workflow <file>` on `release backfill`: the consumer's workflow, required.
+const BACKFILL_WORKFLOW: FlagDecl = FlagDecl {
+    required: true,
+    ..FlagDecl::valued(
+        "workflow",
+        "workflow",
+        "The workflow file dispatched once per tag",
+    )
+};
+
+/// `--ref <branch>` on `release backfill`: where the dispatched runs execute.
+const BACKFILL_REF: FlagDecl = FlagDecl {
+    required: true,
+    ..FlagDecl::valued("ref", "ref", "The branch the dispatched runs execute on")
+};
+
+/// `--pattern <glob>` on `release backfill`: what a release tag is.
+const BACKFILL_PATTERN: FlagDecl = FlagDecl {
+    required: true,
+    ..FlagDecl::valued(
+        "pattern",
+        "pattern",
+        "The glob a release tag matches, as `git tag --list` matches it",
+    )
+};
+
+/// `--dry-run` on `release backfill`.
+const BACKFILL_DRY_RUN: FlagDecl = FlagDecl::switch(
+    "dry_run",
+    "dry-run",
+    "Print the plan, oldest first, and dispatch nothing",
+);
+
+/// `--poll-interval <seconds>` on `release backfill`.
+const BACKFILL_POLL_INTERVAL: FlagDecl = FlagDecl::valued(
+    "poll_interval",
+    "poll-interval",
+    "Seconds between polls; the forge's own interval raises it (default: 5)",
+);
+
+/// `--max-polls <n>` on `release backfill`: a COUNT backstop, never a clock.
+const BACKFILL_MAX_POLLS: FlagDecl = FlagDecl::valued(
+    "max_polls",
+    "max-polls",
+    "Polls per tag before its run reads as never finishing (default: 240)",
+);
+
+/// `<kind>` on `record census note`.
+const CENSUS_KIND: FlagDecl =
+    FlagDecl::positional("kind", "h for a landing's beat, x for a deliberate stop");
+
+/// `[reason]` on `record census note`: why a loop stopped, beside an `x`.
+const CENSUS_REASON: FlagDecl = FlagDecl::positional_optional(
+    "reason",
+    "Why the loop stopped, one word, recorded beside an x",
+);
+
+/// `--once` on `record census report`: speak once per boot.
+///
+/// The verdict classifies the PREVIOUS boot, which is immutable history, so it
+/// is true at every session start for the life of a container. Once the positive
+/// reading has been read it is noise; this writes the mark that silences it, and
+/// that write is why the arm is `write` rather than `read`.
+const CENSUS_ONCE: FlagDecl = FlagDecl::switch(
+    "once",
+    "once",
+    "Report once per boot: record that this boot's verdict was read, and stay silent after",
+);
 
 fn verbosity_parser() -> ValueParser {
     ValueParser::new(clap::builder::EnumValueParser::<Verbosity>::new())
@@ -2869,6 +3699,8 @@ pub const SURFACE: &[CommandDecl] = &[
             LOCK_PATH,
             LOCK_ATTEMPTS,
             LOCK_LABEL,
+            EXEC_TRACKED,
+            EXEC_EXCEPT,
             FlagDecl::defaulted_enum(
                 "format",
                 "format",
@@ -3072,9 +3904,9 @@ pub const SURFACE: &[CommandDecl] = &[
     // STDOUT IS THE MCP TRANSPORT. One stray byte corrupts the JSON-RPC stream
     // and takes the server down looking exactly like the bug this records. So
     // Batten emits nothing on stdout at all, and the record it keeps is a file.
-    // unreached: "mcp spawn" CLOUD-1753 the only caller is `.mcp.json`, which the MCP
-    // client reads with the `batten` on PATH — a release — and no release ships this
-    // verb yet; the repoint lands in the commit after the release that does.
+    // unreached: "mcp spawn" CLOUD-1753 the only caller is `.mcp.json`, whose JSON argv
+    // spells the verb as separate array elements, which a text needle does not read
+    // as a call. The release on PATH ships the verb (v0.0.188 answers its --help).
     CommandDecl {
         path: "mcp spawn",
         id: "mcp.spawn",
@@ -3184,7 +4016,7 @@ pub const SURFACE: &[CommandDecl] = &[
         data_channel: false,
         exits: EXITS_VERDICT,
         effect: Effect::Read,
-        flags: &[SLOW_BASE],
+        flags: &[SLOW_BASE, SLOW_HEAD],
     },
     // WHICH suites a diff can move (CLOUD-886), ported out of
     // `mise-tasks/suite-select.sh` under CLOUD-1716.
@@ -3217,6 +4049,30 @@ pub const SURFACE: &[CommandDecl] = &[
         effect: Effect::Read,
         flags: &[SLOW_BASE],
     },
+    // The runner-file glue a workflow step used a shell for (CLOUD-843, Phase
+    // 4): step outputs, the run summary, a verdict mapped to an output, a
+    // capture. `step run`'s reading: it runs the command the caller names, so
+    // it is `Unclassified`, and the child's verdict is the verb's.
+    CommandDecl {
+        path: "ci step",
+        id: "ci.step",
+        about: "Run one command and write its step outputs, run summary or mapped verdict to the runner's files",
+        data_channel: false,
+        exits: EXITS_VERDICT,
+        effect: Effect::Unclassified,
+        flags: &[
+            CI_STEP_OUTPUTS,
+            CI_STEP_SUMMARY,
+            CI_STEP_SAVE,
+            CI_STEP_STDIN,
+            CI_STEP_VERDICT,
+            CI_STEP_ON,
+            CI_STEP_ARG_ENV,
+            CI_STEP_CAPTURE,
+            CI_STEP_REQUIRE_ENV,
+            CI_STEP_COMMAND,
+        ],
+    },
     // CLOUD-65's install contract, ported out of `mise-tasks/install-check.sh`
     // under CLOUD-1716.
     //
@@ -3227,17 +4083,18 @@ pub const SURFACE: &[CommandDecl] = &[
     CommandDecl {
         path: "release",
         id: "release",
-        about: "Answer whether a release is installable as it says it is",
+        about: "Answer whether a release is installable as it says it is, hash its assets, and backfill its tracking",
         data_channel: false,
         exits: EXITS_DISPATCHES,
         effect: Effect::Unclassified,
         flags: &[],
     },
     // `Unclassified` RATHER THAN `Read`, and the reason is the interim: this
-    // asks `mise-tasks/dist.sh` and `install.sh` through the query flags they
-    // publish, so it spawns, and its reach is whatever theirs is. An optimistic
-    // `read` here would put a process-spawning verb on the derived allowlist.
-    // When wave 2 retires both, this becomes `Read` in the same change.
+    // asks `install.sh` through the query flags it publishes, so it spawns, and
+    // its reach is whatever that program's is. An optimistic `read` here would
+    // put a process-spawning verb on the derived allowlist. `dist`'s naming is
+    // asked in process now (`dist::archive_stem`); `install.sh` stays shell
+    // because it runs before the engine exists, so this stays `Unclassified`.
     CommandDecl {
         path: "release install",
         id: "release.install",
@@ -3246,6 +4103,45 @@ pub const SURFACE: &[CommandDecl] = &[
         exits: EXITS_VERDICT,
         effect: Effect::Unclassified,
         flags: &[],
+    },
+    // A release's checksum manifest, retiring `[tasks.checksums]` (CLOUD-843).
+    // `write`: it writes one file, and it reaches the network, which the derived
+    // read-only allowlist must never advertise. A release it could not read, or
+    // one with nothing to hash, is exit 3 with nothing written.
+    CommandDecl {
+        path: "release sums",
+        id: "release.sums",
+        about: "Hash a published release's own assets into a checksum manifest, never the manifest itself",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Write,
+        flags: &[
+            RELEASE_TAG,
+            RELEASE_MANIFEST,
+            RELEASE_OUT_DIR,
+            RELEASE_NAMES,
+        ],
+    },
+    // The release pipeline's backfill sweep, retiring `[tasks.release-backfill]`
+    // (CLOUD-843). `unclassified` rather than `write`: every dispatch starts a
+    // run of the consumer's own workflow, whose effect is whatever that
+    // workflow does — `exec`'s reading, one host over.
+    CommandDecl {
+        path: "release backfill",
+        id: "release.backfill",
+        about: "Dispatch a backfill workflow once per release tag, oldest first, waiting on each run and stopping at the first that does not succeed",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Unclassified,
+        flags: &[
+            BACKFILL_TAG,
+            BACKFILL_WORKFLOW,
+            BACKFILL_REF,
+            BACKFILL_PATTERN,
+            BACKFILL_DRY_RUN,
+            BACKFILL_POLL_INTERVAL,
+            BACKFILL_MAX_POLLS,
+        ],
     },
     CommandDecl {
         path: "config",
@@ -3441,6 +4337,21 @@ pub const SURFACE: &[CommandDecl] = &[
         exits: EXITS_STANDARD,
         effect: Effect::Read,
         flags: &[JSON],
+    },
+    // WHETHER THE FORGE CREDENTIAL CARRIES THE CLAIMS THE TASKS NEED (CLOUD-843,
+    // retiring `gh-preflight`). `read`: it issues GETs against the endpoints the
+    // committed `[[forge.probe]]` rows name and never a write — a row declaring
+    // a write claim is reported as declared and never called. `doctor *`'s exit
+    // set, for its siblings' reason: a missing claim is a failed diagnosis, and a
+    // diagnosis renders no policy verdict, so it cannot mint a `2`.
+    CommandDecl {
+        path: "doctor forge",
+        id: "doctor.forge",
+        about: "Diagnose whether the forge credential carries the claims this repository's tasks declare",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Read,
+        flags: &[],
     },
     // THE ONE SUB-VERB THAT IS ALSO A ROW IN THE BARE REPORT (CLOUD-1398), and
     // the asymmetry with the two rows above it is the decision rather than an
@@ -3798,7 +4709,7 @@ pub const SURFACE: &[CommandDecl] = &[
         about: "Measure this binary's invocation cost on every path and print one record per path",
         // **NO DATA CHANNEL**, for `ci suites`' reason and stated in this row's
         // own `about`: it prints ONE RECORD PER PATH — `path=… p50=… p95=…
-        // mean=… runs=…` — which `batten record tool perf-p95` parses. That line
+        // mean=… runs=…` — which `batten record tool perf-p95 --pick path=p95` reduces. That line
         // format IS the contract with the frozen caller, so a JSON rendering
         // would be a second output nothing reads, and declaring a channel the
         // verb does not implement is what the two `cli` surface cases caught.
@@ -3854,6 +4765,18 @@ pub const SURFACE: &[CommandDecl] = &[
             rung: Rung::None,
             value: ValueDecl::Bool,
         }],
+    },
+    // CLOUD-843: `hook-latency-drift.yml`'s inline measurement, as a verb. It
+    // times the command `[perf.latency]` declares, so its effect is that
+    // command's — unknown ahead of time, hence `unclassified` rather than a guess.
+    CommandDecl {
+        path: "perf latency",
+        id: "perf.latency",
+        about: "Time the command `[perf.latency]` declares and report a median that has drifted from its budget, in either direction",
+        data_channel: false,
+        exits: EXITS_VERDICT,
+        effect: Effect::Unclassified,
+        flags: &[],
     },
     // The `mutate` noun only dispatches (§2), and it is declared `write` for the
     // reason `perf` states: §5 forbids inheritance in both directions, so the
@@ -4282,7 +5205,15 @@ pub const SURFACE: &[CommandDecl] = &[
         data_channel: false,
         exits: EXITS_VERDICT,
         effect: Effect::Read,
-        flags: &[CLAIMED, MERGED_PRS, LANDED_BY, REFS, INSTANT, MAX_IDLE_DAYS],
+        flags: &[
+            CLAIMED,
+            MERGED_PRS,
+            LANDED_BY,
+            REFS,
+            INSTANT,
+            MAX_IDLE_DAYS,
+            GATHER,
+        ],
     },
     CommandDecl {
         path: "ready lint",
@@ -4303,11 +5234,18 @@ pub const SURFACE: &[CommandDecl] = &[
         effect: Effect::Unclassified,
         flags: &[],
     },
-    // `read`, and structurally so: it decides over a reading handed to it on
-    // stdin and cannot start a program. The FETCH stays with the caller — the
-    // poller already holds the body it got conditionally — which is the
+    // `read`, and structurally so: it decides over a reading and cannot start a
+    // program. By default the reading is handed to it on stdin — the poller
+    // already holds the body it got conditionally — which is the
     // agents-fetch-gates-decide split the board gates use, and what lets every
     // case run offline.
+    //
+    // `--sha` TAKES THE READING IN PROCESS (CLOUD-843), through the same
+    // `pr_watch::read` `record forge --fetch` and `land` use: one GET, no
+    // program started and nothing written, so the row stays `read`. It exists to
+    // retire the `checks-green` task's `gh api` + `jq` acquisition, whose only
+    // other job was re-deciding the engine's exit code off its stdout. Absent,
+    // the verb is the stdin decider it always was.
     //
     // THE EXIT CODES ARE THIS TABLE'S, NOT THE PREDECESSOR'S (CLOUD-1143).
     // `checks-green.sh` used `0` green / `1` red / `2` could-not-look / `3`
@@ -4335,6 +5273,8 @@ pub const SURFACE: &[CommandDecl] = &[
             ABSENT_OK_CHECKS,
             ANSWERED_CONCLUSIONS,
             FANIN_CHECK,
+            CHECKS_SHA,
+            WAIT_REPO,
             JSON,
         ],
     },
@@ -4465,6 +5405,31 @@ pub const SURFACE: &[CommandDecl] = &[
         effect: Effect::Unclassified,
         flags: &[PR_NUMBER],
     },
+    // CLOUD-518's gate and CLOUD-790's actor (CLOUD-843, retiring
+    // `[tasks.pr-unsubscribed]`). ONE leaf with a verb positional rather than
+    // three, because its callers name the three arms as one task with the arm
+    // and the pull request appended. `write`: every arm writes — `drop` a
+    // receipt after a network call, `record` a receipt, `check` a record — and
+    // `EXITS_VERDICT` because `check` is the decision over what it recorded.
+    CommandDecl {
+        path: "pr unsubscribed",
+        id: "pr.unsubscribed",
+        about: "Drop this session's webhook subscription to a pull request, attest it, or record and decide the reading",
+        data_channel: false,
+        exits: EXITS_VERDICT,
+        effect: Effect::Write,
+        flags: &[
+            UNSUBSCRIBED_VERB,
+            PR_NUMBER,
+            UNSUBSCRIBED_SESSION_ENV,
+            UNSUBSCRIBED_TOKEN_ENV,
+            UNSUBSCRIBED_ENDPOINT,
+            UNSUBSCRIBED_TOOL,
+            UNSUBSCRIBED_ARGUMENTS,
+            UNSUBSCRIBED_FAMILY,
+            UNSUBSCRIBED_RULE,
+        ],
+    },
     // The `task` noun (CLOUD-425), ported off `mise-tasks/task-registry.sh` and
     // `mise-tasks/alive.sh` under CLOUD-843. Both halves, because the registry is
     // one mechanism read from both ends.
@@ -4590,6 +5555,30 @@ pub const SURFACE: &[CommandDecl] = &[
         exits: EXITS_STANDARD,
         effect: Effect::Write,
         flags: &[SINGLETON_TASK],
+    },
+    // A BACKGROUND RUN UNDER THE TASK'S LOCK (CLOUD-1731's per-turn check,
+    // retiring `[tasks.cross-turn]` under CLOUD-1991). `unclassified`, for
+    // `exec`'s reason: it runs the command it is handed, so its reach is that
+    // command's. It announces the previous run's failure on stdout — the handler
+    // contract's advisory channel — clears it, starts an attached copy and
+    // returns, so a turn never waits on the command. The attached copy takes the
+    // lock for its own pid: a second copy is refused by the lock, never by a
+    // process probe, and a turn whose copy is still running starts none.
+    CommandDecl {
+        path: "singleton detach",
+        id: "singleton.detach",
+        about: "Run a command in the background under a task's lock, and report the previous run's failure",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Unclassified,
+        flags: &[
+            SINGLETON_TASK,
+            DETACH_MARKER,
+            DETACH_LOG,
+            DETACH_PATTERN,
+            DETACH_ATTACHED,
+            DETACH_COMMAND,
+        ],
     },
     // The `claim` noun (CLOUD-1121), ported off `mise-tasks/claim-check.sh` on the
     // same terms.
@@ -4785,6 +5774,21 @@ pub const SURFACE: &[CommandDecl] = &[
         path: "attribution identity",
         id: "attribution.identity",
         about: "Set this clone's repo-local git identity when it is unset or denied",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Write,
+        flags: &[],
+    },
+    // The SIGNATURE surface's write, `attribution identity`'s twin (CLOUD-669,
+    // retiring `[tasks.signing-posture-repair]` under CLOUD-843). Repo-local
+    // only, and only against a signer whose key cannot be verified or
+    // reproduced: a verifiable signer is left signing, which is the end state
+    // CLOUD-591 works toward. `write`, self-declared (§5) — it may write
+    // `.git/config` in this checkout.
+    CommandDecl {
+        path: "attribution signing",
+        id: "attribution.signing",
+        about: "Switch signing off in this clone when its signer cannot be verified or reproduced",
         data_channel: false,
         exits: EXITS_STANDARD,
         effect: Effect::Write,
@@ -5128,6 +6132,7 @@ pub const SURFACE: &[CommandDecl] = &[
         effect: Effect::Read,
         flags: &[
             FlagDecl::positional("check", "The check whose receipt is judged"),
+            RECEIPT_OR,
             FlagDecl::defaulted_enum(
                 "key",
                 "key",
@@ -5466,10 +6471,13 @@ pub const SURFACE: &[CommandDecl] = &[
         data_channel: false,
         exits: EXITS_STANDARD,
         effect: Effect::Write,
-        flags: &[FlagDecl::positional(
-            "id",
-            "The `[[rule.tools]]` id whose verdict is being recorded",
-        )],
+        flags: &[
+            FlagDecl::positional(
+                "id",
+                "The `[[rule.tools]]` id whose verdict is being recorded",
+            ),
+            TOOL_PICK,
+        ],
     },
     // The sibling half, and what keeps this noun from being the thirteenth singleton
     // CLOUD-1184 counts. The two stores differ in their KEY and in nothing else
@@ -5478,13 +6486,36 @@ pub const SURFACE: &[CommandDecl] = &[
     CommandDecl {
         path: "record forge",
         id: "record.forge",
-        about: "Record the forge's check verdicts for one commit, read as `<check> <conclusion>` lines on stdin",
+        about: "Record the forge's check verdicts for one commit, read as `<check> <conclusion>` lines on stdin or with --fetch from the forge",
         data_channel: false,
         exits: EXITS_STANDARD,
         effect: Effect::Write,
+        flags: &[
+            FlagDecl::positional("ref", "The ref or sha the verdict was taken against"),
+            FORGE_FETCH,
+            FORGE_FANIN,
+            FORGE_ANSWERED,
+        ],
+    },
+    // CLOUD-843's validator door, retiring `[tasks.record-verdicts]`' two
+    // validator arms. `record tool` records a verdict some OTHER program reduced;
+    // this runs the row's own declared argv and records the exit code, so the
+    // reduction is one integer and the reading of it is the consumer's module.
+    //
+    // `Effect::Unclassified`, stated rather than guessed (see `effect.rs`): it
+    // runs a program the CONSUMER names, so what it does cannot be known from
+    // this row — `exec`'s disposition, one leaf over. The spawn is `exec`'s own,
+    // so this adds no site to the inventory.
+    CommandDecl {
+        path: "record validate",
+        id: "record.validate",
+        about: "Run a declared tool row's `run` argv and record its exit code under the row's key",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Unclassified,
         flags: &[FlagDecl::positional(
-            "ref",
-            "The ref or sha the verdict was taken against",
+            "id",
+            "The `[[rule.tools]]` id whose argv runs and whose verdict is recorded",
         )],
     },
     // CLOUD-472. A VERB rather than a `[[recorder]]` on the harness's own todo
@@ -5642,6 +6673,73 @@ pub const SURFACE: &[CommandDecl] = &[
         effect: Effect::Write,
         flags: &[],
     },
+    // CLOUD-843's forge-read door: `record named` with the producer moved IN.
+    // Eleven shell bodies each spelled a paginated `gh api`, a `jq` projection
+    // and a date cut-off; the row declares all three and this walks, reduces and
+    // writes the family the row names.
+    //
+    // `record query`, NOT `record forge`, and the collision is why: `record
+    // forge <ref>` already records a commit's check verdicts from stdin, and a
+    // leaf that took either a ref or a query id in one positional would decide
+    // which store it writes by guessing what the argument names.
+    //
+    // `Effect::Write`, never `Read`: it writes a record, and it reaches the
+    // network, which the derived read-only allowlist must never advertise.
+    CommandDecl {
+        path: "record query",
+        id: "record.query",
+        about: "Run a declared `[[forge.query]]` read and record its reduction as the family it names",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Write,
+        flags: &[
+            FlagDecl::positional(
+                "id",
+                "The `[[forge.query]]` id, which is also the record family written",
+            ),
+            QUERY_INPUT,
+        ],
+    },
+    // `record derive` with the producer moved IN (CLOUD-843, retiring
+    // `[tasks.evaluator-io-record]`): it runs the command after `--` and derives
+    // the family's reading from its exit status and output. `unclassified`, and
+    // stated: it runs a program the caller chose, which is `exec`'s reading.
+    CommandDecl {
+        path: "record probe",
+        id: "record.probe",
+        about: "Run a probe command and record the family's reading of its exit status and output",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Unclassified,
+        flags: &[
+            FlagDecl::positional(
+                "family",
+                "The record family, which selects the reading and is the key a module reads it under",
+            ),
+            DERIVE_INPUT,
+            PROBE_COMMAND,
+        ],
+    },
+    // Derive, write SILENTLY, then decide with the named rules (CLOUD-843,
+    // retiring `[tasks.finding-sink-check]`). Silent because its caller is a
+    // `stop` handler, whose stdout on a pass the host shows; `write` for the
+    // record, `EXITS_VERDICT` for the decision.
+    CommandDecl {
+        path: "record decide",
+        id: "record.decide",
+        about: "Derive a family's reading, record it without echoing it, and decide over it with the named rules",
+        data_channel: false,
+        exits: EXITS_VERDICT,
+        effect: Effect::Write,
+        flags: &[
+            FlagDecl::positional(
+                "family",
+                "The record family, which selects the reading and is the key a module reads it under",
+            ),
+            DERIVE_INPUT,
+            DECIDE_RULE,
+        ],
+    },
     // A NEW NOUN rather than a flag on an existing verb, and two shapes were
     // considered and died on the same rule (CLOUD-893). `generate hooks --write`
     // and `doctor hooks --repair` both hang the effect off a FLAG, where §5 hangs
@@ -5690,6 +6788,29 @@ pub const SURFACE: &[CommandDecl] = &[
         // must not learn that a destructive verb is sometimes safe.
         effect: Effect::Destructive,
         flags: &[DRY_RUN, CHECK],
+    },
+    // THE CLONE'S OWN COMMIT HOOKS (CLOUD-476), retiring the `mkdir -p` and two
+    // `ln -sfn` that were `[tasks."session:git-hooks"]` (CLOUD-1991). Under
+    // `wiring` because it is the same act one surface over — pointing a runner's
+    // hook registration at what should run — and `doctor gate` is its diagnosis,
+    // as `doctor hooks` is `reclaim`'s.
+    //
+    // `write`, not `destructive`: the subject is this clone's hooks directory,
+    // not a file shared by every checkout on the box, and what it replaces is
+    // the link it would write — a committed `[[startup]]` row names it as that
+    // directory's repair, which is the authorisation `reclaim` has to ask `-y`
+    // for. The body is an OPERAND: which file is the gate is the consumer's fact.
+    CommandDecl {
+        path: "wiring gate",
+        id: "wiring.gate",
+        about: "Link this clone's two commit hooks to a hook body the repository checks in",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Write,
+        flags: &[FlagDecl::positional(
+            "body",
+            "The hook body to link, relative to the repository root",
+        )],
     },
     // CLOUD-1274. THE LANDING LEASE, and the noun is `unclassified` for
     // `provision`'s reason rather than `policy`'s: the subtree writes — a
@@ -6041,7 +7162,450 @@ pub const SURFACE: &[CommandDecl] = &[
         exits: EXITS_VERDICT,
         flags: &[LAND_REFERENCE],
     },
+    // `write`, for `land replay`'s first half: it fetches the reference into the
+    // odb and moves its remote-tracking ref, which is the lap's own fetch reused
+    // so the trunk has one reading. The ANSWER is a verdict — `2` for a head that
+    // is not built on the current tip — and it leaves no record (CLOUD-1991).
+    CommandDecl {
+        path: "land linear",
+        id: "land.linear",
+        about: "Whether this head is built on the reference's current tip, so it can fast-forward",
+        data_channel: false,
+        effect: Effect::Write,
+        exits: EXITS_VERDICT,
+        flags: &[LAND_REFERENCE],
+    },
+    // --- CLOUD-843's foundation surface (the bash retirement) -----------------
+    //
+    // Every row below carries its FINAL arguments and its §5 effect. A row whose
+    // package has not landed answers "unimplemented" at exit 3 — could-not-look,
+    // never a pass — so a caller repointed early fails loudly rather than
+    // succeeding at nothing. None declares a data channel except `census shell`:
+    // a `-J` document must be emitted unconditionally, and a verb that cannot yet
+    // answer has none to emit. The retiring programs these replace emit KEY=VALUE
+    // lines or pointers, never JSON, so the surface loses nothing by it.
+    //
+    // The `step` noun (CLOUD-424's step cache, retiring `[tasks.step-receipt]`).
+    // Unclassified for `capture`'s reason: no arm under it is `read`.
+    CommandDecl {
+        path: "step",
+        id: "step",
+        about: "Answer a step from its receipt when its exact inputs, arguments and tools already passed",
+        data_channel: false,
+        exits: EXITS_DISPATCHES,
+        effect: Effect::Unclassified,
+        flags: &[],
+    },
+    // `Unclassified`, not `read`: the key hashes each declared tool's own
+    // `--version` answer, which means running a program the CONSUMER named, and
+    // it writes the pending key a later `record` must match. `hit`/`miss` is an
+    // answer in words at exit 0 (CLOUD-498) — a miss is not a failure.
+    // unreached: "step check" CLOUD-843 a component `step run` composes; no caller checks without running yet.
+    CommandDecl {
+        path: "step check",
+        id: "step.check",
+        about: "Say hit or miss for a step's inputs, arguments and tools, and remember the key a record must match",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Unclassified,
+        flags: &[STEP_NAME, STEP_ARG],
+    },
+    // `EXITS_VERDICT`: refusing to record because the inputs moved while the step
+    // ran is a statement about the tree — a receipt then would attest bytes the
+    // run never judged — not about the invocation.
+    // unreached: "step record" CLOUD-843 a component `step run` composes; no caller records apart from a run yet.
+    CommandDecl {
+        path: "step record",
+        id: "step.record",
+        about: "Record that a step passed, refusing when its inputs changed since the paired check",
+        data_channel: false,
+        exits: EXITS_VERDICT,
+        effect: Effect::Unclassified,
+        flags: &[STEP_NAME, STEP_ARG],
+    },
+    // The composition a caller otherwise writes in shell around the pair: check,
+    // run on a miss, record on a zero. It runs the command the caller names, so it
+    // is `exec`'s reading exactly, and the child's verdict is the verb's.
+    CommandDecl {
+        path: "step run",
+        id: "step.run",
+        about: "Run a step's command only when its receipt misses, and record the receipt when it passes",
+        data_channel: false,
+        exits: EXITS_VERDICT,
+        effect: Effect::Unclassified,
+        flags: &[STEP_NAME, STEP_ARG, STEP_COMMAND],
+    },
+    // The SPDX and CycloneDX inventories (retiring `[tasks.sbom]` and
+    // `sbom-binary-record`). `write`: it writes the documents and runs the
+    // inventory tools the consumer pins, which reach the network to fetch pinned
+    // sources — `doctor target`'s reading, not `exec`'s, because the programs are
+    // declared tools rather than arbitrary code.
+    CommandDecl {
+        path: "sbom",
+        id: "sbom",
+        about: "Derive the SPDX and CycloneDX inventories of this tree, or of a built binary, under the names its release assets carry",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Write,
+        flags: &[
+            SBOM_NAMES,
+            SBOM_BINARY,
+            SBOM_TARGET,
+            SBOM_OUT_DIR,
+            SBOM_RECORD,
+            SBOM_CONFORMANCE,
+        ],
+    },
+    // The release build and archive (retiring `mise-tasks/dist.sh`). Unclassified:
+    // a build runs every dependency's build script, and a cross build runs a
+    // container, so its reach is not this repository's to state.
+    CommandDecl {
+        path: "dist",
+        id: "dist",
+        about: "Build the release binary for a target and stage its archive, printing KEY=VALUE pointers to both",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Unclassified,
+        flags: &[DIST_TARGET, DIST_STEM, DIST_BUILD_TOOL],
+    },
+    // Whether the committed permissions grant a call the host exposed under
+    // another name (retiring `connector-allow-resolve`). `read`: it resolves names
+    // through two files and a payload and runs nothing. `EXITS_VERDICT` because
+    // `--guard` refuses a denied call.
+    CommandDecl {
+        path: "mcp grant",
+        id: "mcp.grant",
+        about: "Apply the committed MCP permissions to whichever server name the host exposed this session",
+        data_channel: false,
+        exits: EXITS_VERDICT,
+        effect: Effect::Read,
+        flags: &[MCP_TOOL, MCP_GUARD, MCP_ALIASES, MCP_CONFIG, MCP_SETTINGS],
+    },
+    // Whether this session's MCP servers are granted and actually attached
+    // (retiring `mcp-attach-check` and `mcp-allow-check --session`). `read`: it
+    // reads the settings, the injected config, the host's connection logs and the
+    // spawn ledger, and starts nothing.
+    CommandDecl {
+        path: "mcp posture",
+        id: "mcp.posture",
+        about: "Refuse an enabled MCP server this session did not attach, or a grant the connector would still prompt for",
+        data_channel: false,
+        exits: EXITS_VERDICT,
+        effect: Effect::Read,
+        flags: &[MCP_SETTINGS, MCP_CONFIG, MCP_LOGS, MCP_SPAWNS],
+    },
+    // The `board` noun. Unclassified for `claim`'s reason: its `check` arm
+    // records a receipt, and a noun that claimed `read` would hand that writer
+    // to any consumer treating an entry as a prefix.
+    CommandDecl {
+        path: "board",
+        id: "board",
+        about: "Whether the board's columns and graph tell the truth about the work",
+        data_channel: false,
+        exits: EXITS_DISPATCHES,
+        effect: Effect::Unclassified,
+        flags: &[],
+    },
+    // The board discipline and the ready frontier (retiring `graph-check`,
+    // `ready-cites-check` and `spec-ref-check`, CLOUD-1221). `write`, and the
+    // foundation's `read` was one fact short: a coherent graph MINTS one
+    // `[board] move_receipt` per judged key under `$GIT_DIR/batten-receipts/`,
+    // which is the file the move guard reads (CLOUD-512). `claim check` is
+    // `write` for the same reason. Nothing is spawned.
+    CommandDecl {
+        path: "board check",
+        id: "board.check",
+        about: "Refuse a board whose columns, graph or citations lie, and print the ready frontier",
+        data_channel: false,
+        exits: EXITS_VERDICT,
+        effect: Effect::Write,
+        flags: &[BOARD_ISSUE, BOARD_CITES, BOARD_REFS],
+    },
+    // Every board gate over ONE payload set, reported as a set (CLOUD-825),
+    // retiring `[tasks.board-sweep]` (CLOUD-843). UNCLASSIFIED, not `read`: it
+    // runs the argv the consumer's `[board] sweep` rows declare, and what those
+    // do is theirs. The spawn is `exec`'s placed adapter, so the inventory does
+    // not grow. `EXITS_VERDICT`: a refusal is `Violation`, and a gate that could
+    // not look — or abstained on this clone — is `Internal`.
+    CommandDecl {
+        path: "board sweep",
+        id: "board.sweep",
+        about: "Run every declared board gate over one payload set and report the set of refusals",
+        data_channel: false,
+        exits: EXITS_VERDICT,
+        effect: Effect::Unclassified,
+        flags: &[BOARD_ISSUE],
+    },
+    // How far the landing loop diverged from linear over a window (retiring
+    // `land-divergence-record`). `write`: it reads the forge and records a family.
+    // Could-not-look — no remote, or an unreadable CI run or landing list — is
+    // exit 3 and removes the record; a window read in PART is recorded, counted
+    // in `unreadable` for the module to decide over.
+    CommandDecl {
+        path: "record divergence",
+        id: "record.divergence",
+        about: "Record how far the landing loop diverged from linear over a window of runs",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Write,
+        flags: &[
+            DIVERGENCE_CI,
+            DIVERGENCE_LAND,
+            DIVERGENCE_SINCE,
+            DIVERGENCE_MAX_PAGES,
+        ],
+    },
+    // Which recent required-check failures never reached a verdict (retiring
+    // `nonverdict-record`). `write`, on `record divergence`'s terms: it reads the
+    // forge and records a family, and could-not-look is exit 3.
+    CommandDecl {
+        path: "record nonverdict",
+        id: "record.nonverdict",
+        about: "Record which recent required-check failures never reached a verdict",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Write,
+        flags: &[
+            NONVERDICT_WINDOW,
+            NONVERDICT_REQUIRED,
+            NONVERDICT_EXCLUDE,
+            NONVERDICT_STEP,
+        ],
+    },
+    // A release's attestation posture and each archive's verifier verdict
+    // (retiring `[tasks.attestation-record]`). `write`: it reads the forge,
+    // spawns the verifier and records a family. Could-not-look — no credential,
+    // a posture neither 200 nor 404, a failed download or unpack — is exit 3
+    // and removes any stale record.
+    CommandDecl {
+        path: "record attestation",
+        id: "record.attestation",
+        about: "Record a release's attestation posture and what the verifier says of each archive's binary",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Write,
+        flags: &[ATTESTATION_TAG, ATTESTATION_BINARY, ATTESTATION_VERIFIER],
+    },
+    // The reclaim census (retiring `[tasks.reclaim-census]`): whether active work
+    // was live when a container was replaced. A noun, because its four arms have
+    // four effects.
+    CommandDecl {
+        path: "record census",
+        id: "record.census",
+        about: "Record whether a landing was in flight when a container was replaced, and read the verdict back",
+        data_channel: false,
+        exits: EXITS_DISPATCHES,
+        effect: Effect::Unclassified,
+        flags: &[],
+    },
+    CommandDecl {
+        path: "record census note",
+        id: "record.census.note",
+        about: "Append a landing's beat or its deliberate stop under this container's boot",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Write,
+        flags: &[CENSUS_KIND, CENSUS_REASON],
+    },
+    // unreached: "record census record-boot" CLOUD-843 `record census report --once` writes the boot mark itself.
+    CommandDecl {
+        path: "record census record-boot",
+        id: "record.census.record-boot",
+        about: "Record this container's boot, once",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Write,
+        flags: &[],
+    },
+    // unreached: "record census report" CLOUD-843 the only caller is the `session-census`
+    // `[[hook.handler]]` argv in `batten.toml`, which is deliberately not a `verb reach other`
+    // line source (its prose reads as callers).
+    CommandDecl {
+        path: "record census report",
+        id: "record.census.report",
+        about: "Say whether a landing was in flight when the previous container was replaced",
+        data_channel: false,
+        exits: EXITS_VERDICT,
+        effect: Effect::Write,
+        flags: &[CENSUS_ONCE],
+    },
+    // unreached: "record census tally" CLOUD-843 a human-read report with no scripted caller.
+    CommandDecl {
+        path: "record census tally",
+        id: "record.census.tally",
+        about: "Count every recorded replacement by what it interrupted",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Read,
+        flags: &[],
+    },
+    // What a published release carries and what its manifest says about it,
+    // retiring `[tasks.release-assets-record]`'s reading half (CLOUD-843).
+    // `write`: it records a family and reaches the network. Could-not-look is
+    // exit 3 and removes any stale record.
+    CommandDecl {
+        path: "record release",
+        id: "record.release",
+        about: "Record a published release's assets, its checksum manifest's entries, and the entries whose bytes disagree",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Write,
+        flags: &[RELEASE_TAG, RELEASE_MANIFEST],
+    },
+    // The `census` noun. `read` because its whole subtree is, `commit`'s reading.
+    CommandDecl {
+        path: "census",
+        id: "census",
+        about: "Count what this repository declares it is retiring, as pointers",
+        data_channel: false,
+        exits: EXITS_DISPATCHES,
+        effect: Effect::Read,
+        flags: &[],
+    },
+    // Every home shell lives in, in code lines (CLOUD-843). `read`: it opens the
+    // declared manifests and the tracked files and starts nothing. A REPORT, not a
+    // gate — the ban is the gate — so it declares no violation code: a census that
+    // refused would be a second authority over what the ban already decides.
+    CommandDecl {
+        path: "census shell",
+        id: "census.shell",
+        about: "Count every shell line in the declared manifests, workflows and shell files, as pointers",
+        data_channel: true,
+        exits: EXITS_STANDARD,
+        effect: Effect::Read,
+        flags: &[JSON],
+    },
+    // The committed derivations' WRITER (CLOUD-1991), retiring the redirects the
+    // `completions`, `man`, `schema` and `render:cli` task bodies carried in
+    // shell. UNCLASSIFIED noun for `hk`'s reason: it dispatches, and a noun on the
+    // read-only allowlist would carry its writer with it for any consumer that
+    // reads an entry as a prefix.
+    CommandDecl {
+        path: "artifacts",
+        id: "artifacts",
+        about: "Write the committed derivations of the command surface",
+        data_channel: false,
+        exits: EXITS_DISPATCHES,
+        effect: Effect::Unclassified,
+        flags: &[],
+    },
+    // `write`, declared rather than smuggled into `generate`: `generate` stays
+    // stdout-only, and this writes the same bytes it emits into the paths the
+    // caller names. The pointer is one `<kind>=<path>` line per derivation.
+    CommandDecl {
+        path: "artifacts write",
+        id: "artifacts.write",
+        about: "Write completions, man pages, schemas or the CLI reference where the caller names",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Write,
+        flags: &[
+            ARTIFACT_COMPLETIONS,
+            ARTIFACT_MAN,
+            ARTIFACT_SCHEMA,
+            ARTIFACT_REFERENCE,
+        ],
+    },
 ];
+
+/// `--tracked <pathspec>` on `exec` (CLOUD-1991): append every TRACKED path the
+/// pathspec selects to the child's argv, and run nothing when none is selected.
+///
+/// The shell spelling it retires is `git ls-files -z <spec> | xargs -0 -r
+/// <tool>`, carried by five lint and format task bodies so a formatter never
+/// reaches a deliberately corrupt fixture a suite wrote under an ignored
+/// directory. REPEATABLE, for [`ValueDecl::StrMany`]'s reason: a second spec
+/// widens the selection rather than silently replacing the first.
+const EXEC_TRACKED: FlagDecl = FlagDecl {
+    id: "tracked",
+    long: Some("tracked"),
+    short: None,
+    help: "Append the tracked paths this pathspec selects to the command; run nothing if none",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::StrMany,
+};
+
+/// `--except <glob>` on `exec` (CLOUD-1991): drop the `--tracked` paths a glob
+/// matches — the `:!:` exclusions a magic pathspec would carry, which `--tracked`
+/// refuses rather than reading as a literal.
+const EXEC_EXCEPT: FlagDecl = FlagDecl {
+    id: "except",
+    long: Some("except"),
+    short: None,
+    help: "Drop the tracked paths this glob matches from what --tracked selected",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::StrMany,
+};
+
+/// `--completions <dir>` on `artifacts write` (CLOUD-1991).
+const ARTIFACT_COMPLETIONS: FlagDecl = FlagDecl {
+    id: "completions",
+    long: Some("completions"),
+    short: None,
+    help: "Write the bash, zsh and fish completion scripts into this directory",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
+/// `--man <dir>` on `artifacts write` (CLOUD-1991).
+const ARTIFACT_MAN: FlagDecl = FlagDecl {
+    id: "man",
+    long: Some("man"),
+    short: None,
+    help: "Write one man page per command into this directory, removing stale pages",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
+/// `--schema <dir>` on `artifacts write` (CLOUD-1991).
+const ARTIFACT_SCHEMA: FlagDecl = FlagDecl {
+    id: "schema",
+    long: Some("schema"),
+    short: None,
+    help: "Write the config and policy-input JSON Schemas into this directory",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
+/// `--reference <path>` on `artifacts write` (CLOUD-1991).
+const ARTIFACT_REFERENCE: FlagDecl = FlagDecl {
+    id: "reference",
+    long: Some("reference"),
+    short: None,
+    help: "Write the markdown CLI reference to this file",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
 
 /// The declared command path `arguments` names, and how many of them it spends.
 ///

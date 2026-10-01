@@ -26,11 +26,13 @@ Two gates, and neither alone is the transition (CLOUD-309):
 - `released <tag>` — "did this tag ship it": a ref in the tag's commit range, or a
   supplied commit the range contains (CLOUD-260).
 
-`mise run released` now composes them: pipe the In Review closure and it runs
-`graph-check` by path, reports any issue that gate names as `REFUSED (<rule>)`,
-and exits 1. **Pipe `attachments`** — the key is what decides `in-review-no-pr`,
-and a payload assembled without it cannot answer the question at all, so an In
-Review issue missing the key is exit 2 ("could not look"), not a verdict.
+`mise run released` now composes them: pipe the In Review closure and `record
+derive released` runs the board gate in process, records every rule it raises
+per shipped row, and `check` refuses such a row as `issue ship refused <id>
+<rule>` (a held one as `issue ship held <id>`) at exit 2. **Pipe
+`attachments`** — the key is what decides `in-review-no-pr`, and a payload
+assembled without it cannot answer the question at all, so an In Review issue
+missing the key is exit 1 (the engine's "could not look"), not a verdict.
 
 Why the order exists: `released` resolves refs from commit _messages_, so an issue
 a commit merely CITES reads as shipped. CLOUD-228 and CLOUD-231 were In Review
@@ -200,12 +202,13 @@ view.
 
 ## The gate (was: gate gap)
 
-The computable version of this discipline ships as `mise run graph-check`
-(CLOUD-175): pipe the active columns' `get_issue(includeRelations: true)`
+The computable version of this discipline ships as `batten board check`
+(CLOUD-175, retired off `graph-check` by CLOUD-1221; `--issue <key>` reads the
+capture store instead of stdin): pipe the active columns' `get_issue(includeRelations: true)`
 payloads and it enforces `In Progress ⇒ assignee != null`, `In Review ⇒ at
 least one linked GitHub PR attachment` (the checkable approximation of "a
 landed PR exists" — commit containment belongs to the In Review → Done release
-transition) and `Todo ⇒ ready-lint exits 0` (`todo-not-ready`, CLOUD-375 — the
+transition) and `Todo ⇒ ready lint passes` (`todo-not-ready`, CLOUD-375 — the
 ready queue is a column claim of the same kind, and an unready issue sitting in
 it was a `board coherent` verdict until that landed), plus acyclic and
 non-dangling `blockedBy`, emitting the ready

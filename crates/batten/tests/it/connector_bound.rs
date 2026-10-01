@@ -335,3 +335,86 @@ fn no_finding_carries_a_tool_name_or_a_key() {
         "the census carries counts, never a tool name or an endpoint: {rendered}"
     );
 }
+
+// --- CLOUD-765: the grants a connector would still prompt for (CLOUD-843) ----
+
+#[test]
+fn the_census_counts_an_allow_rule_on_a_tool_that_asks_and_names_its_posture() {
+    // `mcp posture`'s first production reading. A rule granting a tool the
+    // connector sets to anything but `always_allow` skips no prompt; one on an
+    // `always_allow` tool is enforceable and is not counted.
+    let dir = repo(
+        "bound-unenforceable",
+        &wiring_with(&["always_ask", "always_allow"]),
+    );
+    let file = settings(
+        &dir,
+        "settings.json",
+        &["mcp__tracker__tool_0", "mcp__tracker__tool_1"],
+    );
+    let census = mcp::bound(&config(), &dir, "tracker", &[file]).expect("the source answers");
+
+    assert_eq!(census.unenforceable, 1);
+    assert_eq!(census.postures, vec!["always_ask".to_owned()]);
+}
+
+#[test]
+fn the_census_reads_the_bare_server_rule_as_one_grant() {
+    // THE OWNER'S RECORDED ANSWER (2026-09-28): `mcp__<server>` is honoured as a
+    // grant of every tool, so it is ONE rule that cannot skip the prompt when any
+    // tool asks — and none when every tool is `always_allow`.
+    let dir = repo("bound-bare", &wiring_with(&["always_ask", "always_ask"]));
+    let file = settings(&dir, "settings.json", &["mcp__tracker"]);
+    let census = mcp::bound(&config(), &dir, "tracker", &[file]).expect("the source answers");
+    assert_eq!(census.unenforceable, 1);
+
+    let dir = repo("bound-bare-allowed", &wiring_with(&["always_allow"]));
+    let file = settings(&dir, "settings.json", &["mcp__tracker"]);
+    let census = mcp::bound(&config(), &dir, "tracker", &[file]).expect("the source answers");
+    assert_eq!(census.unenforceable, 0);
+}
+
+#[test]
+fn a_wildcard_or_unknown_tool_rule_is_not_counted_unenforceable() {
+    // The host honours no `__*` tool segment and a typo reaches nothing, so
+    // neither is a grant this could call unenforceable.
+    let dir = repo("bound-wild-count", &wiring_with(&["always_ask"]));
+    let file = settings(
+        &dir,
+        "settings.json",
+        &["mcp__tracker__*", "mcp__tracker__typo"],
+    );
+    let census = mcp::bound(&config(), &dir, "tracker", &[file]).expect("the source answers");
+    assert_eq!(census.unenforceable, 0);
+}
+
+#[test]
+fn a_selector_resolves_an_upstream_the_wrapper_carries_encoded() {
+    // CLOUD-843: the toolbox's address is a query parameter of the launcher's
+    // proxy URL, percent-encoded, so a needle naming its path only matches once
+    // the wrapper is decoded.
+    let wiring = serde_json::json!({
+        "mcpServers": {
+            "0f0f0f0f-aaaa-bbbb-cccc-dddddddddddd": {
+                "url": "https://proxy.example.test/p?mcp_url=https%3A%2F%2Fupstream.example.test%2Fv1%2Fmeta",
+                "tools": [{ "name": "t", "permission_policy": "always_ask" }]
+            }
+        }
+    })
+    .to_string();
+    let dir = repo("bound-encoded", &wiring);
+    let config: McpConfig = toml::from_str(
+        r#"
+[[source]]
+id = "project"
+path = "wiring.json"
+node = "mcpServers"
+
+[source.endpoint_contains]
+box = "upstream.example.test/v1/meta"
+"#,
+    )
+    .expect("the source table parses");
+    let census = mcp::bound(&config, &dir, "box", &[]).expect("the selector resolves");
+    assert_eq!(census.declared, 1);
+}

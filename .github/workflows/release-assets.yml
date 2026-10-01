@@ -110,12 +110,17 @@ jobs:
       # and redundant. Suppressing that needs the tag at the triggering commit,
       # which is exactly the task edit this shape exists to avoid. CLOUD-1777
       # carries the follow-up.
+      # TWO TASKS, BECAUSE THE TAG BELONGS TO THE RECORD (CLOUD-843): the reading
+      # is `batten record release` and the decision is `check`, and an argument
+      # appended to a task reaches its LAST command. `BATTEN_GITHUB_TOKEN` is the
+      # name `[forge] credential_names` reads.
       - name: Check the release carries one archive per matrix target
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BATTEN_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ inputs.tag }}
-        run: mise run release-assets-check "$TAG"
+        run: mise run release-assets-audit
       # The provenance half of the same question (CLOUD-583), on this clock for
       # the same reason the step above is: whether a published release is attested
       # changes with no diff, so it is a property of the WORLD and belongs nowhere
@@ -135,11 +140,19 @@ jobs:
       # step above went on calling the deleted task for as long as nothing asked
       # whether a workflow's callers still resolve — `workflow run unknown` is
       # that clause, and it reported this line.
-      # One step, so the step count stays flat; `&&` stops at the producer's
+      # One step, so the step count stays flat; the task stops at the producer's
       # own failure, so the check never judges a record that was not written.
+      #
+      # THE PRODUCER IS THE ENGINE'S since CLOUD-843 (`batten record
+      # attestation`): it probes over the REST tier, which reads the credential
+      # under a name `[forge] credential_names` declares — hence the second
+      # variable — and `gh` still downloads and verifies under `GH_TOKEN`. The
+      # judge is `commit grade unsafe`, the row that enables the `supply-chain`
+      # preset the attestation module now lives in.
       - name: Record each archive's attestation verdict, then check the release carries build provenance
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BATTEN_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ inputs.tag }}
-        run: mise run attestation-record -- "$TAG" && mise run batten -- check --rule 'release grade unsafe'
+        run: mise run release-attestation-audit

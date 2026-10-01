@@ -254,6 +254,31 @@ fn the_declaration_that_would_not_parse_is_named_without_quoting_it() {
 }
 
 #[test]
+fn the_refusal_over_an_unloadable_config_names_only_a_route_it_admits() {
+    // A REFUSAL WHOSE REMEDY THE SAME STATE REFUSES IS A BROKEN GATE. This one
+    // rendered the crate's general recourse, "or restore it with git", while the
+    // floor refuses every shell command — measured 2026-09-29, a merge left
+    // conflict markers in the authority and the session could run no command at
+    // all, including the one the refusal named. The remedy must be the write the
+    // floor admits, which `the_repair_write_reaches_the_config_that_will_not_load`
+    // proves reaches the file.
+    let dir = fixture("adjudicate-remedy", WILL_NOT_PARSE);
+    let output = run_with_stdin(
+        dir.as_path(),
+        &["adjudicate", "--harness", "claude-code"],
+        &payload(),
+    );
+    let rendered = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        rendered.contains("repair the file with those"),
+        "the remedy must name the route the floor admits: {rendered}"
+    );
+    assert!(
+        !rendered.contains("with git"),
+        "the remedy must not name a command this state refuses: {rendered}"
+    );
+}
+#[test]
 fn the_refusal_names_the_repair_floor_it_admits() {
     // THE REFUSAL IS THE ONLY MAP OUT, so it must point at a route this arm opens.
     // It used to render `Fix::None` — "restore it with git" — and `git` runs

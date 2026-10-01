@@ -6,26 +6,24 @@ runner measured it; the suite runs `--no-parallelize-within-files`, so a
 file's number is its own serial cost and is what an author adding a case
 to it pays.
 
-- suites: 18
-- serial total: 245.1s
+- suites: 16
+- serial total: 241.4s
 
-| seconds | share | suite |
-| ---: | ---: | --- |
-| 101.7 | 41.5% | `tests/commit-convention.bats` |
-| 57.9 | 23.6% | `tests/graph-check.bats` |
-| 23.1 | 9.4% | `tests/ready-lint.bats` |
-| 15.3 | 6.3% | `tests/lint-rego.bats` |
-| 9.1 | 3.7% | `tests/ready-cites-check.bats` |
-| 8.6 | 3.5% | `tests/spawn-census.bats` |
-| 7.1 | 2.9% | `tests/install.bats` |
-| 6.0 | 2.5% | `tests/hk-selection.bats` |
-| 4.0 | 1.6% | `tests/ready-lint-deferral.bats` |
-| 3.3 | 1.3% | `tests/verify.bats` |
-| 3.0 | 1.2% | `tests/spec-ref-check.bats` |
-| 2.5 | 1.0% | `tests/commit-attribution.bats` |
-| 1.1 | 0.5% | `tests/git-hook.bats` |
-| 1.0 | 0.4% | `tests/serena-mcp.bats` |
-| 0.7 | 0.3% | `tests/dist.bats` |
-| 0.4 | 0.2% | `tests/task-fail-closed.bats` |
-| 0.1 | 0.1% | `tests/cross-check.bats` |
-| 0.1 | 0.0% | `tests/zizmor-split.bats` |
+| seconds | share | suite                            |
+| ------: | ----: | -------------------------------- |
+|   101.7 | 42.1% | `tests/commit-convention.bats`   |
+|    57.9 | 24.0% | `tests/graph-check.bats`         |
+|    23.1 |  9.6% | `tests/ready-lint.bats`          |
+|    15.3 |  6.3% | `tests/lint-rego.bats`           |
+|     9.1 |  3.8% | `tests/ready-cites-check.bats`   |
+|     8.6 |  3.6% | `tests/spawn-census.bats`        |
+|     7.1 |  2.9% | `tests/install.bats`             |
+|     6.0 |  2.5% | `tests/hk-selection.bats`        |
+|     4.0 |  1.7% | `tests/ready-lint-deferral.bats` |
+|     3.0 |  1.2% | `tests/spec-ref-check.bats`      |
+|     2.5 |  1.0% | `tests/commit-attribution.bats`  |
+|     1.1 |  0.5% | `tests/git-hook.bats`            |
+|     1.0 |  0.4% | `tests/serena-mcp.bats`          |
+|     0.7 |  0.3% | `tests/dist.bats`                |
+|     0.1 |  0.0% | `tests/cross-check.bats`         |
+|     0.1 |  0.0% | `tests/zizmor-split.bats`        |

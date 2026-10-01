@@ -168,7 +168,7 @@ fn collect_seeded(name: &str, others: &str, seeds: &[&str]) -> (Vec<bool>, Strin
     }
     let published = root.join("nextest-env");
     let path = std::env::join_paths(
-        std::iter::once(bin).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+        std::iter::once(bin).chain(std::env::split_paths(&crate::common::ambient_path())),
     )
     .unwrap();
     let status = std::process::Command::new("sh")

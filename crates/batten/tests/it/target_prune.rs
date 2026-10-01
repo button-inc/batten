@@ -2555,187 +2555,108 @@ fn a_floor_carrying_no_measurement_date_is_refused_at_load() {
 }
 
 // ---------------------------------------------------------------------------
-// CLOUD-1838: the task body's absent-engine arm, run as it ships.
+// CLOUD-843: the task is one argv, and the fallback cascade its shell body ran
+// is the engine's where it had a home and provisioning's where it did not.
+//
+// FIVE CASES RETIRED WITH THE BODY THEY RAN, each named with where its property
+// went, because a case that ran a POSIX `sh` program has nothing left to run:
+//
+// * `an_absent_engine_on_a_short_disk_is_refused_without_a_build`,
+//   `an_absent_engine_on_an_ample_disk_builds_as_before` and
+//   `an_absent_engine_with_no_readable_floor_falls_through_to_the_build` —
+//   CLOUD-1838's arm for a machine with no `batten` at all. That machine now
+//   fails at once with the runner's own "not found", before a byte is built:
+//   STRICTER than the arm, which built whenever free space cleared the cold
+//   floor. A session always has one — `session:batten` installs the release
+//   through `install.sh`, the one program that stays shell because nothing else
+//   runs before `batten` exists.
+// * `a_present_engine_that_answers_needs_no_build` — unchanged by construction:
+//   the task IS the engine answering, and `the_task_is_the_verb_and_builds_nothing`
+//   pins it.
+// * `a_present_engine_that_refuses_still_falls_through_to_the_build` — the arm
+//   CLOUD-1146 argued for, a binary older than the config refusing the whole
+//   file. The engine answers it now without a build: `prune::declared_alone`
+//   reads the committed `[prune]` table ALONE, strictly, and
+//   `a_build_the_config_outran_reclaims_by_the_prune_table_alone` pins it over the
+//   binary. What the arm ALSO did — build on a genuine floor refusal — is gone on
+//   purpose: a refusal about the disk is the answer, and building on it spent the
+//   disk the refusal was about.
 // ---------------------------------------------------------------------------
 
-/// The `run` body of `[tasks."target-prune"]`, exactly as the manifest carries it.
+/// `[tasks."target-prune"]`'s run, and its lap-boundary twin's, as the manifest
+/// carries them.
 ///
-/// **THE SHIPPED BODY, NOT A TRANSCRIPTION OF IT.** The defect lives in the task,
-/// not in the engine, so a case that ran `batten target prune` would pass over it
-/// forever — that arm always worked, and is why the gap stayed latent. Read
-/// through `common::task_block`, so under `mutate sweep` this is the STAGED
-/// manifest and the declared mutation is what runs.
-fn shipped_body() -> String {
-    let block = common::task_block("target-prune").expect("target-prune is a declared task");
-    let body = common::task_value(&block, "run");
-    assert!(
-        body.contains("cargo run"),
-        "the extraction found the body and not an empty value: {body}"
-    );
-    body
+/// Through `common::task_block`, so under `mutate sweep` this is the STAGED
+/// manifest.
+fn run_of(task: &str) -> String {
+    let block = common::task_block(task).unwrap_or_else(|| panic!("{task} is a declared task"));
+    common::task_value(&block, "run")
 }
 
-/// A stub program on the constructed `PATH`.
-fn stub(dir: &Path, name: &str, body: &str) {
-    std::fs::create_dir_all(dir).unwrap();
-    let path = dir.join(name);
-    std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
-}
-
-/// The `PATH` every case runs under: the stubs, then the base system and nothing
-/// else — which is what makes "no `batten`" a state this case can construct
-/// rather than one it has to hope for.
-fn stub_path(repo: &Path) -> String {
-    format!("{}:/usr/bin:/bin", repo.join("stub-bin").display())
-}
-
-/// Run the shipped body the way mise runs it — `sh` under `errexit`, since the
-/// task declares no `shell` — in `repo`, with free space declared through
-/// CLOUD-778's seam and `batten` either absent or a stub exiting as given.
-///
-/// `cargo` is always a stub that leaves a marker and exits 0: whether the build
-/// RAN is the observable, and a real one would build this workspace per case.
-#[expect(
-    clippy::disallowed_types,
-    reason = "stays, and test-only: the subject is the shipped task body, a POSIX `sh` program, so running it under `sh` exactly as mise does is the test; there is no in-process equivalent"
-)]
-fn run_shipped(repo: &Path, free: &str, batten: Option<&str>) -> std::process::Output {
-    let bin = repo.join("stub-bin");
-    stub(&bin, "cargo", ": > \"$PWD/cargo-ran\"");
-    if let Some(behaviour) = batten {
-        stub(&bin, "batten", behaviour);
-    }
-    std::process::Command::new("/bin/sh")
-        .args(["-o", "errexit", "-c", &shipped_body()])
-        .current_dir(repo)
-        .env_clear()
-        .env("PATH", stub_path(repo))
-        .env("TARGET_PRUNE_FREE_MB", free)
-        .output()
-        .expect("run the shipped body")
-}
-
-/// The premise the absent-engine cases stand on, asserted rather than assumed: on
-/// the constructed `PATH`, no `batten` resolves. Without it a case could pass on
-/// a binary that leaked in from the runner's own environment.
-#[expect(
-    clippy::disallowed_types,
-    reason = "stays, and test-only: `command -v` is the shell's own resolution, the same one the shipped body's guard performs, so asking `sh` is what makes the premise the body's premise"
-)]
-fn assert_no_engine_resolves(repo: &Path) {
-    let found = std::process::Command::new("/bin/sh")
-        .args(["-c", "command -v batten"])
-        .env_clear()
-        .env("PATH", stub_path(repo))
-        .output()
-        .expect("probe for batten");
-    assert!(
-        !found.status.success(),
-        "the premise is an ABSENT engine, and one resolved: {}",
-        String::from_utf8_lossy(&found.stdout)
-    );
-}
-
-/// **CLOUD-1838's discriminating case: no engine and a short disk is refused, and
-/// nothing is built to say so.**
-///
-/// 1000MB free under the fixture's 14000MB cold floor. Before the fix the body's
-/// only reachable arm was `cargo run`, so this case saw the build run and exit 0 —
-/// which in production is the build writing to a full disk and dying on cargo's
-/// `ENOSPC` with the reclaim never having spoken.
+/// The task is the verb, and nothing in it builds: the point of this task is to
+/// reclaim WITHOUT a build, which `cargo run` cannot do.
 #[test]
-fn an_absent_engine_on_a_short_disk_is_refused_without_a_build() {
-    // The subject is a POSIX `sh` body and Windows has no `/bin/sh`, so there
-    // the contract is that nothing runs; every item still compiles on it.
-    if !cfg!(unix) {
-        return;
+fn the_task_is_the_verb_and_builds_nothing() {
+    for task in ["target-prune", "target-prune:lap"] {
+        let run = run_of(task);
+        assert_eq!(run, "batten target prune -y", "[tasks.{task}]");
     }
-    let repo = repo("target-prune-absent-short");
-    assert_no_engine_resolves(&repo);
+}
 
-    let output = run_shipped(&repo, "1000", None);
+/// A config carrying a key no build knows — the shape a release meets on every
+/// branch that adds one — with a floor the tree clears.
+fn outran(name: &str, prune_key: Option<&str>) -> PathBuf {
+    let extra = prune_key
+        .map(|key| format!("{key} = 1\n"))
+        .unwrap_or_default();
+    let config = config()
+        .replacen(
+            "version = 1\n",
+            "version = 1\nkey_this_build_predates = true\n",
+            1,
+        )
+        .replacen("keep = 2\n", &format!("keep = 2\n{extra}"), 1);
+    Fixture::new(name)
+        .config(&config)
+        .file("Cargo.toml", "[workspace]\n")
+        .build()
+}
+
+/// **A BUILD THE CONFIG HAS OUTRUN STILL RECLAIMS** (CLOUD-843, CLOUD-1146).
+///
+/// `Config` is `deny_unknown_fields`, so a binary older than the tree's config
+/// refuses the whole file; the retired body answered that by building the engine.
+/// The verb reads the one table it needs instead, and says that it did.
+#[test]
+fn a_build_the_config_outran_reclaims_by_the_prune_table_alone() {
+    let repo = outran("target-prune-outran", None);
+    built(&repo);
+    let output = prune(&repo, "99999", &["-y"]);
     let said = said(&output);
-    assert_eq!(output.status.code(), Some(2), "{said}");
-    assert!(said.contains("1000MB"), "names the free space: {said}");
-    assert!(said.contains("14000MB"), "names the floor: {said}");
+    assert!(output.status.success(), "{said}");
     assert!(
-        !repo.join("cargo-ran").exists(),
-        "no build ran to reach the verdict"
-    );
-    assert!(
-        !repo.join("target").exists(),
-        "and nothing wrote to target/"
+        said.contains("committed [prune] table alone"),
+        "the reader is told the whole config was not loaded: {said}"
     );
 }
 
-/// **MIRROR: the same absent engine with room to build builds, exactly as before.**
-/// Without it the fix is indistinguishable from an arm that refuses every
-/// unprovisioned clone.
+/// **AND THE TABLE STAYS STRICT**: a `[prune]` key this build predates is still a
+/// refusal — never a table read with the key silently dropped.
 #[test]
-fn an_absent_engine_on_an_ample_disk_builds_as_before() {
-    // The subject is a POSIX `sh` body and Windows has no `/bin/sh`, so there
-    // the contract is that nothing runs; every item still compiles on it.
-    if !cfg!(unix) {
-        return;
-    }
-    let repo = repo("target-prune-absent-ample");
-    assert_no_engine_resolves(&repo);
-
-    let output = run_shipped(&repo, "20000", None);
-    assert!(output.status.success(), "{}", said(&output));
-    assert!(repo.join("cargo-ran").exists(), "the build ran");
+fn a_prune_key_this_build_predates_is_still_refused() {
+    let repo = outran("target-prune-outran-prune-key", Some("future_key"));
+    built(&repo);
+    let output = prune(&repo, "99999", &["-y"]);
+    assert!(!output.status.success(), "{}", said(&output));
 }
 
-/// **MIRROR: an absent engine whose floor cannot be read falls through rather than
-/// inventing a verdict.** The arm refuses only on evidence; a manifest with no
-/// `[prune.cold]` has none, so the behaviour is today's.
+/// **AND THE FLOOR STILL DECIDES**: read alone, the table's floor refuses a short
+/// disk exactly as it does read whole — the fallback admits nothing the floor
+/// would not.
 #[test]
-fn an_absent_engine_with_no_readable_floor_falls_through_to_the_build() {
-    // The subject is a POSIX `sh` body and Windows has no `/bin/sh`, so there
-    // the contract is that nothing runs; every item still compiles on it.
-    if !cfg!(unix) {
-        return;
-    }
-    let repo = repo("target-prune-absent-no-floor");
-    std::fs::write(repo.join("batten.toml"), "version = 1\n").unwrap();
-
-    let output = run_shipped(&repo, "1000", None);
-    assert!(output.status.success(), "{}", said(&output));
-    assert!(repo.join("cargo-ran").exists(), "no floor, no refusal");
-}
-
-/// **MIRROR: a present engine that answers needs no build** — the arm that carries
-/// the fleet, unchanged.
-#[test]
-fn a_present_engine_that_answers_needs_no_build() {
-    // The subject is a POSIX `sh` body and Windows has no `/bin/sh`, so there
-    // the contract is that nothing runs; every item still compiles on it.
-    if !cfg!(unix) {
-        return;
-    }
-    let repo = repo("target-prune-present-answers");
-    let output = run_shipped(&repo, "1000", Some("exit 0"));
-    assert!(output.status.success(), "{}", said(&output));
-    assert!(!repo.join("cargo-ran").exists(), "the engine answered");
-}
-
-/// **MIRROR: a present engine that refuses still falls through to the build** —
-/// the arm `mise.toml` argues for (a released binary that cannot parse a key this
-/// branch added), which CLOUD-1838 puts out of scope and must not have disturbed.
-#[test]
-fn a_present_engine_that_refuses_still_falls_through_to_the_build() {
-    // The subject is a POSIX `sh` body and Windows has no `/bin/sh`, so there
-    // the contract is that nothing runs; every item still compiles on it.
-    if !cfg!(unix) {
-        return;
-    }
-    let repo = repo("target-prune-present-refuses");
-    let output = run_shipped(&repo, "1000", Some("exit 2"));
-    assert!(output.status.success(), "{}", said(&output));
-    assert!(repo.join("cargo-ran").exists(), "a refusing engine builds");
+fn a_table_read_alone_still_refuses_below_its_floor() {
+    let repo = outran("target-prune-outran-short", None);
+    built(&repo);
+    let output = prune(&repo, "1000", &["-y"]);
+    assert_eq!(output.status.code(), Some(2), "{}", said(&output));
 }

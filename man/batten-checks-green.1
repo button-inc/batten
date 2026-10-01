@@ -4,7 +4,7 @@
 .SH NAME
 batten\-checks\-green \- Refuse a head whose required checks are red, still running, or not yet registered
 .SH SYNOPSIS
-\fBbatten checks green\fR [\fB\-\-absent\-ok\fR] [\fB\-\-fanin\fR] [\fB\-J\fR|\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-required\fR> <\fB\-\-answered\fR> 
+\fBbatten checks green\fR [\fB\-\-absent\-ok\fR] [\fB\-\-fanin\fR] [\fB\-\-sha\fR] [\fB\-\-repo\fR] [\fB\-J\fR|\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-required\fR> <\fB\-\-answered\fR> 
 .SH DESCRIPTION
 Refuse a head whose required checks are red, still running, or not yet registered
 .SH OPTIONS
@@ -20,6 +20,12 @@ Comma\-separated conclusions that constitute an answer; anything else is not yet
 .TP
 \fB\-\-fanin\fR \fI<fanin>\fR
 The fan\-in check whose failure a cancelled sibling can manufacture
+.TP
+\fB\-\-sha\fR \fI<sha>\fR
+Read this commit\*(Aqs check runs from the forge instead of a reading on stdin
+.TP
+\fB\-\-repo\fR \fI<repo>\fR
+The repository to read, in the forge client\*(Aqs own spelling
 .TP
 \fB\-J\fR, \fB\-\-json\fR
 Emit byte\-stable JSON instead of pointer lines

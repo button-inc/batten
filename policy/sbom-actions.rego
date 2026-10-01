@@ -1,7 +1,7 @@
 # Is every row of the pinned-actions licence table whole and pinned? (CLOUD-667,
 # ported off `mise-tasks/sbom.sh`'s table reader under CLOUD-1717.)
 #
-# `[tasks.sbom]` writes each SHA-pinned GitHub Action's license and copyright
+# `batten sbom` writes each SHA-pinned GitHub Action's license and copyright
 # from `mise-tasks/sbom-actions.tsv`. The program refused the table outright on
 # two shapes, and those refusals are this module's now; the producer reads only
 # rows of the right shape.

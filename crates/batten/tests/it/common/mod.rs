@@ -195,6 +195,77 @@ pub(crate) fn task_value(block: &str, key: &str) -> String {
     }
 }
 
+/// `[tasks.<name>]`'s COMMANDS from the committed `mise.toml`, whichever way the
+/// task spells its `run`.
+///
+/// A task body is a shell string or a `run = [...]` argv list, and the campaign
+/// that retires the shell (CLOUD-843) moves tasks from the first to the second
+/// one at a time — so a tier that pins a property of a task's invocation reads
+/// what the task RUNS, never how it happened to be quoted. A string yields its
+/// non-blank, non-comment lines; a list yields each entry, with a
+/// `{ task = "x" }` entry read as the `mise run x` it means. Comments are
+/// dropped because these bodies discuss the flags they carry at length, and a
+/// pin that passes on its own documentation is not a pin.
+///
+/// An absent task or an absent `run` is the empty list, which every caller
+/// asserts against rather than reading as a pass.
+#[must_use]
+pub(crate) fn task_commands(name: &str) -> Vec<String> {
+    let manifest = fs::read_to_string(at_root("mise.toml")).expect("the manifest");
+    let parsed: toml::Value = toml::from_str(&manifest).expect("mise.toml parses as TOML");
+    let Some(run) = parsed
+        .get("tasks")
+        .and_then(|tasks| tasks.get(name))
+        .and_then(|task| task.get("run"))
+    else {
+        return Vec::new();
+    };
+    match run {
+        toml::Value::String(body) => body
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty() && !line.starts_with('#'))
+            .filter(|line| !line.contains("{% raw %}") && !line.contains("{% endraw %}"))
+            .map(str::to_owned)
+            .collect(),
+        toml::Value::Array(entries) => entries
+            .iter()
+            .filter_map(|entry| match entry {
+                toml::Value::String(command) => Some(command.clone()),
+                toml::Value::Table(table) => table
+                    .get("task")
+                    .and_then(toml::Value::as_str)
+                    .map(|task| format!("mise run {task}")),
+                _ => None,
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// `[tasks.<name>].depends` from the committed `mise.toml`, as task names.
+///
+/// A single string and a list are both spellings mise accepts, so both read the
+/// same here; an absent key is the empty list.
+#[must_use]
+pub(crate) fn task_depends(name: &str) -> Vec<String> {
+    let manifest = fs::read_to_string(at_root("mise.toml")).expect("the manifest");
+    let parsed: toml::Value = toml::from_str(&manifest).expect("mise.toml parses as TOML");
+    match parsed
+        .get("tasks")
+        .and_then(|tasks| tasks.get(name))
+        .and_then(|task| task.get("depends"))
+    {
+        Some(toml::Value::String(one)) => vec![one.clone()],
+        Some(toml::Value::Array(many)) => many
+            .iter()
+            .filter_map(toml::Value::as_str)
+            .map(str::to_owned)
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
 /// Every `BATTEN_` variable the command surface declares, derived from the
 /// surface itself so the set cannot drift behind a new flag.
 fn declared_env_vars() -> Vec<&'static str> {
@@ -312,8 +383,107 @@ pub(crate) fn batten() -> Command {
         command.env_remove(name);
     }
     command.env("BATTEN_BIN", env!("CARGO_BIN_EXE_batten"));
+    // NO `batten` RESOLVABLE BY NAME from anything the binary under test starts
+    // (CLOUD-1951) — see [`ambient_path`].
+    command.env("PATH", ambient_path());
     pin_mise(&mut command);
     command
+}
+
+/// This process's `PATH` with no `batten` resolvable by name — every directory
+/// holding one swapped for a shadow of its other entries (CLOUD-1951).
+///
+/// # Why the suite needs it, and why it lives HERE now
+///
+/// CI's test job has neither this checkout's `target/release` (mise's `_.path`)
+/// nor an installed release in `~/.local/bin`; a developer's box has both. So a
+/// case — or a hook the binary under test dispatches — that spawns a bare
+/// `batten` passed here and failed there; the retired `doctor` handler on #928
+/// cost a matrix that way. `test:cargo`'s shell body used to mask the whole
+/// suite's `PATH` before `cargo nextest` ran. That body retired to one argv
+/// (CLOUD-843), and the mask moved to the doors that hand a child its `PATH`:
+/// [`batten`], [`task_bash`] and [`git_command`] set this, and a tier that builds
+/// its own `PATH` starts from this rather than from the ambient one.
+///
+/// NARROWER THAN THE SHELL MASK, and said so rather than implied: that covered
+/// the whole nextest process tree. A lib unit test, or a case spawning some
+/// other program without one of these doors, inherits the ambient `PATH`.
+///
+/// A SHADOW, NOT A DROP: `mise` shares `~/.local/bin` with the installed
+/// release, so removing the directory would hide the tool runner a case may
+/// need along with the binary it must not find. The shadow links every other
+/// entry, and is built idempotently because nextest runs each case in a process
+/// of its own: a link another process made first is an answer, not a failure.
+#[must_use]
+pub(crate) fn ambient_path() -> std::ffi::OsString {
+    static MASKED: std::sync::LazyLock<std::ffi::OsString> = std::sync::LazyLock::new(|| {
+        mask_batten(
+            &std::env::var_os("PATH").unwrap_or_default(),
+            &target_tmp().join("no-batten-path"),
+        )
+    });
+    MASKED.clone()
+}
+
+/// `path` with every directory holding a `batten` replaced by a shadow of its
+/// other entries under `shadows`, one shadow per directory.
+#[must_use]
+pub(crate) fn mask_batten(path: &std::ffi::OsStr, shadows: &Path) -> std::ffi::OsString {
+    let entries: Vec<PathBuf> = std::env::split_paths(path)
+        .map(|dir| {
+            if dir.as_os_str().is_empty() || !holds_batten(&dir) {
+                return dir;
+            }
+            // Named after the directory it shadows, never after its position: a
+            // PATH that reorders between runs must not reuse another
+            // directory's links.
+            let name: String = dir
+                .to_string_lossy()
+                .chars()
+                .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+                .collect();
+            let shadow = shadows.join(name);
+            shadow_of(&dir, &shadow);
+            shadow
+        })
+        .collect();
+    std::env::join_paths(entries).unwrap_or_else(|_| path.to_os_string())
+}
+
+/// Whether `dir` holds a `batten` a name lookup would find.
+fn holds_batten(dir: &Path) -> bool {
+    dir.join("batten").exists() || dir.join("batten.exe").exists()
+}
+
+/// Link every entry of `dir` but `batten` into `shadow`.
+///
+/// Its mutation is declared in `test_cargo_path.rs`, the file whose cases
+/// observe it (see the block there).
+#[cfg(unix)]
+fn shadow_of(dir: &Path, shadow: &Path) {
+    let _ = fs::create_dir_all(shadow);
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        if name == "batten" {
+            continue;
+        }
+        let link = shadow.join(&name);
+        if link.symlink_metadata().is_ok() {
+            continue;
+        }
+        let _ = std::os::unix::fs::symlink(entry.path(), &link);
+    }
+}
+
+/// Where no symlink can be made cheaply, the directory is dropped outright: its
+/// other programs are hidden too, which is the cost the shadow exists to avoid,
+/// paid only where it cannot be built.
+#[cfg(not(unix))]
+fn shadow_of(_dir: &Path, shadow: &Path) {
+    let _ = fs::create_dir_all(shadow);
 }
 
 /// Where mise keeps its installs, cache and state, resolved from THIS process's
@@ -421,10 +591,22 @@ pub(crate) fn pinned_mise_data_dir() -> Option<&'static Path> {
 pub(crate) fn task_body(name: &str) -> String {
     let manifest = fs::read_to_string(at_root("mise.toml")).expect("the manifest");
     let parsed: toml::Value = toml::from_str(&manifest).expect("mise.toml parses as TOML");
-    parsed["tasks"][name]["run"]
-        .as_str()
-        .unwrap_or_else(|| panic!("[tasks.{name}] declares a run body"))
-        .lines()
+    // A `run` ARRAY is a body too (CLOUD-843): mise runs its entries in order, so
+    // the text a tier reads is those entries, one per line — the shape the
+    // retired shell bodies took when they became argv.
+    let run = &parsed["tasks"][name]["run"];
+    let body = match run.as_array() {
+        Some(steps) => steps
+            .iter()
+            .filter_map(toml::Value::as_str)
+            .collect::<Vec<_>>()
+            .join("\n"),
+        None => run
+            .as_str()
+            .unwrap_or_else(|| panic!("[tasks.{name}] declares a run body"))
+            .to_owned(),
+    };
+    body.lines()
         .filter(|line| !line.contains("{% raw %}") && !line.contains("{% endraw %}"))
         .collect::<Vec<_>>()
         .join("\n")
@@ -449,7 +631,7 @@ pub(crate) fn task_env(name: &str) -> String {
 )]
 #[must_use]
 pub(crate) fn task_bash(dir: &Path, body: &str) -> std::process::Command {
-    let inherited = std::env::var_os("PATH").unwrap_or_default();
+    let inherited = ambient_path();
     let path = std::env::join_paths(
         std::iter::once(dir.join("bin")).chain(std::env::split_paths(&inherited)),
     )
@@ -470,6 +652,49 @@ pub(crate) fn task_bash(dir: &Path, body: &str) -> std::process::Command {
 )]
 pub(crate) fn task_command(dir: &Path, task: &str) -> std::process::Command {
     let mut command = task_bash(dir, &task_body(task));
+    scrub(&mut command, dir);
+    command
+}
+
+/// `mise run -q <task>` in `dir` against THIS repository's manifest, with
+/// `input` on stdin, under [`task_command`]'s environment — for a task whose
+/// `run` is an argv array, which has no single body for [`task_body`] to read.
+///
+/// `MISE_CONFIG_FILE` names the committed manifest so the task resolved is the
+/// one under test, and a task declaring `dir = "{{cwd}}"` then runs in `dir`,
+/// the fixture — the same seam `board-sweep` composes its gates through. The
+/// manifest's `vars.batten` reads `BATTEN_BIN`, which [`batten`] sets to the
+/// binary under test, so the task never builds whatever workspace cargo finds.
+/// `env` is set last, for the variables a task's own vars read.
+///
+/// # `MISE_CEILING_PATHS` is what makes `MISE_CONFIG_FILE` the ONLY manifest
+///
+/// mise still walks up from the working directory and a manifest it finds there
+/// OUTRANKS the named one for a task of the same name. A fixture lives under
+/// `CARGO_TARGET_TMPDIR`, and with a shared `CARGO_TARGET_DIR` that is inside
+/// ANOTHER checkout, whose tasks then answer. Measured 2026-09-29: from
+/// `<checkout>/target/tmp/<x>`, `mise run -n done-check` with
+/// `MISE_CONFIG_FILE` naming a worktree's manifest printed the parent checkout's
+/// `done-check`; with the ceiling at the fixture it printed the worktree's.
+#[must_use]
+pub(crate) fn mise_task(dir: &Path, task: &str, env: &[(&str, &str)], input: &str) -> Output {
+    let mut command = task_bash(dir, &format!("mise run -q {task}"));
+    scrub(&mut command, dir);
+    command.env("MISE_CONFIG_FILE", at_root("mise.toml"));
+    command.env("MISE_CEILING_PATHS", dir);
+    command.envs(env.iter().copied());
+    stdin_run(command, dir, &[], input)
+}
+
+/// Put [`batten`]'s scrubbed environment on a [`task_bash`] command, with the
+/// stubs in `dir/bin` and then the engine under test first on `PATH`. It
+/// configures the caller's command rather than returning one, so the spawn stays
+/// with [`task_bash`], the factory that names it (`policy/spawn-factory.rego`).
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays: configures and never spawns; the command is task_bash's, whose own expect names the program"
+)]
+fn scrub(command: &mut std::process::Command, dir: &Path) {
     let template = batten();
     for (name, value) in template.get_envs() {
         match value {
@@ -502,7 +727,6 @@ pub(crate) fn task_command(dir: &Path, task: &str) -> std::process::Command {
     // environment setting outranks the file, and the report is the human's, never
     // part of the task's output contract.
     command.env("MISE_TASK_TIMINGS", "0");
-    command
 }
 
 /// Run `[tasks.<task>]` in `dir` the way `mise run <task>` would, with the
@@ -526,12 +750,18 @@ pub(crate) fn produce(dir: &Path, task: &str, stdin: &str) -> Output {
     child.wait_with_output().expect("run the producer")
 }
 
-/// Whether the committed authority declares its protected-path set.
+/// Whether the committed authority declares the OWNER'S protected-path set.
 ///
 /// The owner switched that gate off until admission statements are adjudicated.
 /// Cases asserting the COMMITTED gate refuses hold only while it is declared, and
 /// return to force the moment it is; an undeclared set must carry the owner's
 /// marker, so a set that silently vanished still reds.
+///
+/// "Declared" means the owner's classes are in it, not merely that a
+/// `protected` line exists: since CLOUD-1078 a narrower set guarding only the
+/// asked ledger is live, and reading that line as the owner's gate being on sent
+/// four cases to assert `rm .serena/memories/core.md` refuses against a set that
+/// does not name it.
 #[must_use]
 pub(crate) fn committed_protected_declared() -> bool {
     let authority = std::fs::read_to_string(
@@ -540,7 +770,7 @@ pub(crate) fn committed_protected_declared() -> bool {
     .expect("read the committed config");
     let declared = authority
         .lines()
-        .any(|line| line.starts_with("protected = ["));
+        .any(|line| line.starts_with("protected = [") && line.contains("\"batten.toml\""));
     assert!(
         declared || authority.contains("# DISABLED by the owner."),
         "the committed protected set vanished without the owner's marker"
@@ -557,8 +787,36 @@ pub(crate) fn committed_fixture_with_protected(name: &str) -> PathBuf {
     let committed = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let authority =
         std::fs::read_to_string(committed.join("batten.toml")).expect("read the committed config");
-    let config = if committed_protected_declared() {
-        authority
+    // The owner's three classes, UNIONED into whatever set is declared rather
+    // than injected only when none is. Since CLOUD-1078 a narrower set is live —
+    // just the asked ledger — and reading "a set is declared" as "the owner's
+    // set is on" left this fixture guarding the ledger alone, so every
+    // `.serena/memories` case here turned green-for-the-wrong-reason red.
+    let owners = [".serena/memories/**", "batten.toml", ".github/workflows/**"];
+    let config = if authority
+        .lines()
+        .any(|line| line.starts_with("protected = ["))
+    {
+        let line = authority
+            .lines()
+            .find(|line| line.starts_with("protected = ["))
+            .expect("the declared set's line")
+            .to_owned();
+        let declared: toml::Value =
+            toml::from_str(&line).expect("the declared set is one TOML key");
+        let mut entries: Vec<String> = declared["protected"]
+            .as_array()
+            .expect("an array")
+            .iter()
+            .filter_map(|entry| entry.as_str().map(str::to_owned))
+            .collect();
+        for owner in owners {
+            if !entries.iter().any(|entry| entry == owner) {
+                entries.push(owner.to_owned());
+            }
+        }
+        let quoted: Vec<String> = entries.iter().map(|entry| format!("\"{entry}\"")).collect();
+        authority.replacen(&line, &format!("protected = [{}]", quoted.join(", ")), 1)
     } else {
         authority.replacen(
             "must_land_on = \"origin/main\"\n",
@@ -1082,7 +1340,10 @@ pub(crate) fn git_command(dir: &Path, args: &[&str]) -> Command {
         .args(args)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_SYSTEM", "/dev/null")
-        .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"));
+        .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
+        // A hook a fixture installs runs under git's PATH, so git gets the
+        // CLOUD-1951 mask too: no installed `batten` answers a hook by name.
+        .env("PATH", ambient_path());
     for var in [
         "GIT_DIR",
         "GIT_COMMON_DIR",

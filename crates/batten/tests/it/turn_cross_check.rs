@@ -1,5 +1,6 @@
-//! The per-turn cross-triple check keeps the four properties that make it an
-//! alarm rather than a log (CLOUD-1731).
+//! The per-turn cross-triple check keeps the properties that make it an alarm
+//! rather than a log (CLOUD-1731), over `batten singleton detach` since
+//! CLOUD-1991.
 //!
 //! **Why a test and not a careful author.** Every property below was got wrong
 //! once while the row was being written, and each wrong version still *worked*:
@@ -9,95 +10,40 @@
 //! first anyone learns of a broken triple is CI, which is the exact failure the
 //! row exists to move earlier.
 //!
-//! **The executable surface, never the block.** These read `run` and discard the
-//! commentary around it, for `session_provisioning`'s recorded reason: the
-//! comment above this task NAMES the stderr mistake while explaining why it is
-//! wrong, so a prose scan would find `>&2` in a manifest that is correct.
+//! **Behaviour now, where it was text.** `[tasks."cross-turn"]` was a shell
+//! one-liner, so these cases read its `run` string and asserted it carried
+//! `cat $f`, `rm -f $f`, `head -3`, `) &` and the lock call. The body is one argv
+//! into the engine now, so the same properties are driven over the compiled
+//! binary in a scratch repository: the announcing invocation, and the attached
+//! copy it starts, run synchronously here so no case waits on a background
+//! process.
+//!
+//! # RETIREMENT LEDGER — the text cases, per property
+//!
+//! Each case below names the property it carries; the ledger rows are the
+//! `changed:` arms because the SUBJECT moved from a string to a verb.
+// changed: "the failure is announced on stdout and not into a log" crates/batten/src/lib.rs kind:verb `the_failure_is_announced_on_stdout_and_then_cleared` asserts the announcement IS the invocation's stdout
+// changed: "the marker is cleared once it has been announced" crates/batten/src/lib.rs kind:verb the same case asserts the marker is gone after the announcement
+// changed: "the pointers are capped so a build log cannot reach the window" crates/batten/src/lib.rs kind:verb `the_pointers_are_capped_and_name_the_full_log` feeds five pointer lines and asserts three, plus the log's path
+// changed: "the pointer pattern survives a coloured log" batten.toml the pattern is the `compiler-error-pointer` `[[pattern]]` row; the capped-pointers case feeds lines carrying colour escapes between `: ` and `error`
+// changed: "the check is detached so the handler cannot tax the turn" crates/batten/src/lib.rs kind:verb the announcing invocation hands the command to the placed `exec::detached` adapter, which keeps no handle to wait on, and returns; a case timing the return would be a clock standing in for an exit condition (CLOUD-1177), so the cases here run the attached copy synchronously instead
+// changed: "the second copy is refused by the lock rather than a process probe" crates/batten/src/lib.rs kind:verb `a_copy_already_holding_the_lock_leaves_the_run_to_it` holds the lock and asserts the copy runs nothing
+// carried: "the cross-check asks the compiler for one line per diagnostic" mise.toml kind:mechanism
 
+#![cfg(unix)]
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use crate::common::at_root;
+use std::path::{Path, PathBuf};
+use std::process::Output;
 
-/// The `run =` line of one task, without its surrounding comments.
+use crate::common;
+
+/// One task's `run` value from the committed manifest, whatever its quoting —
+/// an array arrives in its TOML spelling.
 fn run_body(name: &str) -> String {
-    let manifest =
-        std::fs::read_to_string(at_root("mise.toml")).expect("the task manifest is readable");
-    let headers = [
-        format!("\n[tasks.\"{name}\"]\n"),
-        format!("\n[tasks.{name}]\n"),
-    ];
-    let block = headers
-        .iter()
-        .find_map(|header| manifest.split(header.as_str()).nth(1))
-        .unwrap_or_else(|| panic!("`{name}` is declared in mise.toml"));
-    let block = block.split("\n[").next().unwrap_or(block);
-    let rest = block
-        .split("\nrun = ")
-        .nth(1)
-        .unwrap_or_else(|| panic!("`{name}` declares a run body"));
-    rest.strip_prefix("'''").map_or_else(
-        || rest.lines().next().unwrap_or_default().to_owned(),
-        |triple| triple.split("'''").next().unwrap_or(triple).to_owned(),
-    )
-}
-
-/// The failure reaches the AGENT, which means stdout.
-///
-/// `handler.rs` states the contract a handler is read under: "Exit `0` with
-/// stdout: advisory text, to be merged into Batten's own". stderr goes to a log
-/// nobody opens. The first draft `cat`-ed the marker to stderr, which printed the
-/// failure, cleared it, and showed it to no one.
-///
-/// Fails by: redirecting the marker read to `>&2`.
-#[test]
-fn the_failure_is_announced_on_stdout_and_not_into_a_log() {
-    let body = run_body("cross-turn");
-    let marker_read = body
-        .split("cat $f")
-        .nth(1)
-        .expect("the body reads the marker back");
-    let statement = marker_read.split(';').next().unwrap_or(marker_read);
-    assert!(
-        !statement.contains(">&2"),
-        "the marker is announced on stderr, which no agent reads: {statement}"
-    );
-}
-
-/// One failure is announced once, not on every turn until it is fixed.
-///
-/// This is what keeps the row under `[hook_output] max_repeats = 1`, and it is
-/// also what stops the line becoming furniture the reader learns to skip.
-///
-/// Fails by: dropping the `rm -f`, which leaves the marker to be re-announced.
-#[test]
-fn the_marker_is_cleared_once_it_has_been_announced() {
-    let body = run_body("cross-turn");
-    assert!(
-        body.contains("rm -f $f"),
-        "a marker that is never cleared re-announces one failure every turn: {body}"
-    );
-}
-
-/// The window cost of a failing turn is bounded.
-///
-/// Pointer-only is non-negotiable rule 4, and here the payload is a compiler's
-/// whole output: without the cap a single broken triple could put a build log
-/// into the agent's context. `hookcost::judge` REPORTS an over-budget hook rather
-/// than truncating it, so nothing downstream would save this.
-///
-/// Fails by: removing the `head`, or raising it to an unbounded count.
-#[test]
-fn the_pointers_are_capped_so_a_build_log_cannot_reach_the_window() {
-    let body = run_body("cross-turn");
-    assert!(
-        body.contains("head -3"),
-        "the pointer list is uncapped, so a compiler's full output can reach the window: {body}"
-    );
-    assert!(
-        body.contains("target/cross-turn.log"),
-        "the capped list names no path to the rest, so the cap costs the reader the detail"
-    );
+    let block = common::task_block(name).unwrap_or_else(|| panic!("`{name}` is declared"));
+    common::task_value(&block, "run")
 }
 
 /// The compiler does the reduction, rather than a grep guessing at it.
@@ -116,60 +62,202 @@ fn the_cross_check_asks_the_compiler_for_one_line_per_diagnostic() {
     );
 }
 
-/// Colour cannot defeat the extractor.
-///
-/// `[env]` sets `CARGO_TERM_COLOR = "always"` repo-wide, so a machine-read log
-/// carries escapes between `: ` and `error`. Three drafts died on this, each
-/// announcing a break with NO pointer and a clean exit code: `-->` scraping,
-/// then `: error`, then `CARGO_TERM_COLOR=never` on the invocation — which a
-/// task's own environment overrides. The pattern must therefore tolerate the
-/// decoration rather than assume it away.
-///
-/// Fails by: anchoring on a literal `: error`, which the escapes split.
+/// The handler is the verb, named with the committed pattern row it reads.
 #[test]
-fn the_pointer_pattern_survives_a_coloured_log() {
+fn the_turn_handler_detaches_the_cross_check_under_its_lock() {
     let body = run_body("cross-turn");
     assert!(
-        body.contains(":[0-9]+:[0-9]+: .*error"),
-        "the pattern does not span the colour escapes, so a break announces no pointer: {body}"
+        body.starts_with("batten singleton detach cross-turn ")
+            && body.contains("--pattern compiler-error-pointer")
+            && body.ends_with("-- mise run cross-check"),
+        "the per-turn check is the detach verb over cross-check: {body}"
+    );
+    for probe in ["pgrep", "pkill", "ps -", "jobs", "&"] {
+        assert!(
+            !body.contains(probe),
+            "`{probe}` is shell the verb replaced: {body}"
+        );
+    }
+}
+
+// --- the verb, over a scratch repository -------------------------------------
+
+const TASK: &str = "turn-check";
+
+/// A repository declaring the pointer pattern the committed row declares.
+fn repo(name: &str) -> PathBuf {
+    let dir = common::scratch(&format!("turn-cross-check-{name}"));
+    common::write(
+        &dir,
+        "batten.toml",
+        "version = 1\n\n[[pattern]]\nid = \"compiler-error-pointer\"\nregex = '^[^ :]+:[0-9]+:[0-9]+: .*error'\n",
+    );
+    common::init_repo(&dir);
+    dir
+}
+
+/// An executable at `dir/name` running `body`.
+fn script(dir: &Path, name: &str, body: &str) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt as _;
+    common::write(dir, name, body);
+    let path = dir.join(name);
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    path
+}
+
+/// Five pointer lines, two carrying colour escapes, among noise, then a failure.
+fn failing(dir: &Path) -> PathBuf {
+    script(
+        dir,
+        "failing.sh",
+        "#!/bin/sh\n\
+         echo 'Checking batten'\n\
+         printf 'src/a.rs:1:1: \\033[31merror\\033[0m: one\\n'\n\
+         printf 'src/b.rs:2:1: \\033[31merror\\033[0m: two\\n' >&2\n\
+         echo 'src/c.rs:3:1: error: three' >&2\n\
+         echo 'src/d.rs:4:1: error: four' >&2\n\
+         echo 'src/e.rs:5:1: error: five' >&2\n\
+         echo 'note: noise'\n\
+         exit 1\n",
+    )
+}
+
+/// `singleton detach` over `command`, with `extra` flags before the `--`.
+fn detach(dir: &Path, extra: &[&str], command: &[&str]) -> Output {
+    let mut args = vec![
+        "singleton",
+        "detach",
+        TASK,
+        "--marker",
+        "marker.txt",
+        "--log",
+        "run.log",
+        "--pattern",
+        "compiler-error-pointer",
+    ];
+    args.extend_from_slice(extra);
+    args.push("--");
+    args.extend_from_slice(command);
+    common::batten()
+        .args(&args)
+        .current_dir(dir)
+        .output()
+        .expect("run batten singleton detach")
+}
+
+/// One failure is announced once, on STDOUT, then cleared.
+///
+/// `handler.rs` states the contract a handler is read under: "Exit `0` with
+/// stdout: advisory text". stderr goes to a log nobody opens — the first draft
+/// `cat`-ed the marker to stderr, which printed the failure, cleared it, and
+/// showed it to no one. And a marker never cleared re-announces one failure every
+/// turn, which is what keeps the row under `[hook_output] max_repeats = 1`.
+#[test]
+fn the_failure_is_announced_on_stdout_and_then_cleared() {
+    let dir = repo("announce");
+    common::write(&dir, "marker.txt", "::error:: turn-check: it broke\n");
+    let out = detach(&dir, &[], &["true"]);
+    assert_eq!(out.status.code(), Some(0), "{}", common::stderr(&out));
+    assert_eq!(common::stdout(&out), "::error:: turn-check: it broke\n");
+    assert!(
+        !dir.join("marker.txt").exists(),
+        "an announced failure is cleared, or it is re-announced every turn"
     );
 }
 
-/// The turn is never blocked on a type-check.
+/// The window cost of a failing run is bounded, and the rest is findable.
 ///
-/// The verdict is not needed before the turn proceeds; it is needed before the
-/// author stops thinking about the change. A handler that waited would tax every
-/// turn by the cost of the check, which is the thing measurement showed is 54s
-/// when it must re-derive.
-///
-/// Fails by: dropping the `&`, which makes the handler wait for cargo.
+/// Pointer-only is non-negotiable rule 4, and here the payload is a compiler's
+/// whole output. The pattern must span colour escapes: three drafts died
+/// anchoring on a literal `: error`, which the escapes split.
 #[test]
-fn the_check_is_detached_so_the_handler_cannot_tax_the_turn() {
-    let body = run_body("cross-turn");
+fn the_pointers_are_capped_and_name_the_full_log() {
+    let dir = repo("capped");
+    let command = failing(&dir);
+    let out = detach(&dir, &["--attached"], &[command.to_str().unwrap()]);
+    assert_eq!(out.status.code(), Some(0), "{}", common::stderr(&out));
+    let marker = std::fs::read_to_string(dir.join("marker.txt")).expect("a failure is recorded");
+    let pointers: Vec<&str> = marker
+        .lines()
+        .filter(|line| line.starts_with("  src/"))
+        .collect();
+    assert_eq!(pointers.len(), 3, "at most three pointers:\n{marker}");
     assert!(
-        body.contains(") &"),
-        "the type-check is not detached, so every turn pays for it: {body}"
+        pointers.iter().any(|line| line.contains("src/a.rs:1:1")),
+        "a coloured pointer is still a pointer:\n{marker}"
     );
+    assert!(
+        marker.contains("(full output: run.log)"),
+        "the cap costs the reader nothing, because the log is named:\n{marker}"
+    );
+    let log = std::fs::read_to_string(dir.join("run.log")).expect("the whole output is kept");
+    assert!(log.contains("src/e.rs:5:1") && log.contains("note: noise"));
+}
+
+/// A passing run says nothing and gives the lock back.
+#[test]
+fn a_passing_run_leaves_no_marker_and_releases_the_lock() {
+    let dir = repo("passing");
+    let out = detach(&dir, &["--attached"], &["true"]);
+    assert_eq!(out.status.code(), Some(0), "{}", common::stderr(&out));
+    assert!(!dir.join("marker.txt").exists(), "success is silence");
+    let pid = std::process::id().to_string();
+    let taken = common::run(&dir, &["singleton", "acquire", TASK, &pid]);
+    assert_eq!(
+        taken.status.code(),
+        Some(0),
+        "the copy released its lock: {}",
+        common::stderr(&taken)
+    );
+    drop(common::run(&dir, &["singleton", "release", TASK]));
 }
 
 /// A second copy is refused by the declared lock, never by a process probe.
 ///
 /// `polls-a-local-process` refuses reading the process table to answer "is one
-/// already running", and `batten singleton` is the mechanism that answers it.
-/// Both spellings of the probe self-match, which this session measured twice.
-///
-/// Fails by: swapping the lock for a `pgrep`/`pkill` guard.
+/// already running", and the singleton lock is the mechanism that answers it.
 #[test]
-fn the_second_copy_is_refused_by_the_lock_rather_than_a_process_probe() {
-    let body = run_body("cross-turn");
+fn a_copy_already_holding_the_lock_leaves_the_run_to_it() {
+    let dir = repo("held");
+    let pid = std::process::id().to_string();
+    let held = common::run(&dir, &["singleton", "acquire", TASK, &pid]);
+    assert_eq!(held.status.code(), Some(0), "{}", common::stderr(&held));
+    let command = failing(&dir);
+    let out = detach(&dir, &["--attached"], &[command.to_str().unwrap()]);
+    assert_eq!(out.status.code(), Some(0), "{}", common::stderr(&out));
     assert!(
-        body.contains("batten singleton acquire cross-turn"),
-        "the declared lock is gone: {body}"
+        !dir.join("run.log").exists() && !dir.join("marker.txt").exists(),
+        "a copy that could not take the lock ran nothing"
     );
-    for probe in ["pgrep", "pkill", "ps -", "jobs"] {
-        assert!(
-            !body.contains(probe),
-            "`{probe}` answers 'is one running' by a process probe, which self-matches: {body}"
-        );
-    }
+    drop(common::run(&dir, &["singleton", "release", TASK]));
+}
+
+/// A pattern no row declares is this invocation's usage error, reported before
+/// anything starts — never a background copy failing where no one reads it.
+#[test]
+fn a_pattern_no_row_declares_is_refused_before_anything_starts() {
+    let dir = repo("undeclared");
+    common::write(&dir, "marker.txt", "::error:: turn-check: kept\n");
+    let out = common::batten()
+        .args([
+            "singleton",
+            "detach",
+            TASK,
+            "--marker",
+            "marker.txt",
+            "--log",
+            "run.log",
+            "--pattern",
+            "no-such-row",
+            "--",
+            "true",
+        ])
+        .current_dir(&dir)
+        .output()
+        .expect("run batten singleton detach");
+    assert_eq!(out.status.code(), Some(1), "{}", common::stderr(&out));
+    assert!(
+        dir.join("marker.txt").exists(),
+        "a refused invocation announces and clears nothing"
+    );
 }

@@ -454,6 +454,30 @@ pub fn append_line(store_dir: &Path, shard: &str, line: &str) -> Result<()> {
         .with_context(|| format!("append to the shard {}", path.display()))
 }
 
+/// [`append_line`] for a shard with ONE SEQUENTIAL writer, dropping a torn tail
+/// first (CLOUD-843, round-2 review).
+///
+/// [`fold_lines`] drops a torn final fragment, but only until the next append:
+/// `O_APPEND` writes the new record straight after the fragment and the two fold
+/// back as one whole line. [`crate::durable::append_whole_lines`] truncates to the
+/// last newline before writing, so what the fold discards is gone from disk too.
+/// NOT [`append_line`] itself, whose shards take concurrent hook processes: the
+/// truncate and the write are two operations, and a writer landing between them
+/// would lose its record.
+///
+/// # Errors
+///
+/// Returns an error when the shard cannot be created, read, truncated, written,
+/// or synced.
+pub fn append_line_healing(store_dir: &Path, shard: &str, line: &str) -> Result<()> {
+    let dir = shards_dir(store_dir);
+    std::fs::create_dir_all(&dir)
+        .with_context(|| format!("create the shard directory {}", dir.display()))?;
+    let path = dir.join(format!("{shard}.jsonl"));
+    crate::durable::append_whole_lines(&path, line)
+        .with_context(|| format!("append to the shard {}", path.display()))
+}
+
 /// What folding every shard of a generic journal found.
 ///
 /// **`task::Reading`'s three answers, and that type is the stated precedent

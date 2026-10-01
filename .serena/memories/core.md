@@ -102,8 +102,9 @@ proof was missing.
 `crates/batten/tests/primitives.rs` — the CLOUD-9 core primitives over the
 _library_ surface, since they mint no subcommand and the fixture suite is their
 gate (Option A). Carries the hermetic git fixture builder and the keystone: a
-rebased-and-landed branch is merged though `--is-ancestor` says otherwise. Non-Rust tests (`mise-tasks/*` scripts,
-gates) live under `tests/**/*.bats`, run via `mise run test:bats`.
+rebased-and-landed branch is merged though `--is-ancestor` says otherwise. The
+former bats suites moved onto compiled tiers under `crates/batten/tests/it` as
+the shell retired (CLOUD-843); `test:bats` and the vendored runner are gone.
 
 ## Self-consumption
 

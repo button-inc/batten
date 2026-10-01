@@ -46,6 +46,13 @@
 // carried: "one unadmitted smell keeps the whole run a verdict" crates/batten/src/lint.rs
 // carried: "the admission reports a pointer, never the clause's prose" crates/batten/tests/it/config_lint.rs
 //!
+//! **SUPERSEDED BY CLOUD-1078.** The admission these arms carried — a groomed
+//! clause and a commit trailer — no longer admits anything: both were written by
+//! the author of the weakening, and in CI the trailer was the whole admission.
+//! A weakening is admitted only by a human's answer recorded in
+//! [`batten::asked::LEDGER`], and the cases below assert that route. The arms
+//! above stay as the record of where the shell suite's cases went.
+//!
 //! ## CHANGED — one case asserted the defect, so it could not be carried
 //!
 //! CLOUD-841: a receipt that EXISTS and names no weakening read as no receipt at
@@ -166,8 +173,8 @@ fn lint(dir: &Path, extra: &[&str]) -> Output {
 /// A pull request that WEAKENS policy, whose work commit carries `trailer` as a
 /// `Weakens:` line when one is given.
 ///
-/// The trailer goes on through git's own commit path rather than being written
-/// into a message file by hand, so what the verb parses is what git produced.
+/// The trailer is kept as an input on purpose: it no longer admits anything, and
+/// the #962 shape is only statable as a branch that carries one and asked nothing.
 fn weakening_pr(name: &str, trailer: Option<&str>) -> PathBuf {
     // `must_land_on` because a fixture has no remote, so no recorded default
     // branch: without a declared target a CLAIMED run could not find its fork
@@ -190,149 +197,199 @@ fn weakening_pr(name: &str, trailer: Option<&str>) -> PathBuf {
     dir
 }
 
-/// Mint a claim receipt for the fixture's current branch, admitting `pairs`.
+/// Mint a claim receipt for the fixture's current branch.
 ///
+/// A claim no longer admits anything (CLOUD-1078). It is still what ARMS a run
+/// with no base ref at the branch's fork point, which the cases below need.
 /// Written through `claim::receipt_name` rather than a literal, because the
-/// filename is the contract between the minter and this reader and two spellings
-/// of it mean the gate reports a missing receipt for one that exists.
-fn groom(dir: &Path, pairs: &[&str]) {
+/// filename is the contract between the minter and this reader.
+fn claim(dir: &Path) {
     let branch = common::git_in(dir, &["rev-parse", "--abbrev-ref", "HEAD"]);
     let branch = branch.trim();
     let store = dir.join(".git").join("batten-receipts");
     fs::create_dir_all(&store).unwrap();
-    let mut body = String::from("CLOUD-1\nready-lint pass\n");
-    for pair in pairs {
-        use std::fmt::Write as _;
-        writeln!(body, "weakens CLOUD-1 {pair}").unwrap();
-    }
-    fs::write(store.join(batten::claim::receipt_name(branch)), body).unwrap();
+    fs::write(
+        store.join(batten::claim::receipt_name(branch)),
+        "CLOUD-1\nready-lint pass\n",
+    )
+    .unwrap();
 }
 
-/// THE PAIR THE WHOLE ADMISSION TURNS ON, over the compiled binary rather than
-/// over `lint::admissions` directly (CLOUD-841, CLOUD-418).
+/// The pair every case below weakens.
+const PAIR: &str = "severity-lowered rule[no-todo].severity";
+
+/// A host result for one question naming [`PAIR`], answered with `answer`.
 ///
-/// The unit tier pins the decision; this one pins that the ENGINE can build the
-/// two inputs it decides over — a receipt read off disk under the branch's own
-/// name, and a trailer read out of a real commit. A `with input as` equivalent
-/// would pass over a reader that finds neither, which is the class this whole
-/// campaign keeps meeting.
-#[test]
-fn a_silent_groom_refuses_where_an_absent_one_admits() {
-    // ABSENT: no receipt at all — CI's shape, and the trailer alone admits.
-    let absent = weakening_pr(
-        "lint-admit-absent",
-        Some("severity-lowered rule[no-todo].severity"),
-    );
-    let out = lint(&absent, &["--config-from", "origin/main"]);
-    assert_eq!(out.status.code(), Some(0), "{}", stdout(&out));
-    assert!(
-        stdout(&out).contains("trailer-alone"),
-        "an absent receipt admits on the trailer and says so: {}",
-        stdout(&out)
-    );
-
-    // SILENT: a receipt that EXISTS and admits nothing. Byte-identical trailer,
-    // byte-identical config, opposite verdict — which is the whole of CLOUD-841
-    // and the case the shell got backwards.
-    let silent = weakening_pr(
-        "lint-admit-silent",
-        Some("severity-lowered rule[no-todo].severity"),
-    );
-    groom(&silent, &[]);
-    let out = lint(&silent, &["--config-from", "origin/main"]);
-    assert_eq!(
-        out.status.code(),
-        Some(2),
-        "a groom that looked and named nothing must refuse: {}",
-        stdout(&out)
-    );
-
-    // NAMING IT: the same receipt, now admitting the pair. The third state, and
-    // without it the two above are satisfied by a gate that never admits.
-    let named = weakening_pr(
-        "lint-admit-named",
-        Some("severity-lowered rule[no-todo].severity"),
-    );
-    groom(&named, &["severity-lowered rule[no-todo].severity"]);
-    let out = lint(&named, &["--config-from", "origin/main"]);
-    assert_eq!(out.status.code(), Some(0), "{}", stdout(&out));
-    assert!(stdout(&out).contains("groomed"), "{}", stdout(&out));
+/// Shaped as the host's own `PostToolUse` result — `questions[]` with their
+/// options, and `answers` keyed by question text — measured from a live session.
+fn question(answer: &str) -> serde_json::Value {
+    let asked = format!("This branch lowers a rule's severity: `{PAIR}`. Admit the weakening?");
+    serde_json::json!({
+        "questions": [{
+            "question": asked,
+            "header": "Weakening",
+            "multiSelect": false,
+            "options": [
+                {"label": "Admit it", "description": "the rule stays at warn"},
+                {"label": "Refuse", "description": "restore deny"}
+            ]
+        }],
+        "answers": {asked: answer}
+    })
 }
 
+/// Put the question to the "human" through the real hook recorder, so the
+/// ledger this tier reads is one the engine wrote (CLOUD-1078, CLOUD-845).
+fn ask(dir: &Path, answer: &str) -> usize {
+    batten::record_asked_for_test(
+        batten::hook::Harness::ClaudeCode,
+        "AskUserQuestion",
+        &question(answer),
+        dir,
+    )
+}
+
+/// THE #962 SHAPE, over the compiled binary: a trailer naming the weakening and
+/// no question asked. The trailer admitted this in CI until CLOUD-1078.
 #[test]
-fn a_weakening_no_trailer_names_is_refused_whatever_the_groom_said() {
-    // The other direction of "they AGREE", end to end: a groomed clause that no
-    // commit names is a plan rather than a declaration.
-    let dir = weakening_pr("lint-admit-no-trailer", None);
-    groom(&dir, &["severity-lowered rule[no-todo].severity"]);
+fn a_commit_trailer_alone_admits_nothing() {
+    let dir = weakening_pr("lint-admit-trailer-only", Some(PAIR));
     let out = lint(&dir, &["--config-from", "origin/main"]);
     assert_eq!(out.status.code(), Some(2), "{}", stdout(&out));
     assert!(!stdout(&out).contains("admitted"), "{}", stdout(&out));
 }
 
+/// The route that remains, end to end: the hook records the answer, the lint
+/// reads the line this branch added, and the weakening is admitted and says how.
 #[test]
-fn an_admission_carries_a_pointer_and_never_the_clause_prose() {
-    // Non-negotiable rule 4 at the one place this family is most likely to breach
-    // it: the groomed body is a consumer's prose, and the receipt is the only
-    // thing that has ever seen it. Neither the reason nor the issue key reaches
-    // the report — the key is provenance for a human reading the RECEIPT, not a
-    // field of the pair being matched.
-    let dir = weakening_pr(
-        "lint-admit-pointer",
-        Some("severity-lowered rule[no-todo].severity"),
+fn an_answered_question_admits_the_weakening_it_names() {
+    let dir = weakening_pr("lint-admit-asked", None);
+    assert_eq!(ask(&dir, "Admit it"), 1, "the hook recorded the answer");
+    let out = lint(&dir, &["--config-from", "origin/main"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stdout(&out));
+    assert!(
+        stdout(&out).contains(&format!("admitted {PAIR} (asked)")),
+        "{}",
+        stdout(&out)
     );
-    groom(&dir, &["severity-lowered rule[no-todo].severity"]);
+}
+
+/// The mirror, without which the case above is satisfied by a lint that admits
+/// on any recorded question at all.
+#[test]
+fn a_question_answered_the_other_way_admits_nothing() {
+    let dir = weakening_pr("lint-admit-declined", None);
+    assert_eq!(ask(&dir, "Refuse"), 1);
+    let out = lint(&dir, &["--config-from", "origin/main"]);
+    assert_eq!(out.status.code(), Some(2), "{}", stdout(&out));
+}
+
+/// A hand-composed envelope is not a host asking anyone. The neutral contract
+/// has no question tool, so the recorder writes nothing and nothing is admitted.
+#[test]
+fn a_hand_composed_answer_is_never_recorded() {
+    let dir = weakening_pr("lint-admit-hand", None);
+    let written = batten::record_asked_for_test(
+        batten::hook::Harness::ExitCode,
+        "AskUserQuestion",
+        &question("Admit it"),
+        &dir,
+    );
+    assert_eq!(written, 0);
+    assert!(!dir.join(batten::asked::LEDGER).exists());
+    let out = lint(&dir, &["--config-from", "origin/main"]);
+    assert_eq!(out.status.code(), Some(2), "{}", stdout(&out));
+}
+
+/// An answer given for an earlier change is not an answer about this one: a
+/// ledger line already on the base admits nothing here.
+#[test]
+fn an_answer_inherited_from_the_base_admits_nothing() {
+    let base = "version = 1\nmust_land_on = \"origin/main\"\n\n[[rule]]\nid = \"no-todo\"\nkind = \"forbid\"\nglob = \"**/*.rs\"\npattern = \"x\"\nseverity = \"deny\"\n";
+    let dir = Fixture::new("lint-admit-inherited")
+        .config(base)
+        .git()
+        .build();
+    // The answer lands on the base commit, then the branch weakens.
+    assert_eq!(ask(&dir, "Admit it"), 1);
+    common::git_in(&dir, &["add", "-A"]);
+    common::git_in(&dir, &["commit", "-q", "-m", "base with an answer"]);
+    common::git_in(&dir, &["update-ref", "refs/remotes/origin/main", "HEAD"]);
+    common::write(&dir, "batten.toml", &base.replace("\"deny\"", "\"warn\""));
+    common::git_in(&dir, &["commit", "-q", "-am", "the pull request"]);
+    let out = lint(&dir, &["--config-from", "origin/main"]);
+    assert_eq!(out.status.code(), Some(2), "{}", stdout(&out));
+}
+
+/// A ledger whose recorded lines were edited records nothing, so it admits
+/// nothing — even when the edited line now reads as an admission.
+#[test]
+fn a_rewritten_ledger_admits_nothing() {
+    let base = "version = 1\nmust_land_on = \"origin/main\"\n\n[[rule]]\nid = \"no-todo\"\nkind = \"forbid\"\nglob = \"**/*.rs\"\npattern = \"x\"\nseverity = \"deny\"\n";
+    let dir = Fixture::new("lint-admit-rewritten")
+        .config(base)
+        .git()
+        .build();
+    assert_eq!(ask(&dir, "Refuse"), 1);
+    common::git_in(&dir, &["add", "-A"]);
+    common::git_in(&dir, &["commit", "-q", "-m", "base with a refusal"]);
+    common::git_in(&dir, &["update-ref", "refs/remotes/origin/main", "HEAD"]);
+    let ledger = dir.join(batten::asked::LEDGER);
+    let refused = fs::read_to_string(&ledger).unwrap();
+    fs::write(
+        &ledger,
+        refused.replace("\"answer\":\"Refuse\"", "\"answer\":\"Admit it\""),
+    )
+    .unwrap();
+    common::write(&dir, "batten.toml", &base.replace("\"deny\"", "\"warn\""));
+    common::git_in(&dir, &["commit", "-q", "-am", "the pull request"]);
+    let out = lint(&dir, &["--config-from", "origin/main"]);
+    assert_eq!(out.status.code(), Some(2), "{}", stdout(&out));
+}
+
+#[test]
+fn an_admission_carries_a_pointer_and_never_the_question_prose() {
+    // Non-negotiable rule 4: the question is prose, and it lives in the ledger
+    // where a reviewer reads it in the diff. The report carries the pair and the
+    // verdict token only.
+    let dir = weakening_pr("lint-admit-pointer", None);
+    ask(&dir, "Admit it");
     let out = lint(&dir, &["--config-from", "origin/main"]);
     let text = format!("{}{}", stdout(&out), stderr(&out));
     assert!(text.contains("severity-lowered"), "{text}");
     assert!(
-        !text.contains("CLOUD-1"),
-        "the issue key is not part of the report: {text}"
+        !text.contains("lowers a rule's severity"),
+        "no question text is echoed: {text}"
     );
     assert!(
-        !text.contains("ready-lint"),
-        "no receipt line is echoed: {text}"
+        !text.contains("restore deny"),
+        "no option text is echoed: {text}"
     );
 }
 
 #[test]
 fn an_unclaimed_run_decides_no_admission_at_all() {
-    // With no claim and no base ref there is no groom to read and nothing to
-    // compare against, so the run is byte-identical to what it was before the
-    // admission half existed. This is the consumer that never adopted the
-    // mechanism, and CLOUD-1896 must not reach it.
-    let dir = weakening_pr(
-        "lint-admit-unclaimed",
-        Some("severity-lowered rule[no-todo].severity"),
-    );
+    // With no claim and no base ref there is nothing to compare against, so the
+    // run is byte-identical to what it was before the admission half existed.
+    // This is the consumer that never adopted the mechanism.
+    let dir = weakening_pr("lint-admit-unclaimed", Some(PAIR));
     let out = lint(&dir, &[]);
     assert_eq!(out.status.code(), Some(0), "{}", stdout(&out));
     assert!(!stdout(&out).contains("admitted"), "{}", stdout(&out));
 }
 
-/// THE ACCEPTANCE CASE FOR CLOUD-1896, and the one this file used to assert the
-/// opposite of.
-///
-/// Its predecessor groomed a receipt — so the branch WAS claimed — lowered a
-/// severity, ran with no base ref and required exit `0`, under a comment
-/// warning that reading an unarmed `0 smell(s)` as a pass was the error that let
-/// two smells reach `verify` on this campaign's own branch. The comment was
-/// right and the assertion pinned the defect: the pre-commit step runs exactly
-/// this invocation, so a weakening the board never saw committed clean and was
-/// adjudicated eleven days later. A claimed branch is now armed at its fork
-/// point, and the same edit refuses where it is made.
+/// THE ACCEPTANCE CASE FOR CLOUD-1896: a claimed branch is armed at its fork
+/// point with no base ref, so the pre-commit step refuses a weakening where it
+/// is made rather than eleven days later.
 #[test]
 fn a_claimed_branch_is_armed_at_its_fork_point_without_a_base_ref() {
-    let dir = weakening_pr(
-        "lint-admit-claimed",
-        Some("severity-lowered rule[no-todo].severity"),
-    );
-    groom(&dir, &[]);
+    let dir = weakening_pr("lint-admit-claimed", Some(PAIR));
+    claim(&dir);
     let out = lint(&dir, &[]);
     assert_eq!(
         out.status.code(),
         Some(2),
-        "a weakening the groom never named must refuse with no --config-from: {}",
+        "a weakening nobody answered must refuse with no --config-from: {}",
         stdout(&out)
     );
     assert!(
@@ -342,13 +399,11 @@ fn a_claimed_branch_is_armed_at_its_fork_point_without_a_base_ref() {
     );
 }
 
-/// The pre-commit shape: the weakening is in the WORK TREE and no commit — so no
-/// trailer — exists yet. The board's admission is the whole question here, and
-/// a groom that named the pair admits it. Demanding the trailer at this surface
-/// would refuse a correctly declared weakening, because the message that will
-/// carry it has not been written.
+/// The pre-commit shape: the weakening and the answer are both in the WORK TREE
+/// and no commit exists yet. The ledger is read from the tree, so the answer
+/// admits before the change is committed — and without it the same edit refuses.
 #[test]
-fn the_claim_armed_run_admits_what_the_board_groomed_before_any_trailer_exists() {
+fn the_claim_armed_run_admits_what_was_answered_before_any_commit_exists() {
     let base = "version = 1\nmust_land_on = \"origin/main\"\n\n[[rule]]\nid = \"no-todo\"\nkind = \"forbid\"\nglob = \"**/*.rs\"\npattern = \"x\"\nseverity = \"deny\"\nno_fix_reason = \"class 3 (x): y\"\n";
     let dir = Fixture::new("lint-admit-precommit")
         .config(base)
@@ -356,16 +411,13 @@ fn the_claim_armed_run_admits_what_the_board_groomed_before_any_trailer_exists()
         .base_commit()
         .config(&base.replace("\"deny\"", "\"warn\""))
         .build();
-    groom(&dir, &["severity-lowered rule[no-todo].severity"]);
-    let out = lint(&dir, &[]);
-    assert_eq!(out.status.code(), Some(0), "{}", stdout(&out));
-    assert!(stdout(&out).contains("groomed"), "{}", stdout(&out));
-
-    // And the same uncommitted edit with a groom that did NOT name it refuses —
-    // so the case above is the groom deciding, not the arm staying quiet.
-    groom(&dir, &[]);
+    claim(&dir);
     let out = lint(&dir, &[]);
     assert_eq!(out.status.code(), Some(2), "{}", stdout(&out));
+    ask(&dir, "Admit it");
+    let out = lint(&dir, &[]);
+    assert_eq!(out.status.code(), Some(0), "{}", stdout(&out));
+    assert!(stdout(&out).contains("(asked)"), "{}", stdout(&out));
 }
 
 /// The claim arms the ROOT's authority and nothing below it.
@@ -383,7 +435,7 @@ fn a_config_below_the_repository_root_is_not_armed_by_the_roots_claim() {
         "lint-admit-nested",
         Some("severity-lowered rule[no-todo].severity"),
     );
-    groom(&dir, &[]);
+    claim(&dir);
     // The premise: at the root, this claimed branch IS armed and refuses.
     assert_eq!(lint(&dir, &[]).status.code(), Some(2));
 
@@ -425,7 +477,7 @@ fn the_claim_armed_run_does_not_charge_the_branch_for_trunk_changes() {
     common::git_in(&dir, &["commit", "-q", "-am", "the trunk tightens"]);
     common::git_in(&dir, &["update-ref", "refs/remotes/origin/main", "HEAD"]);
     common::git_in(&dir, &["reset", "-q", "--hard", "HEAD~1"]);
-    groom(&dir, &[]);
+    claim(&dir);
 
     let out = lint(&dir, &[]);
     assert_eq!(

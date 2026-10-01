@@ -1370,6 +1370,11 @@ pub enum Native {
     /// Position is API; the reading order is not, and `Native::ALL` below is where
     /// the grouping belongs.
     RecordTableRefused,
+    /// The `[[step]]` table would not load (CLOUD-843).
+    ///
+    /// **APPENDED LAST**, for [`Native::RecordTableRefused`]'s reason: position is
+    /// API, and `Native::ALL` is where the grouping belongs.
+    StepTableRefused,
     /// A structured READ of a path whose `[[redirect]]` row declares its own
     /// read route (CLOUD-1929). Not [`Native::ToolSubstituted`]: no shell
     /// utility was involved, and that class's route pointed a memory reader at
@@ -1427,6 +1432,7 @@ impl Native {
         Native::RecordTableRefused,
         Native::ProvisionTableRefused,
         Native::StartupTableRefused,
+        Native::StepTableRefused,
         Native::PlanReadStale,
         Native::OutcomeTableRefused,
         Native::ProgramUnknown,
@@ -1465,6 +1471,7 @@ impl Native {
         Native::RecordTableRefused,
         Native::ProvisionTableRefused,
         Native::StartupTableRefused,
+        Native::StepTableRefused,
     ];
 
     /// The token this class is declared and rendered under.
@@ -1518,6 +1525,7 @@ impl Native {
             Native::RecordTableRefused => "record declare refused",
             Native::ProvisionTableRefused => "provision declare refused",
             Native::StartupTableRefused => "startup declare refused",
+            Native::StepTableRefused => "step declare refused",
         }
     }
 }
@@ -1921,8 +1929,14 @@ the wrong repair.",
             // through was the general hook hatch — a knowable string that records
             // nothing, which this repository already ruled on for `issue file
             // same`: *the point of the admission mechanism is that the bare
-            // variable stops working*. Declaring this route is what MAKES it stop,
-            // because `hook::Policy::honours_hatch` reads exactly this field.
+            // variable stops working*. The hatch is retired engine-wide now, and
+            // `admit_mediated` (`lib.rs`) is what consumes a spent admission.
+            //
+            // THE ROUTE IS HEAD-BOUND, SO IT IS NOT THE EXIT FOR A LONG EDIT
+            // (CLOUD-843): an admission binds `Anchor::Call { head }`, and every
+            // commit voids it. `turn mint ahead` escapes the wedge through
+            // `while_unpushed` instead — a pushed head is the harm the row names
+            // being absent — and this route stays for a head that cannot be pushed.
             //
             // The precondition is what the asker must be ABLE TO STATE, never a
             // judgement the gate makes (non-negotiable rule 3). Both halves are
@@ -2292,6 +2306,18 @@ it was supposed to decide something.",
         id: "startup declare refused",
         gloss: "the startup table would not load",
         class: "`[[startup]]` is how a repository states what its container must be and how that is repaired. A row that could never decide -- an empty check, a repair that runs nothing, an id declared twice -- is a precondition reported as broken every session with no repair reachable, so it is refused here rather than once per session, where the failure would read as a broken container instead of a typo in this file.",
+        routes: &[read("config read first", "batten.toml")],
+        applicability: Applicability::Advice,
+    },
+    VendoredVerdict {
+        id: "step declare refused",
+        gloss: "the step table would not load",
+        class: "`[[step]]` declares what keys a step's receipt: the pathspecs whose index \
+entries it hashes and the tool argvs whose answers it hashes. A row with no inputs keys no \
+file and would answer for any tree; a row with no tools lets a receipt outlive the toolchain \
+that earned it; a `:`-magic pathspec selects nothing and reads as a clean set. Each is a \
+receipt attesting bytes nobody checked, so it is refused at load rather than trusted at the \
+first hit.",
         routes: &[read("config read first", "batten.toml")],
         applicability: Applicability::Advice,
     },
@@ -2694,6 +2720,7 @@ mod tests {
                 | Native::RecordTableRefused
                 | Native::ProvisionTableRefused
                 | Native::StartupTableRefused
+                | Native::StepTableRefused
                 | Native::ProgramUnknown => native.id(),
             };
             // The prefix is gone (CLOUD-1284), so what makes this a token is the

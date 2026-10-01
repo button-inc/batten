@@ -315,7 +315,11 @@ fn key(run: &Run) -> (bool, String, String, u64) {
 /// their old behaviour, telling us less about which clause the cases pin.
 //MUTANT-SUITE crates/batten/src/checks_green.rs
 //MUTANT unanswered-displaces-a-verdict|s@const UNANSWERED: u8 = 3;@const UNANSWERED: u8 = 9;@|a_later_skipped_twin_does_not_erase_a_verdict
-fn winner<'a>(runs: &[&'a Run], answered: &[String]) -> Option<&'a Run> {
+///
+/// `pub(crate)` because `record forge --fetch` records one conclusion per name
+/// and must choose the SAME run this does (CLOUD-843): two orderings over one
+/// reading are two authorities, and on an overlapping re-run they disagree.
+pub(crate) fn winner<'a>(runs: &[&'a Run], answered: &[String]) -> Option<&'a Run> {
     const UNANSWERED: u8 = 3;
     // `max_by_key` over `(key, rank)` is the whole ordering, and it is a
     // FUNCTION OF THE SET rather than of the arrival order — which is the defect
@@ -346,7 +350,8 @@ fn winner<'a>(runs: &[&'a Run], answered: &[String]) -> Option<&'a Run> {
     // Without the column the key falls back to `started_at`, the concurrent twin
     // can win it, and this guard is what keeps a green head landable — the
     // measured six-hour stall. A five-field reading is a live shape, not a legacy
-    // one: `sonar-gate.sh` emits precisely that.
+    // one: any caller whose projection predates the column still emits it, and
+    // `parse_run` accepts it for exactly that reason.
     if !latest.completed_at.is_empty() {
         return Some(latest);
     }

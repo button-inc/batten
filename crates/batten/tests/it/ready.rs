@@ -35,20 +35,13 @@
 //! that as 80 independent behaviour changes would bury the one decision a reader
 //! needs to see in a list nobody reads.
 //!
-//! # THE LEDGER IS WRITTEN AND THE PROGRAM IS NOT YET DELETED, DELIBERATELY
+//! # THE DELETION HAS HAPPENED (CLOUD-1221)
 //!
-//! `mise-tasks/ready-lint.sh` and `tests/ready-lint.bats` are still in the tree,
-//! and the rows below are the mapping the deletion will redeem rather than a
-//! claim that it has happened. The blocker is named rather than left to be
-//! rediscovered: `mise-tasks/graph-check.sh` resolves this gate BY PATH and
-//! branches on its exit codes, and both lines have to move for the program to
-//! die — the path because there is no path any more, the codes because a
-//! violation is `2` here where it was `1` there. `shell edit refused` admits an
-//! edit to a caller only where every added line is a truncation of a removed one
-//! or an exact path substitution at a declared successor (both arms are in
-//! `policy/shell-retirement.rego`), and a shell sibling repointed at a compiled
-//! verb is neither. So retiring this one reaches a second program, and that is a
-//! change of its own rather than a line in this one.
+//! `mise-tasks/ready-lint.sh` and `tests/ready-lint.bats` retired in the one
+//! delta that retired their last caller, `mise-tasks/graph-check.sh`, onto
+//! `batten board check` — which asks `ready::lint` in process rather than
+//! spawning a program by path. The rows below are the mapping that deletion
+//! redeems.
 //!
 //! The claim gate's half of the same port DID land — its only caller named it by
 //! task name, which is why `mise.toml` could answer for it unchanged.
@@ -114,7 +107,7 @@
 // carried: "clauses inside a parent block are still checked" crates/batten/tests/it/ready.rs
 // carried: "a parent's §8 claim is held to the board like a leaf's" crates/batten/tests/it/ready.rs
 // carried: "prose merely discussing refinement is not a Ready block" crates/batten/tests/it/ready.rs
-// carried: "unparseable stdin exits 2, not 1" crates/batten/tests/it/ready.rs
+// carried: "ready-lint.bats::unparseable stdin exits 2, not 1" crates/batten/tests/it/ready.rs
 // carried: "output is pointer-only — no issue prose echoed" crates/batten/tests/it/ready.rs
 // carried: "a blocker claimed under a §8 HEADING with no relation is reported" crates/batten/tests/it/ready.rs
 // carried: "the same claim with the relation present passes" crates/batten/tests/it/ready.rs

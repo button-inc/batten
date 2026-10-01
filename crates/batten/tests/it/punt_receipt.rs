@@ -20,6 +20,12 @@
 //! for the other; the two `#MUTANT` rows on `marker_present` kill exactly one
 //! each.
 //!
+//! # The push is the spend (CLOUD-843)
+//!
+//! `while_unpushed` conjoins with the marker: the row fires while the marker
+//! exists AND `HEAD` is on no remote-tracking ref. The fixtures have no remote,
+//! so every case below that does not call [`pushed`] is unpushed by construction.
+//!
 //! # No receipt is ever minted here, deliberately
 //!
 //! Both cases run with the `verify` receipt ABSENT, so the only thing that differs
@@ -52,6 +58,7 @@ scope = "mediated_call"
 severity = "deny"
 trigger = "write"
 while_marker = "unlanded-nudged"
+while_unpushed = true
 checks = ["verify"]
 key = "head"
 reason = "run `mise run verify`, then `mise run linear-check`, then `mise run land`"
@@ -71,6 +78,14 @@ fn repo(name: &str) -> PathBuf {
         .base_commit()
         .build();
     git_in(&dir, &["checkout", "-q", "-b", BRANCH]);
+    // ONE COMMIT PAST THE BASE, because the base is on a remote-tracking ref and
+    // `while_unpushed` reads a head there as pushed. The row's harm is work
+    // committed nowhere but this clone, so every case starts from exactly that;
+    // `pushed` is what moves a case off it.
+    std::fs::write(dir.join("src/tracked.rs"), "// committed here only\n")
+        .expect("write the local change");
+    git_in(&dir, &["add", "-A"]);
+    git_in(&dir, &["commit", "-q", "-m", "chore: local work"]);
     dir
 }
 
@@ -138,6 +153,58 @@ fn an_ordinary_turn_leaves_the_next_write_alone() {
         verdict(&dir, "src/tracked.rs"),
         Some(0),
         "a turn that did not punt owes this row nothing"
+    );
+}
+
+/// Push `HEAD` the way a clone records it: the remote-tracking ref moves to it.
+///
+/// A ref rather than a real remote, because the predicate is read off
+/// `refs/remotes` and nothing else — a fixture that stood up a bare repository
+/// would be testing `git push`, not the column.
+fn pushed(dir: &Path) {
+    git_in(
+        dir,
+        &[
+            "update-ref",
+            &format!("refs/remotes/origin/{BRANCH}"),
+            "HEAD",
+        ],
+    );
+}
+
+#[test]
+fn a_pushed_head_lifts_the_punt_refusal() {
+    // THE DEADLOCK THIS COLUMN ENDS (CLOUD-843). The row's harm is work
+    // "committed nowhere but this container", and its remedy says a push makes
+    // stopping safe — but it selected on the marker alone, so a pushed branch
+    // stayed refused until `verify` went green, which on a tree that compiles
+    // only after edits needs the very writes it refused. No receipt here either:
+    // the push alone must lift it.
+    let dir = repo("punt-pushed");
+    punt(&dir);
+    pushed(&dir);
+    assert_eq!(
+        verdict(&dir, "src/tracked.rs"),
+        Some(0),
+        "a punt whose work is on a remote owes this row nothing"
+    );
+}
+
+#[test]
+fn an_unpushed_head_after_a_punt_is_refused() {
+    // ANTI-VACUITY for the column: pushed once, then committed past it. The
+    // marker is unchanged and no receipt exists, so the only difference from the
+    // case above is a commit on no remote — which is the harm, and must refuse.
+    let dir = repo("punt-pushed-then-moved");
+    punt(&dir);
+    pushed(&dir);
+    std::fs::write(dir.join("src/tracked.rs"), "// moved past the push\n").expect("move");
+    git_in(&dir, &["add", "-A"]);
+    git_in(&dir, &["commit", "-q", "-m", "chore: move past the push"]);
+    assert_eq!(
+        verdict(&dir, "src/tracked.rs"),
+        Some(2),
+        "a commit on no remote after a punt is the harm the row names"
     );
 }
 

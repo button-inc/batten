@@ -240,6 +240,79 @@ impl Manifest {
 /// never a hand-maintained second list, which is `surface::SURFACE`'s discipline
 /// and the reason a preset cannot be enabled that does not exist.
 pub const MANIFESTS: &[Manifest] = &[
+    // CLOUD-843, carrying CLOUD-441's decision out of a consumer module. A
+    // check's verdict on one commit is its latest run, absent is no veto and
+    // "not yet" is never a pass. The record is `batten record query`'s, under the
+    // family name the module reads; which commit, which repository and which
+    // check names are the consumer's `[[forge.query]]` row, so nothing here names
+    // a repository, an analyzer or a check.
+    //
+    // ITS OWN PRESET RATHER THAN A MODULE OF A WIDER CI BUNDLE, and the engine is
+    // the reason. A row selects a preset's modules by scope and provider, never
+    // one by one, so this per-commit gate beside a scheduled report would make
+    // each row's `--fail-on-warning` fail on the other's findings — and two tree
+    // rows over one preset collide on its predicate ids at load.
+    Manifest {
+        name: "check-verdict",
+        version: 1,
+        modules: &[PresetModule {
+            scope: RuleScope::Tree,
+            // Reads a record, not a workflow document, so no provider's
+            // expression language. The conclusion words are the forge's
+            // check-run vocabulary; on a forge speaking another one every run
+            // reads as no answer yet, which fails closed rather than clean.
+            provider: None,
+            pointer: "<preset:check-verdict>/latest-run-decides.rego",
+            source: include_str!("policy/presets/check-verdict/latest-run-decides.rego"),
+        }],
+        verdicts: &[
+            VendoredVerdict {
+                id: "check grade red",
+                gloss: "a check's latest run on this commit concluded with an objection",
+                class: "The check graded the commit and objected. The pointer is the check's name \
+and its conclusion, never its report: read the run's own details page and fix it locally. A \
+later run of the same name supersedes this one, so an older success does not answer for it.",
+                routes: &[read("source read first", "the check-run's details page")],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "check grade early",
+                gloss: "a check has no verdict on this commit yet: running, skipped or cancelled",
+                class: "Not an answer, and so never a pass: a run still in flight, or one that \
+completed without judging anything. A skipped or cancelled run cannot be waited out, since \
+nothing further is minted for it; re-read the commit's check-runs once the check has graded it, \
+or give it a fresh run.",
+                routes: &[run(
+                    "task run first",
+                    "batten record query check-runs, for the same commit, then this rule again",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "check read partial",
+                gloss: "the check-runs record is a truncated window, lacks one closing line, or holds a torn row",
+                class: "A part of a commit's check-runs is never judged as all of them. Three \
+shapes are partial. A truncated window: the run that decides a name may sit past the page \
+budget, so raise the query's page budget, or narrow it to the names that carry a verdict, and \
+read it again. A record with no single closing line, or a row torn mid-JSON: something other \
+than the query wrote or cut the family, so no page budget clears it; find that writer, stop it \
+writing the family, and re-mint the record from the query.",
+                routes: &[
+                    read("source read first", "the query row that writes the family"),
+                    read(
+                        "record read first",
+                        "every writer of the family besides its query row",
+                    ),
+                    run(
+                        "task run first",
+                        "batten record query check-runs, for the same commit, then this rule again",
+                    ),
+                ],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+        ],
+        patterns: &[],
+    },
     Manifest {
         name: "ci-hygiene",
         version: 1,
@@ -431,14 +504,261 @@ value is what does the work, and it is a boolean rather than the string `true`."
         ],
         patterns: &[],
     },
+    // CLOUD-843. What the CI signal says about a landing loop over a window: it
+    // stays linear (one matrix per landing, run to green), and a required job's
+    // failure reaches a verdict. The records are `batten record divergence`'s and
+    // `batten record nonverdict`'s, under the families those verbs name; every
+    // consumer fact — workflows, roster, fan-in, verdict spellings — was spent by
+    // the producer, so nothing here names one. Two modules, ONE enabling row: a
+    // consumer that runs only one producer has only one family, and the other
+    // module is silent.
+    Manifest {
+        name: "ci-signal",
+        version: 1,
+        modules: &[
+            PresetModule {
+                scope: RuleScope::Tree,
+                // Reads a record of counts, not a workflow document: no provider's
+                // expression language is in it.
+                provider: None,
+                pointer: "<preset:ci-signal>/landing-stays-linear.rego",
+                source: include_str!("policy/presets/ci-signal/landing-stays-linear.rego"),
+            },
+            PresetModule {
+                scope: RuleScope::Tree,
+                provider: None,
+                pointer: "<preset:ci-signal>/required-failures-reach-a-verdict.rego",
+                source: include_str!(
+                    "policy/presets/ci-signal/required-failures-reach-a-verdict.rego"
+                ),
+            },
+            PresetModule {
+                scope: RuleScope::Tree,
+                // A job key two spaces under `jobs:`, a job-level `timeout-minutes:`
+                // at four, and a matrix leg reported as `<key> (<axis>)` are GitHub
+                // Actions' grammar and its jobs endpoint's naming. Another provider's
+                // documents carry no `jobs:` mapping in that shape, so the module
+                // would read no budget and report a clean tree it never read
+                // (CLOUD-1625).
+                provider: Some("github-actions"),
+                pointer: "<preset:ci-signal>/timeout-tracks-its-measurement.rego",
+                source: include_str!(
+                    "policy/presets/ci-signal/timeout-tracks-its-measurement.rego"
+                ),
+            },
+        ],
+        verdicts: &[
+            VendoredVerdict {
+                id: "lane read partial",
+                gloss: "the measurement could not read part of its window, so a green verdict would cover \
+less than it claims",
+                class: "A runs endpoint that caps pagination while still reporting the true total lets a \
+walk that stops on a short page read a PREFIX and look like a clean finish. Measured: 1000 of 1446 \
+runs collected, reporting zero fast-forward refusals over a window carrying 598. Narrow the window.",
+                routes: &[run(
+                    "task run first",
+                    "batten record divergence --ci-workflow <file> --land-workflow <file>",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "lane count spent",
+                gloss: "the landing loop bought more CI matrices per landing than its budget",
+                class: "The ideal is 1.00 — one matrix, run to green, landed. The budget is 2.00 because \
+the second run is a lease precondition cancelling an unauthorised matrix, which is the mechanism \
+working.",
+                routes: &[run(
+                    "task run first",
+                    "batten record divergence --ci-workflow <file> --land-workflow <file>",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "lane grade red",
+                gloss: "red CI runs per landing are over budget",
+                class: "A red run means local verification was skipped or disagreed with CI, and each one \
+spent a full matrix to say so.",
+                routes: &[run(
+                    "task run first",
+                    "batten record divergence --ci-workflow <file> --land-workflow <file>",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "lane reach late",
+                gloss: "cancelled runs have a median lifetime past the budget",
+                class: "LATENCY, NEVER COUNT. An early cancellation is a lease precondition stopping an \
+unauthorised matrix for ~20 runner-seconds instead of billing ~500; a late one is a matrix billed \
+for a verdict nobody reads.",
+                routes: &[run(
+                    "task run first",
+                    "batten record divergence --ci-workflow <file> --land-workflow <file>",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "lease guard dropped",
+                gloss: "more CI matrices ran concurrently than the lease admits",
+                class: "Landing is serialised behind a lease, so concurrency above the admitted-successor \
+bound means something is spending CI without holding it.",
+                routes: &[run(
+                    "task run first",
+                    "batten record divergence --ci-workflow <file> --land-workflow <file>",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "lane measure late",
+                gloss: "runs waited past the budget at p90 before starting",
+                class: "The runner pool saturating, which is a different defect from contention and must \
+not be read as one.",
+                routes: &[run(
+                    "task run first",
+                    "batten record divergence --ci-workflow <file> --land-workflow <file>",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "job measure late",
+                gloss: "individual matrix legs waited past the budget at p90 before starting",
+                class: "A run's own figure is its FIRST job's start, so this is the one that sees a leg \
+queueing behind its siblings — the two disagreeing is what tells a wide matrix apart from a \
+saturated pool.",
+                routes: &[run(
+                    "task run first",
+                    "batten record divergence --ci-workflow <file> --land-workflow <file>",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "branch reach stale",
+                gloss: "the fast-forward bot refused a branch that had gone behind",
+                class: "A refusal means the branch went behind before the bot answered — the thundering \
+herd a landing lease exists to remove (243:5 before, 0:5 after). Any refusal at all is a \
+divergence, so the budget is zero.",
+                routes: &[run(
+                    "task run first",
+                    "batten record divergence --ci-workflow <file> --land-workflow <file>",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "job read partial",
+                gloss: "the scan could not read part of its window, so a green verdict would cover less \
+than it claims",
+                class: "A run that measured two of three paths and reported green over the two is exactly \
+the partial-coverage false green. It fires whatever the count is, because a budget met over part \
+of a window is a budget met over nothing in particular. A persistent read failure is a token or \
+rate-limit problem, not a clean window.",
+                routes: &[run(
+                    "task run first",
+                    "batten record nonverdict --required-check <job> --verdict-step <prefix>",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "job answer missing",
+                gloss: "a required job failed before reaching any verdict-bearing step",
+                class: "The run spent its minutes, redded the branch, and answered nothing. Every \
+occurrence then costs a human or an agent the time to discover it was never a verdict at all — \
+measured as an agent sent to reproduce a lint failure that passed locally because the lint never \
+ran.",
+                routes: &[run(
+                    "task run first",
+                    "batten record nonverdict --required-check <job> --verdict-step <prefix>",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "bound pin loose",
+                gloss: "a job's declared timeout sits well above what its measurement justifies",
+                class: "A budget is a ceiling rather than a target, so headroom is correct and a slack \
+allowance keeps this off a job that merely got a little faster. Past that allowance the number has \
+gone slack, which is the direction a report that only complained about tightness would let rot \
+upward forever. Nothing is broken and no branch is at fault: re-derive the number and commit the \
+new comment.",
+                routes: &[run(
+                    "task run first",
+                    "run the writer the `drift-runs` and `drift-jobs` `[[record]]` rows name, \
+                     which re-takes the run window before it re-walks the jobs",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "bound pin wrong",
+                gloss: "a job's measurement has outgrown its declared timeout",
+                class: "The p95 of recent successful runs, times the headroom multiplier, is already \
+above the committed budget. Raise it before it starts failing healthy runs — this is the direction \
+that turns into a red job nobody caused.",
+                routes: &[run(
+                    "task run first",
+                    "run the writer the `drift-runs` and `drift-jobs` `[[record]]` rows name, \
+                     which re-takes the run window before it re-walks the jobs",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "bound pin stale",
+                gloss: "a dated debt entry now has a usable sample and can become a measured budget",
+                class: "The prompt, never the conversion. A bot re-baselining the number it is supposed \
+to defend is the one move a budget exists to forbid, so this reports that the debt is now \
+convertible and a deliberate commit does the converting.",
+                routes: &[run(
+                    "task run first",
+                    "run the writer the `drift-runs` and `drift-jobs` `[[record]]` rows name, \
+                     which re-takes the run window before it re-walks the jobs",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "bound measure partial",
+                gloss: "too few successful runs to characterise a job, or a measurement that did not \
+close, so no budget is proposed",
+                class: "Below the minimum a job is uncharacterised rather than fast, and saying so is \
+itself the useful signal: jobs that run weekly or on release have a handful of runs in any window, \
+so a naive percentile would compute a confident value from two samples and propose tightening a \
+release job on it. A family present without exactly one closing line was torn by something other \
+than its producer, which writes whole or removes, and reads the same way.",
+                routes: &[run(
+                    "task run first",
+                    "run the writer the `drift-runs` and `drift-jobs` `[[record]]` rows name, \
+                     which re-takes the run window before it re-walks the jobs",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+        ],
+        // Every module writes the grammar it cites inline, for the reason
+        // `Manifest::patterns` gives: `whole-number` for the two record readers,
+        // GitHub Actions' job and timeout lines for the budget reader.
+        patterns: &[
+            "whole-number",
+            "workflow-job-key",
+            "workflow-top-level-key",
+            "job-timeout-line",
+            "timeout-budget-grandfathered",
+        ],
+    },
     // CLOUD-1949. The host never halts on a prompt: in plan mode a call reads or
     // is refused, and a read — or a `batten` lifecycle verb outside plan mode —
     // is pre-approved. Claude Code's tool names and plan-file path are the
     // host's vocabulary, which a vendor preset may carry and the core may not.
+    //
+    // VERSION 2 (CLOUD-843): the preset gained its TREE half, whether the host
+    // honours the committed MCP permission rules at all. The settings file, the
+    // project file and the rule grammar are the same host vocabulary; the
+    // coverage it reads is the consumer's own authority, found by shape.
     Manifest {
         name: "claude-code-cloud",
-        version: 1,
+        version: 2,
         modules: &[
+            PresetModule {
+                scope: RuleScope::Tree,
+                provider: None,
+                pointer: "<preset:claude-code-cloud>/mcp-grants-are-honoured.rego",
+                source: include_str!(
+                    "policy/presets/claude-code-cloud/mcp-grants-are-honoured.rego"
+                ),
+            },
             PresetModule {
                 scope: RuleScope::MediatedCall,
                 provider: None,
@@ -480,16 +800,74 @@ value is what does the work, and it is a boolean rather than the string `true`."
                 ),
             },
         ],
-        verdicts: &[VendoredVerdict {
-            id: "plan write refused",
-            gloss: "a call that is not a read was made while the host is in plan mode",
-            class: "Plan mode is a promise that nothing changes until the plan is approved. The \
+        verdicts: &[
+            VendoredVerdict {
+                id: "plan write refused",
+                gloss: "a call that is not a read was made while the host is in plan mode",
+                class: "Plan mode is a promise that nothing changes until the plan is approved. The \
 host enforces it by asking the operator, and a session halted on a prompt is the failure this \
 preset exists to remove — so the call is refused instead, and nobody has to answer anything. A \
 read, the plan file itself, and leaving plan mode are never refused.",
-            routes: &[run("plan run first", "ExitPlanMode, then make the call")],
-            applicability: crate::verdict::Applicability::Advice,
-        }],
+                routes: &[run("plan run first", "ExitPlanMode, then make the call")],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "grant spelling wrong",
+                gloss: "an MCP allow rule the host skips, so it grants nothing",
+                class: "The host matches an MCP permission rule by server name, and a glob in the \
+server segment, or a bare `*`, is not a name: the rule is skipped with a warning and grants \
+nothing. Its only symptom is an approval prompt on every call, which reads as harness behaviour \
+rather than as a settings bug.",
+                routes: &[run(
+                    "rule fix first",
+                    "name the server literally in the host's settings file (`mcp__<server>` or \
+`mcp__<server>__<tool>`); a tool-segment glob after a literal server is fine",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "grant name missing",
+                gloss: "an enabled MCP server no allow rule names, so every call to it prompts",
+                class: "`enabledMcpjsonServers` turns a project server on, and turning it on grants \
+none of its tools. A server enabled with no allow rule naming it is attached and unusable \
+unattended: every call stops for a human. Measured on one consumer, whose code-navigation server \
+shipped exactly that way.",
+                routes: &[run(
+                    "grant add first",
+                    "add an allow rule naming the server in the host's settings file, or stop \
+enabling it",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "connector deny loose",
+                gloss: "a deny spelled with one host-supplied server name, which the host renames away",
+                class: "A host-supplied connector's exposed name is chosen per registration \
+episode — the same connector was measured under three prefixes. A deny rule naming one of those \
+spellings reads as a prohibition and enforces nothing the moment the connector comes back under \
+another. What survives the rename is a `mediated_call` row keyed on the tool's own name, which \
+matches the tool segment whatever the server is called.",
+                routes: &[run(
+                    "rule cover first",
+                    "add a `mediated_call` `[[rule]]` whose `tool` is the denied tool's suffix, \
+so the refusal holds under any server spelling",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "grant read unread",
+                gloss: "a permission or project file was declared and would not parse, so nothing in it was judged",
+                class: "Could-not-look, and never a clean tree. An absent settings or project file \
+is a repository with nothing to check; one that exists and will not parse is a file the gate \
+tried to read and could not, and reading that as \"no defects\" is the vacuous pass every \
+could-not-look arm exists to refuse.",
+                routes: &[run(
+                    "path fix first",
+                    "make the named file parse as JSON again, then re-run `batten check`",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+        ],
         patterns: &[],
     },
     Manifest {
@@ -861,9 +1239,62 @@ declares, and a probe inside the pin's environment is already correct",
         ],
         patterns: &[],
     },
+    // CLOUD-843's `release-hygiene`: a published release's checksum manifest
+    // tells the truth about the release. The record is `batten record release`'s,
+    // read by KIND rather than by family name, because the family is the
+    // consumer's to declare. Which assets a release must carry is read off each
+    // consumer's own build workflow, so that half stays in the consumer's module.
+    Manifest {
+        name: "release-hygiene",
+        version: 1,
+        modules: &[PresetModule {
+            scope: RuleScope::Tree,
+            // Reads a record `batten record release` writes; no CI provider's
+            // expression language is involved, so it applies anywhere.
+            provider: None,
+            pointer: "<preset:release-hygiene>/checksums-cover-the-release.rego",
+            source: include_str!("policy/presets/release-hygiene/checksums-cover-the-release.rego"),
+        }],
+        verdicts: &[
+            VendoredVerdict {
+                id: "release pin broken",
+                gloss: "a release's checksum manifest is missing, lists itself, covers nothing, omits or orphans an asset, or disagrees on bytes",
+                class: "A manifest a packager cannot trust pins nothing. Uploads are routinely \
+idempotent and a failed leg is recovered by re-running it, so an asset can be replaced after the \
+manifest was cut, and nothing downstream notices: every consumer verifying against the manifest \
+either fails for a reason that looks like tampering or, where the manifest omits the asset, \
+verifies nothing at all. Re-derive the manifest from the release as it now stands and re-upload \
+it.",
+                routes: &[run(
+                    "sums run first",
+                    "batten release sums <tag> --manifest <name>, then upload the manifest it writes",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "release record torn",
+                gloss: "a release record carries no census, or one that disagrees with its lines",
+                class: "A record torn mid-write judges part of a release as if it were all of it: \
+a manifest check over half the asset list reports the other half as neither covered nor missing. \
+The census closes the record and counts every kind above it, so a disagreement is a finding about \
+the record rather than a verdict about the release. Record it again.",
+                routes: &[run(
+                    "record run first",
+                    "batten record release <tag> --manifest <name>",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+        ],
+        patterns: &[],
+    },
+    // Version 2 (CLOUD-1994) adds the line-unit ban, lifted out of the consumer
+    // module it was written as. Its facts — which manifests, keys, unit headers,
+    // workflow globs and exempt files — are the consumer's `[census.shell]`
+    // table, found by shape in the documents the row declares, so the preset
+    // names none and abstains for a consumer that declares none.
     Manifest {
         name: "shell-hygiene",
-        version: 1,
+        version: 2,
         modules: &[
             PresetModule {
                 scope: RuleScope::Tree,
@@ -878,6 +1309,17 @@ declares, and a probe inside the pin's environment is already correct",
                 provider: None,
                 pointer: "<preset:shell-hygiene>/sibling-resolves.rego",
                 source: include_str!("policy/presets/shell-hygiene/sibling-resolves.rego"),
+            },
+            PresetModule {
+                scope: RuleScope::Tree,
+                // Reads a workflow's `run:` steps, but only in the files the
+                // consumer's own `[census.shell] workflows` globs name — the
+                // declaration is what says "these files carry `run:` steps", the
+                // same contract `batten census shell` reads them under. Its
+                // manifest and file arms read no provider at all.
+                provider: None,
+                pointer: "<preset:shell-hygiene>/no-new-shell.rego",
+                source: include_str!("policy/presets/shell-hygiene/no-new-shell.rego"),
             },
         ],
         verdicts: &[
@@ -899,6 +1341,504 @@ with a test that exits 0, so the reference does not fail — it goes silent, and
 behaviour it was reaching for simply never happens. A path that must exist should be \
 asserted rather than tested.",
                 routes: &[read("source read first", "the computed path")],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "task write refused",
+                gloss: "a declared manifest's shell code lines rose against the base",
+                class: "This repository has declared where its shell lives and that it writes no \
+more. A command key's shell lines — every code line of a triple-quoted body, and each one-line \
+value or array entry carrying shell syntax — may fall and may never rise. Counted in lines rather \
+than bodies because a body count reads a 245-line body as one, and relocating whole programs into \
+command strings then reads as the surface shrinking. Put the decision in a policy module, the \
+fetch in a declared recorder, and the glue in an argv command; what is left over is a verb.",
+                routes: &[read(
+                    "source read first",
+                    "the manifest's grown unit and the census declaration",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "task add refused",
+                gloss: "a manifest unit that carried no shell at the base carries some now",
+                class: "The arm relocation cannot offset: moving a body into a new unit while deleting \
+a bigger one elsewhere keeps the line count level and still gives a unit shell it did not have. \
+The pointer is the unit's header. Deleting shell is always free, and an edit inside a body that \
+does not grow it is admitted, so a fix to an existing body lands; a new one does not.",
+                routes: &[read("source read first", "the unit's header")],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "step write refused",
+                gloss: "a declared workflow's run: shell lines rose against the base",
+                class: "A workflow step is where a shell line is the native spelling, which is why the \
+step itself stays allowed and a single-command step is not counted. What is counted is the shell \
+around it: every code line of a `run: |` or `run: >` block and every one-liner carrying shell \
+syntax. Move the logic into a declared task or the engine and call it from the step.",
+                routes: &[read("source read first", "the workflow's grown step")],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "shell place refused",
+                gloss: "a shell file was added outside the declared set of files that must be shell",
+                class: "A `.sh`, `.bash` or `.bats` path, or a file whose first line names a shell, \
+was added. The only files that must be shell are the ones that run where nothing else can — an \
+installer or bootstrap that brings the toolchain to a host, a hook launcher the toolchain cannot \
+reach — and the consumer names them in its census declaration, where widening the set is a \
+reviewed change to the committed config. Anything else is a verb, a module or a recorder.",
+                routes: &[read(
+                    "source read first",
+                    "the census declaration's exempt set",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+        ],
+        patterns: &[],
+    },
+    // CLOUD-843. The board's own claims held to what the tree and the forge
+    // already say: a Done that no release carries, a Done over a pull request
+    // still open, a duplicate close taken in its target's operation, a deferral
+    // with no owner, and a body that never closes what its branch served.
+    //
+    // EVERY MODULE READS A FAMILY `record derive` WRITES, and the family names are
+    // the engine's rather than a consumer's: `crate::tracker_reading` owns both
+    // the names and the line shapes, so nothing here names a consumer fact. A
+    // consumer declares one `[[record]]` row per family it produces, as for any
+    // record a module reads.
+    //
+    // ONE ROW JUDGES ALL FIVE, which is safe only because the producer clears
+    // every tracker family before it reads: the store then holds the answer to
+    // the question just asked and nothing older (`record::run_derive`).
+    // CLOUD-1221 (P14 of CLOUD-843) folded the BOARD half into this entry rather
+    // than a second `Manifest` of the same name, which `no_preset_is_declared_twice`
+    // refuses: a column that lies, a cyclic or unfetched relation, a gloss the
+    // board contradicts, an unready ready queue, a citation naming nothing. Those
+    // five read the `board-*` families `batten board check` writes and evaluates
+    // in process; `crate::board_check` owns their names, so nothing here names a
+    // consumer fact either.
+    Manifest {
+        name: "tracker-hygiene",
+        version: 1,
+        modules: &[
+            PresetModule {
+                scope: RuleScope::Tree,
+                provider: None,
+                pointer: "<preset:tracker-hygiene>/closing-key-closes.rego",
+                source: include_str!("policy/presets/tracker-hygiene/closing-key-closes.rego"),
+            },
+            PresetModule {
+                scope: RuleScope::Tree,
+                provider: None,
+                pointer: "<preset:tracker-hygiene>/deferral-has-an-owner.rego",
+                source: include_str!("policy/presets/tracker-hygiene/deferral-has-an-owner.rego"),
+            },
+            PresetModule {
+                scope: RuleScope::Tree,
+                provider: None,
+                pointer: "<preset:tracker-hygiene>/done-has-no-open-pull.rego",
+                source: include_str!("policy/presets/tracker-hygiene/done-has-no-open-pull.rego"),
+            },
+            PresetModule {
+                scope: RuleScope::Tree,
+                provider: None,
+                pointer: "<preset:tracker-hygiene>/done-is-released.rego",
+                source: include_str!("policy/presets/tracker-hygiene/done-is-released.rego"),
+            },
+            PresetModule {
+                scope: RuleScope::Tree,
+                provider: None,
+                pointer: "<preset:tracker-hygiene>/duplicate-close-is-argued.rego",
+                source: include_str!(
+                    "policy/presets/tracker-hygiene/duplicate-close-is-argued.rego"
+                ),
+            },
+            PresetModule {
+                scope: RuleScope::Tree,
+                provider: None,
+                pointer: "<preset:tracker-hygiene>/shipping-is-not-sufficient.rego",
+                source: include_str!(
+                    "policy/presets/tracker-hygiene/shipping-is-not-sufficient.rego"
+                ),
+            },
+            PresetModule {
+                scope: RuleScope::Tree,
+                provider: None,
+                pointer: "<preset:tracker-hygiene>/board-columns-tell-the-truth.rego",
+                source: include_str!(
+                    "policy/presets/tracker-hygiene/board-columns-tell-the-truth.rego"
+                ),
+            },
+            PresetModule {
+                scope: RuleScope::Tree,
+                provider: None,
+                pointer: "<preset:tracker-hygiene>/board-graph-is-acyclic.rego",
+                source: include_str!("policy/presets/tracker-hygiene/board-graph-is-acyclic.rego"),
+            },
+            PresetModule {
+                scope: RuleScope::Tree,
+                provider: None,
+                pointer: "<preset:tracker-hygiene>/board-claims-agree.rego",
+                source: include_str!("policy/presets/tracker-hygiene/board-claims-agree.rego"),
+            },
+            PresetModule {
+                scope: RuleScope::Tree,
+                provider: None,
+                pointer: "<preset:tracker-hygiene>/board-frontier-is-ready.rego",
+                source: include_str!("policy/presets/tracker-hygiene/board-frontier-is-ready.rego"),
+            },
+            PresetModule {
+                scope: RuleScope::Tree,
+                provider: None,
+                pointer: "<preset:tracker-hygiene>/board-citations-resolve.rego",
+                source: include_str!("policy/presets/tracker-hygiene/board-citations-resolve.rego"),
+            },
+        ],
+        verdicts: &[
+            VendoredVerdict {
+                id: "diff key missing",
+                gloss: "the pull request body names its issue but never in closing form, so the merge moves nothing",
+                class: "A tracker's merged-event automation fires only for a closing pull request: a \
+trailer-only reference merges and never moves the row, where a closing keyword moves it in \
+seconds. Write the closing keyword before the key, or a line-anchored hold marker if this pull \
+request is not meant to complete it.",
+                routes: &[run(
+                    "task run first",
+                    "write the closing keyword, then record the body again with `batten record derive closing-key`",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "diff key dropped",
+                gloss: "the pull request body closes some of the keys its commits served and strands the rest",
+                class: "A served key the body does not close never reaches review while its work is on \
+the trunk. Close each one, or name it on a hold marker line to decline just that one.",
+                routes: &[run(
+                    "task run first",
+                    "close the stranded key, then record the body again with `batten record derive closing-key`",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "diff read partial",
+                gloss: "the closing-key record is missing one of its four readings",
+                class: "A record missing a reading decides over part of the answer, so it is refused \
+rather than judged.",
+                routes: &[run(
+                    "task run first",
+                    "record the body again with `batten record derive closing-key`",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "prose own unnamed",
+                gloss: "a pull-request paragraph defers a decision and names no owning issue besides the one it claims",
+                class: "A pull-request body is not a durable home: nothing sweeps merged bodies, and the \
+board is what others read. File the decision and name its key in the same paragraph; the key \
+this pull request claims names the work in hand, not a home for what it leaves open.",
+                routes: &[run(
+                    "task run first",
+                    "file the owning issue, name it in the paragraph, then record the body again with `batten record derive deferral`",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "prose read partial",
+                gloss: "the deferral record carries no closing census, or one that disagrees with its lines",
+                class: "A record torn mid-write judges part of a body as if it were all of it.",
+                routes: &[run(
+                    "task run first",
+                    "record the body again with `batten record derive deferral`",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "issue ship early",
+                gloss: "an issue is headed for Done while one of its own pull requests is still open",
+                class: "A merged pull request completes a diff, and a board reading it as completing an \
+issue is right only when the issue carries one. Every pull request an issue carries has to have \
+landed or been closed before the issue is done, and a draft is open. The refusal is arithmetic: \
+whether the merged ones did the work is not judged.",
+                routes: &[read(
+                    "record read first",
+                    "the open pull request the refusal names",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "issue point missing",
+                gloss: "an issue is headed for Done and carries no pull request at all",
+                class: "Review already requires a linked pull request, so Done cannot need less. An \
+issue with none either shipped nothing or links its work somewhere the gate cannot read.",
+                routes: &[read("record read first", "the issue's attachments")],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "issue list partial",
+                gloss: "the done-pr record carries no closing census, or one that disagrees with its lines",
+                class: "A record torn mid-write judges part of a board as if it were all of it.",
+                routes: &[run(
+                    "task run first",
+                    "record the board again with `batten record derive done-pr`",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "issue ship ahead",
+                gloss: "an issue reads Done while its commits are on the trunk and no release contains them",
+                class: "Done means released, and landed-but-unreleased is review. Refs come from commit \
+messages, so a ref inside a release cannot confirm a Done — but a ref on the trunk that no \
+release tag reaches is conclusive: nothing shipped it.",
+                routes: &[read(
+                    "record read first",
+                    "the release that has not been cut",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "issue read partial",
+                gloss: "the done record carries no closing census, or one that disagrees with its lines",
+                class: "A record torn mid-write judges part of a board as if it were all of it. The \
+census is written last and counts the lines above it, so a missing or wrong one is a write that \
+did not finish rather than a clean board.",
+                routes: &[run(
+                    "task run first",
+                    "record the board again with `batten record derive done`",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "issue ship held",
+                gloss: "a release shipped this row, and it holds itself open: shipping is necessary for Done, not sufficient",
+                class: "A row in review carries the hold marker in its own description. The tag \
+contains its work, and the row still says it is not finished. Resolve the hold, or strike the \
+marker, before moving it to Done.",
+                routes: &[read("record read first", "the row's description")],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "issue ship refused",
+                gloss: "a release shipped this row, and the board gate rejects its column: fix the board before moving it",
+                class: "Review to Done is a conjunction: the tag must have shipped the row AND the \
+board must be labelling it honestly. The second half is the board gate's own verdict, forwarded \
+by the producer rather than re-derived, and the pointer names the rule it raised.",
+                routes: &[run("task run first", "batten board check")],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "tag read partial",
+                gloss: "the released record carries no closing census, or one that disagrees with its lines",
+                class: "A record torn mid-write judges part of a release as if it were all of it.",
+                routes: &[run(
+                    "task run first",
+                    "record the release again with `batten record derive released`",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "issue grade twice",
+                gloss: "a duplicate close was decided in the same operation as its target's own close",
+                class: "Whether two rows contradict is not computable, and this does not claim to. A \
+duplicate close whose target entered a completed state in the same second is two decisions taken \
+as one, and one was never argued. Argue the close on its own: either the rows really say the same \
+thing, or the closed one carries a finding about the survivor and needs reopening.",
+                routes: &[read("record read first", "both rows the pointer names")],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "issue count partial",
+                gloss: "the duplicate-close record carries no closing census, or one that disagrees with its lines",
+                class: "A record torn mid-write judges part of a board as if it were all of it. The \
+census is written last and counts the lines above it.",
+                routes: &[run(
+                    "task run first",
+                    "record the board again with `batten record derive duplicate-close`",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "issue state wrong",
+                gloss: "a board column, relation or status gloss says something the board contradicts",
+                class: "A column is a claim about the work, and the board is the surface everyone \
+else reads it from. Pulled means somebody has it; landed means a pull request is attached unless \
+the row declares it lands no commit; a started row names its phase; the ready queue holds only \
+rows whose Ready block passes; the blocked-by relation has no cycle; and a body glossing another \
+row's column agrees with the board. The pointer names the row and the rule, never the body.",
+                routes: &[read("source read first", "the row the pointer names")],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "issue judge partial",
+                gloss: "the piped payload set is too thin to judge, so the board has not been judged",
+                class: "Could-not-look, and it outranks a refusal: a verdict over a set only partly \
+read is not a verdict, because the next action is a re-fetch after which more refusals may \
+appear. A row without its relations, attachments, milestone or description, a blocker, parent \
+or claimed row the set does not carry, and a claimed column nobody piped occupies are each this \
+class, keyed to the set when the set is what is short.",
+                routes: &[read(
+                    "source read first",
+                    "the rows the pointer names, fetched again with relations and attachments",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "path point missing",
+                gloss: "a Ready block cites a test or a path the tree does not carry",
+                class: "This checks existence, never relevance. A cited test must be carried by \
+the declared corpus — a fixture quoting the citation is not the thing cited — and a cited path \
+must exist or be marked prospective beside its own path. A marked path an ancestor deleted is \
+refused anyway: history may refute a marker and is never asked to grant one.",
+                routes: &[read(
+                    "source read first",
+                    "the Ready block's live obligations clause",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "source point wrong",
+                gloss: "a clause citation in the tree names a clause its issue does not carry",
+                class: "A citation of a clause that is not there points a reader at nothing. Cite \
+the clause that holds the content, or the issue's own clause if it moved. A sparse clause set is \
+not a defect; only the citation of an absent clause is.",
+                routes: &[read("source read first", "the cited issue's Ready block")],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "source point unread",
+                gloss: "a clause citation names an issue the piped set does not carry",
+                class: "Could-not-look, never a pass: an unfetched issue looks exactly like a clean \
+one. Fetch the cited issue and pipe the set again.",
+                routes: &[read("source read first", "the cited issue, fetched")],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+        ],
+        patterns: &[],
+    },
+    // CLOUD-843's `supply-chain`: what a release and a commit claim about where
+    // they came from is checkable. ONE MANIFEST FOR THE WHOLE BUNDLE: the SBOM
+    // readings (`binary-inventory-is-lockfile-bound.rego`, `cargo list empty`,
+    // `cargo list wrong`) are further modules and verdicts in THIS entry, never a
+    // second `Manifest` of the same name — `no_preset_is_declared_twice` refuses
+    // that, and `find` would answer with whichever came first. Each module binds
+    // its own `package` so their helpers cannot collide. These two read records
+    // the ENGINE's own producers write under the producer's name (`record derive
+    // signing-posture`, `record attestation`), and git facts a row declares, so no
+    // consumer fact travels inside one.
+    Manifest {
+        name: "supply-chain",
+        version: 1,
+        modules: &[
+            PresetModule {
+                scope: RuleScope::Tree,
+                // A forge's attestation endpoint answered through the engine's
+                // producer, never a workflow's expression language.
+                provider: None,
+                pointer: "<preset:supply-chain>/attestation-is-verified.rego",
+                source: include_str!("policy/presets/supply-chain/attestation-is-verified.rego"),
+            },
+            PresetModule {
+                scope: RuleScope::Tree,
+                // git's own config scopes and commit headers; no CI provider.
+                provider: None,
+                pointer: "<preset:supply-chain>/signer-is-verifiable.rego",
+                source: include_str!("policy/presets/supply-chain/signer-is-verifiable.rego"),
+            },
+            PresetModule {
+                scope: RuleScope::Tree,
+                provider: None,
+                pointer: "<preset:supply-chain>/binary-inventory-is-lockfile-bound.rego",
+                source: include_str!(
+                    "policy/presets/supply-chain/binary-inventory-is-lockfile-bound.rego"
+                ),
+            },
+        ],
+        verdicts: &[
+            VendoredVerdict {
+                id: "release ship unsafe",
+                gloss: "a release archive's binary carries no verifiable provenance",
+                class: "The verifier refused the executable inside a published archive while the \
+platform DOES offer attestation for this repository. That is a release to fix rather than a gap \
+to report, and the two are told apart by the attestations endpoint's own status code: 200 with an \
+empty list where the feature exists, 404 on the resource where it does not. The subject is the \
+BINARY and not the archive, because a release attests the executable so that repackaging cannot \
+launder the claim.",
+                routes: &[run(
+                    "record run first",
+                    "batten record attestation <tag> --binary <name>",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "release carry missing",
+                gloss: "a release archive carries no executable to verify",
+                class: "The archive unpacked and held no binary of the declared name, so there was \
+nothing for the verifier to judge. A packaging problem rather than a provenance one, and its own \
+class for that reason: collapsing it into the unverified finding would send a reader after a \
+signing identity when the build matrix dropped a file.",
+                routes: &[run(
+                    "record run first",
+                    "batten record attestation <tag> --binary <name>",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "release list empty",
+                gloss: "the producer looked at a tag and found no archive on it",
+                class: "A green verdict over a release carrying nothing would be about nothing. \
+Present-and-empty and absent are different readings and must not collapse: an absent record is \
+the producer unable to look, where this is the producer having looked and found a tag with no \
+archives.",
+                routes: &[run(
+                    "record run first",
+                    "batten record attestation <tag> --binary <name>",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "config carry unsafe",
+                gloss: "signing is on in this checkout with a signer whose key cannot be verified or reproduced",
+                class: "NOT A VERDICT ABOUT SIGNING, which is good. It is about a signature that \
+LOOKS like provenance and carries none: a key whose public half cannot be read, or a signer under \
+a directory the environment reclaims. The refusal is the CONFLICT — something turns signing on and \
+no local `false` answers it — never the mere absence of a local override, because a CI runner has \
+no launcher and an absent local value is correct there.",
+                routes: &[run("repair run first", "batten attribution signing")],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "commit carry unsafe",
+                gloss: "a commit in range carries a gpgsig from a key this repository cannot verify or reproduce",
+                class: "The posture already produced one. Config can be repaired AFTER a commit was \
+written, so a repaired checkout still carries what it signed before the repair — and those are \
+exactly what must not land. That is why this is a separate class from the config one rather than \
+the same finding twice: repairing the config clears that arm and leaves this one firing. Rewrite \
+the range unsigned, or publish the key's public half so the signature becomes verifiable.",
+                routes: &[read(
+                    "module read first",
+                    "<preset:supply-chain>/signer-is-verifiable.rego",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "cargo list empty",
+                gloss: "a binary's inventory recovered fewer than two rust-crate packages",
+                class: "0 is a build that lost its `cargo auditable` wrapper, 1 is the binary \
+cataloging only itself; both are an empty document that exits 0, and a gate that checks nothing \
+must not report green. Rebuild the binary through the wrapper and scan it again.",
+                routes: &[run(
+                    "task run first",
+                    "batten sbom --binary <binary> --target <triple>",
+                )],
+                applicability: crate::verdict::Applicability::Advice,
+            },
+            VendoredVerdict {
+                id: "cargo list wrong",
+                gloss: "a binary's inventory names a crate the lockfile does not declare",
+                class: "Subset, never equality: the lockfile spans every target's build and dev \
+dependencies. A recovered crate outside it means the binary was not built from this lockfile.",
+                routes: &[run(
+                    "task run first",
+                    "batten sbom --binary <binary> --target <triple>",
+                )],
                 applicability: crate::verdict::Applicability::Advice,
             },
         ],

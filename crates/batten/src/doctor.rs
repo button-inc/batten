@@ -1203,7 +1203,7 @@ fn on_path(program: &str) -> bool {
 /// check release-plz's semver bump depends on, so leaving it out would assert the
 /// expensive half and not the deciding one. Both are git's own names, which is
 /// what keeps this list generic: every consumer's commit path runs these two.
-const COMMIT_HOOKS: [&str; 2] = ["pre-commit", "commit-msg"];
+pub(crate) const COMMIT_HOOKS: [&str; 2] = ["pre-commit", "commit-msg"];
 
 /// The stable reason id for a commit path that does not run the gate.
 const COMMIT_HOOK_MISSING: &str = "commit-hook-missing";
@@ -1227,7 +1227,7 @@ const COMMIT_HOOK_MISSING: &str = "commit-hook-missing";
 /// `None` is could-not-look and never an empty answer: a directory that is not a
 /// repository has already been reported by [`GIT_REPO`], and manufacturing a
 /// second failure from it would double-count one fault.
-fn hooks_dir(dir: &Path) -> Option<std::path::PathBuf> {
+pub(crate) fn hooks_dir(dir: &Path) -> Option<std::path::PathBuf> {
     if let Ok(Some(configured)) = crate::git::config_value(dir, "core.hooksPath")
         && !configured.trim().is_empty()
     {
@@ -1474,7 +1474,17 @@ fn provided_by_pin(dir: &Path, program: &str) -> bool {
 /// appends an extension, the spawn returned `NotFound`, and `Outcome::Broke`
 /// allowed exactly as the door promises. The guard read as wired and ran zero
 /// times.
+///
+/// **A row naming the mediator resolves, because the dispatch never looks it up**
+/// (CLOUD-843). `handler::run_one` spawns the RUNNING IMAGE for
+/// `run = ["batten", ...]` (CLOUD-1326), so a `PATH` probe for that name asked a
+/// question the spawn does not: on a CI runner with no `batten` on `PATH` it
+/// failed a row the dispatch would have run, and pushed rows into a one-line task
+/// wrapper purely to satisfy this probe. The doctor asking is itself that image.
 fn handler_program_resolves(dir: &Path, program: &str) -> bool {
+    if program == crate::surface::BINARY {
+        return true;
+    }
     if program.contains(std::path::MAIN_SEPARATOR) || program.contains('/') {
         return dir.join(program).is_file();
     }
@@ -2863,6 +2873,20 @@ mod tests {
         assert_eq!(RustupTarget::Installed.line(), "ok");
         assert_eq!(RustupTarget::Missing.line(), "missing");
         assert_eq!(RustupTarget::Stale.line(), "stale");
+    }
+
+    /// CLOUD-843. The probe resolves a handler's program the way `run_one`
+    /// spawns it: the mediator's own name is the running image, never a `PATH`
+    /// lookup, so a runner with no `batten` installed does not fail a row the
+    /// dispatch would run. A name that is neither still has to be found.
+    #[test]
+    fn a_handler_naming_the_mediator_resolves_without_path() {
+        let dir = std::env::temp_dir();
+        assert!(handler_program_resolves(&dir, crate::surface::BINARY));
+        assert!(!handler_program_resolves(
+            &dir,
+            "batten-no-such-program-anywhere"
+        ));
     }
     use std::fs;
 
