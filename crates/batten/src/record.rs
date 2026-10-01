@@ -404,6 +404,7 @@ fn already_clean(record: &Path, receipt: &Path, asked: &str) -> bool {
 //MUTANT listing-order-wins|s@^        if let Some(run) = crate::checks_green::winner(.group, .owned) {$@        if let Some(run) = group.last().copied() {@|the_latest_run_per_name_wins_by_completion_then_start
 //MUTANT fanin-ungated|s@^        && !graded.contains_key(fanin)$@        \&\& false@|nothing_is_written_until_the_fan_in_has_answered
 //MUTANT spaced-name-kept|s@^        if name.chars().any(char::is_whitespace) {$@        if false {@|a_name_with_whitespace_is_dropped_and_counted_never_mangled
+//MUTANT unknown-commit-could-not-look|s@^    if answer.status == UNKNOWN_COMMIT {$@    if false {@|a_commit_the_forge_has_never_seen_records_nothing_and_passes
 #[must_use]
 pub fn graded(runs: &[crate::checks_green::Run], answered: &[&str]) -> BTreeMap<String, String> {
     let owned: Vec<String> = answered.iter().map(|word| (*word).to_owned()).collect();
@@ -555,6 +556,9 @@ fn forge_fetch(
     Ok(Some(Fetch { fanin, answered }))
 }
 
+/// The check-runs endpoint's status for a sha it holds no commit for.
+const UNKNOWN_COMMIT: u16 = 422;
+
 /// `record forge --fetch`: read the commit's check-runs from the forge and
 /// record their answered conclusions, gated on the fan-in.
 fn run_forge_fetch(reference: &str, fetch: &Fetch, err: &mut dyn Write) -> Result<ExitCode> {
@@ -584,6 +588,19 @@ fn run_forge_fetch(reference: &str, fetch: &Fetch, err: &mut dyn Write) -> Resul
         )?;
         return Ok(ExitCode::Internal);
     };
+    // A COMMIT THE FORGE HAS NEVER SEEN HAS NO CHECK-RUNS, which is an answer:
+    // the endpoint's 422 is "no commit found for SHA". It is the ordinary state
+    // of a head `land` has just replayed onto a moved trunk and not yet pushed,
+    // and the retired body read it as nothing graded. Calling it could-not-look
+    // made every replayed lap's `verify` die of the environment (measured
+    // 2026-10-01). Every other refusal still is could-not-look.
+    if answer.status == UNKNOWN_COMMIT {
+        writeln!(
+            err,
+            "record forge: the forge has no such commit yet, so nothing is graded; nothing recorded"
+        )?;
+        return Ok(ExitCode::Success);
+    }
     if !answer.is_reading() {
         writeln!(
             err,

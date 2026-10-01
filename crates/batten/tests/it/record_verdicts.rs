@@ -352,6 +352,22 @@ fn a_forge_that_will_not_answer_is_could_not_look_and_writes_nothing() {
     assert_eq!(recorded(&dir), None);
 }
 
+/// The twin of the refusal above: a 422 is the forge saying it holds no such
+/// commit, which `land`'s replayed-not-yet-pushed head always is. No check-run
+/// exists, so nothing is graded — an answer, not could-not-look.
+#[test]
+fn a_commit_the_forge_has_never_seen_records_nothing_and_passes() {
+    let (dir, forge) = consumer("unknown-commit");
+    std::fs::write(
+        forge.join("resp.1"),
+        "HTTP/2 422\ncontent-type: application/json\n\n{\"message\": \"No commit found for SHA\"}\n",
+    )
+    .expect("write the answer");
+    let written = fetch(&dir, &forge, Some("final"));
+    assert_eq!(written.status.code(), Some(0), "{}", said(&written));
+    assert_eq!(recorded(&dir), None);
+}
+
 #[test]
 fn a_qualifier_without_fetch_is_a_usage_error() {
     let (dir, _) = consumer("usage");
