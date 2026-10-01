@@ -673,6 +673,14 @@ local gate = new Mapping<String, Step> {
   ["cargo-clippy"] = (Builtins.cargo_clippy) {
     // `slow` tier: a whole-workspace compile at --all-targets --all-features.
     profiles = List("slow")
+    // ONE JOB, NOT ONE PER CARGO WORKSPACE (CLOUD-2051). The builtin carries
+    // `workspace_indicator = "Cargo.toml"`, so hk formed a job for `fuzz/` (its own
+    // `[workspace]`) as well as the root — and both ran `lint:clippy`, which ignores
+    // the indicator and checks the ROOT. So the root clippy ran twice per lap over
+    // one `target/clippy`, and `fuzz/` was checked by nothing while the step read as
+    // covering it. Excluding it makes the job count honest; linting `fuzz/` is
+    // CLOUD-2052's. `hk_contract.rs` holds every nested workspace to this list.
+    exclude = List("fuzz/**")
     // CHEAP FIRST. Every sub-second lint over a file the build or the gate reads
     // runs before the first compile, so a Rego parse error, a TOML typo or an
     // unformatted file fails in under two seconds instead of after the whole

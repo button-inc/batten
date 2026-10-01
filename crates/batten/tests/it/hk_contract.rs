@@ -40,6 +40,74 @@ fn code(output: &std::process::Output) -> Option<i32> {
     output.status.code()
 }
 
+/// The `exclude` globs one `hk.pkl` step block declares, read off the committed
+/// file. `None` when the step is not found, so a renamed step fails loudly rather
+/// than reading as "excludes nothing".
+fn step_excludes(pkl: &str, step: &str) -> Option<Vec<String>> {
+    let opener = format!("  [\"{step}\"] = ");
+    let start = pkl.lines().position(|line| line.starts_with(&opener))?;
+    let block = pkl
+        .lines()
+        .skip(start + 1)
+        .take_while(|line| *line != "  }");
+    let mut globs = Vec::new();
+    for line in block {
+        let Some(list) = line.trim().strip_prefix("exclude = List(") else {
+            continue;
+        };
+        globs.extend(
+            list.trim_end_matches(')')
+                .split(',')
+                .map(|glob| glob.trim().trim_matches('"').to_owned())
+                .filter(|glob| !glob.is_empty()),
+        );
+    }
+    Some(globs)
+}
+
+/// Every nested Cargo workspace is outside the root clippy step (CLOUD-2051).
+///
+/// The builtin forms one hk job per Cargo workspace, and the step's command,
+/// `mise run lint:clippy`, checks the ROOT whichever job runs it — so a nested
+/// `[workspace]` the step does not exclude is a second full clippy of the root per
+/// lap, and a workspace the step reads as covering while it checks nothing of it.
+/// Measured on the 2026-09-30 landing lap: `fuzz/` made it run twice.
+//
+// The declared mutation, in a plain comment because `hk.pkl` is no sweep route;
+// killed by hand:
+// MUTANT clippy-runs-per-workspace|s@^    exclude = List("fuzz/\*\*")$@@|every_nested_cargo_workspace_is_excluded_from_the_root_clippy_step
+#[test]
+fn every_nested_cargo_workspace_is_excluded_from_the_root_clippy_step() {
+    let root = common::at_root(".");
+    let pkl = fs::read_to_string(root.join("hk.pkl")).expect("hk.pkl is committed");
+    let excludes =
+        step_excludes(&pkl, "cargo-clippy").expect("hk.pkl still declares the cargo-clippy step");
+    let manifests = common::git_in(&root, &["ls-files", "--", "*Cargo.toml"]);
+    let nested: Vec<&str> = manifests
+        .lines()
+        .filter(|manifest| *manifest != "Cargo.toml")
+        .filter(|manifest| {
+            fs::read_to_string(root.join(manifest))
+                .is_ok_and(|text| text.lines().any(|line| line.trim() == "[workspace]"))
+        })
+        .collect();
+    // ANTI-VACUITY: the case was written over `fuzz/`, and a listing that finds no
+    // nested workspace would pass whatever the step declared.
+    assert!(
+        nested.contains(&"fuzz/Cargo.toml"),
+        "the nested-workspace scan found none of the ones this tree carries: {nested:?}"
+    );
+    for manifest in nested {
+        let dir = manifest.trim_end_matches("Cargo.toml");
+        assert!(
+            excludes.iter().any(|glob| glob == &format!("{dir}**")),
+            "`{manifest}` declares its own [workspace], so hk forms a second cargo-clippy job \
+             for it that re-runs the root's `lint:clippy`; exclude `{dir}**` from the step. \
+             Declared: {excludes:?}"
+        );
+    }
+}
+
 /// The whole point of the row: the committed projection still matches the
 /// pinned runner.
 ///
