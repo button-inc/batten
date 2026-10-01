@@ -171,9 +171,11 @@ reason = "..."
     );
     // Exit 1 is the usage code: a config fault, never a policy verdict, so no
     // Batten failure can read as a deny (`rules/rust.md`).
+    // CLOUD-1917: a config this build cannot load REFUSES the call (exit 1 was a
+    // harness's non-blocking error, which ran it); the refusal names the fault.
     assert_eq!(
         output.status.code(),
-        Some(1),
+        Some(2),
         "a partial ceiling is a config fault: {}",
         stderr(&output)
     );

@@ -12563,10 +12563,12 @@ fn a_fact_row_that_states_no_returns_is_refused_at_load_over_the_binary() {
         .build();
 
     let refused = run_hook_in(&dir, "exit-code", PR_CREATE);
+    // CLOUD-1917: a config this build cannot load REFUSES the call (exit 1 was a
+    // harness's non-blocking error, which ran it); the refusal names the fault.
     assert_eq!(
         refused.status.code(),
-        Some(1),
-        "a `[[fact]]` row with no `returns` is a usage error, not a policy verdict; stderr: {}",
+        Some(2),
+        "a `[[fact]]` row with no `returns` is refused at load; stderr: {}",
         common::stderr(&refused)
     );
     // Pointer-only, and this is the clause worth asserting rather than trusting:

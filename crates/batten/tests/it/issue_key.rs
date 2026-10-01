@@ -410,10 +410,12 @@ fn a_requires_key_row_without_a_base_is_a_load_error() {
         &["adjudicate", "--harness", "exit-code"],
         &payload("gh pr create --title 'tidy' --body 'no key'"),
     );
+    // CLOUD-1917: a config this build cannot load REFUSES the call (exit 1 was a
+    // harness's non-blocking error, which ran it); the refusal names the fault.
     assert_eq!(
         output.status.code(),
-        Some(1),
-        "a malformed row is a usage error, never a deny: {}",
+        Some(2),
+        "a malformed row is refused at load: {}",
         stderr(&output)
     );
     assert!(

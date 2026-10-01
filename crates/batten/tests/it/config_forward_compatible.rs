@@ -185,8 +185,13 @@ fn a_refusal_after_a_prune_points_at_the_source_line() {
             "{FROM_A_NEWER_SCHEMA}\n# a comment the prune must not eat\n[worktree]\nnot_a_key_here_either = true\n"
         ),
     );
-    let (code, _, stderr) = adjudicate(&dir);
-    assert_eq!(code, Some(1), "the top-level fault is still refused");
+    let (code, stdout, stderr) = adjudicate(&dir);
+    // The deny is the decision document on this host, so its reason is on
+    // stdout; read both channels.
+    let stderr = format!("{stdout}{stderr}");
+    // CLOUD-1917: a config this build cannot load REFUSES the call (exit 1 was a
+    // harness's non-blocking error, which ran it); the refusal names the fault.
+    assert_eq!(code, Some(3), "the top-level fault is still refused");
     // Line 13 of the fixture: the `[worktree]` header, a top-level key this
     // build does not know and cannot charge to any row. The comment and the
     // blank line above it are what a re-serialising prune would have eaten,
@@ -762,9 +767,11 @@ fn the_same_variant_is_refused_when_the_schemas_agree() {
     fs::write(dir.join("schema/batten.schema.json"), &derived.stdout).unwrap();
 
     let (code, _stdout, stderr) = adjudicate(&dir);
+    // CLOUD-1917: a config this build cannot load REFUSES the call (exit 1 was a
+    // harness's non-blocking error, which ran it); the refusal names the fault.
     assert_eq!(
         code,
-        Some(1),
+        Some(3),
         "with the schemas agreeing the value is bad input, and a rule must never \
          be left configured, typed and off\n{stderr}"
     );
@@ -830,9 +837,11 @@ fn a_consumer_declaring_no_floor_still_refuses_a_bad_variant() {
         ),
     );
     let (code, _stdout, stderr) = adjudicate(&dir);
+    // CLOUD-1917: a config this build cannot load REFUSES the call (exit 1 was a
+    // harness's non-blocking error, which ran it); the refusal names the fault.
     assert_eq!(
         code,
-        Some(1),
+        Some(3),
         "with nothing saying this build is behind, a bad variant is bad input\n{stderr}"
     );
 }

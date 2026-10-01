@@ -558,10 +558,12 @@ fn a_marker_no_sweep_clears_is_refused_at_load() {
         &write_payload("src/tracked.rs"),
     );
     let said = stderr(&output);
+    // CLOUD-1917: a config this build cannot load REFUSES the call (exit 1 was a
+    // harness's non-blocking error, which ran it); the refusal names the fault.
     assert_eq!(
         output.status.code(),
-        Some(1),
-        "a config that cannot be loaded is a usage error, never a verdict: {said}"
+        Some(2),
+        "a config that cannot be loaded is refused at load: {said}"
     );
     assert!(said.contains("never-swept"), "names the marker: {said}");
     assert!(

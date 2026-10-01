@@ -255,10 +255,12 @@ reason = "unreachable"
         )
         .git()
         .build();
+    // CLOUD-1917: a config this build cannot load REFUSES the call (exit 1 was a
+    // harness's non-blocking error, which ran it); the refusal names the fault.
     assert_eq!(
         verdict(&contradictory, "mcp__Linear__save_issue", r"{}"),
-        Some(1),
-        "a row that can never fire is a usage error, not a silently inert gate"
+        Some(2),
+        "a row that can never fire is refused at load, not a silently inert gate"
     );
 
     let over_two = Fixture::new("args-two-projections")
@@ -423,14 +425,16 @@ reason = "unreachable"
         )
         .git()
         .build();
+    // CLOUD-1917: a config this build cannot load REFUSES the call (exit 1 was a
+    // harness's non-blocking error, which ran it); the refusal names the fault.
     assert_eq!(
         verdict(
             &no_projection,
             "mcp__Linear__save_issue",
             r#"{"id":"CLOUD-1"}"#
         ),
-        Some(1),
-        "a named key with no projection is a usage error"
+        Some(2),
+        "a named key with no projection is refused at load"
     );
 
     let wrong_key = Fixture::new("args-from-wrong-key")
@@ -454,8 +458,8 @@ reason = "unreachable"
         .build();
     assert_eq!(
         verdict(&wrong_key, "mcp__Linear__save_issue", r#"{"id":"CLOUD-1"}"#),
-        Some(1),
-        "a projection on a branch-keyed row is a usage error, not an ignored column"
+        Some(2),
+        "a projection on a branch-keyed row is refused at load, not an ignored column"
     );
 }
 
@@ -628,10 +632,12 @@ reason = "unreachable"
         .git()
         .base_commit()
         .build();
+    // CLOUD-1917: a config this build cannot load REFUSES the call (exit 1 was a
+    // harness's non-blocking error, which ran it); the refusal names the fault.
     assert_eq!(
         verdict(&zero, "mcp__Linear__save_issue", r#"{"id":"CLOUD-1"}"#),
-        Some(1),
-        "a bound of zero is a usage error, not a very strict policy"
+        Some(2),
+        "a bound of zero is refused at load, not a very strict policy"
     );
     let refusal = run_with_stdin(
         &zero,

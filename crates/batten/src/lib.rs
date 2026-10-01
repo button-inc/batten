@@ -14490,6 +14490,18 @@ fn names_the_config_authority(path: &str) -> bool {
     name == config::CONFIG_FILE || name == resolve::LOCAL_CONFIG_FILE
 }
 
+/// Is this line of a load error toml's quote of the config source?
+///
+/// toml renders a span as a gutter: `  |`, then `N | <source line>`, then `  |
+/// ^^^` under it. Every such line is optional whitespace, an optional line
+/// number, then `|`. No authored diagnostic starts that way.
+fn is_source_excerpt(line: &str) -> bool {
+    line.trim_start()
+        .trim_start_matches(|c: char| c.is_ascii_digit())
+        .trim_start()
+        .starts_with('|')
+}
+
 /// The remedy [`deny_unadjudicable`] renders: the floor it admits, named.
 ///
 /// **IT USED TO BE [`Fix::None`], AND THAT TEXT SENT THE CALLER INTO THE WALL.**
@@ -14592,12 +14604,24 @@ fn deny_unadjudicable(
     // skew and unknown-key arms the whole message is one line already — the
     // `max_age = 0` and `command_matcher` diagnostics ride through intact, which
     // is what keeps the repair as findable as it was when this arm exited `1`.
+    //
+    // EVERY LINE BUT THE SOURCE EXCERPT, not the first line alone (CLOUD-1917).
+    // A validator's message is authored prose that names the field or key to
+    // fix, and a toml error names its cause AFTER the span (`missing field
+    // returns`), so keeping only line one dropped the one clause a repair
+    // needs. What rule 4 excludes is the quoted source: toml's gutter lines,
+    // `3 | [[fact]]` and the caret line under it, both of which carry a `|`
+    // after an optional line number and nothing else does.
+    //MUTANT-SUITE crates/batten/tests/it/cli.rs
+    //MUTANT refusal-drops-the-cause|s@^        .filter(|line| !is_source_excerpt(line))$@        .take(1)@|a_fact_row_that_states_no_returns_is_refused_at_load_over_the_binary
     let pointer = unreadable
         .to_string()
         .lines()
-        .next()
-        .unwrap_or_default()
-        .to_owned();
+        .filter(|line| !is_source_excerpt(line))
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
     let refusal = Refusal::new(
         "engine-cannot-adjudicate",
         format!(

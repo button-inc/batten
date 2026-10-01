@@ -284,8 +284,18 @@ fn a_named_keying_over_an_agent_sourced_fact_is_refused_at_load_not_at_decision(
     let output = ready(&dir);
     // Exit 1 and a usage error, never exit 2: this is config the operator wrote
     // being refused, not a verdict about the call.
-    assert_eq!(output.status.code(), Some(1), "{}", common::stderr(&output));
-    let reason = common::stderr(&output);
+    // CLOUD-1917: a config this build cannot load REFUSES the call (exit 1 was a
+    // harness's non-blocking error, which ran it); the refusal names the fault.
+    assert_eq!(output.status.code(), Some(3), "{}", common::stderr(&output));
+    // The deny is the decision document on this host, so the reason is its
+    // `permissionDecisionReason` field; parsed, because the raw JSON escapes
+    // the quotes this asserts on.
+    let document: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("the deny is one JSON document");
+    let reason = document["hookSpecificOutput"]["permissionDecisionReason"]
+        .as_str()
+        .expect("the document carries a reason")
+        .to_owned();
     assert!(reason.contains("key = \"named\""), "{reason}");
     assert!(reason.contains("keyed"), "{reason}");
 }
