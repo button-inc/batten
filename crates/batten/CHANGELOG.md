@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.194](https://github.com/button-inc/batten/compare/v0.0.193...v0.0.194) - 2026-10-01
+
+### Other
+
+- *(it)* judge a scratch name threaded through a helper, and end five races
+- *(it)* test the vocabulary file's extension through Path
+- *(it)* read the declared vocabulary from the file set the gates see
+
 ## [0.0.193](https://github.com/button-inc/batten/compare/v0.0.192...v0.0.193) - 2026-09-30
 
 ### Added
