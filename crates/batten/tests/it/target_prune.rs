@@ -1848,6 +1848,50 @@ fn generations_of_one_unit_still_supersede() {
     assert!(!deps.join("cli-aaaaaaaaaaaa").exists(), "the oldest goes");
 }
 
+/// CLOUD-2047. cargo writes an example target's hashed generations to
+/// `<profile>/examples`, `.dwo` sets beside them, under the same
+/// `.fingerprint/<pkg>-<hash>` as a `deps` unit, and nothing ever reclaimed them:
+/// 56 units for 4 benches, 1,082 MB, measured 2026-09-30. The pass over `deps`
+/// applies unchanged.
+///
+/// The control is an `examples` directory that is NOT a profile's: a fixture under
+/// `target/` can spell the name, and the reclaim may only reach cargo's own.
+#[test]
+fn superseded_example_generations_are_reclaimed_like_deps() {
+    let repo = repo("target-prune-examples");
+    let examples = repo.join("target/debug/examples");
+    unit(&examples, "bench", "aaaaaaaaaaaa", 3600, 101, 5);
+    unit(&examples, "bench", "bbbbbbbbbbbb", 1800, 101, 5);
+    unit(&examples, "bench", "cccccccccccc", 60, 101, 5);
+    let orphan = examples.join("bench-dddddddddddd.bench.1a2b3c4d-cgu.0.rcgu.dwo");
+    std::fs::write(&orphan, b"debuginfo").unwrap();
+    let foreign = repo.join("target/tmp/fixture/examples");
+    artifact(&foreign, "bench", "aaaaaaaaaaaa", 3600);
+    artifact(&foreign, "bench", "bbbbbbbbbbbb", 1800);
+    artifact(&foreign, "bench", "cccccccccccc", 60);
+
+    let output = prune(&repo, "99999", &["-y"]);
+    assert!(output.status.success(), "{}", said(&output));
+    assert_eq!(
+        survivors(&examples),
+        2,
+        "keep = 2 of the example's generations, and the orphan .dwo is gone"
+    );
+    assert!(
+        !examples.join("bench-aaaaaaaaaaaa").exists(),
+        "the oldest generation of an example goes, as a deps unit's would"
+    );
+    assert!(
+        !orphan.exists(),
+        "an example .dwo whose unit has no fingerprint goes too"
+    );
+    assert_eq!(
+        survivors(&foreign),
+        3,
+        "an `examples` directory that is not a profile's is never reclaimed"
+    );
+}
+
 /// CLOUD-1293. A `.dwo` whose owning unit has no fingerprint is reclaimed; one
 /// whose unit is live is not. The live one is the control: the case cannot pass by
 /// the pass sweeping `.dwo` wholesale, which would cost every live unit its

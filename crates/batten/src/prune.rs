@@ -2122,7 +2122,23 @@ fn lap(
 fn reclaim_superseded(root: &Path, keep: usize) -> (usize, u64) {
     let mut pruned = 0;
     let mut bytes = 0;
-    for deps in directories_named(root, "deps") {
+    // `examples` BESIDE `deps` (CLOUD-2047). cargo writes an example target's
+    // hashed generations there, `.dwo` sets included, and records each under the
+    // same `.fingerprint/<pkg>-<hash>`, so the one pass applies unchanged — and
+    // without it every lap that rebuilt the crate left one more generation of
+    // every bench: 56 units for 4 examples, 1,082 MB, measured 2026-09-30. Only an
+    // `examples` whose parent is a profile (it carries `.fingerprint`) is a cargo
+    // output; the name alone is one a fixture under `target/` could spell.
+    //MUTANT-SUITE crates/batten/tests/it/target_prune.rs
+    //MUTANT examples-never-pruned|s@\.chain(examples)@.chain(Vec::<PathBuf>::new())@|superseded_example_generations_are_reclaimed_like_deps
+    let examples: Vec<PathBuf> = directories_named(root, "examples")
+        .into_iter()
+        .filter(|dir| {
+            dir.parent()
+                .is_some_and(|profile| profile.join(".fingerprint").is_dir())
+        })
+        .collect();
+    for deps in directories_named(root, "deps").into_iter().chain(examples) {
         let Some(_building) = claim(root, &deps) else {
             continue;
         };
