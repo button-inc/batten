@@ -255,11 +255,13 @@ pub fn carries(dir: &Path, candidate: &str, tip: &str) -> bool {
 /// merge of the running result against that commit's own tree with its first
 /// parent's tree as the base — which is what `git rebase` does, spelled out.
 ///
-/// **A merge commit in the range is refused rather than flattened.** `git rebase`
-/// without `--rebase-merges` silently drops one, and a landing branch that grew
-/// one is a branch whose author did something this loop does not model; guessing
-/// is the wrong direction when the whole point of the range is that its patches
-/// reach `main` unchanged.
+/// **A merge commit in the range is refused here rather than flattened.** `git
+/// rebase` without `--rebase-merges` silently drops one, and guessing is the
+/// wrong direction when the whole point of the range is that its patches reach
+/// `main` unchanged. `land`'s own entry points ([`rebase_resolving`],
+/// [`rebase_proposing`]) answer such a range with a merge of the moved base
+/// instead (CLOUD-2054); this one — the speculation bet's — keeps refusing,
+/// because a bet merged into a branch could not be shed by its unwind.
 ///
 /// **A replayed commit loses its signature, exactly as `git rebase` without `-S`
 /// does.** A rebase mints new bytes, so a carried-over `gpgsig` would be a
@@ -368,7 +370,7 @@ pub fn rebase_resolving(
     onto: &str,
     resolutions: &[String],
 ) -> Result<Rebase> {
-    replay_range(dir, branch, onto, onto, resolutions, None).map(|(rebase, _)| rebase)
+    replay_range(dir, branch, onto, onto, resolutions, None, true).map(|(rebase, _)| rebase)
 }
 
 /// One conflicted path's candidate, if a shape covered every region of it
@@ -406,7 +408,7 @@ pub fn rebase_proposing(
     resolutions: &[String],
     into: &Path,
 ) -> Result<(Rebase, Vec<Candidate>)> {
-    replay_range(dir, branch, onto, onto, resolutions, Some(into))
+    replay_range(dir, branch, onto, onto, resolutions, Some(into), true)
 }
 
 /// Replay `upstream..branch` onto `onto`, and update the worktree to match.
@@ -427,7 +429,7 @@ pub fn rebase_proposing(
 ///
 /// As [`rebase`].
 pub fn replay_onto(dir: &Path, branch: &str, upstream: &str, onto: &str) -> Result<Rebase> {
-    replay_range(dir, branch, upstream, onto, &[], None).map(|(rebase, _)| rebase)
+    replay_range(dir, branch, upstream, onto, &[], None, false).map(|(rebase, _)| rebase)
 }
 
 /// The replay every entry point above funnels into.
@@ -442,6 +444,7 @@ fn replay_range(
     onto: &str,
     resolutions: &[String],
     propose_into: Option<&Path>,
+    merge_ok: bool,
 ) -> Result<(Rebase, Vec<Candidate>)> {
     let repo = crate::git::open_for_write(dir)?;
     let resolve = |rev: &str| {
@@ -479,17 +482,23 @@ fn replay_range(
         .all()
         .map_err(|err| anyhow::anyhow!("gitwrite: {upstream}..{branch} will not walk: {err}"))?;
     let mut range = Vec::new();
+    let mut merges = false;
     for step in walk {
         let info = step.map_err(|err| {
             anyhow::anyhow!("gitwrite: {upstream}..{branch} will not walk: {err}")
         })?;
-        if info.parent_ids().count() > 1 {
-            return Err(anyhow::anyhow!(
-                "gitwrite: {} is a merge, and this replay does not model one",
-                info.id()
-            ));
-        }
+        merges |= info.parent_ids().count() > 1;
         range.push(info.id().detach());
+    }
+    // A REPLAY CANNOT REPRODUCE A MERGE COMMIT, and only `land`'s own catch-up
+    // may answer one with a merge instead (CLOUD-2054). A speculative bet merged
+    // into a branch could not be shed by the unwind, and the unwind itself
+    // (`bound != base`) must drop borrowed commits, which a merge cannot do — so
+    // every other shape keeps the refusal, now naming why.
+    if merges && (!merge_ok || bound != base) {
+        return Err(anyhow::anyhow!(
+            "gitwrite: {upstream}..{branch} carries a merge, which only `land`'s rebase brings onto a moved base"
+        ));
     }
     // The walk is newest first and a replay is oldest first.
     range.reverse();
@@ -505,6 +514,27 @@ fn replay_range(
         .map_err(|err| {
             anyhow::anyhow!("gitwrite: the configured committer will not parse: {err}")
         })?;
+    let empty = gix::ObjectId::empty_tree(repo.object_hash());
+    let context = Replay {
+        dir,
+        options: &options,
+        committer: &committer,
+        empty,
+        propose_into,
+    };
+
+    // A RANGE CARRYING A MERGE IS BROUGHT ONTO THE BASE BY A MERGE (CLOUD-2054).
+    //
+    // Refusing it left one route open: rewriting the branch by hand to get past
+    // the loop, which is lossier than anything this function could do. Measured
+    // on #1056: the refusal arrived after a 51-minute `verify`, and the squash
+    // that answered it dropped a breaking-change marker, per-commit semver and
+    // 211 commits of history. Merging the moved base into the tip keeps every
+    // original commit byte for byte — the property the refusal existed to
+    // protect — and the result still fast-forwards.
+    if merges {
+        return merge_onto(&context, &repo, branch, onto, tip, base, resolutions);
+    }
 
     // **A COMMIT WHOSE CHANGE IS ALREADY ON THE BASE IS DROPPED, NOT REPLAYED**
     // (CLOUD-1586). This is `git rebase`'s own behaviour — it builds the list
@@ -539,14 +569,6 @@ fn replay_range(
     )
     .unwrap_or_default();
 
-    let empty = gix::ObjectId::empty_tree(repo.object_hash());
-    let context = Replay {
-        dir,
-        options: &options,
-        committer: &committer,
-        empty,
-        propose_into,
-    };
     let mut cursor = base;
     let mut replayed = 0usize;
     // THE OFFER, PARSED ONCE AND SPENT PER OCCURRENCE (CLOUD-1670).
@@ -639,6 +661,101 @@ fn finish(
         head: now,
         commits: replayed,
     })
+}
+
+/// Bring a merge-carrying `branch` onto the moved `base` with ONE merge commit
+/// (CLOUD-2054).
+///
+/// **Parents `[tip, base]`, so every original commit keeps its bytes** and the
+/// result is still a descendant of the base, which is all a fast-forward needs.
+/// The tree is [`Repository::merge_commits`](gix::Repository::merge_commits)'s,
+/// which builds a VIRTUAL merge base when the histories have several — a branch
+/// that merged trunk in repeatedly is criss-cross, and picking one base there
+/// would invent conflicts or hide them.
+///
+/// **Judged by [`settle`], exactly as a replayed commit is**: the same strict
+/// reading, the same `--resolve` offer (one merge spends each path once), the
+/// same candidates under `--propose`. A conflict names the TIP, the original
+/// commit that would not carry onto the base, and moves nothing.
+///
+/// The count is zero because nothing was REPLAYED; the head moved by a merge.
+fn merge_onto(
+    ctx: &Replay<'_>,
+    repo: &gix::Repository,
+    branch: &str,
+    onto: &str,
+    tip: gix::ObjectId,
+    base: gix::ObjectId,
+    resolutions: &[String],
+) -> Result<(Rebase, Vec<Candidate>)> {
+    let mut outcome = repo
+        .merge_commits(
+            tip,
+            base,
+            gix::merge::blob::builtin_driver::text::Labels::default(),
+            ctx.options.clone().into(),
+        )
+        .map_err(|err| anyhow::anyhow!("gitwrite: {onto} will not merge into {branch}: {err}"))?;
+    let trees = [
+        outcome.merge_base_tree_id,
+        tree_of(repo, tip)?,
+        tree_of(repo, base)?,
+    ];
+    let offered = next_offer(
+        &parse_offer(resolutions),
+        &std::collections::BTreeMap::new(),
+    );
+    let settled = settle(
+        ctx.dir,
+        repo,
+        &mut outcome.tree_merge,
+        trees,
+        &offered,
+        ctx.propose_into,
+    )?;
+    if let Settled::Conflicted(paths, candidates) = settled {
+        return Ok((
+            Rebase::Conflicted {
+                commit: tip.to_hex().to_string(),
+                paths,
+            },
+            candidates,
+        ));
+    }
+    let tree = outcome
+        .tree_merge
+        .tree
+        .write()
+        .map_err(|err| anyhow::anyhow!("gitwrite: the merge of {onto} into {branch}: {err}"))?
+        .detach();
+    let short = |name: &str| {
+        name.strip_prefix("refs/heads/")
+            .or_else(|| name.strip_prefix("refs/remotes/"))
+            .unwrap_or(name)
+            .to_owned()
+    };
+    let who = stamped_in_utc(ctx.committer);
+    let merged = gix::objs::Commit {
+        tree,
+        parents: [tip, base].into_iter().collect(),
+        author: who.clone(),
+        committer: who,
+        encoding: None,
+        message: format!(
+            "chore(merge): carry {} into {}\n",
+            short(onto),
+            short(branch)
+        )
+        .into(),
+        extra_headers: Vec::new(),
+    };
+    let minted = repo
+        .write_object(&merged)
+        .map_err(|err| {
+            anyhow::anyhow!("gitwrite: the merge of {onto} into {branch} will not write: {err}")
+        })?
+        .detach();
+    finish(ctx.dir, repo, branch, tip, minted, 0).map(|rebase| (rebase, Vec::new()))
 }
 
 /// Move `branch` to `to` and make the worktree match — `git reset --hard`.
@@ -877,6 +994,71 @@ fn replay(
             options.clone(),
         )
         .map_err(|err| anyhow::anyhow!("gitwrite: {original} will not merge: {err}"))?;
+    let resolved = match settle(
+        dir,
+        repo,
+        &mut outcome,
+        [ancestor, ours, theirs],
+        resolutions,
+        propose_into,
+    )? {
+        Settled::Clean(spent) => spent,
+        Settled::Conflicted(paths, candidates) => return Ok(Step::Conflicted(paths, candidates)),
+    };
+
+    let tree = outcome
+        .tree
+        .write()
+        .map_err(|err| anyhow::anyhow!("gitwrite: {original}'s merged tree: {err}"))?
+        .detach();
+    let mut replayed = commit
+        .decode()
+        .map_err(|err| anyhow::anyhow!("gitwrite: {original} will not decode: {err}"))?
+        .into_owned()
+        .map_err(|err| anyhow::anyhow!("gitwrite: {original} will not decode: {err}"))?;
+    replayed.tree = tree;
+    replayed.parents = std::iter::once(cursor).collect();
+    replayed.committer = stamped_in_utc(committer);
+    replayed
+        .extra_headers
+        .retain(|(name, _)| name.as_slice() != b"gpgsig");
+    let minted = repo
+        .write_object(&replayed)
+        .map_err(|err| anyhow::anyhow!("gitwrite: {original} will not rewrite: {err}"))?
+        .detach();
+    Ok(if resolved.is_empty() {
+        Step::Landed(minted)
+    } else {
+        Step::Resolved(minted, resolved)
+    })
+}
+
+/// What settling one merge's conflicts produced.
+enum Settled {
+    /// Nothing left unresolved: the paths whose offered resolution was spent,
+    /// empty when the merge was clean.
+    Clean(Vec<String>),
+    /// The paths left unresolved, and a candidate per path when asked for one.
+    Conflicted(Vec<String>, Vec<Candidate>),
+}
+
+/// Judge a merge outcome strictly, and place every offered resolution.
+///
+/// **ONE JUDGEMENT FOR BOTH SHAPES OF CATCHING UP (CLOUD-2054).** A replayed
+/// commit and a merge of the moved base into a merge-carrying branch must stop
+/// on exactly the same conflicts and take exactly the same `--resolve` offer, or
+/// the conflict stop `land` prints would name a route that works for one shape
+/// and not the other. So the judgement is this function, called by both.
+///
+/// `trees` is `[ancestor, ours, theirs]`, read only to write candidates.
+fn settle(
+    dir: &Path,
+    repo: &gix::Repository,
+    outcome: &mut gix::merge::tree::Outcome<'_>,
+    trees: [gix::ObjectId; 3],
+    resolutions: &std::collections::BTreeMap<String, std::path::PathBuf>,
+    propose_into: Option<&Path>,
+) -> Result<Settled> {
     // THE STRICTEST READING, and the module header says why: a lenient one would
     // let a resolution strategy quietly pick a side, which deletes the loop's
     // only human stop.
@@ -898,10 +1080,10 @@ fn replay(
         // exists to refuse, arrived at by omission rather than by a flag.
         if paths.is_empty() || !paths.iter().all(|path| resolutions.contains_key(path)) {
             let candidates = match propose_into {
-                Some(into) => candidates(repo, [ancestor, ours, theirs], &paths, into)?,
+                Some(into) => candidates(repo, trees, &paths, into)?,
                 None => Vec::new(),
             };
-            return Ok(Step::Conflicted(paths, candidates));
+            return Ok(Settled::Conflicted(paths, candidates));
         }
 
         for path in &paths {
@@ -935,32 +1117,7 @@ fn replay(
         }
         resolved = paths;
     }
-
-    let tree = outcome
-        .tree
-        .write()
-        .map_err(|err| anyhow::anyhow!("gitwrite: {original}'s merged tree: {err}"))?
-        .detach();
-    let mut replayed = commit
-        .decode()
-        .map_err(|err| anyhow::anyhow!("gitwrite: {original} will not decode: {err}"))?
-        .into_owned()
-        .map_err(|err| anyhow::anyhow!("gitwrite: {original} will not decode: {err}"))?;
-    replayed.tree = tree;
-    replayed.parents = std::iter::once(cursor).collect();
-    replayed.committer = stamped_in_utc(committer);
-    replayed
-        .extra_headers
-        .retain(|(name, _)| name.as_slice() != b"gpgsig");
-    let minted = repo
-        .write_object(&replayed)
-        .map_err(|err| anyhow::anyhow!("gitwrite: {original} will not rewrite: {err}"))?
-        .detach();
-    Ok(if resolved.is_empty() {
-        Step::Landed(minted)
-    } else {
-        Step::Resolved(minted, resolved)
-    })
+    Ok(Settled::Clean(resolved))
 }
 
 /// Bring the worktree from the tree of `was` to the tree of `now`.

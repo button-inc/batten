@@ -76,6 +76,9 @@
 #MUTANT same-path-offer-collapses|s@        *used.entry(path).or_insert(0) += 1;@        *used.entry(path).or_insert(0) += 0;@|a_chain_of_conflicts_at_the_same_path_resolves_with_one_entry_each
 #MUTANT use-now-local-or-utc-in-gitwrite|s@        time: crate::git::utc_at(who.time.seconds),@        time: who.time,@|a_replayed_committer_is_stamped_in_utc
 #MUTANT conflict-stop-names-no-route|s@        said.push(format!("land: {path}"));@        let _ = path;@|the_conflict_stop_names_every_path_and_the_route_out
+#MUTANT merge-range-refused|s@    replay_range(dir, branch, onto, onto, resolutions, None, true)@    replay_range(dir, branch, onto, onto, resolutions, None, false)@|a_merge_carrying_branch_over_a_moved_trunk_lands_as_a_merge
+#MUTANT merge-conflict-taken|s@    if let Settled::Conflicted(paths, candidates) = settled {@    if let Settled::Conflicted(paths, candidates) = Settled::Clean(Vec::new()) {@|a_merge_carrying_branch_that_conflicts_with_trunk_moves_nothing
+#MUTANT merge-path-open-to-every-caller|s@    replay_range(dir, branch, upstream, onto, &\[\], None, false)@    replay_range(dir, branch, upstream, onto, \&[], None, true)@|a_plain_rebase_still_refuses_a_merge_carrying_range
 */
 
 #![cfg(unix)]
@@ -1293,6 +1296,147 @@ fn a_placed_bet_unwinds_to_the_recorded_sha() {
         "the borrowed file survived the unwind"
     );
     assert!(dir.join("ours.txt").is_file(), "our own file was removed");
+}
+
+/// A branch that MERGED trunk once, over a trunk that has since moved again.
+///
+/// Returns the repository, the merge-carrying tip, the commit on the branch
+/// before the merge, and the moved trunk. `conflict` makes the branch and the
+/// moved trunk edit the same line after the merge, so the catch-up must stop.
+fn merge_carrying(
+    name: &str,
+    conflict: bool,
+) -> (
+    PathBuf,
+    gix::Repository,
+    gix::ObjectId,
+    gix::ObjectId,
+    gix::ObjectId,
+) {
+    let (dir, repo) = init(name);
+    let base = commit(&repo, &[], &[("shared.txt", "base\n")]);
+    let first: Files<'_> = &[("shared.txt", "base\n"), ("from-main.txt", "one\n")];
+    let trunk_one = commit(&repo, &[base], first);
+    let own: Files<'_> = &[("shared.txt", "base\n"), ("from-branch.txt", "work\n")];
+    let work = commit(&repo, &[base], own);
+    let shared = if conflict { "branch\n" } else { "base\n" };
+    let merged: Files<'_> = &[
+        ("shared.txt", shared),
+        ("from-main.txt", "one\n"),
+        ("from-branch.txt", "work\n"),
+    ];
+    let tip = commit(&repo, &[work, trunk_one], merged);
+    let moved_shared = if conflict { "trunk\n" } else { "base\n" };
+    let second: Files<'_> = &[
+        ("shared.txt", moved_shared),
+        ("from-main.txt", "one\n"),
+        ("from-main-again.txt", "two\n"),
+    ];
+    let trunk_two = commit(&repo, &[trunk_one], second);
+    point(&dir, "refs/heads/main", trunk_two);
+    point(&dir, "refs/heads/work", tip);
+    materialise(&dir, merged);
+    (dir, repo, tip, work, trunk_two)
+}
+
+/// **`land` brings a merge-carrying branch onto a moved trunk with a merge
+/// (CLOUD-2054).** A replay cannot reproduce the branch's merge commit, and the
+/// refusal that stood here left a hand rewrite as the only route — measured on
+/// #1056, a squash that lost a breaking-change marker and 211 commits.
+#[test]
+fn a_merge_carrying_branch_over_a_moved_trunk_lands_as_a_merge() {
+    let (dir, _, tip, work, trunk) = merge_carrying("rebase-merge-lands", false);
+    let outcome = gitwrite::rebase_resolving(&dir, "refs/heads/work", "refs/heads/main", &[])
+        .expect("a merge-carrying branch is caught up, not refused");
+    let Rebase::Replayed { head, commits } = outcome else {
+        panic!("expected the branch to move, got {outcome:?}");
+    };
+    assert_eq!(
+        commits, 0,
+        "nothing was REPLAYED; the head moved by a merge"
+    );
+    let repo = gix::open(&dir).expect("reopen");
+    let head: gix::ObjectId = head.parse().expect("head is a sha");
+    let parents: Vec<gix::ObjectId> = repo
+        .find_commit(head)
+        .expect("head reads")
+        .parent_ids()
+        .map(gix::Id::detach)
+        .collect();
+    assert_eq!(
+        parents,
+        vec![tip, trunk],
+        "parents are [old tip, moved trunk]"
+    );
+    // Every original commit survives byte for byte: they are ancestors, unrewritten.
+    for original in [tip, work] {
+        assert_eq!(
+            repo.merge_base(original, head)
+                .expect("merge base")
+                .detach(),
+            original,
+            "{original} must be an unchanged ancestor of the new head"
+        );
+    }
+    assert_eq!(
+        repo.rev_parse_single("refs/heads/work")
+            .expect("resolve")
+            .detach(),
+        head,
+        "the ref moved to the merge"
+    );
+    let names = tree_names(&repo, head);
+    for file in ["from-branch.txt", "from-main.txt", "from-main-again.txt"] {
+        assert!(
+            names.contains(&file.to_owned()),
+            "{file} missing: {names:?}"
+        );
+    }
+    assert!(
+        dir.join("from-main-again.txt").is_file(),
+        "the worktree was not caught up"
+    );
+}
+
+/// The merge stops on a conflict exactly as a replay does, naming the tip and
+/// moving nothing.
+#[test]
+fn a_merge_carrying_branch_that_conflicts_with_trunk_moves_nothing() {
+    let (dir, repo, tip, _, _) = merge_carrying("rebase-merge-conflicts", true);
+    let outcome = gitwrite::rebase_resolving(&dir, "refs/heads/work", "refs/heads/main", &[])
+        .expect("a conflict is an answer, not an error");
+    let Rebase::Conflicted { commit, paths } = outcome else {
+        panic!("a two-sided edit must stop the merge, got {outcome:?}");
+    };
+    assert_eq!(
+        commit,
+        tip.to_hex().to_string(),
+        "the stop names the branch tip"
+    );
+    assert_eq!(paths, vec!["shared.txt".to_owned()]);
+    assert_eq!(
+        repo.rev_parse_single("refs/heads/work")
+            .expect("resolve")
+            .detach(),
+        tip,
+        "nothing moves on a conflict"
+    );
+}
+
+/// **The speculation bet's entry point keeps refusing a merge-carrying range**:
+/// a bet merged into a branch could not be shed by its unwind.
+#[test]
+fn a_plain_rebase_still_refuses_a_merge_carrying_range() {
+    let (dir, repo, tip, _, _) = merge_carrying("rebase-merge-plain-refuses", false);
+    let refused = gitwrite::rebase(&dir, "refs/heads/work", "refs/heads/main");
+    assert!(refused.is_err(), "rebase() must not merge: {refused:?}");
+    assert_eq!(
+        repo.rev_parse_single("refs/heads/work")
+            .expect("resolve")
+            .detach(),
+        tip,
+        "a refusal moves nothing"
+    );
 }
 
 /// **A BET REACHES THE GATE'S ENVIRONMENT, and the publication is a function of
