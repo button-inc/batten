@@ -140,8 +140,11 @@ mkdir -p "$(dirname "$spdx")" "$(dirname "$cdx")"
 cat "$FIXTURE/spdx.fixture" >"$spdx"
 cat "$FIXTURE/cdx.fixture" >"$cdx"
 if [ -f "$FIXTURE/syft.drifts" ]; then
-	n=$(wc -l <"$FIXTURE/syft.args")
-	sed -i "s/\"crate0\"/\"crate$n\"/" "$spdx"
+	# Portable on purpose: BSD sed reads `-i`'s next word as a backup suffix,
+	# and BSD wc pads the count, so the macOS leg never drifted.
+	n=$(wc -l <"$FIXTURE/syft.args" | tr -d ' ')
+	sed "s/\"crate0\"/\"crate$n\"/" "$spdx" >"$spdx.drift"
+	mv "$spdx.drift" "$spdx"
 fi
 "#;
 
