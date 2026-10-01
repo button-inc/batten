@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.195](https://github.com/button-inc/batten/compare/v0.0.194...v0.0.195) - 2026-10-01
+
+### Fixed
+
+- *(hook)* keep a load fault's cause in the refusal, and pin the deny
+- *(hook)* refuse the call over any config that will not load
+
 ## [0.0.194](https://github.com/button-inc/batten/compare/v0.0.193...v0.0.194) - 2026-10-01
 
 ### Other
