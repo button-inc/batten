@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.196](https://github.com/button-inc/batten/compare/v0.0.195...v0.0.196) - 2026-10-01
+
+### Added
+
+- [**breaking**] retire the repository's bash into engine verbs, rego and presets
+
+### Fixed
+
+- *(durable)* truncate a torn tail through a write handle of its own
+- *(tests)* make the drifting syft stub portable to BSD sed and wc
+- *(record)* read a commit the forge has never seen as nothing graded
+
 ## [0.0.195](https://github.com/button-inc/batten/compare/v0.0.194...v0.0.195) - 2026-10-01
 
 ### Fixed
