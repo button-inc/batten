@@ -1,4 +1,8 @@
 name: CI
+# workflow-shell: CLOUD-843 the step count rises by the transitional `bats`
+# job's two run steps, each one command; trunk's required roster still names
+# `bats`, so the head that retires the suites keeps a job answering under that
+# name until a later change drops it from the roster and then deletes it.
 
 # CI minutes cost money; an agent's local execution does not. So CI runs as
 # rarely as correctness allows:
