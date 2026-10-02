@@ -613,6 +613,14 @@ fn take_arm(shared: &Path, dest: &Path, what: &str) -> Result<()> {
     Ok(())
 }
 
+/// Whether two files hold the same bytes; an unreadable side is never "same".
+fn same_bytes(left: &Path, right: &Path) -> bool {
+    match (std::fs::read(left), std::fs::read(right)) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => false,
+    }
+}
+
 /// The binary [`base_target_dir`] holds once the base arm has been built.
 #[must_use]
 pub fn base_binary(perf_dir: &Path, key: &str) -> PathBuf {
@@ -807,12 +815,52 @@ fn build(dir: &Path, target_dir: Option<&Path>, what: &str, profile: &str) -> Re
             )]
         })
         .unwrap_or_default();
+    // THE SHARED DIR HOLDS ONE `batten` UNIT FOR BOTH ARMS (CLOUD-2060). The two
+    // trees are the same package at the same relative paths, so cargo gives
+    // their units one identity, and its mtime fingerprint then reads the arm
+    // built SECOND as already fresh whenever its sources are older than the
+    // first arm's output. Measured: the head build finished in 0.45s and the
+    // "head" binary was the base binary byte for byte. So switching arms drops
+    // `batten`'s own units first; the dependency closure CLOUD-1891 shares is
+    // left alone.
+    let marker = target_dir.map(|dir| dir.join(LAST_ARM));
+    if let Some(marker) = &marker {
+        let last = std::fs::read_to_string(marker).ok();
+        if switches_arm(last.as_deref(), what) {
+            let clean: Vec<String> = ["clean", "-p", "batten", "--profile", profile]
+                .iter()
+                .map(|word| (*word).to_owned())
+                .collect();
+            if !run(dir, Tool::Cargo, &clean, &env)? {
+                bail!(
+                    "perf-pair: could not drop the other arm's `batten` units before the {what} build. No measurement."
+                );
+            }
+        }
+    }
     if !run(dir, Tool::Cargo, &args, &env)? {
         bail!(
             "perf-pair: the {what} release build failed, so there is nothing to compare. No measurement."
         );
     }
+    if let Some(marker) = &marker {
+        std::fs::write(marker, what)
+            .with_context(|| format!("perf-pair: could not record the {what} build"))?;
+    }
     Ok(())
+}
+
+//MUTANT-SUITE crates/batten/src/perf.rs
+//MUTANT arm-switch-never|s@^    last != Some(what)$@    false@|switching_arms_drops_the_shared_units
+//MUTANT identical-arms-unguarded|s@^        (Ok(left), Ok(right)) => left == right,$@        (Ok(_), Ok(_)) => false,@|identical_arms_are_the_same_bytes
+
+/// The file in a shared target dir naming the arm last built into it.
+const LAST_ARM: &str = "perf-last-arm";
+
+/// Whether building `what` follows a build of the OTHER arm (or of nothing
+/// recorded), so the shared `batten` units must be dropped first.
+fn switches_arm(last: Option<&str>, what: &str) -> bool {
+    last != Some(what)
 }
 
 /// The row carrying `id`, anywhere in a `spec` document's subcommand tree.
@@ -1059,6 +1107,16 @@ fn measure(repo: &Path, options: Options, base_sha: &str) -> Result<Vec<Record>>
     build(repo, Some(&shared), "head", PAIR_PROFILE)?;
     let head_bin = out.join("batten-head");
     take_arm(&shared, &head_bin, "head")?;
+    // THE GUARD THE MEASURED DEFECT LACKED (CLOUD-2060): a pair whose arms are
+    // the same bytes measures nothing, and its ratio of ~1 reads as a pass. A lap
+    // reaches here only when the crate changed, so identical arms mean a build
+    // handed back the wrong binary. The null experiment copies one arm on
+    // purpose, after this.
+    if !options.null && same_bytes(&base_bin, &head_bin) {
+        bail!(
+            "perf-pair: the head arm is byte-identical to the base arm, so a build handed back the wrong binary. No measurement."
+        );
+    }
     if options.null {
         std::fs::copy(&head_bin, &base_bin).context("perf-pair: could not copy the null arm")?;
     }
@@ -3163,6 +3221,34 @@ pub fn latency_verdict(median: u64, budget: u64, slack: u64, loose_factor: u64) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// CLOUD-2060: the arm built second into the shared dir must not inherit
+    /// the first arm's `batten` units, and a repeat of the same arm keeps them.
+    #[test]
+    fn switching_arms_drops_the_shared_units() {
+        assert!(switches_arm(Some("base"), "head"));
+        assert!(switches_arm(Some("head"), "base"));
+        assert!(
+            switches_arm(None, "head"),
+            "nothing recorded is not trusted"
+        );
+        assert!(!switches_arm(Some("head"), "head"));
+    }
+
+    /// CLOUD-2060: the guard that reads two identical arms as a broken build.
+    #[test]
+    fn identical_arms_are_the_same_bytes() -> std::io::Result<()> {
+        let dir = std::env::temp_dir().join(format!("batten-perf-same-{}", std::process::id()));
+        std::fs::create_dir_all(&dir)?;
+        let (a, b, c) = (dir.join("a"), dir.join("b"), dir.join("c"));
+        std::fs::write(&a, b"base")?;
+        std::fs::write(&b, b"base")?;
+        std::fs::write(&c, b"head")?;
+        assert!(same_bytes(&a, &b));
+        assert!(!same_bytes(&a, &c));
+        assert!(!same_bytes(&a, &dir.join("absent")));
+        std::fs::remove_dir_all(&dir)
+    }
 
     #[test]
     fn the_median_is_the_lower_middle_of_the_sorted_samples() {
