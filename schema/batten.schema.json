@@ -165,6 +165,17 @@
         }
       ]
     },
+    "engine": {
+      "description": "The exact engine this file needs: a release tag or a source digest\n(CLOUD-2061). Read from the raw text before the parse by\n[`crate::engine::check`]; authority-only, as `min_batten_version` is.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Pin"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "epoch": {
       "description": "Which files make up the governing config surface the `config_epoch`\nhashes (CLOUD-32). Absent means the default: this file alone.",
       "anyOf": [
@@ -3044,6 +3055,27 @@
         "slack_seconds",
         "loose_factor"
       ]
+    },
+    "Pin": {
+      "description": "The engine a config needs: exactly one of a release tag or a source digest.",
+      "type": "object",
+      "properties": {
+        "release": {
+          "description": "A published release, spelled as its tag (`v0.0.198`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": {
+          "description": "The digest `batten engine digest` prints for the source tree the engine\nmust be built from (64 hex).",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
     },
     "PlanQuery": {
       "description": "One declared plan query: which surface to ask about, and what a module needs\nto decide over the answer.\n\n**`required` and `prohibited_profiles` are CONSUMER facts** and live in the\nrow rather than in this crate (non-negotiable rule 1). They are projected\nalongside the acquired plan so the module compares two halves of one document\nrather than reaching for a second source — the same shape a `[[rule.tools]]`\nrow's `id` gives its module.",

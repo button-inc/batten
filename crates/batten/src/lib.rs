@@ -59,6 +59,7 @@ pub mod drain;
 pub mod durable;
 pub mod effect;
 pub mod emission;
+pub mod engine;
 pub mod environment;
 pub mod epoch;
 pub mod error;
@@ -562,7 +563,26 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
             }
         },
         Some(Command::Artifacts { command }) => run_artifacts(&command, out),
+        Some(Command::Engine { command }) => run_engine(command, out),
     }
+}
+
+/// `batten engine digest|stamp` (CLOUD-2061).
+///
+/// The tree is the WORKTREE's, `census`' reasoning: what a branch's engine is
+/// built from is what that checkout carries.
+fn run_engine(command: cli::EngineCommand, out: &mut dyn Write) -> Result<ExitCode> {
+    let root = git::worktree_root(Path::new("."))?;
+    let digest = engine::digest(&root)?;
+    match command {
+        cli::EngineCommand::Digest => writeln!(out, "{digest}")?,
+        cli::EngineCommand::Stamp => {
+            let binary = std::env::current_exe()?;
+            engine::stamp(&binary, &digest)?;
+            writeln!(out, "{}", engine::stamp_path(&binary).display())?;
+        }
+    }
+    Ok(ExitCode::Success)
 }
 
 /// `batten artifacts write` (CLOUD-1991): the committed derivations of the

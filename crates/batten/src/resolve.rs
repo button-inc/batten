@@ -1435,6 +1435,13 @@ fn apply_local(
     tables: &mut Tables,
     paths: &mut Paths,
 ) -> Result<()> {
+    if local.engine.is_some() {
+        return Err(UsageError::raise(format!(
+            "{LOCAL_CONFIG_FILE}: `engine` is set by the committed authority ({}) \
+             only; an override may not restate it",
+            config::CONFIG_FILE,
+        )));
+    }
     if local.min_batten_version.is_some() {
         return Err(UsageError::raise(format!(
             "{LOCAL_CONFIG_FILE}: `min_batten_version` is set by the committed authority ({}) \

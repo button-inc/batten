@@ -143,6 +143,11 @@ pub struct Config {
     /// green over rules it does not understand (CLOUD-33).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min_batten_version: Option<String>,
+    /// The exact engine this file needs: a release tag or a source digest
+    /// (CLOUD-2061). Read from the raw text before the parse by
+    /// [`crate::engine::check`]; authority-only, as `min_batten_version` is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub engine: Option<crate::engine::Pin>,
     /// How strictly the gates apply. Absent means "this file does not speak to
     /// strictness", which is what lets [`crate::resolve`] attribute the
     /// effective value to the layer that actually set it. Policy-bearing, so an
@@ -1184,6 +1189,10 @@ pub struct Contract {
 /// or an unsupported [`Config::version`]. These are bad *input*, not internal
 /// failures.
 pub fn parse(text: &str, source: &str) -> Result<Config> {
+    // THE PIN BEFORE THE PARSE (CLOUD-2061): a stale engine is named before a key
+    // it cannot read gets the chance to fail the parse, so the refusal says which
+    // engine to install rather than which field was unknown.
+    crate::engine::check(text, source, crate::engine::running_stamp)?;
     let config = parse_ungated(text, source)?;
     check_min_version(&config, source)?;
     // A WRITER of the forge declaration (CLOUD-1622). Every config LOAD funnels
@@ -1653,6 +1662,10 @@ pub struct OverrideConfig {
     /// they did wrong, where "unknown field" would suggest a typo.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min_batten_version: Option<String>,
+    /// Present only so the refusal can name it, for `min_batten_version`'s
+    /// reason: the engine pin is the committed authority's alone (CLOUD-2061).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub engine: Option<crate::engine::Pin>,
     /// Raised, never lowered: a committed `strict` cannot be relaxed here.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub strictness: Option<Strictness>,
@@ -3759,6 +3772,7 @@ impl Config {
             deferrals: Vec::new(),
             host: None,
             min_batten_version: None,
+            engine: None,
             // Declaring nothing declares no landing path set, which the reader
             // takes as could-not-look — the same direction every other absent
             // table here takes.

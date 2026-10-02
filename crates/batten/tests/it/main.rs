@@ -169,6 +169,7 @@ mod durable_write;
 mod egress_fencing;
 mod emission_census;
 mod enforce_journal;
+mod engine_pin;
 mod evaluator_closure;
 mod evaluator_io_probe;
 mod exec_lock;

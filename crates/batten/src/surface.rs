@@ -7480,6 +7480,39 @@ pub const SURFACE: &[CommandDecl] = &[
     // shell. UNCLASSIFIED noun for `hk`'s reason: it dispatches, and a noun on the
     // read-only allowlist would carry its writer with it for any consumer that
     // reads an entry as a prefix.
+    // The `engine` noun (CLOUD-2061): this binary's identity against the pin a
+    // config declares. UNCLASSIFIED for `artifacts`' reason — it dispatches to a
+    // read and a write, and a noun on the allowlist reads as a prefix.
+    CommandDecl {
+        path: "engine",
+        id: "engine",
+        about: "Report and record which engine this binary is, against a config's pin",
+        data_channel: false,
+        exits: EXITS_DISPATCHES,
+        effect: Effect::Unclassified,
+        flags: &[],
+    },
+    // `read`: it lists the tracked engine inputs and hashes their bytes.
+    // unreached: "engine digest" CLOUD-2063 the landing gates call it; until then it is the hand surface for writing a source pin
+    CommandDecl {
+        path: "engine digest",
+        id: "engine.digest",
+        about: "Print the source digest of this tree's tracked engine inputs, the value a source pin names",
+        data_channel: true,
+        exits: EXITS_STANDARD,
+        effect: Effect::Read,
+        flags: &[],
+    },
+    // `write`: one stamp file beside the running binary, through `durable`.
+    CommandDecl {
+        path: "engine stamp",
+        id: "engine.stamp",
+        about: "Record this tree's source digest beside the running binary, so a source pin can be checked",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Write,
+        flags: &[],
+    },
     CommandDecl {
         path: "artifacts",
         id: "artifacts",

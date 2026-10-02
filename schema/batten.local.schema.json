@@ -4,6 +4,17 @@
   "description": "The override surface: exactly what `batten.local.toml` may carry.\n\nA **second type**, not a second reading of [`Config`], and that is the whole\npoint (CLOUD-239). The subset used to exist only as `local.*` reads inside\n[`crate::resolve`] — invisible to a validator, so the published schema\nvouched for keys the loader silently dropped and for one it refused outright.\nWith the surface written as a type, the schema derives from it and the two\ncannot disagree.\n\n`deny_unknown_fields` is what makes the refusal total and free: every\nauthority-only key (`epoch`, `marker`, `verb`, `budget`, `must_land_on`,\n`judge`, `ci`, `defects`, `provision`, `transcript`, `design`) becomes a hard\nparse error here rather than a silently discarded tightening. A hand-maintained\nrefusal list would be a second authority, and would drift the moment a field\nis added to [`Config`]. `hook` is\nauthority-only for a sharper one (CLOUD-91): an action *runs a command*, and\nthere is no reading of §8's raise-only rule under which an uncommitted file\nadding one is a tightening.\n\nEvery key here is **raise-only**; [`crate::resolve`] holds that invariant,\nand the per-field docs say which direction \"raise\" means.",
   "type": "object",
   "properties": {
+    "engine": {
+      "description": "Present only so the refusal can name it, for `min_batten_version`'s\nreason: the engine pin is the committed authority's alone (CLOUD-2061).",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Pin"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "exec_pattern": {
       "description": "`exec` output predicates this file **adds**. A duplicate id is refused.",
       "type": "array",
@@ -530,6 +541,27 @@
         "pattern",
         "reason"
       ]
+    },
+    "Pin": {
+      "description": "The engine a config needs: exactly one of a release tag or a source digest.",
+      "type": "object",
+      "properties": {
+        "release": {
+          "description": "A published release, spelled as its tag (`v0.0.198`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": {
+          "description": "The digest `batten engine digest` prints for the source tree the engine\nmust be built from (64 hex).",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
     },
     "PlanQuery": {
       "description": "One declared plan query: which surface to ask about, and what a module needs\nto decide over the answer.\n\n**`required` and `prohibited_profiles` are CONSUMER facts** and live in the\nrow rather than in this crate (non-negotiable rule 1). They are projected\nalongside the acquired plan so the module compares two halves of one document\nrather than reaching for a second source — the same shape a `[[rule.tools]]`\nrow's `id` gives its module.",

@@ -1,0 +1,23 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-engine 1  batten 
+.SH NAME
+batten\-engine \- Report and record which engine this binary is, against a config\*(Aqs pin
+.SH SYNOPSIS
+\fBbatten engine\fR [\fB\-h\fR|\fB\-\-help\fR] <\fIsubcommands\fR>
+.SH DESCRIPTION
+Report and record which engine this binary is, against a config\*(Aqs pin
+.SH OPTIONS
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.SH SUBCOMMANDS
+.TP
+batten\-engine\-digest(1)
+Print the source digest of this tree\*(Aqs tracked engine inputs, the value a source pin names
+.TP
+batten\-engine\-stamp(1)
+Record this tree\*(Aqs source digest beside the running binary, so a source pin can be checked
+.TP
+batten\-engine\-help(1)
+Print this message or the help of the given subcommand(s)

@@ -477,6 +477,23 @@ pub enum Command {
         /// The sub-verb selected.
         command: ArtifactsCommand,
     },
+    /// This binary's identity against a config's engine pin (CLOUD-2061).
+    ///
+    /// APPENDED LAST, for the reason above.
+    Engine {
+        /// The sub-verb selected.
+        command: EngineCommand,
+    },
+}
+
+/// Subcommands of `engine` (CLOUD-2061).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum EngineCommand {
+    /// Print this tree's source digest.
+    Digest,
+    /// Record this tree's source digest beside the running binary.
+    Stamp,
 }
 
 /// Subcommands of `artifacts` (CLOUD-1991).
@@ -3395,6 +3412,14 @@ fn artifacts_of(matches: &ArgMatches) -> Option<ArtifactsCommand> {
     }
 }
 
+fn engine_of(matches: &ArgMatches) -> Option<EngineCommand> {
+    match matches.subcommand()?.0 {
+        "digest" => Some(EngineCommand::Digest),
+        "stamp" => Some(EngineCommand::Stamp),
+        _ => None,
+    }
+}
+
 fn census_of(matches: &ArgMatches) -> Option<CensusCommand> {
     match matches.subcommand()? {
         ("shell", matches) => Some(CensusCommand::Shell {
@@ -3707,6 +3732,7 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
         "board" => board_of(matches).map(|command| Command::Board { command }),
         "census" => census_of(matches).map(|command| Command::Census { command }),
         "artifacts" => artifacts_of(matches).map(|command| Command::Artifacts { command }),
+        "engine" => engine_of(matches).map(|command| Command::Engine { command }),
         _ => None,
     }
 }
