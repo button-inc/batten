@@ -581,6 +581,38 @@ pub fn base_target_dir(perf_dir: &Path, key: &str) -> PathBuf {
     perf_dir.join(format!("base-{key}"))
 }
 
+/// The ONE target directory both arms of the pair compile in, one after the
+/// other (CLOUD-1891): the dependency closure is built once and shared, and
+/// only the `batten` crate differs between the arms.
+#[must_use]
+//MUTANT base-arm-inside-shared|s@^    perf_dir.join("arms")$@    perf_dir.join("base-k")@|the_shared_arms_directory_keeps_each_arm_apart
+pub fn arms_target_dir(perf_dir: &Path) -> PathBuf {
+    perf_dir.join("arms")
+}
+
+/// Copy the binary the last build into `shared` left to `dest`, before the next
+/// build overwrites it. A build that exits 0 without one is could-not-look.
+fn take_arm(shared: &Path, dest: &Path, what: &str) -> Result<()> {
+    let built = shared.join(PAIR_PROFILE).join("batten");
+    if !built.is_file() {
+        bail!(
+            "perf-pair: the {what} build left no binary at {} — nothing to measure. No measurement.",
+            built.display()
+        );
+    }
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("perf-pair: could not create {}", parent.display()))?;
+    }
+    std::fs::copy(&built, dest).with_context(|| {
+        format!(
+            "perf-pair: could not keep the {what} arm at {}",
+            dest.display()
+        )
+    })?;
+    Ok(())
+}
+
 /// The binary [`base_target_dir`] holds once the base arm has been built.
 #[must_use]
 pub fn base_binary(perf_dir: &Path, key: &str) -> PathBuf {
@@ -971,17 +1003,13 @@ fn measure(repo: &Path, options: Options, base_sha: &str) -> Result<Vec<Record>>
     }
 
     let out = out_dir(repo)?;
-
-    build(repo, None, "head", PAIR_PROFILE)?;
-    let head_bin = repo.join("target").join(PAIR_PROFILE).join("batten");
+    let shared = arms_target_dir(&perf_dir(repo));
 
     let (base_bin, base_tree) = if options.null {
         // The null experiment: the same bytes as both arms. COPIED rather than
         // aliased so hyperfine sees two distinct commands and cannot
         // short-circuit anything, and so the two arms differ in exactly nothing.
-        let copy = out.join("batten-null");
-        std::fs::copy(&head_bin, &copy).context("perf-pair: could not copy the null arm")?;
-        (copy, repo.to_path_buf())
+        (out.join("batten-null"), repo.to_path_buf())
     } else {
         // MATERIALISED, NOT A WORKTREE, and that retires a measured defect rather
         // than guarding it. `git worktree add` leaves an ADMIN ENTRY under the git
@@ -1010,24 +1038,30 @@ fn measure(repo: &Path, options: Options, base_sha: &str) -> Result<Vec<Record>>
         let base_bin = base_binary(&perf, &key);
         if !base_arm_is_built(&perf, &key) {
             seed_base_target_dir(&perf, &key)?;
-            build(
-                &base_tree,
-                Some(&base_target_dir(&perf, &key)),
-                "base",
-                PAIR_PROFILE,
-            )?;
+        }
+        if !base_arm_is_built(&perf, &key) {
+            build(&base_tree, Some(&shared), "base", PAIR_PROFILE)?;
             // A cargo that exits 0 without leaving the binary is could-not-look,
             // never a measurement: hyperfine would report the missing path as a
             // failed command and `perf-compare` would read the gap as a verdict.
-            if !base_arm_is_built(&perf, &key) {
-                bail!(
-                    "perf-pair: the base build left no binary at {} — nothing to measure. No measurement.",
-                    base_bin.display()
-                );
-            }
+            take_arm(&shared, &base_bin, "base")?;
         }
         (base_bin, base_tree)
     };
+
+    // AFTER the base, INTO THE SAME DIRECTORY (CLOUD-1891). The arms differ in
+    // the `batten` crate alone; two target directories compiled the whole
+    // dependency closure twice, and the doubled footprint is what pushed the
+    // lap-close prune into dropping both as regrowable cache — so every next
+    // lap rebuilt both cold. Sequential builds share one lock and one set of
+    // dependency artifacts; each binary is copied out before the next build
+    // overwrites it.
+    build(repo, Some(&shared), "head", PAIR_PROFILE)?;
+    let head_bin = out.join("batten-head");
+    take_arm(&shared, &head_bin, "head")?;
+    if options.null {
+        std::fs::copy(&head_bin, &base_bin).context("perf-pair: could not copy the null arm")?;
+    }
 
     arms(repo, &out, &base_bin, &head_bin, &base_tree)
 }
@@ -3166,6 +3200,32 @@ mod tests {
             bin,
             Path::new("/p/base-k").join(PAIR_PROFILE).join("batten")
         );
+    }
+
+    /// Both arms compile in ONE directory, and the base arm kept from it survives
+    /// the head build that overwrites the shared binary (CLOUD-1891).
+    ///
+    /// MUTANT: keeping the base arm inside the shared directory lets the head
+    /// build replace it, and this case goes red.
+    #[test]
+    fn the_shared_arms_directory_keeps_each_arm_apart() {
+        let scratch = std::env::temp_dir().join(format!("batten-perf-arms-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&scratch);
+        let perf = scratch.as_path();
+        let shared = arms_target_dir(perf);
+        let built = shared.join(PAIR_PROFILE).join("batten");
+        std::fs::create_dir_all(built.parent().unwrap()).unwrap();
+        let base = base_binary(perf, "k");
+        assert!(!base.starts_with(&shared));
+        std::fs::write(&built, b"base").unwrap();
+        take_arm(&shared, &base, "base").unwrap();
+        std::fs::write(&built, b"head").unwrap();
+        let head = perf.join("pair").join("batten-head");
+        take_arm(&shared, &head, "head").unwrap();
+        assert_eq!(std::fs::read(&base).unwrap(), b"base");
+        assert_eq!(std::fs::read(&head).unwrap(), b"head");
+        assert!(take_arm(&perf.join("empty"), &head, "head").is_err());
+        let _ = std::fs::remove_dir_all(&scratch);
     }
 
     /// Two bases whose crate trees match share one key; any tree changing moves it.
