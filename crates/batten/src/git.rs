@@ -748,9 +748,25 @@ fn ceiling_dirs() -> Vec<PathBuf> {
 }
 
 /// [`open`], with the discovery ceilings supplied rather than read.
+///
+/// **A CEILING THAT FENCES NOTHING HERE IS IGNORED, as git ignores it** (CLOUD-2064).
+/// gix's default errors when no ceiling contains the search directory, so a
+/// `GIT_CEILING_DIRECTORIES` naming only directories elsewhere on the machine made
+/// every read inside a valid checkout report "not a git repository" — a refusal
+/// git itself does not make, and not the fail-safe direction [`ceiling_dirs`]
+/// claims, because nothing was fenced.
+///
+/// Each ceiling is canonicalized as `start` is below: gix compares them without
+/// resolving symlinks, so a ceiling spelled through one (or, on Windows, without
+/// the `\\?\` prefix `canonicalize` adds to `start`) would never contain it.
+//MUTANT unrelated-ceiling-refuses|s@match_ceiling_dir_or_error: false@match_ceiling_dir_or_error: true@|an_unrelated_ceiling_does_not_refuse_a_valid_repository
 fn open_upwards(dir: &Path, ceilings: Vec<PathBuf>) -> Result<gix::Repository> {
     let discovery = gix::discover::upwards::Options {
-        ceiling_dirs: ceilings,
+        ceiling_dirs: ceilings
+            .into_iter()
+            .map(|ceiling| ceiling.canonicalize().unwrap_or(ceiling))
+            .collect(),
+        match_ceiling_dir_or_error: false,
         ..Default::default()
     };
     // ABSOLUTE before discovery, because callers pass a relative `"."`
@@ -5586,6 +5602,37 @@ mod tests {
         assert_eq!(
             tracked_paths(&dir).expect("an empty answer, as ls-files gives"),
             BTreeSet::new()
+        );
+    }
+
+    /// A ceiling that contains nothing here fences nothing, which is how git reads
+    /// it; gix's default refused the repository instead (CLOUD-2064).
+    #[test]
+    fn an_unrelated_ceiling_does_not_refuse_a_valid_repository() {
+        let repo = crate::scratch::scratch("git-ceiling-unrelated");
+        crate::gitwrite::init_on_main(&repo).expect("init");
+        let elsewhere = crate::scratch::scratch("git-ceiling-elsewhere");
+        assert!(
+            open_upwards(&repo, vec![elsewhere]).is_ok(),
+            "a ceiling that does not contain the search directory fences nothing"
+        );
+    }
+
+    /// The fence still holds where it applies: a directory below a ceiling, with no
+    /// repository of its own, does not walk past the ceiling to the one above.
+    #[test]
+    fn a_ceiling_between_a_directory_and_its_repository_still_refuses() {
+        let repo = crate::scratch::scratch("git-ceiling-fenced");
+        crate::gitwrite::init_on_main(&repo).expect("init");
+        let nested = repo.join("a").join("b");
+        fs::create_dir_all(&nested).expect("nested");
+        assert!(
+            open_upwards(&nested, Vec::new()).is_ok(),
+            "the premise: unfenced, the nested directory resolves to the repository"
+        );
+        assert!(
+            open_upwards(&nested, vec![repo.join("a")]).is_err(),
+            "a ceiling between the directory and its repository fences the walk"
         );
     }
 
