@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.199](https://github.com/button-inc/batten/compare/v0.0.198...v0.0.199) - 2026-10-02
+
+### Added
+
+- *(preset)* grant every git call batten allows, and prove no refusal is a dead end
+
+### Fixed
+
+- *(perf)* record the last arm through durable::replace
+- *(perf)* build each pair arm from its own tree, and refuse two identical arms
+- *(land)* [**breaking**] push only over a remote value this clone has seen
+
+### Other
+
+- *(preset)* register the git preset's surface and give each scratch call its own name
+- *(portability)* hold every set_len to an inline write handle without a waiver
+- *(portability)* hold executed test stubs and Windows truncation to local gates
+
 ## [0.0.198](https://github.com/button-inc/batten/compare/v0.0.197...v0.0.198) - 2026-10-02
 
 ### Fixed
