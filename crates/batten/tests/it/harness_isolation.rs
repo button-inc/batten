@@ -19,6 +19,40 @@ fn a_spawn_whose_cwd_falls_through_to_the_checkout_is_refused() {
         .output();
 }
 
+/// The case's OWN library calls resolve the root its children are pinned to, so
+/// an admission issued in-process, a lap verified in-process, or a decision
+/// appended in-process lands in the case's store and not the developer's — the
+/// 22 segments one full run still wrote after every spawn door was pinned.
+#[test]
+fn in_process_state_resolves_to_the_cases_own_root() {
+    let _ = common::scratch("harness-isolation-in-process");
+    assert_eq!(
+        batten::state::data_dir().expect("a data directory"),
+        common::scratch_state_root(),
+        "a fixture contains the process, so the library resolves the case's root"
+    );
+}
+
+/// The child's home is the case's own on every platform, so nothing in the
+/// developer's `~/.claude`, `~/.gitconfig` or global mise config reaches a verdict
+/// a CI runner, which has none of them, would not reproduce.
+#[test]
+fn every_spawn_of_the_binary_pins_the_home() {
+    let homes = common::homes(&common::batten());
+    assert_eq!(
+        homes.len(),
+        2,
+        "the home must be pinned on every platform: {homes:?}"
+    );
+    for (name, value) in &homes {
+        assert_eq!(
+            value.as_path(),
+            common::scratch_home(),
+            "{name} must point at the case's own home, never the developer's"
+        );
+    }
+}
+
 /// REFUSED BEFORE THE CHILD EXISTS, not reported after it ran: the point is that
 /// a falling-through fixture never touches the checkout. `init` writes
 /// `batten.toml` into its working directory, so a child that ran leaves one.

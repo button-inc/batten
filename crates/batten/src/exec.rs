@@ -2986,6 +2986,9 @@ mod tests {
     #[test]
     fn a_cancel_that_cannot_resolve_its_record_signals_nothing() {
         let root = crate::scratch::scratch("exec-cancel-record");
+        // The records below are seeded under this case's own state root, never
+        // the developer's (CLOUD-2059).
+        crate::testing::contain_state(&root.join("state"));
 
         // No record at all: the common case, and not a failure. A gate run
         // without the grouping opt-in writes none.

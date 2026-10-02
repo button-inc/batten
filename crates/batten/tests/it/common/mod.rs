@@ -372,9 +372,10 @@ fn bypass_env_vars() -> Vec<String> {
 /// remembered to ask. Before, only a suite whose subject was the committed
 /// configuration asked, and every other spawn wrote the developer's real store:
 /// 768 test segments beside the repository's own under `~/.local/share/batten`
-/// on one container, none of them reaped. A case that reads back what its child wrote reads the
-/// same root through the library's `_in` seams (`admission::load_in`,
-/// `state::repo_state_dir_in`), never through the parent's environment.
+/// on one container, none of them reaped. The case's OWN library calls resolve
+/// the same root, because [`scratch_state_root`] contains this process
+/// (`batten::testing::contain_state`), so what a child writes is what the case
+/// reads back.
 #[must_use]
 #[expect(
     clippy::disallowed_types,
@@ -398,7 +399,71 @@ pub(crate) fn batten() -> Batten {
     command.env("PATH", ambient_path());
     pin_mise(&mut command);
     command.envs(batten::testing::state_pins(scratch_state_root()));
+    pin_home(&mut command);
     Batten(command)
+}
+
+/// The case's own home, and the toolchain the developer's home holds pinned
+/// beside it (CLOUD-2059).
+///
+/// `RUSTUP_HOME` and `CARGO_HOME` are resolved from THIS process — set, or the
+/// `~/.rustup` and `~/.cargo` its own home holds — exactly as [`mise_dirs`]
+/// resolves mise's, because the `cargo` on `PATH` is a rustup proxy that would
+/// otherwise look for a toolchain under the empty home and find none.
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays with the harness spawn it configures: which home a child resolves is a property of the child's environment"
+)]
+fn pin_home(command: &mut Command) {
+    static TOOLCHAIN: std::sync::LazyLock<Vec<(&'static str, PathBuf)>> =
+        std::sync::LazyLock::new(|| {
+            let home = std::env::home_dir();
+            [("RUSTUP_HOME", ".rustup"), ("CARGO_HOME", ".cargo")]
+                .into_iter()
+                .filter_map(|(name, default)| {
+                    std::env::var_os(name)
+                        .map(PathBuf::from)
+                        .or_else(|| home.as_ref().map(|home| home.join(default)))
+                        .filter(|dir| dir.is_dir())
+                        .map(|dir| (name, dir))
+                })
+                .collect()
+        });
+    for (name, dir) in TOOLCHAIN.iter() {
+        command.env(name, dir);
+    }
+    command.envs(batten::testing::home_pins(scratch_home()));
+}
+
+/// This process's own home directory, for [`batten`]'s pin. Per process for
+/// [`scratch_state_root`]'s reason, and created on first use.
+pub(crate) fn scratch_home() -> &'static Path {
+    static HOME: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    HOME.get_or_init(|| {
+        let dir = target_tmp().join(format!("home-{}", std::process::id()));
+        fs::create_dir_all(&dir).expect("create the scratch home");
+        dir
+    })
+}
+
+/// The home directories a command has been pointed at, as `(name, value)` pairs.
+///
+/// SPELLED HERE, NOT READ FROM `batten::testing::home_pins`, for
+/// [`state_roots`]'s reason: this is the oracle the door is checked against.
+#[must_use]
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays with the harness spawn it reads: the subject is what a child's environment carries"
+)]
+pub(crate) fn homes(command: &Command) -> Vec<(String, PathBuf)> {
+    command
+        .get_envs()
+        .filter_map(|(name, value)| {
+            let name = name.to_str()?.to_owned();
+            (name == "HOME" || name == "USERPROFILE")
+                .then(|| Some((name, PathBuf::from(value?))))?
+        })
+        .collect()
 }
 
 /// [`batten`]'s command, which refuses to have run where it would FALL THROUGH
@@ -831,6 +896,7 @@ pub(crate) fn task_bash(dir: &Path, body: &str) -> std::process::Command {
         // which the XDG redirect would otherwise move ([`pin_mise`]).
         .envs(batten::testing::state_pins(scratch_state_root()));
     pin_mise(&mut command);
+    pin_home(&mut command);
     command
 }
 
@@ -1057,9 +1123,9 @@ pub(crate) fn committed_fixture_with_protected(name: &str) -> PathBuf {
 /// suite reading a record back IN-PROCESS — `admission.rs`'s
 /// `a_correctly_answered_override_completes_end_to_end` — resolved the root from
 /// the PARENT's environment and missed what the redirected child filed. The fix
-/// for that was the reader, not the default: such a case reads through the
-/// library's `_in` seams with this root, and every other spawn stopped writing
-/// the developer's store.
+/// was to contain the parent too: resolving this root also points the process's
+/// own state at it (`batten::testing::contain_state`), so the case and its
+/// children read one store and neither writes the developer's.
 ///
 /// **Per PROCESS**, because nextest runs each case in its own process: state one
 /// spawn writes is still there for the next spawn in the same case, and no case
@@ -1070,6 +1136,10 @@ pub(crate) fn scratch_state_root() -> &'static Path {
     ROOT.get_or_init(|| {
         let dir = target_tmp().join(format!("state-{}", std::process::id()));
         fs::create_dir_all(&dir).expect("create the scratch state root");
+        // THIS process's own library calls resolve the same root its children
+        // are pinned to, so a case that spawns and calls in-process reads one
+        // store, and neither half writes the developer's.
+        batten::testing::contain_state(&dir);
         dir
     })
 }
@@ -1168,7 +1238,7 @@ pub(crate) fn state_home<'a>(command: &'a mut Command, home: &Path) -> &'a mut C
     reason = "stays with the harness spawn it configures: scrubbing the ambient home is a property of the child's environment, not a call this could make in-process"
 )]
 pub(crate) fn at_home<'a>(command: &'a mut Command, home: &Path) -> &'a mut Command {
-    command.env("HOME", home).env("USERPROFILE", home)
+    command.envs(batten::testing::home_pins(home))
 }
 
 /// [`state_home`] and [`state_dir`] as chainable methods.
@@ -1393,6 +1463,9 @@ fn in_lane(name: &str) -> String {
 }
 
 fn make_empty(dir: PathBuf) -> PathBuf {
+    // Every fixture primitive passes here, so a case that builds one is
+    // contained before its first library call can resolve the real store.
+    let _ = scratch_state_root();
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).expect("create scratch dir");
     dir

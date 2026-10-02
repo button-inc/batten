@@ -7,7 +7,33 @@
 //! is swept like any engine module's, rather than in the harness, where a row is
 //! a comment whose kill is shown by hand.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+/// The OS data directory THIS process resolves state under, once a test has
+/// contained it ([`contain_state`]).
+static CONTAINED: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// Resolve this process's own state under `data_dir` from now on, as a spawned
+/// child pointed there by [`state_pins`] resolves its (CLOUD-2059).
+///
+/// THE IN-PROCESS HALF OF THE PIN. A case that calls the library — an admission
+/// issued, a lap verified, a decision appended — resolves the store from its own
+/// environment, which no spawn door touches and `unsafe_code = "forbid"` puts out
+/// of reach, so those calls wrote the developer's real store: 22 segments in one
+/// full run after every door was pinned. Set once per process (nextest runs each
+/// case in its own), first value wins, and nothing outside a test can reach it:
+/// it reads no environment variable, and the binary never calls it.
+#[doc(hidden)]
+pub fn contain_state(data_dir: &Path) {
+    let _ = CONTAINED.set(data_dir.to_path_buf());
+}
+
+/// The contained data directory, if a test set one.
+//MUTANT-SUITE crates/batten/tests/it/harness_isolation.rs
+//MUTANT in-process-uncontained|s@^    CONTAINED.get().map(PathBuf::as_path)$@    None@|in_process_state_resolves_to_the_cases_own_root
+pub(crate) fn contained_data_dir() -> Option<&'static Path> {
+    CONTAINED.get().map(PathBuf::as_path)
+}
 
 /// The variables that place a child's state root at `<dir>/batten` on every
 /// platform: the XDG data home `etcetera` reads on unix and macOS, and the
@@ -25,6 +51,21 @@ use std::path::Path;
 #[must_use]
 pub fn state_pins(dir: &Path) -> [(&'static str, &Path); 2] {
     [("XDG_DATA_HOME", dir), ("APPDATA", dir)]
+}
+
+/// The variables that place a child's home directory at `dir` on every platform:
+/// `HOME` on unix and macOS, and the `USERPROFILE` `std::env::home_dir` reads on
+/// Windows. A home overridden for one platform reads the real user's profile on
+/// the other, which is how CLOUD-113's Windows job found `wiring_reclaim.rs`.
+///
+/// What a case's home holds is then the case's business: a developer's
+/// `~/.claude`, `~/.gitconfig` or global mise config can no longer move a verdict
+/// here that a CI runner, which has none of them, would not reproduce.
+//MUTANT home-pin-posix-only|s@("USERPROFILE", dir)@("USERPROFILE_UNREAD", dir)@|every_spawn_of_the_binary_pins_the_home
+#[doc(hidden)]
+#[must_use]
+pub fn home_pins(dir: &Path) -> [(&'static str, &Path); 2] {
+    [("HOME", dir), ("USERPROFILE", dir)]
 }
 
 /// Whether a spawn whose working directory is `cwd` would FALL THROUGH to an

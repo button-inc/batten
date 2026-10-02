@@ -629,8 +629,7 @@ fn a_correctly_answered_override_completes_end_to_end() {
         "and nothing else: {issued:?}"
     );
 
-    let record = admission::load_in(common::scratch_state_root(), &root, &issued)
-        .expect("the store holds it");
+    let record = admission::load(&root, &issued).expect("the store holds it");
     assert_eq!(record.state, State::Issued);
     assert!(record.recomputes(), "and it verifies against its own key");
     assert_eq!(record.binding.subject, "a.rs,b.rs");
@@ -966,8 +965,10 @@ fn admits_fixture_of(name: &str, module: &str, files: &[&str]) -> PathBuf {
     common::git_in(&root, &["init", "-q", "-b", "main"]);
     common::git_in(&root, &["add", "-A"]);
     common::git_in(&root, &["commit", "-qm", "seed"]);
-    // No store to clear, unlike `fixture`'s: every case on this fixture reaches
-    // the store through a child, and `common::batten` pins each process's own.
+    // The store outlives the checkout, for `fixture`'s reason.
+    if let Ok(store) = admission::store_dir(&root) {
+        let _ = std::fs::remove_dir_all(&store);
+    }
     root
 }
 
@@ -980,7 +981,7 @@ fn admits_fixture(name: &str) -> PathBuf {
 /// An absent directory and an empty one are the same answer here: the fixture
 /// removes the store at setup, so either means nothing was written.
 fn records_in(root: &Path) -> usize {
-    admission::store_dir_in(common::scratch_state_root(), root)
+    admission::store_dir(root)
         .ok()
         .and_then(|store| std::fs::read_dir(store).ok())
         .map_or(0, |entries| entries.filter_map(Result::ok).count())
@@ -1073,15 +1074,13 @@ fn spend_block_for(root: &Path, subject: &str, reason: &str) -> (String, String)
     let address = spend_for(root, subject, reason);
     // The block `spend` printed, rendered from the record it left rather than
     // scraped off stdout: same bytes, one renderer.
-    let record = admission::load_in(common::scratch_state_root(), root, &address)
-        .expect("the spent record is in the store");
+    let record = admission::load(root, &address).expect("the spent record is in the store");
     (address, admission::block(&record))
 }
 
 /// Delete the store, so anything admitted afterwards was read from the tree.
 fn forget_store(root: &Path) {
-    let store =
-        admission::store_dir_in(common::scratch_state_root(), root).expect("the store resolves");
+    let store = admission::store_dir(root).expect("the store resolves");
     let _ = std::fs::remove_dir_all(&store);
     assert!(!store.exists(), "the store is gone: {}", store.display());
 }
@@ -1460,8 +1459,7 @@ fn a_mint_for_a_rule_that_produced_no_finding_still_falls_back_to_the_call() {
         common::stderr(&issued)
     );
 
-    let path = batten::admission::record_path_in(common::scratch_state_root(), &root, &address)
-        .expect("record path");
+    let path = batten::admission::record_path(&root, &address).expect("record path");
     let record: Record =
         serde_json::from_slice(&std::fs::read(&path).expect("read")).expect("parse");
     assert!(
@@ -1569,8 +1567,7 @@ fn a_mint_for_a_mediated_rule_anchors_the_call_not_a_tree_finding() {
     let address = String::from_utf8_lossy(&issued.stdout).trim().to_owned();
     assert_eq!(address.len(), 64, "an address was issued: {address:?}");
 
-    let path = batten::admission::record_path_in(common::scratch_state_root(), &root, &address)
-        .expect("record path");
+    let path = batten::admission::record_path(&root, &address).expect("record path");
     let record: Record =
         serde_json::from_slice(&std::fs::read(&path).expect("read")).expect("parse");
     assert!(
@@ -1734,8 +1731,7 @@ fn a_mint_for_a_policy_predicate_anchors_the_finding_not_the_call() {
         common::stderr(&issued)
     );
 
-    let path = batten::admission::record_path_in(common::scratch_state_root(), &root, &address)
-        .expect("record path");
+    let path = batten::admission::record_path(&root, &address).expect("record path");
     let record: Record =
         serde_json::from_slice(&std::fs::read(&path).expect("read")).expect("parse");
     assert!(
