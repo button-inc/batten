@@ -677,6 +677,7 @@ pub fn base_key(repo: &Path, base_sha: &str) -> Result<String> {
 /// behind with no binary in it, and reading that as "built" would hand hyperfine
 /// a path it cannot execute and report the could-not-look as a measurement.
 #[must_use]
+//MUTANT built-for-unread|s@^    base_binary(perf_dir, key).is_file() \&\& marked_for(perf_dir, key)$@    base_binary(perf_dir, key).is_file()@|a_seeded_base_dir_does_not_answer_as_built
 pub fn base_arm_is_built(perf_dir: &Path, key: &str) -> bool {
     // BUILT FOR THIS KEY, NOT MERELY PRESENT (CLOUD-2068). A warm-start seed
     // renames a sibling's directory to this key with that sibling's binary still
@@ -685,8 +686,6 @@ pub fn base_arm_is_built(perf_dir: &Path, key: &str) -> bool {
     // refused `main`'s own config. The marker is written only by a build for this
     // key, so a seeded directory — or one left by a build before this check
     // existed — is rebuilt rather than trusted.
-    //MUTANT-SUITE crates/batten/src/perf.rs
-    //MUTANT built-for-unread|s@^    base_binary(perf_dir, key).is_file() \&\& marked_for(perf_dir, key)$@    base_binary(perf_dir, key).is_file()@|a_seeded_base_dir_does_not_answer_as_built
     base_binary(perf_dir, key).is_file() && marked_for(perf_dir, key)
 }
 
