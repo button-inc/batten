@@ -547,6 +547,29 @@ fn outside_a_checkout_the_check_abstains() {
     assert!(out.stdout.is_empty());
 }
 
+/// A SUBDIRECTORY of a checkout carries no authority of its own, because
+/// configuration never walks upward, so the verb abstains there exactly as it
+/// does outside one rather than failing as a usage error on every turn. This
+/// repository's own `stop` handler did fail that way once the session's working
+/// directory moved into `crates/batten/tests/it` (CLOUD-2059). The same
+/// transcript from the checkout's root still fires, which is what keeps the
+/// abstention from being a blanket pass.
+#[test]
+fn a_session_in_a_subdirectory_abstains_rather_than_failing() {
+    let turns = Turns::new("subdirectory").prompt().say(CITED);
+    turns.write();
+    let deep = turns.repo.join("crates/deep");
+    std::fs::create_dir_all(&deep).expect("a subdirectory");
+    let command = committed_argv();
+    let args: Vec<&str> = command.iter().map(String::as_str).collect();
+    let out = common::run_with_stdin(&deep, &args, &turns.transcript().display().to_string());
+    let said = common::stderr(&out);
+    assert_eq!(out.status.code(), Some(0), "{said}");
+    assert!(out.stdout.is_empty(), "nothing on stdout: {said}");
+    assert!(said.contains("no committed authority"), "{said}");
+    fired(&turns.check(), 1);
+}
+
 /// The declared door the engine's end-of-turn ladder runs.
 #[test]
 fn the_stop_handler_row_runs_this_task() {

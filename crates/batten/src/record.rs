@@ -1452,6 +1452,23 @@ pub fn decide_record(family: &str, inputs: &[String], overrides: &Overrides) -> 
             "not a git repository, so no record store",
         ));
     }
+    // NOR IS A DIRECTORY WITH NO AUTHORITY OF ITS OWN, one level in. The store
+    // check above discovers upward and configuration never does (house style
+    // §8), so a session standing in a subdirectory of a checkout resolves the
+    // defaults, which declare none of this reading's rows — and the reading
+    // below then fails as a usage error on every turn. Measured on this
+    // repository's own `finding-sink` handler once the session's working
+    // directory moved into `crates/batten/tests/it` (CLOUD-2059).
+    //MUTANT-SUITE crates/batten/tests/it/finding_sink.rs
+    //MUTANT subdirectory-decides|s@^        \&\& !Path::new(crate::config::CONFIG_FILE).is_file()$@        \&\& false@|a_session_in_a_subdirectory_abstains_rather_than_failing
+    if overrides.config_from.is_none()
+        && overrides.config_in.is_none()
+        && !Path::new(crate::config::CONFIG_FILE).is_file()
+    {
+        return Ok(Decision::Abstained(
+            "no committed authority in this directory",
+        ));
+    }
     match turn_reading(&family, &inputs, overrides)? {
         None => {
             clear_named("record decide", &family)?;
