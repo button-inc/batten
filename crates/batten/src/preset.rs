@@ -1860,9 +1860,31 @@ dependencies. A recovered crate outside it means the binary was not built from t
 already exists, and the holder finds out by having their next pull fail in a way that \
 looks like their own mistake. `--force-with-lease` refuses when the remote moved, which \
 is the same operation with the one check that makes it safe.",
-            routes: &[run("patch run first", "git push --force-with-lease")],
+            // THE EXPLICIT FORM, never the bare flag (CLOUD-2057): a bare
+            // `--force-with-lease` compares against this clone's tracking ref and
+            // is itself refused by `branch write unsafe`, so naming it here sent a
+            // refused reader straight into a second refusal.
+            routes: &[run(
+                "patch run first",
+                "git push --force-with-lease=<ref>:<sha>",
+            )],
             applicability: crate::verdict::Applicability::Advice,
         }],
+        patterns: &[],
+    },
+    // EVERY GIT CALL BATTEN ALLOWS IS PUT TO NO ONE (CLOUD-2057). One module and
+    // no verdicts: it never refuses, it only stops the host re-deciding a call
+    // the engine already allowed. Destructive calls are left to the host.
+    Manifest {
+        name: "git",
+        version: 1,
+        modules: &[PresetModule {
+            scope: RuleScope::MediatedCall,
+            provider: None,
+            pointer: "<preset:git>/git-call-is-preapproved.rego",
+            source: include_str!("policy/presets/git/git-call-is-preapproved.rego"),
+        }],
+        verdicts: &[],
         patterns: &[],
     },
 ];

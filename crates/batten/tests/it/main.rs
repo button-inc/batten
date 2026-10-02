@@ -196,6 +196,7 @@ mod gh_guard;
 mod gh_preflight;
 mod git_facts;
 mod git_hook;
+mod git_preset;
 mod git_state_facts;
 mod glob_containment;
 mod glob_exclusion;

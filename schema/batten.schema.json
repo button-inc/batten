@@ -4402,7 +4402,8 @@
             "shell-hygiene",
             "tracker-hygiene",
             "supply-chain",
-            "trunk-based"
+            "trunk-based",
+            "git"
           ]
         },
         "produces": {

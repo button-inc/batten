@@ -2121,6 +2121,13 @@ id = "preapproved-task"
 regex = '^(land|verify|verify:gated|linear-check|claim-check|closing-key-check|done-check|install:local|alive|policy-test)$'
 
 [[pattern]]
+id = "trunk-branch"
+# The one long-lived branch, read by the `git` preset (CLOUD-2057): a push that
+# names it skips the landing loop's gate and CI, so it is never pre-approved and
+# stays the host's to ask about. Whole-name anchored.
+regex = '^main$'
+
+[[pattern]]
 id = "mise-run-task"
 # A DOT CONTINUES A NAME when a character follows it: mise accepts a file task
 # with its extension, so `mise run present.typo` is one name and must not read
@@ -6747,6 +6754,19 @@ no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused be
 kind = "policy"
 scope = "mediated_call"
 preset = "trunk-based"
+severity = "deny"
+
+# CLOUD-2057: every git call the rows above allow is pre-approved, so the host's
+# classifier never re-decides a call batten already judged. Measured: a lap's
+# rebased head left `turn mint ahead` refusing every edit, and the explicit
+# `--force-with-lease=<ref>:<sha>` push that lifts it — allowed by every row here
+# — was denied by auto mode. Destructive calls stay the host's to ask about.
+[[rule]]
+id = "program grant now"
+no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
+kind = "policy"
+scope = "mediated_call"
+preset = "git"
 severity = "deny"
 
 # CLOUD-1949, consumer #1 first. The owner's ruling: the host never halts on a
@@ -14196,7 +14216,7 @@ target, and which is the exact construct this repository uses for \
 [[verdict.route]]
 id = "patch run first"
 kind = "command"
-target = "git mv the file under crates/batten/tests/it/ and declare it in that group's main.rs"
+target = "git mv <path> crates/batten/tests/it/<path> — then declare it in that group's main.rs"
 
 # CLOUD-1419's classes. `policy/fixture-forks.rego` raises both.
 [[verdict]]
