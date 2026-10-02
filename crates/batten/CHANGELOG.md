@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.198](https://github.com/button-inc/batten/compare/v0.0.197...v0.0.198) - 2026-10-02
+
+### Fixed
+
+- *(preset)* pre-approve declared mise lifecycle tasks
+
+### Other
+
+- *(prune)* stop the escalation at the first row that recovers the floor
+- *(perf-gate)* return Result from the shared-arms case
+- *(preset)* opa fmt the lifecycle-task grant
+- *(perf-gate)* build both pair arms in one shared target dir
+- *(journal)* write each folded record once per merge, not once per entry
+
 ## [0.0.197](https://github.com/button-inc/batten/compare/v0.0.196...v0.0.197) - 2026-10-02
 
 ### Fixed
