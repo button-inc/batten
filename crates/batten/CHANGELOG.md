@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.197](https://github.com/button-inc/batten/compare/v0.0.196...v0.0.197) - 2026-10-02
+
+### Fixed
+
+- *(land)* catch a merge-carrying branch up with a merge instead of refusing it
+
 ## [0.0.196](https://github.com/button-inc/batten/compare/v0.0.195...v0.0.196) - 2026-10-01
 
 ### Added
