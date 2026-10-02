@@ -1726,7 +1726,21 @@ fn escalate(
     // breached. That is not a phase rule and deliberately so: a run cannot tell the
     // head of `verify` from the tail of `verify:gated` — both are the same
     // invocation — but it can always tell whether it still needs the space.
-    let (cheap, cheap_bytes, _) = drop_regrowable(root, &config.regrowable, false);
+    let mut short = None;
+    let mut recovered = || match readings.take(measured_at) {
+        Ok(mb) => {
+            *free_mb = mb;
+            mb >= warm_in_force
+        }
+        Err(error) => {
+            short = Some(error);
+            true
+        }
+    };
+    let (cheap, cheap_bytes, _) = drop_regrowable(root, &config.regrowable, false, &mut recovered);
+    if let Some(error) = short {
+        return Err(error);
+    }
     let mut dropped = cheap;
     let mut bytes = cheap_bytes;
     if cheap > 0 {
@@ -1770,7 +1784,8 @@ fn escalate(
     // to be the one that will judge the lap, or this tier inherits the identical
     // gap one step later.
     if *free_mb < warm_in_force {
-        let (costly, costly_bytes, basis_moved) = drop_regrowable(root, &config.regrowable, true);
+        let (costly, costly_bytes, basis_moved) =
+            drop_regrowable(root, &config.regrowable, true, &mut || false);
         dropped += costly;
         bytes += costly_bytes;
         // THE BASIS MOVES WITH THE RECLAIM, and this is the whole of CLOUD-1030.
@@ -2603,7 +2618,21 @@ fn populated_directory(path: &Path) -> bool {
 /// So the count moves on the ATTEMPT rather than the outcome, and the bytes move
 /// only on success: the stricter floor is the safe direction for a reclaim whose
 /// extent is unknown, and claiming megabytes that may still be on disk is not.
-fn drop_regrowable(root: &Path, declared: &[Regrowable], basis_moving: bool) -> (usize, u64, bool) {
+///
+/// AND IT STOPS ONCE `recovered` SAYS THE FLOOR IS MET (CLOUD-1891). Every row of
+/// a tier used to go at once, so the order the consumer declared predicted what
+/// went first and nothing about what survived: measured 2026-10-02, a lap short
+/// by ~5.5GB dropped 11886MB — the perf pair's whole release-profile closure with
+/// it — and every next `perf-gate` rebuilt that from nothing. `recovered` is
+/// asked after each row that removed something, so a root declared last is
+/// taken only when every cheaper one before it was not enough.
+//MUTANT drop-past-the-floor|s@^        if removed > 0 && recovered() \{$@        if false \&\& recovered() {@|an_escalation_stops_at_the_first_row_that_recovers_the_floor
+fn drop_regrowable(
+    root: &Path,
+    declared: &[Regrowable],
+    basis_moving: bool,
+    recovered: &mut dyn FnMut() -> bool,
+) -> (usize, u64, bool) {
     let mut removed = 0;
     let mut freed = 0;
     let mut basis_moved = false;
@@ -2616,6 +2645,9 @@ fn drop_regrowable(root: &Path, declared: &[Regrowable], basis_moving: bool) -> 
         // See the call site: one tier per pass, cheap first.
         if declared_root.cold != basis_moving {
             continue;
+        }
+        if removed > 0 && recovered() {
+            return (removed, freed, basis_moved);
         }
         for cache in directories_named(root, &declared_root.name) {
             let Some(_building) = claim(root, &cache) else {
@@ -2642,7 +2674,8 @@ fn drop_regrowable(root: &Path, declared: &[Regrowable], basis_moving: bool) -> 
     //
     // Last, because the declared list is the consumer's and its ORDER is a
     // statement they made; a derived root has no such claim on going first.
-    if !basis_moving {
+    let floor_met = removed > 0 && recovered();
+    if !basis_moving && !floor_met {
         for tree in nested_build_trees(root) {
             // A declared row may name the same directory — `semver-checks` and
             // `perf` are themselves nested build trees, so today they are matched
@@ -3141,7 +3174,7 @@ mod tests {
         let tree = root.join("aarch64-apple-darwin");
         mkdir(&tree.join("debug/deps"));
 
-        let (removed, _, basis_moved) = drop_regrowable(&root, &[], false);
+        let (removed, _, basis_moved) = drop_regrowable(&root, &[], false, &mut || false);
         assert_eq!(removed, 1, "the derived tree is reclaimed");
         assert!(
             !basis_moved,
@@ -3160,7 +3193,7 @@ mod tests {
         let tree = root.join("x86_64-pc-windows-gnu");
         mkdir(&tree.join("release"));
 
-        let (removed, freed, basis_moved) = drop_regrowable(&root, &[], true);
+        let (removed, freed, basis_moved) = drop_regrowable(&root, &[], true, &mut || false);
         assert_eq!(removed, 0, "the cold pass takes no derived root");
         assert_eq!(freed, 0);
         assert!(!basis_moved);
@@ -3180,11 +3213,39 @@ mod tests {
             name: String::from("semver-checks"),
             cold: false,
         }];
-        let (removed, _, _) = drop_regrowable(&root, &declared, false);
+        let (removed, _, _) = drop_regrowable(&root, &declared, false, &mut || false);
         assert_eq!(
             removed, 1,
             "one directory, one reclaim — not one per pass that matched it"
         );
+    }
+
+    #[test]
+    fn an_escalation_stops_at_the_first_row_that_recovers_the_floor() {
+        // CLOUD-1891: the order a consumer declares decides what SURVIVES, not
+        // only what goes first. Two cheap rows; the floor is met after the first,
+        // so the second — declared last because it is dearest to regrow — stays.
+        let root = build_root("stop-at-floor");
+        mkdir(&root.join("tmp/fixture"));
+        mkdir(&root.join("perf/arms/deps"));
+        let declared = [
+            Regrowable {
+                name: String::from("tmp"),
+                cold: false,
+            },
+            Regrowable {
+                name: String::from("perf"),
+                cold: false,
+            },
+        ];
+        let (removed, _, _) = drop_regrowable(&root, &declared, false, &mut || true);
+        assert_eq!(removed, 1, "only the row before the floor was met");
+        assert!(!root.join("tmp").exists(), "the cheap root went");
+        assert!(root.join("perf/arms/deps").is_dir(), "the dear one stayed");
+
+        let (removed, _, _) = drop_regrowable(&root, &declared, false, &mut || false);
+        assert_eq!(removed, 1, "still short, the next row is taken");
+        assert!(!root.join("perf").exists());
     }
 
     // --- observations a superseded reading took (CLOUD-1246) -----------------
@@ -3895,7 +3956,7 @@ mod tests {
         mkdir(&tree.join("debug/deps"));
         let build = building(&tree.join("debug"));
 
-        let (removed, freed, _) = drop_regrowable(&root, &[], false);
+        let (removed, freed, _) = drop_regrowable(&root, &[], false, &mut || false);
         assert_eq!(
             (removed, freed),
             (0, 0),
@@ -3904,7 +3965,7 @@ mod tests {
         assert!(tree.join("debug/deps").is_dir(), "and it is still there");
 
         drop(build);
-        let (removed, _, _) = drop_regrowable(&root, &[], false);
+        let (removed, _, _) = drop_regrowable(&root, &[], false, &mut || false);
         assert_eq!(removed, 1, "released, the same tree is reclaimed");
         assert!(!tree.exists());
     }
@@ -3921,11 +3982,11 @@ mod tests {
         }];
         let build = building(&root.join("debug"));
 
-        let (removed, _, _) = drop_regrowable(&root, &declared, false);
+        let (removed, _, _) = drop_regrowable(&root, &declared, false, &mut || false);
         assert_eq!(removed, 0, "the build writing into it keeps it");
 
         drop(build);
-        let (removed, _, _) = drop_regrowable(&root, &declared, false);
+        let (removed, _, _) = drop_regrowable(&root, &declared, false, &mut || false);
         assert_eq!(removed, 1, "released, the cache regrows as declared");
     }
 

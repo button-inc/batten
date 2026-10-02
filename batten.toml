@@ -11071,9 +11071,6 @@ cold = false
 name = "semver*"
 cold = false
 [[prune.regrowable]]
-name = "perf*"
-cold = false
-[[prune.regrowable]]
 name = "flycheck*"
 cold = false
 
@@ -11104,6 +11101,17 @@ cold = false
 # suite that finds it gone materialises exactly what it always did.
 [[prune.regrowable]]
 name = "tmp"
+cold = false
+
+# LAST, BECAUSE IT IS THE DEAREST TO REGROW (CLOUD-1891). `perf*` holds the perf
+# pair's shared arms directory, a full release-profile dependency closure. The
+# escalation now stops at the first row that recovers the floor, so a root
+# declared last is taken only when every cheaper one was not enough; declared
+# third, it went on lap after lap — measured 2026-10-02, `escalated below the warm
+# floor — 11886MB of regrowable cache dropped` — and the next `perf-gate` rebuilt
+# it from nothing, most of a 956s `verify`.
+[[prune.regrowable]]
+name = "perf*"
 cold = false
 
 # ---------------------------------------------------------------------------
