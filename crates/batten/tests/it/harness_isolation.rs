@@ -19,6 +19,16 @@ fn a_spawn_whose_cwd_falls_through_to_the_checkout_is_refused() {
         .output();
 }
 
+/// The task door refuses the same directory (review of #1089): a task body runs
+/// the engine through `PATH` from where it stands, so it falls through exactly as
+/// a direct spawn does.
+#[test]
+#[should_panic(expected = "falls through to the checkout")]
+fn a_task_body_whose_cwd_falls_through_to_the_checkout_is_refused() {
+    let bare = common::scratch("harness-isolation-task-bare");
+    let _ = common::task_bash(&bare, "true");
+}
+
 /// The case's OWN library calls resolve the root its children are pinned to, so
 /// an admission issued in-process, a lap verified in-process, or a decision
 /// appended in-process lands in the case's store and not the developer's — the

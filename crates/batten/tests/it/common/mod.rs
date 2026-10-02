@@ -515,22 +515,30 @@ impl std::ops::DerefMut for Batten {
     }
 }
 
+/// Panic if a spawn in `cwd` would fall through to the checkout holding this
+/// build. The ONE refusal both spawn doors apply: [`Batten`] before it spawns, and
+/// [`task_bash`] when it is built, since a task body reaches the engine through
+/// `PATH` from the same directory.
+fn refuse_fall_through_at(cwd: &Path) {
+    let cwd = std::path::absolute(cwd).unwrap_or_else(|_| cwd.to_path_buf());
+    assert!(
+        !batten::testing::falls_through(&cwd, &target_tmp()),
+        "batten ran in {}, which falls through to the checkout holding this build: \
+         make the fixture a repository (`common::init_repo`), or put a fixture whose \
+         subject is \"not a repository\" in `common::scratch_outside_tree`",
+        cwd.display()
+    );
+}
+
 //MUTANT-SUITE crates/batten/tests/it/harness_isolation.rs
 //MUTANT refused-after-the-spawn|s@^        self.refuse_fall_through();$@@|a_fall_through_is_refused_before_the_child_runs
+//MUTANT task-door-falls-through|s@^    refuse_fall_through_at(dir);$@@|a_task_body_whose_cwd_falls_through_to_the_checkout_is_refused
 impl Batten {
     /// Panic if this command's working directory falls through to the checkout.
     fn refuse_fall_through(&self) {
-        let Some(cwd) = self.0.get_current_dir() else {
-            return;
-        };
-        let cwd = std::path::absolute(cwd).unwrap_or_else(|_| cwd.to_path_buf());
-        assert!(
-            !batten::testing::falls_through(&cwd, &target_tmp()),
-            "batten ran in {}, which falls through to the checkout holding this build: \
-             make the fixture a repository (`common::init_repo`), or put a fixture whose \
-             subject is \"not a repository\" in `common::scratch_outside_tree`",
-            cwd.display()
-        );
+        if let Some(cwd) = self.0.get_current_dir() {
+            refuse_fall_through_at(cwd);
+        }
     }
 
     pub(crate) fn arg<S: AsRef<std::ffi::OsStr>>(&mut self, arg: S) -> &mut Self {
@@ -881,6 +889,10 @@ pub(crate) fn task_env(name: &str) -> String {
 )]
 #[must_use]
 pub(crate) fn task_bash(dir: &Path, body: &str) -> std::process::Command {
+    // THE BINARY'S DOOR GUARDS THIS ONE TOO (review of #1089). A task body runs
+    // the engine through `PATH` from `dir`, so a fixture that is no repository of
+    // its own falls through to this checkout here exactly as it would there.
+    refuse_fall_through_at(dir);
     let inherited = ambient_path();
     let path = std::env::join_paths(
         std::iter::once(dir.join("bin")).chain(std::env::split_paths(&inherited)),
