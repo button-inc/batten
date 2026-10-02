@@ -240,7 +240,7 @@ fn a_row_naming_an_unplannable_surface_is_refused() {
 #[test]
 fn this_repositorys_plan_row_is_clean_today() {
     let root = common::at_root(".");
-    let output = common::run_at_real_root(&root, &["enforce", "--rule", "plan require missing"]);
+    let output = common::run(&root, &["enforce", "--rule", "plan require missing"]);
     assert_eq!(
         output.status.code(),
         Some(0),

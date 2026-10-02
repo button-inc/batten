@@ -2149,7 +2149,7 @@ fn an_issue_key_reaches_the_same_verdict_as_the_piped_payload_with_stdin_closed(
         let mut command = common::batten();
         command.args(["ready", "lint"]).current_dir(&dir);
         common::state_home(&mut command, &home);
-        run_piped(command, &raw_payload(&document))
+        run_piped(&mut command, &raw_payload(&document))
     };
     assert_eq!(code(&piped), 0, "{}", stderr(&piped));
 
@@ -2159,7 +2159,7 @@ fn an_issue_key_reaches_the_same_verdict_as_the_piped_payload_with_stdin_closed(
             .args(["ready", "lint", "--issue", "CLOUD-424"])
             .current_dir(&dir);
         common::state_home(&mut command, &home);
-        run_piped(command, "")
+        run_piped(&mut command, "")
     };
     assert_eq!(code(&resolved), 0, "{}", stderr(&resolved));
     assert_eq!(
@@ -2178,7 +2178,7 @@ fn an_issue_key_reaches_the_same_verdict_as_the_piped_payload_with_stdin_closed(
     clippy::disallowed_types,
     reason = "stays, because the compiled-binary tier is a spawn by definition"
 )]
-fn run_piped(mut command: std::process::Command, input: &str) -> Output {
+fn run_piped(command: &mut std::process::Command, input: &str) -> Output {
     use std::io::Write as _;
     use std::process::Stdio;
 

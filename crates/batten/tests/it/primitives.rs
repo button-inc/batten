@@ -1561,7 +1561,7 @@ fn the_declared_vocabulary_never_reads_an_ignored_directory() {
 /// every redirected suite actually spawns.
 #[test]
 fn a_redirected_state_root_leaves_mises_installs_where_they_are() {
-    let command = common::batten_at_real_root();
+    let command = common::batten();
     let envs: std::collections::BTreeMap<String, Option<String>> = command
         .get_envs()
         .map(|(name, value)| {

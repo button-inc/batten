@@ -339,7 +339,7 @@ fn this_repos_own_history_satisfies_its_committed_convention() {
     let base = String::from_utf8_lossy(&parent.stdout).trim().to_owned();
     let head = common::git_in(&root, &["rev-parse", "HEAD"]);
     let range = format!("{base}..{head}");
-    let output = common::run_at_real_root(&root, &["commit", "check", &range]);
+    let output = common::run(&root, &["commit", "check", &range]);
     assert!(
         output.status.success(),
         "the committed convention refuses this repository's own last commit: {}{}",

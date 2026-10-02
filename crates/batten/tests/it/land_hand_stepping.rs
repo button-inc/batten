@@ -69,7 +69,7 @@
 
 use std::path::PathBuf;
 
-use crate::common::{run_with_stdin_at_real_root, stdout};
+use crate::common::{run_with_stdin, stdout};
 
 /// The row under test. Named rather than inferred from the verdict, because a
 /// refusal from any OTHER row is a different question.
@@ -113,11 +113,7 @@ fn decision_with(command: &str, promoted: bool) -> String {
     } else {
         &["adjudicate", "--harness", "claude-code"]
     };
-    stdout(&run_with_stdin_at_real_root(
-        &root(),
-        args,
-        &bash_payload(command),
-    ))
+    stdout(&run_with_stdin(&root(), args, &bash_payload(command)))
 }
 
 /// The document at DEFAULT strictness, which is where this row's predicate is
@@ -185,11 +181,7 @@ fn the_refusal_names_the_route_out_of_a_conflict() {
     // `"call name refused patch run loose"` and nothing else — pointer-only, by
     // design — so asserting the route against that document would be asserting
     // against the wrong surface and would fail over a perfectly good reason.
-    let out = stdout(&run_with_stdin_at_real_root(
-        &root(),
-        &["policy", "rule", ROW],
-        "",
-    ));
+    let out = stdout(&run_with_stdin(&root(), &["policy", "rule", ROW], ""));
 
     assert!(
         out.contains("--resolve"),

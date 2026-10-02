@@ -198,7 +198,7 @@ fn output_is_pointer_only() {
 fn the_repositorys_own_map_is_complete() {
     // The self-consumption case the retiring suite ended on: the claim
     // `rules/rust.md` makes about the map is checkable rather than asserted.
-    let output = common::run_at_real_root(
+    let output = common::run(
         &common::at_root(""),
         &["check", "--rule", "memory cover partial"],
     );

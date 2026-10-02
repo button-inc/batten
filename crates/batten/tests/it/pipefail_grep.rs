@@ -170,7 +170,7 @@ fn q_after_the_separator_is_a_pattern_not_a_flag() {
 
 #[test]
 fn this_repos_own_programs_pass_today() {
-    let output = common::run_at_real_root(
+    let output = common::run(
         &common::at_root(""),
         &["check", "--rule", "spawn read broken"],
     );

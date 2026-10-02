@@ -30,7 +30,7 @@ use crate::common;
 
 use std::path::PathBuf;
 
-use common::{run, run_with_stdin_at_real_root, stderr};
+use common::{run, run_with_stdin, stderr};
 
 fn root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -45,7 +45,7 @@ fn payload(command: &str) -> String {
 }
 
 fn verdict(command: &str) -> Option<i32> {
-    run_with_stdin_at_real_root(
+    run_with_stdin(
         &root(),
         &["adjudicate", "--harness", "exit-code"],
         &payload(command),
@@ -77,7 +77,7 @@ fn cause_backgrounded(command: &str) -> String {
         "{{\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"Bash\",\
          \"tool_input\":{{\"command\":{encoded},\"run_in_background\":true}}}}"
     );
-    stderr(&run_with_stdin_at_real_root(
+    stderr(&run_with_stdin(
         &root(),
         &["adjudicate", "--harness", "exit-code"],
         &payload,
@@ -90,10 +90,9 @@ fn assert_allowed_backgrounded(command: &str) {
         "{{\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"Bash\",\
          \"tool_input\":{{\"command\":{encoded},\"run_in_background\":true}}}}"
     );
-    let code =
-        run_with_stdin_at_real_root(&root(), &["adjudicate", "--harness", "exit-code"], &payload)
-            .status
-            .code();
+    let code = run_with_stdin(&root(), &["adjudicate", "--harness", "exit-code"], &payload)
+        .status
+        .code();
     assert_eq!(code, Some(0), "must allow a backgrounded: {command}");
 }
 
@@ -103,7 +102,7 @@ fn assert_allowed_backgrounded(command: &str) {
 /// shapes render three causes, and the substitution family asserts that the
 /// cause points at the operand a caller can act on.
 fn cause(command: &str) -> String {
-    stderr(&run_with_stdin_at_real_root(
+    stderr(&run_with_stdin(
         &root(),
         &["adjudicate", "--harness", "exit-code"],
         &payload(command),

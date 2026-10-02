@@ -368,7 +368,8 @@ fn the_clause_needs_no_store_to_decide() {
         &dir,
         &format!("fix(config): change the guarded file\n\n{block}"),
     );
-    let store = batten::admission::store_dir(&dir).expect("the store resolves");
+    let store = batten::admission::store_dir_in(common::scratch_state_root(), &dir)
+        .expect("the store resolves");
     std::fs::remove_dir_all(&store).expect("the store is removable");
     assert!(
         !store.exists(),

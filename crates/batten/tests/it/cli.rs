@@ -132,7 +132,7 @@ fn run_hook_in_promoted(
     payload: &str,
     promoted: bool,
 ) -> Output {
-    let mut command = common::batten_at_real_root();
+    let mut command = common::batten();
     command.current_dir(dir);
     if promoted {
         command.arg("--fail-on-warning");
@@ -168,7 +168,7 @@ fn run_hook_with_env(
     payload: &str,
     env: &[(&str, &str)],
 ) -> Output {
-    let mut command = common::batten_at_real_root();
+    let mut command = common::batten();
     command
         .current_dir(dir)
         .args(["adjudicate", "--harness", harness])

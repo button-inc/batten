@@ -240,7 +240,7 @@ fn output_is_pointer_only() {
 fn this_repositorys_own_workflows_hold_the_floor() {
     // The self-consumption case the retiring suite ended on: the floor is a live
     // claim about this repository, checked rather than asserted.
-    let output = common::run_at_real_root(
+    let output = common::run(
         &common::at_root(""),
         &["check", "--rule", "provision pin stale"],
     );

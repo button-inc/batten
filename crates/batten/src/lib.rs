@@ -185,6 +185,9 @@ pub mod sweep;
 pub mod task;
 /// The task runner's argv, from a receipt minted outside the mediated call.
 pub mod taskset;
+/// Decisions the test harness makes about a spawn, swept by `batten mutate`.
+#[doc(hidden)]
+pub mod testing;
 /// Third-party tool verdicts, keyed to (tool, pinned version, input digest).
 pub mod tools;
 /// The `tracker-hygiene` preset's readings: tracker payloads and a pull request

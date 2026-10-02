@@ -29,7 +29,7 @@ use crate::common;
 
 use std::path::PathBuf;
 
-use common::{StateHome as _, run_with_stdin_at_real_root, stdout};
+use common::{StateHome as _, run_with_stdin, stdout};
 
 fn root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -51,7 +51,7 @@ fn shell(mode: &str, command: &str) -> String {
 
 /// Every document the hook put on stdout, parsed.
 fn documents(payload: &str) -> Vec<serde_json::Value> {
-    let outcome = run_with_stdin_at_real_root(
+    let outcome = run_with_stdin(
         &root(),
         &["adjudicate", "--harness", "claude-code"],
         payload,

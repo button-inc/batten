@@ -1639,7 +1639,7 @@ mod ready_cites {
             "tests/fixtures/ready-cites-check/CLOUD-740-superseded.json",
         ))
         .expect("the fetched fixture");
-        let output = common::run_with_stdin_at_real_root(
+        let output = common::run_with_stdin(
             &common::at_root(""),
             &["board", "check", "--cites"],
             &payload,
@@ -1668,7 +1668,7 @@ mod ready_cites {
             "tests/fixtures/ready-cites-check/CLOUD-740-superseded.json",
         ))
         .expect("the fetched fixture");
-        let output = common::run_with_stdin_at_real_root(
+        let output = common::run_with_stdin(
             &common::at_root(""),
             &["board", "check", "--cites"],
             &payload,
@@ -1683,7 +1683,7 @@ mod ready_cites {
             "tests/fixtures/ready-cites-check/CLOUD-740-live.json",
         ))
         .expect("the fetched fixture");
-        let output = common::run_with_stdin_at_real_root(
+        let output = common::run_with_stdin(
             &common::at_root(""),
             &["board", "check", "--cites"],
             &payload,

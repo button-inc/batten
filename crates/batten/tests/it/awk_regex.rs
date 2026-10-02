@@ -156,7 +156,7 @@ fn a_tree_with_no_awk_at_all_passes_rather_than_erroring() {
 
 #[test]
 fn this_repos_own_programs_pass_today() {
-    let output = common::run_at_real_root(
+    let output = common::run(
         &common::at_root(""),
         &["check", "--rule", "pattern carry unsafe"],
     );

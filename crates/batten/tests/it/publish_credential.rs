@@ -286,7 +286,7 @@ fn publishing_on_with_no_release_workflow_is_not_a_pass() {
 #[test]
 fn the_tree_as_it_stands_carries_no_registry_credential() {
     // The self-consumption case the retiring suite opened on.
-    let output = common::run_at_real_root(
+    let output = common::run(
         &common::at_root(""),
         &["check", "--rule", "release grant missing"],
     );

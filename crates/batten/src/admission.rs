@@ -627,6 +627,17 @@ fn assemble(claimed: &str, fields: &BTreeMap<String, String>) -> Option<Articula
 ///
 /// Returns an error when the state root cannot be resolved.
 pub fn store_dir(repo_root: &Path) -> Result<PathBuf> {
+    store_dir_in(&crate::state::data_dir()?, repo_root)
+}
+
+/// [`store_dir`] under an explicit OS data directory rather than the one the
+/// process environment resolves (CLOUD-2059): the seam a caller needs to read
+/// back what a child it pointed at `data_dir` wrote.
+///
+/// # Errors
+///
+/// Returns an error when the repository root cannot be resolved.
+pub fn store_dir_in(data_dir: &Path, repo_root: &Path) -> Result<PathBuf> {
     // CANONICALIZE FIRST, for the reason `secrets::resolve_scanner` records: the
     // anchor is a RELATIVE path (`.`) whenever the config sits in the cwd, and
     // the state directory is keyed by the repository's own directory name, which
@@ -636,7 +647,7 @@ pub fn store_dir(repo_root: &Path) -> Result<PathBuf> {
     let anchored = repo_root
         .canonicalize()
         .with_context(|| format!("resolve the repository root at {}", repo_root.display()))?;
-    Ok(crate::state::repo_state_dir(&anchored)?
+    Ok(crate::state::repo_state_dir_in(data_dir, &anchored)?
         .join("receipts")
         .join("overrides"))
 }
@@ -648,6 +659,15 @@ pub fn store_dir(repo_root: &Path) -> Result<PathBuf> {
 /// Returns an error when the store directory cannot be resolved.
 pub fn record_path(repo_root: &Path, admission: &str) -> Result<PathBuf> {
     Ok(store_dir(repo_root)?.join(format!("{admission}.json")))
+}
+
+/// [`record_path`] under an explicit OS data directory (CLOUD-2059).
+///
+/// # Errors
+///
+/// Returns an error when the repository root cannot be resolved.
+pub fn record_path_in(data_dir: &Path, repo_root: &Path, admission: &str) -> Result<PathBuf> {
+    Ok(store_dir_in(data_dir, repo_root)?.join(format!("{admission}.json")))
 }
 
 /// The lock file guarding the store's state transitions.
@@ -693,7 +713,18 @@ fn lock(dir: &Path) -> Result<std::fs::File> {
 /// a record that cannot be read is never an authorization.
 #[must_use]
 pub fn load(repo_root: &Path, admission: &str) -> Option<Record> {
-    let path = record_path(repo_root, admission).ok()?;
+    load_from(&record_path(repo_root, admission).ok()?)
+}
+
+/// [`load`] under an explicit OS data directory (CLOUD-2059): what a caller
+/// that pointed a child at `data_dir` reads back.
+#[must_use]
+pub fn load_in(data_dir: &Path, repo_root: &Path, admission: &str) -> Option<Record> {
+    load_from(&record_path_in(data_dir, repo_root, admission).ok()?)
+}
+
+/// The record at `path`, under [`load`]'s fail-closed posture.
+fn load_from(path: &Path) -> Option<Record> {
     let bytes = std::fs::read(path).ok()?;
     let record: Record = serde_json::from_slice(&bytes).ok()?;
     (record.predicate_type == PREDICATE_TYPE).then_some(record)

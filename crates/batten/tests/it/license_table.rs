@@ -146,7 +146,7 @@ fn output_is_a_pointer_never_the_table_body() {
 
 #[test]
 fn the_repo_as_it_stands_passes() {
-    let output = common::run_at_real_root(
+    let output = common::run(
         &common::at_root(""),
         &["check", "--rule", "tool grade unclear"],
     );

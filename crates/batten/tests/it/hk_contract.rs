@@ -50,7 +50,7 @@ fn code(output: &std::process::Output) -> Option<i32> {
 #[test]
 fn the_committed_contract_is_the_one_the_binary_derives() {
     let root = common::at_root(".");
-    let output = common::run_at_real_root(&root, &["hk", "drift"]);
+    let output = common::run(&root, &["hk", "drift"]);
     assert_eq!(
         code(&output),
         Some(0),
@@ -78,7 +78,7 @@ fn the_committed_contract_is_the_one_the_binary_derives() {
 #[test]
 fn a_caller_suppressing_steps_does_not_drift_the_contract() {
     let root = common::at_root(".");
-    let output = common::batten_at_real_root()
+    let output = common::batten()
         .args(["hk", "drift"])
         .current_dir(&root)
         .env(hk::CALLER_SKIP, "sbom-check,batten-check")
@@ -186,7 +186,7 @@ fn tracked_entries(dir: &Path) -> Vec<String> {
 #[test]
 fn the_generator_is_a_write_and_the_gate_is_a_read() {
     let root = common::at_root(".");
-    let output = common::run_at_real_root(&root, &["spec", "--format", "json"]);
+    let output = common::run(&root, &["spec", "--format", "json"]);
     let spec: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("the spec is one JSON document");
     let mut seen = 0;
@@ -271,7 +271,7 @@ fn a_drifted_contract_exits_two_and_names_the_class() {
     fs::copy(common::at_root("hk.pkl"), root.join("hk.pkl")).expect("the runner config copies");
     fs::create_dir_all(root.join("contracts")).expect("the artifact directory");
 
-    let generated = common::run_at_real_root(root, &["hk", "contract"]);
+    let generated = common::run(root, &["hk", "contract"]);
     if code(&generated) != Some(0) {
         // The pinned runner is unreachable here, which is a provisioning fault
         // and not a drifted contract. Skipped rather than asserted, because a
@@ -295,7 +295,7 @@ fn a_drifted_contract_exits_two_and_names_the_class() {
     step.name = format!("{}-renamed", step.name);
     fs::write(&artifact, contract.render().expect("it renders")).expect("the drift is committed");
 
-    let output = common::run_at_real_root(root, &["hk", "drift"]);
+    let output = common::run(root, &["hk", "drift"]);
     assert_eq!(
         code(&output),
         Some(2),

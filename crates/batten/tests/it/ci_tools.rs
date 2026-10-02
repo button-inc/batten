@@ -432,8 +432,7 @@ fn output_is_pointer_only() {
 #[test]
 fn the_committed_workflows_and_manifest_agree() {
     // The two self-consumption cases the retiring suite kept, in one run.
-    let output =
-        common::run_at_real_root(&common::at_root(""), &["check", "--rule", "tool pin wrong"]);
+    let output = common::run(&common::at_root(""), &["check", "--rule", "tool pin wrong"]);
     assert_eq!(
         output.status.code(),
         Some(0),

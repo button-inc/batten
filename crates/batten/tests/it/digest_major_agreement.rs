@@ -296,7 +296,7 @@ fn output_is_pointer_only() {
 fn this_workspaces_own_crypto_crates_agree() {
     // The claim the old manifest comment got wrong, checked rather than
     // asserted.
-    let output = common::run_at_real_root(
+    let output = common::run(
         &common::at_root(""),
         &["check", "--rule", "version read wrong"],
     );

@@ -227,7 +227,7 @@ fn output_is_pointer_only() {
 #[test]
 fn the_committed_filter_honours_every_probe() {
     // The self-consumption case the retiring suite opened on.
-    let output = common::run_at_real_root(
+    let output = common::run(
         &common::at_root(""),
         &["check", "--rule", "path list partial"],
     );

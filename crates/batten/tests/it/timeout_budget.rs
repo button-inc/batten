@@ -382,7 +382,7 @@ fn output_is_pointer_only() {
 #[test]
 fn the_real_workflows_all_carry_a_justified_budget() {
     // The self-consumption case the retiring suite opened on.
-    let output = common::run_at_real_root(
+    let output = common::run(
         &common::at_root(""),
         &["check", "--rule", "job bind missing"],
     );

@@ -185,7 +185,7 @@ fn the_ambient_state_root_never_reaches_the_binary_under_test() {
     // `primitives::no_suite_sets_the_state_dir_variables_itself` enforces — a
     // case that re-typed them to assert the redirect would become the copy that
     // audit exists to refuse, while claiming there are none.
-    let redirected = common::state_roots(&common::batten_at_real_root());
+    let redirected = common::state_roots(&common::batten());
     assert_eq!(
         redirected.len(),
         2,
@@ -234,7 +234,7 @@ fn an_admission_in_the_store_disarms_the_committed_protected_gate() {
     })
     .to_string();
 
-    let refused = run(common::batten_at_real_root().current_dir(root), &payload);
+    let refused = run(common::batten().current_dir(root), &payload);
     assert_eq!(
         refused,
         Some(2),
@@ -247,7 +247,7 @@ fn an_admission_in_the_store_disarms_the_committed_protected_gate() {
                    is unreachable from any other process\n\
                    rejected-route=every declared route is a real remedy for a real write; this \
                    case is not making one, it is proving the channel is load-bearing\n";
-    let issued = common::run_with_stdin_at_real_root(
+    let issued = common::run_with_stdin(
         root,
         &[
             "override",
@@ -273,7 +273,7 @@ fn an_admission_in_the_store_disarms_the_committed_protected_gate() {
         .to_owned();
     assert!(!admission.is_empty(), "the request must name an address");
 
-    let spent = common::run_at_real_root(
+    let spent = common::run(
         root,
         &[
             "override",
@@ -294,7 +294,7 @@ fn an_admission_in_the_store_disarms_the_committed_protected_gate() {
         String::from_utf8_lossy(&spent.stderr)
     );
 
-    let admitted = run(common::batten_at_real_root().current_dir(root), &payload);
+    let admitted = run(common::batten().current_dir(root), &payload);
     assert_eq!(
         admitted,
         Some(0),

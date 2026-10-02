@@ -513,7 +513,7 @@ fn this_repositorys_ban_reads_the_census_declaration() {
 /// exempt file it names is one the ban exempts.
 #[test]
 fn this_repositorys_own_census_answers() {
-    let output = common::run_at_real_root(&common::at_root("."), &["census", "shell", "-J"]);
+    let output = common::run(&common::at_root("."), &["census", "shell", "-J"]);
     assert_eq!(
         output.status.code(),
         Some(0),

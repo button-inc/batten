@@ -45,7 +45,7 @@ use crate::common;
 
 use std::path::{Path, PathBuf};
 
-use common::{Fixture, run_with_stdin, run_with_stdin_at_real_root, stderr};
+use common::{Fixture, run_with_stdin, stderr};
 
 fn root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -84,8 +84,7 @@ fn repeat_refusal(payload: &str) -> Option<String> {
 
 /// One firing, whatever the store says.
 fn refusal_once(payload: &str) -> Option<String> {
-    let run =
-        run_with_stdin_at_real_root(&root(), &["adjudicate", "--harness", "exit-code"], payload);
+    let run = run_with_stdin(&root(), &["adjudicate", "--harness", "exit-code"], payload);
     if run.status.code() == Some(2) {
         Some(stderr(&run).trim().to_owned())
     } else {

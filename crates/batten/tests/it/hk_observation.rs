@@ -287,7 +287,7 @@ fn a_record_of_another_predicate_is_could_not_look() {
 #[test]
 fn this_session_can_observe_the_pinned_runner() {
     let root = common::at_root(".");
-    let output = common::run_at_real_root(
+    let output = common::run(
         &root,
         &["hk", "observe", "--session", "hk-observation-suite"],
     );

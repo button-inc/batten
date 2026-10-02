@@ -66,8 +66,39 @@ const CHECKOUT_DIGEST_LEN: usize = 12;
 /// Returns an error when the platform's base directories cannot be resolved (for
 /// example, no home directory is set).
 pub fn state_root() -> Result<PathBuf> {
+    Ok(state_root_in(&data_dir()?))
+}
+
+/// The OS data directory the process environment resolves, per the CLOUD-23
+/// per-OS rule — the directory [`state_root`] places `<app>` under.
+///
+/// # Errors
+///
+/// Returns an error when the platform's base directories cannot be resolved.
+pub fn data_dir() -> Result<PathBuf> {
     let strategy = choose_base_strategy().context("resolve the OS data directory")?;
-    Ok(strategy.data_dir().join(APP_NAMESPACE))
+    Ok(strategy.data_dir())
+}
+
+/// [`state_root`] under an explicit OS data directory rather than the one the
+/// process environment resolves (CLOUD-2059).
+///
+/// The seam a caller needs when it has POINTED a child at a data directory and
+/// must read back what that child wrote: resolving from its own environment would
+/// find the developer's real store instead. [`state_root`] is this applied to the
+/// resolved directory, so the two cannot disagree on the layout.
+#[must_use]
+pub fn state_root_in(data_dir: &Path) -> PathBuf {
+    data_dir.join(APP_NAMESPACE)
+}
+
+/// [`repo_state_dir`] under an explicit OS data directory (CLOUD-2059).
+///
+/// # Errors
+///
+/// [`derive_repo_name`]'s: a root with no usable final component, or a relative one.
+pub fn repo_state_dir_in(data_dir: &Path, repo_root: &Path) -> Result<PathBuf> {
+    Ok(state_root_in(data_dir).join(derive_repo_name(repo_root)?))
 }
 
 /// The state directory for the repository rooted at `repo_root`:

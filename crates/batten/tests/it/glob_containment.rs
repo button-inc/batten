@@ -353,7 +353,7 @@ fn the_committed_pair_covers_itself_today() {
     // The self-consumption case the retiring suite opened on, and the reason
     // this gate is worth having: the two committed files agree, checked rather
     // than asserted.
-    let output = common::run_at_real_root(
+    let output = common::run(
         &common::at_root(""),
         &["check", "--rule", "pattern reach other"],
     );

@@ -365,12 +365,22 @@ fn bypass_env_vars() -> Vec<String> {
 /// a defect, green because the mechanism never ran. Set after the scrub so it
 /// survives it, and set unconditionally for the reason above: a suite that opted
 /// in would be the suites that remembered.
+///
+/// # The state root is the case's own, on every spawn (CLOUD-2059)
+///
+/// Pinned to [`scratch_state_root`] here rather than by the suites that
+/// remembered to ask. Before, only a suite whose subject was the committed
+/// configuration asked, and every other spawn wrote the developer's real store:
+/// 763 test segments and 534 MB under `~/.local/share/batten` on one container,
+/// none of them reaped. A case that reads back what its child wrote reads the
+/// same root through the library's `_in` seams (`admission::load_in`,
+/// `state::repo_state_dir_in`), never through the parent's environment.
 #[must_use]
 #[expect(
     clippy::disallowed_types,
     reason = "stays, and test-only: the subject of an end-to-end test is the compiled binary, so there is nothing to move in-process without testing something else"
 )]
-pub(crate) fn batten() -> Command {
+pub(crate) fn batten() -> Batten {
     let mut command = Command::new(env!("CARGO_BIN_EXE_batten"));
     for name in declared_env_vars() {
         command.env_remove(name);
@@ -387,7 +397,75 @@ pub(crate) fn batten() -> Command {
     // (CLOUD-1951) — see [`ambient_path`].
     command.env("PATH", ambient_path());
     pin_mise(&mut command);
-    command
+    command.envs(batten::testing::state_pins(scratch_state_root()));
+    Batten(command)
+}
+
+/// [`batten`]'s command, which refuses to have run where it would FALL THROUGH
+/// to the checkout holding this build (CLOUD-2059).
+///
+/// A fixture under [`target_tmp`] with no repository of its own resolves to this
+/// checkout, because `git::repo_root` ignores discovery ceilings by design: the
+/// case then reads the real configuration and writes the real `.git` while it
+/// believes it judged its fixture. Measured on `cli.rs`'s `repo_with_config`,
+/// `fail_on_warning.rs` and `acceptance_corpus.rs`.
+///
+/// # Why the check is in `Drop`, which is matklad's drop-bomb shape
+///
+/// Every builder method reaches the inner command through [`DerefMut`], so all
+/// 437 spawn sites compile unchanged — and for the same reason no method of this
+/// type sees the spawn itself: `.args(…)` hands back the inner `&mut Command`
+/// and `.output()` is `Command`'s. The value is dropped at the end of the
+/// statement that ran it, so `Drop` is the one point every chain passes. A case
+/// that tripped it fails red; it has already run, which is the cost of not
+/// shadowing the whole builder, and a red case is what a guard is for.
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays, and test-only: the door wraps the one spawn of the binary under test"
+)]
+pub(crate) struct Batten(Command);
+
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays, and test-only: the door hands out the command it wraps"
+)]
+impl std::ops::Deref for Batten {
+    type Target = Command;
+
+    fn deref(&self) -> &Command {
+        &self.0
+    }
+}
+
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays, and test-only: the door hands out the command it wraps"
+)]
+impl std::ops::DerefMut for Batten {
+    fn deref_mut(&mut self) -> &mut Command {
+        &mut self.0
+    }
+}
+
+impl Drop for Batten {
+    fn drop(&mut self) {
+        // A second panic while unwinding aborts the process and loses the first
+        // one's message, which is the failure the case was reporting.
+        if std::thread::panicking() {
+            return;
+        }
+        let Some(cwd) = self.0.get_current_dir() else {
+            return;
+        };
+        let cwd = std::path::absolute(cwd).unwrap_or_else(|_| cwd.to_path_buf());
+        assert!(
+            !batten::testing::falls_through(&cwd, &target_tmp()),
+            "batten ran in {}, which falls through to the checkout holding this build: \
+             make the fixture a repository (`common::init_repo`), or put a fixture whose \
+             subject is \"not a repository\" in `common::scratch_outside_tree`",
+            cwd.display()
+        );
+    }
 }
 
 /// This process's `PATH` with no `batten` resolvable by name — every directory
@@ -640,7 +718,12 @@ pub(crate) fn task_bash(dir: &Path, body: &str) -> std::process::Command {
     command
         .args(["-c", body])
         .current_dir(dir)
-        .env("PATH", path);
+        .env("PATH", path)
+        // A body that reaches the engine writes the case's own state root, as
+        // [`batten`] does (CLOUD-2059) — and so keeps mise's installs pinned,
+        // which the XDG redirect would otherwise move ([`pin_mise`]).
+        .envs(batten::testing::state_pins(scratch_state_root()));
+    pin_mise(&mut command);
     command
 }
 
@@ -683,7 +766,7 @@ pub(crate) fn mise_task(dir: &Path, task: &str, env: &[(&str, &str)], input: &st
     command.env("MISE_CONFIG_FILE", at_root("mise.toml"));
     command.env("MISE_CEILING_PATHS", dir);
     command.envs(env.iter().copied());
-    stdin_run(command, dir, &[], input)
+    stdin_run(&mut command, dir, &[], input)
 }
 
 /// Put [`batten`]'s scrubbed environment on a [`task_bash`] command, with the
@@ -862,21 +945,14 @@ pub(crate) fn committed_fixture_with_protected(name: &str) -> PathBuf {
 /// and the case reported that the committed protected-path policy refuses a
 /// write while a record on that machine was admitting it.
 ///
-/// **WHY IT IS NOT THE DEFAULT IN [`batten`], WHICH WAS THE FIRST SHAPE TRIED.**
-/// A fixture suite may spawn a child that WRITES the store and then read it back
-/// IN-PROCESS — `admission.rs`'s `a_correctly_answered_override_completes_end_to_end`
-/// does exactly that, through `admission::load`, which resolves the root from the
-/// PARENT's environment. Redirecting only the child splits the two and the case
-/// fails looking for a record the child filed elsewhere. That case is not the
-/// defect: its subject is a scratch repo, so it already has a state segment of
-/// its own and cannot collide with the real one.
-///
-/// The defect is narrower than "every spawn", and naming it precisely is what
-/// keeps this from being a change to how every suite runs: **a suite whose
-/// subject is the COMMITTED configuration must drive the binary at the real
-/// repository root, and the state segment is derived from that root — so it, and
-/// only it, shares the developer's own segment.** Hence a helper the real-root
-/// suites apply, rather than a default every fixture suite inherits.
+/// **THE DEFAULT IN [`batten`] SINCE CLOUD-2059.** It was first applied only by
+/// the suites whose subject is the committed configuration, because a fixture
+/// suite reading a record back IN-PROCESS — `admission.rs`'s
+/// `a_correctly_answered_override_completes_end_to_end` — resolved the root from
+/// the PARENT's environment and missed what the redirected child filed. The fix
+/// for that was the reader, not the default: such a case reads through the
+/// library's `_in` seams with this root, and every other spawn stopped writing
+/// the developer's store.
 ///
 /// **Per PROCESS**, because nextest runs each case in its own process: state one
 /// spawn writes is still there for the next spawn in the same case, and no case
@@ -901,6 +977,11 @@ pub(crate) fn scratch_state_root() -> &'static Path {
 /// checking the redirect must therefore ask this module rather than re-type the
 /// names, or it becomes the fifteenth copy while asserting that there are none.
 ///
+/// SPELLED HERE, NOT READ FROM `batten::testing::state_pins`, and that is the
+/// one copy that must stay a copy: this is the oracle the door is checked
+/// against, and an oracle that read the door's own list would agree with any pin
+/// that dropped a name.
+///
 /// `LOCALAPPDATA` is deliberately absent: [`state_dir`] points it at a `cache`
 /// subdirectory rather than at the root, so including it would make a caller
 /// compare two different things under one name.
@@ -920,39 +1001,10 @@ pub(crate) fn state_roots(command: &Command) -> Vec<(String, PathBuf)> {
         .collect()
 }
 
-/// `batten`, pointed at a state root of the suite's own — for the suites whose
-/// subject is the committed configuration and which therefore run at the real
-/// repository root. See [`scratch_state_root`] for what this contains and why it
-/// is not the default.
-#[must_use]
-#[expect(
-    clippy::disallowed_types,
-    reason = "stays with the harness spawn it configures, exactly as `state_home` does: the state root a child resolves is a property of that child's environment"
-)]
-pub(crate) fn batten_at_real_root() -> Command {
-    let mut command = batten();
-    state_dir(&mut command, scratch_state_root());
-    command
-}
-
 /// Run `batten` with `args` in `dir`.
 #[must_use]
 pub(crate) fn run(dir: &Path, args: &[&str]) -> Output {
     batten()
-        .args(args)
-        .current_dir(dir)
-        .output()
-        .expect("run batten")
-}
-
-/// [`run`] for a suite whose subject is the committed configuration, so its state
-/// root is the suite's own rather than the developer's.
-///
-/// See [`scratch_state_root`] for the defect this closes and why it is a separate
-/// entry point rather than [`batten`]'s default.
-#[must_use]
-pub(crate) fn run_at_real_root(dir: &Path, args: &[&str]) -> Output {
-    batten_at_real_root()
         .args(args)
         .current_dir(dir)
         .output()
@@ -1071,8 +1123,7 @@ impl StateHome for Command {
 )]
 pub(crate) fn state_dir<'a>(command: &'a mut Command, dir: &Path) -> &'a mut Command {
     command
-        .env("XDG_DATA_HOME", dir)
-        .env("APPDATA", dir)
+        .envs(batten::testing::state_pins(dir))
         .env("LOCALAPPDATA", dir.join("cache"))
 }
 
@@ -1084,17 +1135,7 @@ pub(crate) fn state_dir<'a>(command: &'a mut Command, dir: &Path) -> &'a mut Com
 /// of agreement with [`batten`].
 #[must_use]
 pub(crate) fn run_with_stdin(dir: &Path, args: &[&str], input: &str) -> Output {
-    stdin_run(batten(), dir, args, input)
-}
-
-/// [`run_with_stdin`] for a suite whose subject is the committed configuration,
-/// so its state root is the suite's own rather than the developer's.
-///
-/// See [`scratch_state_root`] for the defect this exists to close and for why it
-/// is a separate entry point rather than [`batten`]'s default.
-#[must_use]
-pub(crate) fn run_with_stdin_at_real_root(dir: &Path, args: &[&str], input: &str) -> Output {
-    stdin_run(batten_at_real_root(), dir, args, input)
+    stdin_run(&mut batten(), dir, args, input)
 }
 
 #[expect(
@@ -1102,7 +1143,7 @@ pub(crate) fn run_with_stdin_at_real_root(dir: &Path, args: &[&str], input: &str
     reason = "stays, and test-only: this IS the spawn-and-pipe harness, and taking the command lets the two entry points above share one body rather than drifting apart — the founding reason this module exists"
 )]
 #[must_use]
-fn stdin_run(mut command: Command, dir: &Path, args: &[&str], input: &str) -> Output {
+fn stdin_run(command: &mut Command, dir: &Path, args: &[&str], input: &str) -> Output {
     use std::io::Write as _;
     use std::process::Stdio;
 
@@ -1343,7 +1384,10 @@ pub(crate) fn git_command(dir: &Path, args: &[&str]) -> Command {
         .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
         // A hook a fixture installs runs under git's PATH, so git gets the
         // CLOUD-1951 mask too: no installed `batten` answers a hook by name.
-        .env("PATH", ambient_path());
+        .env("PATH", ambient_path())
+        // And a hook that reaches the engine writes the case's own state root,
+        // as [`batten`] does (CLOUD-2059).
+        .envs(batten::testing::state_pins(scratch_state_root()));
     for var in [
         "GIT_DIR",
         "GIT_COMMON_DIR",
@@ -1357,6 +1401,7 @@ pub(crate) fn git_command(dir: &Path, args: &[&str]) -> Command {
     ] {
         command.env_remove(var);
     }
+    pin_mise(&mut command);
     command
 }
 

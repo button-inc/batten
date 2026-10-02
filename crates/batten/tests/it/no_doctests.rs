@@ -155,7 +155,7 @@ fn the_committed_workspace_carries_no_runnable_doctest() {
     // `cargo nextest run` executes no doctest, so an example here would be run
     // nowhere. Asserted rather than assumed, because an empty class is not a
     // stable property.
-    let output = common::run_at_real_root(
+    let output = common::run(
         &common::at_root(""),
         &["check", "--rule", "test run unseen"],
     );

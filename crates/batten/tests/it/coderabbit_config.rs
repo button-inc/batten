@@ -223,7 +223,7 @@ fn output_is_pointer_only() {
 #[test]
 fn this_repositorys_own_config_holds_the_three_keys() {
     // The self-consumption case the retiring suite opened on.
-    let output = common::run_at_real_root(
+    let output = common::run(
         &common::at_root(""),
         &["check", "--rule", "review declare wrong"],
     );
