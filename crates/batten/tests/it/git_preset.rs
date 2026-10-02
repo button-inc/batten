@@ -242,9 +242,9 @@ preset = "git"
 severity = "deny"
 "#;
 
-fn granted_under_the_preset_alone(mode: &str, command: &str) -> bool {
-    let dir = common::scratch("git-preset-alone");
-    let home = common::scratch("git-preset-alone-home");
+fn granted_under_the_preset_alone(name: &str, mode: &str, command: &str) -> bool {
+    let dir = common::scratch(name);
+    let home = common::scratch(&format!("{name}-home"));
     common::write(&dir, "batten.toml", GIT_ONLY);
     common::init_repo(&dir);
     let mut invocation = common::batten();
@@ -272,10 +272,14 @@ fn granted_under_the_preset_alone(mode: &str, command: &str) -> bool {
 #[test]
 fn a_git_write_is_not_granted_in_plan_mode() {
     assert!(
-        granted_under_the_preset_alone("auto", "git commit -m x"),
+        granted_under_the_preset_alone("git-preset-alone-auto", "auto", "git commit -m x"),
         "the anti-vacuity half: outside plan mode the preset grants it"
     );
-    assert!(!granted_under_the_preset_alone("plan", "git commit -m x"));
+    assert!(!granted_under_the_preset_alone(
+        "git-preset-alone-plan",
+        "plan",
+        "git commit -m x"
+    ));
 }
 
 #[test]
