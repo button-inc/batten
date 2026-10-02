@@ -3208,24 +3208,26 @@ mod tests {
     /// MUTANT: keeping the base arm inside the shared directory lets the head
     /// build replace it, and this case goes red.
     #[test]
-    fn the_shared_arms_directory_keeps_each_arm_apart() {
+    fn the_shared_arms_directory_keeps_each_arm_apart() -> Result<()> {
         let scratch = std::env::temp_dir().join(format!("batten-perf-arms-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&scratch);
         let perf = scratch.as_path();
         let shared = arms_target_dir(perf);
-        let built = shared.join(PAIR_PROFILE).join("batten");
-        std::fs::create_dir_all(built.parent().unwrap()).unwrap();
+        let profile_dir = shared.join(PAIR_PROFILE);
+        let built = profile_dir.join("batten");
+        std::fs::create_dir_all(&profile_dir)?;
         let base = base_binary(perf, "k");
         assert!(!base.starts_with(&shared));
-        std::fs::write(&built, b"base").unwrap();
-        take_arm(&shared, &base, "base").unwrap();
-        std::fs::write(&built, b"head").unwrap();
+        std::fs::write(&built, b"base")?;
+        take_arm(&shared, &base, "base")?;
+        std::fs::write(&built, b"head")?;
         let head = perf.join("pair").join("batten-head");
-        take_arm(&shared, &head, "head").unwrap();
-        assert_eq!(std::fs::read(&base).unwrap(), b"base");
-        assert_eq!(std::fs::read(&head).unwrap(), b"head");
+        take_arm(&shared, &head, "head")?;
+        assert_eq!(std::fs::read(&base)?, b"base");
+        assert_eq!(std::fs::read(&head)?, b"head");
         assert!(take_arm(&perf.join("empty"), &head, "head").is_err());
         let _ = std::fs::remove_dir_all(&scratch);
+        Ok(())
     }
 
     /// Two bases whose crate trees match share one key; any tree changing moves it.
