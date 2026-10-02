@@ -5294,9 +5294,11 @@ fn exec_still_runs_where_no_authority_is_configured() {
     // reason ordinary work stops — the same reading `hook` takes for its policy.
     let home = scratch("exec-pred-no-authority");
     fs::create_dir_all(&home).expect("create home");
-    // Outside the tree, because that is the subject: under `target/tmp` a
-    // directory with no repository resolves to this checkout's authority.
-    let elsewhere = common::scratch_outside_tree("cli", "exec-pred-elsewhere");
+    // A REPOSITORY WITH NO `batten.toml`, which is what "no authority" means:
+    // the capture store is keyed on the repository, so a directory outside one
+    // is refused by design (`exec::run_with`), and one under `target/tmp` with no
+    // `.git` resolved to this checkout's authority — the opposite of the subject.
+    let elsewhere = common::scratch_repo("exec-pred-elsewhere");
     let output = batten()
         .args(["exec", "--tee", "--", "sh", "-c", "echo fine"])
         .current_dir(&elsewhere)

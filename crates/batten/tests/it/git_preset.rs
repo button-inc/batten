@@ -23,7 +23,7 @@ use crate::common;
 
 use std::path::PathBuf;
 
-use common::{StateHome as _, run_with_stdin_at_real_root, stdout};
+use common::{StateHome as _, run_with_stdin, stdout};
 
 fn root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -42,7 +42,7 @@ fn shell(mode: &str, command: &str) -> String {
 /// The hook's permission decision and its reason, or `None` when it said
 /// nothing verdict-shaped — which is what "left to the host" looks like.
 fn decision(mode: &str, command: &str) -> Option<(String, String)> {
-    let outcome = run_with_stdin_at_real_root(
+    let outcome = run_with_stdin(
         &root(),
         &["adjudicate", "--harness", "claude-code"],
         &shell(mode, command),

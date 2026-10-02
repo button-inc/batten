@@ -240,20 +240,8 @@ fn a_green_head_exits_zero_and_prints_each_conclusion() {
 #[cfg_attr(not(unix), ignore = "the stubbed client is a shebang script")]
 fn a_ref_is_resolved_to_the_commit_it_names_before_the_request() {
     let fixture = Fixture::new("ci-wait-ref", &[response("W/\"a\"", &all_green(""))]);
-    common::init_repo(&fixture.dir);
-    // A REMOTE, because `pr watch` refuses before its loop when no repository
-    // resolves (a slug-less loop 404s forever). The sibling cases run in a
-    // directory that is not a repository and borrow this checkout's own `origin`
-    // by walking up; this one IS a repository, so it declares its own.
-    common::git_in(
-        &fixture.dir,
-        &[
-            "remote",
-            "add",
-            "origin",
-            "https://github.com/example/example.git",
-        ],
-    );
+    // A COMMIT, because this case resolves `HEAD`; the slug comes from the
+    // `GH_REPO` every case sets, as a slug-less loop would 404 forever.
     common::git_in(&fixture.dir, &["add", "-A"]);
     common::git_in(&fixture.dir, &["commit", "--quiet", "-m", "base"]);
     let head = common::git_in(&fixture.dir, &["rev-parse", "HEAD"])
