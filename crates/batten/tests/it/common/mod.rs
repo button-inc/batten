@@ -516,9 +516,9 @@ impl std::ops::DerefMut for Batten {
 }
 
 /// Panic if a spawn in `cwd` would fall through to the checkout holding this
-/// build. The ONE refusal both spawn doors apply: [`Batten`] before it spawns, and
-/// [`task_bash`] when it is built, since a task body reaches the engine through
-/// `PATH` from the same directory.
+/// build. [`Batten`] applies it before every spawn and again on drop, and both
+/// doors hand one out: [`batten`] for the binary, [`task_bash`] for a task body
+/// that reaches it through `PATH`.
 fn refuse_fall_through_at(cwd: &Path) {
     let cwd = std::path::absolute(cwd).unwrap_or_else(|_| cwd.to_path_buf());
     assert!(
@@ -532,7 +532,8 @@ fn refuse_fall_through_at(cwd: &Path) {
 
 //MUTANT-SUITE crates/batten/tests/it/harness_isolation.rs
 //MUTANT refused-after-the-spawn|s@^        self.refuse_fall_through();$@@|a_fall_through_is_refused_before_the_child_runs
-//MUTANT task-door-falls-through|s@^    refuse_fall_through_at(dir);$@@|a_task_body_whose_cwd_falls_through_to_the_checkout_is_refused
+//MUTANT task-door-unguarded|s@^        self.refuse_fall_through();$@@|a_task_body_redirected_to_a_fall_through_is_refused_before_it_runs
+//MUTANT piped-door-unguarded|s@^    refuse_fall_through_at(dir);$@@|a_piped_spawn_into_a_fall_through_is_refused_before_it_runs
 impl Batten {
     /// Panic if this command's working directory falls through to the checkout.
     fn refuse_fall_through(&self) {
@@ -888,11 +889,7 @@ pub(crate) fn task_env(name: &str) -> String {
     reason = "stays: a mise task body is shell, so running it is a spawn by definition, and this is the one site every task-body tier shares"
 )]
 #[must_use]
-pub(crate) fn task_bash(dir: &Path, body: &str) -> std::process::Command {
-    // THE BINARY'S DOOR GUARDS THIS ONE TOO (review of #1089). A task body runs
-    // the engine through `PATH` from `dir`, so a fixture that is no repository of
-    // its own falls through to this checkout here exactly as it would there.
-    refuse_fall_through_at(dir);
+pub(crate) fn task_bash(dir: &Path, body: &str) -> Batten {
     let inherited = ambient_path();
     let path = std::env::join_paths(
         std::iter::once(dir.join("bin")).chain(std::env::split_paths(&inherited)),
@@ -909,16 +906,17 @@ pub(crate) fn task_bash(dir: &Path, body: &str) -> std::process::Command {
         .envs(batten::testing::state_pins(scratch_state_root()));
     pin_mise(&mut command);
     pin_home(&mut command);
-    command
+    // THE BINARY'S DOOR GUARDS THIS ONE TOO (review of #1089). A task body runs
+    // the engine through `PATH` from wherever the command stands WHEN IT SPAWNS,
+    // so a fixture that is no repository of its own falls through to this
+    // checkout here exactly as it would there. Returned as a `Batten`, the check
+    // reads the final directory — a caller's later `current_dir` included.
+    Batten(command)
 }
 
 /// `[tasks.<task>]` ready to run in `dir` under [`batten`]'s scrubbed
 /// environment, for a tier that sets its own readings before running it.
-#[expect(
-    clippy::disallowed_types,
-    reason = "stays: returns the one shared task-body spawn for the caller to finish configuring"
-)]
-pub(crate) fn task_command(dir: &Path, task: &str) -> std::process::Command {
+pub(crate) fn task_command(dir: &Path, task: &str) -> Batten {
     let mut command = task_bash(dir, &task_body(task));
     scrub(&mut command, dir);
     command
@@ -1336,6 +1334,11 @@ fn stdin_run(command: &mut Command, dir: &Path, args: &[&str], input: &str) -> O
     use std::io::Write as _;
     use std::process::Stdio;
 
+    // BEFORE THE SPAWN, for the reason `Batten::output` checks first (review of
+    // #1089): this takes the command as `&mut Command`, so it spawns below the
+    // wrapper's own methods, and only the drop check would see a fall-through —
+    // after the child had already run. `dir` is the directory set just below.
+    refuse_fall_through_at(dir);
     let mut child = command
         .args(args)
         .current_dir(dir)
