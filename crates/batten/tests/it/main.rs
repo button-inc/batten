@@ -403,6 +403,7 @@ mod startup_bootstrap;
 mod step_receipt;
 mod stop_posture;
 mod store_lifecycle;
+mod stub_portability;
 mod submodule;
 mod suite_cost_corpus;
 mod suite_subjects;

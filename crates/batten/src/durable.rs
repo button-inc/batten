@@ -112,6 +112,10 @@ pub fn append_whole_lines(path: &Path, text: &str) -> std::io::Result<()> {
             // handle FILE_APPEND_DATA and not FILE_WRITE_DATA, so truncating
             // through `file` is access-denied there. The append itself stays on
             // `file`, so every write still lands at the end.
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "truncates through the `.write(true)` handle opened on the line above, never the append-only `file`"
+            )]
             std::fs::OpenOptions::new()
                 .write(true)
                 .open(path)?
