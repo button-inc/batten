@@ -150,6 +150,19 @@ declared_modules := {
 	# `#[cfg(test)]` cannot be shared across the three scopes that need it (this
 	# crate's unit tests, the `it` binary, and the standalone `tests/*.rs`).
 	"scratch",
+	# `testing` arrived with CLOUD-2059 and this rule named it on the last gate
+	# before landing. It is `scratch`'s class — test support, `pub` for the same
+	# three scopes, doc-hidden — holding the harness's DECISIONS (which variables
+	# pin a child's state and home, whether a spawn falls through to the checkout)
+	# so a mutation sweep can reach them where `tests/` cannot.
+	#
+	# It reaches `git` alone, for the resolver the binary itself uses. ONE library
+	# edge points at it, and it is the deliberate one: `state` asks it for a
+	# contained data directory before consulting the platform. Only a test process
+	# ever sets that, through `contain_state`, so a binary resolves exactly what it
+	# did before — the seam carries no fixture path into a decision, it lets a
+	# test's in-process calls agree with the children it pinned.
+	"testing",
 	# `config_edit` arrived with CLOUD-1575. It is a LEAF like `secret`: it reaches
 	# nothing in this crate, only `toml_edit` and `anyhow`, because its whole surface
 	# is one format-preserving write that a `fix` calls. A decider reads it; it reads
