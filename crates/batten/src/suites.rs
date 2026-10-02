@@ -352,6 +352,93 @@ pub fn corpus_path(root: &Path) -> PathBuf {
     root.join(CORPUS)
 }
 
+/// Where cargo-nextest writes a profile's `JUnit` report, relative to the
+/// repository root (CLOUD-2059).
+///
+/// nextest's own layout — `target/nextest/<profile>/` plus the file name the
+/// profile's `[profile.<name>.junit] path` declares — so the engine names the
+/// runner's convention and no consumer's (non-negotiable rule 1). The file name is
+/// the consumer's, read from its own nextest config by the caller's reader of
+/// choice; this is the conventional one.
+pub const NEXTEST_REPORT_DIR: &str = "target/nextest";
+
+/// The report file name a nextest profile writes when it declares `junit.xml`.
+pub const NEXTEST_REPORT_FILE: &str = "junit.xml";
+
+/// Read `<testcase>` elements out of a nextest `JUnit` report, one row per
+/// MODULE: the binary's suite name, then the test name's first path segment.
+///
+/// **Per module rather than per case**, for the bats corpus's reason: the reader
+/// is an author asking whether the file they are about to add a case to is
+/// expensive, and a module is that file. A case is `module::name`; a case with
+/// no `::` is its own module, so nothing is dropped.
+///
+/// Text rather than a parser, as [`rows_in`] reads: the element shape is fixed
+/// by the runner's formatter.
+#[must_use]
+pub fn nextest_rows(report: &str) -> Vec<Row> {
+    let mut totals: BTreeMap<String, f64> = BTreeMap::new();
+    for chunk in report.split("<testcase").skip(1) {
+        let element = chunk.split_once('>').map_or(chunk, |(head, _)| head);
+        let (Some(name), Some(binary), Some(time)) = (
+            attribute(element, "name"),
+            attribute(element, "classname"),
+            attribute(element, "time"),
+        ) else {
+            continue;
+        };
+        let Ok(seconds) = time.parse::<f64>() else {
+            continue;
+        };
+        let module = name.split_once("::").map_or(name, |(module, _)| module);
+        *totals.entry(format!("{binary}::{module}")).or_default() += seconds;
+    }
+    let mut rows: Vec<Row> = totals
+        .into_iter()
+        .map(|(suite, seconds)| Row { suite, seconds })
+        .collect();
+    rows.sort_by(|left, right| right.seconds.total_cmp(&left.seconds));
+    rows
+}
+
+/// Derive the per-module table from a nextest profile's report, or say why it
+/// could not be.
+///
+/// # Errors
+///
+/// A usage error when the report is absent or carries no readable case: both are
+/// could-not-look, never an empty suite.
+pub fn derive_nextest(root: &Path, profile: &str) -> Result<(Vec<Row>, String)> {
+    let relative = format!("{NEXTEST_REPORT_DIR}/{profile}/{NEXTEST_REPORT_FILE}");
+    let Ok(report) = std::fs::read_to_string(root.join(&relative)) else {
+        return Err(UsageError::raise(format!(
+            "record suites: no report at {relative} — nextest has not written one for profile \
+             `{profile}` in this tree. Run the suite first; this reads a report and measures \
+             nothing itself."
+        )));
+    };
+    let rows = nextest_rows(&report);
+    if rows.is_empty() {
+        return Err(UsageError::raise(format!(
+            "record suites: {relative} carries no <testcase> element with a name, a classname \
+             and a time, so there is nothing to derive. This is could-not-look, not an empty \
+             suite."
+        )));
+    }
+    let text = render(&rows)
+        .replacen(
+            "# Per-suite cost of `test:bats`",
+            "# Per-module cost of the nextest run",
+            1,
+        )
+        .replacen(
+            "from the report `test:bats` writes.",
+            "from the JUnit report nextest writes.",
+            1,
+        );
+    Ok((rows, text))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -359,6 +446,32 @@ mod tests {
     #[allow(clippy::expect_used)]
     fn tracked(names: &[&str]) -> BTreeSet<String> {
         names.iter().map(|name| (*name).to_owned()).collect()
+    }
+
+    #[test]
+    fn a_nextest_report_yields_one_row_per_module_ordered_by_cost() {
+        let report = concat!(
+            "<testsuites>\n",
+            "<testsuite name=\"batten::it\" tests=\"3\">\n",
+            "<testcase name=\"cli::a\" classname=\"batten::it\" time=\"1.5\">\n</testcase>\n",
+            "<testcase name=\"cli::b\" classname=\"batten::it\" time=\"2.0\"/>\n",
+            "<testcase name=\"board::c\" classname=\"batten::it\" time=\"9.25\"/>\n",
+            "<testcase name=\"lonely\" classname=\"batten\" time=\"0.5\"/>\n",
+            "</testsuite>\n</testsuites>\n",
+        );
+        let rows = nextest_rows(report);
+        let named: Vec<String> = rows
+            .iter()
+            .map(|row| format!("{} {:.2}", row.suite, row.seconds))
+            .collect();
+        assert_eq!(
+            named,
+            vec![
+                "batten::it::board 9.25",
+                "batten::it::cli 3.50",
+                "batten::lonely 0.50",
+            ]
+        );
     }
 
     #[test]

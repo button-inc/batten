@@ -647,6 +647,28 @@ fn run_forge_fetch(reference: &str, fetch: &Fetch, err: &mut dyn Write) -> Resul
 pub fn run_suites(write: bool, out: &mut dyn Write, err: &mut dyn Write) -> Result<ExitCode> {
     let root = git::repo_root(Path::new("."))?;
     let root = Path::new(&root);
+    // TWO RUNNERS, ONE VERB (CLOUD-2059). The bats report is read where it
+    // exists — a consumer with a bats lane keeps exactly what it had — and
+    // nextest's own JUnit report otherwise, for the profile the run used. The
+    // per-module table is printed, never written: it is a measurement an author
+    // reads on the row it is posted to, and `--write`'s committed corpus is the
+    // bats lane's contract alone.
+    if !root.join(crate::suites::REPORT).is_file() {
+        let profile = std::env::var("NEXTEST_PROFILE")
+            .ok()
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| "default".to_owned());
+        let (rows, text) = crate::suites::derive_nextest(root, &profile)?;
+        write!(out, "{text}")?;
+        if write {
+            writeln!(
+                err,
+                "record suites: {} module(s) printed; a nextest table is not written to the tree",
+                rows.len()
+            )?;
+        }
+        return Ok(ExitCode::Success);
+    }
     // THE TRACKED SET FROM GIT, never a directory walk: an untracked scratch file
     // beside the suites is not something the corpus should have to carry, and a
     // walk would put it there.

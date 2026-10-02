@@ -161,6 +161,17 @@ slow-timeout = { period = "10s", terminate-after = 120 }
 # added later that never heard of the flag.
 fail-fast = false
 
+# EVERY RUN LEAVES ITS PER-CASE TIMES BEHIND (CLOUD-2059). nextest writes this to
+# `target/nextest/<profile>/junit.xml`, and `batten record suites` reads it into a
+# per-module table. Before it, the only per-case figures were whatever scrolled
+# past in a terminal, so "which module is slow" was answered by grepping logs that
+# a container reclaim deletes. `ci` inherits it, so a CI leg's report is the same
+# file under the same name.
+#MUTANT-SUITE crates/batten/tests/it/junit_wired.rs
+#MUTANT junit-unwired|s@^path = "junit.xml"$@path = ""@|the_default_profile_writes_a_junit_report
+[profile.default.junit]
+path = "junit.xml"
+
 # CI's profile, selected by `NEXTEST_PROFILE=ci`. It sets NOTHING of its own and
 # inherits every key from `default` above, `fail-fast = false` included: a red
 # CI leg must still report every failure, or each fix buys another matrix to

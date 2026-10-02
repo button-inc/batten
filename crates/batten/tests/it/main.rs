@@ -229,6 +229,7 @@ mod install_web;
 mod inverted_board_cases;
 mod issue_key;
 mod judge_kind;
+mod junit_wired;
 mod land;
 mod land_divergence;
 mod land_entry_gates;
