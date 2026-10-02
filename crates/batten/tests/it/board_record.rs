@@ -504,6 +504,62 @@ fn a_groom_of_a_row_this_branch_filed_is_recorded() {
     assert!(lines[1].contains("CLOUD-9"), "got: {lines:?}");
 }
 
+/// The committed `[[recorder]]` block `name` heads, read out of this repository's
+/// own `batten.toml`, so a case drives the declaration that ships rather than a
+/// copy of it.
+fn committed_recorder(name: &str) -> String {
+    let text = fs::read_to_string(common::at_root("batten.toml")).expect("the committed config");
+    let lines: Vec<&str> = text.lines().collect();
+    let named = format!("name = {name:?}");
+    let at = lines
+        .iter()
+        .position(|line| *line == named)
+        .expect("the committed recorder");
+    let start = at - 1;
+    assert_eq!(
+        lines[start], "[[recorder]]",
+        "a recorder's name is its table's first key"
+    );
+    let end = lines[at..]
+        .iter()
+        .position(|line| *line == "[[recorder]]")
+        .map_or(lines.len(), |offset| at + offset);
+    lines[start..end].join("\n")
+}
+
+/// A CLOSE BY `duplicateOf` IS A CLOSE (CLOUD-2065). The tracker closes a row as
+/// Duplicate with no `state` in the input, so before the committed
+/// `board-issue-duplicated` row only the groom row fired, re-linted the body, and
+/// recorded `unready` over a row the tracker answered `Duplicate`.
+#[test]
+fn a_duplicate_close_of_a_filed_row_records_the_trackers_status() {
+    let dir = repo("record-duplicate", 1, "", "0");
+    let mut config = fs::read_to_string(dir.join("batten.toml")).expect("the fixture config");
+    config.push_str("\n[[pattern]]\nid = \"ready-issue-key\"\nregex = 'CLOUD-[0-9]+'\n\n");
+    config.push_str(&committed_recorder("board-issue-duplicated"));
+    config.push('\n');
+    fs::write(dir.join("batten.toml"), config).expect("extend the config");
+    hook(
+        &dir,
+        "mcp__Linear__save_issue",
+        "{}",
+        r#"{"id":"CLOUD-9","updatedAt":"t","description":"body"}"#,
+    );
+    hook(
+        &dir,
+        "mcp__Linear__save_issue",
+        r#"{"id":"CLOUD-9","duplicateOf":"CLOUD-8"}"#,
+        r#"{"id":"CLOUD-9","updatedAt":"t2","description":"body","status":"Duplicate"}"#,
+    );
+    let written = record(&dir);
+    let last = written.lines().last().unwrap_or_default();
+    assert!(
+        last.starts_with("issue CLOUD-9 t2 Duplicate "),
+        "the latest reading of a duplicate-closed row is the tracker's status, \
+         never a re-lint of its body: {written:?}"
+    );
+}
+
 #[test]
 fn a_groom_of_a_row_this_branch_did_not_file_is_still_skipped() {
     // The narrowing that keeps the exception from becoming a hole: re-judging a
