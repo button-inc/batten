@@ -3001,60 +3001,6 @@ value = { literal = "-" }
 name = "obligations"
 value = { literal = "-" }
 
-# A DUPLICATE CLOSE, the closed row's second spelling (CLOUD-2065). The tracker
-# closes a row as Duplicate from `duplicateOf` alone, with no `state` in the
-# input, so the row above never selected it and the groom row re-linted the
-# unchanged body to `unready`. A row the tracker answered `Duplicate` was then
-# refused as unrefined, and the class's first route was unreachable again by the
-# spelling CLOUD-1910's fix did not read. Measured on CLOUD-2065, closed as a
-# duplicate of CLOUD-2062 and recorded `unready`.
-#
-# After the groom row for the closed row's reason: the module takes the LAST
-# line per id. The verdict is still the tracker's own `status` from the RESPONSE,
-# and the input only selects.
-#MUTANT-SUITE crates/batten/tests/it/board_record.rs
-#MUTANT duplicate-close-unread|s@^requires-input-matching = { duplicateOf = "ready-issue-key" }$@requires-input-matching = { duplicateOf = "closed-state" }@|a_duplicate_close_of_a_filed_row_records_the_trackers_status
-[[recorder]]
-name = "board-issue-duplicated"
-record = "board-writes"
-tool = "save_issue"
-key = "branch"
-requires = ["id", "status"]
-requires-recorded = { matches = { 0 = { literal = "issue" }, 1 = { result = "id" } } }
-requires-input-matching = { duplicateOf = "ready-issue-key" }
-
-[[recorder.columns]]
-name = "kind"
-value = { literal = "issue" }
-
-[[recorder.columns]]
-name = "id"
-value = { result = "id" }
-
-[[recorder.columns]]
-name = "updated"
-value = { result = "updatedAt" }
-
-[[recorder.columns]]
-name = "verdict"
-value = { result = "status" }
-
-[[recorder.columns]]
-name = "overlap"
-value = { literal = "-" }
-
-[[recorder.columns]]
-name = "cites"
-value = { literal = "-" }
-
-[[recorder.columns]]
-name = "sec1"
-value = { literal = "-" }
-
-[[recorder.columns]]
-name = "obligations"
-value = { literal = "-" }
-
 # A COMMENT IS RECORDED AND NEVER GATED. It is the honest common case — a comment
 # on the row that already owns a finding — and pricing it would push the pressure
 # toward silence, which is the failure `finding-sink-check` exists to catch. So the
