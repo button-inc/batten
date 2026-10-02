@@ -32,17 +32,21 @@ fn the_default_profile_writes_a_junit_report() {
     let text = std::fs::read_to_string(common::at_root(".config/nextest.toml"))
         .expect("read the committed nextest config");
     let config: toml::Table = text.parse().expect("the nextest config is TOML");
-    let path = junit_path(&config, "default");
-    assert!(
-        path.as_deref().is_some_and(|path| !path.is_empty()),
-        ".config/nextest.toml declares no `[profile.default.junit] path`, so a run leaves no \
-         per-case times behind"
+    // THE READER'S OWN NAME, not merely a non-empty one: `derive_nextest` reads
+    // `NEXTEST_REPORT_FILE`, so a stanza writing any other file leaves a report
+    // nothing reads.
+    let reader = batten::suites::NEXTEST_REPORT_FILE;
+    assert_eq!(
+        junit_path(&config, "default").as_deref(),
+        Some(reader),
+        ".config/nextest.toml must write `[profile.default.junit] path = '{reader}'`, or a run \
+         leaves no per-case times `record suites` can read"
     );
-    // `ci` inherits `default`'s; a ci profile that set its own empty path would
-    // silently switch the CI legs' report off.
+    // `ci` inherits `default`'s; a ci profile that set its own path to anything
+    // else would silently move the CI legs' report out from under the reader.
     assert!(
-        junit_path(&config, "ci").is_none_or(|path| !path.is_empty()),
-        "the ci profile blanks the junit path it would otherwise inherit"
+        junit_path(&config, "ci").is_none_or(|path| path == reader),
+        "the ci profile overrides the junit path the reader expects"
     );
 }
 
