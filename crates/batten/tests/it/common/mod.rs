@@ -371,8 +371,8 @@ fn bypass_env_vars() -> Vec<String> {
 /// Pinned to [`scratch_state_root`] here rather than by the suites that
 /// remembered to ask. Before, only a suite whose subject was the committed
 /// configuration asked, and every other spawn wrote the developer's real store:
-/// 763 test segments and 534 MB under `~/.local/share/batten` on one container,
-/// none of them reaped. A case that reads back what its child wrote reads the
+/// 768 test segments beside the repository's own under `~/.local/share/batten`
+/// on one container, none of them reaped. A case that reads back what its child wrote reads the
 /// same root through the library's `_in` seams (`admission::load_in`,
 /// `state::repo_state_dir_in`), never through the parent's environment.
 #[must_use]
@@ -410,15 +410,18 @@ pub(crate) fn batten() -> Batten {
 /// believes it judged its fixture. Measured on `cli.rs`'s `repo_with_config`,
 /// `fail_on_warning.rs` and `acceptance_corpus.rs`.
 ///
-/// # Why the check is in `Drop`, which is matklad's drop-bomb shape
+/// # Refused BEFORE the spawn, with `Drop` behind it
 ///
-/// Every builder method reaches the inner command through [`DerefMut`], so all
-/// 437 spawn sites compile unchanged — and for the same reason no method of this
-/// type sees the spawn itself: `.args(…)` hands back the inner `&mut Command`
-/// and `.output()` is `Command`'s. The value is dropped at the end of the
-/// statement that ran it, so `Drop` is the one point every chain passes. A case
-/// that tripped it fails red; it has already run, which is the cost of not
-/// shadowing the whole builder, and a red case is what a guard is for.
+/// The builder methods a chain uses are inherent here and hand back `&mut Self`,
+/// so `batten().args(…).current_dir(…).output()` never leaves this type and its
+/// `output`/`spawn`/`status` refuse before the child exists — a fixture that
+/// falls through never touches the checkout at all. Inherent methods win method
+/// resolution over [`DerefMut`], which is why all 437 sites compile unchanged.
+///
+/// A chain CAN still leave through `DerefMut` — a helper taking `&mut Command`
+/// and spawning it — so `Drop`, matklad's drop-bomb shape, asserts the same
+/// thing once the statement ends. That one has already run; it is the backstop
+/// that keeps the exit red, not the guard that keeps the checkout clean.
 #[expect(
     clippy::disallowed_types,
     reason = "stays, and test-only: the door wraps the one spawn of the binary under test"
@@ -447,13 +450,11 @@ impl std::ops::DerefMut for Batten {
     }
 }
 
-impl Drop for Batten {
-    fn drop(&mut self) {
-        // A second panic while unwinding aborts the process and loses the first
-        // one's message, which is the failure the case was reporting.
-        if std::thread::panicking() {
-            return;
-        }
+//MUTANT-SUITE crates/batten/tests/it/harness_isolation.rs
+//MUTANT refused-after-the-spawn|s@^        self.refuse_fall_through();$@@|a_fall_through_is_refused_before_the_child_runs
+impl Batten {
+    /// Panic if this command's working directory falls through to the checkout.
+    fn refuse_fall_through(&self) {
         let Some(cwd) = self.0.get_current_dir() else {
             return;
         };
@@ -465,6 +466,112 @@ impl Drop for Batten {
              subject is \"not a repository\" in `common::scratch_outside_tree`",
             cwd.display()
         );
+    }
+
+    pub(crate) fn arg<S: AsRef<std::ffi::OsStr>>(&mut self, arg: S) -> &mut Self {
+        self.0.arg(arg);
+        self
+    }
+
+    pub(crate) fn args<I, S>(&mut self, args: I) -> &mut Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<std::ffi::OsStr>,
+    {
+        self.0.args(args);
+        self
+    }
+
+    pub(crate) fn current_dir<P: AsRef<Path>>(&mut self, dir: P) -> &mut Self {
+        self.0.current_dir(dir);
+        self
+    }
+
+    pub(crate) fn env<K, V>(&mut self, key: K, value: V) -> &mut Self
+    where
+        K: AsRef<std::ffi::OsStr>,
+        V: AsRef<std::ffi::OsStr>,
+    {
+        self.0.env(key, value);
+        self
+    }
+
+    pub(crate) fn envs<I, K, V>(&mut self, vars: I) -> &mut Self
+    where
+        I: IntoIterator<Item = (K, V)>,
+        K: AsRef<std::ffi::OsStr>,
+        V: AsRef<std::ffi::OsStr>,
+    {
+        self.0.envs(vars);
+        self
+    }
+
+    pub(crate) fn env_remove<K: AsRef<std::ffi::OsStr>>(&mut self, key: K) -> &mut Self {
+        self.0.env_remove(key);
+        self
+    }
+
+    pub(crate) fn stdin<T: Into<std::process::Stdio>>(&mut self, cfg: T) -> &mut Self {
+        self.0.stdin(cfg);
+        self
+    }
+
+    pub(crate) fn stdout<T: Into<std::process::Stdio>>(&mut self, cfg: T) -> &mut Self {
+        self.0.stdout(cfg);
+        self
+    }
+
+    pub(crate) fn stderr<T: Into<std::process::Stdio>>(&mut self, cfg: T) -> &mut Self {
+        self.0.stderr(cfg);
+        self
+    }
+
+    /// [`std::process::Command::output`], refused first where it would fall through.
+    pub(crate) fn output(&mut self) -> std::io::Result<Output> {
+        self.refuse_fall_through();
+        self.0.output()
+    }
+
+    /// [`std::process::Command::spawn`], refused first where it would fall through.
+    pub(crate) fn spawn(&mut self) -> std::io::Result<std::process::Child> {
+        self.refuse_fall_through();
+        self.0.spawn()
+    }
+
+    /// [`std::process::Command::status`], refused first where it would fall through.
+    pub(crate) fn status(&mut self) -> std::io::Result<std::process::ExitStatus> {
+        self.refuse_fall_through();
+        self.0.status()
+    }
+}
+
+/// [`StateHome`] on the door itself, so a chain through `.state_home(…)` stays on
+/// this type and keeps its pre-spawn refusal.
+impl StateHome for Batten {
+    fn state_home(&mut self, home: &Path) -> &mut Self {
+        state_home(&mut self.0, home);
+        self
+    }
+
+    fn state_dir(&mut self, dir: &Path) -> &mut Self {
+        state_dir(&mut self.0, dir);
+        self
+    }
+
+    fn at_home(&mut self, home: &Path) -> &mut Self {
+        at_home(&mut self.0, home);
+        self
+    }
+}
+
+impl Drop for Batten {
+    fn drop(&mut self) {
+        // A second panic while unwinding aborts the process and loses the first
+        // one's message, which is the failure the case was reporting.
+        if std::thread::panicking() {
+            return;
+        }
+        self.refuse_fall_through();
     }
 }
 

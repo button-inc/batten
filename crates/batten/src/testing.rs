@@ -28,9 +28,15 @@ pub fn state_pins(dir: &Path) -> [(&'static str, &Path); 2] {
 }
 
 /// Whether a spawn whose working directory is `cwd` would FALL THROUGH to an
-/// enclosing repository: `cwd` lies at or below `scratch_root`, and no directory
-/// from `cwd` up to and including `scratch_root` carries a `.git` (a directory,
-/// or a linked worktree's file).
+/// enclosing repository: `cwd` lies at or below `scratch_root`, and the working
+/// tree discovery resolves it to lies above `scratch_root`.
+///
+/// RESOLVED, NOT INFERRED FROM A `.git` THAT EXISTS. An empty or malformed `.git`
+/// is not a repository, so discovery walks straight past it to the checkout —
+/// the one case a presence test calls owned while the binary falls through. This
+/// asks [`crate::git::worktree_root`], the resolver the binary itself uses, and a
+/// directory no repository encloses is not judged: the binary refuses there, and
+/// nothing reaches a checkout.
 ///
 /// # The defect this refuses
 ///
@@ -47,18 +53,20 @@ pub fn state_pins(dir: &Path) -> [(&'static str, &Path); 2] {
 /// the system temp directory falls through to nothing. Only the scratch root sits
 /// inside the checkout, so only there is a missing `.git` an accident.
 //MUTANT-SUITE crates/batten/tests/it/harness_isolation.rs
-//MUTANT spawn-falls-through|s@^    !owned$@    false@|a_spawn_whose_cwd_falls_through_to_the_checkout_is_refused
+//MUTANT spawn-falls-through|s@^    resolved.is_ok_and.*$@    false@|a_spawn_whose_cwd_falls_through_to_the_checkout_is_refused
 #[doc(hidden)]
 #[must_use]
 pub fn falls_through(cwd: &Path, scratch_root: &Path) -> bool {
     if !cwd.starts_with(scratch_root) {
         return false;
     }
-    let owned = cwd
-        .ancestors()
-        .take_while(|dir| dir.starts_with(scratch_root))
-        .any(|dir| dir.join(".git").exists());
-    !owned
+    // Both sides canonical, because the resolver answers canonically and a
+    // scratch root reached through a symlink would otherwise own nothing.
+    let scratch = scratch_root
+        .canonicalize()
+        .unwrap_or_else(|_| scratch_root.to_path_buf());
+    let resolved = crate::git::worktree_root(cwd);
+    resolved.is_ok_and(|owner| !owner.starts_with(&scratch))
 }
 
 #[cfg(test)]
@@ -66,30 +74,48 @@ pub fn falls_through(cwd: &Path, scratch_root: &Path) -> bool {
 mod tests {
     use super::*;
 
-    fn tree(name: &str) -> std::path::PathBuf {
-        let dir = crate::scratch::scratch(&format!("testing-{name}"));
-        std::fs::create_dir_all(dir.join("root/fixture/sub")).expect("create the tree");
+    /// A checkout at `<scratch>/checkout` whose own scratch root is `tmp` inside
+    /// it — this build's shape, one level down — with an empty fixture beneath.
+    fn checkout(name: &str) -> std::path::PathBuf {
+        let dir = crate::scratch::scratch(&format!("testing-{name}")).join("checkout");
+        std::fs::create_dir_all(dir.join("tmp/fixture/sub")).expect("create the tree");
+        crate::gitwrite::init_on_main(&dir).expect("the enclosing checkout");
         dir
     }
 
     #[test]
     fn a_fixture_with_no_repository_under_the_scratch_root_falls_through() {
-        let dir = tree("bare");
-        let root = dir.join("root");
-        assert!(falls_through(&root.join("fixture/sub"), &root));
+        let dir = checkout("bare");
+        assert!(falls_through(
+            &dir.join("tmp/fixture/sub"),
+            &dir.join("tmp")
+        ));
     }
 
     #[test]
     fn a_repository_anywhere_up_to_the_scratch_root_owns_the_fixture() {
-        let dir = tree("owned");
-        let root = dir.join("root");
-        std::fs::create_dir_all(root.join("fixture/.git")).expect("create .git");
-        assert!(!falls_through(&root.join("fixture/sub"), &root));
+        let dir = checkout("owned");
+        crate::gitwrite::init_on_main(&dir.join("tmp/fixture"))
+            .expect("the fixture's own repository");
+        assert!(!falls_through(
+            &dir.join("tmp/fixture/sub"),
+            &dir.join("tmp")
+        ));
+    }
+
+    #[test]
+    fn a_dot_git_that_is_not_a_repository_owns_nothing() {
+        let dir = checkout("hollow");
+        std::fs::create_dir_all(dir.join("tmp/fixture/.git")).expect("an empty .git");
+        assert!(falls_through(
+            &dir.join("tmp/fixture/sub"),
+            &dir.join("tmp")
+        ));
     }
 
     #[test]
     fn a_directory_outside_the_scratch_root_is_not_judged() {
-        let dir = tree("outside");
-        assert!(!falls_through(&dir, &dir.join("root")));
+        let dir = checkout("outside");
+        assert!(!falls_through(&dir, &dir.join("tmp")));
     }
 }
