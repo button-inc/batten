@@ -146,6 +146,8 @@ fn argv(resolved: &str) -> Vec<String> {
 ///   own budget on top; a row whose fix cannot finish inside the boundary's
 ///   budget is a row that should not declare one.
 #[must_use]
+//MUTANT-SUITE crates/batten/tests/it/cli.rs
+//MUTANT retry-reports-silent|s@        Applicability::Retry => Outcome::Retry,@        Applicability::Retry => Outcome::Silent,@|a_retry_repair_refuses_and_never_allows
 pub fn run(root: &Path, fix: &str, key: Option<&str>, applicability: Applicability) -> Outcome {
     // ADVICE NEVER REACHES THE SPAWN. Asked here as well as at the call site,
     // because this is the function that runs a command and a caller that got the
@@ -176,8 +178,6 @@ pub fn run(root: &Path, fix: &str, key: Option<&str>, applicability: Applicabili
     // THE ARMS, AND THEIR ORDER IS THE MUTATION SLUG'S SUBJECT. Swapping these
     // two reports a repaired-and-refused call as a repaired-and-allowed one,
     // which is the silent-rewrite posture arriving without anybody declaring it.
-    //MUTANT-SUITE crates/batten/tests/it/cli.rs
-    //MUTANT retry-reports-silent|s@        Applicability::Retry => Outcome::Retry,@        Applicability::Retry => Outcome::Silent,@|a_retry_repair_refuses_and_never_allows
     match applicability {
         Applicability::Retry => Outcome::Retry,
         Applicability::Silent => Outcome::Silent,

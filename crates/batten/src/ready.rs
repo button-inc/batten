@@ -1296,6 +1296,7 @@ fn check_replay(
 /// CLOUD-1092 both lived in — a declaration disagreeing with the table it is
 /// checked against — is not expressible here at all. That is the difference
 /// between checking a claim and removing the chance to make a wrong one.
+//MUTANT empty-tests-admitted-beyond-docs|s@declared.eq_ignore_ascii_case("docs")@!declared.is_empty()@|a_refactor_row_still_owes_its_tests
 fn check_claims(
     grammar: &Grammar,
     payload: &Payload,
@@ -1336,8 +1337,6 @@ fn check_claims(
         .and_then(serde_json::Value::as_str)
         .map(|declared| declared.trim().to_ascii_lowercase())
         .is_some_and(|declared| declared.eq_ignore_ascii_case("docs") || declared == "none");
-    //MUTANT-SUITE crates/batten/tests/it/ready.rs
-    //MUTANT empty-tests-admitted-beyond-docs|s@declared.eq_ignore_ascii_case("docs")@!declared.is_empty()@|a_refactor_row_still_owes_its_tests
     for key in REQUIRED_CLAIMS {
         // PRESENT AND NON-EMPTY, because an empty string, array or object is an
         // omission wearing a declaration's shape. `blockers: []` is the one

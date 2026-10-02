@@ -4794,6 +4794,7 @@ fn supplied_epoch(raw: Option<&str>) -> Result<u64> {
 /// The whole of it runs under [`record::hold_decide`], so no other decide can
 /// clear this one's reading between its write and its judgement (CLOUD-2069).
 //MUTANT decide-unserialised|s@^    let _held = record::hold_decide(family, err)?;$@@|a_concurrent_decide_waits_for_the_one_holding_the_record
+//MUTANT decided-record-kept|s@^    record::clear_named("record decide", \&record::safe_component("family", family)?)?;$@@|a_decided_record_never_answers_a_later_check
 fn run_record_decide(
     family: &str,
     inputs: &[String],
@@ -4830,8 +4831,6 @@ fn run_record_decide(
     // previous turn's stranding turned into a blocker at `verify` and `land`,
     // which the retired body (stderr and an exit code, no record) never was.
     // Removed whatever the decision said, so no rule reads it afterwards.
-    //MUTANT-SUITE crates/batten/tests/it/finding_sink.rs
-    //MUTANT decided-record-kept|s@^    record::clear_named("record decide", \&record::safe_component("family", family)?)?;$@@|a_decided_record_never_answers_a_later_check
     record::clear_named("record decide", &record::safe_component("family", family)?)?;
     decided
 }
@@ -8259,6 +8258,7 @@ fn admission_anchor(
 ///
 /// Returns a [`error::UsageError`] for an unknown class or a class that declares
 /// no override route, and an internal error when the store cannot be written.
+//MUTANT request-ignores-config-from|s@^    let (epoch, _) = epoch::describe(root, overrides.config_from.as_deref())?;$@    let (epoch, _) = epoch::describe(root, None)?;@|an_admission_requested_under_config_from_spends_under_it
 fn run_override_request(
     rule: &str,
     token: &str,
@@ -8326,8 +8326,6 @@ fn run_override_request(
     // under `--config-from <ref>` bound the working tree's epoch and the spend
     // presented the ref's: every such admission refused `unbound`, and the one
     // route to repairing an unloadable working config was closed.
-    //MUTANT-SUITE crates/batten/tests/it/admission.rs
-    //MUTANT request-ignores-config-from|s@^    let (epoch, _) = epoch::describe(root, overrides.config_from.as_deref())?;$@    let (epoch, _) = epoch::describe(root, None)?;@|an_admission_requested_under_config_from_spends_under_it
     let (epoch, _) = epoch::describe(root, overrides.config_from.as_deref())?;
     // `user.email` rather than a name: it is the accountable identity
     // `[attribution]` already decides over, and it is never a model identity
@@ -9173,6 +9171,8 @@ fn run_land(
 /// # Errors
 ///
 /// Only a write failure on either channel; every failure to look is an exit code.
+//MUTANT linear-shallow-trusted|s@^    if git::is_shallow(root).unwrap_or(true) {$@    if false {@|a_shallow_clone_is_could_not_look_and_names_the_remedy
+//MUTANT linear-fetch-failure-trusted|s@return Ok(ExitCode::Internal); // the fetch did not complete$@return Ok(ExitCode::Success);@|a_fetch_that_cannot_complete_is_could_not_look_and_never_a_pass
 fn run_land_linear(
     root: &Path,
     url: &str,
@@ -9180,9 +9180,6 @@ fn run_land_linear(
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
-    //MUTANT-SUITE crates/batten/tests/it/linear_check.rs
-    //MUTANT linear-shallow-trusted|s@^    if git::is_shallow(root).unwrap_or(true) {$@    if false {@|a_shallow_clone_is_could_not_look_and_names_the_remedy
-    //MUTANT linear-fetch-failure-trusted|s@return Ok(ExitCode::Internal); // the fetch did not complete$@return Ok(ExitCode::Success);@|a_fetch_that_cannot_complete_is_could_not_look_and_never_a_pass
     if git::is_shallow(root).unwrap_or(true) {
         writeln!(
             err,
@@ -15429,6 +15426,10 @@ fn destructive_call_facts(
     (discards, singleton)
 }
 
+//MUTANT unloadable-config-admits-write|s@^                    return deny_unadjudicable(harness, \&envelope, \&unreadable, mode, out, err);$@                    return Err(unreadable);@|a_write_over_a_config_that_fails_validation_is_refused
+//MUTANT floor-swallows-the-refusal|s@                if recoverable_without_rules(\&envelope) {@                if true {@|a_command_is_still_refused_over_a_config_that_will_not_load
+//MUTANT floor-removed|s@                if recoverable_without_rules(\&envelope) {@                if false {@|a_read_still_answers_over_a_config_that_will_not_load
+//MUTANT advice-beside-the-grant|s@^    let context = matches!(decision, hook::Decision::Preapproved(_)) \&\& !advice.is_empty();$@    let context = false;@|a_preapproval_carries_the_calls_advice_in_one_document
 fn run_hook(
     harness: hook::Harness,
     // Resolved by the dispatch (CLOUD-1170) — see `Recency::now`.
@@ -15598,10 +15599,6 @@ fn run_hook(
     //
     // [`recoverable_without_rules`] carries the argument for which two shapes
     // pass and why every other one still refuses.
-    //MUTANT-SUITE crates/batten/tests/it/adjudicate_absent.rs
-    //MUTANT unloadable-config-admits-write|s@^                    return deny_unadjudicable(harness, \&envelope, \&unreadable, mode, out, err);$@                    return Err(unreadable);@|a_write_over_a_config_that_fails_validation_is_refused
-    //MUTANT floor-swallows-the-refusal|s@                if recoverable_without_rules(\&envelope) {@                if true {@|a_command_is_still_refused_over_a_config_that_will_not_load
-    //MUTANT floor-removed|s@                if recoverable_without_rules(\&envelope) {@                if false {@|a_read_still_answers_over_a_config_that_will_not_load
     let (policy, waivers) = if adjudicable {
         match load_policy(overrides, harness) {
             Ok(loaded) => loaded,
@@ -15857,8 +15854,6 @@ fn run_hook(
     // A PRE-APPROVAL TAKES THE ADVICE INTO ITS OWN DOCUMENT (CLOUD-1949): two
     // documents on one stream is the collision above, with the grant as the
     // discarded one.
-    //MUTANT-SUITE crates/batten/tests/it/preapprove.rs
-    //MUTANT advice-beside-the-grant|s@^    let context = matches!(decision, hook::Decision::Preapproved(_)) \&\& !advice.is_empty();$@    let context = false;@|a_preapproval_carries_the_calls_advice_in_one_document
     let context = matches!(decision, hook::Decision::Preapproved(_)) && !advice.is_empty();
     let context = context.then(|| advisory::admit(std::mem::take(&mut advice), ceiling).text);
     emit_channel(harness, &envelope, out, err, advice, ceiling, &decision)?;
@@ -16196,6 +16191,7 @@ fn unadjudicable_remedy() -> Fix {
 /// bound" rather than as a bound of zero, which is the direction that keeps a
 /// refusal about an unreadable config from being truncated by a value nobody
 /// could read.
+//MUTANT refusal-drops-the-cause|s@^        .filter(|line| !is_source_excerpt(line))$@        .take(1)@|a_fact_row_that_states_no_returns_is_refused_at_load_over_the_binary
 fn deny_unadjudicable(
     harness: hook::Harness,
     envelope: &hook::Envelope,
@@ -16227,8 +16223,6 @@ fn deny_unadjudicable(
     // needs. What rule 4 excludes is the quoted source: toml's gutter lines,
     // `3 | [[fact]]` and the caret line under it, both of which carry a `|`
     // after an optional line number and nothing else does.
-    //MUTANT-SUITE crates/batten/tests/it/cli.rs
-    //MUTANT refusal-drops-the-cause|s@^        .filter(|line| !is_source_excerpt(line))$@        .take(1)@|a_fact_row_that_states_no_returns_is_refused_at_load_over_the_binary
     let pointer = unreadable
         .to_string()
         .lines()
@@ -16667,6 +16661,7 @@ fn fill_turn_advice(
 /// function rather than an expression at the call site: the pre-approval arm needs
 /// the engine's decision to decide whether to keep the grant, and a reader has to
 /// be able to see that it is not consulted twice.
+//MUTANT preapprove-before-refusal|s@^            decided => decided,$@            decided => hook::policy_preapproval(policy, envelope, facts).map_or(decided, hook::Decision::Preapproved),@|a_refused_call_is_never_preapproved
 fn compose(
     handled: Option<hook::Decision>,
     policy: &hook::Policy,
@@ -16688,8 +16683,6 @@ fn compose(
         // DENY FIRST, THEN THE MODULE PRE-APPROVAL (CLOUD-1949). The engine's
         // answer — every typed row and every module's deny — is taken whole, and
         // a module's `preapprove` is asked only when that answer is `Allow`.
-        //MUTANT-SUITE crates/batten/tests/it/preapprove.rs
-        //MUTANT preapprove-before-refusal|s@^            decided => decided,$@            decided => hook::policy_preapproval(policy, envelope, facts).map_or(decided, hook::Decision::Preapproved),@|a_refused_call_is_never_preapproved
         None => match hook::adjudicate(policy, envelope, facts) {
             hook::Decision::Allow => hook::policy_preapproval(policy, envelope, facts)
                 .map_or(hook::Decision::Allow, hook::Decision::Preapproved),
@@ -21275,6 +21268,8 @@ fn apply_baseline(
 /// row) admits nothing — there is no token an admission could bind. An
 /// unresolvable HEAD or epoch admits nothing. An unreadable store admits
 /// nothing. A store this cannot read must not be able to suppress.
+//MUTANT block-arm-removed|s@^        if admitted.is_none() {$@        if false {@|a_spent_block_in_the_head_commit_admits_with_no_store
+//MUTANT merge-parent-arm-removed|s@^        if admitted.is_none() {$@        if false {@|a_spent_block_on_a_merge_refs_second_parent_admits
 fn apply_admissions(
     findings: Vec<rules::Finding>,
     scan: &rules::Scan,
@@ -21333,8 +21328,6 @@ fn apply_admissions(
         let anchor = admission::Anchor::Finding(fingerprint.clone()).token();
         let mut admitted =
             admission::admitted(root, &finding.rule, class, &finding.path, &anchor, &epoch)?;
-        //MUTANT-SUITE crates/batten/tests/it/admission.rs
-        //MUTANT block-arm-removed|s@^        if admitted.is_none() {$@        if false {@|a_spent_block_in_the_head_commit_admits_with_no_store
         if admitted.is_none() {
             let message = head_message.get_or_insert_with(|| {
                 git::commit_record(root, "HEAD")
@@ -21352,8 +21345,6 @@ fn apply_admissions(
                 )
             });
         }
-        //MUTANT-SUITE crates/batten/tests/it/admission.rs
-        //MUTANT merge-parent-arm-removed|s@^        if admitted.is_none() {$@        if false {@|a_spent_block_on_a_merge_refs_second_parent_admits
         if admitted.is_none() {
             let message = merged_head_message.get_or_insert_with(|| {
                 git::commit_record(root, "HEAD^2")
@@ -23438,6 +23429,7 @@ fn run_doctor_session(json: bool, out: &mut dyn Write) -> Result<ExitCode> {
     Ok(session_code(&report))
 }
 
+//MUTANT unminted-fact-reads-clean|s@    if !report.unminted.is_empty() {@    if false {@|a_session_whose_start_chain_did_not_run_is_could_not_look
 fn session_code(report: &doctor::SessionReport) -> ExitCode {
     // AN UNMINTED FACT OUTRANKS THE TASK COUNT, and it is could-not-look rather
     // than unfinished work (CLOUD-1760). The two arms answer different questions —
@@ -23445,8 +23437,6 @@ fn session_code(report: &doctor::SessionReport) -> ExitCode {
     // second is the one that invalidates the first: a store read under a session
     // whose guards were disarmed is not a clean bill, it is an unexamined one.
     // `3` rather than `1` because nothing was DECIDED here; a reading is missing.
-    //MUTANT-SUITE crates/batten/tests/it/doctor_session.rs
-    //MUTANT unminted-fact-reads-clean|s@    if !report.unminted.is_empty() {@    if false {@|a_session_whose_start_chain_did_not_run_is_could_not_look
     if !report.unminted.is_empty() {
         return ExitCode::Internal;
     }

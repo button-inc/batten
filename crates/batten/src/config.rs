@@ -2618,6 +2618,7 @@ enum Header<'a> {
     Table(&'a str),
 }
 
+//MUTANT dotted-row-not-droppable|s@        matches!(self, Self::Row(_))@        matches!(self, Self::Row(name) if !name.contains('.'))@|an_unknown_key_in_a_dotted_row_costs_the_row_not_the_file
 impl<'a> Header<'a> {
     /// The declared name, dots and all.
     fn name(self) -> &'a str {
@@ -2649,7 +2650,6 @@ impl<'a> Header<'a> {
     /// Which of the two shapes a dotted row is cannot be read off the header
     /// alone — it is a fact about the DOCUMENT, namely whether the root is itself
     /// an array row — so that question lives in [`owning_row`], which has the text.
-    //MUTANT dotted-row-not-droppable|s@        matches!(self, Self::Row(_))@        matches!(self, Self::Row(name) if !name.contains('.'))@|an_unknown_key_in_a_dotted_row_costs_the_row_not_the_file
     fn is_row(self) -> bool {
         matches!(self, Self::Row(_))
     }
@@ -3367,6 +3367,7 @@ fn drop_key(
 /// trusting the scan, which `headers`' own doc refuses and which cost 646
 /// silently vanished sections the one time it was tried. Bring a number over
 /// the budget and this moves.
+//MUTANT dotted-section-read-as-a-key|s@        let Some(rows) = holder.get_mut(leaf).and_then(toml::Value::as_array_mut) else {@        let Some(rows) = holder.get_mut(section.as_str()).and_then(toml::Value::as_array_mut) else {@|an_unknown_key_in_a_dotted_row_costs_the_row_not_the_file
 fn prune_unresolvable<T: serde::de::DeserializeOwned>(source: &str, behind: bool) -> Prune<T> {
     // The parser's own reading of the document, carried across the loop so each
     // blank can be checked against what removing the row SHOULD produce.
@@ -3485,7 +3486,6 @@ fn prune_unresolvable<T: serde::de::DeserializeOwned>(source: &str, behind: bool
         }) else {
             break;
         };
-        //MUTANT dotted-section-read-as-a-key|s@        let Some(rows) = holder.get_mut(leaf).and_then(toml::Value::as_array_mut) else {@        let Some(rows) = holder.get_mut(section.as_str()).and_then(toml::Value::as_array_mut) else {@|an_unknown_key_in_a_dotted_row_costs_the_row_not_the_file
         let Some(rows) = holder.get_mut(leaf).and_then(toml::Value::as_array_mut) else {
             break;
         };

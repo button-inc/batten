@@ -1256,6 +1256,8 @@ fn update_worktree(repo: &gix::Repository, was: gix::ObjectId, now: gix::ObjectI
 /// the failures are reported together afterwards: returning on the first is what
 /// left 50 files behind (CLOUD-1948), and a partial worktree is worse than a loud
 /// one because it reads as the branch's own untracked work.
+//MUTANT-SUITE crates/batten/tests/it/rebase.rs
+//MUTANT gone-directory-left-on-disk|s@^    gone_trees.sort_by_key(|tree| std::cmp::Reverse(tree.len()));$@    gone_trees.clear();@|a_directory_the_base_deleted_leaves_the_worktree
 fn remove_gone(
     workdir: &Path,
     gone: &std::collections::BTreeSet<Vec<u8>>,
@@ -1277,8 +1279,6 @@ fn remove_gone(
     // its children are gone. `remove_dir` and never `remove_dir_all`: a directory
     // still holding an untracked file keeps it, which is the user's file and not
     // this replay's to delete — so "not empty" is the honest outcome, not a fault.
-    //MUTANT-SUITE crates/batten/tests/it/rebase.rs
-    //MUTANT gone-directory-left-on-disk|s@^    gone_trees.sort_by_key(|tree| std::cmp::Reverse(tree.len()));$@    gone_trees.clear();@|a_directory_the_base_deleted_leaves_the_worktree
     gone_trees.sort_by_key(|tree| std::cmp::Reverse(tree.len()));
     for tree in &gone_trees {
         let Ok(relative) = std::str::from_utf8(tree) else {

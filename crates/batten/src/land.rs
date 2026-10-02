@@ -638,12 +638,11 @@ fn contains(root: &Path, tip: &str, ancestor: &str) -> bool {
 /// An absent remote ref is admitted: there is nothing to lose, and the
 /// receive-pack CAS still refuses if it appears before the swap.
 #[must_use]
+//MUTANT admits-ignored|s@^    if last_pushed.as_deref() == Some(remote) {$@    if true {@|a_sibling_commit_on_the_branch_is_never_admitted
 pub fn admitted(root: &Path, branch: &str, remote: &str, head: &str) -> bool {
     if remote == crate::lease::ZERO || contains(root, head, remote) {
         return true;
     }
-    //MUTANT-SUITE crates/batten/tests/it/land.rs
-    //MUTANT admits-ignored|s@^    if last_pushed.as_deref() == Some(remote) {$@    if true {@|a_sibling_commit_on_the_branch_is_never_admitted
     let lines = lap_lines(root, branch);
     let last_pushed = lines.iter().rev().find_map(|line| {
         let columns: Vec<&str> = line.split(' ').collect();

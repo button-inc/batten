@@ -341,6 +341,8 @@ pub struct Refusal {
 /// Rule 4 is untouched either way. This binds only what the refusal already
 /// renders; it puts no new byte on any channel, and `subject` is
 /// `skip_serializing`, so `-J` output and `schema/*.json` do not move.
+//MUTANT-SUITE crates/batten/src/hook.rs
+//MUTANT artifact-binding-dropped|s@^    (!artifacts.is_empty()).then(|| artifacts.join(","))@    None@|every_class_declaring_an_override_route_can_be_bound
 fn admission_subject(subjects: &[crate::verdict::Subject]) -> Option<String> {
     if let Some(path) = subjects.iter().find_map(|subject| match subject {
         crate::verdict::Subject::Path { path } | crate::verdict::Subject::Line { path, .. } => {
@@ -361,8 +363,6 @@ fn admission_subject(subjects: &[crate::verdict::Subject]) -> Option<String> {
         .collect();
     // The restored defect, exactly: a path-only answer, which is what left two
     // classes with an override route nobody could reach.
-    //MUTANT-SUITE crates/batten/src/hook.rs
-    //MUTANT artifact-binding-dropped|s@^    (!artifacts.is_empty()).then(|| artifacts.join(","))@    None@|every_class_declaring_an_override_route_can_be_bound
     (!artifacts.is_empty()).then(|| artifacts.join(","))
 }
 

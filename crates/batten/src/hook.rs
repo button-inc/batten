@@ -5252,10 +5252,9 @@ fn modifier_admits(rule: &Rule, envelope: &Envelope) -> bool {
 /// Could-not-look answers `true` — the row stays selected — for the reason
 /// [`marker_present`]'s unreadable arms give: an answer nobody could read must
 /// not switch a refusal off on exactly the checkouts least able to notice.
+//MUTANT push-unread|s@    crate::git::head_on_a_remote(std::path::Path::new(".")) != Some(true)@    true@|a_pushed_head_lifts_the_punt_refusal
+//MUTANT push-assumed|s@    crate::git::head_on_a_remote(std::path::Path::new(".")) != Some(true)@    false@|an_unpushed_head_after_a_punt_is_refused
 fn head_unpushed() -> bool {
-    //MUTANT-SUITE crates/batten/tests/it/punt_receipt.rs
-    //MUTANT push-unread|s@    crate::git::head_on_a_remote(std::path::Path::new(".")) != Some(true)@    true@|a_pushed_head_lifts_the_punt_refusal
-    //MUTANT push-assumed|s@    crate::git::head_on_a_remote(std::path::Path::new(".")) != Some(true)@    false@|an_unpushed_head_after_a_punt_is_refused
     crate::git::head_on_a_remote(std::path::Path::new(".")) != Some(true)
 }
 
@@ -7866,6 +7865,7 @@ fn protected_write(policy: &Policy, envelope: &Envelope, stage: WriteStage) -> D
 ///
 /// The path and the declared remedy. Never a byte of the file, which for a
 /// memory is exactly the content a read gate must not become a mirror of.
+//MUTANT read-refused-as-substitution|s@Native::ReadRedirected,@Native::ToolSubstituted,@|a_generic_read_of_a_memory_is_refused_and_names_the_tool_that_answers
 fn redirected_read(policy: &Policy, envelope: &Envelope) -> Decision {
     let Some(path) = envelope.reads.as_deref() else {
         return Decision::Allow;
@@ -7881,8 +7881,6 @@ fn redirected_read(policy: &Policy, envelope: &Envelope) -> Decision {
     // the row's own pointer, so it takes the tool's subject slot: the tool is the
     // envelope's own, and carrying both put the repeat line for the longest
     // memory name over `[refusal] max_tokens` (101 bytes against 96).
-    //MUTANT-SUITE crates/batten/tests/it/mediated_verbs.rs
-    //MUTANT read-refused-as-substitution|s@Native::ReadRedirected,@Native::ToolSubstituted,@|a_generic_read_of_a_memory_is_refused_and_names_the_tool_that_answers
     Decision::Deny(Refusal::declared(
         PROTECTED_MUTATION,
         crate::verdict::Native::ReadRedirected,

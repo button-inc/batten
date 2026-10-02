@@ -455,6 +455,7 @@ pub struct BasisDrift {
     pub measured: String,
 }
 
+//MUTANT drift-refusal-prescribes-rescale|s@ in `$GIT_DIR/batten-prune/laps.json` is one@ is one@|a_drift_refusal_names_a_measurement_and_never_the_stem_model
 impl BasisDrift {
     /// The refusal, pointer-only: two counts, a tolerance and a date.
     ///
@@ -467,8 +468,6 @@ impl BasisDrift {
     /// refused every close on a container whose laps fit. The count is a trend
     /// counter since CLOUD-1210; the remedy says so, and names where a real
     /// measurement lives.
-    //MUTANT-SUITE crates/batten/src/prune.rs
-    //MUTANT drift-refusal-prescribes-rescale|s@ in `$GIT_DIR/batten-prune/laps.json` is one@ is one@|a_drift_refusal_names_a_measurement_and_never_the_stem_model
     ///
     /// NEVER A FILE LISTING (non-negotiable rule 4). The count IS the finding, and
     /// the paths behind it are unbounded — a caller who wants them can run the

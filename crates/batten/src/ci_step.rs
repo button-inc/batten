@@ -299,12 +299,15 @@ pub fn run(request: &StepRequest, out: &mut dyn Write, err: &mut dyn Write) -> R
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
+//MUTANT-SUITE crates/batten/src/ci_step.rs
+//MUTANT key-unchecked|s@        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')@        \&\& true@|only_a_key_value_line_is_an_output
+//MUTANT tail-unbounded|s@lines.len().saturating_sub(SUMMARY_TAIL)@0@|a_summary_keeps_the_tail_of_a_long_log
+//MUTANT empty-passed|s@        match lookup(name).filter(|value| !value.is_empty()) {@        match lookup(name) {@|an_env_argument_is_one_word_and_an_empty_one_is_refused
+//MUTANT require-empty-passed|s@        .find(|name| lookup(name).is_none_or(|value| value.is_empty()))@        .find(|name| lookup(name).is_none())@|a_required_variable_must_be_set_and_non_empty
+//MUTANT capture-blank|s@        .find(|line| !line.is_empty())@        .next()@|a_capture_is_the_first_non_blank_line_or_empty
 mod tests {
     use super::*;
 
-    //MUTANT-SUITE crates/batten/src/ci_step.rs
-    //MUTANT key-unchecked|s@        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')@        \&\& true@|only_a_key_value_line_is_an_output
-    //MUTANT tail-unbounded|s@lines.len().saturating_sub(SUMMARY_TAIL)@0@|a_summary_keeps_the_tail_of_a_long_log
     #[test]
     fn only_a_key_value_line_is_an_output() {
         assert!(output_line("archive=target/x.tar.gz"));
@@ -328,7 +331,6 @@ mod tests {
         assert!(mapping(&["x=green".to_owned()]).is_err());
     }
 
-    //MUTANT empty-passed|s@        match lookup(name).filter(|value| !value.is_empty()) {@        match lookup(name) {@|an_env_argument_is_one_word_and_an_empty_one_is_refused
     #[test]
     fn an_env_argument_is_one_word_and_an_empty_one_is_refused() {
         let command = vec!["gh".to_owned(), "release".to_owned()];
@@ -347,7 +349,6 @@ mod tests {
         assert!(argv(&command, &["UNSET".to_owned()], env).is_err());
     }
 
-    //MUTANT require-empty-passed|s@        .find(|name| lookup(name).is_none_or(|value| value.is_empty()))@        .find(|name| lookup(name).is_none())@|a_required_variable_must_be_set_and_non_empty
     #[test]
     fn a_required_variable_must_be_set_and_non_empty() {
         let env = |name: &str| match name {
@@ -363,7 +364,6 @@ mod tests {
         assert_eq!(missing(&["UNSET".to_owned()], env), Some("UNSET"));
     }
 
-    //MUTANT capture-blank|s@        .find(|line| !line.is_empty())@        .next()@|a_capture_is_the_first_non_blank_line_or_empty
     #[test]
     fn a_capture_is_the_first_non_blank_line_or_empty() {
         assert_eq!(captured("sha", "\n  abc123  \nother\n"), "sha=abc123\n");

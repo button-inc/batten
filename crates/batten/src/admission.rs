@@ -794,12 +794,12 @@ pub fn consume(
 /// separator is read as the artifact list the line printed, and rejoined.
 /// A path subject is returned untouched: a path is bound as itself.
 #[must_use]
+//MUTANT rendered-subject-unmatched|s@^    trimmed.split_whitespace().collect::<Vec<_>>().join(",")$@    trimmed.to_owned()@|a_subject_copied_from_the_refusal_line_binds_as_the_refusal_does
 pub fn subject_as_bound(subject: &str) -> String {
     let trimmed = subject.trim();
     if trimmed.contains('/') || !trimmed.contains(char::is_whitespace) {
         return trimmed.to_owned();
     }
-    //MUTANT rendered-subject-unmatched|s@^    trimmed.split_whitespace().collect::<Vec<_>>().join(",")$@    trimmed.to_owned()@|a_subject_copied_from_the_refusal_line_binds_as_the_refusal_does
     trimmed.split_whitespace().collect::<Vec<_>>().join(",")
 }
 
@@ -1008,6 +1008,8 @@ pub fn admitted(
 /// enforces with `State::Spent`. That gap is closed one field over: the address
 /// binds `answers`, so a block with no articulation cannot recompute at all.
 #[must_use]
+//MUTANT-SUITE crates/batten/tests/it/admission.rs
+//MUTANT recomputes-unchecked|s@^        if !articulation.recomputes() {$@        if false {@|a_tampered_block_in_the_head_commit_admits_nothing
 pub fn admitted_by_block(
     message: &str,
     rule: &str,
@@ -1019,8 +1021,6 @@ pub fn admitted_by_block(
     blocks(message).into_iter().find_map(|articulation| {
         // TAMPER FIRST. A block that does not recompute is not evidence of
         // anything, whatever its fields say.
-        //MUTANT-SUITE crates/batten/tests/it/admission.rs
-        //MUTANT recomputes-unchecked|s@^        if !articulation.recomputes() {$@        if false {@|a_tampered_block_in_the_head_commit_admits_nothing
         if !articulation.recomputes() {
             return None;
         }

@@ -1277,6 +1277,7 @@ fn is_runnable_hook(at: &Path) -> bool {
 /// One predicate reached from both, on [`diagnose_commit_gate`]'s reason: a
 /// startup row asks it alone, and a second reading could drift from the report.
 #[must_use]
+//MUTANT dropped-rows-pass|s@Check::failed(CONFIG, "config-rows-dropped")@Check::passed(CONFIG)@|doctor_config_fails_on_a_row_this_build_cannot_resolve
 pub fn diagnose_config(dir: &Path) -> Check {
     match config::load(&dir.join(config::CONFIG_FILE)) {
         // Loading proves the file parses and the version gates pass; resolving
@@ -1290,8 +1291,6 @@ pub fn diagnose_config(dir: &Path) -> Check {
         // green `doctor` over one is the same vacuous pass one layer along.
         // This is the arm that gives the drop an exit code rather than a
         // message: `config show` names the rows, and nothing else was reading.
-        //MUTANT-SUITE crates/batten/tests/it/doctor.rs
-        //MUTANT dropped-rows-pass|s@Check::failed(CONFIG, "config-rows-dropped")@Check::passed(CONFIG)@|doctor_config_fails_on_a_row_this_build_cannot_resolve
         Ok(config) if !config.unresolvable.is_empty() => {
             Check::failed(CONFIG, "config-rows-dropped")
         }
@@ -2578,6 +2577,8 @@ pub fn has_session_start_reader(fact: crate::facts::Fact) -> bool {
 /// repository whose policy will not resolve has a louder problem, `doctor`'s
 /// `config` check is what says so, and reporting every rule as unminted over an
 /// unreadable config would bury that.
+//MUTANT factless-rule-demands-a-fact|s@        for token in bundle.session_start_facts() {@        for token in ["pinned-programs", "tasks"] {@|a_rule_reading_no_session_start_fact_is_not_judged
+//MUTANT every-session-is-could-not-look|s@            if reads.and_then(|fact| minted(fact, dir)) != Some(true) {@            if true {@|a_session_with_every_fact_minted_is_clean
 fn unminted_facts(dir: &Path) -> Vec<Unminted> {
     let Ok(resolved) = resolve::resolve(dir, &crate::Overrides::default()) else {
         return Vec::new();
@@ -2612,9 +2613,6 @@ fn unminted_facts(dir: &Path) -> Vec<Unminted> {
         return Vec::new();
     };
     let mut found = Vec::new();
-    //MUTANT-SUITE crates/batten/tests/it/doctor_session.rs
-    //MUTANT factless-rule-demands-a-fact|s@        for token in bundle.session_start_facts() {@        for token in ["pinned-programs", "tasks"] {@|a_rule_reading_no_session_start_fact_is_not_judged
-    //MUTANT every-session-is-could-not-look|s@            if reads.and_then(|fact| minted(fact, dir)) != Some(true) {@            if true {@|a_session_with_every_fact_minted_is_clean
     for bundle in &bundles {
         for token in bundle.session_start_facts() {
             let reads = crate::facts::Fact::from_token(token);

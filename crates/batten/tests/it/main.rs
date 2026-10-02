@@ -275,6 +275,7 @@ mod mise_preset;
 mod module_closure;
 mod module_map;
 mod msrv_pin_agreement;
+mod mutant_rows;
 mod mutate;
 mod mutation_declared_case;
 mod named_paths;

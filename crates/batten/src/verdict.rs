@@ -1642,6 +1642,7 @@ pushed",
 /// themselves: a class here may describe a PRACTICE and may never name a path, a
 /// task, a tracker key or an entity. `presets_are_inside_the_rule_one_glob`
 /// covers this file, because it is under `crates/**`.
+//MUTANT missing-receipt-route-dropped|s@^        routes: &\[read("config read first", "batten.toml"), STALE_RECEIPT_ROUTE\],$@        routes: \&[read("config read first", "batten.toml")],@|a_spent_admission_clears_a_missing_receipt
 const VENDORED: &[VendoredVerdict] = &[
     // ── native ──────────────────────────────────────────────────────────────
     VendoredVerdict {
@@ -1877,8 +1878,6 @@ remedy for a missing one and useless for a refuted one.",
         // MISSING, never as `receipt read other`. The route there alone was
         // unreachable from the deadlock it was written for: `admit_mediated` binds
         // to the class the refusal carries.
-        //MUTANT-SUITE crates/batten/tests/it/punt_receipt.rs
-        //MUTANT missing-receipt-route-dropped|s@^        routes: &\[read("config read first", "batten.toml"), STALE_RECEIPT_ROUTE\],$@        routes: \&[read("config read first", "batten.toml")],@|a_spent_admission_clears_a_missing_receipt
         routes: &[
             read("config read first", "batten.toml"),
             STALE_RECEIPT_ROUTE,
