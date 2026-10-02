@@ -2837,13 +2837,14 @@ depends = ["build:release"]
 # directory could not be made — and the destination's fallback chain, which was
 # `${BATTEN_INSTALL_DIR:-${XDG_BIN_HOME:-$HOME/.local/bin}}`, is the template's
 # `if`/`elif`, where an empty variable is as unset as it was to `:-`.
+# CLOUD-2061: the last step stamps the installed binary with the source digest it
+# was built from, so a config's source pin can be checked against it. A plain
+# argv, resolved on PATH exactly as every hook resolves the binary, so the stamp
+# lands beside the one the hooks will run.
 run = [
   "mkdir -p {% if env.BATTEN_INSTALL_DIR %}{{env.BATTEN_INSTALL_DIR}}{% elif env.XDG_BIN_HOME %}{{env.XDG_BIN_HOME}}{% else %}{{env.HOME}}/.local/bin{% endif %}",
   "install -m 0755 target/release/batten {% if env.BATTEN_INSTALL_DIR %}{{env.BATTEN_INSTALL_DIR}}{% elif env.XDG_BIN_HOME %}{{env.XDG_BIN_HOME}}{% else %}{{env.HOME}}/.local/bin{% endif %}/batten",
-  # CLOUD-2061: the installed binary records the source digest it was built from,
-  # so a config's `engine = { source = ... }` pin can be checked against it.
-  # Invoked by its full path so the stamp lands beside THIS install.
-  "{% if env.BATTEN_INSTALL_DIR %}{{env.BATTEN_INSTALL_DIR}}{% elif env.XDG_BIN_HOME %}{{env.XDG_BIN_HOME}}{% else %}{{env.HOME}}/.local/bin{% endif %}/batten engine stamp",
+  "batten engine stamp",
 ]
 
 # The provisioning seam the environment's setup script ALREADY CALLS, and which

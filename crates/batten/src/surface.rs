@@ -7498,7 +7498,7 @@ pub const SURFACE: &[CommandDecl] = &[
         path: "engine digest",
         id: "engine.digest",
         about: "Print the source digest of this tree's tracked engine inputs, the value a source pin names",
-        data_channel: true,
+        data_channel: false,
         exits: EXITS_STANDARD,
         effect: Effect::Read,
         flags: &[],

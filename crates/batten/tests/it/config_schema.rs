@@ -486,6 +486,7 @@ fn the_override_schema_describes_only_keys_the_loader_honours() {
     assert_eq!(
         keys,
         [
+            "engine",
             "exec_pattern",
             "fail_on_warning",
             "min_batten_version",

@@ -1527,6 +1527,34 @@ expression: stdout_of(&output)
       "subcommands": []
     },
     {
+      "path": "engine",
+      "id": "engine",
+      "about": "Report and record which engine this binary is, against a config's pin",
+      "effect": "unclassified",
+      "data_channel": false,
+      "flags": [],
+      "subcommands": [
+        {
+          "path": "engine digest",
+          "id": "engine.digest",
+          "about": "Print the source digest of this tree's tracked engine inputs, the value a source pin names",
+          "effect": "read",
+          "data_channel": false,
+          "flags": [],
+          "subcommands": []
+        },
+        {
+          "path": "engine stamp",
+          "id": "engine.stamp",
+          "about": "Record this tree's source digest beside the running binary, so a source pin can be checked",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [],
+          "subcommands": []
+        }
+      ]
+    },
+    {
       "path": "exec",
       "id": "exec",
       "about": "Run a command — or a `:::` bundle — and report a pointer to what it wrote",
@@ -4887,6 +4915,10 @@ expression: stdout_of(&output)
     {
       "id": "doctor.toolchain",
       "path": "doctor toolchain"
+    },
+    {
+      "id": "engine.digest",
+      "path": "engine digest"
     },
     {
       "id": "generate",

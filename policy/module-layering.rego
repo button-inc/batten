@@ -713,6 +713,12 @@ declared_modules := {
 	# mints no `Finding` and reaches no decider, and it starts no program, which
 	# is what keeps the verb on the derived read-only allowlist.
 	"census",
+	# `engine` arrived with CLOUD-2061 and is `census`' class: a report over the
+	# tracked tree (`git` for the tracked paths) that the `engine digest` verb
+	# renders, plus one write through `durable` for the stamp. `config::parse`
+	# calls its pre-parse check, so it reaches `config` only for `VERSION` and
+	# `error` for its refusal, and decides nothing beyond "this pin, this engine".
+	"engine",
 	# `ci_signal` arrived with CLOUD-843's `p2-divergence` package, in
 	# `forge_query`'s class: a PRODUCER that walks `forge`'s window over `rest`'s
 	# transport and writes through `record`'s named-family store. It measures the

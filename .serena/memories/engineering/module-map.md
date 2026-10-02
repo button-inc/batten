@@ -143,6 +143,7 @@ row here, so a new module lands with its line.
 - `attestation.rs` — `batten record attestation`: a release's attestation posture, recorded for the `supply-chain` preset to decide (CLOUD-843).
 - `board_check.rs` — `batten board check` (CLOUD-1221): the board's columns, dependency graph and citations read into records the `tracker-hygiene` preset decides over.
 - `census.rs` — `batten census shell` (CLOUD-843): every place a consumer still writes shell, counted in code lines as pointers.
+- `engine.rs` — the engine pin (CLOUD-2061): `engine = { release | source }` in `batten.toml`, checked by a line scan at the top of `config::parse` BEFORE the TOML parse, so a stale engine is named before a key it cannot read fails the load. `batten engine digest` hashes the tracked inputs under `crates/` plus `Cargo.toml`/`Cargo.lock`; `batten engine stamp` records it beside the running binary (`<binary>.source`), and `install:local` stamps what it installs. A missing stamp fails a source pin.
 - `ci_signal.rs` — the CI-signal producers (CLOUD-843): landing-loop divergence and non-verdict failures, recorded for the `ci-signal` preset.
 - `ci_step.rs` — `batten ci step` (CLOUD-843): the runner-file glue a workflow step used a shell for, as one argv.
 - `dist.rs` — `batten dist` (CLOUD-843): build a workspace's one release binary for a target and stage its archive.

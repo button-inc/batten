@@ -545,6 +545,9 @@ mod tests {
                 // do — the caller-fetches-gate-decides split is what keeps the
                 // row honest rather than merely promised.
                 "doctor toolchain".to_owned(),
+                // The engine pin's identity (CLOUD-2061): it lists the tracked
+                // engine inputs and hashes their bytes, and writes nothing.
+                "engine digest".to_owned(),
                 "generate".to_owned(),
                 "generate completions".to_owned(),
                 // §11's third derivation (CLOUD-62): the hook wiring a host
@@ -935,6 +938,9 @@ mod tests {
             "doctor target".to_owned(),
             "doctor toolchain".to_owned(),
             "enforce".to_owned(),
+            "engine".to_owned(),
+            "engine digest".to_owned(),
+            "engine stamp".to_owned(),
             "exec".to_owned(),
             // The schema is emitted by `generate`, not `config`: it is a
             // derivation of the config types, and §11 gives every

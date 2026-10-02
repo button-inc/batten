@@ -1292,6 +1292,16 @@ pub const CENSUS: &[FieldCoverage] = &[
         coverage: Coverage::Compared(&[WeakeningKind::MinVersionLowered]),
     },
     FieldCoverage {
+        field: "engine",
+        coverage: Coverage::NoMonotoneReading(
+            "the pin names ONE engine, by release or by source digest, and an engine is \
+             not an ordering: a different pin is a different binary, not a lower bar. A \
+             source pin is refused on the landing path by its own gate (CLOUD-2063), and \
+             dropping the pin returns the file to `min_batten_version`, which `trust` \
+             already compares",
+        ),
+    },
+    FieldCoverage {
         field: "strictness",
         coverage: Coverage::Compared(&[WeakeningKind::StrictnessLowered]),
     },
