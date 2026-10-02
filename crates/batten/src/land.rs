@@ -72,6 +72,11 @@ pub enum Replay {
         head: String,
         /// How many commits were replayed.
         commits: usize,
+        /// The sha the branch pointed at BEFORE the replay (CLOUD-2056): the
+        /// commit set this replay rewrote, and so the remote value a push of
+        /// `head` may replace without losing anything. Recorded in the line's
+        /// fourth column, which a `replayed` line never used.
+        from: String,
     },
 }
 
@@ -119,7 +124,7 @@ impl Replay {
                 format!("rebase conflicted {commit} {path}")
             }
             Self::Current => String::from("rebase current - -"),
-            Self::Replayed { head, .. } => format!("rebase replayed {head} -"),
+            Self::Replayed { head, from, .. } => format!("rebase replayed {head} {from}"),
         }
     }
 }
@@ -369,13 +374,18 @@ pub fn replay_onto(
     branch: &str,
     resolutions: &[String],
 ) -> Result<Replay> {
+    let from = pre_replay_head(root, branch);
     let outcome =
         gitwrite::rebase_resolving(root, &format!("refs/heads/{branch}"), tracking, resolutions)
             .with_context(|| format!("land: replay {branch} onto {tracking}"))?;
     let replayed = match outcome {
         Rebase::Conflicted { commit, paths } => Replay::Conflicted { commit, paths },
         Rebase::Current => Replay::Current,
-        Rebase::Replayed { head, commits } => Replay::Replayed { head, commits },
+        Rebase::Replayed { head, commits } => Replay::Replayed {
+            head,
+            commits,
+            from,
+        },
     };
 
     // RECORDED WHATEVER HAPPENED, INCLUDING THE CLEAN CASE. A store written only
@@ -425,6 +435,7 @@ pub fn replay_onto_proposing(
     let into = crate::git::git_dir(root)
         .context("land: the git dir holding proposals will not resolve")?
         .join("batten-propose");
+    let from = pre_replay_head(root, branch);
     let (outcome, candidates) = gitwrite::rebase_proposing(
         root,
         &format!("refs/heads/{branch}"),
@@ -436,7 +447,11 @@ pub fn replay_onto_proposing(
     let replayed = match outcome {
         Rebase::Conflicted { commit, paths } => Replay::Conflicted { commit, paths },
         Rebase::Current => Replay::Current,
-        Rebase::Replayed { head, commits } => Replay::Replayed { head, commits },
+        Rebase::Replayed { head, commits } => Replay::Replayed {
+            head,
+            commits,
+            from,
+        },
     };
     record(root, branch, &replayed)?;
     Ok((replayed, candidates))
@@ -573,6 +588,80 @@ fn append(root: &Path, branch: &str, lines: &[String]) -> Result<()> {
     }
     crate::durable::append(&path, &text)
         .with_context(|| format!("land: append to the lap record {}", path.display()))
+}
+
+/// The branch's sha before a replay rewrites it, or `-` — the record's
+/// could-not-look spelling — when the ref will not resolve.
+fn pre_replay_head(root: &Path, branch: &str) -> String {
+    crate::git::resolve_ref(root, &format!("refs/heads/{branch}"))
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| String::from("-"))
+}
+
+/// This branch's lap record, one line per entry, or nothing where none exists.
+///
+/// The SAME path [`append`] writes, derived the same way, so the reader and the
+/// writer cannot disagree about which file is the record.
+fn lap_lines(root: &Path, branch: &str) -> Vec<String> {
+    let Ok(git_dir) = crate::git::git_dir(root) else {
+        return Vec::new();
+    };
+    let claim = crate::claim::claimed_token(&git_dir.join("batten-receipts"), branch);
+    let path = crate::recorder::record_path(&git_dir, LAP_RECORD, branch, claim.as_deref());
+    std::fs::read_to_string(path)
+        .map(|text| text.lines().map(str::to_owned).collect())
+        .unwrap_or_default()
+}
+
+/// Whether `ancestor` is reachable from `tip` — every commit it carries is
+/// already in `tip`'s history.
+fn contains(root: &Path, tip: &str, ancestor: &str) -> bool {
+    ancestor == tip
+        || crate::git::commits_in_range(root, tip, ancestor).is_ok_and(|outside| outside.is_empty())
+}
+
+/// Whether a push of `head` may replace `remote` on this branch (CLOUD-2056).
+///
+/// **THE ASSERTION A LEASE MAKES, which the advertised-value CAS dropped.** The
+/// swap is atomic, but an `old` read a moment before the push asserts nothing
+/// about what this clone has seen: a sibling commit pushed an hour earlier is
+/// overwritten silently. So the remote's value is admitted only when nothing on
+/// it is work this clone never saw — when it is:
+///
+/// - the sha this clone itself last pushed to the branch (the latest
+///   `push landed` line), which is also what the speculation unwind corrects;
+/// - contained in the head a replay rewrote (the latest `rebase replayed`
+///   line's `from`, for a replay whose result `head` still carries); or
+/// - contained in `head` itself, a plain fast-forward.
+///
+/// An absent remote ref is admitted: there is nothing to lose, and the
+/// receive-pack CAS still refuses if it appears before the swap.
+#[must_use]
+pub fn admitted(root: &Path, branch: &str, remote: &str, head: &str) -> bool {
+    if remote == crate::lease::ZERO || contains(root, head, remote) {
+        return true;
+    }
+    //MUTANT-SUITE crates/batten/tests/it/land.rs
+    //MUTANT admits-ignored|s@^    if last_pushed.as_deref() == Some(remote) {$@    if true {@|a_sibling_commit_on_the_branch_is_never_admitted
+    let lines = lap_lines(root, branch);
+    let last_pushed = lines.iter().rev().find_map(|line| {
+        let columns: Vec<&str> = line.split(' ').collect();
+        (columns.len() == 4 && columns[0] == "push" && columns[1] == "landed")
+            .then(|| columns[2].to_owned())
+    });
+    if last_pushed.as_deref() == Some(remote) {
+        return true;
+    }
+    lines.iter().rev().any(|line| {
+        let columns: Vec<&str> = line.split(' ').collect();
+        columns.len() == 4
+            && columns[0] == "rebase"
+            && columns[1] == "replayed"
+            && columns[3] != "-"
+            && contains(root, head, columns[2])
+            && contains(root, columns[3], remote)
+    })
 }
 
 /// The record this module writes, and the one `record::VERB_WRITTEN` names so a
@@ -1050,7 +1139,8 @@ impl Pushed {
 pub fn push(root: &Path, remote: &str, branch: &str) -> Result<Pushed> {
     let head = crate::git::head_commit(root).context("land: read this clone's HEAD")?;
     let reference = format!("refs/heads/{branch}");
-    let outcome = crate::lease::push(remote, root, &reference, &head)
+    let admit = |old: &str| admitted(root, branch, old, &head);
+    let outcome = crate::lease::push(remote, root, &reference, &head, &admit)
         .with_context(|| format!("land: push {reference}"))?;
     let pushed = match outcome {
         crate::lease::Outcome::Applied => Pushed::Landed(head),
@@ -3758,6 +3848,7 @@ mod tests {
             Replay::Replayed {
                 head: String::from("def5678"),
                 commits: 1,
+                from: String::from("abc1234"),
             },
         ] {
             let line = outcome.line();
@@ -3801,9 +3892,10 @@ mod tests {
             Replay::Replayed {
                 head: String::from("def5678"),
                 commits: 3,
+                from: String::from("abc1234"),
             }
             .line(),
-            "rebase replayed def5678 -"
+            "rebase replayed def5678 abc1234"
         );
     }
 

@@ -3060,17 +3060,21 @@ pub fn delete_ref(remote: &str, reference: &str) -> Result<Outcome> {
     swap(remote, &update, &pack_of(&[])?)
 }
 
-/// Push `head` to `reference` on `remote`, from whatever the remote currently has.
+/// Push `head` to `reference` on `remote`, replacing the remote's value only
+/// when `admit` accepts it.
 ///
-/// # This is the same CAS the lease uses, and that is the point
+/// # The CAS proves the swap was atomic; `admit` proves it loses nothing
 ///
 /// `Update` carries `old` and `new`, and receive-pack applies the change **only
-/// while the ref still reads `old`**, decided under the server's own lock. A
-/// branch push therefore gets the identical guarantee the lease does, and gets it
-/// from the protocol rather than from a flag: `--force-with-lease` compares
-/// against what the CLIENT last observed and races anything that moved in
-/// between, which on a ref the fleet is actively rewriting is exactly the stale
-/// value nothing should trust.
+/// while the ref still reads `old`**, decided under the server's own lock. That
+/// closes the window between reading the advertisement and swapping — and
+/// nothing else. `old` is the value read a moment ago, so on its own the CAS
+/// asserts nothing about what the caller has SEEN: a sibling commit pushed an
+/// hour earlier is overwritten silently. That is the hazard `--force-with-lease`
+/// guards against by comparing with what the client last observed, and the one
+/// this function once claimed to cover while it did not (CLOUD-2056). `admit`
+/// restores it: the caller says which remote values this push may replace, and
+/// any other sends nothing.
 ///
 /// # What is sent
 ///
@@ -3088,9 +3092,24 @@ pub fn delete_ref(remote: &str, reference: &str) -> Result<Outcome> {
 /// A transport failure, an unreadable report, or a repository whose objects will
 /// not enumerate. **A lost race is not an error** — it is [`Outcome::Rejected`],
 /// for the reason [`cas`] states.
-pub fn push(remote: &str, repo: &std::path::Path, reference: &str, head: &str) -> Result<Outcome> {
+pub fn push(
+    remote: &str,
+    repo: &std::path::Path,
+    reference: &str,
+    head: &str,
+    admit: &dyn Fn(&str) -> bool,
+) -> Result<Outcome> {
     let advertisement = advertise(remote, Service::ReceivePack)?;
     let old = advertisement.head_of(reference);
+    // THE CALLER'S ASSERTION, before anything is sent (CLOUD-2056). The CAS
+    // below only proves the ref did not move DURING the swap; whether `old` is a
+    // value this push may replace at all is the caller's to say, from what it
+    // has seen. A refusal sends nothing and reads exactly as a lost race.
+    if !admit(old) {
+        return Ok(Outcome::Rejected {
+            reason: format!("{reference} holds {old}, which this push was not admitted to replace"),
+        });
+    }
     // The subtraction base is the remote's OWN current value, never a local
     // guess: a branch this clone rebased carries commits the remote never had,
     // and any base but the advertised one either sends too little (a broken
@@ -5100,7 +5119,7 @@ mod tests {
         let repo = std::path::Path::new(".");
         let remote = std::env::var("BATTEN_LIVE_PUSH_REMOTE").expect("remote url");
         let head = crate::git::head_commit(repo).expect("head");
-        let outcome = push(&remote, repo, &reference, &head).expect("push");
+        let outcome = push(&remote, repo, &reference, &head, &|_| true).expect("push");
         assert_eq!(outcome, Outcome::Applied, "the scratch push must apply");
     }
 

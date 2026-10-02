@@ -239,6 +239,7 @@ fn a_conflicted_lap_is_refused_and_a_clean_one_is_not() {
         &Replay::Replayed {
             head: String::from("def5678"),
             commits: 1,
+            from: String::from("abc1234"),
         },
     )
     .expect("record the resolving lap");
@@ -900,4 +901,86 @@ fn a_red_head_s_other_runs_finish_and_every_other_stop_cancels() {
             "{seen:?}: nothing on this head will be read, so its runs are cancelled"
         );
     }
+}
+
+/// A commit on HEAD's own line, or on a line `reset` returns from: what a
+/// sibling clone or a pre-rebase head looks like to this clone.
+fn commit_on(repo: &Path, subject: &str) -> String {
+    common::git_in(repo, &["commit", "-q", "--allow-empty", "-m", subject]);
+    common::git_in(repo, &["rev-parse", "HEAD"])
+}
+
+fn reset_to(repo: &Path, sha: &str) {
+    common::git_in(repo, &["reset", "-q", "--hard", sha]);
+}
+
+/// THE HAZARD (CLOUD-2056): a commit somebody else pushed to the branch, which
+/// this clone never saw, is never a value a push may replace. The mirror is a
+/// plain fast-forward, which is.
+#[test]
+fn a_sibling_commit_on_the_branch_is_never_admitted() {
+    let repo = repo("land-admit-sibling");
+    let branch = branch_of(&repo);
+    let base = common::git_in(&repo, &["rev-parse", "HEAD"]);
+    let sibling = commit_on(&repo, "sibling: pushed by another clone");
+    reset_to(&repo, &base);
+    let head = commit_on(&repo, "ours");
+    assert!(
+        !land::admitted(&repo, &branch, &sibling, &head),
+        "a sibling's commit must not be overwritten"
+    );
+    assert!(
+        land::admitted(&repo, &branch, &base, &head),
+        "a remote this head descends from is a fast-forward"
+    );
+}
+
+/// The lap's own case: the remote holds the head the replay rewrote.
+#[test]
+fn a_rebased_branch_replaces_its_own_pre_rebase_head() {
+    let repo = repo("land-admit-rebased");
+    let branch = branch_of(&repo);
+    let base = common::git_in(&repo, &["rev-parse", "HEAD"]);
+    let before = commit_on(&repo, "ours, before the replay");
+    reset_to(&repo, &base);
+    let after = commit_on(&repo, "ours, replayed");
+    assert!(
+        !land::admitted(&repo, &branch, &before, &after),
+        "with no replay on record the old head is unseen work"
+    );
+    land::record(
+        &repo,
+        &branch,
+        &Replay::Replayed {
+            head: after.clone(),
+            commits: 1,
+            from: before.clone(),
+        },
+    )
+    .expect("record the replay");
+    assert!(land::admitted(&repo, &branch, &before, &after));
+}
+
+/// The remote is behind the pre-rebase head: it carries nothing the replay did
+/// not rewrite.
+#[test]
+fn an_unpushed_commit_on_top_still_lands() {
+    let repo = repo("land-admit-unpushed");
+    let branch = branch_of(&repo);
+    let base = common::git_in(&repo, &["rev-parse", "HEAD"]);
+    let pushed = commit_on(&repo, "ours, pushed");
+    let before = commit_on(&repo, "ours, not yet pushed");
+    reset_to(&repo, &base);
+    let after = commit_on(&repo, "ours, replayed");
+    land::record(
+        &repo,
+        &branch,
+        &Replay::Replayed {
+            head: after.clone(),
+            commits: 2,
+            from: before,
+        },
+    )
+    .expect("record the replay");
+    assert!(land::admitted(&repo, &branch, &pushed, &after));
 }

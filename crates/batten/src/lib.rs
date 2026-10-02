@@ -11437,7 +11437,7 @@ fn run_land_replay(
             )?;
             Ok(ExitCode::Success)
         }
-        land::Replay::Replayed { head, commits } => {
+        land::Replay::Replayed { head, commits, .. } => {
             writeln!(
                 out,
                 "land: replayed {commits} commit(s) of {branch} onto {reference}; head is {head}"
