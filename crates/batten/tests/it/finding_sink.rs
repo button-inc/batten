@@ -58,7 +58,9 @@
 use crate::common;
 
 use std::fmt::Write as _;
+use std::io::{BufRead as _, BufReader, Write as _};
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
 
 const CITED: &str = "The ordering key is wrong at mise-tasks/checks-green.sh:164.";
 
@@ -593,6 +595,61 @@ fn a_subdirectory_abstention_clears_a_record_left_at_the_root() {
         "the abstention cleared {}",
         stale.display()
     );
+}
+
+/// TWO DECIDES NEVER INTERLEAVE (CLOUD-2069). Each writes its reading, judges it,
+/// and clears it through one per-branch file, so a second decide's clear could
+/// delete the first's reading between its write and its judgement, and the absent
+/// record judged as a pass. A decide that finds the lock held says so and waits.
+/// The line is read here as it is written, so the wait is OBSERVED rather than
+/// timed, and the decide still fires once the holder lets go.
+#[test]
+fn a_concurrent_decide_waits_for_the_one_holding_the_record() {
+    let turns = Turns::new("concurrent").prompt().say(CITED);
+    turns.write();
+    let lock = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(turns.repo.join(".git/batten-record-decide.lock"))
+        .expect("the decide lock");
+    fs4::FileExt::lock(&lock).expect("hold it, as a concurrent decide would");
+    let mut child = common::batten()
+        .args(committed_argv())
+        .current_dir(&turns.repo)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn the decide");
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(turns.transcript().display().to_string().as_bytes())
+        .expect("hand it the transcript");
+    // THE READER STAYS OPEN until the child exits: dropping it would close the
+    // pipe under the decide's own verdict and fail it for a reason of ours.
+    let mut said = BufReader::new(child.stderr.take().expect("stderr")).lines();
+    let waited = said
+        .by_ref()
+        .map_while(Result::ok)
+        .any(|line| line.contains("waiting on a concurrent decide"));
+    drop(lock);
+    let rest: Vec<String> = said.map_while(Result::ok).collect();
+    let out = child
+        .wait_with_output()
+        .expect("the decide finishes once released");
+    let both = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        rest.join("\n")
+    );
+    assert!(
+        waited,
+        "a decide that found the record held went on without waiting: {both}"
+    );
+    fired(&(out.status.code(), String::new(), both), 1);
 }
 
 /// The declared door the engine's end-of-turn ladder runs.

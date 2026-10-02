@@ -4790,6 +4790,10 @@ fn supplied_epoch(raw: Option<&str>) -> Result<u64> {
 /// An abstention is could-not-look: the stale record is gone, the reason goes to
 /// stderr as a fixed pointer, and nothing is decided — exit `0` with nothing on
 /// stdout, which a `stop` handler's door reads as a pass.
+///
+/// The whole of it runs under [`record::hold_decide`], so no other decide can
+/// clear this one's reading between its write and its judgement (CLOUD-2069).
+//MUTANT decide-unserialised|s@^    let _held = record::hold_decide(family, err)?;$@@|a_concurrent_decide_waits_for_the_one_holding_the_record
 fn run_record_decide(
     family: &str,
     inputs: &[String],
@@ -4799,6 +4803,7 @@ fn run_record_decide(
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
+    let _held = record::hold_decide(family, err)?;
     match record::decide_record(family, inputs, overrides)? {
         record::Decision::Abstained(why) => {
             writeln!(err, "batten: record decide {family}: abstained — {why}")?;

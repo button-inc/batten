@@ -1994,6 +1994,60 @@ pub(crate) fn clear_named(verb: &str, family: &str) -> Result<()> {
     remove_stale(&named_path(verb, family)?)
 }
 
+/// The lock `record decide` holds from its first write to its last clear, under
+/// `$GIT_DIR` beside the records it guards.
+const DECIDE_LOCK: &str = "batten-record-decide.lock";
+
+/// Hold [`DECIDE_LOCK`] until the returned file drops, or `None` outside a
+/// repository, where there is no record to guard.
+///
+/// **ONE DECIDE AT A TIME PER CLONE** (CLOUD-2069). A decide writes the reading,
+/// judges it, and clears it, through one per-branch file keyed by family and
+/// claim but never by invocation. Three doors remove that file: the post-decision
+/// clear, the no-transcript arm, and the no-authority arm. So one invocation could
+/// delete another's reading between its write and its judgement, and the absent
+/// record then judged as could-not-look: a pass. Holding this lock across the
+/// whole decide makes the write, the judgement and the clear one step to every
+/// other decide.
+///
+/// IT BLOCKS, AND SAYS SO FIRST. Losing the race and abstaining would be the same
+/// fail-open by another route, so a contended caller waits. The line it writes
+/// before waiting is a pointer and the only output contention ever produces, and
+/// it is what lets a case observe the wait without timing it.
+///
+/// # Errors
+///
+/// An internal error when the lock file cannot be opened or a blocking lock fails.
+pub(crate) fn hold_decide(family: &str, err: &mut dyn Write) -> Result<Option<std::fs::File>> {
+    let Ok(git_dir) = git::git_dir(Path::new(".")) else {
+        return Ok(None);
+    };
+    let path = git_dir.join(DECIDE_LOCK);
+    let lock = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&path)
+        .with_context(|| format!("open the decide lock {}", path.display()))?;
+    // Fully qualified for `capture.rs`'s reason: `std::fs::File::try_lock` shares
+    // the name, and an inherent method would win over the trait silently.
+    match fs4::FileExt::try_lock(&lock) {
+        Ok(()) => return Ok(Some(lock)),
+        Err(fs4::TryLockError::WouldBlock) => {}
+        Err(fs4::TryLockError::Error(error)) => {
+            return Err(anyhow::Error::from(error))
+                .with_context(|| format!("take the decide lock {}", path.display()));
+        }
+    }
+    writeln!(
+        err,
+        "batten: record decide {family}: waiting on a concurrent decide"
+    )?;
+    fs4::FileExt::lock(&lock)
+        .with_context(|| format!("take the decide lock {}", path.display()))?;
+    Ok(Some(lock))
+}
+
 /// Remove the record at `path`, where an absent one is already the answer.
 fn remove_stale(path: &Path) -> Result<()> {
     match std::fs::remove_file(path) {
