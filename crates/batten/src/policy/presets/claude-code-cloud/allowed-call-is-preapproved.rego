@@ -46,6 +46,54 @@ lifecycle(program) if {
 # `cd` beside a batten verb changes only where it runs.
 lifecycle(program) if program.name == "cd"
 
+# `mise run <task>` for a task the consumer declares as its lifecycle: the
+# `preapproved-task` `[[pattern]]` row. No row, no grant — the crate names no
+# task of its own (rule 1).
+lifecycle(program) if {
+	program.name == "mise"
+	program.arguments[0] == "run"
+	regex.match(data.batten.patterns["preapproved-task"], task_named(program.arguments))
+}
+
+task_named(arguments) := [word | some i, word in arguments; i > 0; not startswith(word, "-")][0]
+
+mise_call(arguments) := {"call": {
+	"event": "pre-tool", "tool": "Bash", "permission-mode": "default",
+	"command": concat(" ", array.concat(["mise"], arguments)),
+	"segments": [{"words": array.concat(["mise"], arguments)}],
+	"programs": [{"name": "mise", "arguments": arguments, "batten-effect": null}],
+}}
+
+declared := {"preapproved-task": "^(land|verify)$"}
+
+test_a_declared_lifecycle_task_is_granted if {
+	"call grant now" in preapprove with input as mise_call(["run", "land"]) with data.batten.patterns as declared
+}
+
+test_a_flag_before_the_task_is_still_that_task if {
+	"call grant now" in preapprove with input as mise_call(["run", "--quiet", "verify"]) with data.batten.patterns as declared
+}
+
+test_an_undeclared_task_is_not if {
+	count(preapprove) == 0 with input as mise_call(["run", "land:x"]) with data.batten.patterns as declared
+}
+
+test_no_declaration_grants_no_task if {
+	count(preapprove) == 0 with input as mise_call(["run", "land"]) with data.batten.patterns as {}
+}
+
+test_cd_then_a_declared_task_is_granted if {
+	"call grant now" in preapprove with input as {"call": {
+		"event": "pre-tool", "tool": "Bash", "permission-mode": "default",
+		"command": "cd /x && mise run land",
+		"segments": [{"words": ["cd", "/x"]}, {"words": ["mise", "run", "land"]}],
+		"programs": [
+			{"name": "cd", "arguments": ["/x"], "batten-effect": null},
+			{"name": "mise", "arguments": ["run", "land"], "batten-effect": null},
+		],
+	}} with data.batten.patterns as declared
+}
+
 test_an_override_spend_is_granted if {
 	"call grant now" in preapprove with input as {"call": {
 		"event": "pre-tool", "tool": "Bash", "permission-mode": "default",

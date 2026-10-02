@@ -2113,6 +2113,14 @@ id = "fixture-git-init"
 regex = '\["init", "--?q'
 
 [[pattern]]
+id = "preapproved-task"
+# The lifecycle tasks the gates themselves prescribe, granted by the
+# `claude-code-cloud` preset's `call grant now` (CLOUD-1949). A gate that names
+# `mise run land` and a host that then prompts for it is the dead end that row
+# exists to close. Whole-name anchored: `land` grants `land`, never `land:x`.
+regex = '^(land|verify|verify:gated|linear-check|claim-check|closing-key-check|done-check|install:local|alive|policy-test)$'
+
+[[pattern]]
 id = "mise-run-task"
 # A DOT CONTINUES A NAME when a character follows it: mise accepts a file task
 # with its extension, so `mise run present.typo` is one name and must not read
