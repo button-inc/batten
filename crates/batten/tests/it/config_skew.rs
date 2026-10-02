@@ -123,8 +123,9 @@ fn an_unknown_key_names_the_rebuild() {
 /// that appends the note to every parse failure — which would send a reader
 /// with a real syntax error off to rebuild a binary that is already current.
 ///
-/// Fails by: `every-parse-error-blames-skew`, which forces the guard to `false`
-/// so the note is appended unconditionally.
+/// A SYNTAX error never reaches the skew guard: since CLOUD-1677 the syntax probe
+/// classes it first and returns. So this case cannot see the guard flipped, and
+/// the one below is the mirror that does.
 #[test]
 fn a_malformed_config_does_not_mention_a_rebuild() {
     let dir = scratch("malformed", "version = 1\n\n[[rule\nid = \"x\"\n");
@@ -137,6 +138,26 @@ fn a_malformed_config_does_not_mention_a_rebuild() {
         !said.contains("mise run install:local"),
         "a syntax error is not a version skew, and sending the reader to rebuild \
          a current binary is this defect with the subject swapped: {said}"
+    );
+}
+
+/// And a WELL-FORMED file whose fault names no unknown key says nothing about a
+/// rebuild either. This is the fault that reaches the skew guard, so it is the one
+/// that sees the guard flipped.
+///
+/// Fails by: `every-parse-error-blames-skew`, which forces the guard to `false` so
+/// the note is appended to every fault past the syntax probe.
+#[test]
+fn a_schema_fault_that_names_no_unknown_key_does_not_mention_a_rebuild() {
+    let dir = scratch("schema-fault", "version = \"one\"\n");
+
+    let output = check(&dir);
+    let said = stderr(&output);
+    assert_eq!(output.status.code(), Some(1), "got: {said}");
+    assert!(said.contains("invalid config"), "got: {said}");
+    assert!(
+        !said.contains("mise run install:local"),
+        "a type fault is not a version skew: {said}"
     );
 }
 

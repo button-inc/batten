@@ -16191,7 +16191,7 @@ fn unadjudicable_remedy() -> Fix {
 /// bound" rather than as a bound of zero, which is the direction that keeps a
 /// refusal about an unreadable config from being truncated by a value nobody
 /// could read.
-//MUTANT refusal-drops-the-cause|s@^        .filter(|line| !is_source_excerpt(line))$@        .take(1)@|a_fact_row_that_states_no_returns_is_refused_at_load_over_the_binary
+//MUTANT refusal-drops-the-cause|s@^        .filter(\x7cline\x7c !is_source_excerpt(line))$@        .take(1)@|a_fact_row_that_states_no_returns_is_refused_at_load_over_the_binary
 fn deny_unadjudicable(
     harness: hook::Harness,
     envelope: &hook::Envelope,
@@ -16496,8 +16496,8 @@ fn admitted(
 }
 
 //MUTANT-SUITE crates/batten/tests/it/adjudicate_absent.rs
-//MUTANT ripcord-reaches-a-loaded-deny-all|s@    let admits = bootstrap || (ripcord::present(root) \&\& recoverable_without_rules(envelope));@    let admits = false;@|the_ripcord_admits_a_read_a_loaded_rule_refused
-//MUTANT ripcord-becomes-a-global-allow|s@    let admits = bootstrap || (ripcord::present(root) \&\& recoverable_without_rules(envelope));@    let admits = bootstrap || ripcord::present(root);@|the_ripcord_is_not_a_global_allow
+//MUTANT ripcord-reaches-a-loaded-deny-all|s@    let admits = bootstrap \x7c\x7c (ripcord::present(root) \&\& recoverable_without_rules(envelope));@    let admits = false;@|the_ripcord_admits_a_read_a_loaded_rule_refused
+//MUTANT ripcord-becomes-a-global-allow|s@    let admits = bootstrap \x7c\x7c (ripcord::present(root) \&\& recoverable_without_rules(envelope));@    let admits = bootstrap \x7c\x7c ripcord::present(root);@|the_ripcord_is_not_a_global_allow
 fn pull_ripcord(
     envelope: &hook::Envelope,
     decision: hook::Decision,
@@ -21268,8 +21268,8 @@ fn apply_baseline(
 /// row) admits nothing — there is no token an admission could bind. An
 /// unresolvable HEAD or epoch admits nothing. An unreadable store admits
 /// nothing. A store this cannot read must not be able to suppress.
-//MUTANT block-arm-removed|s@^        if admitted.is_none() {$@        if false {@|a_spent_block_in_the_head_commit_admits_with_no_store
-//MUTANT merge-parent-arm-removed|s@^        if admitted.is_none() {$@        if false {@|a_spent_block_on_a_merge_refs_second_parent_admits
+//MUTANT block-arm-removed|/^        if admitted.is_none() {$/{N;s@^\(        if \)admitted.is_none()\( {\n            let message = head_message\)@\1false\2@}|a_spent_block_in_the_head_commit_admits_with_no_store
+//MUTANT merge-parent-arm-removed|/^        if admitted.is_none() {$/{N;s@^\(        if \)admitted.is_none()\( {\n            let message = merged_head_message\)@\1false\2@}|a_spent_block_on_a_merge_refs_second_parent_admits
 fn apply_admissions(
     findings: Vec<rules::Finding>,
     scan: &rules::Scan,

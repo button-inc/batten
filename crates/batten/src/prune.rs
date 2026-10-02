@@ -2625,7 +2625,7 @@ fn populated_directory(path: &Path) -> bool {
 /// it — and every next `perf-gate` rebuilt that from nothing. `recovered` is
 /// asked after each row that removed something, so a root declared last is
 /// taken only when every cheaper one before it was not enough.
-//MUTANT drop-past-the-floor|s@^        if removed > 0 && recovered() \{$@        if false \&\& recovered() {@|an_escalation_stops_at_the_first_row_that_recovers_the_floor
+//MUTANT drop-past-the-floor|s@^        if removed > 0 \&\& recovered() {$@        if false \&\& recovered() {@|an_escalation_stops_at_the_first_row_that_recovers_the_floor
 fn drop_regrowable(
     root: &Path,
     declared: &[Regrowable],

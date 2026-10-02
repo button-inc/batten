@@ -1261,7 +1261,7 @@ impl Body {
 // two spellings of one case taking different branches, and the test picked the
 // branch that already worked.
 //MUTANT-SUITE crates/batten/src/lease.rs
-//MUTANT empty-schema-reads-as-oldest|s@                    "schema" => {}@                    "schema" => {}@|a_body_carrying_an_empty_major_is_refused
+//MUTANT empty-schema-reads-as-oldest|s@                    "schema" => schema = Some(None),@                    "schema" => {}@|a_body_carrying_an_empty_major_is_refused
 #[must_use]
 pub fn parse_body(object: &[u8]) -> Option<Body> {
     let text = String::from_utf8_lossy(object);

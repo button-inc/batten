@@ -2328,7 +2328,7 @@ fn names_an_unknown_key(rendered: &str) -> bool {
 //MUTANT skew-reads-as-malformed|s@    if !names_an_unknown_key(&rendered) {@    if true {@|an_unknown_key_names_the_rebuild
 //MUTANT the-schema-is-derived-before-the-read|s@^    let Ok(committed) = fs::read_to_string(\&at) else {$@    let _eager = schema(); let Ok(committed) = fs::read_to_string(\&at) else {@|a_failing_load_with_no_committed_schema_derives_nothing
 //MUTANT the-schema-is-derived-every-call|s@^    if let Some(derived) = DERIVED.get() {$@    if let Some(derived) = None::<\&String> {@|the_schema_is_derived_once_per_process
-//MUTANT every-parse-error-blames-skew|s@    if !names_an_unknown_key(&rendered) {@    if false {@|a_malformed_config_does_not_mention_a_rebuild
+//MUTANT every-parse-error-blames-skew|s@    if !names_an_unknown_key(&rendered) {@    if false {@|a_schema_fault_that_names_no_unknown_key_does_not_mention_a_rebuild
 pub(crate) fn config_error(source: &str, text: &str, err: &toml::de::Error) -> anyhow::Error {
     let rendered = err.to_string();
     // THE SYNTAX PROBE, AND IT RUNS ONLY HERE — ON THE ERROR PATH (CLOUD-1677).

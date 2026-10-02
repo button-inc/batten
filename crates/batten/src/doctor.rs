@@ -2578,7 +2578,7 @@ pub fn has_session_start_reader(fact: crate::facts::Fact) -> bool {
 /// `config` check is what says so, and reporting every rule as unminted over an
 /// unreadable config would bury that.
 //MUTANT factless-rule-demands-a-fact|s@        for token in bundle.session_start_facts() {@        for token in ["pinned-programs", "tasks"] {@|a_rule_reading_no_session_start_fact_is_not_judged
-//MUTANT every-session-is-could-not-look|s@            if reads.and_then(|fact| minted(fact, dir)) != Some(true) {@            if true {@|a_session_with_every_fact_minted_is_clean
+//MUTANT every-session-is-could-not-look|s@            if reads.and_then(\x7cfact\x7c minted(fact, dir)) != Some(true) {@            if true {@|a_session_with_every_fact_minted_is_clean
 fn unminted_facts(dir: &Path) -> Vec<Unminted> {
     let Ok(resolved) = resolve::resolve(dir, &crate::Overrides::default()) else {
         return Vec::new();
@@ -2779,8 +2779,8 @@ pub fn diagnose_session(dir: &Path) -> SessionReport {
     }
 }
 
-//MUTANT unprovisioned-verify-green|s@^        .filter(|tool| !installed.contains(tool))$@        .filter(|tool| installed.contains(tool))@|a_declared_tool_the_probe_does_not_report_is_unprovisioned
-//MUTANT toolchain-probe-blind|s@^        return Toolchain::Unreadable;\n    };\n    let missing@        return Toolchain::Provisioned;\n    };\n    let missing@|a_toolchain_whose_runner_cannot_be_run_at_all_is_unprovisioned_rather_than_a_pass
+//MUTANT unprovisioned-verify-green|s@^        .filter(\x7ctool\x7c !installed.contains(tool))$@        .filter(\x7ctool\x7c installed.contains(tool))@|a_declared_tool_the_probe_does_not_report_is_unprovisioned
+//MUTANT toolchain-probe-blind|/^    let Some(installed) = installed_tools(probe) else {$/{n;s@^        return Toolchain::Unreadable;$@        return Toolchain::Provisioned;@}|a_probe_that_answered_nothing_is_unprovisioned_rather_than_a_pass
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]

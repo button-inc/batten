@@ -413,7 +413,7 @@ impl Commit {
 /// so it decides identically on a runner that cannot reach the store OR the
 /// config — which is what keeps the range half and the pending half from drifting.
 #[must_use]
-//MUTANT admits-tampered-survives-the-redirect|s/^            } else if claims/            } else if crate::redirect::resolve(redirects, path).is_some() || claims/|a tampered block on a redirected path is still refused
+//MUTANT admits-tampered-survives-the-redirect|s/^            } else if claims/            } else if crate::redirect::resolve(redirects, path).is_some() \x7c\x7c claims/|a_tampered_block_on_a_redirected_path_is_still_refused
 pub fn judge_admissions(
     writes: &[crate::git::CommitWrite],
     redirects: &[crate::redirect::Redirect],

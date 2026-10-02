@@ -300,11 +300,11 @@ pub fn run(request: &StepRequest, out: &mut dyn Write, err: &mut dyn Write) -> R
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 //MUTANT-SUITE crates/batten/src/ci_step.rs
-//MUTANT key-unchecked|s@        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')@        \&\& true@|only_a_key_value_line_is_an_output
+//MUTANT key-unchecked|s@        && chars.all(\x7cc\x7c c.is_ascii_alphanumeric() \x7c\x7c c == '_' \x7c\x7c c == '-')@        \&\& true@|only_a_key_value_line_is_an_output
 //MUTANT tail-unbounded|s@lines.len().saturating_sub(SUMMARY_TAIL)@0@|a_summary_keeps_the_tail_of_a_long_log
-//MUTANT empty-passed|s@        match lookup(name).filter(|value| !value.is_empty()) {@        match lookup(name) {@|an_env_argument_is_one_word_and_an_empty_one_is_refused
-//MUTANT require-empty-passed|s@        .find(|name| lookup(name).is_none_or(|value| value.is_empty()))@        .find(|name| lookup(name).is_none())@|a_required_variable_must_be_set_and_non_empty
-//MUTANT capture-blank|s@        .find(|line| !line.is_empty())@        .next()@|a_capture_is_the_first_non_blank_line_or_empty
+//MUTANT empty-passed|s@        match lookup(name).filter(\x7cvalue\x7c !value.is_empty()) {@        match lookup(name) {@|an_env_argument_is_one_word_and_an_empty_one_is_refused
+//MUTANT require-empty-passed|s@        .find(\x7cname\x7c lookup(name).is_none_or(\x7cvalue\x7c value.is_empty()))@        .find(\x7cname\x7c lookup(name).is_none())@|a_required_variable_must_be_set_and_non_empty
+//MUTANT capture-blank|s@        .find(\x7cline\x7c !line.is_empty())@        .next()@|a_capture_is_the_first_non_blank_line_or_empty
 mod tests {
     use super::*;
 

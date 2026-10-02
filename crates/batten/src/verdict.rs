@@ -1642,7 +1642,7 @@ pushed",
 /// themselves: a class here may describe a PRACTICE and may never name a path, a
 /// task, a tracker key or an entity. `presets_are_inside_the_rule_one_glob`
 /// covers this file, because it is under `crates/**`.
-//MUTANT missing-receipt-route-dropped|s@^        routes: &\[read("config read first", "batten.toml"), STALE_RECEIPT_ROUTE\],$@        routes: \&[read("config read first", "batten.toml")],@|a_spent_admission_clears_a_missing_receipt
+//MUTANT missing-receipt-route-dropped|/^            read("config read first", "batten.toml"),$/{n;s@^            STALE_RECEIPT_ROUTE,$@@}|a_spent_admission_clears_a_missing_receipt
 const VENDORED: &[VendoredVerdict] = &[
     // ── native ──────────────────────────────────────────────────────────────
     VendoredVerdict {

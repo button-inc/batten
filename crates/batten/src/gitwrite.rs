@@ -1257,7 +1257,7 @@ fn update_worktree(repo: &gix::Repository, was: gix::ObjectId, now: gix::ObjectI
 /// left 50 files behind (CLOUD-1948), and a partial worktree is worse than a loud
 /// one because it reads as the branch's own untracked work.
 //MUTANT-SUITE crates/batten/tests/it/rebase.rs
-//MUTANT gone-directory-left-on-disk|s@^    gone_trees.sort_by_key(|tree| std::cmp::Reverse(tree.len()));$@    gone_trees.clear();@|a_directory_the_base_deleted_leaves_the_worktree
+//MUTANT gone-directory-left-on-disk|s@^    gone_trees.sort_by_key(\x7ctree\x7c std::cmp::Reverse(tree.len()));$@    gone_trees.clear();@|a_directory_the_base_deleted_leaves_the_worktree
 fn remove_gone(
     workdir: &Path,
     gone: &std::collections::BTreeSet<Vec<u8>>,
