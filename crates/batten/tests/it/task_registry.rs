@@ -456,7 +456,7 @@ fn a_registry_that_cannot_be_read_is_could_not_look_and_never_nothing_runs() {
 
 #[test]
 fn outside_a_repository_it_is_could_not_look_rather_than_nothing_runs() {
-    let outside = Fixture::at(scratch("task-no-repo").join("plain")).build();
+    let outside = Fixture::at(common::scratch_outside_tree("task-registry", "no-repo")).build();
     let (root, _) = this_process();
     let output = alive(&outside, &["--program-root", &root]);
     assert_eq!(output.status.code(), Some(3), "{}", stderr(&output));
@@ -843,7 +843,11 @@ fn outside_a_repository_a_write_is_could_not_look_rather_than_a_silent_success()
     // There is nowhere to record, and saying so is the point: a write that
     // succeeded loudly into nothing is how a half-wired task looks fully wired.
     // Exit 3 where the shell spelled it 2 — could-not-look is `Internal`.
-    let outside = Fixture::at(scratch("task-write-no-repo").join("plain")).build();
+    let outside = Fixture::at(common::scratch_outside_tree(
+        "task-registry",
+        "write-no-repo",
+    ))
+    .build();
     let output = task(&outside, &["register", "land", "4242"]);
     assert_eq!(output.status.code(), Some(3), "{}", stderr(&output));
 }

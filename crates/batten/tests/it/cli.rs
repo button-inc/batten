@@ -428,7 +428,7 @@ struct Case {
 /// scratch directories colliding.
 fn assert_exit_codes(label: &str, cases: &[Case]) {
     for (index, case) in cases.iter().enumerate() {
-        let dir = scratch(&format!("exit-{label}-{index}"));
+        let dir = common::scratch_repo(&format!("exit-{label}-{index}"));
         fs::create_dir_all(&dir).expect("create case dir");
         let config_path = dir.join("batten.toml");
         match case.config {
@@ -2202,7 +2202,7 @@ redirect = "restore it with git"
 /// breaks would be twelve dead remedies, which is the shape that row is about.
 #[test]
 fn a_class_still_explains_when_the_config_cannot_be_read() {
-    let dir = scratch("explain-over-a-broken-config");
+    let dir = common::scratch_repo("explain-over-a-broken-config");
     write(
         &dir,
         "batten.toml",
@@ -2523,7 +2523,13 @@ fn an_absent_session_degrades_to_per_invocation_without_panicking() {
     // The acceptance's second clause. A host that reports no session must be
     // adjudicated exactly as one that does — the deny is a function of the
     // command, and nothing here is keyed on a session yet.
+    //
+    // TWO IDENTICAL FIXTURES, advancing in lockstep: a refusal renders long on
+    // its first sighting and short after, and the sighting store lives under the
+    // fixture's `$GIT_DIR` (`refusal::first_sighting`). One fixture would compare
+    // a first sighting with a repeat and report the store as a session effect.
     let dir = repo_with_gh_policy("session-absent");
+    let twin = repo_with_gh_policy("session-absent-twin");
     let with = serde_json::json!({
         "hook_event_name": "PreToolUse",
         "session_id": "abc123",
@@ -2534,7 +2540,7 @@ fn an_absent_session_degrades_to_per_invocation_without_panicking() {
     let without = payload_at("PreToolUse", "gh pr merge 42");
     for harness in harnesses() {
         let a = run_hook_in(&dir, harness, &with);
-        let b = run_hook_in(&dir, harness, &without);
+        let b = run_hook_in(&twin, harness, &without);
         assert_eq!(
             a.status.code(),
             b.status.code(),
@@ -4322,7 +4328,7 @@ fn batten_with(dir: &std::path::Path, args: &[&str], env: &[(&str, &str)]) -> Ou
 /// A scratch directory carrying this repository's own `batten.toml`, for the
 /// verbs that need a real authority.
 fn repo_with_committed_config(name: &str) -> PathBuf {
-    let dir = scratch(name);
+    let dir = common::scratch_repo(name);
     fs::create_dir_all(&dir).expect("create dir");
     fs::copy(
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -4340,7 +4346,7 @@ fn stdout_bytes_are_identical_at_every_rung() {
     // ladder shapes stderr, and stdout is the answer. If a rung could touch
     // stdout, a `--quiet` in a wrapper script would silently truncate a document
     // its caller is parsing.
-    let dir = scratch("ladder-stdout");
+    let dir = common::scratch_repo("ladder-stdout");
     fs::create_dir_all(&dir).expect("create dir");
     let baseline = batten_with(&dir, &["spec"], &[]).stdout;
     assert!(!baseline.is_empty(), "spec emits its answer");
@@ -4393,7 +4399,7 @@ fn json_output_is_identical_under_every_machine_signal() {
 fn an_unknown_flag_is_a_usage_error_even_under_silent() {
     // clap's own usage render cannot be ladder-gated: the flags may not have
     // parsed, so suppressing it would leave a bare `1` explaining nothing.
-    let dir = scratch("silent-unknown-flag");
+    let dir = common::scratch_repo("silent-unknown-flag");
     fs::create_dir_all(&dir).expect("create dir");
     let output = batten_with(&dir, &["--silent", "--nope", "spec"], &[]);
     assert_eq!(output.status.code(), Some(1));
@@ -4415,7 +4421,7 @@ fn a_library_usage_error_is_loud_under_silent_too() {
     // layer, so it no longer raises anything. The invariant under test is
     // unchanged — a library-raised `UsageError` is loud at the quietest rung —
     // and a present-but-unhonourable config is still exactly that error.
-    let dir = scratch("silent-invalid-config");
+    let dir = common::scratch_repo("silent-invalid-config");
     fs::create_dir_all(&dir).expect("create dir");
     fs::write(dir.join("batten.toml"), "version = 2\n").expect("write batten.toml");
     let output = batten_with(&dir, &["--silent", "config", "show"], &[]);
@@ -4428,7 +4434,7 @@ fn a_library_usage_error_is_loud_under_silent_too() {
 
 #[test]
 fn the_hidden_rungs_are_absent_from_help_but_still_parse() {
-    let dir = scratch("hidden-rungs");
+    let dir = common::scratch_repo("hidden-rungs");
     fs::create_dir_all(&dir).expect("create dir");
     let help = String::from_utf8_lossy(&batten_with(&dir, &["--help"], &[]).stdout).into_owned();
     for shown in [
@@ -4463,7 +4469,7 @@ fn the_ladder_is_emitted_in_the_spec_as_taking_no_value() {
     // `spec.rs` reported `takes_value: true` for every counted flag until
     // `ArgAction::Count` joined the boolean actions — a lie a completion script
     // acts on by eating the next word.
-    let dir = scratch("spec-counted");
+    let dir = common::scratch_repo("spec-counted");
     fs::create_dir_all(&dir).expect("create dir");
     let document: serde_json::Value =
         serde_json::from_slice(&batten_with(&dir, &["spec"], &[]).stdout).expect("spec is JSON");
@@ -4486,7 +4492,7 @@ fn the_ladder_is_emitted_in_the_spec_as_taking_no_value() {
 
 #[test]
 fn config_epoch_emits_the_digest_and_the_surface_it_covers() {
-    let dir = scratch("epoch-json");
+    let dir = common::scratch_repo("epoch-json");
     fs::create_dir_all(&dir).expect("create dir");
     // Its own authority rather than this repository's: the committed `[epoch]`
     // list names four files that do not exist in a scratch directory, and an
@@ -4528,7 +4534,7 @@ fn config_lint_emits_its_document_even_when_clean() {
 
 #[test]
 fn config_lint_json_carries_the_same_smells_the_pointer_lines_do() {
-    let dir = scratch("lint-json-smelly");
+    let dir = common::scratch_repo("lint-json-smelly");
     fs::create_dir_all(&dir).expect("create dir");
     // An empty declared set is a smell, and one that needs no rule to trigger.
     fs::write(
@@ -4618,7 +4624,7 @@ fn captures_in(home: &std::path::Path) -> Vec<String> {
 #[cfg(unix)]
 fn child_script(name: &str, body: &str) -> PathBuf {
     use std::os::unix::fs::PermissionsExt;
-    let dir = scratch(name);
+    let dir = common::scratch_repo(name);
     fs::create_dir_all(&dir).expect("create dir");
     let script = dir.join("child.sh");
     fs::write(&script, format!("#!/bin/sh\n{body}\n")).expect("write child");
@@ -4960,7 +4966,7 @@ fn a_trailing_arg_takes_values_in_the_emitted_spec() {
     // has already been wrong once for a newly added action (`Count`, CLOUD-42).
     // A trailing variadic consumes every remaining token, so `true` is the honest
     // answer and a completion script depends on it.
-    let dir = scratch("exec-spec");
+    let dir = common::scratch_repo("exec-spec");
     fs::create_dir_all(&dir).expect("create dir");
     let document: serde_json::Value =
         serde_json::from_slice(&batten_with(&dir, &["spec"], &[]).stdout).expect("spec is JSON");
@@ -5288,9 +5294,9 @@ fn exec_still_runs_where_no_authority_is_configured() {
     // reason ordinary work stops — the same reading `hook` takes for its policy.
     let home = scratch("exec-pred-no-authority");
     fs::create_dir_all(&home).expect("create home");
-    let elsewhere = scratch("exec-pred-elsewhere");
-    fs::create_dir_all(&elsewhere).expect("create dir");
-    let _ = fs::remove_file(elsewhere.join("batten.toml"));
+    // Outside the tree, because that is the subject: under `target/tmp` a
+    // directory with no repository resolves to this checkout's authority.
+    let elsewhere = common::scratch_outside_tree("cli", "exec-pred-elsewhere");
     let output = batten()
         .args(["exec", "--tee", "--", "sh", "-c", "echo fine"])
         .current_dir(&elsewhere)
@@ -6541,9 +6547,10 @@ fn a_receipt_from_another_checkout_reads_as_missing() {
 
 #[test]
 fn receipt_checkout_problems_are_usage_errors_never_verdicts() {
-    // Not a repository (discovery fenced by GIT_CEILING_DIRECTORIES): exit 1,
-    // and no verdict line — a checkout problem is not a verification answer.
-    let root = scratch("receipt-no-repo");
+    // Not a repository: exit 1, and no verdict line — a checkout problem is not a
+    // verification answer. Outside the tree, because `git::repo_root` ignores
+    // discovery ceilings and a directory under `target/tmp` resolves to this checkout.
+    let root = common::scratch_outside_tree("cli", "receipt-no-repo");
     let _ = fs::remove_dir_all(&root);
     let plain = root.join("plain");
     let home = root.join("home");
@@ -9660,7 +9667,7 @@ fn run_lint_brief(case: &str, name: &str, extra: &[&str]) -> Output {
     // THE DIRECTORY IS THE CASE'S, NOT THE BRIEF'S (CLOUD-2053): two cases lint
     // the same brief, and a scratch named for the brief was one directory both
     // wiped under the other.
-    let dir = scratch(&format!("lint-brief-{case}"));
+    let dir = common::scratch_repo(&format!("lint-brief-{case}"));
     let mut command = batten();
     command.arg("lint").arg("brief");
     command.args(extra);
@@ -9723,7 +9730,7 @@ fn an_unreadable_brief_is_a_usage_error_and_never_a_deny() {
     // The other half of CLOUD-307's correction. `1`, not `2`: "I could not read
     // the input" must never travel to a harness as a policy decision, or a
     // mistyped path becomes a block.
-    let dir = scratch("lint-brief-unreadable");
+    let dir = common::scratch_repo("lint-brief-unreadable");
     let output = batten()
         .args(["lint", "brief", "no-such-brief.md"])
         .current_dir(&dir)
@@ -9737,7 +9744,7 @@ fn an_unreadable_brief_is_a_usage_error_and_never_a_deny() {
 fn a_brief_arrives_on_stdin_when_no_path_is_given() {
     // A brief is composed in memory by whatever is dispatching; requiring a
     // temporary file would put a write on the path of a `read` verb's caller.
-    let dir = scratch("lint-brief-stdin");
+    let dir = common::scratch_repo("lint-brief-stdin");
     let brief = fs::read_to_string(brief_fixture("complete.md")).expect("read fixture");
     let mut child = batten()
         .args(["lint", "brief"])
@@ -9779,7 +9786,7 @@ fn no_byte_of_the_brief_reaches_any_output_stream() {
     // formal: a delegation brief is the likeliest document in this system to
     // carry a consumer's name, an entity path, or a credential pasted "for
     // context". The report is section ids and counts.
-    let dir = scratch("lint-brief-no-leak");
+    let dir = common::scratch_repo("lint-brief-no-leak");
     let sentinel = "ACCOUNT-SENTINEL-01189998819991197253";
     let path = dir.join("brief.md");
     fs::write(
@@ -12328,7 +12335,7 @@ fn an_empty_response_and_an_absent_one_never_produce_the_same_record() {
 /// fails this — and it failed against the literal that was there.
 #[test]
 fn help_leads_with_the_crate_description() {
-    let dir = common::scratch("help-lead");
+    let dir = common::scratch_repo("help-lead");
     let out = common::run(&dir, &["--help"]);
     assert_eq!(out.status.code(), Some(0), "--help is an answer");
 
@@ -12507,7 +12514,7 @@ fn the_removal_gate_reports_a_verdict_or_refuses_to_guess() {
 /// not borrow the deprecation vocabulary.
 #[test]
 fn an_unknown_key_is_refused_without_borrowing_the_deprecation_vocabulary() {
-    let dir = scratch("deprecations-unknown");
+    let dir = common::scratch_repo("deprecations-unknown");
     fs::create_dir_all(&dir).expect("create dir");
     fs::write(
         dir.join("batten.toml"),

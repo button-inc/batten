@@ -39,7 +39,7 @@ use crate::common;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use common::{batten, run_with_stdin, scratch};
+use common::{batten, run_with_stdin, scratch_repo};
 
 /// A `shape` row that refuses `rm`, spelled the way the matcher accepts.
 const GOOD: &str = r#"
@@ -66,7 +66,7 @@ this_key_does_not_exist_in_any_version = true
 
 /// A repository whose `batten.toml` is exactly `body`.
 fn repo(name: &str, body: &str) -> PathBuf {
-    let dir = scratch(name);
+    let dir = scratch_repo(name);
     fs::create_dir_all(&dir).unwrap();
     fs::write(dir.join("batten.toml"), format!("version = 1\n{body}")).unwrap();
     dir
@@ -623,7 +623,7 @@ fn a_newer_key_in_the_local_override_costs_the_row_not_the_resolution() {
 /// note takes the absent arm and the defect is unreachable.
 #[test]
 fn the_report_never_tells_the_reader_to_install_an_older_release() {
-    let dir = scratch("config-forward-floor");
+    let dir = scratch_repo("config-forward-floor");
     fs::create_dir_all(&dir).unwrap();
     fs::write(
         dir.join("batten.toml"),

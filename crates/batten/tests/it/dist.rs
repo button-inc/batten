@@ -37,7 +37,7 @@
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use crate::common::{at_root, batten, scratch, scratch_outside_tree, stderr, stdout, write};
+use crate::common::{at_root, batten, scratch_outside_tree, stderr, stdout, write};
 
 use std::path::{Path, PathBuf};
 use std::process::Output;
@@ -76,7 +76,7 @@ struct Bench {
 
 /// A workspace whose one member `widget` declares the given version and binaries.
 fn bench(name: &str, version: &str, bins: &[&str]) -> Bench {
-    let root = scratch(&format!("dist-{name}"));
+    let root = crate::common::scratch_repo(&format!("dist-{name}"));
     let stubs = root.join(".stubs");
     for program in ["cargo", "cross"] {
         write(&stubs, program, STUB);

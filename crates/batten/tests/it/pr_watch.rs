@@ -95,7 +95,7 @@ impl Fixture {
     /// Repeating the last is what bounds the loop: the poll is unbounded by
     /// design, so the final response must be one the roster reads as terminal.
     fn new(name: &str, responses: &[String]) -> Self {
-        let dir = common::scratch(name);
+        let dir = common::scratch_repo(name);
         let bin = dir.join("bin");
         std::fs::create_dir_all(&bin).expect("create the stub directory");
         for (index, body) in responses.iter().enumerate() {
@@ -172,6 +172,11 @@ impl Fixture {
             // the real forge, never gets a green reading, and — since the loop is
             // deliberately unbounded — runs until the suite is killed.
             .env("BATTEN_REST_FIXTURE", &self.dir)
+            // The repository the reads are addressed to, named rather than
+            // resolved: the fixture is a clone with no remote, and before it was
+            // a repository at all every case resolved THIS checkout's `origin`
+            // (CLOUD-2059).
+            .env("GH_REPO", "fixture/watched")
             .current_dir(&self.dir)
             .output()
             .expect("the compiled binary runs");

@@ -37,7 +37,7 @@ use crate::common;
 use std::io::Write as _;
 use std::process::Stdio;
 
-use common::{at_root, batten, scratch, write};
+use common::{at_root, batten, write};
 
 /// The hatches the committed config declares, read the way the helper reads them.
 fn declared_row_hatches() -> Vec<String> {
@@ -94,7 +94,7 @@ fn every_row_declared_hatch_is_scrubbed() {
 /// must refuse — a build that still honoured the name fails here.
 #[test]
 fn the_removed_global_hatch_opens_nothing() {
-    let root = scratch("bypass-scrub-load-bearing");
+    let root = common::scratch_repo("bypass-scrub-load-bearing");
     write(
         &root,
         "batten.toml",

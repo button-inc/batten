@@ -145,7 +145,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
-use common::{Fixture, batten, scratch, stderr, stdout};
+use common::{Fixture, batten, stderr, stdout};
 
 /// Create a temp repo containing a `batten.toml` with `contents`.
 fn repo_with_config(name: &str, contents: &str) -> PathBuf {
@@ -1007,9 +1007,7 @@ fn a_malformed_config_is_a_usage_error() {
 
 #[test]
 fn a_missing_config_is_a_usage_error() {
-    let dir = scratch("lint-missing-config");
-    let _ = fs::remove_dir_all(&dir);
-    fs::create_dir_all(&dir).expect("create dir");
+    let dir = common::scratch_repo("lint-missing-config");
     assert_eq!(lint(&dir, &[]).status.code(), Some(1));
 }
 

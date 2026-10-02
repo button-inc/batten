@@ -46,7 +46,7 @@ fn generated(dir: &Path, args: &[&str]) -> Vec<u8> {
 }
 
 fn scratch(name: &str) -> PathBuf {
-    common::scratch(&format!("artifacts-write-{name}"))
+    common::scratch_repo(&format!("artifacts-write-{name}"))
 }
 
 #[test]
@@ -186,8 +186,13 @@ fn naming_nothing_is_a_usage_error_and_writes_nothing() {
         Some(batten::exit::ExitCode::Usage.code()),
         "a request for no derivation is a statement about the invocation"
     );
+    // The fixture's own `.git` is the one entry that precedes the run.
     assert_eq!(
-        fs::read_dir(&dir).expect("scratch").count(),
+        fs::read_dir(&dir)
+            .expect("scratch")
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_name() != ".git")
+            .count(),
         0,
         "and nothing was written"
     );

@@ -114,6 +114,7 @@ row here, so a new module lands with its line.
 - `init.rs` — `batten init` (CLOUD-206), house style §12's scaffolding half: the starter `batten.toml` embedded as `src/starter.toml` plus the three-valued `apply`.
 - `identity.rs` — finding-identity fingerprints (CLOUD-123): SHA-256 over a normalized, kind-discriminated tuple — never raw `file:line` — so line insertion doesn't re-mint a finding.
 - `scratch.rs` — out-of-tree TEST scratch, owned in one place and reaped by liveness (CLOUD-1148).
+- `testing.rs` — the TEST harness's spawn decisions (state pins, fall-through to the checkout), swept by `engine-testing` (CLOUD-2059).
 - `secret.rs` — the credential type, and the PUREST LEAF in the layer table: it reaches nothing in this crate, not even `error`.
 - `secrets.rs` — secret-class scanning: key custody and the scanner adapter (CLOUD-59).
 - `sink.rs` — production, the boundary half (CLOUD-851): a `[[rule]]` may declare what it PRODUCES, and this is what writes it.

@@ -313,7 +313,7 @@ fn outside_a_repository_it_is_could_not_look_rather_than_free() {
     // Exit 3 where the shell spelled it 2. Reading "I could not tell" as "nothing
     // holds it" is how a second land starts, which is the whole point of the
     // three-valued answer.
-    let outside = Fixture::at(scratch("singleton-no-repo").join("plain")).build();
+    let outside = Fixture::at(common::scratch_outside_tree("singleton", "no-repo")).build();
     let output = singleton(&outside, &["acquire", "land", "4242"]);
     assert_eq!(output.status.code(), Some(3), "{}", stderr(&output));
 }

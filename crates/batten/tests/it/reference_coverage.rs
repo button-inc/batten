@@ -36,7 +36,7 @@ use crate::common;
 
 use std::collections::BTreeSet;
 
-use common::{batten, scratch};
+use common::batten;
 
 // THE FILE-GRANULARITY RETIREMENT ARMS (CLOUD-1059). Two paths die, so two arms:
 // a program and its suite are separate subjects, and one arm covering both would
@@ -296,7 +296,7 @@ fn rendering_the_reference_leaves_nothing_behind_in_the_tree_it_judges() {
     // A check that writes the tree it judges is the shape `derived-check`'s header
     // refuses, and this one has no business leaving an artifact behind at all:
     // `generate markdown` writes to stdout, so there is nothing to clean up.
-    let dir = scratch("reference-coverage-render");
+    let dir = common::scratch_outside_tree("reference-coverage", "render");
     let output = batten()
         .args(["generate", "markdown"])
         .current_dir(&dir)

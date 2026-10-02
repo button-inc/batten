@@ -39,7 +39,7 @@ use std::process::Output;
 
 use crate::common;
 
-use common::{Fixture, batten, scratch};
+use common::{Fixture, batten};
 
 /// stdout as text, for a snapshot that freezes what a consumer parses.
 fn stdout_of(output: &Output) -> String {
@@ -95,7 +95,7 @@ fn json_output_is_frozen() {
 /// success banner out of it.
 #[test]
 fn a_clean_run_is_frozen_as_silent() {
-    let dir = scratch("snap-clean");
+    let dir = common::scratch_repo("snap-clean");
     std::fs::create_dir_all(&dir).expect("create dir");
     std::fs::write(dir.join("batten.toml"), "version = 1\n").expect("write config");
     let output = batten()

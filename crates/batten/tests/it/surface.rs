@@ -54,7 +54,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::Output;
 
-use common::{at_root, batten, git_in, scratch};
+use common::{at_root, batten, git_in};
 
 /// The shells the repository commits a completion script for.
 const SHELLS: [&str; 3] = ["bash", "zsh", "fish"];
@@ -121,7 +121,7 @@ fn generate_writes_no_file() {
     // a promise about behaviour: the verb emits on stdout and touches nothing.
     // Asserted by running it from a scratch directory and finding that
     // directory still empty.
-    let dir = scratch("generate-writes-no-file");
+    let dir = common::scratch_outside_tree("surface", "generate-writes-no-file");
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).expect("create scratch dir");
     let output = batten()

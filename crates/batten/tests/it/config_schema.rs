@@ -21,7 +21,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::Output;
 
-use common::{Fixture, at_root, batten, scratch};
+use common::{Fixture, at_root, batten};
 
 // THE FILE-GRANULARITY RETIREMENT ARMS (CLOUD-1059) for `schema-check`, whose
 // predicate this file already held over the compiled binary before the program
@@ -217,7 +217,7 @@ fn generate_schema_writes_no_file() {
     // What keeps `generate schema`'s `read` effect structurally honest (§5):
     // the verb emits on stdout and touches nothing. The redirect that refreshes
     // the committed artifact is `mise run schema`, in the caller.
-    let dir = scratch("schema-writes-no-file");
+    let dir = common::scratch_outside_tree("config-schema", "writes-no-file");
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).expect("create scratch dir");
     let output = batten()
@@ -862,7 +862,7 @@ fn drift_findings(root: &std::path::Path) -> Vec<String> {
 /// A scratch root holding its own copy of `schema/`, which is the only thing a
 /// case mutates.
 fn schema_fixture(name: &str) -> PathBuf {
-    let root = scratch(name);
+    let root = common::scratch_repo(name);
     fs::create_dir_all(root.join("schema")).expect("create the schema directory");
     for (surface, committed) in SURFACES {
         fs::write(root.join(committed), derived_for(surface)).expect("seed the committed schema");

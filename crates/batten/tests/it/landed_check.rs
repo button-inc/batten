@@ -75,7 +75,7 @@ use crate::common;
 /// authority, and a fixture holding a second copy drifts the day the board is
 /// renamed.
 fn scratch(name: &str) -> std::path::PathBuf {
-    let dir = common::scratch(name);
+    let dir = common::scratch_repo(name);
     common::write(
         &dir,
         "batten.toml",

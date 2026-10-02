@@ -23,7 +23,7 @@
 
 use batten::race::{self, Keys, Pull};
 
-use crate::common::{Fixture, batten, run, scratch, stderr, stdout};
+use crate::common::{Fixture, batten, run, stderr, stdout};
 
 /// A [`Keys`] double, for `race.rs`'s own reason: `ready::Grammar` resolves ~18
 /// declared patterns, and a tier that had to build one would assert the
@@ -188,7 +188,7 @@ fn a_shorter_key_does_not_match_a_longer_one() {
 /// policy refusal would make the gate decide something nobody asked it.
 #[test]
 fn outside_a_checkout_there_is_nothing_to_judge() {
-    let dir = scratch("claim-race-no-repo");
+    let dir = crate::common::scratch_outside_tree("claim-race", "no-repo");
     let output = run(&dir, &["claim", "race"]);
     assert_ne!(
         output.status.code(),

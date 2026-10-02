@@ -76,7 +76,7 @@ fn serve(forge: &Path, tag: &str, assets: &[(String, String)]) {
 
 /// A working directory and a fixture forge serving `assets` on `v9.9.9`.
 fn bench(name: &str, assets: &[&str]) -> (PathBuf, PathBuf) {
-    let dir = scratch(&format!("checksums-{name}"));
+    let dir = common::scratch_repo(&format!("checksums-{name}"));
     let forge = scratch(&format!("checksums-{name}-forge"));
     let served: Vec<(String, String)> = assets
         .iter()

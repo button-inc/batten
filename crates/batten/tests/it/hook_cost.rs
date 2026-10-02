@@ -28,7 +28,7 @@ use crate::common;
 
 use std::path::{Path, PathBuf};
 
-use common::{run, scratch, stdout, write};
+use common::{run, scratch_repo, stdout, write};
 
 /// One `hook_success` attachment as the host writes it.
 ///
@@ -47,7 +47,7 @@ fn emission(hook: &str, text: &str) -> String {
 /// A repo whose `[transcript]` points at the given lines, with `ceiling` as its
 /// `[hook_output]` table when one is given.
 fn repo(name: &str, lines: &[String], ceiling: Option<&str>) -> PathBuf {
-    let dir = scratch(name);
+    let dir = scratch_repo(name);
     let table = ceiling.unwrap_or("");
     write(
         &dir,
@@ -245,7 +245,7 @@ fn a_repository_with_no_transcript_is_a_usage_error_and_never_a_clean_pass() {
     // missing one exiting 0 would report "no hook cost" about a session nobody
     // read — the vacuous green `[budget]`'s dead-glob refusal exists to stop one
     // verb up.
-    let dir = scratch("hook-cost-no-transcript");
+    let dir = scratch_repo("hook-cost-no-transcript");
     write(
         &dir,
         "batten.toml",

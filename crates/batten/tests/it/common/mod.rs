@@ -1246,13 +1246,24 @@ pub(crate) fn scratch(name: &str) -> PathBuf {
     make_empty(target_tmp().join(in_lane(name)))
 }
 
+/// [`scratch`] as a repository of its own: the one shape a directory the binary
+/// runs in may take under [`target_tmp`] (CLOUD-2059), since one without a `.git`
+/// resolves to the checkout holding this build and [`Batten`] refuses the spawn.
+#[must_use]
+pub(crate) fn scratch_repo(name: &str) -> PathBuf {
+    Fixture::new(name).build()
+}
+
 /// An empty scratch directory **outside** this repository's tree, wiped first.
 ///
 /// For the one fixture shape that cannot live under `target/`: a directory that
 /// must not be inside any git repository (see the module doc).
 #[must_use]
 pub(crate) fn scratch_outside_tree(group: &str, name: &str) -> PathBuf {
-    make_empty(std::env::temp_dir().join(group).join(in_lane(name)))
+    // Under `batten::scratch::root()`, which carries this process's pid as a
+    // segment and reaps dead ones, rather than a fixed `<tmp>/<group>/<name>`
+    // that two concurrent runs share and nothing ever collects (CLOUD-2059).
+    make_empty(batten::scratch::root().join(group).join(in_lane(name)))
 }
 
 /// `name` qualified by this runner's lane and invocation, so no two concurrent
@@ -1752,13 +1763,24 @@ pub(crate) struct Fixture {
 }
 
 impl Fixture {
-    /// A fixture at `target/tmp/<name>`, wiped first.
+    /// A fixture at `target/tmp/<name>`, wiped first, and A REPOSITORY from the
+    /// start (CLOUD-2059).
+    ///
+    /// Under `target/tmp` a directory with no `.git` of its own resolves to the
+    /// checkout holding this build, so a fixture that skipped [`Fixture::git`]
+    /// was judged against the real configuration and wrote the real `.git` —
+    /// and [`Batten`]'s door now refuses that spawn. A fixture whose subject is
+    /// "not a repository" is [`Fixture::at`] over [`scratch_outside_tree`].
     #[must_use]
     pub(crate) fn new(name: &str) -> Self {
-        Fixture { dir: scratch(name) }
+        let dir = scratch(name);
+        init_repo(&dir);
+        Fixture { dir }
     }
 
-    /// A fixture at an explicit directory, wiped first.
+    /// A fixture at an explicit directory, wiped first, and NOT a repository
+    /// until [`Fixture::git`] says so: the caller chose the place, so the caller
+    /// says what it is — a home beside a repository is the common case.
     #[must_use]
     pub(crate) fn at(dir: PathBuf) -> Self {
         Fixture {
@@ -1822,9 +1844,14 @@ impl Fixture {
     /// it is still `main` after the first commit — and the template is built
     /// through the same pinned invocation, so the copy inherits that default
     /// rather than re-deriving it.
+    ///
+    /// A no-op on a [`Fixture::new`], which is already one (CLOUD-2059); it
+    /// initialises only a [`Fixture::at`] directory.
     #[must_use]
     pub(crate) fn git(self) -> Self {
-        init_repo(&self.dir);
+        if !self.dir.join(".git").exists() {
+            init_repo(&self.dir);
+        }
         self
     }
 

@@ -1563,8 +1563,15 @@ fn a_checkout_with_no_lap_history_decides_on_the_declaration_alone() {
     // The journal lives under `$GIT_DIR`, so a checkout without one has nowhere
     // to keep a history. Asserted rather than assumed, because it is what every
     // other case in this file silently relies on — and because "no history" must
-    // be a state rather than a failure.
-    let repo = repo("target-prune-no-history");
+    // be a state rather than a failure. OUTSIDE the tree, because under
+    // `target/tmp` a directory with no `.git` resolves to this checkout's.
+    let repo = Fixture::at(crate::common::scratch_outside_tree(
+        "target-prune",
+        "no-history",
+    ))
+    .config(&config())
+    .file("Cargo.toml", "[workspace]\n")
+    .build();
     built(&repo);
 
     let first = said(&prune(&repo, "20000", &["-y"]));

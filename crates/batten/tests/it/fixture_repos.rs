@@ -135,7 +135,7 @@ fn materialize(name: &str) -> PathBuf {
 /// part of the address rather than something a runner setting can paper over.
 fn materialize_into(name: &str, slot: &str) -> PathBuf {
     let source = corpus_root().join(name);
-    let dir = common::scratch(&format!("fixture-repos/{slot}/{name}"));
+    let dir = common::scratch_repo(&format!("fixture-repos/{slot}/{name}"));
     for entry in fs::read_dir(&source).expect("read a fixture directory") {
         let entry = entry.expect("read a fixture entry");
         let file_name = entry.file_name().to_string_lossy().into_owned();

@@ -43,7 +43,7 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Output, Stdio};
 
-use common::{batten, scratch};
+use common::{batten, scratch_repo};
 
 /// A fixture module, deliberately not one of the committed ones.
 ///
@@ -115,7 +115,7 @@ severity = "{severity}"
 }
 
 fn repo(name: &str, severity: &str) -> PathBuf {
-    let dir = scratch(name);
+    let dir = scratch_repo(name);
     fs::write(dir.join("batten.toml"), config(severity)).expect("write config");
     fs::create_dir_all(dir.join("policy")).expect("policy dir");
     fs::write(dir.join("policy/fixture-severity.rego"), MODULE).expect("write module");
@@ -279,7 +279,7 @@ severity = "{second}"
 }
 
 fn pair_repo(name: &str, first: &str, second: &str) -> PathBuf {
-    let dir = scratch(name);
+    let dir = scratch_repo(name);
     fs::write(dir.join("batten.toml"), pair_config(first, second)).expect("write config");
     fs::create_dir_all(dir.join("policy")).expect("policy dir");
     fs::write(dir.join("policy/fixture-severity.rego"), MODULE).expect("write module");

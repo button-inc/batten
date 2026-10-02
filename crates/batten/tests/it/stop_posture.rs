@@ -144,7 +144,7 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Output, Stdio};
 
-use common::{batten, scratch};
+use common::{batten, scratch, scratch_repo};
 
 /// The committed module, the rows it needs, and nothing else.
 ///
@@ -221,7 +221,7 @@ severity = "deny"
 "#;
 
 fn repo(name: &str) -> PathBuf {
-    let dir = scratch(name);
+    let dir = scratch_repo(name);
     fs::write(dir.join("batten.toml"), CONFIG).expect("write config");
     fs::create_dir_all(dir.join("policy")).expect("policy dir");
     install_modules(&dir);

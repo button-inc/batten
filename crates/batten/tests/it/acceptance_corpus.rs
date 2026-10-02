@@ -179,7 +179,7 @@ fn source_dir() -> PathBuf {
 /// The stub programs need their executable bit: the corpus is committed as
 /// inert data, and `.in` files carry no mode worth preserving.
 fn materialize(name: &str) -> PathBuf {
-    let dir = common::scratch(&format!("acceptance-corpus/{name}"));
+    let dir = common::scratch_repo(&format!("acceptance-corpus/{name}"));
     copy_inert(&source_dir(), &dir);
     dir
 }

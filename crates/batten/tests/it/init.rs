@@ -13,7 +13,7 @@ use crate::common;
 
 use std::fs;
 
-use common::{Fixture, run, scratch, stderr, stdout};
+use common::{Fixture, run, scratch_outside_tree, stderr, stdout};
 
 /// The issue's own clause-2 obligation, in its strongest form: the scaffolded
 /// config is not merely present, it is one every read verb accepts. `config
@@ -48,7 +48,7 @@ fn init_writes_a_config_every_read_verb_accepts() {
 /// empty-directory case is the one a first-contact user actually runs.
 #[test]
 fn init_needs_no_repository() {
-    let dir = scratch("init-no-repo");
+    let dir = scratch_outside_tree("init", "no-repo");
 
     let output = run(&dir, &["init"]);
 
@@ -62,7 +62,7 @@ fn init_needs_no_repository() {
 /// authority the plan traded `batten.example.toml` away for.
 #[test]
 fn init_emits_the_committed_starter_verbatim() {
-    let dir = scratch("init-verbatim");
+    let dir = scratch_outside_tree("init", "verbatim");
 
     assert!(
         run(&dir, &["init"]).status.success(),
@@ -82,7 +82,7 @@ fn init_emits_the_committed_starter_verbatim() {
 /// a `batten: ` prefix belongs to `1` and `3`.
 #[test]
 fn a_second_init_refuses_and_leaves_the_file_untouched() {
-    let dir = scratch("init-twice");
+    let dir = scratch_outside_tree("init", "twice");
     assert!(
         run(&dir, &["init"]).status.success(),
         "the fixture's own scaffold must succeed"
@@ -119,7 +119,7 @@ fn a_second_init_refuses_and_leaves_the_file_untouched() {
 /// verb.
 #[test]
 fn a_dry_run_writes_nothing() {
-    let dir = scratch("init-dry-run");
+    let dir = scratch_outside_tree("init", "dry-run");
 
     let output = run(&dir, &["init", "--dry-run"]);
 
@@ -138,7 +138,7 @@ fn a_dry_run_writes_nothing() {
 /// rather than a second answer.
 #[test]
 fn a_dry_run_over_an_existing_config_still_refuses() {
-    let dir = scratch("init-dry-run-exists");
+    let dir = scratch_outside_tree("init", "dry-run-exists");
     assert!(
         run(&dir, &["init"]).status.success(),
         "the fixture's own scaffold must succeed"
@@ -155,11 +155,11 @@ fn a_dry_run_over_an_existing_config_still_refuses() {
 #[test]
 fn init_output_is_byte_stable_across_runs() {
     let first = {
-        let dir = scratch("init-stable-a");
+        let dir = scratch_outside_tree("init", "stable-a");
         run(&dir, &["init", "-n"])
     };
     let second = {
-        let dir = scratch("init-stable-b");
+        let dir = scratch_outside_tree("init", "stable-b");
         run(&dir, &["init", "-n"])
     };
 
@@ -172,7 +172,7 @@ fn init_output_is_byte_stable_across_runs() {
 /// untouched, and so is the exit code.
 #[test]
 fn the_ladder_silences_the_hint_and_not_the_pointer() {
-    let dir = scratch("init-quiet");
+    let dir = scratch_outside_tree("init", "quiet");
 
     let output = run(&dir, &["--quiet", "init"]);
 
@@ -185,7 +185,7 @@ fn the_ladder_silences_the_hint_and_not_the_pointer() {
 /// `2` explaining nothing — the same reason exit `1` is fail-loud.
 #[test]
 fn the_refusal_survives_silent() {
-    let dir = scratch("init-silent-refusal");
+    let dir = scratch_outside_tree("init", "silent-refusal");
     assert!(
         run(&dir, &["init"]).status.success(),
         "the fixture's own scaffold must succeed"
@@ -210,7 +210,7 @@ fn the_refusal_survives_silent() {
 /// table, because the allowlist an agent consumes is the emitted one.
 #[test]
 fn init_is_declared_write_and_stays_off_the_read_only_allowlist() {
-    let dir = scratch("init-effect");
+    let dir = scratch_outside_tree("init", "effect");
 
     let spec = run(&dir, &["spec"]);
     let value: serde_json::Value = serde_json::from_slice(&spec.stdout).expect("the spec is JSON");

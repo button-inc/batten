@@ -49,7 +49,7 @@ use crate::common;
 
 use std::path::{Path, PathBuf};
 
-use common::{run_with_stdin, scratch, stderr, stdout, write};
+use common::{run_with_stdin, scratch_repo, stderr, stdout, write};
 
 /// A fixture repository carrying exactly one `[[hook.handler]]` row.
 ///
@@ -63,7 +63,7 @@ use common::{run_with_stdin, scratch, stderr, stdout, write};
 /// particular behaviour writes its own stub, which is what the cases below already
 /// did.
 fn fixture(name: &str) -> PathBuf {
-    let dir = scratch(name);
+    let dir = scratch_repo(name);
     std::fs::create_dir_all(dir.join("mise-tasks")).expect("the fixture's task dir");
     stub_guard(&dir, "exit 0");
     // The guard resolves `mise.toml` beside itself for the cargo family. An

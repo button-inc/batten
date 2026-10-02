@@ -95,7 +95,7 @@ const ONE_MISSING: &str = r#"{
 /// `fixture-forks`, which is right to refuse a hand-rolled `git init` — the gate
 /// named this file twice while the fork was here, and the fork was the defect.
 fn bench(name: &str, manifest: &str) -> std::path::PathBuf {
-    let dir = common::scratch(name);
+    let dir = common::scratch_repo(name);
     common::write(&dir, "mise.toml", manifest);
     dir
 }
