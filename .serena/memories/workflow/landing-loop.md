@@ -331,6 +331,50 @@ Before filing, reproduce with the suspected variable held fixed by a mechanism y
 have **read in the source**, not assumed from its name. If the control does not
 provably reach the value the code reads, the run measured nothing.
 
+## Measured 2026-10-02 (#1084, #1086), each now a gate rather than advice
+
+- **`land` replays a merge-carrying branch by merging trunk in** (CLOUD-2054).
+  It used to refuse, and squashing to get past that refusal cost the `!` marker,
+  per-commit changelog granularity and history. Never squash to dodge a refusal:
+  repair the gate.
+- **`land`'s push replaces only a remote value this clone has seen** (CLOUD-2056).
+  That means the sha it last pushed, an ancestor of the pre-replay head (recorded
+  as `rebase replayed <head> <from>`), or an ancestor of HEAD. Any other value
+  sends nothing and reads as `push raced`.
+- **Every git call batten allows is pre-approved** (CLOUD-2057, the `git` preset).
+  So the push that lifts `turn mint ahead` is plain
+  `git push --force-with-lease=<branch>:<sha-you-replace>`, and the host no longer
+  re-decides it. A destructive call, or a push naming the trunk, stays the host's
+  to ask about. `tests/it/git_preset.rs` refuses any refusal whose git route is
+  itself refused or ungranted.
+- **`perf-pair` compares two DIFFERENT binaries or says it could not look**
+  (CLOUD-2060). Both arms share one `batten` unit identity in the shared target
+  dir, so the second build read as fresh and "head" was the base, byte for byte.
+  Every such lap had passed vacuously. An arm switch now runs
+  `cargo clean -p batten` first.
+- **The `bats` required check is the `test:cargo` job under its old name**
+  (`ci.yml`'s `bats:` job runs `mise run test:cargo`). Dropping it from
+  `CI_REQUIRED_CHECKS` stops requiring the test suite. Renaming it is a two-step
+  roster change.
+- **The `fast-forward` bot reads TRUNK's `CI_REQUIRED_CHECKS`**, not the head's. A
+  roster change lands before the job it describes goes away.
+- **`step run` hides a failing step's output.** Rerun the underlying command:
+  `cargo nextest run --workspace --no-fail-fast` for `test:cargo`, and
+  `batten semver check` for `semver`.
+- **A new preset needs the FULL suite before `land`.** `policy_presets`
+  (`PRESET_SCOPES`) and `scratch_names` caught registration gaps that every
+  targeted tier passed. `semver` catches a changed `pub` signature, which needs
+  `!` and a `BREAKING CHANGE:` footer.
+- **Test stubs and truncation are portable by gate** (CLOUD-2055).
+  `stub_portability.rs` holds every `#!` literal to the `shell * unsafe` rows, and
+  `truncate_handle.rs` holds every `set_len` to an inline `.write(true)` handle.
+  A clippy `disallowed-methods` ban is the wrong shape here: its per-site waiver
+  is what `waiver add refused` forbids.
+- **A `#MUTANT` script may not contain `|`.** `mutate` splits a row on every pipe.
+  Anchor patterns `^…$` to the code line, because `cargo fmt` re-indents, and an
+  unanchored pattern then matches only its own declaration and "survives" while
+  testing nothing.
+
 ## Rollout posture
 
 Every mechanism here fails open on a clone that predates it, so none of them
