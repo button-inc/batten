@@ -678,7 +678,28 @@ pub fn base_key(repo: &Path, base_sha: &str) -> Result<String> {
 /// a path it cannot execute and report the could-not-look as a measurement.
 #[must_use]
 pub fn base_arm_is_built(perf_dir: &Path, key: &str) -> bool {
-    base_binary(perf_dir, key).is_file()
+    // BUILT FOR THIS KEY, NOT MERELY PRESENT (CLOUD-2068). A warm-start seed
+    // renames a sibling's directory to this key with that sibling's binary still
+    // in it, and a binary's presence said nothing about which base it was built
+    // from. Measured: the binary under a new key was the previous `main`'s and
+    // refused `main`'s own config. The marker is written only by a build for this
+    // key, so a seeded directory — or one left by a build before this check
+    // existed — is rebuilt rather than trusted.
+    //MUTANT-SUITE crates/batten/src/perf.rs
+    //MUTANT built-for-unread|s@^    base_binary(perf_dir, key).is_file() \&\& marked_for(perf_dir, key)$@    base_binary(perf_dir, key).is_file()@|a_seeded_base_dir_does_not_answer_as_built
+    base_binary(perf_dir, key).is_file() && marked_for(perf_dir, key)
+}
+
+/// Whether the `built-for` marker names `key`.
+fn marked_for(perf_dir: &Path, key: &str) -> bool {
+    std::fs::read_to_string(built_for(perf_dir, key)).is_ok_and(|text| text == key)
+}
+
+/// The marker a base build writes beside its binary, naming the key it was
+/// built for.
+#[must_use]
+pub fn built_for(perf_dir: &Path, key: &str) -> PathBuf {
+    base_target_dir(perf_dir, key).join("built-for")
 }
 
 /// Warm-start a missing base target directory from the newest sibling base build.
@@ -731,6 +752,8 @@ pub fn seed_base_target_dir(perf_dir: &Path, key: &str) -> Result<()> {
                 previous.display()
             )
         })?;
+        // The previous base's binary rides along and is not this key's build:
+        // `base_arm_is_built` refuses it by its `built-for` marker (CLOUD-2068).
     }
     Ok(())
 }
@@ -1093,6 +1116,8 @@ fn measure(repo: &Path, options: Options, base_sha: &str) -> Result<Vec<Record>>
             // never a measurement: hyperfine would report the missing path as a
             // failed command and `perf-compare` would read the gap as a verdict.
             take_arm(&shared, &base_bin, "base")?;
+            crate::durable::replace(built_for(&perf, &key), &key)
+                .context("perf-pair: could not record which base the arm was built for")?;
         }
         (base_bin, base_tree)
     };
@@ -3221,6 +3246,28 @@ pub fn latency_verdict(median: u64, budget: u64, slack: u64, loose_factor: u64) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// CLOUD-2068: a seeded directory carries the dependencies, never the binary.
+    #[test]
+    fn a_seeded_base_dir_does_not_answer_as_built() -> Result<()> {
+        let perf = std::env::temp_dir().join(format!("batten-perf-seed-{}", std::process::id()));
+        let old = base_binary(&perf, "old");
+        std::fs::create_dir_all(old.parent().unwrap_or(&perf))?;
+        std::fs::write(&old, b"the previous base")?;
+        std::fs::write(built_for(&perf, "old"), "old")?;
+        assert!(base_arm_is_built(&perf, "old"));
+        seed_base_target_dir(&perf, "new")?;
+        assert!(
+            base_target_dir(&perf, "new").is_dir(),
+            "the seed carries the directory over"
+        );
+        assert!(
+            !base_arm_is_built(&perf, "new"),
+            "a seeded directory must not answer as this base's build"
+        );
+        std::fs::remove_dir_all(&perf)?;
+        Ok(())
+    }
 
     /// CLOUD-2060: the arm built second into the shared dir must not inherit
     /// the first arm's `batten` units, and a repeat of the same arm keeps them.

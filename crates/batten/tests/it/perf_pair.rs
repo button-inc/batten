@@ -92,7 +92,9 @@
 
 use crate::common;
 
-use batten::perf::{PAIR_PROFILE, base_arm_is_built, base_binary, base_target_dir, perf_dir};
+use batten::perf::{
+    PAIR_PROFILE, base_arm_is_built, base_binary, base_target_dir, built_for, perf_dir,
+};
 use common::{Fixture, run, stdout};
 
 /// A checkout with a committed base and nothing after it, so HEAD IS its merge
@@ -249,6 +251,9 @@ fn stage_base_arm(repo: &std::path::Path, sha: &str) -> std::path::PathBuf {
     )
     .expect("stage the base arm's target directory");
     std::fs::write(&bin, b"a previously built base arm").expect("stage the base arm's binary");
+    // A base build names the key it was built for (CLOUD-2068); a staged arm that
+    // stands for one does the same.
+    std::fs::write(built_for(&perf_dir(repo), sha), sha).expect("mark the base arm built");
     bin
 }
 
