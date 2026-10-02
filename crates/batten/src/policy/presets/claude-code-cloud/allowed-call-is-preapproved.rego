@@ -91,7 +91,8 @@ test_cd_then_a_declared_task_is_granted if {
 			{"name": "cd", "arguments": ["/x"], "batten-effect": null},
 			{"name": "mise", "arguments": ["run", "land"], "batten-effect": null},
 		],
-	}} with data.batten.patterns as declared
+	}}
+		with data.batten.patterns as declared
 }
 
 test_an_override_spend_is_granted if {
