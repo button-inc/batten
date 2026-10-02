@@ -103,6 +103,36 @@ fn record_suites_reads_a_nextest_report_per_module() {
     );
 }
 
+/// A RETIRED LANE'S LAST REPORT IS NOT A LANE. The bats report outlives the bats
+/// suites in `target/` indefinitely; measured on this repository, it shadowed
+/// every nextest reading behind a "stale report" refusal. The lane is decided by
+/// whether the tree still tracks a bats suite, never by a file existing.
+#[test]
+fn a_retired_bats_report_does_not_shadow_the_nextest_one() {
+    let dir = run_left(
+        "junit-wired-retired-bats",
+        Some(concat!(
+            "<testsuites>\n<testsuite name=\"pkg::it\" tests=\"1\">\n",
+            "<testcase name=\"only::a\" classname=\"pkg::it\" time=\"2.0\"/>\n",
+            "</testsuite>\n</testsuites>\n",
+        )),
+    );
+    common::write(
+        &dir,
+        "target/bats-report/report.xml",
+        "<testsuite name=\"tests/retired.bats\" time=\"9.0\">\n",
+    );
+    let output = record(&dir);
+    let said = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{said}{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(said.contains("`pkg::it::only`"), "{said}");
+}
+
 #[test]
 fn an_absent_nextest_report_is_could_not_look() {
     let dir = run_left("junit-wired-absent", None);

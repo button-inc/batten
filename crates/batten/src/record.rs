@@ -221,7 +221,7 @@ fn picked(raw: &str, name: &str, token: &str) -> String {
 // The reduction's mutation rows, each caught by the compiled case it names in
 // the perf tier, which drives the real writer and reads the record back.
 //MUTANT-SUITE crates/batten/tests/it/perf_assert.rs
-//MUTANT pick-any-line|s@^    for line in raw.lines().filter(|line| line.starts_with(&opener)) {$@    for line in raw.lines() {@|a_picked_measurement_skips_a_line_that_does_not_open_with_the_name
+//MUTANT pick-any-line|s@^    for line in raw.lines().filter(\x7cline\x7c line.starts_with(&opener)) {$@    for line in raw.lines() {@|a_picked_measurement_skips_a_line_that_does_not_open_with_the_name
 //MUTANT pick-empty-recorded|s@^    if text.is_empty() {$@    if false {@|a_picked_measurement_with_no_record_line_is_could_not_look
 
 /// Record `text` under the declared tool row `id`: [`run_tool`]'s tail, shared with
@@ -644,16 +644,35 @@ fn run_forge_fetch(reference: &str, fetch: &Fetch, err: &mut dyn Write) -> Resul
 /// names a suite this tree does not track — see [`crate::suites::derive`], where
 /// all four are could-not-look and none is an empty corpus. An internal error
 /// when the corpus cannot be written.
+//MUTANT retired-bats-report-shadows-nextest|s@^    if tracked.is_empty() {$@    if !root.join(crate::suites::REPORT).is_file() {@|a_retired_bats_report_does_not_shadow_the_nextest_one
 pub fn run_suites(write: bool, out: &mut dyn Write, err: &mut dyn Write) -> Result<ExitCode> {
     let root = git::repo_root(Path::new("."))?;
     let root = Path::new(&root);
-    // TWO RUNNERS, ONE VERB (CLOUD-2059). The bats report is read where it
-    // exists — a consumer with a bats lane keeps exactly what it had — and
-    // nextest's own JUnit report otherwise, for the profile the run used. The
+    // THE TRACKED SET FROM GIT, never a directory walk: an untracked scratch file
+    // beside the suites is not something the corpus should have to carry, and a
+    // walk would put it there.
+    let tracked: std::collections::BTreeSet<String> = crate::git::tracked_paths(root)?
+        .into_iter()
+        // `extension`, not `ends_with(".bats")`: the string comparison is
+        // case-sensitive where a file name is not everywhere, and a `FOO.BATS`
+        // the runner would run is one this corpus would then never carry.
+        .filter(|path| {
+            path.starts_with("tests/")
+                && Path::new(path)
+                    .extension()
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("bats"))
+        })
+        .collect();
+    // TWO RUNNERS, ONE VERB (CLOUD-2059). The bats report is read where the tree
+    // still TRACKS a bats suite — a consumer with a bats lane keeps exactly what
+    // it had — and nextest's own JUnit report otherwise, for the profile the run
+    // used. Keyed on the lane, never on a report file existing: a retired lane
+    // leaves its last report in `target/` indefinitely, and measured here it
+    // shadowed every nextest reading behind a "stale report" refusal. The
     // per-module table is printed, never written: it is a measurement an author
     // reads on the row it is posted to, and `--write`'s committed corpus is the
     // bats lane's contract alone.
-    if !root.join(crate::suites::REPORT).is_file() {
+    if tracked.is_empty() {
         let profile = std::env::var("NEXTEST_PROFILE")
             .ok()
             .filter(|name| !name.is_empty())
@@ -669,21 +688,6 @@ pub fn run_suites(write: bool, out: &mut dyn Write, err: &mut dyn Write) -> Resu
         }
         return Ok(ExitCode::Success);
     }
-    // THE TRACKED SET FROM GIT, never a directory walk: an untracked scratch file
-    // beside the suites is not something the corpus should have to carry, and a
-    // walk would put it there.
-    let tracked = crate::git::tracked_paths(root)?
-        .into_iter()
-        // `extension`, not `ends_with(".bats")`: the string comparison is
-        // case-sensitive where a file name is not everywhere, and a `FOO.BATS`
-        // the runner would run is one this corpus would then never carry.
-        .filter(|path| {
-            path.starts_with("tests/")
-                && Path::new(path)
-                    .extension()
-                    .is_some_and(|extension| extension.eq_ignore_ascii_case("bats"))
-        })
-        .collect();
     let (rows, text) = crate::suites::derive(root, &tracked)?;
     if !write {
         write!(out, "{text}")?;

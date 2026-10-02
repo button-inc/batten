@@ -1371,14 +1371,19 @@ fn working_tree_changes(dir: &Path, want: Changes) -> Result<BTreeSet<String>> {
 /// Raises a [`UsageError`] (exit `1`) when `dir` is not inside a repository. Every
 /// caller reads that as could-not-look and allows, so a tree this cannot
 /// enumerate is never refused on the strength of a count nobody took.
+//MUTANT index-required|s@repo.index_or_empty()@repo.index()@|a_repository_nothing_was_added_to_tracks_nothing
 pub fn tracked_paths(dir: &Path) -> Result<BTreeSet<String>> {
     let repo = open(dir)?;
     // The INDEX is what `ls-files` printed, so this is the same membership test
     // rather than a similar one — which CLOUD-312's differential obligation
     // needs, since a different test would diverge on exactly the paths a
     // migration is supposed to preserve.
-    let index = repo.index().map_err(|_| {
-        UsageError::raise("cannot read the tracked paths; this is not a git repository".to_owned())
+    //
+    // OR EMPTY, as `ls-files` answers it: a repository nothing was ever added to
+    // has no index file at all, and `ls-files` prints nothing and exits 0 there.
+    // `index()` refused it as "not a git repository", which it is (CLOUD-2059).
+    let index = repo.index_or_empty().map_err(|_| {
+        UsageError::raise("cannot read the tracked paths: the index will not read".to_owned())
     })?;
     Ok(index
         .entries()
@@ -5566,6 +5571,23 @@ mod tests {
     use std::fs;
 
     use super::*;
+
+    /// A repository nothing was ever added to has no index file, and `ls-files`
+    /// answers it with nothing and exit 0 — so this does too, rather than calling
+    /// it "not a git repository" (CLOUD-2059).
+    #[test]
+    fn a_repository_nothing_was_added_to_tracks_nothing() {
+        let dir = crate::scratch::scratch("git-tracked-fresh");
+        crate::gitwrite::init_on_main(&dir).expect("init");
+        assert!(
+            !dir.join(".git/index").exists(),
+            "the premise: a fresh repository has no index file yet"
+        );
+        assert_eq!(
+            tracked_paths(&dir).expect("an empty answer, as ls-files gives"),
+            BTreeSet::new()
+        );
+    }
 
     /// The declaration languages have their comments stripped, so a rule over
     /// the remainder can see a comment-only change to one of them.
