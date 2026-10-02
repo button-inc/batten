@@ -844,7 +844,7 @@ fn build(dir: &Path, target_dir: Option<&Path>, what: &str, profile: &str) -> Re
         );
     }
     if let Some(marker) = &marker {
-        std::fs::write(marker, what)
+        crate::durable::replace(marker, what)
             .with_context(|| format!("perf-pair: could not record the {what} build"))?;
     }
     Ok(())
