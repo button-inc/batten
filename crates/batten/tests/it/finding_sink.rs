@@ -570,6 +570,31 @@ fn a_session_in_a_subdirectory_abstains_rather_than_failing() {
     fired(&turns.check(), 1);
 }
 
+/// AND IT CLEARS A RECORD A ROOT RUN LEFT. Every decision clears its own record,
+/// so one survives only a run that died between recording and deciding — and the
+/// store is still reachable from a subdirectory even though the authority is not,
+/// so an abstention there that left it would leave an older reading answering.
+#[test]
+fn a_subdirectory_abstention_clears_a_record_left_at_the_root() {
+    let turns = Turns::new("subdirectory-stale").prompt().say(CITED);
+    turns.write();
+    let stale =
+        batten::recorder::record_path(&turns.repo.join(".git"), "turn-writes", "main", None);
+    std::fs::create_dir_all(stale.parent().expect("a records directory")).expect("records");
+    std::fs::write(&stale, "a reading a dead run left\n").expect("the stale record");
+    let deep = turns.repo.join("crates/deep");
+    std::fs::create_dir_all(&deep).expect("a subdirectory");
+    let command = committed_argv();
+    let args: Vec<&str> = command.iter().map(String::as_str).collect();
+    let out = common::run_with_stdin(&deep, &args, &turns.transcript().display().to_string());
+    assert_eq!(out.status.code(), Some(0), "{}", common::stderr(&out));
+    assert!(
+        !stale.exists(),
+        "the abstention cleared {}",
+        stale.display()
+    );
+}
+
 /// The declared door the engine's end-of-turn ladder runs.
 #[test]
 fn the_stop_handler_row_runs_this_task() {

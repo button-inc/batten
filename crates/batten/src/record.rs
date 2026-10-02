@@ -1436,6 +1436,9 @@ pub enum Decision {
 ///
 /// As [`run_derive`]: a [`UsageError`] for an unknown family, a malformed input
 /// or a tree with no branch to key on; an internal error for an unwritable store.
+//MUTANT-SUITE crates/batten/tests/it/finding_sink.rs
+//MUTANT subdirectory-decides|s@^        && !Path::new(crate::config::CONFIG_FILE).is_file()$@        \&\& false@|a_session_in_a_subdirectory_abstains_rather_than_failing
+//MUTANT subdirectory-keeps-stale|s@^            remove_stale(&path)?;$@            let _ = \&path;@|a_subdirectory_abstention_clears_a_record_left_at_the_root
 pub fn decide_record(family: &str, inputs: &[String], overrides: &Overrides) -> Result<Decision> {
     let inputs = inputs_of("record decide", inputs)?;
     let family = safe_component("family", family)?;
@@ -1459,12 +1462,18 @@ pub fn decide_record(family: &str, inputs: &[String], overrides: &Overrides) -> 
     // below then fails as a usage error on every turn. Measured on this
     // repository's own `finding-sink` handler once the session's working
     // directory moved into `crates/batten/tests/it` (CLOUD-2059).
-    //MUTANT-SUITE crates/batten/tests/it/finding_sink.rs
-    //MUTANT subdirectory-decides|s@^        \&\& !Path::new(crate::config::CONFIG_FILE).is_file()$@        \&\& false@|a_session_in_a_subdirectory_abstains_rather_than_failing
+    // THE STORE IS STILL REACHABLE from here, unlike the arm above, so a record a
+    // run from the root left is cleared, as the no-transcript arm below clears
+    // it: an abstention must not leave an older reading answering. Where HEAD
+    // names no commit there is no key, so nothing was ever written under one,
+    // and the abstention stands rather than becoming that key's usage error.
     if overrides.config_from.is_none()
         && overrides.config_in.is_none()
         && !Path::new(crate::config::CONFIG_FILE).is_file()
     {
+        if let Ok(path) = named_path("record decide", &family) {
+            remove_stale(&path)?;
+        }
         return Ok(Decision::Abstained(
             "no committed authority in this directory",
         ));
@@ -1978,8 +1987,12 @@ pub(crate) fn load_named(verb: &str, family: &str) -> Result<Option<String>> {
 /// As [`named_path`], and an internal error when an existing record cannot be
 /// removed.
 pub(crate) fn clear_named(verb: &str, family: &str) -> Result<()> {
-    let path = named_path(verb, family)?;
-    match std::fs::remove_file(&path) {
+    remove_stale(&named_path(verb, family)?)
+}
+
+/// Remove the record at `path`, where an absent one is already the answer.
+fn remove_stale(path: &Path) -> Result<()> {
+    match std::fs::remove_file(path) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => {
