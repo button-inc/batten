@@ -3131,6 +3131,28 @@ pub fn push(
     swap(remote, &update, &pack_of(&objects)?)
 }
 
+/// The id `remote` advertises for `qualified`, or a usage error naming the ref.
+///
+/// THE CALLER NAMED THE REF, so a ref the remote does not advertise is a statement
+/// about the invocation — exit 1 under §7, one line — and not the engine failing
+/// (CLOUD-2066). Raised as an internal error it reached `land replay origin/main`
+/// as exit 3 with a backtrace, which tells a caller the binary is broken. Failing
+/// to reach the remote at all stays an internal error, in [`advertise`].
+//MUTANT unadvertised-ref-is-internal|s@Err(crate::error::UsageError::raise(format!(@Err(anyhow::anyhow!(format!(@|an_unadvertised_ref_is_a_usage_error
+fn advertised_head<'a>(
+    advertisement: &'a Advertisement,
+    remote: &str,
+    qualified: &str,
+) -> Result<&'a str> {
+    let want = advertisement.head_of(qualified);
+    if want == ZERO {
+        return Err(crate::error::UsageError::raise(format!(
+            "lease: {remote} does not advertise {qualified}"
+        )));
+    }
+    Ok(want)
+}
+
 /// Fetch `reference` from `remote`, returning the sha it now points at and every
 /// object the local odb was missing.
 ///
@@ -3175,12 +3197,7 @@ pub fn fetch(remote: &str, repo: &std::path::Path, reference: &str) -> Result<Fe
     } else {
         format!("refs/heads/{reference}")
     };
-    let want = advertisement.head_of(&qualified);
-    if want == ZERO {
-        return Err(anyhow::anyhow!(
-            "lease: {remote} does not advertise {qualified}"
-        ));
-    }
+    let want = advertised_head(&advertisement, remote, &qualified)?;
     // Already in hand: the local odb has it, so there is nothing on the wire to
     // ask for. Reported as a fetch that moved nothing rather than as a no-op,
     // because the caller's next question is "what does the ref read now".
@@ -3724,6 +3741,28 @@ pub fn carries(repo: &str, trunk: &str, head: &str, paths: &[String]) -> Carries
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// A ref the caller named and the remote does not carry is the caller's error,
+    /// exit 1, never the engine's (CLOUD-2066). `origin/main` is the measured
+    /// spelling: a tracking ref's short name passed where the remote's is wanted.
+    #[test]
+    fn an_unadvertised_ref_is_a_usage_error() {
+        let tip = "a".repeat(40);
+        let advertisement = Advertisement {
+            refs: BTreeMap::from([("refs/heads/main".to_owned(), tip.clone())]),
+            capabilities: Vec::new(),
+        };
+        assert_eq!(
+            advertised_head(&advertisement, "remote", "refs/heads/main").expect("advertised"),
+            tip
+        );
+        let refused = advertised_head(&advertisement, "remote", "refs/heads/origin/main")
+            .expect_err("a ref the remote does not carry");
+        assert!(
+            refused.downcast_ref::<crate::error::UsageError>().is_some(),
+            "an unadvertised ref is bad input, not an engine fault: {refused:#}"
+        );
+    }
 
     fn framed(lines: &[&str]) -> Vec<u8> {
         let mut body = Vec::new();
