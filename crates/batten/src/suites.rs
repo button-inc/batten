@@ -116,7 +116,21 @@ fn attribute<'a>(element: &'a str, name: &str) -> Option<&'a str> {
 /// 105% of itself.
 #[must_use]
 pub fn render(rows: &[Row]) -> String {
-    table(rows, BATS_PREAMBLE, "suites", "serial total")
+    table(rows, BATS_PREAMBLE, "suites", "serial total", "suite")
+}
+
+/// The nextest table: one row per MODULE, which is what a row names there — a
+/// bats row is a file, a nextest row is a module path inside one test binary.
+//MUTANT-SUITE crates/batten/src/suites.rs
+//MUTANT nextest-rows-labelled-suites|s@^        "module",$@        "suite",@|a_nextest_table_says_its_figures_are_summed_case_durations
+fn nextest_table(rows: &[Row]) -> String {
+    table(
+        rows,
+        NEXTEST_PREAMBLE,
+        "modules",
+        "sum of case durations",
+        "module",
+    )
 }
 
 /// What the bats corpus's numbers mean: each suite ran alone and serially.
@@ -142,8 +156,9 @@ const NEXTEST_PREAMBLE: &[&str] = &[
     "of the run's wall clock they occupied.",
 ];
 
-/// The table under `preamble`, its count and total labelled for what they are.
-fn table(rows: &[Row], preamble: &[&str], counted: &str, summed: &str) -> String {
+/// The table under `preamble`, its count, total and row column labelled for what
+/// they are.
+fn table(rows: &[Row], preamble: &[&str], counted: &str, summed: &str, column: &str) -> String {
     let total: f64 = rows.iter().map(|row| row.seconds).sum();
     // ONE OWNED STRING PER LINE, joined once. `push_str(&format!(..))` is what
     // this said first and `format_push_string` refuses it: every call allocates a
@@ -160,7 +175,7 @@ fn table(rows: &[Row], preamble: &[&str], counted: &str, summed: &str) -> String
         format!("- {counted}: {}", rows.len()),
         format!("- {summed}: {total:.1}s"),
         String::new(),
-        "| seconds | share | suite |".to_owned(),
+        format!("| seconds | share | {column} |"),
         "| ---: | ---: | --- |".to_owned(),
     ]);
     for row in rows {
@@ -459,7 +474,7 @@ pub fn derive_nextest(root: &Path, profile: &str) -> Result<(Vec<Row>, String)> 
              suite."
         )));
     }
-    let text = table(&rows, NEXTEST_PREAMBLE, "modules", "sum of case durations");
+    let text = nextest_table(&rows);
     Ok((rows, text))
 }
 
@@ -511,8 +526,12 @@ mod tests {
             suite: "batten::it::cli".to_owned(),
             seconds: 2.0,
         }];
-        let text = table(&rows, NEXTEST_PREAMBLE, "modules", "sum of case durations");
+        let text = nextest_table(&rows);
         assert!(text.contains("- sum of case durations: 2.0s"), "{text}");
+        assert!(
+            text.contains("| seconds | share | module |"),
+            "a nextest row is a module, not a suite: {text}"
+        );
         assert!(
             !text.contains("serial") && !text.contains("--no-parallelize-within-files"),
             "a concurrent run's sum is not a serial cost: {text}"

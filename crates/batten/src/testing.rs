@@ -29,6 +29,10 @@ pub fn contain_state(data_dir: &Path) {
 }
 
 /// The contained data directory, if a test set one.
+///
+/// ONE SUITE FOR EVERY ROW IN THIS FILE: `mutate` reads a source's first
+/// `MUTANT-SUITE` only, and a Rust suite selects the runner, not a target — each
+/// row's case filter runs over the whole `it` binary, wherever the case lives.
 //MUTANT-SUITE crates/batten/tests/it/harness_isolation.rs
 //MUTANT in-process-uncontained|s@^    CONTAINED.get().map(PathBuf::as_path)$@    None@|in_process_state_resolves_to_the_cases_own_root
 pub(crate) fn contained_data_dir() -> Option<&'static Path> {
@@ -45,7 +49,6 @@ pub(crate) fn contained_data_dir() -> Option<&'static Path> {
 /// Windows keeps its whole toolchain there with no `MISE_DATA_DIR` pinned on that
 /// leg, so moving it on every spawn would reinstall the toolchain per case —
 /// CLOUD-2021's cost, on every case rather than one.
-//MUTANT-SUITE crates/batten/tests/it/bypass_scrub.rs
 //MUTANT state-pin-posix-only|s@("APPDATA", dir)@("APPDATA_UNREAD", dir)@|the_ambient_state_root_never_reaches_the_binary_under_test
 #[doc(hidden)]
 #[must_use]
@@ -93,7 +96,6 @@ pub fn home_pins(dir: &Path) -> [(&'static str, &Path); 2] {
 /// committed configuration runs at the real root on purpose, and a fixture under
 /// the system temp directory falls through to nothing. Only the scratch root sits
 /// inside the checkout, so only there is a missing `.git` an accident.
-//MUTANT-SUITE crates/batten/tests/it/harness_isolation.rs
 //MUTANT spawn-falls-through|s@^    resolved.is_ok_and.*$@    false@|a_spawn_whose_cwd_falls_through_to_the_checkout_is_refused
 #[doc(hidden)]
 #[must_use]
