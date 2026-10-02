@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.200](https://github.com/button-inc/batten/compare/v0.0.199...v0.0.200) - 2026-10-02
+
+### Added
+
+- *(engine)* an exact engine pin, checked before the parse
+
+### Fixed
+
+- *(perf)* count a base arm as built only for the key it was built for
+
+### Other
+
+- *(engine)* [**breaking**] register the engine noun and key in every surface ledger
+
 ## [0.0.199](https://github.com/button-inc/batten/compare/v0.0.198...v0.0.199) - 2026-10-02
 
 ### Added
