@@ -50,6 +50,65 @@ fn the_default_profile_writes_a_junit_report() {
     );
 }
 
+/// A SUBSET GATE NEVER OVERWRITES THE FULL SUITE'S REPORT. nextest writes the junit
+/// file under the selected profile's store, and `verify` runs one-module gates
+/// beside the full suite: measured, the 7,497-case report was replaced by a 12-case
+/// one from whichever subset finished last. So every manifest task that runs a
+/// filtered nextest selects a declared profile of its own, never the one the full
+/// suite reports into.
+#[test]
+fn a_subset_gate_never_overwrites_the_full_suites_report() {
+    let nextest: toml::Table = std::fs::read_to_string(common::at_root(".config/nextest.toml"))
+        .expect("read the committed nextest config")
+        .parse()
+        .expect("the nextest config is TOML");
+    let manifest: toml::Table = std::fs::read_to_string(common::at_root("mise.toml"))
+        .expect("read the manifest")
+        .parse()
+        .expect("the manifest is TOML");
+    let tasks = manifest
+        .get("tasks")
+        .and_then(toml::Value::as_table)
+        .expect("the manifest declares tasks");
+    let mut subsets = 0;
+    for (name, task) in tasks {
+        let runs: Vec<&str> = match task.get("run") {
+            Some(toml::Value::String(run)) => vec![run.as_str()],
+            Some(toml::Value::Array(runs)) => runs.iter().filter_map(toml::Value::as_str).collect(),
+            _ => Vec::new(),
+        };
+        let filtered = runs
+            .iter()
+            .any(|run| run.contains("nextest run") && !run.contains("--workspace"));
+        if !filtered {
+            continue;
+        }
+        subsets += 1;
+        let profile = task
+            .get("env")
+            .and_then(|env| env.get("NEXTEST_PROFILE"))
+            .and_then(toml::Value::as_str)
+            .unwrap_or("default");
+        assert!(
+            !matches!(profile, "default" | "ci"),
+            "task `{name}` runs a filtered nextest under `{profile}`, the profile the full suite \
+             reports into, so its report replaces the full one"
+        );
+        assert!(
+            nextest
+                .get("profile")
+                .and_then(|profiles| profiles.get(profile))
+                .is_some(),
+            "task `{name}` selects nextest profile `{profile}`, which .config/nextest.toml does \
+             not declare"
+        );
+    }
+    assert!(
+        subsets > 0,
+        "the manifest runs no filtered nextest task, so this case asserts nothing"
+    );
+}
+
 /// A repository whose last nextest run left `report` as its junit file.
 fn run_left(name: &str, report: Option<&str>) -> std::path::PathBuf {
     let dir = common::scratch(name);

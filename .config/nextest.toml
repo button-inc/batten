@@ -178,6 +178,17 @@ path = "junit.xml"
 # find the next one (review of #928, where this profile was briefly `true`).
 [profile.ci]
 
+# THE SUBSET GATES' PROFILE, so a filtered run never overwrites the full run's
+# report (CLOUD-2059). The junit stanza above writes under the PROFILE's store
+# directory, and `verify` runs seven one-module gates (`test:config-schema` and
+# its siblings) beside the full suite. Measured: the full suite's 7,497-case
+# report was replaced by a 12-case one from whichever subset finished last, so
+# the reading `record suites` exists to keep was the one a verify lap destroyed.
+# Those tasks select this profile through `NEXTEST_PROFILE`, and it inherits
+# every key from `default`, so they report into `target/nextest/narrow/` instead.
+#MUTANT narrow-profile-undeclared|s@^\[profile\.narrow\]$@[profile.narrow-gone]@|a_subset_gate_never_overwrites_the_full_suites_report
+[profile.narrow]
+
 [[profile.default.overrides]]
 filter = 'test(deleting_six_governed_paths_costs_a_flat_multiple_of_the_floor)'
 threads-required = "num-test-threads"

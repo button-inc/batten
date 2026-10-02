@@ -1354,40 +1354,46 @@ run = "cargo run --quiet -p batten -- step run test:cargo -- cargo nextest run -
 # these seven modules appears once, at the head — `tests/it/main.rs` declares no
 # other module whose name contains one of them. `--no-tests=fail` still refuses a
 # selection that matches nothing, so a renamed module reds rather than passing.
+#
+# `NEXTEST_PROFILE = "narrow"` SO A SUBSET NEVER OVERWRITES THE FULL REPORT
+# (CLOUD-2059). nextest writes its junit file under the profile's store, and
+# `verify` runs these beside `test:cargo`: measured, the full suite's report was
+# replaced by a 12-case one. `junit_wired.rs` holds every filtered nextest task here
+# to a profile of its own.
 [tasks."test:reference-coverage"]
 description = "Gate: the rendered CLI reference and the command spec name exactly the same flags, in both directions (CLOUD-171)"
 run = "cargo nextest run -p batten --no-tests=fail --test it reference_coverage::"
-env = { BATTEN_TEST_SCRATCH_LANE = "narrow" }
+env = { BATTEN_TEST_SCRATCH_LANE = "narrow", NEXTEST_PROFILE = "narrow" }
 
 [tasks."test:skill-contract"]
 description = "Gate: every shipped skill stays inside its line budget and describes only the surface the binary ships (CLOUD-213)"
 run = "cargo nextest run -p batten --no-tests=fail --test it skill_contract::"
-env = { BATTEN_TEST_SCRATCH_LANE = "narrow" }
+env = { BATTEN_TEST_SCRATCH_LANE = "narrow", NEXTEST_PROFILE = "narrow" }
 
 [tasks."test:config-schema"]
 description = "Gate: the committed JSON Schemas match the ones the binary derives from the config types (CLOUD-33)"
 run = "cargo nextest run -p batten --no-tests=fail --test it config_schema::"
-env = { BATTEN_TEST_SCRATCH_LANE = "narrow" }
+env = { BATTEN_TEST_SCRATCH_LANE = "narrow", NEXTEST_PROFILE = "narrow" }
 
 [tasks."test:hook-profile"]
 description = "Gate: the hook profile the wiring declares is the one the binary reports (CLOUD-509)"
 run = "cargo nextest run -p batten --no-tests=fail --test it hook_profile::"
-env = { BATTEN_TEST_SCRATCH_LANE = "narrow" }
+env = { BATTEN_TEST_SCRATCH_LANE = "narrow", NEXTEST_PROFILE = "narrow" }
 
 [tasks."test:verdict-vocabulary"]
 description = "Gate: every verdict vocabulary word is one token under the declared pin (CLOUD-1284 arm 4)"
 run = "cargo nextest run -p batten --no-tests=fail --test it verdict_vocabulary::"
-env = { BATTEN_TEST_SCRATCH_LANE = "narrow" }
+env = { BATTEN_TEST_SCRATCH_LANE = "narrow", NEXTEST_PROFILE = "narrow" }
 
 [tasks."test:refusal-ceiling"]
 description = "Gate: every emitted mediated refusal line is within the declared `[refusal]` ceiling (CLOUD-1286)"
 run = "cargo nextest run -p batten --no-tests=fail --test it refusal_ceiling::"
-env = { BATTEN_TEST_SCRATCH_LANE = "narrow" }
+env = { BATTEN_TEST_SCRATCH_LANE = "narrow", NEXTEST_PROFILE = "narrow" }
 
 [tasks."test:config-deprecations"]
 description = "Gate: no config key left the published schema without a deprecation window (CLOUD-360)"
 run = "cargo nextest run -p batten --no-tests=fail --test it config_deprecations::"
-env = { BATTEN_TEST_SCRATCH_LANE = "narrow" }
+env = { BATTEN_TEST_SCRATCH_LANE = "narrow", NEXTEST_PROFILE = "narrow" }
 
 [tasks.prose-only-check]
 description = "Gate: a branch whose whole diff is comment lines buys a CI matrix no required check can have an opinion about (reads the diff; pointer-only)"
