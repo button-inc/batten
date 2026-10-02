@@ -401,6 +401,9 @@ pub const NEXTEST_REPORT_FILE: &str = "junit.xml";
 /// by the runner's formatter.
 #[must_use]
 pub fn nextest_rows(report: &str) -> Vec<Row> {
+    /// The classname prefix nextest gives a setup script's `<testcase>`.
+    const SETUP_SCRIPT_CLASS: &str = "@setup-script:";
+
     let mut totals: BTreeMap<String, f64> = BTreeMap::new();
     for chunk in report.split("<testcase").skip(1) {
         let element = chunk.split_once('>').map_or(chunk, |(head, _)| head);
@@ -414,6 +417,13 @@ pub fn nextest_rows(report: &str) -> Vec<Row> {
         let Ok(seconds) = time.parse::<f64>() else {
             continue;
         };
+        // A SETUP SCRIPT IS NOT A MODULE. nextest reports each one it ran as a
+        // `<testcase>` whose classname is `@setup-script:<name>`, and this
+        // repository's `clear-scratch` runs on every invocation — so it would be
+        // a row an author could never add a case to.
+        if binary.starts_with(SETUP_SCRIPT_CLASS) {
+            continue;
+        }
         let module = name.rsplit_once("::").map_or(name, |(module, _)| module);
         *totals.entry(format!("{binary}::{module}")).or_default() += seconds;
     }
@@ -472,6 +482,9 @@ mod tests {
             "<testcase name=\"board::c\" classname=\"batten::it\" time=\"9.25\"/>\n",
             "<testcase name=\"cli::nested::d\" classname=\"batten::it\" time=\"0.75\"/>\n",
             "<testcase name=\"lonely\" classname=\"batten\" time=\"0.5\"/>\n",
+            "</testsuite>\n",
+            "<testsuite name=\"@setup-script:clear-scratch\" tests=\"1\">\n",
+            "<testcase name=\"clear-scratch\" classname=\"@setup-script:clear-scratch\" time=\"40\"/>\n",
             "</testsuite>\n</testsuites>\n",
         );
         let rows = nextest_rows(report);
@@ -487,7 +500,8 @@ mod tests {
                 "batten::it::cli::nested 0.75",
                 "batten::lonely 0.50",
             ],
-            "a nested module is its own row, never folded into its parent"
+            "a nested module is its own row, never folded into its parent, and a setup \
+             script is no row at all"
         );
     }
 
