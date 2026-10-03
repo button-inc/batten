@@ -2264,6 +2264,11 @@ const CENSUS: &[Verb] = &[
             "a finding's full arm carries the declaring row's own `reason`, the class gloss \
              and each override's precondition — the caller's declaration, once per context \
              per compaction cycle (CLOUD-2075)",
+            Echoed::Columns(&[
+                "rule[].reason",
+                "verdict[].gloss",
+                "verdict[].route[].precondition",
+            ]),
         ),
     },
     // THE ONE VERB WHOSE ANSWER IS THE PAYLOAD, and `command` is deliberately the
