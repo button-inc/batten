@@ -71,7 +71,11 @@ pub(crate) fn committed_events(
     document: &serde_json::Value,
     file: hook::WiringFile,
 ) -> Option<Cow<'_, serde_json::Map<String, serde_json::Value>>> {
-    let key = event_key(file);
+    let Some(key) = event_key(file) else {
+        // A root-keyed file IS the event map, so only a non-object is
+        // unreadable.
+        return document.as_object().map(Cow::Borrowed);
+    };
     // AN ABSENT KEY IS AN EMPTY MAP, NEVER UNREADABLE, and the distinction is a
     // verdict rather than a detail. A settings file carrying `permissions` and no
     // `hooks` parses perfectly and registers batten nowhere — which under
@@ -94,12 +98,14 @@ pub(crate) fn committed_events(
 /// Extracted so the mutable walk in [`prune_siblings`] and the immutable read in
 /// [`committed_events`] cannot pick different keys — the one way those two could
 /// silently stop describing the same document.
-const fn event_key(file: hook::WiringFile) -> &'static str {
+const fn event_key(file: hook::WiringFile) -> Option<&'static str> {
     match file {
-        hook::WiringFile::Key { key, .. } => key,
+        hook::WiringFile::Key { key, .. } => Some(key),
         // A hooks-only file is what `render_wiring` emits whole, and what it
         // emits is `{"hooks": {…}}`.
-        hook::WiringFile::Whole(_) => "hooks",
+        hook::WiringFile::Whole(_) => Some("hooks"),
+        // Keyed directly by event name: the document is the map.
+        hook::WiringFile::Root(_) => None,
     }
 }
 
@@ -431,11 +437,13 @@ fn prune_siblings(
     file: hook::WiringFile,
     command: &str,
 ) -> Vec<(String, usize)> {
-    let key = event_key(file);
-    let Some(events) = document
-        .get_mut(key)
-        .and_then(serde_json::Value::as_object_mut)
-    else {
+    let events = match event_key(file) {
+        Some(key) => document
+            .get_mut(key)
+            .and_then(serde_json::Value::as_object_mut),
+        None => document.as_object_mut(),
+    };
+    let Some(events) = events else {
         return Vec::new();
     };
     let mut removed = Vec::new();

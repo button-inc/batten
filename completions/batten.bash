@@ -2284,7 +2284,7 @@ _batten() {
                     return 0
                     ;;
                 --harness)
-                    COMPREPLY=($(compgen -W "claude-code cursor copilot-cli gemini-cli codex-cli exit-code" -- "${cur}"))
+                    COMPREPLY=($(compgen -W "claude-code cursor copilot-cli gemini-cli codex-cli factory exit-code" -- "${cur}"))
                     return 0
                     ;;
                 --strictness)
@@ -2470,7 +2470,7 @@ _batten() {
                     return 0
                     ;;
                 --harness)
-                    COMPREPLY=($(compgen -W "claude-code cursor copilot-cli gemini-cli codex-cli exit-code" -- "${cur}"))
+                    COMPREPLY=($(compgen -W "claude-code cursor copilot-cli gemini-cli codex-cli factory exit-code" -- "${cur}"))
                     return 0
                     ;;
                 --strictness)
@@ -5848,7 +5848,7 @@ _batten() {
             fi
             case "${prev}" in
                 --harness)
-                    COMPREPLY=($(compgen -W "claude-code cursor copilot-cli gemini-cli codex-cli exit-code" -- "${cur}"))
+                    COMPREPLY=($(compgen -W "claude-code cursor copilot-cli gemini-cli codex-cli factory exit-code" -- "${cur}"))
                     return 0
                     ;;
                 --strictness)
@@ -11342,7 +11342,7 @@ _batten() {
             fi
             case "${prev}" in
                 --harness)
-                    COMPREPLY=($(compgen -W "claude-code cursor copilot-cli gemini-cli codex-cli exit-code" -- "${cur}"))
+                    COMPREPLY=($(compgen -W "claude-code cursor copilot-cli gemini-cli codex-cli factory exit-code" -- "${cur}"))
                     return 0
                     ;;
                 --name)
