@@ -1641,14 +1641,27 @@ fn diff_shape(root: &Path, staged: &Staged, source: &str) -> (bool, usize) {
 /// matched nothing but its own declaration counted that rewrite as a code change
 /// — exactly the self-match this guard exists to refuse, in the half of the
 /// tree it did not look at.
+///
+/// **COUNTED AS A MULTISET, NOT A SET.** A line is changed by the number of
+/// copies it gained or lost, never by whether its text appears somewhere in the
+/// other version. Judged by membership, a mutation whose old and new lines both
+/// recur elsewhere in the file counted zero code lines and was refused as a
+/// self-match: `toolchain-probe-blind` swaps one `return Toolchain::…;` for
+/// another and `missing-receipt-route-dropped` blanks a list entry, and every
+/// one of those lines occurs elsewhere in its file (CLOUD-2067).
+//MUTANT shared-line-uncounted|s@^        \.filter(\x7c(line, _)\x7c strip_marker(line\.trim_start(), "MUTANT")\.is_none())$@        .filter(\x7c(line, _)\x7c !(before.contains(line) \&\& after.contains(line)) \&\& strip_marker(line.trim_start(), "MUTANT").is_none())@|a_changed_line_repeated_elsewhere_in_the_file_is_still_a_changed_code_line
 fn code_lines_changed(before: &str, after: &str) -> usize {
-    let head: Vec<&str> = after.lines().collect();
-    let base: Vec<&str> = before.lines().collect();
-    base.iter()
-        .filter(|line| !head.contains(*line))
-        .chain(head.iter().filter(|line| !base.contains(*line)))
-        .filter(|line| strip_marker(line.trim_start(), "MUTANT").is_none())
-        .count()
+    let mut net: BTreeMap<&str, isize> = BTreeMap::new();
+    for line in before.lines() {
+        *net.entry(line).or_default() += 1;
+    }
+    for line in after.lines() {
+        *net.entry(line).or_default() -= 1;
+    }
+    net.into_iter()
+        .filter(|(line, _)| strip_marker(line.trim_start(), "MUTANT").is_none())
+        .map(|(_, copies)| copies.unsigned_abs())
+        .sum()
 }
 
 /// Judge one row.
@@ -2164,6 +2177,28 @@ mod tests {
             code_lines_changed(before, code),
             2,
             "the old and new code line"
+        );
+    }
+
+    /// Fails by: judging a line changed only when its text appears nowhere in the
+    /// other version. A swap between two lines that each recur elsewhere, or a
+    /// duplicated line blanked where a blank already stands, then counts zero
+    /// code lines and the row is refused as `self-mutating-row` — measured on two
+    /// real rows (CLOUD-2067).
+    #[test]
+    fn a_changed_line_repeated_elsewhere_in_the_file_is_still_a_changed_code_line() {
+        let before = "    return A;\n    return B;\n\n    return A;\n";
+        let swapped = "    return A;\n    return B;\n\n    return B;\n";
+        assert_eq!(
+            code_lines_changed(before, swapped),
+            2,
+            "the old and new line, though each recurs elsewhere"
+        );
+        let blanked = "    return A;\n    return B;\n\n\n";
+        assert_eq!(
+            code_lines_changed(before, blanked),
+            2,
+            "a duplicated line blanked beside a blank that already stood"
         );
     }
 
