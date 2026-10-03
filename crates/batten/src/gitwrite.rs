@@ -1744,6 +1744,8 @@ pub fn diff3(ancestor: &[u8], ours: &[u8], theirs: &[u8]) -> Option<String> {
 /// The patch identities a replay drops rather than re-applies (CLOUD-1586,
 /// CLOUD-2086): the base's, and on a bet's unwind the upstream's too. Split out
 /// of [`replay_range`] to keep that function a readable length.
+//MUTANT-SUITE crates/batten/tests/it/rebase.rs
+//MUTANT borrowed-upstream-replayed|s@^    if widen {$@    if false {@|a_borrowed_commit_the_holder_republished_is_dropped_on_unwind
 fn drop_set(
     dir: &Path,
     branch: &str,
@@ -1751,8 +1753,6 @@ fn drop_set(
     onto: &str,
     widen: bool,
 ) -> std::collections::BTreeSet<String> {
-    //MUTANT-SUITE crates/batten/tests/it/rebase.rs
-    //MUTANT borrowed-upstream-replayed|s@^    if widen {$@    if false {@|a_borrowed_commit_the_holder_republished_is_dropped_on_unwind
     let mut already = crate::git::patch_identities(
         dir,
         crate::git::Window::DEFAULT,
