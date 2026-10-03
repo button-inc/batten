@@ -99,6 +99,12 @@ pub enum Harness {
     /// its own repo says so. No payload shim is needed; the adapter exists so
     /// the host is nameable and its fixture is pinned against drift.
     CodexCli,
+    /// Factory Droid. Claude Code's wire shape — the same event names, the same
+    /// `hookSpecificOutput.permissionDecision` verdict object — over a different
+    /// tool vocabulary (`Create`/`Edit`/`ApplyPatch` write, `Execute` runs a
+    /// shell) and its own hooks-only project file. Fetched 2026-10-03 from
+    /// `docs.factory.com/reference/hooks-reference` (CLOUD-1942).
+    Factory,
     /// The neutral core contract: envelope in, decision as exit code out —
     /// `0` allow, `2` deny (reason on stderr), for any host whose only decision
     /// channel is an exit status. Both codes are the §7 table's, unmodified.
@@ -115,6 +121,7 @@ impl Harness {
         Harness::CopilotCli,
         Harness::GeminiCli,
         Harness::CodexCli,
+        Harness::Factory,
         Harness::ExitCode,
     ];
 
@@ -131,6 +138,7 @@ impl Harness {
             Harness::CopilotCli => "copilot-cli",
             Harness::GeminiCli => "gemini-cli",
             Harness::CodexCli => "codex-cli",
+            Harness::Factory => "factory",
             Harness::ExitCode => "exit-code",
         }
     }
@@ -187,6 +195,17 @@ impl Harness {
                 // recorded the wire format, not the environment a host expands,
                 // and the two are different fetches.
                 project_dir_var: None,
+            }),
+            // A hooks-only project file whose root IS the hooks object: the
+            // vendor reference names `.factory/hooks.json` for the project scope
+            // and says hooks "live directly at the root" of a standalone
+            // `hooks.json`. Claude's event names, so the spellings are shared;
+            // and unlike Codex, the variable IS fetched — the same page names
+            // `$FACTORY_PROJECT_DIR` for referencing project scripts.
+            Harness::Factory => Some(Wiring {
+                file: WiringFile::Root(".factory/hooks.json"),
+                spellings: CLAUDE_SPELLINGS,
+                project_dir_var: Some("FACTORY_PROJECT_DIR"),
             }),
             // Registered in the PascalCase dialect deliberately: M1 records that
             // the camelCase one omits `hook_event_name` entirely, and the casing
@@ -276,6 +295,11 @@ impl Harness {
             Harness::GeminiCli => &["WriteFile", "Edit", "Write", "MultiEdit", "NotebookEdit"],
             Harness::Cursor => &["Write", "Edit", "MultiEdit", "write", "edit"],
             Harness::CopilotCli => &["Write", "Edit", "MultiEdit", "StrReplaceEditor"],
+            // The vendor reference's own tool list: `Create` makes a file,
+            // `Edit` changes one, `ApplyPatch` applies a diff. Claude's `Write`
+            // is not a Factory tool, which is why this host is not folded into
+            // Claude's row despite sharing its wire shape.
+            Harness::Factory => &["Create", "Edit", "ApplyPatch"],
             // The neutral contract: a caller composing the envelope by hand is
             // stating the normalized shape, so it gets the normalized spellings.
             Harness::ExitCode => &["Write", "Edit", "MultiEdit", "NotebookEdit"],
@@ -300,6 +324,7 @@ impl Harness {
         match self {
             Harness::ClaudeCode => Some("AskUserQuestion"),
             Harness::CodexCli
+            | Harness::Factory
             | Harness::GeminiCli
             | Harness::Cursor
             | Harness::CopilotCli
@@ -349,6 +374,16 @@ impl Harness {
                 // spellings are one operation, or every spawn row goes dead.
                 "Agent" | "Task" => Operation::Subagent,
                 other if other.starts_with(MCP_TOOL_PREFIX) => Operation::Mcp,
+                other => Operation::Other(other.to_owned()),
+            },
+            // The vendor reference names its shell, read and subagent tools and
+            // no MCP spelling, so an MCP call classifies as `Other` — could not
+            // look — rather than borrowing Claude's prefix on the strength of a
+            // shared wire shape.
+            Harness::Factory => match raw_tool {
+                "Execute" => Operation::Execute,
+                "Read" => Operation::Read,
+                "Task" => Operation::Subagent,
                 other => Operation::Other(other.to_owned()),
             },
             Harness::Cursor => match raw_tool {
@@ -401,9 +436,14 @@ impl Harness {
             // has fetched Codex's transcript format, so it is unsurveyed —
             // reading the clone as evidence would be the confident wrong answer
             // `operation_of` declines for the other two.
-            Harness::CodexCli | Harness::Cursor | Harness::GeminiCli | Harness::CopilotCli => {
-                TranscriptShape::Unsurveyed("CLOUD-1781")
-            }
+            // Factory's hook payload names a `transcript_path` and the reference
+            // documents no record grammar behind it, so it is unsurveyed for
+            // Codex's reason.
+            Harness::CodexCli
+            | Harness::Factory
+            | Harness::Cursor
+            | Harness::GeminiCli
+            | Harness::CopilotCli => TranscriptShape::Unsurveyed("CLOUD-1781"),
         }
     }
 }
@@ -1213,8 +1253,13 @@ impl Capabilities {
 /// business rewriting.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WiringFile {
-    /// A hooks-only file, owned whole.
+    /// A hooks-only file, owned whole, whose events sit under a `hooks` key.
     Whole(&'static str),
+    /// A hooks-only file, owned whole, keyed DIRECTLY by event name — no `hooks`
+    /// wrapper (CLOUD-1942). Factory's reference: "Standalone `hooks.json` files
+    /// are keyed directly by event name", and a wrapped document there registers
+    /// nothing, because the host reads `hooks` as an event it does not have.
+    Root(&'static str),
     /// One key inside a file the host shares with other configuration.
     Key {
         /// The file, repo-root-relative.
@@ -1383,8 +1428,10 @@ pub fn render_wiring(harness: Harness, wiring: &Wiring) -> String {
 
     match wiring.file {
         // The key's VALUE alone: the file carries configuration the engine does
-        // not own, so emitting the file would be claiming the rest of it.
-        WiringFile::Key { .. } => {
+        // not own, so emitting the file would be claiming the rest of it. A
+        // root-keyed hooks-only file is the same document for the opposite
+        // reason — the event map IS the whole file.
+        WiringFile::Key { .. } | WiringFile::Root(_) => {
             let body: Vec<String> = registrations
                 .iter()
                 .map(|(_, spelling)| entry(spelling, "  "))
@@ -1783,6 +1830,46 @@ impl Harness {
                 attribution: UNSURVEYED_ATTRIBUTION,
                 capture: UNSURVEYED_CAPTURE,
             },
+            // Every value below is from the vendor reference fetched 2026-10-03
+            // (`docs.factory.com/reference/hooks-reference`) or is stated as
+            // unanswered by it.
+            Harness::Factory => Capabilities {
+                // The reference lists hook-visible tools and no plan tool.
+                plan_tools: PlanTools::Unsurveyed("CLOUD-1781"),
+                events: CONVERGED_EVENTS,
+                // `"ask"` is documented on `PreToolUse` as "Forces a user
+                // confirmation prompt", in the same `hookSpecificOutput` object a
+                // deny travels in.
+                ask: AskReach {
+                    enforced_on: &["PreToolUse"],
+                    declared: Declaration::Yes,
+                },
+                // The reference says stdout "can add context" for
+                // `UserPromptSubmit` and `SessionStart`, neither of which Batten
+                // registers here, and names no field for the events it does. So
+                // the channel exists and is reached nowhere — `ADVISORY_GAPS`
+                // states it.
+                advisory: AdvisoryReach::unreachable(Declaration::Yes),
+                // `permissionDecision: "allow"` is documented on `PreToolUse`,
+                // the same field Claude Code honours there.
+                preapprove: PreapproveReach {
+                    honoured_on: &["PreToolUse"],
+                    declared: Declaration::Yes,
+                },
+                stop_vetoes_completion: false,
+                // The reference states a 60-second default and no timeout
+                // outcome, so nothing here claims it fails open.
+                timeout_fails_open: false,
+                needs_fail_closed_config: false,
+                // "stdout is otherwise visible in transcripts": stray output is
+                // shown, not parsed as a decision.
+                stdout_must_stay_clean: false,
+                // The verdict object carries `permissionDecisionReason`, the
+                // channel the deny below writes.
+                reason_travels_in_band: true,
+                attribution: UNSURVEYED_ATTRIBUTION,
+                capture: UNSURVEYED_CAPTURE,
+            },
             Harness::ExitCode => Capabilities {
                 // The neutral contract carries no host tool surface of its own.
                 plan_tools: PlanTools::Surveyed(&[]),
@@ -1892,6 +1979,9 @@ impl Harness {
             // Gemini merges the same user-level file its committed wiring is
             // keyed in — one layout, two locations.
             Harness::GeminiCli => &[".gemini/settings.json"],
+            // The reference's user scope: `~/.factory/hooks.json`, "applies
+            // across projects" — the same layout as the committed file.
+            Harness::Factory => &[".factory/hooks.json"],
             // EMPTY IS A MEASUREMENT HERE, not a gap: these hosts declare a
             // hooks-only project file and the survey records no user-level merge
             // for them, so there is nothing beyond the committed surface to
@@ -1925,6 +2015,7 @@ impl Harness {
             Harness::Cursor
             | Harness::CopilotCli
             | Harness::CodexCli
+            | Harness::Factory
             | Harness::GeminiCli
             | Harness::ExitCode => None,
         }
@@ -3081,7 +3172,11 @@ fn normalize_event(harness: Harness, raw: &str) -> Event {
             "sessionStart" => Some(Event::SessionStart),
             _ => None,
         },
-        Harness::ClaudeCode | Harness::CopilotCli | Harness::CodexCli | Harness::ExitCode => None,
+        Harness::ClaudeCode
+        | Harness::CopilotCli
+        | Harness::CodexCli
+        | Harness::Factory
+        | Harness::ExitCode => None,
     };
     renamed.unwrap_or_else(|| Event::normalize(raw))
 }
@@ -10085,6 +10180,12 @@ fn encode_cursor_verdict(permission: &str, reason: &str) -> serde_json::Result<S
 ///
 /// Serialization of these fixed shapes cannot practically fail; the `Result` is
 /// the honest signature for a serde boundary.
+//MUTANT-SUITE crates/batten/tests/it/cli.rs
+//MUTANT factory-deny-drops-reason|s@^        Harness::Factory => encode_claude_deny(event, reason).map(Some),$@        Harness::Factory => encode_claude_deny(event, "").map(Some),@|a_factory_deny_carries_its_reason_in_the_verdict_object
+// `match_same_arms` would fold Factory into Claude's arm. Refused for
+// `write_tools`' reason: the two share a wire shape today by coincidence of two
+// vendors' documentation, and each host answers for its own deny.
+#[allow(clippy::match_same_arms)]
 pub fn encode_deny(
     harness: Harness,
     event: &str,
@@ -10092,6 +10193,10 @@ pub fn encode_deny(
 ) -> serde_json::Result<Option<String>> {
     match harness {
         Harness::ClaudeCode => encode_claude_deny(event, reason).map(Some),
+        // Factory documents the same verdict object, reason included, so it
+        // takes Claude's encoder rather than a copy of it. Its own arm so the
+        // reason it carries is pinned for this host by itself.
+        Harness::Factory => encode_claude_deny(event, reason).map(Some),
         Harness::Cursor => encode_cursor_deny(reason).map(Some),
         Harness::CopilotCli | Harness::GeminiCli | Harness::CodexCli | Harness::ExitCode => {
             Ok(None)
@@ -10152,7 +10257,9 @@ pub fn encode_ask(
         // Documented, and merged most-restrictive-first by the host itself
         // (`deny > defer > ask > allow`), so an ask here cannot override another
         // hook's deny.
-        Harness::ClaudeCode => encode_claude_verdict(event, "ask", reason).map(Some),
+        Harness::ClaudeCode | Harness::Factory => {
+            encode_claude_verdict(event, "ask", reason).map(Some)
+        }
         // Reachable on `beforeShellExecution` and `beforeMCPExecution` only, which
         // the guard above has already established by the time this arm runs. The
         // body is the host's one documented verdict shape, the same one a deny
@@ -10219,7 +10326,13 @@ pub fn encode_advice(
         // its wire shape. Cursor documents a verdict body and no advisory one;
         // Copilot's output object is unconfirmed; Codex is unsurveyed; the
         // neutral adapter has an exit status and nothing else.
-        Harness::Cursor | Harness::CopilotCli | Harness::CodexCli | Harness::ExitCode => Ok(None),
+        // Factory's channel reaches no event Batten registers (its capability
+        // row), so the guard above never lets it reach this arm.
+        Harness::Cursor
+        | Harness::CopilotCli
+        | Harness::CodexCli
+        | Harness::Factory
+        | Harness::ExitCode => Ok(None),
     }
 }
 
@@ -10264,7 +10377,7 @@ pub fn encode_preapproval(
         // The same envelope a deny and an ask travel in, with the third verdict
         // word, and the call's advice beside it (CLOUD-1949) — one document,
         // because the channel reads one.
-        Harness::ClaudeCode => serde_json::to_string(&ClaudeVerdict {
+        Harness::ClaudeCode | Harness::Factory => serde_json::to_string(&ClaudeVerdict {
             hook_specific_output: ClaudeVerdictInner {
                 hook_event_name: event,
                 permission_decision: "allow",
@@ -10301,16 +10414,25 @@ pub fn encode_preapproval(
 /// describes a gap — so probing a surface fails until its row is removed.
 ///
 /// `pub` because being readable IS the mechanism.
-pub const ADVISORY_GAPS: &[(Harness, &str)] = &[(
-    Harness::ClaudeCode,
-    "`PostToolUse` and `UserPromptSubmit` are documented to accept \
+pub const ADVISORY_GAPS: &[(Harness, &str)] = &[
+    (
+        Harness::ClaudeCode,
+        "`PostToolUse` and `UserPromptSubmit` are documented to accept \
          `additionalContext` and are NOT in `delivered_on`, because nothing here \
          has probed them. Listing an unprobed surface costs a notice that \
          vanishes silently; leaving it out costs only silence. `PreToolUse` was \
          a third entry here until CLOUD-1131 probed it and it delivered — so a \
          row leaving this table is what closing a gap looks like, and the \
          absence of a probe is never itself a finding about the host.",
-)];
+    ),
+    (
+        Harness::Factory,
+        "The reference says stdout \"can add context\" on `UserPromptSubmit` and \
+         `SessionStart` and names no context field on the events Batten \
+         registers, so the channel is declared and reached nowhere. Nothing here \
+         has probed this host at all.",
+    ),
+];
 
 /// Surfaces where a pre-approval is honoured and Batten does not spend one,
 /// **stated**.
