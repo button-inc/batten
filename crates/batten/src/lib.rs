@@ -14683,9 +14683,12 @@ fn semver_compare(
     // scratch. A build artefact belongs where the build artefacts are: it is
     // gitignored already, and `target-prune` reclaims it with everything else
     // rather than growing without bound in a state directory nobody prunes.
+    //
+    // THE TARGET IS KEPT, ONLY THE TREE AND THE OLD DOCUMENT GO (CLOUD-2099): a
+    // wiped target re-checked the whole dependency graph cold on both sides,
+    // every lap. `semver::prepare_scratch` carries the reasoning.
     let scratch = root.join("target").join("semver-baseline");
-    drop(std::fs::remove_dir_all(&scratch));
-    std::fs::create_dir_all(&scratch).ok()?;
+    semver::prepare_scratch(&scratch, package).ok()?;
     // THE HEAD SIDE IS BUILT FROM THE LOCK TOO, and this is the half the fallback
     // was missing (CLOUD-1399). The tool generates the current crate's rustdoc the
     // same way it generates the baseline's — a scratch package with no lock — so a
@@ -14702,8 +14705,7 @@ fn semver_compare(
     // no comparison. The verdict stays could-not-look either way; what changes is
     // that the run gets a chance to succeed first.
     let head_scratch = root.join("target").join("semver-current");
-    drop(std::fs::remove_dir_all(&head_scratch));
-    let current = std::fs::create_dir_all(&head_scratch)
+    let current = semver::prepare_scratch(&head_scratch, package)
         .ok()
         .and_then(|()| semver::current_rustdoc(root, toolchain, package, &head_scratch).ok());
     match semver::baseline_rustdoc(root, toolchain, package, baseline, &scratch) {
