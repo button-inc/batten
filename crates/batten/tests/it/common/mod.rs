@@ -542,11 +542,13 @@ impl Batten {
         }
     }
 
+    /// [`std::process::Command::arg`], returning the door so a chain keeps its refusal.
     pub(crate) fn arg<S: AsRef<std::ffi::OsStr>>(&mut self, arg: S) -> &mut Self {
         self.0.arg(arg);
         self
     }
 
+    /// [`std::process::Command::args`], returning the door so a chain keeps its refusal.
     pub(crate) fn args<I, S>(&mut self, args: I) -> &mut Self
     where
         I: IntoIterator<Item = S>,
@@ -556,11 +558,14 @@ impl Batten {
         self
     }
 
+    /// [`std::process::Command::current_dir`]. Read again when the command
+    /// spawns, so moving it after construction is still judged.
     pub(crate) fn current_dir<P: AsRef<Path>>(&mut self, dir: P) -> &mut Self {
         self.0.current_dir(dir);
         self
     }
 
+    /// [`std::process::Command::env`], returning the door so a chain keeps its refusal.
     pub(crate) fn env<K, V>(&mut self, key: K, value: V) -> &mut Self
     where
         K: AsRef<std::ffi::OsStr>,
@@ -570,6 +575,7 @@ impl Batten {
         self
     }
 
+    /// [`std::process::Command::envs`], returning the door so a chain keeps its refusal.
     pub(crate) fn envs<I, K, V>(&mut self, vars: I) -> &mut Self
     where
         I: IntoIterator<Item = (K, V)>,
@@ -580,21 +586,26 @@ impl Batten {
         self
     }
 
+    /// [`std::process::Command::env_remove`], returning the door so a chain keeps
+    /// its refusal.
     pub(crate) fn env_remove<K: AsRef<std::ffi::OsStr>>(&mut self, key: K) -> &mut Self {
         self.0.env_remove(key);
         self
     }
 
+    /// [`std::process::Command::stdin`], returning the door so a chain keeps its refusal.
     pub(crate) fn stdin<T: Into<std::process::Stdio>>(&mut self, cfg: T) -> &mut Self {
         self.0.stdin(cfg);
         self
     }
 
+    /// [`std::process::Command::stdout`], returning the door so a chain keeps its refusal.
     pub(crate) fn stdout<T: Into<std::process::Stdio>>(&mut self, cfg: T) -> &mut Self {
         self.0.stdout(cfg);
         self
     }
 
+    /// [`std::process::Command::stderr`], returning the door so a chain keeps its refusal.
     pub(crate) fn stderr<T: Into<std::process::Stdio>>(&mut self, cfg: T) -> &mut Self {
         self.0.stderr(cfg);
         self
@@ -1325,6 +1336,9 @@ pub(crate) fn run_with_stdin(dir: &Path, args: &[&str], input: &str) -> Output {
     stdin_run(&mut batten(), dir, args, input)
 }
 
+/// Run `command` in `dir` with `args`, writing `input` to its stdin and closing
+/// it, and capture its output. Refuses a fall-through BEFORE the spawn, since it
+/// runs below `Batten`'s own methods.
 #[expect(
     clippy::disallowed_types,
     reason = "stays, and test-only: this IS the spawn-and-pipe harness, and taking the command lets the two entry points above share one body rather than drifting apart — the founding reason this module exists"

@@ -28,6 +28,8 @@ fn falls_through(dir: &Path) -> bool {
     batten::git::worktree_root(dir).is_ok_and(|owner| !owner.starts_with(&scratch))
 }
 
+/// The binary's door refuses a spawn in a bare scratch directory exactly when it
+/// falls through.
 #[test]
 fn a_spawn_whose_cwd_falls_through_to_the_checkout_is_refused() {
     let bare = common::scratch("harness-isolation-bare");

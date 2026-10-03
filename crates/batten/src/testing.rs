@@ -126,6 +126,7 @@ mod tests {
         dir
     }
 
+    /// A fixture with no repository of its own resolves to the enclosing checkout.
     #[test]
     fn a_fixture_with_no_repository_under_the_scratch_root_falls_through() {
         let dir = checkout("bare");
@@ -135,6 +136,7 @@ mod tests {
         ));
     }
 
+    /// A repository between the fixture and the scratch root owns it.
     #[test]
     fn a_repository_anywhere_up_to_the_scratch_root_owns_the_fixture() {
         let dir = checkout("owned");
@@ -146,6 +148,8 @@ mod tests {
         ));
     }
 
+    /// An empty `.git` is no repository, so ownership is resolved, never inferred
+    /// from the entry existing (review of #1089).
     #[test]
     fn a_dot_git_that_is_not_a_repository_owns_nothing() {
         let dir = checkout("hollow");
@@ -156,6 +160,8 @@ mod tests {
         ));
     }
 
+    /// Only a directory under the scratch root is judged; the real root is not a
+    /// fixture.
     #[test]
     fn a_directory_outside_the_scratch_root_is_not_judged() {
         let dir = checkout("outside");

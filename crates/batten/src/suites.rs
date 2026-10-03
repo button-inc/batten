@@ -487,6 +487,8 @@ mod tests {
         names.iter().map(|name| (*name).to_owned()).collect()
     }
 
+    /// Fails by: keying on the first `::` segment (a nested module folds into its
+    /// parent), counting a setup script as a module, or dropping the cost order.
     #[test]
     fn a_nextest_report_yields_one_row_per_module_ordered_by_cost() {
         let report = concat!(
@@ -520,6 +522,8 @@ mod tests {
         );
     }
 
+    /// Fails by: rendering the nextest table with the bats corpus's serial-total
+    /// wording, which a concurrent run's summed case durations are not.
     #[test]
     fn a_nextest_table_says_its_figures_are_summed_case_durations() {
         let rows = vec![Row {

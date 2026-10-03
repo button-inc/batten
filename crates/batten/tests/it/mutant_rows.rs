@@ -45,6 +45,7 @@ fn indented_rows(root: &Path) -> Vec<String> {
     found
 }
 
+/// Every tracked `//MUTANT` row sits at column 0, where `mutate` reads it.
 #[test]
 fn no_rust_mutation_row_is_indented() {
     let found = indented_rows(&common::at_root("."));
