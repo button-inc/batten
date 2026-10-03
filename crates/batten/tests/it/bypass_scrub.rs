@@ -222,15 +222,14 @@ fn the_ambient_state_root_never_reaches_the_binary_under_test() {
 #[test]
 fn an_admission_in_the_store_disarms_the_committed_protected_gate() {
     let root = at_root("batten.toml");
-    // No committed gate while the owner has it off, so nothing to disarm.
-    if !common::committed_protected_declared() {
-        return;
-    }
     let root = root.parent().expect("the committed config has a parent");
+    // Whatever the committed set guards today, so the case asserts while the
+    // owner's own set is switched off rather than returning (CLOUD-2059).
+    let subject = common::committed_protected_path();
     let payload = serde_json::json!({
         "hook_event_name": "PreToolUse",
         "tool_name": "Bash",
-        "tool_input": {"command": "mv batten.toml elsewhere.toml"},
+        "tool_input": {"command": format!("mv {subject} elsewhere")},
     })
     .to_string();
 
@@ -257,7 +256,7 @@ fn an_admission_in_the_store_disarms_the_committed_protected_gate() {
             "--verdict",
             "path write refused",
             "--subject",
-            "batten.toml",
+            subject,
         ],
         answers,
     );
@@ -285,7 +284,7 @@ fn an_admission_in_the_store_disarms_the_committed_protected_gate() {
             "--verdict",
             "path write refused",
             "--subject",
-            "batten.toml",
+            subject,
         ],
     );
     assert!(

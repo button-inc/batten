@@ -66,10 +66,17 @@
 # is in force that this gate can vouch for.
 #MUTANT-SUITE crates/batten/tests/it/nextest_slow.rs
 #MUTANT terminator-unread|s@^\tcontains(line, "terminate-after")$@\ttrue@|a_declaration_without_terminate_after_is_refused
-#MUTANT ceiling-may-rise|s@^\tkill > ceiling_seconds$@\tfalse@|a_kill_threshold_above_the_ceiling_is_refused
+#MUTANT ceiling-may-rise|s@^\tkill > ceiling_seconds$@\tfalse@|a_period_above_the_ceiling_is_refused
 #MUTANT declaration-unread|s@^lines := input.tree.lines\[config\]$@lines := []@|the_committed_config_declares_a_terminating_slow_timeout
 #MUTANT override-reason-unread|s@^\tnot filed(i)$@\ttrue@|an_override_that_cites_a_row_is_clean
-#MUTANT multiplier-ignored|s@^\tkill := period \* multiplier$@\tkill := period@|a_kill_threshold_above_the_ceiling_is_refused
+#MUTANT multiplier-ignored|s@^\tkill := period \* multiplier$@\tkill := period@|a_small_period_with_a_large_multiplier_is_refused
+#MUTANT retry-admitted|s@^\tretry_key(key_of(line))$@\tfalse@|a_retry_declaration_is_refused
+#MUTANT scheduling-override-unread|s@^\tkey_of(line) in scheduling_keys$@\tfalse@|an_override_citing_no_row_is_refused
+#MUTANT citation-window-widened|s@^\t\tstartswith(trim_space(lines\[k\]), "#")$@\t\ttrue@|a_citation_in_an_earlier_section_does_not_file_an_override
+#
+# The first, second and fourth rows named `test_` rules of this module, which
+# `mutate` cannot run: a Rust suite is a libtest filter, so each named no case
+# and swept as a filter fault. They name the engine tier's cases now (CLOUD-2059).
 #
 # THE THIRD MUTATION EMPTIES THE LINE WALK rather than negating a conjunct, for
 # `landing-roster-guarded`'s reason: emptying it makes the declaration
@@ -95,6 +102,8 @@ rules contains "suite bind missing"
 rules contains "bound edit refused"
 
 rules contains "waiver file missing"
+
+rules contains "suite retry refused"
 
 # The runner's committed configuration. A consumer path in a consumer module,
 # which is where non-negotiable rule 1 puts it.
@@ -156,14 +165,56 @@ override_at contains i if {
 	startswith(section(i), "[[profile.default.overrides]]")
 }
 
-# An override whose preceding comment block cites a tracker row. The window is
-# generous because the rationale for an exception is prose, and prose is the point
-# — an exception nobody explained is the thing this refuses.
-filed(i) if {
+# The index of the section header line `i` belongs to.
+header_of(i) := max([j |
 	some j, line in lines
 	j < i
-	i - j <= 30
+	startswith(trim_space(line), "[")
+])
+
+# An override whose section is preceded by an UNBROKEN comment block citing a
+# tracker row. The rationale for an exception is prose, and prose is the point —
+# an exception nobody explained is the thing this refuses.
+#
+# THE BLOCK DIRECTLY ABOVE ITS OWN HEADER, NOT A LINE WINDOW (CLOUD-2059). A
+# 30-line window let a row cited for a DIFFERENT section file this one: the
+# override this repository carried until CLOUD-2059 had no comment of its own and
+# read as filed only through another section's citation.
+filed(i) if {
+	h := header_of(i)
+	some j, line in lines
+	j < h
 	contains(line, "CLOUD-")
+	every k in numbers.range(j, h - 1) {
+		startswith(trim_space(lines[k]), "#")
+	}
+}
+
+# A non-comment `key = value` line's key.
+key_of(line) := trim_space(split(line, "=")[0]) if {
+	not startswith(trim_space(line), "#")
+	contains(line, "=")
+}
+
+retry_key(key) if key == "retries"
+
+# A RETRY, anywhere in the file: a profile's or an override's. `retries = 0` is
+# the default spelled out and retries nothing.
+retry_at contains i if {
+	some i, line in lines
+	retry_key(key_of(line))
+	trim_space(split(line, "=")[1]) != "0"
+}
+
+# The scheduling keys an override can set to give one case the machine, or a
+# group of it. Each is an exception to how every other case is run, so each owes
+# the same filed reason a slow-timeout override does.
+scheduling_keys := {"threads-required", "test-group"}
+
+scheduled_at contains i if {
+	some i, line in lines
+	key_of(line) in scheduling_keys
+	startswith(section(i), "[[profile.")
 }
 
 # The kill threshold in seconds: `period x terminate-after`, read with string
@@ -226,6 +277,28 @@ violation contains {
 	"subjects": [{"path": config}],
 } if {
 	some i in override_at
+	not filed(i)
+}
+
+# FLAKES ARE FIXED, NEVER RETRIED (CLOUD-2059). A retry turns a case that fails
+# one run in three into a green suite, and the flake it hides is the one this
+# repository's every recorded failure traced to: shared state, a clock, an order.
+violation contains {
+	"rule": "suite retry refused",
+	"verdict": "suite retry refused",
+	"subjects": [{"path": config}],
+} if {
+	count(retry_at) > 0
+}
+
+# A SCHEDULING EXCEPTION NOBODY EXPLAINED, on the same terms as a slow-timeout
+# override: giving one case the whole machine serialises the run around it.
+violation contains {
+	"rule": "waiver file missing",
+	"verdict": "waiver file missing",
+	"subjects": [{"path": config}],
+} if {
+	some i in scheduled_at
 	not filed(i)
 }
 
@@ -354,4 +427,53 @@ test_an_override_above_the_ceiling_is_not_a_raise if {
 	every v in violation {
 		v.rule != "nextest-slow-raised"
 	} with input as tree({".config/nextest.toml": filed_override})
+}
+
+# --- retries and scheduling exceptions (CLOUD-2059) ----------------------------
+
+test_a_retry_declaration_is_refused if {
+	some v in violation with input as tree({".config/nextest.toml": array.concat(armed, ["retries = 2"])})
+	v.verdict == "suite retry refused"
+}
+
+test_a_retry_in_an_override_is_refused if {
+	count(violation) == 1 with input as tree({".config/nextest.toml": array.concat(armed, [
+		"",
+		"# CLOUD-1641 owns this.",
+		"[[profile.default.overrides]]",
+		"filter = 'test(flaky)'",
+		"retries = 3",
+	])})
+}
+
+test_zero_retries_and_a_commented_retry_are_not_retries if {
+	count(violation) == 0 with input as tree({".config/nextest.toml": array.concat(armed, ["retries = 0", "# retries = 2"])})
+}
+
+unfiled_threads := array.concat(armed, [
+	"",
+	"[[profile.default.overrides]]",
+	"filter = 'test(alone)'",
+	"threads-required = \"num-test-threads\"",
+])
+
+test_a_threads_required_override_citing_no_row_is_refused if {
+	some v in violation with input as tree({".config/nextest.toml": unfiled_threads})
+	v.verdict == "waiver file missing"
+}
+
+test_a_threads_required_override_cited_directly_above_is_clean if {
+	count(violation) == 0 with input as tree({".config/nextest.toml": array.concat(armed, [
+		"",
+		"# CLOUD-1641: this case measures the whole machine.",
+		"[[profile.default.overrides]]",
+		"filter = 'test(alone)'",
+		"threads-required = \"num-test-threads\"",
+	])})
+}
+
+# A ROW CITED FOR ANOTHER SECTION DOES NOT FILE THIS ONE: a blank line ends the
+# block, so the citation above `[profile.default]` is not this override's.
+test_a_citation_in_an_earlier_section_does_not_file_an_override if {
+	count(violation) == 1 with input as tree({".config/nextest.toml": array.concat(["# CLOUD-1641 owns the default."], unfiled_threads)})
 }

@@ -3091,9 +3091,7 @@ mod tests {
             "an absent record is could-not-look, never a reclaimed group"
         );
 
-        let Ok(dir) = crate::state::repo_state_dir(&root) else {
-            return;
-        };
+        let dir = crate::state::repo_state_dir(&root).expect("the contained state root resolves");
         let exec_dir = dir.join("exec");
         std::fs::create_dir_all(&exec_dir).expect("seed the record directory");
         let path = exec_dir.join(format!("group.{}", std::process::id()));

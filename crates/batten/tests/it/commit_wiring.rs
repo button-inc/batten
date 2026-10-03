@@ -328,18 +328,34 @@ fn this_repos_own_history_satisfies_its_committed_convention() {
     // Consumer #1, end to end: the pattern in batten.toml is the one this
     // repository's commits actually follow, so the move changed where the rule
     // lives and not which commits it admits. A clone with no parent commit has no
-    // range to judge, and says so by returning.
+    // range to judge, so HEAD's own message is judged instead — it used to return,
+    // passing over nothing, on every shallow clone (CLOUD-2059).
     let root = root();
     let parent = common::git_command(&root, &["rev-parse", "HEAD~1"])
         .output()
         .expect("run git");
-    if !parent.status.success() {
-        return;
-    }
-    let base = String::from_utf8_lossy(&parent.stdout).trim().to_owned();
-    let head = common::git_in(&root, &["rev-parse", "HEAD"]);
-    let range = format!("{base}..{head}");
-    let output = common::run(&root, &["commit", "check", &range]);
+    let output = if parent.status.success() {
+        let base = String::from_utf8_lossy(&parent.stdout).trim().to_owned();
+        let head = common::git_in(&root, &["rev-parse", "HEAD"]);
+        common::run(&root, &["commit", "check", &format!("{base}..{head}")])
+    } else {
+        let message = common::scratch("commit-wiring-head").join("MESSAGE");
+        fs::create_dir_all(message.parent().expect("a parent")).expect("the scratch dir");
+        fs::write(
+            &message,
+            common::git_in(&root, &["log", "-1", "--format=%B"]),
+        )
+        .expect("write HEAD's message");
+        common::run(
+            &root,
+            &[
+                "commit",
+                "check",
+                "--message",
+                message.to_str().expect("utf-8"),
+            ],
+        )
+    };
     assert!(
         output.status.success(),
         "the committed convention refuses this repository's own last commit: {}{}",

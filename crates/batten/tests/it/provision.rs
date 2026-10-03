@@ -928,13 +928,17 @@ fn host_ca_configuration_reaches_the_fetch() {
 // fixture: asserting on what the CHILD saw is the only way to catch a launcher
 // that writes a plausible file and passes nothing on, and it needs no shell.
 
-/// Where this host keeps `env(1)`, or `None` if the fixture cannot run here.
+/// Where this host keeps `env(1)`.
+///
+/// POSIX puts it on every unix host, so its absence FAILS (CLOUD-2059): these
+/// cases used to return, passing, wherever neither path resolved.
 #[cfg(unix)]
-fn env_binary() -> Option<PathBuf> {
+fn env_binary() -> PathBuf {
     ["/usr/bin/env", "/bin/env"]
         .into_iter()
         .map(PathBuf::from)
         .find(|path| path.is_file())
+        .expect("`env(1)` is at /usr/bin/env or /bin/env on every unix host")
 }
 
 /// A manifest whose one entry links, and optionally declares an environment.
@@ -982,9 +986,7 @@ fn an_entry_declaring_no_environment_is_still_a_plain_copy() {
 #[cfg(unix)]
 #[test]
 fn a_launcher_hands_the_tool_an_environment_a_manifest_could_not() {
-    let Some(system_env) = env_binary() else {
-        return;
-    };
+    let system_env = env_binary();
     let env = Env::new("provision-launcher-env");
     let dest = env.repo.parent().unwrap().join("bin-launcher");
     let bytes = fs::read(&system_env).unwrap();
@@ -1047,9 +1049,7 @@ fn a_launcher_hands_the_tool_an_environment_a_manifest_could_not() {
 #[cfg(unix)]
 #[test]
 fn the_prepend_adds_nothing_it_already_carries() {
-    let Some(system_env) = env_binary() else {
-        return;
-    };
+    let system_env = env_binary();
     let env = Env::new("provision-launcher-idempotent");
     let dest = env.repo.parent().unwrap().join("bin-idem");
     let bytes = fs::read(&system_env).unwrap();
@@ -1080,9 +1080,7 @@ fn the_prepend_adds_nothing_it_already_carries() {
 #[cfg(unix)]
 #[test]
 fn a_credential_no_source_carries_is_left_unset() {
-    let Some(system_env) = env_binary() else {
-        return;
-    };
+    let system_env = env_binary();
     let env = Env::new("provision-launcher-no-token");
     let dest = env.repo.parent().unwrap().join("bin-no-token");
     let bytes = fs::read(&system_env).unwrap();
@@ -1225,38 +1223,24 @@ fn conditioned_rows(org: &str) -> String {
     )
 }
 
-/// A bundle holding exactly one certificate, taken from the host's own, plus the
-/// organisation that certificate names.
+/// A bundle holding exactly one certificate, plus the organisation it names.
 ///
-/// Built from a real bundle rather than a literal because the predicate is about
+/// A REAL CERTIFICATE rather than a literal, because the predicate is about
 /// PARSING: a hand-written fixture would assert that the fixture is shaped the
 /// way its author imagined, which is the tautology the second tier exists to
-/// avoid. `None` where the host has no readable bundle or none of its
-/// authorities names an organisation — the case is skipped rather than passing
-/// vacuously.
+/// avoid. COMMITTED rather than read off the host, which this used to do and
+/// return — passing — on a host with no readable bundle (CLOUD-2059): ISRG Root
+/// X1, a public root, so every leg parses the same bytes.
 #[cfg(unix)]
-fn one_certificate_bundle(into: &Path) -> Option<String> {
-    const FOOTER: &str = "-----END CERTIFICATE-----";
-
-    let source = ["SSL_CERT_FILE", "CURL_CA_BUNDLE"]
-        .into_iter()
-        .filter_map(std::env::var_os)
-        .map(PathBuf::from)
-        .find(|path| path.is_file())
-        .or_else(|| {
-            let system = PathBuf::from("/etc/ssl/certs/ca-certificates.crt");
-            system.is_file().then_some(system)
-        })?;
-    let text = fs::read_to_string(&source).ok()?;
-    for block in text.split_inclusive(FOOTER).filter(|b| b.contains(FOOTER)) {
-        let pem = block.trim_start();
-        let Some(org) = batten::provision::organisation_of(pem) else {
-            continue;
-        };
-        fs::write(into, pem).ok()?;
-        return Some(org);
-    }
-    None
+fn one_certificate_bundle(into: &Path) -> String {
+    const ROOT: &str = include_str!("../fixtures/certs/isrg-root-x1.pem");
+    fs::write(into, ROOT).expect("write the one-certificate bundle");
+    let org = batten::provision::organisation_of(ROOT).expect("the root names its organisation");
+    assert_eq!(
+        org, "Internet Security Research Group",
+        "the subject's `O =`"
+    );
+    org
 }
 
 /// THE ROW APPLIES ONLY WHERE THE NAMED AUTHORITY IS TRUSTED, and the negative
@@ -1265,14 +1249,10 @@ fn one_certificate_bundle(into: &Path) -> Option<String> {
 #[cfg(unix)]
 #[test]
 fn a_conditioned_row_applies_only_where_the_trust_bundle_names_that_authority() {
-    let Some(system_env) = env_binary() else {
-        return;
-    };
+    let system_env = env_binary();
     let env = Env::new("provision-trust-condition");
     let bundle = env.repo.parent().unwrap().join("one-ca.pem");
-    let Some(present_org) = one_certificate_bundle(&bundle) else {
-        return;
-    };
+    let present_org = one_certificate_bundle(&bundle);
     let bytes = fs::read(&system_env).unwrap();
 
     let run = |org: &str, dest: &Path| -> String {
@@ -1315,9 +1295,7 @@ fn a_conditioned_row_applies_only_where_the_trust_bundle_names_that_authority() 
 #[cfg(unix)]
 #[test]
 fn an_unreadable_trust_bundle_does_not_apply_the_bypass() {
-    let Some(system_env) = env_binary() else {
-        return;
-    };
+    let system_env = env_binary();
     let env = Env::new("provision-trust-unreadable");
     let dest = env.repo.parent().unwrap().join("bin-unreadable");
     let bytes = fs::read(&system_env).unwrap();

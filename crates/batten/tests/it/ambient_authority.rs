@@ -213,17 +213,19 @@ fn bound_four_the_policy_authority_is_a_protected_path() {
     };
     // THE GATE IS SWITCHABLE, NOT OPTIONAL: the owner turned it off until a skill
     // adjudicates admission statements. Off is legal only while the authority says
-    // so in the marker below, so a set that silently vanished still reds here.
-    if !crate::common::committed_protected_declared() {
-        return;
-    }
+    // so in its marker, which `committed_protected_declared` asserts, so a set that
+    // silently vanished still reds here. Asserted in both states rather than
+    // returned from in one (CLOUD-2059): the parsed set guards the authority
+    // exactly when the owner's set is declared.
     let Look::Is(Node::List(protected)) = config.at("protected") else {
         panic!("the authority declares no protected set");
     };
     let guarded: Vec<String> = protected.iter().filter_map(Node::scalar).collect();
-    assert!(
+    assert_eq!(
         guarded.iter().any(|path| path == "batten.toml"),
-        "the policy authority is not in its own protected set"
+        crate::common::committed_protected_declared(),
+        "the policy authority is in its own protected set exactly while the owner's set \
+         is declared: {guarded:?}"
     );
 }
 

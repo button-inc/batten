@@ -6006,11 +6006,19 @@ declared_in = "crates/batten/tests/**/*.rs"
 # would have failed on its own documentation. An attribute always begins a line;
 # a mention does not. (`budget.rs` anchors its HTML-comment scan for the same
 # reason.)
+#
+# WIDENED TO AN EXPRESSION (CLOUD-2059), because the literal saw one spelling of
+# four. Every `ignore` this tree actually carried was a form it could not count:
+# `#[cfg_attr(not(unix), ignore = "…")]`, so the row guarded nothing that
+# existed. Nor could it count `#[ignore = "…"]`, the form a new skip is most
+# likely to take, or an indented `#[ignore]` inside a test module. The anchor is
+# the same as before, with indentation allowed: an attribute begins its line and
+# a mention does not.
 [[rule]]
 id = "test skip refused"
 kind = "ratchet"
 glob = "crates/**/*.rs"
-pattern = "\n#[ignore]"
+regex = '(?m)^[ \t]*#\[(?:ignore\b|cfg_attr\(.*\bignore\b)'
 direction = "non_increasing"
 base = "origin/main"
 severity = "deny"
@@ -11020,9 +11028,14 @@ measured = "2026-09-07"
 # since CLOUD-2018: the count is a trend counter, and the floor moves only from a
 # measurement. This lap closed at 11634MB free against main's measured 10935MB
 # warm floor. NO FLOOR MEASUREMENT IS CLAIMED BY THIS ENTRY.
+#
+# 2026-10-03, 370 -> 381: the test-suite campaign's censuses and cases
+# (CLOUD-2059), `wall_clock.rs` and `silent_skip.rs` among them. `target-prune`
+# reported `declared 370, live 381`. The count moves and the floors do not, on the
+# same terms as the entries above. NO FLOOR MEASUREMENT IS CLAIMED BY THIS ENTRY.
 [prune.warm.basis]
 glob = "crates/batten/tests/**/*.rs"
-count = 370
+count = 381
 tolerance = 10
 
 # COLD'S BASIS MOVES AND COLD'S FLOOR DOES NOT, and that is the entry above
@@ -11045,7 +11058,7 @@ glob = "crates/batten/tests/**/*.rs"
 # 298, moved with warm's by the 2026-09-25 entry above and for the reason the
 # 2026-09-06 entry measured: a basis refreshed on one arm and not the other makes
 # the very next lap refuse on the arm that was left behind.
-count = 370
+count = 381
 tolerance = 10
 
 # THE REGROWABLE ROOTS THE ESCALATION MAY DROP (CLOUD-1157), in the order it drops
@@ -17811,9 +17824,21 @@ target = "policy/nextest-slow.rego"
 
 [[verdict]]
 id = "waiver file missing"
-gloss = "a per-test slow-timeout override cites no tracker row, so the exception is written but not filed"
+gloss = "a per-test override cites no tracker row directly above it, so the exception is written but not filed"
 class = """
 A per-test override is how a legitimately slow case keeps the ban in force for every other case, so the mechanism is sanctioned and the ceiling deliberately does not reach it. What it owes instead is a reason a reader can follow: an override with no row behind it is the ban switched off for whichever test was inconvenient, and an unexplained exception is the thing that rots while looking like policy.
+"""
+
+[[verdict.route]]
+id = "module read first"
+kind = "document"
+target = "policy/nextest-slow.rego"
+
+[[verdict]]
+id = "suite retry refused"
+gloss = "the runner config retries a failing case, so a flake reads as a pass"
+class = """
+A retry turns a case that fails one run in three into a green suite, and the flake it hides is the kind every failure this repository recorded traced to: shared state, a clock read, an order between cases. The remedy is the cause, never the count: fix the state the case shares, assert the outcome rather than the time, or give the case its own fixture.
 """
 
 [[verdict.route]]

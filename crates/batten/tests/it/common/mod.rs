@@ -1055,6 +1055,52 @@ pub(crate) fn committed_protected_declared() -> bool {
     declared
 }
 
+/// The tool `mise.toml` pins under `name`, resolved the way `mise exec` resolves it.
+///
+/// A MISSING TOOL IS A FAILURE (CLOUD-2059). Every leg that runs this suite
+/// installs what it pins, so a tool that does not resolve is a misprovisioned leg;
+/// the three suites that each kept their own copy of this lookup returned `None`
+/// there and their cases returned with it, passing over a tool they never ran.
+///
+/// # Panics
+///
+/// When `mise` cannot run, or the tool does not resolve to a file.
+#[must_use]
+pub(crate) fn require_tool(name: &str) -> PathBuf {
+    #[expect(
+        clippy::disallowed_types,
+        reason = "stays: resolving a pinned tool is what `mise exec` does in the task, and a fixture repo carries no mise config for `mise exec` to read (CLOUD-843, CLOUD-1268, CLOUD-1991)"
+    )]
+    let output = std::process::Command::new("mise")
+        .args(["which", name])
+        .current_dir(at_root("."))
+        .output()
+        .expect("run `mise which`");
+    let path = PathBuf::from(String::from_utf8_lossy(&output.stdout).trim());
+    assert!(
+        output.status.success() && path.is_file(),
+        "`{name}` is provisioned by mise.toml on every leg that runs this suite: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    path
+}
+
+/// A path the committed protected set guards TODAY: the policy authority while the
+/// owner's set is declared, and otherwise the asked ledger the narrower set always
+/// guards (CLOUD-1078).
+///
+/// So a case asserting the committed gate always has a subject to assert over,
+/// rather than returning — and passing — while the owner has their set switched
+/// off (CLOUD-2059).
+#[must_use]
+pub(crate) fn committed_protected_path() -> &'static str {
+    if committed_protected_declared() {
+        "batten.toml"
+    } else {
+        ".batten/asked.jsonl"
+    }
+}
+
 /// A fixture carrying the committed `batten.toml` and policy modules, with the
 /// protected-path set DECLARED — the engine's protected-path mechanism under
 /// this repository's own rows, independent of whether the owner has the

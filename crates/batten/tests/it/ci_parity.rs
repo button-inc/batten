@@ -950,10 +950,9 @@ fn the_committed_lane_reserves_a_slot_a_freeze_cannot_consume() {
 
     // Only a composition is refused, so a lane with no freeze label keeps its
     // right to a single slot. Reading the label's presence rather than assuming it
-    // is what keeps this case honest if that key is ever retired.
-    if !text.contains("stopUpdatingLabel") {
-        return;
-    }
+    // is what keeps this case honest if that key is ever retired. Asserted as the
+    // implication it is, on every run, rather than returned from (CLOUD-2059).
+    let freezes = text.contains("stopUpdatingLabel");
 
     // THE KEY LINE, NEVER THE PROSE. The first draft of this case used
     // `split_once("prConcurrentLimit:")` over the whole file and read the value
@@ -972,7 +971,7 @@ fn the_committed_lane_reserves_a_slot_a_freeze_cannot_consume() {
         .expect("renovate.json5 declares a numeric `prConcurrentLimit`");
 
     assert!(
-        limit > 1,
+        !freezes || limit > 1,
         "`prConcurrentLimit: {limit}` composed with `stopUpdatingLabel` lets one frozen \
          pull request hold the only slot and stop every ecosystem's updates — measured at \
          28 days on #676 (CLOUD-1881). Reserve a slot a freeze cannot consume."

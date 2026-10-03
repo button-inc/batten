@@ -49,6 +49,7 @@ use crate::common;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use batten::testing::is_case;
 use syn::visit::Visit;
 
 /// One literal scratch name, where it was spelled, and whether a case owns it.
@@ -230,15 +231,6 @@ fn literal_name(
         return None;
     };
     Some(text.value())
-}
-
-fn is_case(attrs: &[syn::Attribute]) -> bool {
-    attrs.iter().any(|attr| {
-        attr.path()
-            .segments
-            .last()
-            .is_some_and(|segment| segment.ident == "test")
-    })
 }
 
 impl<'ast> Visit<'ast> for Sites {

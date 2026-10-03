@@ -381,28 +381,10 @@ hooks: Mapping<String, Hook> = new {
 /// The line of [`PKL_SOUND`] that routes the one fixer.
 const PKL_ROUTE: &str = "  [\"deno-fmt\"] = gate[\"deno-fmt\"]\n";
 
-/// The pinned `pkl`, or `None` where it is not installed — `hk_binary`'s shape.
-fn pkl_binary() -> Option<PathBuf> {
-    #[expect(
-        clippy::disallowed_types,
-        reason = "stays — CLOUD-1991: the subject IS a Pkl module, so exercising it means running the pinned `pkl`; resolving it is what `mise exec pkl` does in the task"
-    )]
-    let output = std::process::Command::new("mise")
-        .args(["which", "pkl"])
-        .current_dir(common::at_root("."))
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let path = PathBuf::from(String::from_utf8(output.stdout).ok()?.trim());
-    path.is_file().then_some(path)
-}
-
 /// Evaluate the committed predicate beside `config`: whether it passed, and
 /// everything it printed.
-fn fix_selection(name: &str, config: &str) -> Option<(bool, String)> {
-    let pkl = pkl_binary()?;
+fn fix_selection(name: &str, config: &str) -> (bool, String) {
+    let pkl = common::require_tool("pkl");
     let root = common::scratch(&format!("hk-fix-selection-pkl-{name}"));
     common::write(&root, "hk.pkl", config);
     fs::copy(
@@ -422,7 +404,7 @@ fn fix_selection(name: &str, config: &str) -> Option<(bool, String)> {
         .expect("pkl runs the predicate");
     let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
     text.push_str(&String::from_utf8_lossy(&output.stderr));
-    Some((output.status.success(), text))
+    (output.status.success(), text)
 }
 
 /// The control: without it, both refusals below could come from a module that
@@ -430,9 +412,7 @@ fn fix_selection(name: &str, config: &str) -> Option<(bool, String)> {
 /// deliberately outside the subset must not read as unrouted.
 #[test]
 fn the_pkl_predicate_passes_a_fix_hook_selecting_exactly_the_fixers() {
-    let Some((passed, text)) = fix_selection("sound", PKL_SOUND) else {
-        return;
-    };
+    let (passed, text) = fix_selection("sound", PKL_SOUND);
     assert!(passed, "the sound config should pass: {text}");
     assert!(
         text.contains("selects exactly the gate's fixer-bearing steps"),
@@ -452,9 +432,7 @@ fn the_pkl_predicate_refuses_a_fixer_the_fix_hook_does_not_route() {
         "the fixture carries the route"
     );
     let config = PKL_SOUND.replace(PKL_ROUTE, "");
-    let Some((passed, text)) = fix_selection("unrouted", &config) else {
-        return;
-    };
+    let (passed, text) = fix_selection("unrouted", &config);
     assert!(
         !passed,
         "an unrouted fixer should fail the evaluation: {text}"
@@ -477,9 +455,7 @@ fn the_pkl_predicate_refuses_a_check_only_step_in_the_fix_hook() {
         PKL_ROUTE,
         &format!("{PKL_ROUTE}  [\"test\"] = gate[\"test\"]\n"),
     );
-    let Some((passed, text)) = fix_selection("not-a-fixer", &config) else {
-        return;
-    };
+    let (passed, text) = fix_selection("not-a-fixer", &config);
     assert!(
         !passed,
         "a check-only step should fail the evaluation: {text}"
@@ -611,7 +587,7 @@ fn staging_fixture(name: &str, stashing: bool) -> PathBuf {
 }
 
 #[cfg(unix)]
-/// Run the fixture's pre-commit gate, or `None` where hk is not installed.
+/// Run the fixture's pre-commit gate.
 ///
 /// `BATTEN_GATE_PID` is cleared deliberately. This runs INSIDE the real gate, and
 /// the installed hook body refuses to re-enter one already running (exit 9) — a
@@ -619,8 +595,8 @@ fn staging_fixture(name: &str, stashing: bool) -> PathBuf {
 /// fixture's gate is one `sed` and reaches nothing of this repo's, so there is no
 /// recursion to guard against here; leaving the marker set would make every case
 /// refuse rather than measure.
-fn run_fixture_gate(dir: &Path) -> Option<()> {
-    let hk = hk_binary()?;
+fn run_fixture_gate(dir: &Path) {
+    let hk = common::require_tool("hk");
     #[expect(
         clippy::disallowed_types,
         reason = "stays — CLOUD-1268: the subject IS a gate definition, so exercising it means running hk. The retired suite made this same spawn; it moved rather than being added, and it goes when `hk.pkl` does"
@@ -635,27 +611,6 @@ fn run_fixture_gate(dir: &Path) -> Option<()> {
     // fails its check before fixing and that is the run being measured. What each
     // case asserts is the TREE afterwards.
     let _ = status;
-    Some(())
-}
-
-#[cfg(unix)]
-/// The hk this clone pins, or `None` where it is not installed — in which case a
-/// case has learned nothing and says so rather than failing.
-fn hk_binary() -> Option<PathBuf> {
-    #[expect(
-        clippy::disallowed_types,
-        reason = "stays — CLOUD-1268: resolving the pinned tool is what `mise which hk` did in the retired suite's own setup, and a fixture repo has no mise config for `mise exec` to read"
-    )]
-    let output = std::process::Command::new("mise")
-        .args(["which", "hk"])
-        .current_dir(common::at_root("."))
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let path = PathBuf::from(String::from_utf8(output.stdout).ok()?.trim());
-    path.is_file().then_some(path)
 }
 
 #[cfg(unix)]
@@ -680,9 +635,7 @@ fn a_commit_contains_only_what_was_staged_with_another_change_dirty() {
     common::write(&dir, "b.txt", "b-changed\n");
     common::git_in(&dir, &["add", "a.txt"]);
 
-    if run_fixture_gate(&dir).is_none() {
-        return;
-    }
+    run_fixture_gate(&dir);
     let staged = common::git_in(&dir, &["diff", "--cached", "--name-only"]);
     assert_eq!(staged.trim(), "a.txt");
 }
@@ -698,9 +651,7 @@ fn the_unstaged_change_survives_the_fixer_byte_for_byte() {
     common::write(&dir, "b.txt", "b-changed\n");
     common::git_in(&dir, &["add", "a.txt"]);
 
-    if run_fixture_gate(&dir).is_none() {
-        return;
-    }
+    run_fixture_gate(&dir);
     assert_eq!(
         fs::read_to_string(dir.join("b.txt")).expect("read b.txt"),
         "b-changed\n"
@@ -721,9 +672,7 @@ fn shown_able_to_fail_without_the_setting_the_fixer_clobbers_the_unstaged_change
     common::write(&dir, "b.txt", "b-changed\n");
     common::git_in(&dir, &["add", "a.txt"]);
 
-    if run_fixture_gate(&dir).is_none() {
-        return;
-    }
+    run_fixture_gate(&dir);
     assert_eq!(
         fs::read_to_string(dir.join("b.txt")).expect("read b.txt"),
         "STAMPED b-changed\n",
@@ -740,9 +689,7 @@ fn the_fixers_own_change_to_a_staged_file_reaches_the_commit() {
     common::write(&dir, "a.txt", "a-changed\n");
     common::git_in(&dir, &["add", "a.txt"]);
 
-    if run_fixture_gate(&dir).is_none() {
-        return;
-    }
+    run_fixture_gate(&dir);
     assert_eq!(staged_content(&dir), vec!["a.txt:STAMPED a-changed"]);
 }
 
@@ -754,9 +701,7 @@ fn an_all_staged_commit_is_unchanged_in_shape() {
     common::write(&dir, "b.txt", "b-changed\n");
     common::git_in(&dir, &["add", "-A"]);
 
-    if run_fixture_gate(&dir).is_none() {
-        return;
-    }
+    run_fixture_gate(&dir);
     assert_eq!(
         staged_content(&dir),
         vec!["a.txt:STAMPED a-changed", "b.txt:STAMPED b-changed"]
@@ -774,9 +719,7 @@ fn an_all_staged_commit_is_unchanged_in_shape() {
 fn a_clean_tree_with_nothing_staged_rewrites_nothing() {
     let dir = staging_fixture("clean", true);
 
-    if run_fixture_gate(&dir).is_none() {
-        return;
-    }
+    run_fixture_gate(&dir);
     assert!(
         common::git_in(&dir, &["status", "--porcelain"])
             .trim()

@@ -5061,9 +5061,11 @@ mod tests {
     /// the offset-base decoder over bytes GitHub actually built.
     #[test]
     fn a_ref_fetches_and_its_objects_arrive() {
-        let Ok(reference) = std::env::var("BATTEN_LIVE_FETCH_REF") else {
+        if !cfg!(feature = "live-remote") {
             return;
-        };
+        }
+        let reference = std::env::var("BATTEN_LIVE_FETCH_REF")
+            .expect("`live-remote` names the ref in BATTEN_LIVE_FETCH_REF");
         let remote = std::env::var("BATTEN_LIVE_PUSH_REMOTE").expect("remote url");
         let repo = std::path::Path::new(".");
         let fetched = fetch(&remote, repo, &reference).expect("fetch");
@@ -5095,9 +5097,11 @@ mod tests {
     /// engine can USE what it fetched, which is the whole point of the capability.
     #[test]
     fn fetched_objects_land_in_the_odb_and_the_ref_moves() {
-        let Ok(reference) = std::env::var("BATTEN_LIVE_ROUNDTRIP_REF") else {
+        if !cfg!(feature = "live-remote") {
             return;
-        };
+        }
+        let reference = std::env::var("BATTEN_LIVE_ROUNDTRIP_REF")
+            .expect("`live-remote` names the ref in BATTEN_LIVE_ROUNDTRIP_REF");
         let remote = std::env::var("BATTEN_LIVE_PUSH_REMOTE").expect("remote url");
         let repo = std::path::Path::new(".");
         let fetched = fetch(&remote, repo, &reference).expect("fetch");
@@ -5136,9 +5140,11 @@ mod tests {
     /// code's, and the landing loop treats a failed delete as best-effort anyway.
     #[test]
     fn a_scratch_ref_deletes_when_asked() {
-        let Ok(reference) = std::env::var("BATTEN_LIVE_DELETE_REF") else {
+        if !cfg!(feature = "live-remote") {
             return;
-        };
+        }
+        let reference = std::env::var("BATTEN_LIVE_DELETE_REF")
+            .expect("`live-remote` names the ref in BATTEN_LIVE_DELETE_REF");
         let remote = std::env::var("BATTEN_LIVE_PUSH_REMOTE").expect("remote url");
         let outcome = delete_ref(&remote, &reference).expect("delete");
         assert_eq!(outcome, Outcome::Applied, "the scratch delete must apply");
@@ -5152,9 +5158,11 @@ mod tests {
     /// case that pushes from CI.
     #[test]
     fn a_branch_pushes_to_a_scratch_ref_when_asked() {
-        let Ok(reference) = std::env::var("BATTEN_LIVE_PUSH_REF") else {
+        if !cfg!(feature = "live-remote") {
             return;
-        };
+        }
+        let reference = std::env::var("BATTEN_LIVE_PUSH_REF")
+            .expect("`live-remote` names the ref in BATTEN_LIVE_PUSH_REF");
         let repo = std::path::Path::new(".");
         let remote = std::env::var("BATTEN_LIVE_PUSH_REMOTE").expect("remote url");
         let head = crate::git::head_commit(repo).expect("head");
@@ -5167,38 +5175,39 @@ mod tests {
         // THE SHAPE EVERY LEASE FIXTURE LACKS. A lease pack carries one commit and
         // one empty tree; a branch push carries commits, trees and blobs in the
         // hundreds, and the pack writer had never been asked for one. This drives
-        // the enumeration over THIS repository's own history — the only corpus to
-        // hand that is genuinely branch-shaped.
-        let repo = std::path::Path::new(".");
-        let Ok(head) = crate::git::head_commit(repo) else {
-            // A checkout this test cannot read is not a finding about the pack
-            // writer. Could-not-look, never a pass asserted over nothing.
-            return;
-        };
-        let Ok(parent) = crate::git::commits_in_range(repo, "HEAD~1", "HEAD") else {
-            return;
-        };
-        if parent.is_empty() {
-            return;
+        // the enumeration over a branch-shaped commit built here: new blobs under
+        // nested trees, beside a changed one at the root.
+        //
+        // IT USED TO WALK THIS CHECKOUT'S OWN `HEAD~1`, and returned — passing —
+        // wherever that was unreadable, which a shallow clone makes it
+        // (CLOUD-2059). A fixture's delta is also KNOWN, so the count is exact
+        // rather than a floor.
+        let repo = crate::scratch::scratch("lease-branch-shaped");
+        std::fs::create_dir_all(repo.join("src/nested")).expect("the nested trees");
+        std::fs::write(repo.join("README"), "base\n").expect("the base file");
+        crate::gitwrite::commit_paths(&repo, &["README".to_owned()], "base").expect("base");
+        let branch = ["README", "src/lib.rs", "src/nested/mod.rs"];
+        for path in branch {
+            std::fs::write(repo.join(path), format!("{path} on the branch\n")).expect("write");
         }
-        let Ok(objects) = crate::git::objects_to_send(repo, Some("HEAD~1"), &head) else {
-            return;
-        };
-        // One commit's worth of change touches at least the commit, the root tree
-        // and one blob. A set smaller than that is an enumeration that walked
-        // nothing, which is the failure a green suite would otherwise hide.
-        assert!(
-            objects.len() >= 3,
-            "one commit should enumerate at least commit + root tree + a blob, got {}",
-            objects.len()
+        let branch: Vec<String> = branch.iter().map(|path| (*path).to_owned()).collect();
+        crate::gitwrite::commit_paths(&repo, &branch, "branch").expect("the branch commit");
+        let head = crate::git::head_commit(&repo).expect("the fixture's head");
+        let objects = crate::git::objects_to_send(&repo, Some("HEAD~1"), &head).expect("enumerate");
+        // The commit, three trees (the root, `src`, `src/nested`) and three blobs.
+        // A smaller set is an enumeration that skipped a level, and a larger one
+        // resent what the base already holds.
+        let kinds = |kind| objects.iter().filter(|o| o.kind == kind).count();
+        assert_eq!(kinds(gix::object::Kind::Commit), 1, "the commit itself");
+        assert_eq!(
+            kinds(gix::object::Kind::Tree),
+            3,
+            "every tree the commit changed"
         );
-        assert!(
-            objects.iter().any(|o| o.kind == gix::object::Kind::Commit),
-            "the commit itself must be in the set"
-        );
-        assert!(
-            objects.iter().any(|o| o.kind == gix::object::Kind::Tree),
-            "the root tree must be in the set"
+        assert_eq!(
+            kinds(gix::object::Kind::Blob),
+            3,
+            "every blob the commit changed"
         );
         // And it must round-trip through the pack writer, which is the half the
         // single-object fixtures never exercised.

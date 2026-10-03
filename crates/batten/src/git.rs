@@ -6449,19 +6449,20 @@ mod tests {
         // Vacuously true now, live again the day anything here spawns — which is
         // the resolution that survives the migration instead of being spent by
         // it.
-        if !doc.contains("Still spawning") {
-            return;
-        }
+        //
+        // Asserted as the implication it is, on every run, rather than returned
+        // from when the premise is absent (CLOUD-2059).
+        let claims_a_spawn = doc.contains("Still spawning");
         for owner in ["CLOUD-737", "CLOUD-585"] {
             assert!(
-                doc.contains(owner),
+                !claims_a_spawn || doc.contains(owner),
                 "the module doc explains which half of this module spawns, but not what that \
                  costs or who re-decides it: name {owner} beside the claim, so a reader learns \
                  the split is priced rather than fixed (CLOUD-320)"
             );
         }
         assert!(
-            doc.contains("git2"),
+            !claims_a_spawn || doc.contains("git2"),
             "the module doc must name `git2` as capable-but-barred rather than leaving a reader \
              to infer no library can do this — that inference is the defect CLOUD-320's own \
              correction of 2026-08-19 records (CLOUD-320)"
