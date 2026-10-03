@@ -810,7 +810,10 @@ jobs:
         id: release-branch
         env:
           GH_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}
-        run: mise run batten -- ci step --capture branch -- gh api "repos/{owner}/{repo}/pulls" --jq '[.[] | select(.head.repo.full_name == .base.repo.full_name) | select(.head.ref | startswith("release-plz-"))][0].head.ref // ""'
+        # `head:` matches a branch PREFIX. A fork's PR whose branch shares it names
+        # a branch origin does not have, so the fetch below refuses and nothing is
+        # pushed; no filter here needs a shell to spell.
+        run: mise run batten -- ci step --capture branch -- gh pr list --state open --search head:release-plz- --json headRefName --jq '.[0].headRefName // empty'
       - name: Fetch the release PR's head
         if: steps.release-branch.outputs.branch != ''
         env:
@@ -828,7 +831,7 @@ jobs:
         run: mise run batten -- ci step --verdict moved --on 0=false --on 1=true -- git diff --quiet -- batten.toml
       - name: Commit the moved pin
         if: steps.pin.outputs.moved == 'true'
-        run: 'git -c user.name=github-actions[bot] -c user.email=41898282+github-actions[bot]@users.noreply.github.com commit -m "chore(release): move the engine pin to the release version" -- batten.toml'
+        run: 'git -c user.name=github-actions[bot] -c user.email=41898282+github-actions[bot]@users.noreply.github.com commit -m "chore: move the engine pin to the release version" -- batten.toml'
       - name: Push the moved pin onto the release PR
         if: steps.pin.outputs.moved == 'true'
         env:
