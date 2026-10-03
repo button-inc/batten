@@ -472,23 +472,21 @@ fn a_step_that_hangs_is_killed_at_its_declared_bound() {
     // asserting is the thing that makes synchrony affordable: the bound. A step
     // declaring 300ms and sleeping 30s must not hold the session for 30s.
     //
-    // THE ASSERTION IS ON THE WALL CLOCK AND THAT IS DELIBERATE, against
-    // `rules/rust.md`'s standing preference for counters over timing:
-    // the property here IS elapsed time, and a counter cannot express "was
-    // killed early". The margin is two orders wide — 10s against a 30s sleep and
-    // a 300ms bound — so it discriminates a working bound from an absent one
-    // without discriminating a slow runner from a fast one.
+    // THE KILL IS RECORDED, SO THE CASE READS THE RECORD (CLOUD-2059). This
+    // asserted a wall-clock ceiling on the reasoning that "a counter cannot
+    // express was killed early". The parent's own record can: a step that ran
+    // out its bound is reported as exceeding it and killed, and one that was
+    // never bounded sleeps its 30s and passes silently.
     let bench = bench("session-bound", &[("hanging", 300)]);
     bench.step("hanging", "sleep 30");
 
-    let started = std::time::Instant::now();
     let door = bench.session_start();
-    let took = started.elapsed();
 
     assert_eq!(door.code, Some(0), "a timed-out step allows: {}", door.err);
+    let said = format!("{}{}", door.out, door.err);
     assert!(
-        took < std::time::Duration::from_secs(10),
-        "the declared bound is imposed by the parent, not hoped for: took {took:?}"
+        said.contains("hook.handler hanging: exceeded 300ms and was killed"),
+        "the declared bound is imposed by the parent, not hoped for: {said}"
     );
 }
 

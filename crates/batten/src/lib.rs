@@ -19527,6 +19527,7 @@ fn load_policy(
 /// Returns a [`UsageError`] for an unreadable authority or a `--jobs` value that
 /// is not a positive whole number, and whatever [`exec::run_with`] returns
 /// otherwise — including the child's own code, as a [`error::Passthrough`].
+//MUTANT exec-lock-verdict-discarded|s@^    exec::run_with(&command, &patterns, &settings, err)$@    exec::run_with(\&command, \&patterns, \&settings, err).or(Ok(ExitCode::Success))@|the_wrapped_exit_code_survives_the_lock
 fn run_exec(
     request: &cli::ExecRequest,
     overrides: &Overrides,

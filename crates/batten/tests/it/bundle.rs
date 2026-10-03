@@ -424,6 +424,50 @@ fn await_path(path: &Path) {
     panic!("{} never appeared", path.display());
 }
 
+/// Poll `probe` until it answers, bounded by [`PATIENCE`], or `None` once the
+/// patience is spent — so the CALLER asserts on the state it found, and no
+/// assertion reads the clock (CLOUD-2059).
+fn poll_until<T>(mut probe: impl FnMut() -> Option<T>) -> Option<T> {
+    let deadline = Instant::now() + PATIENCE;
+    while Instant::now() < deadline {
+        if let Some(found) = probe() {
+            return Some(found);
+        }
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "the interval of a poll whose exit condition is the caller's probe answering, \
+                      bounded by `PATIENCE` — past that this answers `None` (CLOUD-1177)"
+        )]
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    None
+}
+
+/// A child that says `line`, records its own pid, and then holds its capture
+/// live — for far longer than any case waits, so the live window is the case's
+/// to close rather than a race against a short `sleep` (CLOUD-2059). Returns the
+/// script and the note its pid lands in.
+fn live_child(name: &str, line: &str) -> (PathBuf, PathBuf) {
+    let note = scratch(&format!("{name}-pid")).join("pid");
+    let child = script(
+        name,
+        &format!("echo {line}\necho $$ > {}\nexec sleep 300", note.display()),
+    );
+    (child, note)
+}
+
+/// End the child [`live_child`] recorded, so the `sleep` it became does not
+/// outlive the case that killed its writer.
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays, and test-only: the live child is a real process the case left running, and ending it is a signal to its pid"
+)]
+fn end_live_child(note: &Path) {
+    if let Ok(pid) = fs::read_to_string(note) {
+        let _ = Command::new("kill").args(["-KILL", pid.trim()]).status();
+    }
+}
+
 #[test]
 fn a_second_process_reads_a_live_capture_and_never_passes_the_watermark() {
     if !has_flock() {
@@ -435,9 +479,9 @@ fn a_second_process_reads_a_live_capture_and_never_passes_the_watermark() {
     }
     let home = scratch("live-read-home");
     fs::create_dir_all(&home).expect("create home");
-    // Speaks, then holds the stream open. The capture is live for the whole of
-    // the `sleep`, which is the window this case reads in.
-    let child = script("live-read-child", "echo committed; sleep 10");
+    // Speaks, then holds the stream open. The capture is live for as long as the
+    // case keeps the child alive, which is the window this case reads in.
+    let (child, child_pid) = live_child("live-read-child", "committed");
     let mut batten = common::batten()
         .args(["exec", "--", child.to_str().expect("utf-8")])
         .stdout(Stdio::null())
@@ -450,22 +494,12 @@ fn a_second_process_reads_a_live_capture_and_never_passes_the_watermark() {
     // The live handle is derived from the pid and the command's index, both of
     // which this test knows because it spawned the process — printing it would
     // put a pid in Batten's output and break §6 byte-stability.
-    let deadline = Instant::now() + PATIENCE;
-    let (data, watermark, lock) = loop {
-        if let Ok(paths) = std::panic::catch_unwind(|| spool_paths(&home, "stdout", pid, 0))
-            && paths.0.exists()
-        {
-            break paths;
-        }
-        assert!(Instant::now() < deadline, "the spool never appeared");
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "the interval of a poll whose exit condition is `spool_paths` resolving to a \
-                      file that exists, bounded by the `deadline` the assertion above enforces \
-                      (CLOUD-1177)"
-        )]
-        std::thread::sleep(Duration::from_millis(20));
-    };
+    let (data, watermark, lock) = poll_until(|| {
+        std::panic::catch_unwind(|| spool_paths(&home, "stdout", pid, 0))
+            .ok()
+            .filter(|paths| paths.0.exists())
+    })
+    .expect("the spool never appeared");
     await_path(&watermark);
 
     // A REAL SECOND PROCESS, holding the same OS advisory lock Batten takes.
@@ -508,6 +542,7 @@ fn a_second_process_reads_a_live_capture_and_never_passes_the_watermark() {
             .status(),
     );
     let _ = batten.wait();
+    end_live_child(&child_pid);
 }
 
 #[test]
@@ -529,7 +564,7 @@ fn a_killed_writer_leaves_a_reader_a_defined_answer_rather_than_a_hang() {
     }
     let home = scratch("live-killed-home");
     fs::create_dir_all(&home).expect("create home");
-    let child = script("live-killed-child", "echo durable; sleep 10");
+    let (child, child_pid) = live_child("live-killed-child", "durable");
     let mut batten = common::batten()
         .args(["exec", "--", child.to_str().expect("utf-8")])
         .stdout(Stdio::null())
@@ -539,26 +574,12 @@ fn a_killed_writer_leaves_a_reader_a_defined_answer_rather_than_a_hang() {
         .expect("spawn batten exec");
     let pid = batten.id();
 
-    let deadline = Instant::now() + PATIENCE;
-    let (data, watermark, lock) = loop {
-        if let Ok(paths) = std::panic::catch_unwind(|| spool_paths(&home, "stdout", pid, 0))
-            && paths.1.exists()
-            && fs::read_to_string(&paths.1).is_ok_and(|text| text.trim() != "0")
-        {
-            break paths;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "the spool never committed anything"
-        );
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "the interval of a poll whose exit condition is the watermark reading \
-                      something other than \"0\", bounded by the `deadline` the assertion above \
-                      enforces (CLOUD-1177)"
-        )]
-        std::thread::sleep(Duration::from_millis(20));
-    };
+    let (data, watermark, lock) = poll_until(|| {
+        std::panic::catch_unwind(|| spool_paths(&home, "stdout", pid, 0))
+            .ok()
+            .filter(|paths| fs::read_to_string(&paths.1).is_ok_and(|text| text.trim() != "0"))
+    })
+    .expect("the spool never committed anything");
 
     #[expect(
         clippy::disallowed_types,
@@ -570,6 +591,7 @@ fn a_killed_writer_leaves_a_reader_a_defined_answer_rather_than_a_hang() {
         .expect("kill batten");
     assert!(killed.success());
     let _ = batten.wait();
+    end_live_child(&child_pid);
 
     // The lock is takeable — immediately, and without `-w`, which is what makes
     // this an assertion about auto-release rather than about patience.

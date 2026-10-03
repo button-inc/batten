@@ -31,6 +31,13 @@ These load when you touch Rust; they do not need to be in context otherwise.
   tree, and the class declares an `override` route whose precondition is exactly
   that — the case reaches a symbol the other target does not have, so a `cfg!` arm
   would not type-check. Red is not the precondition.
+- **Time is an input to a case, never what it asserts**, and `wall_clock.rs` is
+  the gate. A bound the case imposes and a deadline its poll gives up at are
+  inputs. A ceiling or floor on elapsed time is an assertion about the scheduler,
+  so assert the outcome it stands in for: the kill line, the recorded escalation,
+  or the timeout the code names. Measured on CLOUD-2059: eight clock assertions
+  were replaced by their records, and one had been vacuous. Its group emptied on
+  its own inside the ceiling, so it passed with no escalation at all.
 - Branch on the named `ExitCode` variants in `crates/batten/src/exit.rs`, never
   integer literals. One table, no per-verb exception: `2` is the policy verdict
   everywhere — a `check` violation and a `hook` deny alike — and `1`/`3` are the
