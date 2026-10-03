@@ -4,10 +4,13 @@
 .SH NAME
 batten\-mutate\-sweep \- Apply every declared mutation to its source and report the ones its declared suite did not catch
 .SH SYNOPSIS
-\fBbatten mutate sweep\fR [\fB\-h\fR|\fB\-\-help\fR] 
+\fBbatten mutate sweep\fR [\fB\-\-changed\-since\fR] [\fB\-h\fR|\fB\-\-help\fR] 
 .SH DESCRIPTION
 Apply every declared mutation to its source and report the ones its declared suite did not catch
 .SH OPTIONS
+.TP
+\fB\-\-changed\-since\fR \fI<changed_since>\fR
+Sweep only the enforced gates a diff against this revision touches
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help

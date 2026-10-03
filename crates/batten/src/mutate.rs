@@ -257,6 +257,9 @@ fn task_names(lines: &[String]) -> Vec<String> {
 //MUTANT-SUITE crates/batten/tests/it/mutate.rs
 //MUTANT task-block-unscoped|s@        Some(task) if task_manifest().as_deref() == Some(source) => task_block(&lines, task),@        Some(_) if task_manifest().as_deref() == Some(source) => Some(lines),@|a_task_gate_sweeps_only_its_own_block
 //MUTANT suite-first-only|s@own_suites.get(&row.source)@own_suites.get(\&row.slug)@|each_preset_module_row_runs_under_its_own_declared_suite
+//MUTANT source-change-ignored|s@^                let by_source = .*;$@                let by_source = false;@|a_change_to_one_gate_sweeps_only_that_gate
+//MUTANT suite-change-ignored|s@^                let by_suite = .*;$@                let by_suite = false;@|a_change_to_a_suite_sweeps_its_gate
+//MUTANT every-gate-touched|s@^        \.filter(\x7cname\x7c {$@        .filter(\x7cname\x7c { true \x7c\x7c@|a_change_touching_no_gate_sweeps_nothing
 fn declaring_lines(root: &Path, name: &str, source: &str) -> Option<Vec<String>> {
     let lines = lines_of(root, source)?;
     match name.strip_prefix(TASK_PREFIX) {
@@ -820,6 +823,39 @@ pub fn enforced_set() -> Result<Vec<String>> {
         );
     }
     Ok(names)
+}
+
+// ---------------------------------------------------------------------------
+// Narrowing the set to a change (CLOUD-2072).
+// ---------------------------------------------------------------------------
+
+/// The enforced gates a change can move, so a sweep can run at admission over
+/// the gates a pull request touched rather than on a schedule over all of them.
+///
+/// A gate is touched when a changed path is one of its sources, or one of
+/// [`Gate::suites`]: a weaker suite is the commonest way a gate stops
+/// discriminating, so a change to the suite alone must re-sweep its rows.
+///
+/// A name that resolves to nothing is KEPT. Narrowing it away would turn the
+/// sweep's `no-such-gate` report into silence; could-not-look widens here as it
+/// does in `ci suites`.
+#[must_use]
+pub fn touched(
+    root: &Path,
+    names: &[String],
+    changed: &std::collections::BTreeSet<String>,
+) -> Vec<String> {
+    names
+        .iter()
+        .filter(|name| {
+            resolve(root, name).is_none_or(|gate| {
+                let by_source = gate.sources.iter().any(|path| changed.contains(path));
+                let by_suite = gate.suites().iter().any(|s| changed.contains(s.path()));
+                by_source || by_suite
+            })
+        })
+        .cloned()
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
