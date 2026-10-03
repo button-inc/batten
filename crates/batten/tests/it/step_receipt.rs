@@ -69,7 +69,7 @@ const DECL: &str = "#!/bin/sh\ncat \"$1\"\n";
 const OK: &str = "#!/bin/sh\necho ran >>bin/ran.log\n";
 
 /// A step command that fails with the code the case chooses.
-const FAIL: &str = "#!/bin/sh\nexit \"${STUB_CODE:-2}\"\n";
+const FAIL: &str = "#!/bin/sh\necho 'stub failure detail' >&2\nexit \"${STUB_CODE:-2}\"\n";
 
 /// A step command that PASSES after leaving the committed authority unloadable,
 /// so the record after it cannot recompute the key.
@@ -572,6 +572,21 @@ fn a_failing_command_passes_its_code_through_and_records_nothing() {
     }
     assert!(repo.receipts().is_empty(), "{:?}", repo.receipts());
     assert_eq!(repo.check(&["mystep"]), "miss");
+}
+
+/// CLOUD-2091: a step is a gate whose reader is a log, so the command's own
+/// failure output reaches the caller's stderr rather than only the capture store
+/// — on a CI runner that store dies with the job.
+#[test]
+fn a_failing_step_shows_the_commands_own_output() {
+    let repo = Repo::new("run-shows-output");
+    let out = repo.run_step(&["mystep"], &["fail"], &[("STUB_CODE", "2")]);
+    assert_eq!(out.status.code(), Some(2), "{}", common::stderr(&out));
+    assert!(
+        common::stderr(&out).contains("stub failure detail"),
+        "the step's own failure output must reach the caller: {}",
+        common::stderr(&out)
+    );
 }
 
 #[test]

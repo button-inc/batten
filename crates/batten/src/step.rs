@@ -137,6 +137,7 @@ const SHOWN: usize = 12;
 //MUTANT row-not-keyed|s@^    lines.push(format!("row {}", serde_json::to_string(row).ok()?));$@    let _ = row;@|an_edited_row_is_a_miss
 //MUTANT config-source-honoured|s@&Overrides::default()).ok()?;$@\&{ let mut o = Overrides::default(); o.config_in = std::env::var("BATTEN_CONFIG_IN").ok(); o }).ok()?;@|a_config_source_override_does_not_reach_the_step_table
 //MUTANT no-key-skips|s@^    if answer.is_hit() {$@    if !matches!(answer, Answer::Miss(_)) {@|an_authority_that_will_not_load_still_runs_the_step
+//MUTANT step-run-drops-child-stderr|s@^    settings.tee = true;$@    settings.tee = false;@|a_failing_step_shows_the_commands_own_output
 //MUTANT record-refusal-fails-step|s@^        let _ = record(step, args, Some(command), &mut recorded, &mut refused);$@        if !matches!(record(step, args, Some(command), \&mut recorded, \&mut refused), Ok(ExitCode::Success)) { return Ok(ExitCode::Violation); }@|a_passing_step_whose_record_refuses_stays_green
 
 /// What a check found.
@@ -472,7 +473,14 @@ pub fn run_step(
     if answer.is_hit() {
         return Ok(ExitCode::Success);
     }
-    let ran = crate::exec::run(command);
+    // TEED, NOT ONLY CAPTURED (CLOUD-2091). `exec::run`'s default stores the
+    // child's bytes and prints none of them, which is right for `batten exec` and
+    // wrong here: a step is a gate whose reader is a log, and on a CI runner the
+    // capture store dies with the job. A failing `test:cargo` then said only
+    // `ERROR task failed`, with no case named anywhere a person could read it.
+    let mut settings = crate::exec::ExecConfig::DEFAULT;
+    settings.tee = true;
+    let ran = crate::exec::run_with(command, &[], &settings, &mut std::io::sink());
     let passed = matches!(ran, Ok(ExitCode::Success));
     if passed && matches!(answer, Answer::Miss(_)) {
         // A record that refuses or fails here — the inputs moved while the
