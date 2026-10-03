@@ -732,7 +732,8 @@ fn engine_pin(
 ///
 /// - A SOURCE pin never lands: it names a build only this branch can make.
 /// - A RELEASE pin must be the engine this tree can run under: that release's
-///   own binary — fetched and verified once, then cached — must load this
+///   own binary — fetched and verified once, then cached in the repository's
+///   state directory, outside the checkout — must load this
 ///   config, and every verb a released lane's command lines invoke must exist
 ///   in it. A key or verb newer than the pin is feature drift, refused here
 ///   rather than discovered when a lane on `main` fails.
@@ -759,8 +760,8 @@ fn engine_gate(root: &Path, lanes: &[String], out: &mut dyn Write) -> Result<Exi
     let Some(tag) = pin.release.as_deref() else {
         return Ok(ExitCode::Success);
     };
-    let common = PathBuf::from(git::common_dir(root)?);
-    let binary = engine::pinned_release(&common, env!("CARGO_PKG_REPOSITORY"), tag)?;
+    let cache = state::repo_state_dir(root)?;
+    let binary = engine::pinned_release(&cache, env!("CARGO_PKG_REPOSITORY"), tag)?;
     // The pinned engine must decide as itself: never update itself mid-gate.
     let published = [(String::from(ENGINE_UPDATED), String::from("1"))];
     // A non-zero child arrives as a `Passthrough` ERROR, which is the right shape

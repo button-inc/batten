@@ -409,12 +409,17 @@ pub fn invoked_verbs(text: &str) -> std::collections::BTreeSet<String> {
         .collect()
 }
 
-/// Where the pinned release's binary is kept once fetched: under git's common
-/// directory, so every worktree of one clone shares one download per tag.
+/// Where the pinned release's binary is kept once fetched: under the
+/// repository's STATE directory, never inside the checkout.
+///
+/// It was first under git's common directory, and a consumer's own SBOM scan
+/// then catalogued the cached binary's embedded crates as the tree's — measured
+/// here, `syft scan dir:.` walked into `.git/` and the lockfile count disagreed.
+/// A cache is the engine's state, and state lives outside the tree it judges.
 #[must_use]
-pub fn cached_release(common_dir: &Path, tag: &str) -> PathBuf {
-    common_dir
-        .join("batten-engine")
+pub fn cached_release(state_dir: &Path, tag: &str) -> PathBuf {
+    state_dir
+        .join("engine")
         .join(tag)
         .join(crate::dist::binary_file("batten", &running_target()))
 }
@@ -424,8 +429,8 @@ pub fn cached_release(common_dir: &Path, tag: &str) -> PathBuf {
 /// # Errors
 ///
 /// As [`fetch_release`], or a cache that will not write.
-pub fn pinned_release(common_dir: &Path, repository: &str, tag: &str) -> Result<PathBuf> {
-    let path = cached_release(common_dir, tag);
+pub fn pinned_release(state_dir: &Path, repository: &str, tag: &str) -> Result<PathBuf> {
+    let path = cached_release(state_dir, tag);
     if path.is_file() {
         return Ok(path);
     }

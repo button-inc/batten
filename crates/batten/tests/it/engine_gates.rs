@@ -3,14 +3,15 @@
 //! config and carry every verb a released lane invokes.
 //!
 //! The pinned release is a STUB seeded into the cache `engine gate` reads
-//! (`<git common dir>/batten-engine/<tag>/batten`), so the cases measure the
-//! gate's decisions and never reach the network.
+//! (`<repository state dir>/engine/<tag>/batten`), so the cases measure the
+//! gate's decisions and never reach the network. Each case runs under its own
+//! state directory, outside its checkout, which is where the cache belongs.
 
 #![cfg(unix)]
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use crate::common;
+use crate::common::{self, StateHome as _};
 
 use std::path::{Path, PathBuf};
 use std::process::Output;
@@ -24,6 +25,22 @@ fn repo(name: &str, config: &str) -> PathBuf {
     dir
 }
 
+/// The case's own data directory, a sibling of its checkout.
+fn data_dir(dir: &Path) -> PathBuf {
+    let mut name = dir.file_name().unwrap().to_os_string();
+    name.push(".data");
+    dir.with_file_name(name)
+}
+
+fn run(dir: &Path, args: &[&str]) -> Output {
+    common::batten()
+        .state_dir(&data_dir(dir))
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .expect("run batten")
+}
+
 fn text(output: &Output) -> String {
     format!(
         "{}{}",
@@ -35,7 +52,12 @@ fn text(output: &Output) -> String {
 /// A stand-in for the pinned release: `config show` answers `config_exit`, and
 /// `--help` succeeds only for the verbs it is told it has.
 fn seed_release(dir: &Path, tag: &str, config_exit: u8, verbs: &[&str]) {
-    let cache = dir.join(".git").join("batten-engine").join(tag);
+    let root = dir.canonicalize().unwrap();
+    let cache = data_dir(dir)
+        .join("batten")
+        .join(batten::state::derive_repo_name(&root).unwrap())
+        .join("engine")
+        .join(tag);
     std::fs::create_dir_all(&cache).unwrap();
     let mut script =
         format!("#!/bin/sh\nif [ \"$1 $2\" = \"config show\" ]; then exit {config_exit}; fi\n");
@@ -77,7 +99,7 @@ fn a_source_pin_is_refused_on_the_landing_path() {
             "0".repeat(64)
         ),
     );
-    let output = common::run(&dir, &["engine", "gate"]);
+    let output = run(&dir, &["engine", "gate"]);
     assert!(!output.status.success(), "{}", text(&output));
     assert!(
         text(&output).contains("engine pin source never lands"),
@@ -89,7 +111,7 @@ fn a_source_pin_is_refused_on_the_landing_path() {
 #[test]
 fn no_pin_is_nothing_to_judge() {
     let dir = repo("engine-gate-unpinned", "version = 1\n");
-    let output = common::run(&dir, &["engine", "gate"]);
+    let output = run(&dir, &["engine", "gate"]);
     assert!(output.status.success(), "{}", text(&output));
 }
 
@@ -100,23 +122,21 @@ fn the_fixer_rewrites_a_stale_source_pin_to_the_digest() {
         "0".repeat(64)
     );
     let dir = repo("engine-pin-fixer", &stale);
-    let checked = common::run(&dir, &["engine", "pin", "--check"]);
+    let checked = run(&dir, &["engine", "pin", "--check"]);
     assert!(!checked.status.success(), "--check names a stale pin");
     assert_eq!(
         std::fs::read_to_string(dir.join("batten.toml")).unwrap(),
         stale,
         "--check writes nothing"
     );
-    let fixed = common::run(&dir, &["engine", "pin"]);
+    let fixed = run(&dir, &["engine", "pin"]);
     assert!(fixed.status.success(), "{}", text(&fixed));
-    let digest = text(&common::run(&dir, &["engine", "digest"]))
-        .trim()
-        .to_owned();
+    let digest = text(&run(&dir, &["engine", "digest"])).trim().to_owned();
     assert_eq!(
         std::fs::read_to_string(dir.join("batten.toml")).unwrap(),
         format!("version = 1\nengine = {{ source = \"{digest}\" }}\n")
     );
-    let again = common::run(&dir, &["engine", "pin", "--check"]);
+    let again = run(&dir, &["engine", "pin", "--check"]);
     assert!(again.status.success(), "a current pin is left alone");
 }
 
@@ -124,7 +144,7 @@ fn the_fixer_rewrites_a_stale_source_pin_to_the_digest() {
 fn the_fixer_leaves_a_release_pin_alone() {
     let pinned = "version = 1\nengine = { release = \"v0.0.1\" }\n";
     let dir = repo("engine-pin-release-kept", pinned);
-    let output = common::run(&dir, &["engine", "pin"]);
+    let output = run(&dir, &["engine", "pin"]);
     assert!(output.status.success(), "{}", text(&output));
     assert_eq!(
         std::fs::read_to_string(dir.join("batten.toml")).unwrap(),
@@ -140,7 +160,7 @@ fn a_verb_the_pinned_release_lacks_is_drift() {
     );
     common::write(&dir, "lane.yml", LANE);
     seed_release(&dir, "v9.9.9", 0, &["pr ensure"]);
-    let output = common::run(&dir, &["engine", "gate", "--lane", "lane.yml"]);
+    let output = run(&dir, &["engine", "gate", "--lane", "lane.yml"]);
     assert!(!output.status.success(), "{}", text(&output));
     let said = text(&output);
     assert!(
@@ -164,7 +184,7 @@ fn a_config_the_pinned_release_cannot_load_is_drift() {
         "version = 1\nengine = { release = \"v9.9.9\" }\n",
     );
     seed_release(&dir, "v9.9.9", 1, &[]);
-    let output = common::run(&dir, &["engine", "gate"]);
+    let output = run(&dir, &["engine", "gate"]);
     assert!(!output.status.success(), "{}", text(&output));
     assert!(
         text(&output).contains("engine pin v9.9.9 cannot load this config"),
@@ -181,6 +201,6 @@ fn a_release_pin_that_loads_and_carries_every_verb_passes() {
     );
     common::write(&dir, "lane.yml", LANE);
     seed_release(&dir, "v9.9.9", 0, &["pr ensure", "gone verb"]);
-    let output = common::run(&dir, &["engine", "gate", "--lane", "lane.yml"]);
+    let output = run(&dir, &["engine", "gate", "--lane", "lane.yml"]);
     assert!(output.status.success(), "{}", text(&output));
 }
