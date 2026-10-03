@@ -2401,7 +2401,7 @@ claim a reviewer and a workflow can see. Claiming is stricter than mentioning. A
 a property of the commit, never of its wording: every path it changed, and where declared its \
 author address, must match one `unclaimed` row.",
         routes: &[
-            run("commit edit now", "git commit --amend"),
+            run("commit edit now", "git commit --amend -F <path>"),
             read("config read first", "batten.toml"),
         ],
         applicability: Applicability::Advice,
@@ -2474,7 +2474,7 @@ that made it, and `identity_deny` is the half that reads the author and committe
 stamps them. The committer is judged too, because it is the field a repair reaching only the \
 author leaves behind. The finding names the field and never the identity. The declared \
 repair sets the repository-local identity to the accountable one the table declares, and \
-leaves a contributor's own compliant identity alone.",
+leaves an identity a contributor set for themselves alone when the policy accepts it.",
         routes: &[run("config fix now", "batten attribution identity")],
         applicability: Applicability::Advice,
     },

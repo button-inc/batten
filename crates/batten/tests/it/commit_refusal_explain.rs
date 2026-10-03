@@ -14,7 +14,7 @@ use crate::common;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use common::{batten, git_in, scratch, stdout, write};
+use common::{Fixture, batten, stdout, write};
 
 /// Both engine tables, one version line: the commit convention from
 /// `commit.rs`'s fixture and the attribution policy from `attribution.rs`'s.
@@ -35,14 +35,11 @@ email = "human@example.test"
 "#;
 
 fn fixture(name: &str) -> PathBuf {
-    let dir = scratch(name);
-    git_in(&dir, &["init", "-q", "-b", "main"]);
-    git_in(&dir, &["config", "user.name", "Accountable Human"]);
-    git_in(&dir, &["config", "user.email", "human@example.test"]);
-    write(&dir, "batten.toml", POLICY);
-    git_in(&dir, &["add", "batten.toml"]);
-    git_in(&dir, &["commit", "-q", "-m", "chore: base"]);
-    dir
+    Fixture::new(name)
+        .config(POLICY)
+        .git()
+        .base_commit()
+        .build()
 }
 
 /// Run `<verb> check --message` over `body`, asserting the policy verdict.

@@ -294,11 +294,17 @@ pub struct Finding {
 }
 
 /// Serialize a class as the token it is declared under.
-pub(crate) fn serialize_verdict<S: serde::Serializer>(
-    verdict: &Native,
+///
+/// Generic over the field's type because `serialize_with` hands a reference,
+/// and a `&Native` parameter is one byte passed by pointer.
+pub(crate) fn serialize_verdict<S: serde::Serializer, V: Copy>(
+    verdict: &V,
     serializer: S,
-) -> std::result::Result<S::Ok, S::Error> {
-    serializer.serialize_str(verdict.id())
+) -> std::result::Result<S::Ok, S::Error>
+where
+    Native: From<V>,
+{
+    serializer.serialize_str(Native::from(*verdict).id())
 }
 
 //MUTANT subject-refusal-unexplained|s@^        let token = self.verdict.id();$@        let token = "";@|every_commit_finding_names_its_vendored_class
