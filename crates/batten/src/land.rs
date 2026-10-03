@@ -2915,6 +2915,8 @@ pub struct Ledger {
     pub fresh_ready: bool,
 }
 
+//MUTANT-SUITE crates/batten/tests/it/land.rs
+//MUTANT lease-loss-charges-a-lap|s@^        self.laps < budget$@        self.laps.saturating_add(self.lease_waits) < budget@|a_lap_lost_to_the_lease_leaves_the_lap_budget_unchanged
 impl Ledger {
     /// Open a lap.
     pub const fn attempt(&mut self) {
@@ -2931,8 +2933,6 @@ impl Ledger {
     /// another branch holding the lease ended the landing having spent nothing,
     /// and the agent was told to "run this again" — the shell predecessor's
     /// `charge_wait` refund, retired into a counter nothing read.
-    //MUTANT-SUITE crates/batten/tests/it/land.rs
-    //MUTANT lease-loss-charges-a-lap|s@^        self.laps < budget$@        self.laps.saturating_add(self.lease_waits) < budget@|a_lap_lost_to_the_lease_leaves_the_lap_budget_unchanged
     #[must_use]
     pub const fn may_open_a_lap(&self, budget: u32) -> bool {
         self.laps < budget
