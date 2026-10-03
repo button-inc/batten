@@ -802,6 +802,12 @@ than its producer, which writes whole or removes, and reads the same way.",
             PresetModule {
                 scope: RuleScope::MediatedCall,
                 provider: None,
+                pointer: "<preset:claude-code-cloud>/write-is-preapproved.rego",
+                source: include_str!("policy/presets/claude-code-cloud/write-is-preapproved.rego"),
+            },
+            PresetModule {
+                scope: RuleScope::MediatedCall,
+                provider: None,
                 pointer: "<preset:claude-code-cloud>/read-only-is-preapproved.rego",
                 source: include_str!(
                     "policy/presets/claude-code-cloud/read-only-is-preapproved.rego"

@@ -24,6 +24,12 @@
 #MUTANT preapprove-before-refusal|s@^            decided => decided,$@            decided => hook::policy_preapproval(policy, envelope, facts).map_or(decided, hook::Decision::Preapproved),@|a_refused_call_is_never_preapproved
 #MUTANT advice-beside-the-grant|s@^    let context = matches!(decision, hook::Decision::Preapproved(_)) \&\& !advice.is_empty();$@    let context = false;@|a_preapproval_carries_the_calls_advice_in_one_document
 */
+// And the rows `write-is-preapproved.rego` declares (CLOUD-2002), mirrored for
+// the same reason:
+/*
+#MUTANT write-mode-unchecked|s@^\tinput.call\["permission-mode"\] == "auto"$@\ttrue@|an_edit_is_not_preapproved_in_default_mode
+#MUTANT write-destructive-granted|s@^\t\tnot destructive_program\(program\)$@\t\ttrue@|a_destructive_shell_write_is_left_to_the_host_in_auto
+*/
 
 use crate::common;
 
@@ -346,6 +352,44 @@ fn a_batten_lifecycle_verb_is_preapproved_outside_plan_mode() {
         &shell("auto", "batten override spend --admission x"),
         "call grant now",
     );
+}
+
+/// CLOUD-2002: in auto mode an Edit, a Write or a shell write batten allows is
+/// not left to the host's classifier.
+#[test]
+fn an_edit_and_a_shell_write_are_preapproved_in_auto() {
+    let edit = envelope(
+        "auto",
+        "Edit",
+        &serde_json::json!({ "file_path": "README.md", "old_string": "a", "new_string": "b" }),
+    );
+    assert_granted_by(&edit, "call grant now");
+    let write = envelope(
+        "auto",
+        "Write",
+        &serde_json::json!({ "file_path": "notes.txt", "content": "x" }),
+    );
+    assert_granted_by(&write, "call grant now");
+    assert_granted_by(&shell("auto", "python3 tools/x.py"), "call grant now");
+}
+
+/// THE CASE `write-mode-unchecked` KILLS: outside auto mode the host's own
+/// prompt stands.
+#[test]
+fn an_edit_is_not_preapproved_in_default_mode() {
+    let edit = envelope(
+        "default",
+        "Edit",
+        &serde_json::json!({ "file_path": "README.md", "old_string": "a", "new_string": "b" }),
+    );
+    assert_not_granted(&edit);
+}
+
+/// THE CASE `write-destructive-granted` KILLS: a line carrying `rm` is the
+/// host's to ask about, even in auto mode.
+#[test]
+fn a_destructive_shell_write_is_left_to_the_host_in_auto() {
+    assert_not_granted(&shell("auto", "python3 tools/x.py && rm -rf build"));
 }
 
 #[test]
