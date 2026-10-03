@@ -562,33 +562,7 @@ fn replay_range(
     // A range that will not read is an EMPTY set, never a refusal: could-not-look
     // here means replay everything, which is the behaviour that existed before
     // and can only conflict, never silently drop work.
-    //MUTANT-SUITE crates/batten/tests/it/rebase.rs
-    //MUTANT borrowed-upstream-replayed|s@^    if bound != base {$@    if false {@|a_borrowed_commit_the_holder_republished_is_dropped_on_unwind
-    let mut already = crate::git::patch_identities(
-        dir,
-        crate::git::Window::DEFAULT,
-        &format!("{branch}..{onto}"),
-    )
-    .unwrap_or_default();
-    // **AND THE UPSTREAM'S OWN CHANGES, WHERE THE UPSTREAM IS NOT THE BASE**
-    // (CLOUD-2086). They differ only on a bet's unwind, where `upstream` is the
-    // lease holder's published tip. The holder republishes its range under new
-    // shas, so this branch's copies of the holder's commits are neither on the
-    // trunk nor ancestors of the upstream, and the trunk drop set above kept
-    // them: measured on #1065, two of another branch's commits were replayed as
-    // this branch's own and voided a fresh verify receipt. Patch identity is the
-    // same question `git cherry` asks, asked of the side the commits came from.
-    // Could-not-look is an empty set, as above.
-    if bound != base {
-        already.extend(
-            crate::git::patch_identities(
-                dir,
-                crate::git::Window::DEFAULT,
-                &format!("{branch}..{upstream}"),
-            )
-            .unwrap_or_default(),
-        );
-    }
+    let already = drop_set(dir, branch, upstream, onto, bound != base);
 
     let mut cursor = base;
     let mut replayed = 0usize;
@@ -1765,6 +1739,46 @@ pub fn diff3(ancestor: &[u8], ours: &[u8], theirs: &[u8]) -> Option<String> {
         return None;
     }
     String::from_utf8(out).ok()
+}
+
+/// The patch identities a replay drops rather than re-applies (CLOUD-1586,
+/// CLOUD-2086): the base's, and on a bet's unwind the upstream's too. Split out
+/// of [`replay_range`] to keep that function a readable length.
+fn drop_set(
+    dir: &Path,
+    branch: &str,
+    upstream: &str,
+    onto: &str,
+    widen: bool,
+) -> std::collections::BTreeSet<String> {
+    //MUTANT-SUITE crates/batten/tests/it/rebase.rs
+    //MUTANT borrowed-upstream-replayed|s@^    if widen {$@    if false {@|a_borrowed_commit_the_holder_republished_is_dropped_on_unwind
+    let mut already = crate::git::patch_identities(
+        dir,
+        crate::git::Window::DEFAULT,
+        &format!("{branch}..{onto}"),
+    )
+    .unwrap_or_default();
+    // **AND THE UPSTREAM'S OWN CHANGES, WHERE THE UPSTREAM IS NOT THE BASE**
+    // (CLOUD-2086). They differ only on a bet's unwind, where `upstream` is the
+    // lease holder's published tip. The holder republishes its range under new
+    // shas, so this branch's copies of the holder's commits are neither on the
+    // trunk nor ancestors of the upstream, and the trunk drop set above kept
+    // them: measured on #1065, two of another branch's commits were replayed as
+    // this branch's own and voided a fresh verify receipt. Patch identity is the
+    // same question `git cherry` asks, asked of the side the commits came from.
+    // Could-not-look is an empty set, as above.
+    if widen {
+        already.extend(
+            crate::git::patch_identities(
+                dir,
+                crate::git::Window::DEFAULT,
+                &format!("{branch}..{upstream}"),
+            )
+            .unwrap_or_default(),
+        );
+    }
+    already
 }
 
 #[cfg(test)]

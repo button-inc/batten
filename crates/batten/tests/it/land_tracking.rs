@@ -7,14 +7,13 @@ use crate::common;
 
 #[test]
 fn a_landed_branch_leaves_the_tracking_ref_at_the_landed_head() {
-    let root = common::scratch("land-tracking");
-    common::git_in(&root, &["init", "-q", "-b", "main"]);
-    // gix writes a reflog entry with the ref, and refuses one with no committer.
-    common::git_in(&root, &["config", "user.name", "fixture"]);
-    common::git_in(&root, &["config", "user.email", "fixture@example.invalid"]);
-    common::write(&root, "a.txt", "one\n");
-    common::git_in(&root, &["add", "-A"]);
-    common::git_in(&root, &["commit", "-qm", "seed"]);
+    // The shared template rather than a hand-rolled `git init`
+    // (`policy/fixture-forks.rego`).
+    let root = common::Fixture::new("land-tracking")
+        .file("a.txt", "one\n")
+        .git()
+        .base_commit()
+        .build();
     common::git_in(&root, &["update-ref", "refs/remotes/origin/main", "HEAD"]);
     common::git_in(&root, &["checkout", "-qb", "feature"]);
     common::write(&root, "a.txt", "two\n");

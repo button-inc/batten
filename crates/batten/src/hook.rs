@@ -10358,6 +10358,22 @@ pub const ASK_GAPS: &[(Harness, &str)] = &[
     ),
 ];
 
+/// The host tools that can mutate nothing: search, tool-schema lookup and the
+/// plan-mode switches (CLOUD-2084).
+///
+/// Read by the unloadable-config floor ONLY, which admits a call no rule could
+/// have decided. Not a reclassification: [`Harness::operation_of`] still
+/// answers `Other` for these, so tool-keyed rows see exactly what they saw.
+/// Claude Code's spelling; no surveyed host uses one of these names for a tool
+/// that writes, so a match on another host is the same inert call.
+pub const INERT_TOOLS: [&str; 5] = [
+    "Grep",
+    "Glob",
+    "ToolSearch",
+    "EnterPlanMode",
+    "ExitPlanMode",
+];
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
@@ -16515,19 +16531,3 @@ deny contains "refused by themodule" if {
         assert_eq!(parsed[0].terminator, Some(Separator::Background));
     }
 }
-
-/// The host tools that can mutate nothing: search, tool-schema lookup and the
-/// plan-mode switches (CLOUD-2084).
-///
-/// Read by the unloadable-config floor ONLY, which admits a call no rule could
-/// have decided. Not a reclassification: [`Harness::operation_of`] still
-/// answers `Other` for these, so tool-keyed rows see exactly what they saw.
-/// Claude Code's spelling; no surveyed host uses one of these names for a tool
-/// that writes, so a match on another host is the same inert call.
-pub const INERT_TOOLS: [&str; 5] = [
-    "Grep",
-    "Glob",
-    "ToolSearch",
-    "EnterPlanMode",
-    "ExitPlanMode",
-];
