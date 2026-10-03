@@ -6975,39 +6975,48 @@ fn policy_rules(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Deci
     }
 }
 
-/// The advisory half of [`policy_rules`]: what a NON-blocking module violation
-/// says (CLOUD-1131).
+/// The advisory half of [`policy_rules`]: every NON-blocking, non-`allow` module
+/// violation, one per bundle (CLOUD-1131, CLOUD-1470).
 ///
-/// `None` for silence, for a blocking violation — that one is the caller's
-/// `Decision` and saying it twice would put one finding on two channels — and for
-/// an event with no advisory channel, which is the host capability table's answer
-/// rather than this function's.
+/// Empty for silence, for a blocking violation — that one is the caller's
+/// `Decision` and saying it twice would put one finding on two channels — and at
+/// `Stop`, where [`stop_advice`] stays the sole module producer (CLOUD-888's
+/// one-nudge bound). Every advisory is returned rather than the strongest,
+/// because two pointers on one call are two things a reader needs, and keeping
+/// only the first-declared shed the second silently.
 ///
-/// **Assembled rather than `Refusal::render`ed**, for `stop_advice`'s reason: that
-/// projection opens `Refused by`, and nothing here refuses. The id, the cause and
-/// the remedy all travel, so a reader still gets the class and the way out.
+/// Returned as [`Refusal`]s so the renderer is the caller's choice.
+//MUTANT stop-advice-multiplied|s@^    let turn_end = envelope.event == Event::Stop;$@    let turn_end = false;@|a_stop_carries_one_module_nudge_whatever_the_warn_count
 #[must_use]
-pub fn policy_advice(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Option<String> {
-    let (severity, refusal) = policy_refusal(policy, envelope, facts)?;
-    if blocks(severity, policy.fail_on_warning) {
-        return None;
+pub fn policy_advice(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Vec<Refusal> {
+    let turn_end = envelope.event == Event::Stop;
+    if turn_end {
+        return Vec::new();
     }
-    Some(render_advice(&refusal))
+    policy_advisories(policy, envelope, facts)
 }
 
 /// One refusal's text on the advisory channel, with no word that claims a verdict.
-fn render_advice(refusal: &Refusal) -> String {
-    format!(
-        "{}: {} {}",
-        refusal.rule(),
-        refusal.reason(),
+///
+/// A declared class renders EVERY route by kind (`read …` / `run …` / `see …`),
+/// because a class whose only way out is a document carried no pointer at all
+/// when this rendered the first command route alone (CLOUD-1470). An undeclared
+/// refusal keeps its fix.
+//MUTANT advice-routes-dropped|s@^    let tail = if routes.is_empty() {$@    let tail = if true {@|a_warn_advisory_carries_its_document_route_on_an_allowed_pre_tool_call
+#[must_use]
+pub(crate) fn render_advice(refusal: &Refusal) -> String {
+    let routes = refusal.routes();
+    let tail = if routes.is_empty() {
         match refusal.fix() {
             crate::refusal::Fix::Run(text) => text.clone(),
             crate::refusal::Fix::None => String::new(),
         }
-    )
-    .trim_end()
-    .to_owned()
+    } else {
+        format!("— {}", routes.join("; "))
+    };
+    format!("{}: {} {tail}", refusal.rule(), refusal.reason())
+        .trim_end()
+        .to_owned()
 }
 
 /// The STRONGEST violation any enabled bundle raises, with the severity its
@@ -7027,6 +7036,11 @@ fn render_advice(refusal: &Refusal) -> String {
 /// So the scan is total and the strongest wins. Declaration order survives as the
 /// tie-break, which is what keeps output byte-stable between two rows of equal
 /// force — the property first-match-wins was actually buying.
+///
+/// An `allow` row is OFF and is skipped (CLOUD-1470): it never blocks, so this
+/// changes no decision, and it stops [`stop_advice`] nudging for a rule the
+/// consumer switched off.
+//MUTANT allow-row-nudged|s@^            if severity == RuleSeverity::Allow {$@            if false {@|an_allow_row_nudges_nothing_at_stop
 fn policy_refusal(
     policy: &Policy,
     envelope: &Envelope,
@@ -7070,6 +7084,9 @@ fn policy_refusal(
             // from the class's first `command` route, so "a refusal names a way
             // out" holds by construction rather than by each module's care.
             let severity = bundle.severity_for(violation.rule.as_deref());
+            if severity == RuleSeverity::Allow {
+                continue;
+            }
             // STRICTLY GREATER, so an equal severity leaves the incumbent in
             // place and declaration order remains the tie-break.
             if strongest.as_ref().is_none_or(|(held, _)| severity > *held) {
@@ -7101,6 +7118,46 @@ fn policy_refusal(
         }
     }
     strongest
+}
+
+/// Every non-blocking, non-`allow` module violation over this call, the first
+/// per bundle in declaration order (CLOUD-1470).
+///
+/// A blocking violation empties the result: it is the call's decision, and
+/// saying it twice would put one finding on two channels.
+//MUTANT advice-strongest-only|s@^    advised$@    advised.into_iter().take(1).collect()@|two_warn_advisories_on_one_call_both_arrive
+//MUTANT allow-row-advised|s@^        if severity == RuleSeverity::Allow {$@        if false {@|an_allow_row_advises_nothing
+fn policy_advisories(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Vec<Refusal> {
+    if policy.bundles.is_empty() {
+        return Vec::new();
+    }
+    let Ok(input) = call_document(envelope, facts) else {
+        return Vec::new();
+    };
+    let mut advised = Vec::new();
+    for bundle in &policy.bundles {
+        let crate::facts::Look::Is(denials) = crate::policy::deny(bundle, &input) else {
+            continue;
+        };
+        let Some(violation) = denials.first() else {
+            continue;
+        };
+        let severity = bundle.severity_for(violation.rule.as_deref());
+        if blocks(severity, policy.fail_on_warning) {
+            return Vec::new();
+        }
+        if severity == RuleSeverity::Allow {
+            continue;
+        }
+        advised.push(Refusal::from_class(
+            bundle.attribute(violation),
+            &policy.verdicts,
+            &violation.verdict,
+            &violation.subjects,
+            Fix::None,
+        ));
+    }
+    advised
 }
 
 /// The first pre-approval any module grants this call, as the host's reason

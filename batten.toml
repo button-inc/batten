@@ -8251,6 +8251,19 @@ severity = "warn"
 id = "unanswered-human-calls"
 count = "unanswered-human-calls"
 
+# A code-host call is handed the memory documenting this host's GitHub access
+# (CLOUD-1470). Measured twice: 2026-08-31 an `add_repo` detour the memory says is
+# blocked (CLOUD-1259), and 2026-09-05 six turns spent telling the owner the
+# lander could not run before `mise run land` drove the loop first try. `warn`,
+# so the call is allowed and the pointer rides it on the advisory channel.
+[[rule]]
+id = "forge read first"
+no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
+kind = "policy"
+scope = "mediated_call"
+module = "policy/forge-read-first.rego"
+severity = "warn"
+
 # A weaker spelling of a task this project already defines (CLOUD-856, the
 # successor shape for `run-shape-guard`'s `cargo-substitutes-for-a-task`).
 #
@@ -13400,6 +13413,16 @@ A message from the operator (a prompt, or one sent while the session was working
 id = "module read first"
 kind = "document"
 target = "policy/answer-the-operator.rego"
+[[verdict]]
+id = "forge read first"
+gloss = "a code-host call; read the memory documenting this host's GitHub access first"
+class = """
+A call reaching the code host was made with the memory documenting this host's GitHub access unread at the moment it mattered: on 2026-08-31 a session took an `add_repo` detour that memory says is blocked, and on 2026-09-05 one spent six turns claiming the lander could not run before `mise run land` drove the loop first try. The pointer rides the allowed call; the remedy is to read the memory before concluding the host is unreachable.
+"""
+[[verdict.route]]
+id = "memory read first"
+kind = "document"
+target = ".serena/memories/github-access.md"
 [[verdict]]
 id = "forge check red"
 gloss = "the forge judged this commit and its fan-in check did not pass"
