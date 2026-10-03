@@ -733,6 +733,12 @@ fn resolve(base: &hyper::Uri, location: &str) -> Result<String> {
 
 /// One request, with no redirect following: the status, the buffered body, and
 /// the `Location` header if there was one.
+///
+/// The total bound's expiry is RECORDED as its own cause, which is what lets a
+/// case prove the bound ended the request by reading the cause rather than by
+/// timing the process (CLOUD-2059).
+//MUTANT-SUITE crates/batten/tests/it/provision.rs
+//MUTANT total-bound-cause-lost|s@^        .map_err(\x7c_\x7c anyhow::anyhow!("fetch: timed out"))?$@        .map_err(\x7c_\x7c anyhow::anyhow!("fetch: the request failed"))?@|the_timeout_is_what_ends_it_rather_than_an_instant_failure
 async fn one_exchange(
     url: &str,
     headers: &[(String, String)],

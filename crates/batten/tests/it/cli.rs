@@ -10597,16 +10597,15 @@ fn a_handler_that_hangs_is_killed_at_its_bound_and_the_turn_still_ends() {
             "version = 1\n\n[[hook.handler]]\nid = \"slow\"\non = \"post-tool-batch\"\nrun = [\"sleep\", \"30\"]\ntimeout_ms = 300\n",
         )
         .build();
-    let started = std::time::Instant::now();
     let output = run_hook_in(&dir, "claude-code", &batch_payload());
     assert_eq!(output.status.code(), Some(0), "a bound is not a refusal");
+    // THE KILL IS RECORDED, SO THE CASE READS THE RECORD (CLOUD-2059). Without
+    // the bound, `sleep 30` exits 0 and the handler reads as a silent pass, so
+    // this line exists only when the parent imposed the bound — which is what an
+    // elapsed-time ceiling here used to approximate.
     assert!(
-        started.elapsed() < std::time::Duration::from_secs(10),
-        "the bound was imposed rather than waited out"
-    );
-    assert!(
-        common::stdout(&output).contains("exceeded 300ms"),
-        "and the author is told which handler and by how much: {:?}",
+        common::stdout(&output).contains("hook.handler slow: exceeded 300ms and was killed"),
+        "the bound was imposed, and the author is told which handler and by how much: {:?}",
         common::stdout(&output)
     );
 }

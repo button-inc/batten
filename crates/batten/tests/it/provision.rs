@@ -618,6 +618,11 @@ fn a_server_that_accepts_and_never_answers_times_out_rather_than_hanging() {
         before,
         "a timed-out fetch writes nothing — buffer, verify, then write"
     );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("fetch: timed out"),
+        "and the cause is the bound, named: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 /// The same listener, judged the other way round.
@@ -625,11 +630,13 @@ fn a_server_that_accepts_and_never_answers_times_out_rather_than_hanging() {
 /// Without this, the case above is satisfied by a build that cannot fetch at
 /// all: a `provision apply` that errored instantly for any reason would produce
 /// the identical exit code and the identical untouched cache. What discriminates
-/// is that the process *waited*, and then stopped.
+/// is the CAUSE: the total bound ran out, which the fetch records as its own
+/// error, where an instant failure names the request failing instead. This used
+/// to read the cause off the wall clock — a floor on elapsed time — and the
+/// record is the same discrimination with no clock in it (CLOUD-2059).
 #[test]
 fn the_timeout_is_what_ends_it_rather_than_an_instant_failure() {
     use std::net::TcpListener;
-    use std::time::Instant;
 
     let env = Env::new("provision-hung-clock");
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -646,8 +653,6 @@ fn the_timeout_is_what_ends_it_rather_than_an_instant_failure() {
         &digest(BINARY),
     ));
 
-    let bound = std::time::Duration::from_millis(1_500);
-    let started = Instant::now();
     let output = batten()
         .state_home(&env.home)
         .args(["provision", "apply"])
@@ -655,16 +660,12 @@ fn the_timeout_is_what_ends_it_rather_than_an_instant_failure() {
         .env("BATTEN_FETCH_TIMEOUT_MS", "1500")
         .output()
         .expect("run batten");
-    let waited = started.elapsed();
 
     assert_eq!(output.status.code(), Some(3));
-    // A LOWER bound only, and deliberately no upper one. The process start is
-    // included here and a loaded runner makes the upper half a flake, so an
-    // assertion on it would discriminate nothing and fail sometimes; the claim
-    // is that the wait HAPPENED, which is the half a fail-fast build breaks.
+    let said = String::from_utf8_lossy(&output.stderr);
     assert!(
-        waited >= bound,
-        "the fetch must have waited out its bound, not failed instantly ({waited:?})"
+        said.contains("fetch: timed out"),
+        "the fetch must have been ended by its bound, not failed instantly: {said}"
     );
 }
 

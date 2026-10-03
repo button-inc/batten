@@ -1478,7 +1478,15 @@ fn the_recorded_instant_is_the_read_rather_than_a_later_transcription() {
     // so a 33-minute-old payload was measured opening a 300-second window. Taken
     // from the result, the two instants collapse — the stamp is within seconds of
     // now rather than of whenever the payload was fetched.
+    //
+    // ORDERED BETWEEN TWO RECORDED INSTANTS, NOT BOUNDED AGAINST A CLOCK
+    // (CLOUD-2059). This asserted `now - stamped < 60`, a ceiling a slow enough
+    // hook would fail. The stamp lies at or after a marker written before the
+    // call and at or before the receipt's own write, an order no runner's load can
+    // change.
     let repo = repo("mint-read-stamps-the-read");
+    let marker = repo.join("before-the-read");
+    std::fs::write(&marker, "").expect("write the marker");
     completed(&repo, "mcp__Linear__get_issue", READ_RESULT);
     let minted = receipt(&repo, "issue-read.CLOUD-1").expect("minted");
     let stamped: u64 = minted
@@ -1487,14 +1495,24 @@ fn the_recorded_instant_is_the_read_rather_than_a_later_transcription() {
         .expect("field three is the clock")
         .parse()
         .expect("the clock is seconds since the epoch");
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .expect("the clock is past the epoch")
-        .as_secs();
-    assert!(
-        now.saturating_sub(stamped) < 60,
-        "the receipt records the read, not a transcription: {stamped} vs {now}"
+    let (before, written) = (
+        modified_secs(&marker),
+        modified_secs(&repo.join(".git/batten-receipts/issue-read.CLOUD-1")),
     );
+    assert!(
+        (before..=written).contains(&stamped),
+        "the receipt records the read, not a transcription: {stamped} outside {before}..={written}"
+    );
+}
+
+/// When `path` was last written, in whole seconds since the epoch.
+fn modified_secs(path: &Path) -> u64 {
+    std::fs::metadata(path)
+        .and_then(|meta| meta.modified())
+        .expect("the file's mtime")
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("written after the epoch")
+        .as_secs()
 }
 
 #[test]

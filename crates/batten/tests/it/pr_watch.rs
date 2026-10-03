@@ -514,8 +514,11 @@ fn a_304_keeps_the_previous_reading_instead_of_clearing_it() {
 #[cfg_attr(not(unix), ignore = "the stubbed client is a shebang script")]
 fn a_server_requested_poll_floor_is_honoured_over_a_shorter_interval() {
     // The floor is the endpoint asking to be polled less often, so it wins over
-    // the configured interval. Asserted end to end rather than only in the fold,
-    // because a floor the loop parses and then ignores looks identical here.
+    // the configured interval. That the loop hands the floor to the pause it
+    // takes is decided in-process, from a recorded pause rather than a clock:
+    // `pr_watch::tests::a_server_requested_floor_reaches_the_pause` (CLOUD-2059).
+    // What stays end to end is the wire: an `X-Poll-Interval` the binary reads
+    // off a real response, and a poll that still turns and still reaches green.
     let fixture = Fixture::new(
         "ci-wait-floor",
         &[
@@ -526,12 +529,11 @@ fn a_server_requested_poll_floor_is_honoured_over_a_shorter_interval() {
             response("W/\"b\"", &all_green("")),
         ],
     );
-    let started = std::time::Instant::now();
     let (code, stdout, _) = fixture.watch(&[]);
     assert_eq!(code, 0, "{stdout}");
     assert!(
-        started.elapsed() >= std::time::Duration::from_secs(1),
-        "a `--interval 0` run that honoured a 1s floor cannot finish sooner than the floor"
+        fixture.calls() >= 2,
+        "the floored response must not have ended the poll"
     );
 }
 

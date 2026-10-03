@@ -572,11 +572,13 @@ fn a_filter_naming_no_case_is_still_a_filter_fault_and_not_a_timeout() {
         .args(["mutate", "sweep"])
         .current_dir(&root)
         .env("MUTANT_GATES", "toy")
-        // The same short bound the timeout case uses. The suite here returns well
-        // inside it, so a runner that reported every short bound as a timeout
-        // would fail this — which is the over-correction the mirror exists to
-        // catch.
-        .env("BATTEN_MUTATE_SUITE_TIMEOUT", "10")
+        // A bound the suite returns well inside, so a runner that reported every
+        // bounded run as a timeout would fail this — the over-correction the
+        // mirror exists to catch. Not the timeout case's 10s: that one HAS to be
+        // short, because it waits its bound out, while here a short bound only
+        // made a warm `cargo test` on a loaded host the thing being measured
+        // (CLOUD-2059).
+        .env("BATTEN_MUTATE_SUITE_TIMEOUT", "120")
         .output()
         .expect("run batten mutate");
     let code = answer.status.code().unwrap_or(-1);

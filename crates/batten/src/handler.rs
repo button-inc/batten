@@ -917,6 +917,14 @@ pub fn dispatch(
 }
 
 /// Run one handler and read its answer.
+///
+/// A bound that fires is RECORDED — the outcome is `TimedOut` and the advisory
+/// says "exceeded …ms and was killed" — so the cases that prove it read that
+/// record rather than a wall clock (CLOUD-2059). Each row below takes the bound
+/// away in one way, and its case reads `Pass` where the record should have been.
+//MUTANT handler-bound-never-fires|s@^        if Instant::now() >= deadline {$@        if Instant::now() >= deadline + Duration::from_secs(3600) {@|a_handler_that_hangs_is_killed_at_its_bound_and_the_turn_still_ends
+//MUTANT step-bound-never-fires|s@^        if Instant::now() >= deadline {$@        if Instant::now() >= deadline + Duration::from_secs(3600) {@|a_step_that_hangs_is_killed_at_its_declared_bound
+//MUTANT payload-written-before-the-bound|s@^    let deadline = Instant::now() + bound;$@    let _ = child.stdin.as_mut().map(\x7cpipe\x7c std::io::Write::write_all(pipe, payload.as_bytes())); let deadline = Instant::now() + bound;@|a_handler_that_never_reads_stdin_cannot_wedge_the_parent
 fn run_one(handler: &Handler, payload: &str) -> Outcome {
     let Some((program, args)) = handler.run.split_first() else {
         return Outcome::Broke(Violation::NotSpawnable);
@@ -1398,23 +1406,19 @@ mod tests {
         // that sleeps holds the read end open, which is what makes the parent's
         // write block and the defect reachable.
         //
-        // The BOUND is the assertion, in both senses: the outcome must be the
-        // timeout rather than a hang, and it must arrive on the handler's own
-        // deadline rather than the child's. Elapsed time is the subject here, so
-        // measuring it is the assertion rather than a proxy for one.
+        // THE OUTCOME IS THE ASSERTION, NOT THE CLOCK (CLOUD-2059). Written
+        // before the deadline, the payload blocks the parent until the deaf child
+        // exits on its own — and by then the child has already exited, so the
+        // reading is `Pass`, not `TimedOut`. The exact timeout, at the bound the
+        // handler declared, is therefore what separates the fix from the defect;
+        // an elapsed-time ceiling only restated it, and added a way to flake.
         let mut deaf = handler("deaf", "stop", &["sh", "-c", "sleep 30"]);
         deaf.timeout_ms = Some(300);
-        let started = Instant::now();
         let outcome = run_one(&deaf, &oversized());
-        let took = started.elapsed();
-        assert!(
-            matches!(outcome, Outcome::Broke(Violation::TimedOut(_))),
-            "expected the declared bound to fire, got {outcome:?}"
-        );
-        assert!(
-            took < Duration::from_secs(5),
-            "the bound must govern the whole call: took {took:?} against a 300ms timeout, which \
-             means the parent blocked writing stdin before the deadline was armed"
+        assert_eq!(
+            outcome,
+            Outcome::Broke(Violation::TimedOut(Duration::from_millis(300))),
+            "the declared bound must govern the whole call, payload write included"
         );
     }
 

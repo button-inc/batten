@@ -200,13 +200,27 @@ fn arm(name: &str, count: usize) -> (Duration, usize) {
 
     let mut best = Duration::MAX;
     let mut counted: Option<usize> = None;
-    for _ in 0..RUNS {
+    for run in 0..RUNS {
         let region = stats_alloc::Region::new(crate::ALLOCATOR);
         let scanned = scan(&root);
         let allocations = region.change().allocations;
         // A COUNT THAT MOVES BETWEEN RUNS OF ONE ARM IS NOT A COUNT. Asserted, not
         // assumed: the case's whole claim is that this number is the same on every
         // runner, and the first place that could fail is the same process twice.
+        // It used to say "asserted" over a binding that was only overwritten
+        // (CLOUD-2059). Compared from the second run on: the first in a process
+        // also pays its one-time memos, measured at ~21,000 allocations over the
+        // second, while two runs after it differ by about 30 — so a thousand is a
+        // count's tolerance and not a clock's.
+        if run > 1
+            && let Some(previous) = counted
+        {
+            assert!(
+                allocations.abs_diff(previous) <= 1_000,
+                "{name}: one arm counted {previous} and then {allocations} allocations, so the \
+                 reading moves between runs and is not a count"
+            );
+        }
         counted = Some(allocations);
         assert!(
             scanned.findings.is_empty(),

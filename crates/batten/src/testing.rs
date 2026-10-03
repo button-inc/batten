@@ -7,7 +7,10 @@
 //! is swept like any engine module's, rather than in the harness, where a row is
 //! a comment whose kill is shown by hand.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
+
+use syn::visit::Visit;
 
 /// The OS data directory THIS process resolves state under, once a test has
 /// contained it ([`contain_state`]).
@@ -112,6 +115,169 @@ pub fn falls_through(cwd: &Path, scratch_root: &Path) -> bool {
     let scratch = crate::git::canonical(scratch_root);
     let resolved = crate::git::worktree_root(cwd);
     resolved.is_ok_and(|owner| !owner.starts_with(&scratch))
+}
+
+/// What one source file's assertions do with the clock.
+///
+/// TIME IS AN INPUT TO A CASE, NEVER WHAT IT ASSERTS (CLOUD-2059). A bound the
+/// case imposes and a deadline its poll gives up at are inputs; a ceiling or a
+/// floor on elapsed time is an assertion about the scheduler, and every one this
+/// tree carried was replaced by the outcome it stood in for — the kill line, the
+/// recorded escalation, the drain's notice, the fetch's own `timed out`.
+#[doc(hidden)]
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct ClockCensus {
+    /// Assertion macros whose arguments parsed and were judged.
+    pub judged: usize,
+    /// Locals bound from a clock read. The anti-vacuity count: a census that
+    /// stopped recognising a read finds none.
+    pub clocked: usize,
+    /// The functions holding an assertion whose CONDITION reads the clock.
+    pub refused: Vec<String>,
+    /// The functions holding an assertion whose arguments do not parse as
+    /// expressions — unjudged, so reported rather than passed.
+    pub unparsed: Vec<String>,
+}
+
+/// Every assertion in `file` that reads the clock in what it asserts.
+///
+/// A message argument is never judged: printing the elapsed time beside a count
+/// is a report, and the count is what is asserted. A clock read reaches an
+/// assertion directly or through a `let` in the same function; a field, a
+/// helper's return value or a reassignment carries one unseen.
+#[doc(hidden)]
+#[must_use]
+pub fn clock_census(file: &syn::File) -> ClockCensus {
+    let mut walk = ClockWalk::default();
+    walk.visit_file(file);
+    walk.census
+}
+
+/// How many leading arguments of an assertion macro are its condition, or
+/// `None` for a macro that asserts nothing.
+fn conditions_of(path: &syn::Path) -> Option<usize> {
+    let name = path.segments.last()?.ident.to_string();
+    match name.as_str() {
+        "assert" | "debug_assert" => Some(1),
+        "assert_eq" | "assert_ne" | "debug_assert_eq" | "debug_assert_ne" => Some(2),
+        _ => None,
+    }
+}
+
+/// Whether `expr` reads the clock: `Instant::now` or `SystemTime::now`, any
+/// `.elapsed()`, or a local in `clocked`. A `Duration` alone is a constant, not
+/// a reading.
+//MUTANT elapsed-unread|s@^        self.found \x7c= call.method == "elapsed";$@        self.found \x7c= call.method == "elapsed_unread";@|an_upper_bound_on_elapsed_is_refused
+//MUTANT now-unread|s@^            \[.., clock, now\] => now == "now"@            [.., clock, now] => now == "now_unread"@|a_deadline_asserted_against_now_is_refused
+//MUTANT clock-taint-unread|s@^            \[local\] => self.clocked.contains(local),$@            [_] => false,@|a_clock_read_through_a_local_is_refused
+#[doc(hidden)]
+#[must_use]
+pub fn reads_clock(expr: &syn::Expr, clocked: &BTreeSet<String>) -> bool {
+    let mut reads = Reads {
+        clocked,
+        found: false,
+    };
+    reads.visit_expr(expr);
+    reads.found
+}
+
+struct Reads<'a> {
+    clocked: &'a BTreeSet<String>,
+    found: bool,
+}
+
+impl<'ast> Visit<'ast> for Reads<'_> {
+    fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
+        self.found |= call.method == "elapsed";
+        syn::visit::visit_expr_method_call(self, call);
+    }
+
+    fn visit_expr_path(&mut self, path: &'ast syn::ExprPath) {
+        let segments: Vec<String> = path
+            .path
+            .segments
+            .iter()
+            .map(|segment| segment.ident.to_string())
+            .collect();
+        self.found |= match segments.as_slice() {
+            [.., clock, now] => now == "now" && (clock == "Instant" || clock == "SystemTime"),
+            [local] => self.clocked.contains(local),
+            [] => false,
+        };
+        syn::visit::visit_expr_path(self, path);
+    }
+}
+
+/// The names a pattern binds.
+#[derive(Default)]
+struct Bindings(Vec<String>);
+
+impl<'ast> Visit<'ast> for Bindings {
+    fn visit_pat_ident(&mut self, ident: &'ast syn::PatIdent) {
+        self.0.push(ident.ident.to_string());
+        syn::visit::visit_pat_ident(self, ident);
+    }
+}
+
+#[derive(Default)]
+struct ClockWalk {
+    /// The enclosing function and the locals it bound from a clock read,
+    /// innermost last.
+    within: Vec<(String, BTreeSet<String>)>,
+    census: ClockCensus,
+}
+
+//MUTANT clock-message-judged|s@^                        .take(conditions)$@                        .take(usize::MAX)@|the_clock_in_a_message_is_not_asserted
+impl<'ast> Visit<'ast> for ClockWalk {
+    fn visit_item_fn(&mut self, item: &'ast syn::ItemFn) {
+        self.within
+            .push((item.sig.ident.to_string(), BTreeSet::new()));
+        syn::visit::visit_item_fn(self, item);
+        self.within.pop();
+    }
+
+    fn visit_impl_item_fn(&mut self, item: &'ast syn::ImplItemFn) {
+        self.within
+            .push((item.sig.ident.to_string(), BTreeSet::new()));
+        syn::visit::visit_impl_item_fn(self, item);
+        self.within.pop();
+    }
+
+    fn visit_local(&mut self, local: &'ast syn::Local) {
+        syn::visit::visit_local(self, local);
+        if let (Some(init), Some((_, clocked))) = (&local.init, self.within.last_mut())
+            && reads_clock(&init.expr, clocked)
+        {
+            let mut bound = Bindings::default();
+            bound.visit_pat(&local.pat);
+            self.census.clocked += bound.0.len();
+            clocked.extend(bound.0);
+        }
+    }
+
+    fn visit_macro(&mut self, mac: &'ast syn::Macro) {
+        if let (Some(conditions), Some((function, clocked))) =
+            (conditions_of(&mac.path), self.within.last())
+        {
+            let parsed = mac.parse_body_with(
+                syn::punctuated::Punctuated::<syn::Expr, syn::Token![,]>::parse_terminated,
+            );
+            match parsed {
+                Ok(args) => {
+                    self.census.judged += 1;
+                    if args
+                        .iter()
+                        .take(conditions)
+                        .any(|condition| reads_clock(condition, clocked))
+                    {
+                        self.census.refused.push(function.clone());
+                    }
+                }
+                Err(_) => self.census.unparsed.push(function.clone()),
+            }
+        }
+        syn::visit::visit_macro(self, mac);
+    }
 }
 
 #[cfg(test)]

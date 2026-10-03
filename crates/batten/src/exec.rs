@@ -735,6 +735,12 @@ struct Drain {
     spool: Arc<Mutex<capture::Spool>>,
 }
 
+// THE DRAIN'S TWO DECISIONS, SHOWN RED BY WHAT IT REPORTS RATHER THAN BY A CLOCK
+// (CLOUD-2059). One budget across both streams leaves the second exactly what the
+// first left — `0ns` once the first waited it out — and a pipe that never closes
+// is reported as such.
+//MUTANT drain-budget-per-stream|s@PIPE_DRAIN_TIMEOUT.saturating_sub(started.elapsed()),@PIPE_DRAIN_TIMEOUT.saturating_sub(started.elapsed() * 0),@|a_surviving_grandchild_cannot_hang_exec
+//MUTANT drain-timeout-unreported|s@^                Err(mpsc::RecvTimeoutError::Timeout) => true,$@                Err(mpsc::RecvTimeoutError::Timeout) => false,@|the_drain_reports_what_arrived_when_the_pipe_never_closes
 impl Drain {
     /// Spawn a tee of `pipe` into `sink`.
     fn spawn<R, W>(pipe: R, sink: W, spool: capture::Spool) -> Self
@@ -1262,8 +1268,8 @@ pub(crate) struct Forwarding {
 struct ForwardingThread {
     /// Ends the `Signals` iterator, which is how the worker is asked to stop.
     handle: signal_hook::iterator::Handle,
-    /// The worker itself.
-    worker: std::thread::JoinHandle<()>,
+    /// The worker itself, answering why it escalated, if it did.
+    worker: std::thread::JoinHandle<Option<Escalation>>,
     /// The signal Batten was sent, or `0` for none. Read once, after the join.
     received: Arc<std::sync::atomic::AtomicI32>,
     /// The group to forward to, published by [`Forwarding::adopt`] once the
@@ -1315,6 +1321,10 @@ fn await_group(slot: &Arc<std::sync::atomic::AtomicI32>) -> Option<rustix::proce
     }
 }
 
+// A SECOND SIGNAL ESCALATES AT ONCE, AND SAYS SO (CLOUD-746 S1, CLOUD-2059). The
+// case reads the recorded reason, so a swallowed second signal shows up as the
+// grace expiring rather than as a teardown that took longer.
+//MUTANT second-signal-ignored|s@^                if signals.pending().next().is_some() {$@                if signals.pending().next().is_some() \&\& false {@|a_second_signal_escalates_instead_of_being_swallowed
 #[cfg(unix)]
 impl Forwarding {
     /// Install the registry **before** the spawn, if `decision` says Batten owns
@@ -1363,7 +1373,7 @@ impl Forwarding {
                 let Some(signal) = stream.next() else {
                     // The handle was closed: the child was reaped without Batten
                     // being signalled at all, which is every clean run.
-                    return;
+                    return None;
                 };
                 signal
             };
@@ -1372,9 +1382,7 @@ impl Forwarding {
             // The signal may have arrived before the spawn published a group.
             // Wait for one rather than dropping the signal on the floor, since
             // that window is precisely what arming early exists to cover.
-            let Some(pgid) = await_group(&group) else {
-                return;
-            };
+            let pgid = await_group(&group)?;
             if let Some(sig) = rustix::process::Signal::from_named_raw(first) {
                 signal_group(pgid, sig);
             }
@@ -1390,7 +1398,7 @@ impl Forwarding {
             let deadline = std::time::Instant::now() + GROUP_GRACE;
             while std::time::Instant::now() < deadline {
                 if group_is_empty(pgid) {
-                    return;
+                    return None;
                 }
                 // A SECOND SIGNAL ESCALATES (CLOUD-746 S1), and the stream is
                 // read rather than left to queue. `Signals::new` has already
@@ -1406,7 +1414,7 @@ impl Forwarding {
                 // on the stream would abandon both.
                 if signals.pending().next().is_some() {
                     signal_group(pgid, rustix::process::Signal::KILL);
-                    return;
+                    return Some(Escalation::SecondSignal);
                 }
                 #[expect(
                     clippy::disallowed_methods,
@@ -1417,6 +1425,7 @@ impl Forwarding {
                 std::thread::sleep(Duration::from_millis(20));
             }
             signal_group(pgid, rustix::process::Signal::KILL);
+            Some(Escalation::GraceExpired)
         });
 
         Ok(Self {
@@ -1465,16 +1474,50 @@ impl Forwarding {
     /// teardown and then left it half-done would be the bug wearing the fix's
     /// clothes.
     pub(crate) fn finish(self) -> Option<i32> {
+        self.finish_reporting().0
+    }
+
+    /// [`Self::finish`], and why the teardown escalated to `SIGKILL`, if it did.
+    ///
+    /// The reason is RECORDED so a case can tell a second signal that escalated
+    /// at once from one that was swallowed until the grace ran out by reading it,
+    /// rather than by timing the teardown against [`GROUP_GRACE`] (CLOUD-2059).
+    pub(crate) fn finish_reporting(self) -> (Option<i32>, Option<Escalation>) {
         use std::sync::atomic::Ordering;
 
-        let active = self.active?;
+        let Some(active) = self.active else {
+            return (None, None);
+        };
         active.handle.close();
         // A worker that panicked has still recorded what it saw before it could,
         // and a panic on the way out is not worth failing a completed command for.
-        drop(active.worker.join());
-        match active.received.load(Ordering::SeqCst) {
+        let escalated = active.worker.join().ok().flatten();
+        let received = match active.received.load(Ordering::SeqCst) {
             0 => None,
             signal => Some(signal),
+        };
+        (received, escalated)
+    }
+}
+
+/// Why a forwarder escalated the group it owned to `SIGKILL`.
+///
+/// Every platform names the type so `run_one` reads one shape; only unix ever
+/// produces a value, because only unix forwards.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Escalation {
+    /// A second signal arrived inside the grace, and the operator asked twice.
+    SecondSignal,
+    /// The group outlived [`GROUP_GRACE`] after the forwarded signal.
+    GraceExpired,
+}
+
+impl Escalation {
+    /// The pointer a notice carries.
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Escalation::SecondSignal => "second-signal",
+            Escalation::GraceExpired => "grace-expired",
         }
     }
 }
@@ -1501,6 +1544,11 @@ impl Forwarding {
     )]
     pub(crate) fn adopt(&self, _child_pid: u32) -> Result<()> {
         Ok(())
+    }
+
+    /// Nothing was forwarded, so nothing escalated either.
+    pub(crate) const fn finish_reporting(self) -> (Option<i32>, Option<Escalation>) {
+        (None, None)
     }
 
     /// Nothing was forwarded, so nothing outranks the child's own status.
@@ -2445,6 +2493,7 @@ fn dispatch(
 /// The split is what `--jobs` forces: with several children in flight nothing may
 /// write to a shared stream on the completion path, or the bundle's own output
 /// would be ordered by the machine.
+//MUTANT escalation-unreported|s@^    if let Some(escalation) = escalated {$@    if let Some(escalation) = None::<Escalation> {@|a_second_signal_escalates_instead_of_being_swallowed
 fn run_one(
     repo_root: &Path,
     run: u64,
@@ -2549,7 +2598,7 @@ fn run_one(
     let group = GroupRecord::write(repo_root, decision, child.id())?;
 
     let status = child.wait().context("wait for the wrapped command")?;
-    let received = forwarding.finish();
+    let (received, escalated) = forwarding.finish_reporting();
     group.clear();
 
     // Deadline-bounded (see the module docs). A grandchild that inherited the
@@ -2561,6 +2610,15 @@ fn run_one(
     // and its floor assertion both describe what a leak costs in total, and two
     // fresh deadlines made that twenty seconds (CLOUD-1288).
     let mut notices = Vec::new();
+    // AN ESCALATION SAYS WHY (CLOUD-2059). Pointer-only — the command's index and
+    // one word — and held with the drain's notices so it lands in bundle order.
+    if let Some(escalation) = escalated {
+        writeln!(
+            notices,
+            "exec: command {index}: group escalated to SIGKILL ({})",
+            escalation.as_str()
+        )?;
+    }
     let drain_started = std::time::Instant::now();
     let (out_bytes, out_spool) =
         out_drain.collect_remaining(drain_started, Stream::Stdout, &mut notices)?;
@@ -3175,60 +3233,42 @@ mod tests {
         capture::Spool::open_in(&dir, stream, name).expect("open a scratch spool")
     }
 
+    /// A drain in a known state, built by hand: what the tee had appended, and
+    /// whether its outcome was already sent. The sender comes back with it, so a
+    /// case that wants a pipe that NEVER closes keeps it alive and unsent.
+    ///
+    /// BUILT RATHER THAN RACED (CLOUD-2059). These cases used to spawn a real tee
+    /// and sleep until it reached the state under test — an hour-long `read` for
+    /// a pipe that never closes, and a fixed 200ms for one that had finished — so
+    /// what they asserted depended on a scheduler. The state is the subject, so
+    /// the state is constructed.
+    fn drain_holding(
+        name: &str,
+        stream: capture::LiveStream,
+        seen: &[u8],
+    ) -> (Drain, mpsc::Sender<Result<()>>) {
+        let (tx, outcome) = mpsc::channel();
+        let drain = Drain {
+            outcome,
+            seen: Arc::new(Mutex::new(seen.to_vec())),
+            spool: Arc::new(Mutex::new(scratch_spool(name, stream))),
+        };
+        (drain, tx)
+    }
+
     #[test]
     fn the_drain_reports_what_arrived_when_the_pipe_never_closes() {
         // The live hang CLOUD-162 introduced and this issue bounds: EOF arrives
         // when the LAST holder of the write end closes it, which is not the
-        // moment the child is reaped. Modelled with a reader that never sees EOF
-        // — the case cannot pass at all without the deadline, because a bare
-        // `join()` on this shape does not return.
-        struct NeverEnds {
-            /// One chunk, then silence forever.
-            spoken: bool,
-        }
-        impl Read for NeverEnds {
-            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-                if self.spoken {
-                    #[expect(
-                        clippy::disallowed_methods,
-                        reason = "the only site in the crate where the delay IS the subject: \
-                                  `NeverEnds` models a pipe whose write end never closes, so the \
-                                  hour is a stand-in for `read` never returning. The bound is the \
-                                  caller's — `collect_within` gives up on its own deadline, which \
-                                  is the property under test (CLOUD-1177)"
-                    )]
-                    std::thread::sleep(Duration::from_hours(1));
-                    return Ok(0);
-                }
-                self.spoken = true;
-                let said = b"partial";
-                buf.get_mut(..said.len())
-                    .ok_or_else(|| std::io::Error::other("buffer too small"))?
-                    .copy_from_slice(said);
-                Ok(said.len())
-            }
-        }
-
-        let drain = Drain::spawn(
-            NeverEnds { spoken: false },
-            std::io::sink(),
-            scratch_spool("never-ends", capture::LiveStream::STDOUT),
-        );
-        // Wait for the one chunk to land, so the case asserts "kept what arrived"
-        // rather than accidentally asserting "gave up before anything did".
-        while drain.seen.lock().map_or(true, |held| held.is_empty()) {
-            #[expect(
-                clippy::disallowed_methods,
-                reason = "the interval of a poll whose exit condition is the `seen` buffer holding \
-                          the one chunk `NeverEnds` speaks; without it the case would assert \
-                          \"gave up before anything arrived\" instead (CLOUD-1177)"
-            )]
-            std::thread::sleep(Duration::from_millis(10));
-        }
+        // moment the child is reaped. Modelled as a tee that spoke one chunk and
+        // never reported — its sender held and unsent — so the case cannot pass at
+        // all without the deadline: a bare wait on this shape does not return.
+        let (drain, open) = drain_holding("never-ends", capture::LiveStream::STDOUT, b"partial");
         let mut report = Vec::new();
         let (bytes, _spool) = drain
-            .collect_within(Duration::from_millis(200), Stream::Stdout, &mut report)
+            .collect_within(Duration::ZERO, Stream::Stdout, &mut report)
             .expect("a drain that timed out is not a failed command");
+        drop(open);
         assert_eq!(
             bytes, b"partial",
             "the bytes that did arrive are still stored"
@@ -3288,32 +3328,10 @@ mod tests {
     /// depending on an `mpsc` detail std does not promise.
     #[test]
     fn a_finished_stream_emits_no_notice_when_the_budget_is_gone() {
-        let drain = Drain::spawn(
-            &b"hello"[..],
-            std::io::sink(),
-            scratch_spool("zero-budget", capture::LiveStream::STDERR),
-        );
-        // The tee appends before it reports, so wait for the bytes and then for
-        // the outcome to follow them. Same poll idiom as the timeout case above,
-        // and for the same reason: without it this would assert "gave up before
-        // anything arrived", which is the opposite property.
-        while drain.seen.lock().map_or(true, |held| held.len() < 5) {
-            #[expect(
-                clippy::disallowed_methods,
-                reason = "the interval of a poll whose exit condition is the `seen` buffer holding \
-                          the bytes the tee speaks; the case is about what happens AFTER a stream \
-                          finished, so it has to wait for it to finish (CLOUD-1177)"
-            )]
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "the tee appends to `seen` and only then sends its outcome, so the poll above \
-                      can exit inside that window; this closes it. The subject is a stream that \
-                      has ALREADY finished, and racing its own completion would test the other \
-                      case (CLOUD-1288)"
-        )]
-        std::thread::sleep(Duration::from_millis(200));
+        // A tee that appended its bytes and then reported EOF — the state this
+        // case is about, built rather than waited for.
+        let (drain, tee) = drain_holding("zero-budget", capture::LiveStream::STDERR, b"hello");
+        tee.send(Ok(())).expect("the drain is still listening");
 
         let mut report = Vec::new();
         let (bytes, _spool) = drain
