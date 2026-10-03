@@ -1193,7 +1193,7 @@ pub fn parse(text: &str, source: &str) -> Result<Config> {
     // it cannot read gets the chance to fail the parse, so the refusal says which
     // engine to install rather than which field was unknown.
     crate::engine::check(text, source, crate::engine::running_stamp)?;
-    let config = parse_ungated(text, source)?;
+    let config = parse_remembered(text, source)?;
     check_min_version(&config, source)?;
     // A WRITER of the forge declaration (CLOUD-1622). Every config LOAD funnels
     // through here — `load`, `load_authority`, `load_site` — so recording it once
@@ -4232,6 +4232,34 @@ fn parse_ungated(text: &str, source: &str) -> Result<Config> {
     parse_ungated_with(text, source, Grammar::Enforced)
 }
 
+/// [`parse_ungated`], answered from the last success when the bytes and the
+/// source are the ones it parsed.
+///
+/// ONE ADJUDICATION PARSED THE SAME AUTHORITY THREE TIMES (CLOUD-2103):
+/// `resolve` loads it twice and `epoch::authority` once more, each a full
+/// deserialize and every load-time validator over 583 KB. Under callgrind that
+/// was 435M of a 1,481M-instruction `adjudicate`. The result is a pure function
+/// of `(text, source)` — the parse reads no environment and no file, and the one
+/// load-time report, [`check_min_version`]'s, stays outside so it is still made
+/// on every load. Only a success is kept: a refusal is re-derived, so its
+/// message is never a stale one.
+//MUTANT config-parse-unremembered|s@^        \&\& remembered_text == text$@        \&\& false@|one_authority_is_parsed_once_per_process
+fn parse_remembered(text: &str, source: &str) -> Result<Config> {
+    static LAST: std::sync::Mutex<Option<(String, String, Config)>> = std::sync::Mutex::new(None);
+    if let Ok(last) = LAST.lock()
+        && let Some((remembered_text, remembered_source, config)) = last.as_ref()
+        && remembered_text == text
+        && remembered_source == source
+    {
+        return Ok(config.clone());
+    }
+    let config = parse_ungated(text, source)?;
+    if let Ok(mut last) = LAST.lock() {
+        *last = Some((text.to_owned(), source.to_owned(), config.clone()));
+    }
+    Ok(config)
+}
+
 fn parse_ungated_with(text: &str, source: &str, grammar: Grammar) -> Result<Config> {
     CONFIG_PARSES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     // THE COMMON CASE COSTS ONE PARSE, and it used to cost three.
@@ -6071,6 +6099,30 @@ mod tests {
             crate::rest::declared().map(|forge| forge.credential_names.clone()),
             Some(vec![String::from("BATTEN_FORGE_ALONE")]),
             "the forge is still declared"
+        );
+    }
+
+    /// CLOUD-2103: the same bytes from the same source are parsed once per
+    /// process, and anything else — other bytes, another source — is parsed.
+    #[test]
+    fn one_authority_is_parsed_once_per_process() {
+        let text = "version = 1\n# one-authority-is-parsed-once\n";
+        let first = parse(text, "first.toml").unwrap();
+        let before = config_parses();
+        let again = parse(text, "first.toml").unwrap();
+        assert_eq!(
+            config_parses(),
+            before,
+            "the same authority is not re-parsed"
+        );
+        assert_eq!(again, first, "and answers what the parse answered");
+        parse(text, "second.toml").unwrap();
+        assert_eq!(config_parses(), before + 1, "another source is parsed");
+        parse("version = 1\n# other bytes\n", "second.toml").unwrap();
+        assert_eq!(config_parses(), before + 2, "other bytes are parsed");
+        assert!(
+            parse("version = 1\nnot toml at all [", "bad.toml").is_err(),
+            "a refusal is still a refusal"
         );
     }
 
