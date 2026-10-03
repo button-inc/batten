@@ -119,7 +119,10 @@ fn a_non_conventional_subject_is_refused_and_the_pointer_names_the_field() {
     let last = commit(&dir, "just did some stuff");
     let out = check_range(&dir, &base, &last);
     assert_eq!(out.status.code(), Some(2));
-    assert_eq!(stdout(&out), format!("{} subject\n", short(&last)));
+    assert_eq!(
+        stdout(&out),
+        format!("commit spelling wrong {} subject\n", short(&last))
+    );
 }
 
 #[test]
@@ -146,7 +149,10 @@ fn a_type_outside_the_configured_vocabulary_is_refused() {
     let last = commit(&dir, "docs: a real change");
     let out = check_range(&dir, &base, &last);
     assert_eq!(out.status.code(), Some(2));
-    assert_eq!(stdout(&out), format!("{} subject\n", short(&last)));
+    assert_eq!(
+        stdout(&out),
+        format!("commit spelling wrong {} subject\n", short(&last))
+    );
 }
 
 #[test]
@@ -161,7 +167,11 @@ fn every_offending_commit_is_reported_not_just_the_first() {
     // `git log` is newest-first, so the later commit leads.
     assert_eq!(
         stdout(&out),
-        format!("{} subject\n{} subject\n", short(&third), short(&first))
+        format!(
+            "commit spelling wrong {} subject\ncommit spelling wrong {} subject\n",
+            short(&third),
+            short(&first)
+        )
     );
 }
 
@@ -197,7 +207,7 @@ fn message_mode_refuses_a_pending_subject_before_the_commit_exists() {
     let dir = fixture("commit-message-bad");
     let out = check_message(&dir, "just did some stuff\n\nRefs: CLOUD-701\n");
     assert_eq!(out.status.code(), Some(2));
-    assert_eq!(stdout(&out), "pending subject\n");
+    assert_eq!(stdout(&out), "commit spelling wrong pending subject\n");
 }
 
 #[test]
@@ -226,7 +236,7 @@ fn an_empty_message_is_refused_rather_than_waved_through() {
     let dir = fixture("commit-message-empty");
     let out = check_message(&dir, "");
     assert_eq!(out.status.code(), Some(2));
-    assert_eq!(stdout(&out), "pending subject\n");
+    assert_eq!(stdout(&out), "commit spelling wrong pending subject\n");
 }
 
 // --- could-not-look is 1, never a pass ----------------------------------------

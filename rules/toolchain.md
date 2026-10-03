@@ -793,8 +793,9 @@ commit-attribution` is a `depends` of `commit-lint`, so it rides the
 `BASE_SHA`/`HEAD_SHA` contract `verify` and CI's commit-lint job already share
 (a second workflow entry would oblige `verify` to run it too, per
 `ci-local-parity`); `mise run commit-attribution-msg` runs from hk's `commit-msg`
-hook and refuses before the commit exists. Findings are pointers (`<sha8>
-author`, `<sha8> trailer:<key>`) and never the matched text, because everything
+hook and refuses before the commit exists. Findings are a declared class plus
+pointers (`<class> <sha8> author`, `<class> <sha8> trailer:<key>` — e.g.
+`commit own refused <sha8> author`) and never the matched text, because everything
 it reads is content someone wanted suppressed. The policy is `[attribution]` in
 `batten.toml` — patterns, the carve-out, and the accountable identity — never a
 literal in the crate, and `crates/batten/tests/it/commit_wiring.rs` asserts both the

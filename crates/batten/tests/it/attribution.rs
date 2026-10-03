@@ -123,7 +123,10 @@ fn a_denied_author_is_refused_and_the_pointer_names_the_field() {
     );
     let out = check_range(&dir, &base, &head);
     assert_eq!(out.status.code(), Some(2));
-    assert_eq!(stdout(&out), format!("{} author\n", short(&head)));
+    assert_eq!(
+        stdout(&out),
+        format!("commit own refused {} author\n", short(&head))
+    );
 }
 
 #[test]
@@ -144,7 +147,10 @@ fn a_denied_committer_is_refused_too() {
     let head = git_in(&dir, &["rev-parse", "HEAD"]);
     let out = check_range(&dir, &base, &head);
     assert_eq!(out.status.code(), Some(2));
-    assert_eq!(stdout(&out), format!("{} committer\n", short(&head)));
+    assert_eq!(
+        stdout(&out),
+        format!("commit own refused {} committer\n", short(&head))
+    );
 }
 
 #[test]
@@ -159,7 +165,10 @@ fn a_model_identity_in_co_authorship_form_reports_the_key_and_never_the_value() 
     assert_eq!(out.status.code(), Some(2));
     assert_eq!(
         stdout(&out),
-        format!("{} trailer:Co-Authored-By\n", short(&head))
+        format!(
+            "commit carry refused {} trailer:Co-Authored-By\n",
+            short(&head)
+        )
     );
     // Pointer, never payload: the address is what the policy exists to suppress,
     // so a gate that reprints it has published the thing it was catching.
@@ -178,7 +187,10 @@ fn a_vendor_session_url_is_refused_without_echoing_the_url() {
     assert_eq!(out.status.code(), Some(2));
     assert_eq!(
         stdout(&out),
-        format!("{} trailer:Vendorbot-Session\n", short(&head))
+        format!(
+            "commit carry refused {} trailer:Vendorbot-Session\n",
+            short(&head)
+        )
     );
     assert!(!stdout(&out).contains("session_secret"));
 }
@@ -190,7 +202,10 @@ fn a_marketing_formula_in_the_body_is_refused_without_echoing_it() {
     let head = commit_clean(&dir, "fix(x): a change\n\nGenerated with SomeProduct");
     let out = check_range(&dir, &base, &head);
     assert_eq!(out.status.code(), Some(2));
-    assert_eq!(stdout(&out), format!("{} body\n", short(&head)));
+    assert_eq!(
+        stdout(&out),
+        format!("commit state refused {} body\n", short(&head))
+    );
     assert!(!stdout(&out).contains("SomeProduct"));
 }
 
@@ -209,7 +224,10 @@ fn with_an_empty_allow_set_a_disclosure_trailer_is_refused() {
     assert_eq!(out.status.code(), Some(2));
     assert_eq!(
         stdout(&out),
-        format!("{} trailer:Assisted-by\n", short(&head))
+        format!(
+            "commit carry refused {} trailer:Assisted-by\n",
+            short(&head)
+        )
     );
 }
 
@@ -243,7 +261,7 @@ fn opting_in_carves_out_the_well_formed_shape_and_only_that_shape() {
     assert_eq!(out.status.code(), Some(2));
     assert_eq!(
         stdout(&out),
-        format!("{} trailer:Assisted-by\n", short(&bad))
+        format!("commit carry refused {} trailer:Assisted-by\n", short(&bad))
     );
 }
 
@@ -346,7 +364,10 @@ fn message_mode_refuses_a_pending_message_before_the_commit_exists() {
         .output()
         .expect("run batten");
     assert_eq!(out.status.code(), Some(2));
-    assert_eq!(stdout(&out), "pending trailer:Vendorbot-Session\n");
+    assert_eq!(
+        stdout(&out),
+        "commit carry refused pending trailer:Vendorbot-Session\n"
+    );
 }
 
 #[test]
@@ -361,7 +382,7 @@ fn message_mode_refuses_the_identity_git_is_about_to_stamp() {
         .output()
         .expect("run batten");
     assert_eq!(out.status.code(), Some(2));
-    assert_eq!(stdout(&out), "pending author\n");
+    assert_eq!(stdout(&out), "commit own refused pending author\n");
 }
 
 #[test]

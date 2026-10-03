@@ -10848,7 +10848,11 @@ fn enforcement_is_identical_across_every_host() {
     let baseline: serde_json::Value = serde_json::from_slice(&unnamed.stdout).expect("-J is JSON");
     assert_eq!(
         baseline["findings"],
-        serde_json::json!([{ "label": "pending", "field": "body" }]),
+        serde_json::json!([{
+            "label": "pending",
+            "field": "body",
+            "verdict": "commit state refused"
+        }]),
     );
 
     for harness in ATTRIBUTION_HOSTS {

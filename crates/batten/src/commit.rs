@@ -24,8 +24,9 @@
 //!
 //! # Pointer, never payload
 //!
-//! A finding is `<sha8> subject` — the commit and the field, never the subject
-//! text (non-negotiable rule 4, house style §6). This is a deliberate tightening:
+//! A finding is `<class> <sha8> <field>` — for example `commit spelling wrong
+//! <sha8> subject`: a declared class, then the commit and the field, never the
+//! subject text (non-negotiable rule 4, house style §6). This is a deliberate tightening:
 //! the shell task it replaces printed the offending subject, which §6 does not
 //! allow. A subject can carry anything its author typed, and a gate that echoes
 //! it back is a gate that republishes whatever that was.
@@ -40,6 +41,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::UsageError;
 use crate::git;
+use crate::verdict::{Native, Subject as Pointer};
 
 /// The `[commit]` table: what a commit subject must look like here.
 ///
@@ -203,8 +205,9 @@ fn address_of(identity: &str) -> &str {
 /// Judge the claim clause: every commit names the row it serves, unless a
 /// declared exemption covers it (CLOUD-843).
 ///
-/// A finding is `<sha8> claim` — the commit and the field, never the subject the
-/// retired shell echoed, which is exactly the payload rule 4 refuses.
+/// A finding is `<class> <sha8> <field>` — `commit name missing <sha8> claim`:
+/// the commit and the field, never the subject the retired shell echoed, which is
+/// exactly the payload rule 4 refuses.
 ///
 /// # Errors
 ///
@@ -235,6 +238,7 @@ pub fn judge_claims(commits: &[Claimant], claims: &Claims) -> Result<Vec<Finding
             label: commit.label.clone(),
             field: "claim".to_owned(),
             subject: None,
+            verdict: Native::CommitUnclaimed,
         });
     }
     Ok(found)
@@ -280,16 +284,55 @@ pub struct Finding {
     /// existed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub subject: Option<String>,
+    /// The declared class the refusal leads with (CLOUD-1960).
+    ///
+    /// Without it the line was two bare pointers no registry declared, so
+    /// `batten policy explain` could not say what failed or what fixes it.
+    /// Serialized as its token, last, so `-J` gains one trailing key.
+    #[serde(serialize_with = "crate::commit::serialize_verdict")]
+    pub verdict: Native,
 }
 
+/// Serialize a class as the token it is declared under.
+pub(crate) fn serialize_verdict<S: serde::Serializer>(
+    verdict: &Native,
+    serializer: S,
+) -> std::result::Result<S::Ok, S::Error> {
+    serializer.serialize_str(verdict.id())
+}
+
+//MUTANT subject-refusal-unexplained|s@^        let token = self.verdict.id();$@        let token = "";@|every_commit_finding_names_its_vendored_class
 impl Finding {
-    /// The pointer line, house style §6.
+    /// The refusal line, house style §6: `<class> <label> <field>[ <subject>]`,
+    /// through the same projection every declared refusal renders with.
     #[must_use]
     pub fn line(&self) -> String {
-        match &self.subject {
-            Some(path) => format!("{} {} {path}", self.label, self.field),
-            None => format!("{} {}", self.label, self.field),
+        let token = self.verdict.id();
+        let mut subjects = vec![
+            Pointer::Artifact {
+                artifact: self.label.clone(),
+            },
+            Pointer::Artifact {
+                artifact: self.field.clone(),
+            },
+        ];
+        if let Some(subject) = &self.subject {
+            // A protected path is a path; an arm key is `<rule id>.<arm>`.
+            let articulation = matches!(
+                self.verdict,
+                Native::ArticulationMissing | Native::ArticulationTampered
+            );
+            subjects.push(if articulation {
+                Pointer::Path {
+                    path: subject.clone(),
+                }
+            } else {
+                Pointer::Artifact {
+                    artifact: subject.clone(),
+                }
+            });
         }
+        crate::verdict::render_line(&[], token, &subjects)
     }
 }
 
@@ -344,6 +387,7 @@ impl Commit {
                 label: subject.label.clone(),
                 field: "subject".to_owned(),
                 subject: None,
+                verdict: Native::SubjectUnconventional,
             })
             .collect())
     }
@@ -432,22 +476,23 @@ pub fn judge_admissions(
             // blocks of which at least one verifies is clean — several are
             // legitimate, since re-articulating the same path on one commit chains
             // rather than replaces.
-            let field = if claims.is_empty() {
+            let (field, verdict) = if claims.is_empty() {
                 if crate::redirect::resolve(redirects, path).is_some() {
                     continue;
                 }
-                "admits"
+                ("admits", Native::ArticulationMissing)
             } else if claims.iter().any(|block| block.recomputes()) {
                 continue;
             } else {
                 // REACHED FOR A REDIRECTED PATH TOO, and that is the half the
                 // superseded fix dropped.
-                "admits-tampered"
+                ("admits-tampered", Native::ArticulationTampered)
             };
             found.push(Finding {
                 label: short(&write.commit),
                 field: field.to_owned(),
                 subject: Some(path.clone()),
+                verdict,
             });
         }
     }
@@ -567,6 +612,7 @@ pub fn judge_arm_sequencing(sequences: &[ArmSequence]) -> Vec<Finding> {
                     label: sequence.label.clone(),
                     field: "arm-self-authorized".to_owned(),
                     subject: Some(key.clone()),
+                    verdict: Native::ArmSelfAuthorized,
                 });
             }
         }
@@ -574,19 +620,13 @@ pub fn judge_arm_sequencing(sequences: &[ArmSequence]) -> Vec<Finding> {
     found
 }
 
-// THE MUTATION FOR THIS PREDICATE IS DECLARED IN ITS SUITE, NOT HERE (CLOUD-1402).
+// THE MUTATION FOR THIS PREDICATE IS DECLARED IN ITS SUITE (CLOUD-1402).
 //
-// `obligations-bound` binds a §7 obligation by reading the declared FILE's lines
-// for a row beginning `#MUTANT <slug>|`, and its `line_sources` covers
-// `crates/batten/tests/**` where `crates/batten/src/**` is not. So the row lives
-// in `crates/batten/tests/it/commit_arm_sequencing.rs`, which is where the claims
-// object names it and the only place the gate can see it.
-//
-// Measured the hard way: the row was written HERE first, with only a prose
-// mention of the slug in the suite. `declares_slug` matches a line PREFIX, a
-// mention inside a doc comment is not one, and `test name undefined` fired over a
-// promise that was in fact kept — which is the gate being right about the
-// binding and me being wrong about where it reads.
+// It lives in `crates/batten/tests/it/commit_arm_sequencing.rs`, where its claims
+// object names it. That was forced once: `obligations-bound`'s `line_sources`
+// did not cover `crates/batten/src/**`. It has since CLOUD-1909, so this
+// module's own rows — the refusal-line ones above `impl Finding` and
+// `pub fn report` — live in this file, beside the code they mutate.
 
 /// Read every non-merge commit's subject in `base..head`.
 ///
@@ -636,6 +676,7 @@ pub fn read_message(message: &Path) -> Result<Subject> {
 
 /// Render a run's findings as pointer lines, one per line.
 #[must_use]
+//MUTANT printed-class-unresolved|s@^        _ = writeln!(rendered, "{}", finding.line());$@        _ = writeln!(rendered, "{} {}", finding.label, finding.field);@|a_refused_commit_msg_line_names_a_class_policy_explain_resolves
 pub fn report(findings: &[Finding]) -> String {
     let mut rendered = String::new();
     for finding in findings {
@@ -683,7 +724,7 @@ mod tests {
     fn a_non_conventional_subject_is_pointed_at_by_field() {
         let found = policy().judge(&[subject("just did some stuff")]).unwrap();
         assert_eq!(found.len(), 1);
-        assert_eq!(found[0].line(), "a1b2c3d4 subject");
+        assert_eq!(found[0].line(), "commit spelling wrong a1b2c3d4 subject");
     }
 
     #[test]
@@ -693,7 +734,7 @@ mod tests {
         // gate republishing arbitrary content.
         let found = policy().judge(&[subject("wip SECRETLEAK stuff")]).unwrap();
         assert!(!report(&found).contains("SECRETLEAK"));
-        assert_eq!(report(&found), "a1b2c3d4 subject\n");
+        assert_eq!(report(&found), "commit spelling wrong a1b2c3d4 subject\n");
     }
 
     #[test]
@@ -795,7 +836,7 @@ mod tests {
             &claims(),
         )
         .unwrap();
-        assert_eq!(report(&found), "a1b2c3d4 claim\n");
+        assert_eq!(report(&found), "commit name missing a1b2c3d4 claim\n");
     }
 
     /// The mirror: a commit that claims a row is never a finding, whatever it
@@ -849,7 +890,7 @@ mod tests {
             &claims(),
         )
         .unwrap();
-        assert_eq!(report(&found), "aaaaaaaa claim\n");
+        assert_eq!(report(&found), "commit name missing aaaaaaaa claim\n");
     }
 
     /// `#MUTANT exemption-ignores-author` reddens here. The bot row is two
@@ -870,7 +911,7 @@ mod tests {
             false,
         );
         let found = judge_claims(&[by_a_person, by_the_bot], &claims()).unwrap();
-        assert_eq!(report(&found), "cccccccc claim\n");
+        assert_eq!(report(&found), "commit name missing cccccccc claim\n");
     }
 
     /// And the bot's address alone is not enough: a bump reaching anything but a
@@ -887,7 +928,7 @@ mod tests {
             &claims(),
         )
         .unwrap();
-        assert_eq!(report(&found), "eeeeeeee claim\n");
+        assert_eq!(report(&found), "commit name missing eeeeeeee claim\n");
     }
 
     #[test]
@@ -949,7 +990,7 @@ mod tests {
         assert_eq!(found.len(), 1);
         assert_eq!(
             found[0].line(),
-            "a1b2c3d4 arm-self-authorized suites-not-gutted.withdrawn"
+            "commit admit same a1b2c3d4 arm-self-authorized suites-not-gutted.withdrawn"
         );
     }
 
@@ -964,6 +1005,78 @@ mod tests {
             &["    // withdrawn: \"one\" the subject is gone"],
         )]);
         assert_eq!(found.len(), 1);
+    }
+
+    /// `#MUTANT subject-refusal-unexplained` reddens here (CLOUD-1960): every
+    /// field this module raises leads its line with its own declared class.
+    #[test]
+    fn every_commit_finding_names_its_vendored_class() {
+        let guarded: std::collections::BTreeSet<String> =
+            std::iter::once("guarded.toml".to_owned()).collect();
+        let tampered = "fix: x\n\nAdmits: 0\nAdmits-rule: protected-mutation\nAdmits-verdict: \
+                        path write refused\nAdmits-subject: guarded.toml\nAdmits-anchor: \
+                        call:h\nAdmits-epoch: e\nAdmits-author: a\nAdmits-prev: -\n\
+                        Admits-answer-precondition: p\n";
+        let mut found = policy()
+            .judge(&[Subject {
+                label: "pending".to_owned(),
+                text: "fix(test:cargo): x".to_owned(),
+            }])
+            .unwrap();
+        found.extend(
+            judge_claims(
+                &[claimant(
+                    "a1b2c3d4",
+                    "Someone <someone@example.com>",
+                    &["crates/batten/src/lib.rs"],
+                    false,
+                )],
+                &claims(),
+            )
+            .unwrap(),
+        );
+        found.extend(judge_pending("fix: x\n", &guarded, &[]));
+        found.extend(judge_pending(tampered, &guarded, &[]));
+        found.extend(judge_arm_sequencing(&[sequence(
+            "suites-not-gutted.withdrawn",
+            "// withdrawn:",
+            &["// withdrawn: \"one\" the subject is gone"],
+        )]));
+
+        let expected = [
+            ("subject", Native::SubjectUnconventional),
+            ("claim", Native::CommitUnclaimed),
+            ("admits", Native::ArticulationMissing),
+            ("admits-tampered", Native::ArticulationTampered),
+            ("arm-self-authorized", Native::ArmSelfAuthorized),
+        ];
+        let fields: Vec<&str> = found.iter().map(|f| f.field.as_str()).collect();
+        assert_eq!(
+            fields,
+            expected.iter().map(|(field, _)| *field).collect::<Vec<_>>()
+        );
+        let registry = crate::verdict::vendored();
+        for (finding, (field, class)) in found.iter().zip(expected) {
+            assert_eq!(finding.verdict, class, "{field}");
+            let line = finding.line();
+            assert!(line.contains(class.id()), "{line}");
+            assert!(
+                line.contains(&format!("{} {field}", finding.label)),
+                "{line}"
+            );
+            assert!(
+                registry.iter().any(|row| row.id == class.id()),
+                "{} is not vendored",
+                class.id()
+            );
+            for row in &registry {
+                assert!(
+                    row.id == class.id() || !line.contains(row.id.as_str()),
+                    "{line} also carries {}",
+                    row.id
+                );
+            }
+        }
     }
 
     #[test]

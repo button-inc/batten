@@ -97,7 +97,11 @@ fn every_commit_in_the_range_is_judged_and_only_the_unclaimed_one_is_named() {
     let unclaimed = commit(&dir, "src/b.rs", "fix: b", None);
     let (code, out) = check(&dir, &base);
     assert_eq!(code, Some(2), "{out}");
-    assert_eq!(out, format!("{} claim\n", short(&unclaimed)), "{out}");
+    assert_eq!(
+        out,
+        format!("commit name missing {} claim\n", short(&unclaimed)),
+        "{out}"
+    );
     assert!(!out.contains(short(&claimed)), "{out}");
 }
 
@@ -156,7 +160,11 @@ fn an_update_bot_bump_owes_no_claim_and_a_person_touching_the_same_paths_does() 
         Some(2),
         "a workflow-only diff is ordinary work: {out}"
     );
-    assert_eq!(out, format!("{} claim\n", short(&person)), "{out}");
+    assert_eq!(
+        out,
+        format!("commit name missing {} claim\n", short(&person)),
+        "{out}"
+    );
 }
 
 #[test]

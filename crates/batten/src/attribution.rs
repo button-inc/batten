@@ -50,8 +50,8 @@
 //!
 //! # Pointer, never payload
 //!
-//! A finding names the commit and the **field** — `a1b2c3d4 trailer:Co-Authored-By`
-//! — never the matched text (non-negotiable rule 4, house style §6). Everything
+//! A finding names its declared class, the commit and the **field** —
+//! `commit carry refused a1b2c3d4 trailer:Co-Authored-By` — never the matched text (non-negotiable rule 4, house style §6). Everything
 //! this gate reads is by definition content someone wanted suppressed, so echoing
 //! it back would make the gate republish exactly what it exists to catch.
 
@@ -67,6 +67,7 @@ use crate::decision::{Caller, Provenance};
 use crate::error::UsageError;
 use crate::git;
 use crate::hook::{Capability, Harness};
+use crate::verdict::{Native, Subject as Pointer};
 
 /// The `[attribution]` table: what produced commits may carry about the tooling.
 ///
@@ -212,13 +213,29 @@ pub struct Finding {
     /// Which surface carried it: `author`, `committer`, `body`, or
     /// `trailer:<Key>`.
     pub field: String,
+    /// The declared class the refusal leads with (CLOUD-1960), serialized as its
+    /// token so `-J` gains one trailing key.
+    #[serde(serialize_with = "crate::commit::serialize_verdict")]
+    pub verdict: Native,
 }
 
+//MUTANT-SUITE crates/batten/src/attribution.rs
+//MUTANT attribution-refusal-unexplained|s@^        let token = self.verdict.id();$@        let token = "";@|every_attribution_finding_names_its_vendored_class
 impl Finding {
-    /// The pointer line, house style §6.
+    /// The refusal line, house style §6: `<class> <label> <field>`, through the
+    /// same projection every declared refusal renders with.
     #[must_use]
     pub fn line(&self) -> String {
-        format!("{} {}", self.label, self.field)
+        let token = self.verdict.id();
+        let subjects = [
+            Pointer::Artifact {
+                artifact: self.label.clone(),
+            },
+            Pointer::Artifact {
+                artifact: self.field.clone(),
+            },
+        ];
+        crate::verdict::render_line(&[], token, &subjects)
     }
 }
 
@@ -284,16 +301,17 @@ impl Attribution {
         let allow = Matchers::compile("trailer_allow", &self.trailer_allow)?;
 
         let mut findings = Vec::new();
-        let point = |field: &str| Finding {
+        let point = |field: &str, verdict: Native| Finding {
             label: commit.label.clone(),
             field: field.to_owned(),
+            verdict,
         };
 
         if identity.matches(&commit.author) {
-            findings.push(point("author"));
+            findings.push(point("author", Native::IdentityDenied));
         }
         if identity.matches(&commit.committer) {
-            findings.push(point("committer"));
+            findings.push(point("committer", Native::IdentityDenied));
         }
         for line in &commit.trailers {
             if !trailer.matches(line) {
@@ -309,10 +327,10 @@ impl Attribution {
             }
             // The key alone. The value is the payload.
             let key = line.split_once(':').map_or(line.as_str(), |(key, _)| key);
-            findings.push(point(&format!("trailer:{key}")));
+            findings.push(point(&format!("trailer:{key}"), Native::TrailerDenied));
         }
         if body.matches(&commit.body) {
-            findings.push(point("body"));
+            findings.push(point("body", Native::BodyDenied));
         }
         Ok(findings)
     }
@@ -365,9 +383,10 @@ impl Attribution {
         }
         let permitted = Matchers::compile("tag_identity_allow", &self.tag_identity_allow)?;
         let denied = Matchers::compile("identity_deny", &self.identity_deny)?;
-        let point = |field: &str| Finding {
+        let point = |field: &str, verdict: Native| Finding {
             label: label.to_owned(),
             field: field.to_owned(),
+            verdict,
         };
         // The two no-identity arms are JOINED, and the `#[allow(match_same_arms)]`
         // that once kept them apart is gone. It was an added clippy escape, which
@@ -378,20 +397,20 @@ impl Attribution {
         // Exhaustiveness is unaffected: `A | B` introduces no wildcard, so a fourth
         // variant still fails to compile. Independent mutatability was the real
         // reason — a `|` inside a mutated expression is split as a field separator
-        // by `mutate`'s own row parser — but it was speculative: this module
-        // declares no `#MUTANT` row, here or anywhere, so there is no row to refuse.
-        // An author who later declares one over these arms can split them again and
-        // will own the escape that costs.
+        // by `mutate`'s own row parser — but it was speculative: this module's one
+        // `#MUTANT` row, `attribution-refusal-unexplained`, is over `Finding::line`,
+        // and none is declared over these arms. An author who later declares one
+        // over them can split them again and will own the escape that costs.
         Ok(match tagger {
             git::Tagger::Signed(rendered) => {
                 if Self::tagger_is_accountable(rendered, &permitted, &denied) {
                     Vec::new()
                 } else {
-                    vec![point("tagger")]
+                    vec![point("tagger", Native::TaggerUnaccountable)]
                 }
             }
             git::Tagger::Unsigned | git::Tagger::Lightweight => {
-                vec![point("tagger:unannotated")]
+                vec![point("tagger:unannotated", Native::TaggerUnannotated)]
             }
         })
     }
@@ -775,7 +794,7 @@ mod tests {
         subject.author = "Vendor <bot@no-reply.example>".to_owned();
         let found = policy().judge(&subject).unwrap();
         assert_eq!(found.len(), 1);
-        assert_eq!(found[0].line(), "a1b2c3d4 author");
+        assert_eq!(found[0].line(), "commit own refused a1b2c3d4 author");
     }
 
     #[test]
@@ -785,7 +804,7 @@ mod tests {
         let mut subject = commit();
         subject.committer = "Vendor <bot@no-reply.example>".to_owned();
         let found = policy().judge(&subject).unwrap();
-        assert_eq!(found[0].line(), "a1b2c3d4 committer");
+        assert_eq!(found[0].line(), "commit own refused a1b2c3d4 committer");
     }
 
     #[test]
@@ -795,7 +814,10 @@ mod tests {
             .trailers
             .push("Vendor-Session: https://example.test/session_secret".to_owned());
         let found = policy().judge(&subject).unwrap();
-        assert_eq!(found[0].line(), "a1b2c3d4 trailer:Vendor-Session");
+        assert_eq!(
+            found[0].line(),
+            "commit carry refused a1b2c3d4 trailer:Vendor-Session"
+        );
         assert!(!report(&found).contains("session_secret"));
     }
 
@@ -804,7 +826,7 @@ mod tests {
         let mut subject = commit();
         subject.body = "fix(x): a change\n\nGenerated with SomeTool\n".to_owned();
         let found = policy().judge(&subject).unwrap();
-        assert_eq!(found[0].line(), "a1b2c3d4 body");
+        assert_eq!(found[0].line(), "commit state refused a1b2c3d4 body");
         assert!(!report(&found).contains("SomeTool"));
     }
 
@@ -819,7 +841,10 @@ mod tests {
             .trailers
             .push("Assisted-by: some-agent:some-model".to_owned());
         let found = policy().judge(&subject).unwrap();
-        assert_eq!(found[0].line(), "a1b2c3d4 trailer:Assisted-by");
+        assert_eq!(
+            found[0].line(),
+            "commit carry refused a1b2c3d4 trailer:Assisted-by"
+        );
     }
 
     #[test]
@@ -840,7 +865,7 @@ mod tests {
             .push("Assisted-by: Vendor Model <bot@no-reply.example>".to_owned());
         assert_eq!(
             disclosing.judge(&malformed).unwrap()[0].line(),
-            "a1b2c3d4 trailer:Assisted-by"
+            "commit carry refused a1b2c3d4 trailer:Assisted-by"
         );
     }
 
@@ -854,6 +879,69 @@ mod tests {
         subject.trailers.push("Vendor-Session: x".to_owned());
         subject.body = "Generated with SomeTool".to_owned();
         assert_eq!(policy().judge(&subject).unwrap().len(), 4);
+    }
+
+    /// `#MUTANT attribution-refusal-unexplained` reddens here (CLOUD-1960): every
+    /// field this module raises leads its line with its own declared class.
+    #[test]
+    fn every_attribution_finding_names_its_vendored_class() {
+        let offending = CommitMeta {
+            label: "a1b2c3d4".to_owned(),
+            author: "Vendor <x@no-reply.example>".to_owned(),
+            committer: "Vendor <x@no-reply.example>".to_owned(),
+            trailers: vec!["Vendor-Session: s".to_owned()],
+            body: "fix: x\n\nGenerated with SomeTool\n".to_owned(),
+        };
+        let mut found = policy().judge(&offending).unwrap();
+        found.extend(
+            policy()
+                .judge_tagger(
+                    "v1",
+                    &git::Tagger::Signed("Somebody Else <s@example.test>".into()),
+                )
+                .unwrap(),
+        );
+        found.extend(
+            policy()
+                .judge_tagger("v1", &git::Tagger::Lightweight)
+                .unwrap(),
+        );
+
+        let expected = [
+            ("author", Native::IdentityDenied),
+            ("committer", Native::IdentityDenied),
+            ("trailer:Vendor-Session", Native::TrailerDenied),
+            ("body", Native::BodyDenied),
+            ("tagger", Native::TaggerUnaccountable),
+            ("tagger:unannotated", Native::TaggerUnannotated),
+        ];
+        let fields: Vec<&str> = found.iter().map(|f| f.field.as_str()).collect();
+        assert_eq!(
+            fields,
+            expected.iter().map(|(field, _)| *field).collect::<Vec<_>>()
+        );
+        let registry = crate::verdict::vendored();
+        for (finding, (field, class)) in found.iter().zip(expected) {
+            assert_eq!(finding.verdict, class, "{field}");
+            let line = finding.line();
+            assert!(line.contains(class.id()), "{line}");
+            assert!(
+                line.contains(&format!("{} {field}", finding.label)),
+                "{line}"
+            );
+            assert!(
+                registry.iter().any(|row| row.id == class.id()),
+                "{} is not vendored",
+                class.id()
+            );
+            for row in &registry {
+                assert!(
+                    row.id == class.id() || !line.contains(row.id.as_str()),
+                    "{line} also carries {}",
+                    row.id
+                );
+            }
+        }
     }
 
     #[test]
@@ -892,7 +980,7 @@ mod tests {
         policy.trailer_deny = vec!["^Assisted-by".to_owned()];
         assert_eq!(
             policy.judge(&subject).unwrap()[0].line(),
-            "a1b2c3d4 trailer:Assisted-by"
+            "commit carry refused a1b2c3d4 trailer:Assisted-by"
         );
     }
 

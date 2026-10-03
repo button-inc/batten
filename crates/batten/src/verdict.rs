@@ -1380,6 +1380,31 @@ pub enum Native {
     /// utility was involved, and that class's route pointed a memory reader at
     /// `rules/scanning.md` instead of the tool the row names.
     ReadRedirected,
+    /// A commit subject does not match `[commit] subject_pattern` (CLOUD-1960).
+    ///
+    /// **APPENDED LAST**, with the nine below, for [`Native::RecordTableRefused`]'s
+    /// reason. These ten are the commit-msg channel's classes: `[commit]` and
+    /// `[attribution]` are the engine's own tables, so a consumer that declares
+    /// either and no `[[verdict]]` row still gets a token `explain` resolves.
+    SubjectUnconventional,
+    /// A commit in a judged range names no tracker row and no exemption covers it.
+    CommitUnclaimed,
+    /// A commit wrote a protected path and carries no articulation block for it.
+    ArticulationMissing,
+    /// An articulation block claims a path and does not hash to its address.
+    ArticulationTampered,
+    /// A commit introduces a conserves-ledger arm and spends it at once.
+    ArmSelfAuthorized,
+    /// A commit's author or committer matches `[attribution] identity_deny`.
+    IdentityDenied,
+    /// A commit carries a trailer `[attribution] trailer_deny` refuses.
+    TrailerDenied,
+    /// A commit message body matches `[attribution] body_deny`.
+    BodyDenied,
+    /// A tag was cut by an identity `tag_identity_allow` does not permit.
+    TaggerUnaccountable,
+    /// A tag carries no tagger identity at all.
+    TaggerUnannotated,
 }
 
 impl Native {
@@ -1437,6 +1462,16 @@ impl Native {
         Native::OutcomeTableRefused,
         Native::ProgramUnknown,
         Native::ReadRedirected,
+        Native::SubjectUnconventional,
+        Native::CommitUnclaimed,
+        Native::ArticulationMissing,
+        Native::ArticulationTampered,
+        Native::ArmSelfAuthorized,
+        Native::IdentityDenied,
+        Native::TrailerDenied,
+        Native::BodyDenied,
+        Native::TaggerUnaccountable,
+        Native::TaggerUnannotated,
     ];
 
     /// The classes the CONFIG LOADER raises, in `parse_ungated` order.
@@ -1526,6 +1561,16 @@ impl Native {
             Native::ProvisionTableRefused => "provision declare refused",
             Native::StartupTableRefused => "startup declare refused",
             Native::StepTableRefused => "step declare refused",
+            Native::SubjectUnconventional => "commit spelling wrong",
+            Native::CommitUnclaimed => "commit name missing",
+            Native::ArticulationMissing => "commit admit missing",
+            Native::ArticulationTampered => "commit admit other",
+            Native::ArmSelfAuthorized => "commit admit same",
+            Native::IdentityDenied => "commit own refused",
+            Native::TrailerDenied => "commit carry refused",
+            Native::BodyDenied => "commit state refused",
+            Native::TaggerUnaccountable => "tag own refused",
+            Native::TaggerUnannotated => "tag own unnamed",
         }
     }
 }
@@ -1560,7 +1605,7 @@ pub struct VendoredVerdict {
     ///
     /// A plain field with no default, unlike the consumer table's: a `const`
     /// initialiser cannot omit one, and spelling `Applicability::Advice` on each
-    /// of the 39 vendored rows is what makes the two that are NOT advice visible
+    /// vendored row is what makes any that is NOT advice visible
     /// in a diff rather than inferred from an absence.
     pub applicability: Applicability,
 }
@@ -2320,6 +2365,158 @@ first hit.",
         routes: &[read("config read first", "batten.toml")],
         applicability: Applicability::Advice,
     },
+    // ── commit-msg channel ──────────────────────────────────────────────────
+    VendoredVerdict {
+        id: "commit spelling wrong",
+        gloss: "the commit subject does not match the repository's declared commit convention",
+        class: "`[commit] subject_pattern` is the one expression every non-merge commit's \
+subject must match. A repository that lands by fast-forward derives its changelog and its \
+version bump from those subjects, so whether a subject is conventional is a rule about what a \
+commit may be. The engine never judges whether a subject is good: it asks whether the \
+configured pattern matches the first line, and the type words and scope shape are the \
+consumer's own. The finding points at the commit and the field and never echoes the subject, \
+which can carry anything its author typed.",
+        routes: &[
+            read("config read first", "batten.toml"),
+            run("commit write now", "git commit -F <path>"),
+        ],
+        applicability: Applicability::Advice,
+    },
+    VendoredVerdict {
+        id: "commit name missing",
+        gloss: "the commit names no tracker row and no declared exemption covers it",
+        class: "`[commit.claims]` asks that every commit in a judged range name the row it \
+serves: a closing keyword or the first key of a reference trailer, read through the \
+consumer's own key grammar. A claim receipt never leaves the clone, so this is the half of a \
+claim a reviewer and a workflow can see. Claiming is stricter than mentioning. An exemption is \
+a property of the commit, never of its wording: every path it changed, and where declared its \
+author address, must match one `unclaimed` row.",
+        routes: &[
+            run("commit edit now", "git commit --amend"),
+            read("config read first", "batten.toml"),
+        ],
+        applicability: Applicability::Advice,
+    },
+    VendoredVerdict {
+        id: "commit admit missing",
+        gloss: "the commit wrote a protected path and carries no articulation block for it",
+        class: "An override makes a protected write admissible, and the articulation it cost \
+lives in a store scoped to the container. The block in the commit message is what makes that \
+reasoning durable and readable by every reviewer of the change it justifies. This finding is \
+the honest omission: the commit wrote the path and no block claims it. Issue and spend an \
+admission against the class that refused the write, and carry the block it prints. A path \
+whose writes a redirect sanctions owes no block, because nothing was refused and nothing was \
+issued.",
+        routes: &[
+            run(
+                "grant ask first",
+                "batten override request --rule protected-mutation --verdict 'path write \
+refused' --subject <path>",
+            ),
+            run(
+                "grant write now",
+                "batten override spend --admission <address> --rule protected-mutation \
+--verdict 'path write refused' --subject <path>",
+            ),
+            read("config read first", "batten.toml"),
+        ],
+        applicability: Applicability::Advice,
+    },
+    VendoredVerdict {
+        id: "commit admit other",
+        gloss: "an articulation block for this path does not hash to the address it names",
+        class: "The graver of the two articulation findings, and the opposite of an omission: \
+a block claims this path and does not recompute to the address it carries. Somebody edited the \
+reasoning after it was issued, or assembled a block by hand. The check is a pure function of \
+the block, so it decides identically on a runner that has never seen the admission store. It \
+is still reached on a path a redirect sanctions, because a doctored block is examined even \
+where none was owed. Issue a fresh admission and carry the block it prints verbatim.",
+        routes: &[
+            run(
+                "grant ask first",
+                "batten override request --rule protected-mutation --verdict 'path write \
+refused' --subject <path>",
+            ),
+            run(
+                "grant write now",
+                "batten override spend --admission <address> --rule protected-mutation \
+--verdict 'path write refused' --subject <path>",
+            ),
+        ],
+        applicability: Applicability::Advice,
+    },
+    VendoredVerdict {
+        id: "commit admit same",
+        gloss: "the commit adds a conserves-ledger arm and spends it in the same change",
+        class: "An optional conserves-ledger arm widens what a deletion may claim, so adding \
+one wants an independent reader. A commit that both introduces the arm and spends it is \
+self-authorizing: the thing that would have refused the deletion was authored by the same \
+change. The remedy is sequencing, not permission. Land the arm, let it be reviewed on its \
+own, then spend it in a later commit. There is deliberately no override, since an admission \
+here would be the author authorizing their own hatch one layer up.",
+        routes: &[run("commit ship first", "git restore --staged <path>")],
+        applicability: Applicability::Advice,
+    },
+    VendoredVerdict {
+        id: "commit own refused",
+        gloss: "the commit's author or committer is an identity the attribution policy denies",
+        class: "`[attribution]` governs what a produced commit may carry about the tooling \
+that made it, and `identity_deny` is the half that reads the author and committer as git \
+stamps them. The committer is judged too, because it is the field a repair reaching only the \
+author leaves behind. The finding names the field and never the identity. The declared \
+repair sets the repository-local identity to the accountable one the table declares, and \
+leaves a contributor's own compliant identity alone.",
+        routes: &[run("config fix now", "batten attribution identity")],
+        applicability: Applicability::Advice,
+    },
+    VendoredVerdict {
+        id: "commit carry refused",
+        gloss: "the commit carries a trailer the attribution policy denies",
+        class: "`[attribution] trailer_deny` names trailer shapes a produced commit may not \
+carry, and `trailer_allow` is the only carve-out: an empty allow list exempts nothing, which \
+is the posture that discloses nothing. The finding names the trailer KEY and never its value, \
+because the value is the payload the policy exists to keep out of history. Rewrite the \
+message without the trailer.",
+        routes: &[run("commit write now", "git commit -F <path>")],
+        applicability: Applicability::Advice,
+    },
+    VendoredVerdict {
+        id: "commit state refused",
+        gloss: "the commit message body states attribution the policy denies",
+        class: "`[attribution] body_deny` names phrasings a produced commit's message may not \
+state about the tooling that made it. The whole message is judged, not only the trailers, \
+because a formula in the body discloses exactly what a refused trailer would. The finding \
+names the field and never the matched text. Rewrite the message without it.",
+        routes: &[run("commit write now", "git commit -F <path>")],
+        applicability: Applicability::Advice,
+    },
+    VendoredVerdict {
+        id: "tag own refused",
+        gloss: "the tag was cut by an identity the attribution policy does not permit",
+        class: "`[attribution] tag_identity_allow` is an allow-form: every tagger that is not \
+the declared identity is refused, so a release cut by an unexpected credential is caught \
+whether or not anyone predicted that credential. `identity_deny` is still consulted, and a \
+tagger both permitted and denied is refused. The finding names the tag and never the tagger \
+identity. Delete the tag and cut it again under the accountable identity.",
+        routes: &[
+            run("tag retire now", "git tag -d <tag>"),
+            read("config read first", "batten.toml"),
+        ],
+        applicability: Applicability::Advice,
+    },
+    VendoredVerdict {
+        id: "tag own unnamed",
+        gloss: "the tag carries no tagger identity, so who cut it cannot be judged",
+        class: "A lightweight tag is a ref pointing straight at a commit, and an unsigned \
+annotated tag carries no tagger header. Either way there is no identity to hold to \
+`tag_identity_allow`, and reading that absence as accountable is how a release cut by anyone \
+would pass. Replace it with an annotated tag cut under the accountable identity.",
+        routes: &[
+            run("tag retire now", "git tag -d <tag>"),
+            run("tag mint now", "git tag -a <tag>"),
+        ],
+        applicability: Applicability::Advice,
+    },
 ];
 
 /// Every class the binary ships, as the registry carries them.
@@ -2720,7 +2917,17 @@ mod tests {
                 | Native::ProvisionTableRefused
                 | Native::StartupTableRefused
                 | Native::StepTableRefused
-                | Native::ProgramUnknown => native.id(),
+                | Native::ProgramUnknown
+                | Native::SubjectUnconventional
+                | Native::CommitUnclaimed
+                | Native::ArticulationMissing
+                | Native::ArticulationTampered
+                | Native::ArmSelfAuthorized
+                | Native::IdentityDenied
+                | Native::TrailerDenied
+                | Native::BodyDenied
+                | Native::TaggerUnaccountable
+                | Native::TaggerUnannotated => native.id(),
             };
             // The prefix is gone (CLOUD-1284), so what makes this a token is the
             // ARITY: exactly three words. Asserting that here rather than a
