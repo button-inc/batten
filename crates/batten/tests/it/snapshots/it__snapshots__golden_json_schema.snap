@@ -1544,6 +1544,50 @@ expression: stdout_of(&output)
           "subcommands": []
         },
         {
+          "path": "engine gate",
+          "id": "engine.gate",
+          "about": "Refuse a source pin, or a release pin that cannot load this config or lacks a verb the released lanes call",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "lane",
+              "short": null,
+              "long": "lane",
+              "takes_value": true,
+              "positional": false,
+              "help": "A workflow that runs the released binary; every verb its command lines invoke must exist in the pinned release (repeatable)"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "path": "engine pin",
+          "id": "engine.pin",
+          "about": "Set the config's engine pin, or refresh a declared source pin to this tree's digest",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "check",
+              "short": null,
+              "long": "check",
+              "takes_value": false,
+              "positional": false,
+              "help": "Exit 1 when the pin would change, and write nothing"
+            },
+            {
+              "name": "value",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The pin to write: a release tag (v0.0.201), `source` for this tree's digest, or `version` for this engine's own release; omitted, refresh a declared source pin"
+            }
+          ],
+          "subcommands": []
+        },
+        {
           "path": "engine stamp",
           "id": "engine.stamp",
           "about": "Record this tree's source digest beside the running binary, so a source pin can be checked",

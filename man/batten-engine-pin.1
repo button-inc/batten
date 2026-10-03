@@ -1,0 +1,19 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-engine-pin 1  batten 
+.SH NAME
+batten\-engine\-pin \- Set the config\*(Aqs engine pin, or refresh a declared source pin to this tree\*(Aqs digest
+.SH SYNOPSIS
+\fBbatten engine pin\fR [\fB\-\-check\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIvalue\fR] 
+.SH DESCRIPTION
+Set the config\*(Aqs engine pin, or refresh a declared source pin to this tree\*(Aqs digest
+.SH OPTIONS
+.TP
+\fB\-\-check\fR
+Exit 1 when the pin would change, and write nothing
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+[\fIvalue\fR]
+The pin to write: a release tag (v0.0.201), `source` for this tree\*(Aqs digest, or `version` for this engine\*(Aqs own release; omitted, refresh a declared source pin

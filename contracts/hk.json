@@ -42,6 +42,7 @@
             "pkl-format",
             "prettier",
             "deno-fmt",
+            "engine-pin",
             "rego",
             "actionlint",
             "cargo-fmt",
@@ -236,57 +237,63 @@
           "parallelGroupId": "group_0"
         },
         {
-          "name": "rego",
+          "name": "engine-pin",
           "status": "included",
           "orderIndex": 30,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "actionlint",
+          "name": "rego",
           "status": "included",
           "orderIndex": 31,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "cargo-fmt",
+          "name": "actionlint",
           "status": "included",
           "orderIndex": 32,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "cargo-clippy",
+          "name": "cargo-fmt",
           "status": "included",
           "orderIndex": 33,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "test",
+          "name": "cargo-clippy",
           "status": "included",
           "orderIndex": 34,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "signing-posture-record",
+          "name": "test",
           "status": "included",
           "orderIndex": 35,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "batten-check",
+          "name": "signing-posture-record",
           "status": "included",
           "orderIndex": 36,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "policy-test",
+          "name": "batten-check",
           "status": "included",
           "orderIndex": 37,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "memories-check",
+          "name": "policy-test",
           "status": "included",
           "orderIndex": 38,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "memories-check",
+          "status": "included",
+          "orderIndex": 39,
           "parallelGroupId": "group_0"
         }
       ]
@@ -396,6 +403,7 @@
             "pkl-format",
             "prettier",
             "deno-fmt",
+            "engine-pin",
             "rego",
             "actionlint",
             "cargo-fmt",
@@ -589,51 +597,57 @@
           "parallelGroupId": "group_0"
         },
         {
-          "name": "rego",
+          "name": "engine-pin",
           "status": "included",
           "orderIndex": 30,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "actionlint",
+          "name": "rego",
           "status": "included",
           "orderIndex": 31,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "cargo-fmt",
+          "name": "actionlint",
           "status": "included",
           "orderIndex": 32,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "cargo-clippy",
+          "name": "cargo-fmt",
           "status": "included",
           "orderIndex": 33,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "test",
+          "name": "cargo-clippy",
           "status": "included",
           "orderIndex": 34,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "signing-posture-record",
+          "name": "test",
           "status": "included",
           "orderIndex": 35,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "batten-check",
+          "name": "signing-posture-record",
           "status": "included",
           "orderIndex": 36,
           "parallelGroupId": "group_0"
         },
         {
-          "name": "policy-test",
+          "name": "batten-check",
           "status": "included",
           "orderIndex": 37,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "policy-test",
+          "status": "included",
+          "orderIndex": 38,
           "parallelGroupId": "group_0"
         }
       ]

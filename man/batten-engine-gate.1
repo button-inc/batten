@@ -1,0 +1,16 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-engine-gate 1  batten 
+.SH NAME
+batten\-engine\-gate \- Refuse a source pin, or a release pin that cannot load this config or lacks a verb the released lanes call
+.SH SYNOPSIS
+\fBbatten engine gate\fR [\fB\-\-lane\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.SH DESCRIPTION
+Refuse a source pin, or a release pin that cannot load this config or lacks a verb the released lanes call
+.SH OPTIONS
+.TP
+\fB\-\-lane\fR \fI<lane>\fR
+A workflow that runs the released binary; every verb its command lines invoke must exist in the pinned release (repeatable)
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help

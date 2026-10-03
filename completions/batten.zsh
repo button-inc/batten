@@ -8522,6 +8522,67 @@ trace\:"Add everything"))' \
 '--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
 ;;
+(pin)
+_arguments "${_arguments_options[@]}" : \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--check[Exit 1 when the pin would change, and write nothing]' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+'::value -- The pin to write\: a release tag (v0.0.201), `source` for this tree'\''s digest, or `version` for this engine'\''s own release; omitted, refresh a declared source pin:_default' \
+&& ret=0
+;;
+(gate)
+_arguments "${_arguments_options[@]}" : \
+'*--lane=[A workflow that runs the released binary; every verb its command lines invoke must exist in the pinned release (repeatable)]:lane:_default' \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+&& ret=0
+;;
 (help)
 _arguments "${_arguments_options[@]}" : \
 ":: :_batten__subcmd__engine__subcmd__help_commands" \
@@ -8543,6 +8604,14 @@ _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
 (update)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(pin)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(gate)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -10008,6 +10077,14 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
+(pin)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(gate)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
         esac
     ;;
 esac
@@ -10882,6 +10959,8 @@ _batten__subcmd__engine_commands() {
 'digest:Print the source digest of this tree'\''s tracked engine inputs, the value a source pin names' \
 'stamp:Record this tree'\''s source digest beside the running binary, so a source pin can be checked' \
 'update:Install the engine this config pins over the running binary, from its release or from this tree' \
+'pin:Set the config'\''s engine pin, or refresh a declared source pin to this tree'\''s digest' \
+'gate:Refuse a source pin, or a release pin that cannot load this config or lacks a verb the released lanes call' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'batten engine commands' commands "$@"
@@ -10891,12 +10970,19 @@ _batten__subcmd__engine__subcmd__digest_commands() {
     local commands; commands=()
     _describe -t commands 'batten engine digest commands' commands "$@"
 }
+(( $+functions[_batten__subcmd__engine__subcmd__gate_commands] )) ||
+_batten__subcmd__engine__subcmd__gate_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten engine gate commands' commands "$@"
+}
 (( $+functions[_batten__subcmd__engine__subcmd__help_commands] )) ||
 _batten__subcmd__engine__subcmd__help_commands() {
     local commands; commands=(
 'digest:Print the source digest of this tree'\''s tracked engine inputs, the value a source pin names' \
 'stamp:Record this tree'\''s source digest beside the running binary, so a source pin can be checked' \
 'update:Install the engine this config pins over the running binary, from its release or from this tree' \
+'pin:Set the config'\''s engine pin, or refresh a declared source pin to this tree'\''s digest' \
+'gate:Refuse a source pin, or a release pin that cannot load this config or lacks a verb the released lanes call' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'batten engine help commands' commands "$@"
@@ -10906,10 +10992,20 @@ _batten__subcmd__engine__subcmd__help__subcmd__digest_commands() {
     local commands; commands=()
     _describe -t commands 'batten engine help digest commands' commands "$@"
 }
+(( $+functions[_batten__subcmd__engine__subcmd__help__subcmd__gate_commands] )) ||
+_batten__subcmd__engine__subcmd__help__subcmd__gate_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten engine help gate commands' commands "$@"
+}
 (( $+functions[_batten__subcmd__engine__subcmd__help__subcmd__help_commands] )) ||
 _batten__subcmd__engine__subcmd__help__subcmd__help_commands() {
     local commands; commands=()
     _describe -t commands 'batten engine help help commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__engine__subcmd__help__subcmd__pin_commands] )) ||
+_batten__subcmd__engine__subcmd__help__subcmd__pin_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten engine help pin commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__engine__subcmd__help__subcmd__stamp_commands] )) ||
 _batten__subcmd__engine__subcmd__help__subcmd__stamp_commands() {
@@ -10920,6 +11016,11 @@ _batten__subcmd__engine__subcmd__help__subcmd__stamp_commands() {
 _batten__subcmd__engine__subcmd__help__subcmd__update_commands() {
     local commands; commands=()
     _describe -t commands 'batten engine help update commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__engine__subcmd__pin_commands] )) ||
+_batten__subcmd__engine__subcmd__pin_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten engine pin commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__engine__subcmd__stamp_commands] )) ||
 _batten__subcmd__engine__subcmd__stamp_commands() {
@@ -11430,6 +11531,8 @@ _batten__subcmd__help__subcmd__engine_commands() {
 'digest:Print the source digest of this tree'\''s tracked engine inputs, the value a source pin names' \
 'stamp:Record this tree'\''s source digest beside the running binary, so a source pin can be checked' \
 'update:Install the engine this config pins over the running binary, from its release or from this tree' \
+'pin:Set the config'\''s engine pin, or refresh a declared source pin to this tree'\''s digest' \
+'gate:Refuse a source pin, or a release pin that cannot load this config or lacks a verb the released lanes call' \
     )
     _describe -t commands 'batten help engine commands' commands "$@"
 }
@@ -11437,6 +11540,16 @@ _batten__subcmd__help__subcmd__engine_commands() {
 _batten__subcmd__help__subcmd__engine__subcmd__digest_commands() {
     local commands; commands=()
     _describe -t commands 'batten help engine digest commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__engine__subcmd__gate_commands] )) ||
+_batten__subcmd__help__subcmd__engine__subcmd__gate_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help engine gate commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__engine__subcmd__pin_commands] )) ||
+_batten__subcmd__help__subcmd__engine__subcmd__pin_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help engine pin commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__help__subcmd__engine__subcmd__stamp_commands] )) ||
 _batten__subcmd__help__subcmd__engine__subcmd__stamp_commands() {
