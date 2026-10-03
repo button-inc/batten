@@ -791,11 +791,32 @@ pub fn checkout_fingerprint(repo_root: &std::path::Path) -> anyhow::Result<Finge
 /// [`SpanNormalization::Collapsed`] — all whitespace removed.
 #[must_use]
 pub fn normalize_span(span: &str, mode: SpanNormalization) -> String {
-    let canonical: String = span.replace("\r\n", "\n").nfc().collect();
+    let canonical = canonical_text(span);
     match mode {
         SpanNormalization::Collapsed => canonical.chars().filter(|c| !c.is_whitespace()).collect(),
-        SpanNormalization::Verbatim => canonical,
+        SpanNormalization::Verbatim => canonical.into_owned(),
     }
+}
+
+/// `CRLF -> LF` then NFC, borrowing the input when both are the identity.
+///
+/// THE SURFACE IS ALREADY CANONICAL, AND REWRITING IT WAS 37% OF AN ADJUDICATION
+/// (CLOUD-2102). [`surface_fingerprint`] runs every policy file through here on
+/// every hook call, and that text is LF and NFC by construction, so the two
+/// rewrites produced the bytes they were given. Measured under callgrind on one
+/// mcp-surface `adjudicate`: 719M of 2,087M instructions. Text with no `CRLF`
+/// that the quick check calls NFC is returned as it is, which is exactly what
+/// the rewrite returns for it; anything else — a `CRLF`, or a quick check
+/// answering `No` or `Maybe` — takes the rewrite, and is the only text that does.
+//MUTANT nfc-fast-path-never|s@^    if !span.contains("\\r\\n")$@    if false \&\& !span.contains("\\r\\n")@|normalized_text_is_fingerprinted_without_a_rewrite
+fn canonical_text(span: &str) -> std::borrow::Cow<'_, str> {
+    if !span.contains("\r\n")
+        && unicode_normalization::is_nfc_quick(span.chars())
+            == unicode_normalization::IsNormalized::Yes
+    {
+        return std::borrow::Cow::Borrowed(span);
+    }
+    std::borrow::Cow::Owned(span.replace("\r\n", "\n").nfc().collect())
 }
 
 /// Hash the kind tag plus each field, every part length-prefixed (u64 LE), so
@@ -1314,19 +1335,22 @@ pub fn context_fingerprint(bytes: &[u8]) -> Fingerprint {
 /// identity: adding an empty file still moves the value.
 #[must_use]
 pub fn surface_fingerprint(entries: &[(String, Vec<u8>)]) -> Fingerprint {
-    let normalized: Vec<(Vec<u8>, Vec<u8>)> = entries
+    let normalized: Vec<(&[u8], std::borrow::Cow<'_, [u8]>)> = entries
         .iter()
         .map(|(path, contents)| {
             let content = match std::str::from_utf8(contents) {
-                Ok(text) => normalize_span(text, SpanNormalization::Verbatim).into_bytes(),
-                Err(_) => contents.clone(),
+                Ok(text) => match canonical_text(text) {
+                    std::borrow::Cow::Borrowed(text) => std::borrow::Cow::Borrowed(text.as_bytes()),
+                    std::borrow::Cow::Owned(text) => std::borrow::Cow::Owned(text.into_bytes()),
+                },
+                Err(_) => std::borrow::Cow::Borrowed(contents.as_slice()),
             };
-            (path.as_bytes().to_vec(), content)
+            (path.as_bytes(), content)
         })
         .collect();
     let fields: Vec<&[u8]> = normalized
         .iter()
-        .flat_map(|(path, content)| [path.as_slice(), content.as_slice()])
+        .flat_map(|(path, content)| [*path, content.as_ref()])
         .collect();
     tagged_fingerprint(SURFACE_TAG, &fields)
 }
@@ -1451,6 +1475,52 @@ pub const fn compare_to_anchor(anchor: u64, current: u64) -> CountChange {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    /// CLOUD-2102: canonical text is borrowed, never rewritten, and every input
+    /// still canonicalizes to exactly what the full rewrite produces.
+    #[test]
+    fn normalized_text_is_fingerprinted_without_a_rewrite() {
+        let rewrite = |text: &str| -> String { text.replace("\r\n", "\n").nfc().collect() };
+        for canonical in ["", "plain ascii\nwith lines\n", "caf\u{e9} composed\n"] {
+            assert!(
+                matches!(canonical_text(canonical), std::borrow::Cow::Borrowed(_)),
+                "{canonical:?} is already canonical and is borrowed"
+            );
+        }
+        for text in [
+            "",
+            "plain ascii\nwith lines\n",
+            "caf\u{e9} composed\n",
+            "cafe\u{301} decomposed\n",
+            "crlf\r\nline\r\n",
+            "lone\rcarriage\n",
+            "mixed e\u{301}\r\n",
+        ] {
+            assert_eq!(canonical_text(text), rewrite(text), "{text:?}");
+            assert_eq!(
+                normalize_span(text, SpanNormalization::Verbatim),
+                rewrite(text),
+                "{text:?}"
+            );
+        }
+        let entries = vec![
+            (String::from("a.rego"), b"package a\n".to_vec()),
+            (String::from("b.toml"), b"k = 1\r\n".to_vec()),
+            (String::from("c.bin"), vec![0xff, 0xfe]),
+        ];
+        let expected = tagged_fingerprint(
+            SURFACE_TAG,
+            &[
+                b"a.rego",
+                b"package a\n",
+                b"b.toml",
+                b"k = 1\n",
+                b"c.bin",
+                &[0xff, 0xfe],
+            ],
+        );
+        assert_eq!(surface_fingerprint(&entries), expected);
+    }
 
     // -- CLOUD-594: the golden vectors. --
     //
