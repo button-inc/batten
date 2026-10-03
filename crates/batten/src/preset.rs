@@ -2002,9 +2002,8 @@ mod tests {
     /// A class belongs to exactly one preset.
     ///
     /// Two manifests declaring one token would collide in the registry, and
-    /// `policy::registry_for` refuses a collision between the vendored and
-    /// consumer halves rather than within the vendored half — so nothing else
-    /// asks this.
+    /// `policy` refuses a collision between the vendored and consumer halves
+    /// rather than within the vendored half — so nothing else asks this.
     #[test]
     fn no_class_is_declared_by_two_presets() {
         let mut seen: Vec<&str> = MANIFESTS

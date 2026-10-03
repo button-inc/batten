@@ -442,6 +442,7 @@ mod truncate_handle;
 mod trunk_watch;
 mod turn_cross_check;
 mod use_graph;
+mod vendored_skew;
 mod verdict;
 mod verdict_registry;
 mod verdict_vocabulary;

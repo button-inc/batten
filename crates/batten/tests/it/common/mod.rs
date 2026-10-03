@@ -2279,9 +2279,8 @@ pub(crate) fn verdicts_in(root: &Path) -> Vec<batten::verdict::DeclaredVerdict> 
         found.extend(tokens_in(&text));
     }
     // A token this BINARY vendors is already in the registry, so declaring it
-    // again is the collision `registry_for` refuses — correctly, because a class
-    // with two definitions renders one refusal under words its emitter never
-    // wrote. A fixture module raising a vendored class is a legitimate thing to
+    // again is the collision `check` refuses (CLOUD-2089) — the binary's
+    // definition is the one that renders, so the row would be dead. A fixture module raising a vendored class is a legitimate thing to
     // write, so the filter belongs here rather than in the fixtures.
     let vendored: std::collections::BTreeSet<String> = batten::verdict::vendored()
         .into_iter()

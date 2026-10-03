@@ -1046,6 +1046,7 @@ pub fn load(
     }
 
     if checks == ModuleChecks::Run {
+        check_no_vendored_collision(verdicts)?;
         check_registry_is_exhausted(verdicts, &emitted)?;
         check_collapse(rules, &per_rule, &tokens)?;
     }
@@ -2175,33 +2176,74 @@ explain` and its routes have never been walked by anybody. Delete the row, or gi
 
 /// The registry a load decides against: the consumer's rows, then this binary's.
 ///
-/// **A collision is refused rather than resolved.** Letting the consumer's row
-/// win would let a `batten.toml` silently redefine a class a vendored preset
-/// raises — the preset's refusal would then carry words its author never wrote,
-/// which is the same defect as a second authority for one question. Letting the
-/// vendored one win would make a consumer's declaration inert while reading as
-/// live. Both are worse than saying so.
+/// **A collision resolves to the binary's definition, and is refused one surface
+/// over.** The vendored row replaces a consumer row carrying the same token, so
+/// a refusal a preset raises always renders in its author's words. The other
+/// half — a consumer declaration made inert while reading as live — is answered
+/// where authoring properties are answered: [`check_no_vendored_collision`] runs
+/// on every load that runs the module checks (`check`, `enforce`), so a dead
+/// row cannot land.
+///
+/// # Why the boundary does not refuse it (CLOUD-2089)
+///
+/// The collision's commonest cause is not a redefinition: it is a binary NEWER
+/// than the checked-out branch. A trunk change moves a class from `batten.toml`
+/// into the binary, the session updates the engine to its release pin, and a
+/// branch cut before the move still declares the class. Refusing here made
+/// every mediated call unadjudicable — measured 2026-10-03, a session was
+/// refused everything but `Read` and an authority `Edit`, the rebuild, the fetch
+/// and the rebase that are the only ways out included, and every pre-approval
+/// with them, because a policy that does not load grants nothing.
 ///
 /// # Errors
 ///
-/// A [`UsageError`] (exit `1`) naming the colliding token.
+/// None today; the `Result` stays so every caller keeps one fault channel.
+//MUTANT-SUITE crates/batten/tests/it/vendored_skew.rs
+//MUTANT skew-bricks-the-boundary|s@        registry.retain(|row| row.id != entry.id);@        if registry.iter().any(|row| row.id == entry.id) { return Err(UsageError::raise(entry.id)); }@|a_branch_declaring_a_class_the_binary_ships_still_adjudicates
 pub fn registry_for(
     verdicts: &[crate::verdict::DeclaredVerdict],
 ) -> Result<Vec<crate::verdict::DeclaredVerdict>> {
     let mut registry = verdicts.to_vec();
-    let declared: BTreeSet<&str> = verdicts.iter().map(|entry| entry.id.as_str()).collect();
     for entry in crate::verdict::vendored() {
-        if declared.contains(entry.id.as_str()) {
-            return Err(UsageError::raise(format!(
-                "`[[verdict]]` declares `{}`, which this binary already ships — \
-                 a class with two definitions renders one refusal under words its \
-                 emitter never wrote. Pick a token this binary does not vendor",
-                entry.id
-            )));
-        }
+        registry.retain(|row| row.id != entry.id);
         registry.push(entry);
     }
     Ok(registry)
+}
+
+/// Refuse a consumer `[[verdict]]` row whose token this binary ships, on a load
+/// that runs the module checks (CLOUD-2089).
+///
+/// The authoring half of [`registry_for`]'s resolution: such a row is dead —
+/// the binary's definition is the one that renders — whether the branch merely
+/// predates the move or means to redefine the class. Either way it must not
+/// land, and either way the mediated boundary is the wrong place to say so.
+///
+/// # Errors
+///
+/// A [`UsageError`] (exit `1`) naming every colliding token.
+//MUTANT-SUITE crates/batten/tests/it/vendored_skew.rs
+//MUTANT skew-lands-unrefused|s@    if let Some(first) = collisions.first() {@    if let Some(first) = collisions.first().filter(|_| false) {@|a_class_the_binary_ships_is_still_refused_by_check
+fn check_no_vendored_collision(verdicts: &[crate::verdict::DeclaredVerdict]) -> Result<()> {
+    let vendored: BTreeSet<String> = crate::verdict::vendored()
+        .into_iter()
+        .map(|entry| entry.id)
+        .collect();
+    let collisions: Vec<&str> = verdicts
+        .iter()
+        .map(|entry| entry.id.as_str())
+        .filter(|token| vendored.contains(*token))
+        .collect();
+    if let Some(first) = collisions.first() {
+        return Err(UsageError::raise(format!(
+            "`[[verdict]]` declares `{first}`, which this binary already ships — the row is \
+             dead, because the binary's definition is the one that renders. Delete it; a \
+             branch that predates the move rebases onto the trunk that deleted it. \
+             Shipped: {}",
+            collisions.join(", ")
+        )));
+    }
+    Ok(())
 }
 
 /// Refuse a module whose refusals the registry does not declare (CLOUD-1050).

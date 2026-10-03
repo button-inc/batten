@@ -7155,8 +7155,8 @@ fn run(
     };
 
     // The union the engine DECIDES against, built once for the run (CLOUD-1220).
-    // `registry_for` is the one authority on it and refuses a consumer row that
-    // collides with a vendored class, so resolving a module's token against
+    // `registry_for` is the one authority on it, and a vendored class replaces a
+    // consumer row of the same token, so resolving a module's token against
     // anything narrower would answer for half the classes a module may raise.
     let registry = crate::policy::registry_for(vocabulary.verdicts)?;
 
