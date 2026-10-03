@@ -137,6 +137,11 @@ pub struct Launcher {
     pub program: String,
     /// Arguments placed before the analyser's own flags.
     pub prefix: Vec<String>,
+    /// Variables set on both of the analyser's spawns, over what this process
+    /// carries. Empty for the engine's launcher; a caller analysing a crate of
+    /// its own sets that crate's `CARGO_TARGET_DIR`, since an inherited one is a
+    /// lock another cargo may be holding (CLOUD-2059).
+    pub env: Vec<(String, String)>,
 }
 
 impl Launcher {
@@ -151,7 +156,15 @@ impl Launcher {
         Self {
             program: program.to_owned(),
             prefix: prefix.to_vec(),
+            env: Vec::new(),
         }
+    }
+
+    /// This launcher, with `key` set to `value` on every spawn.
+    #[must_use]
+    pub fn with_env(mut self, key: &str, value: &str) -> Self {
+        self.env.push((key.to_owned(), value.to_owned()));
+        self
     }
 
     /// The analyser's flags with this launcher's prefix in front.
@@ -229,6 +242,7 @@ fn version(root: &Path, launcher: &Launcher) -> Look<String> {
     )]
     let spawned = std::process::Command::new(&launcher.program)
         .args(launcher.argv(&["clippy", "--version"]))
+        .envs(launcher.env.iter().map(|(key, value)| (key, value)))
         .current_dir(root)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -279,6 +293,7 @@ pub fn resolve(root: &Path, launcher: &Launcher) -> Look<Resolved> {
     )]
     let spawned = std::process::Command::new(&launcher.program)
         .args(launcher.argv(ANALYSER_FLAGS))
+        .envs(launcher.env.iter().map(|(key, value)| (key, value)))
         .current_dir(root)
         // Both streams captured, NEITHER forwarded: stdout is the fact and
         // stderr can carry a path the analyser failed to read. Echoing a child's

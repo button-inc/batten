@@ -95,9 +95,17 @@ fn toy(case: &str) -> PathBuf {
 
 /// The pinned analyser, reached by path: the toy lives outside this tree, where
 /// no pin is declared for the engine's ladder to read.
-fn toy_launcher() -> symbols::Launcher {
+///
+/// WITH THE TOY'S OWN TARGET DIRECTORY. An inherited `CARGO_TARGET_DIR` is a
+/// lock another cargo may hold: `mutate` runs this suite under `cargo test`,
+/// which holds its target directory's lock while the cases run, so the toy's
+/// clippy waited on it until the suite's bound killed the run (CLOUD-2059). Set
+/// on the spawn, because the variable outranks `cargo --config build.target-dir`.
+fn toy_launcher(toy: &Path) -> symbols::Launcher {
     let cargo = crate::common::require_tool("cargo");
+    let target = toy.join("target");
     symbols::Launcher::new(cargo.to_str().expect("utf-8"), &[])
+        .with_env("CARGO_TARGET_DIR", target.to_str().expect("utf-8"))
 }
 
 /// §7(a). THE CASE THE FACT EXISTS FOR — asserted over SETS, not counts.
@@ -123,7 +131,7 @@ fn toy_launcher() -> symbols::Launcher {
 #[test]
 fn the_resolved_set_excludes_what_only_name_resolution_can_exclude() {
     let root = toy("resolved-set");
-    let Look::Is(resolved) = symbols::resolve(&root, &toy_launcher()) else {
+    let Look::Is(resolved) = symbols::resolve(&root, &toy_launcher(&root)) else {
         panic!("the analyser did not resolve; this suite needs a working `cargo clippy`");
     };
 
@@ -205,8 +213,8 @@ fn byte_scan(root: &Path) -> std::collections::BTreeSet<&'static str> {
 fn two_runs_agree_and_the_analyser_that_produced_them_is_named() {
     let root = toy("two-runs");
     let (Look::Is(first), Look::Is(second)) = (
-        symbols::resolve(&root, &toy_launcher()),
-        symbols::resolve(&root, &toy_launcher()),
+        symbols::resolve(&root, &toy_launcher(&root)),
+        symbols::resolve(&root, &toy_launcher(&root)),
     ) else {
         panic!("the analyser did not resolve twice");
     };
@@ -242,7 +250,7 @@ fn two_runs_agree_and_the_analyser_that_produced_them_is_named() {
 #[test]
 fn no_site_carries_a_byte_of_what_the_analyser_read() {
     let root = toy("pointer-only");
-    let Look::Is(resolved) = symbols::resolve(&root, &toy_launcher()) else {
+    let Look::Is(resolved) = symbols::resolve(&root, &toy_launcher(&root)) else {
         panic!("the analyser did not resolve");
     };
     assert!(
