@@ -8,22 +8,15 @@
 //! be already correct when it lands. The second is the bet, and the whole of the
 //! machinery below exists because a bet can be wrong.
 //!
-//! # THIS IS A CONSERVING PORT, AND ONE KNOWN DEFECT TRAVELS WITH IT
+//! # A POISONED BASE IS LOST
 //!
-//! `settle` has THREE outcomes — the holder landed, the bet is still open, the
-//! bet lost — and **no arm for a base whose tree is poisoned**: one that will
-//! not pass `verify`. CLOUD-1306 is that gap, and it is deliberately NOT fixed
-//! here. A port that improved behaviour could not be shown to conserve it, and
-//! being able to say "this does what the bash did" is the whole discipline that
-//! makes a 4,700-line retirement reviewable.
-//!
-//! What the gap costs, so nobody reads its absence as completeness: a waiter
-//! linearizes onto a head that cannot go green, `settle` reads the bet as still
-//! open every lap (the holder is still there and `main` has not moved, which is
-//! exactly what "pending" looks like), and [`Bet::would_rebet`] bets on the same
-//! holder again. Every waiter behind that holder stalls together. The fix is
-//! CLOUD-1306's and belongs in one change that can be reviewed as a behaviour
-//! change rather than smuggled into a port.
+//! The port conserved one defect: `settle` had no arm for a base whose tree the
+//! gate refused, so it read such a bet as still open every lap — the holder is
+//! still there and `main` has not moved — and the waiter kept re-verifying the
+//! same borrowed tree. CLOUD-1306 recorded the refusal on [`Bet::poisoned`] and
+//! made [`Bet::would_rebet`] decline it; CLOUD-2076 makes `settle` read it, so a
+//! poisoned bet settles [`Settle::Lost`] and the next lap unwinds to this
+//! branch's own head.
 //!
 //! # Every failure is a FALLBACK, never a stop
 //!
@@ -82,12 +75,8 @@ pub enum Settle {
     /// branch is already linearized on it. Nothing to undo.
     Landed,
     /// Undecided. The holder is still landing and this branch is already behind
-    /// it, so the tree is kept.
-    ///
-    /// **This is the arm CLOUD-1306's poisoned base hides in.** A base that will
-    /// never go green is indistinguishable here from one that simply has not
-    /// landed yet, and the module header says why that is conserved rather than
-    /// fixed.
+    /// it, so the tree is kept. Never for a base the gate already refused over
+    /// (CLOUD-2076): that one is [`Settle::Lost`].
     Pending,
     /// The bet cannot come true: the holder is gone, or `main` moved and took
     /// something else. The borrowed range is dropped.
@@ -260,11 +249,9 @@ impl Bet {
     /// `false` for the same candidate twice — the one-outstanding-bet rule above.
     ///
     /// **AND `true` AGAIN ONCE THE BET IS FORGOTTEN, WHICH IS CLOUD-1306's OTHER
-    /// HALF.** A poisoned base settles as [`Settle::Pending`] and is never
-    /// forgotten, so this correctly answers `false` and the waiter sits. Where
-    /// the bet IS dropped, nothing here remembers that this candidate was already
-    /// tried, so the next lap bets on the same holder again. Conserved; the fix
-    /// is CLOUD-1306's.
+    /// HALF.** A poisoned base settles as [`Settle::Lost`] (CLOUD-2076) and is
+    /// unwound; [`Bet::poisoned`] survives that, so the next lap does not borrow
+    /// the same holder again.
     ///
     /// **A base known to CONFLICT is a different question and this now answers
     /// it** (review of #848). That one is not about a tree that will not go
@@ -358,6 +345,7 @@ impl Bet {
 /// [`Settle::Pending`] and the waiter laps, and [`Live::Unreadable`] still
 /// decides as `No`, which keeps the fail-CLOSED posture where both readings are
 /// gone.
+//MUTANT poisoned-base-kept|s@^    if bet.poisoned.is_some() \&\& bet.poisoned == bet.base {$@    if false {@|a_poisoned_base_settles_lost_and_is_unwound
 #[must_use]
 pub fn settle(bet: &Bet, main_now: Option<&str>, base_on_main: bool, live: Live) -> Settle {
     let Some(_) = bet.base.as_deref() else {
@@ -370,6 +358,19 @@ pub fn settle(bet: &Bet, main_now: Option<&str>, base_on_main: bool, live: Live)
     // moved and call it lost.
     if base_on_main {
         return Settle::Landed;
+    }
+
+    // THE GATE ALREADY REFUSED THIS BORROWED TREE (CLOUD-2076). `Bet::poisoned`
+    // is the verdict the arms below cannot see, and it is on the bet: without
+    // this arm the holder was still there and `main` had not moved, so the bet
+    // read Pending, the borrowed tree was KEPT, and the next lap re-verified the
+    // identical tree — measured on #1094, two laps refused over one holder's
+    // tree and the stop left this branch carrying its commits. Lost unwinds to
+    // the undo point, so the next lap runs the experiment `land::Basis::Borrowed`
+    // laps for: this branch's own tree, on trunk. After `Landed`, because a
+    // holder that has since landed is this branch's trunk whatever its tree did.
+    if bet.poisoned.is_some() && bet.poisoned == bet.base {
+        return Settle::Lost;
     }
 
     // An ADOPTED bet has no `main_at_bet` — the process that recorded it is gone
@@ -796,28 +797,42 @@ mod tests {
         assert_eq!(settle(&adopted, Some(MOVED), false, Live::No), Settle::Lost);
     }
 
-    /// **`settle` STILL CANNOT SEE A POISONED BASE, AND THAT STAYS TRUE.**
-    ///
-    /// This case was pinned as CLOUD-1306's defect, with a note that its changing
-    /// would be the review's cue that behaviour moved. Behaviour has moved and
-    /// this case has NOT changed, which is the honest outcome rather than a
-    /// missed update: `settle` answers "is the bet won, lost or outstanding" from
-    /// the holder and the trunk, and from there a base that will never pass
-    /// `verify` is byte-identical to a holder that is merely slow. No fourth arm
-    /// can be derived from these inputs, because the discriminating fact — the
-    /// gate's verdict on the borrowed tree — is not among them.
-    ///
-    /// The fix lives where that fact exists: the lap records [`Bet::poisoned`]
-    /// when the gate refuses over a borrowed base, and [`Bet::would_rebet`]
-    /// declines it afterwards. So this reading is conserved and the mechanism
-    /// sits beside it rather than inside it.
+    /// A slow holder is still Pending: the holder is there and `main` has not
+    /// moved, and nothing says the borrowed tree failed.
     #[test]
-    fn settle_cannot_tell_a_poisoned_base_from_a_slow_holder() {
+    fn a_slow_holder_is_still_pending() {
         assert_eq!(
             settle(&placed(), Some(MAIN), false, Live::Yes),
             Settle::Pending,
-            "the holder is there and main has not moved — which is what a poisoned \
-             base looks like from here, and there is no fourth arm"
+        );
+    }
+
+    /// **A POISONED BASE IS LOST, NOT PENDING** (CLOUD-2076). This case used to
+    /// pin the opposite, on the argument that the gate's verdict was not among
+    /// `settle`'s inputs — but [`Bet::poisoned`] is on the bet it reads. Kept
+    /// Pending, the borrowed tree stayed in place and the next lap re-verified
+    /// it; measured on #1094, both laps refused over one holder's tree and the
+    /// stop left the branch carrying its commits. A holder that has since landed
+    /// still settles Landed, whatever its tree did here.
+    #[test]
+    fn a_poisoned_base_settles_lost_and_is_unwound() {
+        let mut bet = placed();
+        bet.poisoned = bet.base.clone();
+        assert_eq!(
+            settle(&bet, Some(MAIN), false, Live::Yes),
+            Settle::Lost,
+            "the gate refused this borrowed tree, so the next lap must not keep it"
+        );
+        assert_eq!(
+            settle(&bet, Some(MAIN), true, Live::Yes),
+            Settle::Landed,
+            "a poisoned holder that landed anyway is this branch's trunk"
+        );
+        bet.poisoned = Some(String::from("some-other-holder"));
+        assert_eq!(
+            settle(&bet, Some(MAIN), false, Live::Yes),
+            Settle::Pending,
+            "a different base's poison says nothing about this one"
         );
     }
 

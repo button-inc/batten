@@ -10059,6 +10059,16 @@ fn run_land_laps(run: Laps<'_>, out: &mut dyn Write, err: &mut dyn Write) -> Res
     // drained `entered`, so this is a no-op for them and the guard would be a
     // second statement of which paths compensate.
     unwind_lap(root, branch, &pipeline, &mut entered, None, out, err)?;
+    // AND THE BORROWED RANGE COMES OFF THE BRANCH (CLOUD-2076). A bet is settled
+    // by the NEXT lap's precheck, and on the last lap there is none — so a run
+    // that spent its budget over a holder left this branch carrying the holder's
+    // commits, measured on #1094 as `ahead 30, behind 3` against its own pushed
+    // head. A stop here leaves the branch as it found it.
+    if bet.live()
+        && let Some(code) = unwind_the_bet(root, url, branch, &mut bet, reference, out, err)?
+    {
+        return Ok(code);
+    }
     // NOT A VERDICT ABOUT THE BRANCH. Exhausting the count says the loop stopped
     // asking, never that the head is unlandable — so `3`, and the caller runs it
     // again if the laps were lost to contention rather than to a defect.
