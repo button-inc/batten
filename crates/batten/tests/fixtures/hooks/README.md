@@ -30,6 +30,12 @@ the `PreToolUse` input example in Factory's own hooks reference
 (`docs.factory.com/reference/hooks-reference`, fetched 2026-10-03, CLOUD-1942),
 including its `Execute` shell tool and its `permission_mode` value.
 
+`opencode.json` and `opencode-write.json` are not a host's payload, because
+OpenCode has no hook payload: its plugin API calls `tool.execute.before(input,
+output)` in-process (`opencode.ai/docs/plugins/`, fetched 2026-10-03). They are
+the envelope the generated plugin builds from that call (`input.tool` as
+`tool_name`, `output.args` as `tool_input`), so its `write` names `filePath`.
+
 `copilot-cli` is registered in its **PascalCase** dialect deliberately: the
 camelCase one omits the event name entirely, and an adapter that cannot read the
 event cannot dispatch on it.
@@ -54,6 +60,7 @@ gate against one host.
 | copilot-cli | `StrReplaceEditor`             | **allowed**           |
 | codex-cli   | `NotebookEdit`                 | refused               |
 | factory     | `Create`                       | _(added 2026-10-03)_  |
+| opencode    | `write`                        | _(added 2026-10-03)_  |
 
 The three allows were measured against a `[[verb]]` table naming Claude Code's
 four write tools — the table a consumer actually writes. Nothing reported them,
