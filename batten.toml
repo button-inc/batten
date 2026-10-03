@@ -6048,11 +6048,19 @@ declared_in = "crates/batten/tests/**/*.rs"
 # would have failed on its own documentation. An attribute always begins a line;
 # a mention does not. (`budget.rs` anchors its HTML-comment scan for the same
 # reason.)
+#
+# WIDENED TO AN EXPRESSION (CLOUD-2059), because the literal saw one spelling of
+# four. Every `ignore` this tree actually carried was a form it could not count:
+# `#[cfg_attr(not(unix), ignore = "…")]`, so the row guarded nothing that
+# existed. Nor could it count `#[ignore = "…"]`, the form a new skip is most
+# likely to take, or an indented `#[ignore]` inside a test module. The anchor is
+# the same as before, with indentation allowed: an attribute begins its line and
+# a mention does not.
 [[rule]]
 id = "test skip refused"
 kind = "ratchet"
 glob = "crates/**/*.rs"
-pattern = "\n#[ignore]"
+regex = '(?m)^[ \t]*#\[(?:ignore\b|cfg_attr\(.*\bignore\b)'
 direction = "non_increasing"
 base = "origin/main"
 severity = "deny"
@@ -17892,9 +17900,21 @@ target = "policy/nextest-slow.rego"
 
 [[verdict]]
 id = "waiver file missing"
-gloss = "a per-test slow-timeout override cites no tracker row, so the exception is written but not filed"
+gloss = "a per-test override cites no tracker row directly above it, so the exception is written but not filed"
 class = """
 A per-test override is how a legitimately slow case keeps the ban in force for every other case, so the mechanism is sanctioned and the ceiling deliberately does not reach it. What it owes instead is a reason a reader can follow: an override with no row behind it is the ban switched off for whichever test was inconvenient, and an unexplained exception is the thing that rots while looking like policy.
+"""
+
+[[verdict.route]]
+id = "module read first"
+kind = "document"
+target = "policy/nextest-slow.rego"
+
+[[verdict]]
+id = "suite retry refused"
+gloss = "the runner config retries a failing case, so a flake reads as a pass"
+class = """
+A retry turns a case that fails one run in three into a green suite, and the flake it hides is the kind every failure this repository recorded traced to: shared state, a clock read, an order between cases. The remedy is the cause, never the count: fix the state the case shares, assert the outcome rather than the time, or give the case its own fixture.
 """
 
 [[verdict.route]]

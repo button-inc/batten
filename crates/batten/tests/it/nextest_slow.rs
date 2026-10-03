@@ -41,6 +41,16 @@ use batten::rules::{self, Rule};
 /// The predicate ids the module declares.
 const UNBOUNDED: &str = "suite bind missing";
 const RAISED: &str = "bound edit refused";
+const RETRIED: &str = "suite retry refused";
+const UNFILED: &str = "waiver file missing";
+
+/// The committed default bound, so a case adding one line fires only its own arm.
+const ARMED: &str =
+    "[profile.default]\nslow-timeout = { period = \"10s\", terminate-after = 120 }\n";
+
+/// [`ARMED`] with an override that gives one case the whole machine, citing
+/// nothing.
+const UNFILED_THREADS: &str = "\n[[profile.default.overrides]]\nfilter = 'test(alone)'\nthreads-required = \"num-test-threads\"\n";
 
 /// The one path the module is anchored on.
 const CONFIG: &str = ".config/nextest.toml";
@@ -228,4 +238,52 @@ fn a_commented_declaration_does_not_arm_the_ban() {
         Some("[profile.default]\n# slow-timeout = { period = \"10s\", terminate-after = 9 }\n"),
     );
     assert_eq!(rules_fired(&root), vec![UNBOUNDED.to_owned()]);
+}
+
+/// FLAKES ARE FIXED, NEVER RETRIED (CLOUD-2059), over the engine. A retry turns a
+/// case that fails one run in three into a green suite.
+#[test]
+fn a_retry_declaration_is_refused() {
+    let root = repo(
+        "nextest-slow-retries",
+        Some(&format!("{ARMED}retries = 2\n")),
+    );
+    assert_eq!(rules_fired(&root), vec![RETRIED.to_owned()]);
+}
+
+/// A SCHEDULING EXCEPTION NOBODY EXPLAINED: the override this repository carried
+/// until CLOUD-2059 had exactly this shape and no comment of its own.
+#[test]
+fn an_override_citing_no_row_is_refused() {
+    let root = repo(
+        "nextest-slow-unfiled",
+        Some(&format!("{ARMED}{UNFILED_THREADS}")),
+    );
+    assert_eq!(rules_fired(&root), vec![UNFILED.to_owned()]);
+}
+
+/// AND THE SAME OVERRIDE WITH A ROW DIRECTLY ABOVE IT IS CLEAN, which is what
+/// shows the refusal turns on the missing reason rather than on the override.
+#[test]
+fn an_override_that_cites_a_row_is_clean() {
+    let root = repo(
+        "nextest-slow-filed",
+        Some(&format!(
+            "{ARMED}\n# CLOUD-1641: this case measures the whole machine.{UNFILED_THREADS}"
+        )),
+    );
+    assert!(rules_fired(&root).is_empty());
+}
+
+/// A ROW CITED FOR ANOTHER SECTION DOES NOT FILE THIS ONE. The 30-line window the
+/// module used to read let exactly this through.
+#[test]
+fn a_citation_in_an_earlier_section_does_not_file_an_override() {
+    let root = repo(
+        "nextest-slow-borrowed",
+        Some(&format!(
+            "# CLOUD-1641 owns the default bound.\n{ARMED}{UNFILED_THREADS}"
+        )),
+    );
+    assert_eq!(rules_fired(&root), vec![UNFILED.to_owned()]);
 }

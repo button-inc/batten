@@ -265,6 +265,11 @@ pub enum RuleKind {
     /// of `pattern` across files matching `glob`, compared between a base rev
     /// and the working tree, must not move in the banned `direction`.
     ///
+    /// The counted shape is `pattern` or `regex`, exactly one, as for
+    /// [`RuleKind::Forbid`]. The expression is for a token one literal cannot
+    /// spell: an attribute is counted wherever it is indented and in every form
+    /// it takes, while a prose mention of it is not (CLOUD-2059).
+    ///
     /// The kind exists because the property worth gating on a test suite is not
     /// immutability — tests are edited every day, so a protected path would
     /// block writing them — but *direction of change*. That is the same shape
@@ -666,7 +671,9 @@ impl RuleKind {
                 reason = "the two lists are equal by coincidence; see the note above"
             )]
             RuleKind::Shape => &["reason", "severity"],
-            RuleKind::Ratchet => &["glob", "pattern", "direction", "base", "severity"],
+            // `pattern` is absent for `forbid`'s reason: a ratchet counts exactly
+            // one of `pattern` or `regex` (CLOUD-2059), which `validate` checks.
+            RuleKind::Ratchet => &["glob", "direction", "base", "severity"],
             // Same `reason` obligation as a shape row, for the same reason: the
             // deny reaches a model as the whole explanation. `checks` is
             // required because a receipt row naming none would gate its trigger
@@ -901,6 +908,7 @@ impl RuleKind {
             RuleKind::Ratchet => &[
                 "glob",
                 "pattern",
+                "regex",
                 "direction",
                 "base",
                 // Optional, and optional is the whole of its compatibility story
@@ -1323,7 +1331,8 @@ pub struct Rule {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pattern: Option<String>,
     /// The banned shape as a regular expression — [`RuleKind::Forbid`]'s
-    /// **alternative** to `pattern`, never an addition to it (CLOUD-283).
+    /// **alternative** to `pattern`, never an addition to it (CLOUD-283), and the
+    /// counted token's for [`RuleKind::Ratchet`] on the same terms (CLOUD-2059).
     ///
     /// A row carries exactly one of the two, and one carrying both is a load
     /// error rather than a precedence rule nobody can read. `pattern` stays the
@@ -5791,7 +5800,7 @@ impl Rule {
     }
 
     fn validate_forbid_predicate(&self) -> anyhow::Result<()> {
-        if self.kind != RuleKind::Forbid {
+        if !matches!(self.kind, RuleKind::Forbid | RuleKind::Ratchet) {
             return Ok(());
         }
         match (self.pattern.is_some(), self.regex.is_some()) {
@@ -5804,8 +5813,9 @@ impl Rule {
             }
             (false, false) => {
                 return Err(UsageError::raise(format!(
-                    "rule {}: kind \"forbid\" requires `pattern` (a literal) or `regex` (a shape)",
-                    self.id
+                    "rule {}: kind \"{}\" requires `pattern` (a literal) or `regex` (a shape)",
+                    self.id,
+                    self.kind.as_str()
                 )));
             }
             _ => {}
@@ -10353,6 +10363,7 @@ fn fingerprint_of(violation: &crate::policy::Violation) -> String {
 /// Returns a [`UsageError`] (→ exit `1`) when `base` names a rev git cannot
 /// resolve — never a pass. A ratchet that cannot see its own baseline has not
 /// established that the count held.
+//MUTANT ratchet-regex-uncounted|s@^        (Some(expression), _) => expression.find_iter(text).count(),$@        (Some(_), _) => 0,@|a_ratchet_regex_counts_every_spelling_of_the_token
 fn ratchet_rule(
     rule: &Rule,
     root: &Path,
@@ -10366,13 +10377,18 @@ fn ratchet_rule(
     if rule.severity() == RuleSeverity::Allow {
         return Ok(());
     }
-    let (Some(pattern), Some(direction), Some(base)) = (
-        rule.pattern.as_deref(),
-        rule.direction,
-        rule.base.as_deref(),
-    ) else {
-        // Unreachable: the census requires all three for this kind.
+    let (Some(direction), Some(base)) = (rule.direction, rule.base.as_deref()) else {
+        // Unreachable: the census requires both for this kind.
         return Ok(());
+    };
+    // THE COUNTED TOKEN: a literal, or an expression for one a literal cannot spell
+    // (CLOUD-2059). `validate` admits exactly one and has compiled the expression,
+    // so the `None` arm is unreachable and counts nothing.
+    let expression = rule.regex.as_deref().map(Regex::new).transpose()?;
+    let tally = |text: &str| match (&expression, rule.pattern.as_deref()) {
+        (Some(expression), _) => expression.find_iter(text).count(),
+        (None, Some(pattern)) => text.matches(pattern).count(),
+        (None, None) => 0,
     };
 
     // THE COUNT IS TAKEN AT THE MERGE BASE, NOT AT THE DECLARED REF'S TIP
@@ -10426,7 +10442,7 @@ fn ratchet_rule(
         // from git. Counting it in `git.rs` would also point that module at this
         // one, which the layering table declares the wrong way round.
         count_read(text.len());
-        base_counts.insert(path.to_owned(), text.matches(pattern).count());
+        base_counts.insert(path.to_owned(), tally(text));
         // Held only for the columns that read it: a ratchet with neither
         // `retires_with` nor `conserves` must not start buffering the base
         // tree's text. `conserves` is named here as well as `retires_with`
@@ -10449,7 +10465,7 @@ fn ratchet_rule(
     for path in matched {
         let text = fs::read_to_string(root.join(path)).unwrap_or_default();
         count_read(text.len());
-        let count = text.matches(pattern).count();
+        let count = tally(&text);
         working_count += count;
         working_counts.insert(path.as_str(), count);
         if let Some(token) = admits_with
@@ -16157,7 +16173,7 @@ mod tests {
                 // (CLOUD-283). This test is about scope pairings, so it supplies
                 // the literal and lets `validate_forbid_predicate` be tested by
                 // the cases that are about it.
-                if *kind == RuleKind::Forbid {
+                if matches!(*kind, RuleKind::Forbid | RuleKind::Ratchet) {
                     rule.pattern = Some("x".to_owned());
                 }
                 // The same shape, for the same reason: a receipt row's `pattern`

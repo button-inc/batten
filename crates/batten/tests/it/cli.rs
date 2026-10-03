@@ -3047,15 +3047,21 @@ fn the_committed_protected_paths_fire_on_a_mutating_verb() {
     // The same obligation the shape rows carry: every other protected-path test
     // supplies its own fixture, so without this, deleting a `protected` entry or
     // a `[[verb]]` row from the real `batten.toml` would break nothing.
-    if !common::committed_protected_declared() {
-        return;
-    }
+    //
+    // Over whichever set is committed today: the owner's three classes while it is
+    // declared, and the asked ledger the narrower set always guards while it is
+    // switched off — never a return that passes over nothing (CLOUD-2059).
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    for command in [
-        "rm .serena/memories/core.md",
-        "mv batten.toml elsewhere.toml",
-        "cat x > .github/workflows/ci.yml",
-    ] {
+    let commands: &[&str] = if common::committed_protected_declared() {
+        &[
+            "rm .serena/memories/core.md",
+            "mv batten.toml elsewhere.toml",
+            "cat x > .github/workflows/ci.yml",
+        ]
+    } else {
+        &["rm .batten/asked.jsonl", "cat x > .batten/asked.jsonl"]
+    };
+    for command in commands {
         let output = run_hook_in(&root, "exit-code", &claude_payload(command));
         assert_eq!(
             output.status.code(),

@@ -387,11 +387,18 @@ mod tests {
         // `the_two_read_failures_are_classified_apart`, over synthesized
         // `io::Error`s. Asserting the conclusion here regardless would be the
         // false-clean answer this module's own doc forbids.
+        //
+        // So BOTH arms assert, and neither returns early (CLOUD-2059): where the
+        // bits do not bite, the walk reads the file like any other and reports its
+        // marker, so the case still says what the walk does with what it can read.
+        let found = find(&dir, &[marker("m", "A")]);
         if fs::read_to_string(&unreadable).is_ok() {
-            return;
+            let hits = found.expect("a file the caller can read walks clean");
+            assert_eq!(hits.len(), 1, "its one marker is found: {hits:?}");
+        } else {
+            let err = found.expect_err("an unreadable file is not clean");
+            assert!(format!("{err:#}").contains("locked.rs"), "got: {err:#}");
         }
-        let err = find(&dir, &[marker("m", "A")]).expect_err("an unreadable file is not clean");
-        assert!(format!("{err:#}").contains("locked.rs"), "got: {err:#}");
     }
 
     #[test]

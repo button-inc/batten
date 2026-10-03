@@ -78,6 +78,11 @@ path = "src/lib.rs"
 # completeness fix.
 [features]
 probe-evaluator-io = ["regorus/http"]
+# Builds in the lease cases that write to a real remote, each naming its ref in a
+# `BATTEN_LIVE_*` variable it then requires. A `cfg!` arm rather than a variable
+# probed at run time, so the default build states it does not run them and a
+# build that asks for them fails on a missing ref instead of passing (CLOUD-2059).
+live-remote = []
 
 [dependencies]
 anyhow.workspace = true

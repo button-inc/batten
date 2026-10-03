@@ -340,14 +340,16 @@ fn a_drifted_contract_exits_two_and_names_the_class() {
     fs::create_dir_all(root.join("contracts")).expect("the artifact directory");
 
     let generated = common::run(root, &["hk", "contract"]);
-    if code(&generated) != Some(0) {
-        // The pinned runner is unreachable here, which is a provisioning fault
-        // and not a drifted contract. Skipped rather than asserted, because a
-        // `3` from the generator says nothing about the arm under test — and
-        // `the_committed_contract_is_the_one_the_binary_derives` above is the
-        // case that goes red when the runner genuinely cannot be reached.
-        return;
-    }
+    // The pinned runner is provisioned by `mise.toml`, so an unreachable one is a
+    // provisioning fault — and a fault FAILS, beside
+    // `the_committed_contract_is_the_one_the_binary_derives`, rather than letting
+    // this case pass over an arm it never reached (CLOUD-2059).
+    assert_eq!(
+        code(&generated),
+        Some(0),
+        "the pinned runner generates the contract: {}",
+        common::stderr(&generated)
+    );
 
     let artifact = root.join(hk::ARTIFACT);
     let text = fs::read_to_string(&artifact).expect("the generator wrote the artifact");

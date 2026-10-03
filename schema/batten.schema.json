@@ -5078,7 +5078,7 @@
           }
         },
         "regex": {
-          "description": "The banned shape as a regular expression — [`RuleKind::Forbid`]'s\n**alternative** to `pattern`, never an addition to it (CLOUD-283).\n\nA row carries exactly one of the two, and one carrying both is a load\nerror rather than a precedence rule nobody can read. `pattern` stays the\ncommon case because a literal is the readable one (§9); this is the\nescape for a predicate that genuinely is a *shape* — a flag cluster\njudged by its letters, where `-qxF` must count as `-q` and an enumeration\nof spellings rots.",
+          "description": "The banned shape as a regular expression — [`RuleKind::Forbid`]'s\n**alternative** to `pattern`, never an addition to it (CLOUD-283), and the\ncounted token's for [`RuleKind::Ratchet`] on the same terms (CLOUD-2059).\n\nA row carries exactly one of the two, and one carrying both is a load\nerror rather than a precedence rule nobody can read. `pattern` stays the\ncommon case because a literal is the readable one (§9); this is the\nescape for a predicate that genuinely is a *shape* — a flag cluster\njudged by its letters, where `-qxF` must count as `-q` and an enumeration\nof spellings rots.",
           "type": [
             "string",
             "null"
@@ -5395,7 +5395,7 @@
           "const": "shape"
         },
         {
-          "description": "A **count that may only move one way** (CLOUD-55): the total occurrences\nof `pattern` across files matching `glob`, compared between a base rev\nand the working tree, must not move in the banned `direction`.\n\nThe kind exists because the property worth gating on a test suite is not\nimmutability — tests are edited every day, so a protected path would\nblock writing them — but *direction of change*. That is the same shape\n`trust.rs` already encodes for config: which way is weakening is a\nproperty of the key.\n\nCounted in **aggregate per rule**, never per file: a test moved between\ntwo files matching the glob changes nothing, so renames and\nconsolidations that preserve the suite are clean with no rename tracking.\nThe price is that the finding names counts rather than locations, and\n`git diff` answers *where*.",
+          "description": "A **count that may only move one way** (CLOUD-55): the total occurrences\nof `pattern` across files matching `glob`, compared between a base rev\nand the working tree, must not move in the banned `direction`.\n\nThe counted shape is `pattern` or `regex`, exactly one, as for\n[`RuleKind::Forbid`]. The expression is for a token one literal cannot\nspell: an attribute is counted wherever it is indented and in every form\nit takes, while a prose mention of it is not (CLOUD-2059).\n\nThe kind exists because the property worth gating on a test suite is not\nimmutability — tests are edited every day, so a protected path would\nblock writing them — but *direction of change*. That is the same shape\n`trust.rs` already encodes for config: which way is weakening is a\nproperty of the key.\n\nCounted in **aggregate per rule**, never per file: a test moved between\ntwo files matching the glob changes nothing, so renames and\nconsolidations that preserve the suite are clean with no rename tracking.\nThe price is that the finding names counts rather than locations, and\n`git diff` answers *where*.",
           "type": "string",
           "const": "ratchet"
         },

@@ -306,17 +306,6 @@ fn the_record_is_in_declaration_order_whatever_order_they_finish_in() {
 
 // --- the live capture ----------------------------------------------------------
 
-/// Say why a case was skipped.
-///
-/// Not `eprintln!`: the workspace denies the print macros because Batten's own
-/// output is a byte-stable contract, and a test target inherits the lint. A skip
-/// notice is the one thing that genuinely belongs on a human's stderr, so it goes
-/// through `io::Write` rather than through an allow.
-fn skipped(reason: &str) {
-    use std::io::Write as _;
-    drop(writeln!(std::io::stderr(), "{reason}"));
-}
-
 /// Whether `flock(1)` is installed, so a shell can be a real reader.
 #[expect(
     clippy::disallowed_types,
@@ -470,13 +459,16 @@ fn end_live_child(note: &Path) {
 
 #[test]
 fn a_second_process_reads_a_live_capture_and_never_passes_the_watermark() {
-    if !has_flock() {
-        skipped(
-            "bundle: `flock` is not installed, so the independent-reader case is skipped; the \
-             spool's own protocol is covered by capture.rs's unit tests",
-        );
+    // `flock(1)` is util-linux: on every Linux leg and on no macOS one. So the
+    // platform is a `cfg!` arm, and a Linux host without it FAILS rather than
+    // passing over a reader it never ran (CLOUD-2059).
+    if !cfg!(target_os = "linux") {
         return;
     }
+    assert!(
+        has_flock(),
+        "`flock(1)` is util-linux, installed on every Linux leg"
+    );
     let home = scratch("live-read-home");
     fs::create_dir_all(&home).expect("create home");
     // Speaks, then holds the stream open. The capture is live for as long as the
@@ -558,10 +550,16 @@ fn a_killed_writer_leaves_a_reader_a_defined_answer_rather_than_a_hang() {
     // it asserts is the property that matters to a reader — after an uncatchable
     // kill, the lock is free and the watermark still names exactly how much of
     // the spool is real.
-    if !has_flock() {
-        skipped("bundle: `flock` is not installed, so the killed-writer case is skipped");
+    // `flock(1)` is util-linux: on every Linux leg and on no macOS one. So the
+    // platform is a `cfg!` arm, and a Linux host without it FAILS rather than
+    // passing over a reader it never ran (CLOUD-2059).
+    if !cfg!(target_os = "linux") {
         return;
     }
+    assert!(
+        has_flock(),
+        "`flock(1)` is util-linux, installed on every Linux leg"
+    );
     let home = scratch("live-killed-home");
     fs::create_dir_all(&home).expect("create home");
     let (child, child_pid) = live_child("live-killed-child", "durable");

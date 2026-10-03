@@ -181,6 +181,52 @@ fn a_non_increasing_row_catches_a_newly_added_token() {
 }
 
 #[test]
+fn a_ratchet_regex_counts_every_spelling_of_the_token() {
+    // The committed `test skip refused` row's expression, over the three spellings
+    // its literal `\n#[ignore]` could not see: an indented attribute inside a test
+    // module, one carrying a reason, and a `cfg_attr` arm. A prose mention of the
+    // attribute is not one and does not count (CLOUD-2059).
+    let config = r#"version = 1
+
+[[rule]]
+id = "test skip refused"
+kind = "ratchet"
+glob = "src/**/*.rs"
+regex = '(?m)^[ \t]*#\[(?:ignore\b|cfg_attr\(.*\bignore\b)'
+direction = "non_increasing"
+base = "main"
+severity = "deny"
+"#;
+    let dir = ratchet_repo("ratchet-ignore-spellings", config);
+    // One quoted line per source line, so no line of THIS file begins with the
+    // attribute and the committed row does not count the fixture as a skip.
+    let added = [
+        "/// Prose naming `#[ignore]` is not an attribute.",
+        "#[ignore = \"slow\"]",
+        "#[test]",
+        "fn a() {}",
+        "mod tests {",
+        "    #[ignore]",
+        "    #[test]",
+        "    fn b() {}",
+        "}",
+        "#[cfg_attr(not(unix), ignore)]",
+        "#[test]",
+        "fn c() {}",
+    ]
+    .join("\n");
+    common::write(&dir, "src/lib.rs", &format!("{BASE_SRC}\n{added}\n"));
+
+    let output = check(&dir);
+    assert_eq!(output.status.code(), Some(2), "{}", stdout(&output));
+    assert!(
+        stdout(&output).contains("0->3"),
+        "three attributes, and the prose mention is not one: {}",
+        stdout(&output)
+    );
+}
+
+#[test]
 fn a_warn_row_reports_without_failing_until_promoted() {
     // The advisory tier: assertions thinning out is worth saying, and worth
     // saying without blocking, until the run asks for strictness.

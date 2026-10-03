@@ -38,6 +38,18 @@ These load when you touch Rust; they do not need to be in context otherwise.
   or the timeout the code names. Measured on CLOUD-2059: eight clock assertions
   were replaced by their records, and one had been vacuous. Its group emptied on
   its own inside the ceiling, so it passed with no escalation at all.
+- **A missing tool is a failure, and a missing subject is a `cfg!` arm.**
+  `silent_skip.rs` is the gate: no case returns before it asserts unless an
+  `if cfg!(…)` holds the `return`. A case that probes for a tool and returns
+  when it finds none passes, so the leg that lacks the tool reports coverage it
+  does not have. A pinned tool is `common::require_tool`, which fails when the
+  tool does not resolve. Measured on CLOUD-2059: 37 such cases, including every
+  `pkl` case on the three legs that never installed `pkl`. A deliberate skip is
+  `#[ignore]` in whatever form, and `test skip refused` counts every form.
+- **Flakes are fixed, never retried.** `suite retry refused` in
+  `policy/nextest-slow.rego` refuses `retries` in the runner config. An
+  override that schedules one case apart (`threads-required`, `test-group`)
+  owes a tracker row directly above it, as a slow-timeout override does.
 - Branch on the named `ExitCode` variants in `crates/batten/src/exit.rs`, never
   integer literals. One table, no per-verb exception: `2` is the policy verdict
   everywhere — a `check` violation and a `hook` deny alike — and `1`/`3` are the

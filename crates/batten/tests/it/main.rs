@@ -397,6 +397,7 @@ mod shell_retirement;
 mod shell_retirement_cost;
 mod shell_write_advisory;
 mod signing_posture;
+mod silent_skip;
 mod singleton;
 mod singleton_gate;
 mod sinks;

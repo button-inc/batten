@@ -280,6 +280,124 @@ impl<'ast> Visit<'ast> for ClockWalk {
     }
 }
 
+/// Whether `attrs` mark a function nextest runs as a case: `#[test]` or
+/// `#[rstest]`, by last segment, so a qualified spelling counts too.
+#[doc(hidden)]
+#[must_use]
+pub fn is_case(attrs: &[syn::Attribute]) -> bool {
+    attrs.iter().any(|attr| {
+        attr.path()
+            .segments
+            .last()
+            .is_some_and(|segment| segment.ident == "test" || segment.ident == "rstest")
+    })
+}
+
+/// What one source file's cases do when their subject is missing.
+///
+/// A MISSING TOOL IS A FAILURE; A MISSING SUBJECT IS A `cfg!` ARM (CLOUD-2059).
+/// A case that returns before it asserts PASSES, and nextest cannot tell "looked
+/// and found it right" from "never looked". A probe that finds no `hk`, no `pkl`
+/// or no `flock` and returns is a leg reporting coverage it does not have. The
+/// one admitted early exit is under `if cfg!(…)` or `if !cfg!(…)`: the
+/// off-platform contract, stated where a reader sees it and decided at compile
+/// time rather than by what a runner happens to have installed.
+#[doc(hidden)]
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct SkipCensus {
+    /// Cases walked.
+    pub cases: usize,
+    /// Early exits under a platform guard, admitted. The anti-vacuity count: a
+    /// census that stopped recognising the guard would refuse these instead.
+    pub guarded: usize,
+    /// The cases holding an early exit no platform guard covers.
+    pub refused: Vec<String>,
+}
+
+/// Every case in `file` that can return before it asserts.
+///
+/// Every function is walked, a `mod tests` inside the library included. A
+/// `return` inside a closure, an async block or a nested item leaves that and
+/// not the case, so it is not counted. An exit a HELPER takes is the helper's:
+/// a case that calls one which returns early is not seen here.
+#[doc(hidden)]
+#[must_use]
+pub fn skip_census(file: &syn::File) -> SkipCensus {
+    let mut walk = SkipWalk::default();
+    walk.visit_file(file);
+    walk.census
+}
+
+#[derive(Default)]
+struct SkipWalk {
+    census: SkipCensus,
+}
+
+impl<'ast> Visit<'ast> for SkipWalk {
+    fn visit_item_fn(&mut self, item: &'ast syn::ItemFn) {
+        if is_case(&item.attrs) {
+            let mut exits = Exits::default();
+            exits.visit_block(&item.block);
+            self.census.cases += 1;
+            self.census.guarded += exits.guarded;
+            if exits.silent > 0 {
+                self.census.refused.push(item.sig.ident.to_string());
+            }
+        }
+        syn::visit::visit_item_fn(self, item);
+    }
+}
+
+/// Whether `condition` is a platform guard: `cfg!(…)` under any number of `!`.
+//MUTANT platform-guard-unread|s@^    matches!(condition, syn::Expr::Macro(guard) if guard.mac.path.is_ident("cfg"))$@    false@|a_return_under_a_cfg_guard_is_admitted
+fn platform_guard(condition: &syn::Expr) -> bool {
+    let mut condition = condition;
+    while let syn::Expr::Unary(syn::ExprUnary {
+        op: syn::UnOp::Not(_),
+        expr,
+        ..
+    }) = condition
+    {
+        condition = expr;
+    }
+    matches!(condition, syn::Expr::Macro(guard) if guard.mac.path.is_ident("cfg"))
+}
+
+/// The early exits in one case body, split by whether a platform guard holds
+/// them.
+#[derive(Default)]
+struct Exits {
+    /// How many enclosing `if`s are platform guards, at the current node.
+    within_guard: usize,
+    silent: usize,
+    guarded: usize,
+}
+
+//MUTANT silent-skip-admitted|s@^        if self.within_guard == 0 {$@        if self.within_guard == usize::MAX {@|a_bare_return_in_a_case_is_refused
+impl<'ast> Visit<'ast> for Exits {
+    fn visit_expr_if(&mut self, branch: &'ast syn::ExprIf) {
+        let guard = usize::from(platform_guard(&branch.cond));
+        self.within_guard += guard;
+        syn::visit::visit_expr_if(self, branch);
+        self.within_guard -= guard;
+    }
+
+    fn visit_expr_return(&mut self, exit: &'ast syn::ExprReturn) {
+        if self.within_guard == 0 {
+            self.silent += 1;
+        } else {
+            self.guarded += 1;
+        }
+        syn::visit::visit_expr_return(self, exit);
+    }
+
+    fn visit_expr_closure(&mut self, _: &'ast syn::ExprClosure) {}
+
+    fn visit_expr_async(&mut self, _: &'ast syn::ExprAsync) {}
+
+    fn visit_item(&mut self, _: &'ast syn::Item) {}
+}
+
 #[cfg(test)]
 #[allow(clippy::expect_used)]
 mod tests {

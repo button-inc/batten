@@ -77,15 +77,6 @@ fn script_named(dir: &Path, name: &str, body: &str) -> PathBuf {
     path
 }
 
-/// Say why a case was skipped.
-///
-/// Not `eprintln!`: the workspace denies the print macros because Batten's own
-/// output is a byte-stable contract, and a test target inherits the lint.
-fn skipped(reason: &str) {
-    use std::io::Write as _;
-    drop(writeln!(std::io::stderr(), "{reason}"));
-}
-
 /// Whether `pid` still names a live process.
 ///
 /// `kill -0` rather than `/proc`: the question is POSIX and `/proc` is Linux's
@@ -640,26 +631,26 @@ fn a_session_leader_declines_even_with_the_opt_in_on() {
     // leader, and a session leader manages nothing an ancestor was not already
     // placed to manage.
     //
-    // `setsid` is util-linux rather than POSIX, so where it is absent the live
-    // reading cannot be taken at all. The rule is still covered by
-    // `GroupDecision::decide`'s unit case; what is skipped here is the
-    // observation, and the case says so out loud rather than passing quietly.
+    // `setsid` is util-linux rather than POSIX: on every Linux leg and on no
+    // macOS one. The rule is still covered by `GroupDecision::decide`'s unit case;
+    // the live reading is a `cfg!` arm, and a Linux host without `setsid` FAILS
+    // rather than passing over an observation it never took (CLOUD-2059).
+    if !cfg!(target_os = "linux") {
+        return;
+    }
     #[expect(
         clippy::disallowed_types,
-        reason = "stays, and test-only: probing for `setsid` is asking the host a question about itself, and the case says out loud when the live reading is skipped"
+        reason = "stays, and test-only: probing for `setsid` is asking the host a question about itself"
     )]
-    if !Command::new("sh")
+    let installed = Command::new("sh")
         .args(["-c", "command -v setsid >/dev/null"])
         .status()
         .expect("probe for setsid")
-        .success()
-    {
-        skipped(
-            "process_group: `setsid` is not installed, so the session-leader rule's LIVE \
-             reading is skipped; the predicate itself is covered in exec.rs's unit tests",
-        );
-        return;
-    }
+        .success();
+    assert!(
+        installed,
+        "`setsid` is util-linux, installed on every Linux leg"
+    );
 
     let dir = repo("pgroup-session", true);
     let home = scratch("pgroup-session-home");
