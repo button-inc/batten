@@ -256,6 +256,11 @@ pub use severity::{AdvisoryTier, Mapping, ReportLevel, RuleSeverity};
 // `#[expect]` rather than `#[allow]` for `rules/rust.md`'s reason: it is
 // self-cleaning in both directions, so if the table ever shrinks back under the
 // ceiling this annotation goes red rather than quietly outliving its cause.
+//
+// The startup update's hook-path skip (CLOUD-2062): dropping it lets a hook
+// build or download inline, which the hook-path case catches.
+//MUTANT-SUITE crates/batten/tests/it/engine_update.rs
+//MUTANT hook-path-updates|s@^    let may_update = !hook_path \&\& !own_surface \&\& std::env::var_os(ENGINE_UPDATED).is_none();$@    let may_update = !own_surface \&\& std::env::var_os(ENGINE_UPDATED).is_none();@|the_hook_path_never_updates
 #[expect(
     clippy::too_many_lines,
     reason = "a dispatch table's length is its verb count; splitting it scatters the surface"
@@ -293,8 +298,6 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
     // own surface, and the guard bounds a session to one update per invocation.
     let hook_path = matches!(command, Some(Command::Hook { .. }));
     let own_surface = matches!(command, Some(Command::Engine { .. }));
-    //MUTANT-SUITE crates/batten/tests/it/engine_update.rs
-    //MUTANT hook-path-updates|s@^    let may_update = !hook_path \&\& !own_surface \&\& std::env::var_os(ENGINE_UPDATED).is_none();$@    let may_update = !own_surface \&\& std::env::var_os(ENGINE_UPDATED).is_none();@|the_hook_path_never_updates
     let may_update = !hook_path && !own_surface && std::env::var_os(ENGINE_UPDATED).is_none();
     if may_update && let Some(code) = update_then_reexec()? {
         return Ok(code);
@@ -623,21 +626,7 @@ fn engine_update(root: &Path, out: &mut dyn Write) -> Result<ExitCode> {
     };
     let binary = std::env::current_exe()?;
     let bytes = match (pin.release.as_deref(), pin.source.as_deref()) {
-        (Some(tag), None) => {
-            let target = engine::running_target();
-            let asset = engine::release_asset(tag, &target);
-            let repository = env!("CARGO_PKG_REPOSITORY");
-            let archive = fetch::get(&engine::release_url(repository, tag, &asset), &[])?;
-            let sums = fetch::get(&engine::release_url(repository, tag, "SHA256SUMS"), &[])?;
-            if archive.status != 200 || sums.status != 200 {
-                return Err(UsageError::raise(format!(
-                    "engine update: {tag} answered {} for {asset} and {} for SHA256SUMS; nothing was installed",
-                    archive.status, sums.status
-                )));
-            }
-            engine::verify(&archive.body, &String::from_utf8_lossy(&sums.body), &asset)?;
-            engine::extract(&archive.body, &dist::binary_file("batten", &target))?
-        }
+        (Some(tag), None) => engine::fetch_release(env!("CARGO_PKG_REPOSITORY"), tag)?,
         (None, Some(_)) => {
             let build: Vec<String> = ["cargo", "build", "--release", "-p", "batten"]
                 .iter()

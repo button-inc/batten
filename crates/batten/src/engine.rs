@@ -279,6 +279,31 @@ pub fn verify(archive: &[u8], sums: &str, asset: &str) -> Result<()> {
     Ok(())
 }
 
+/// The engine binary of release `tag`, fetched from `repository` for this build's
+/// own target and checked against that release's `SHA256SUMS` (CLOUD-2062).
+///
+/// The one network door this module opens, and only `batten engine update` and
+/// the startup update off the hook path reach it.
+///
+/// # Errors
+///
+/// Either download answering other than 200, a digest that disagrees, or an
+/// archive with no binary at its root — in every case nothing is installed.
+pub fn fetch_release(repository: &str, tag: &str) -> Result<Vec<u8>> {
+    let target = running_target();
+    let asset = release_asset(tag, &target);
+    let archive = crate::fetch::get(&release_url(repository, tag, &asset), &[])?;
+    let sums = crate::fetch::get(&release_url(repository, tag, "SHA256SUMS"), &[])?;
+    if archive.status != 200 || sums.status != 200 {
+        return Err(UsageError::raise(format!(
+            "engine update: {tag} answered {} for {asset} and {} for SHA256SUMS; nothing was installed",
+            archive.status, sums.status
+        )));
+    }
+    verify(&archive.body, &String::from_utf8_lossy(&sums.body), &asset)?;
+    extract(&archive.body, &crate::dist::binary_file("batten", &target))
+}
+
 /// The `bin` entry at the root of a `.tar.gz` release archive.
 ///
 /// # Errors

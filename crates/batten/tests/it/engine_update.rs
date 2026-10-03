@@ -66,13 +66,14 @@ fn run(binary: &Path, dir: &Path, args: &[&str], stdin: &str) -> Output {
         )),
     )
     .unwrap();
-    let mut child = std::process::Command::new(binary)
+    let mut command = std::process::Command::new(binary);
+    common::state_dir(&mut command, &dir.join("state"));
+    let mut child = command
         .args(args)
         .current_dir(dir)
         .env("PATH", path)
         .env("CARGO_TARGET_DIR", dir.join("target"))
         .env("STUB_RAN", dir.join("cargo-ran"))
-        .env("XDG_DATA_HOME", dir.join("state"))
         .env_remove("BATTEN_ENGINE_UPDATED")
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())

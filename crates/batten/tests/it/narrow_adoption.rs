@@ -154,7 +154,14 @@ fn the_network_callers_are_the_declared_ones_and_nothing_else() {
         // token file the `[hook]` host table declares for this harness — which no
         // `[mcp]` row describes. It resolves that token in one place, as the other
         // four do, and the retired body spent it through `curl` instead.
+        //
+        // `engine.rs` is the sixth (CLOUD-2062): a pinned release's binary and its
+        // `SHA256SUMS` are fetched from the engine's own repository, anonymously,
+        // and installed only when the digest agrees. No credential is resolved, and
+        // `lib.rs` stays off this list — the update CALLS the module, it does not
+        // open the door itself.
         vec![
+            "engine.rs".to_owned(),
             "lease.rs".to_owned(),
             "mcp.rs".to_owned(),
             "provision.rs".to_owned(),
