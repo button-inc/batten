@@ -356,18 +356,25 @@ fn a_batten_lifecycle_verb_is_preapproved_outside_plan_mode() {
 
 /// CLOUD-2002: in auto mode an Edit, a Write or a shell write batten allows is
 /// not left to the host's classifier.
+///
+/// THE PATHS ARE OUTSIDE THE REPOSITORY ON PURPOSE. This tier adjudicates
+/// against the real checkout, so an in-repo write is first judged by whatever
+/// receipt state the developer's branch holds — `turn mint ahead` refuses one
+/// on any head `land` just rebased — and the case would assert that state
+/// rather than the grant (CLOUD-1209's class). Scratch outside the tree is never
+/// gated, so a deny here can only mean the grant failed.
 #[test]
 fn an_edit_and_a_shell_write_are_preapproved_in_auto() {
     let edit = envelope(
         "auto",
         "Edit",
-        &serde_json::json!({ "file_path": "README.md", "old_string": "a", "new_string": "b" }),
+        &serde_json::json!({ "file_path": "/tmp/batten-preapprove/notes.md", "old_string": "a", "new_string": "b" }),
     );
     assert_granted_by(&edit, "call grant now");
     let write = envelope(
         "auto",
         "Write",
-        &serde_json::json!({ "file_path": "notes.txt", "content": "x" }),
+        &serde_json::json!({ "file_path": "/tmp/batten-preapprove/notes.txt", "content": "x" }),
     );
     assert_granted_by(&write, "call grant now");
     assert_granted_by(&shell("auto", "python3 tools/x.py"), "call grant now");
