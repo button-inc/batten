@@ -2496,3 +2496,55 @@ fn collect_rust(dir: &Path, found: &mut Vec<PathBuf>) {
         }
     }
 }
+
+/// The schema node a config column resolves to, or `None` (CLOUD-1643).
+///
+/// `path` is spelled as `batten::config::TEXT_CENSUS` spells one: split on `.`,
+/// a segment ending `[]` steps into `properties[key]` and then `items`, and every
+/// step dereferences `$ref` into `$defs` and an `anyOf` with exactly one
+/// non-null branch into that branch.
+pub(crate) fn schema_leaf<'a>(
+    schema: &'a serde_json::Value,
+    path: &str,
+) -> Option<&'a serde_json::Value> {
+    fn resolve<'a>(
+        schema: &'a serde_json::Value,
+        mut node: &'a serde_json::Value,
+    ) -> Option<&'a serde_json::Value> {
+        // Bounded, so a self-referencing `$def` cannot spin.
+        for _ in 0..64 {
+            if let Some(name) = node
+                .get("$ref")
+                .and_then(serde_json::Value::as_str)
+                .and_then(|reference| reference.strip_prefix("#/$defs/"))
+            {
+                node = schema.get("$defs")?.get(name)?;
+                continue;
+            }
+            if let Some(branches) = node.get("anyOf").and_then(serde_json::Value::as_array) {
+                let non_null: Vec<&serde_json::Value> = branches
+                    .iter()
+                    .filter(|branch| branch.get("type") != Some(&serde_json::json!("null")))
+                    .collect();
+                if let [only] = non_null.as_slice() {
+                    node = only;
+                    continue;
+                }
+            }
+            return Some(node);
+        }
+        None
+    }
+    let mut node = resolve(schema, schema)?;
+    for segment in path.split('.') {
+        let (key, element) = match segment.strip_suffix("[]") {
+            Some(key) => (key, true),
+            None => (segment, false),
+        };
+        node = resolve(schema, node.get("properties")?.get(key)?)?;
+        if element {
+            node = resolve(schema, node.get("items")?)?;
+        }
+    }
+    Some(node)
+}

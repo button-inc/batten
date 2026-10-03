@@ -57,6 +57,12 @@
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
+//MUTANT-SUITE crates/batten/tests/it/pointer_only.rs
+//MUTANT echoed-column-undeclared|s@"verdict...class",@@|no_verb_emits_content_it_merely_read
+//MUTANT echo-arm-unreached|s@args: &\["no-canary-command"]@args: \&["cargo run loose"]@|no_verb_emits_content_it_merely_read
+//MUTANT echo-column-unresolved|s@"fact...command"]@"fact[].command", "rule[].nonesuch"]@|every_echo_declaration_resolves_to_capped_config_leaves
+//MUTANT prose-column-unseeded|s@columns: &\["waiver...reason"]@columns: \&[]@|the_corpus_seeds_every_prose_column
+//MUTANT redirect-arm-undeclared|s@"redirect...read",@@|the_protected_mutation_arm_echoes_only_its_declared_columns
 
 use crate::common;
 
@@ -91,6 +97,10 @@ fn canary(tag: &str) -> String {
 struct Canary {
     tag: &'static str,
     source: &'static str,
+    /// The config columns these bytes are seeded in (CLOUD-1643), spelled as
+    /// `batten::config::TEXT_CENSUS` spells a path. Empty for a content canary
+    /// and for a declaration that is not a config column.
+    columns: &'static [&'static str],
 }
 
 /// Bytes a check read as its **subject**. No verb may emit one of these.
@@ -100,38 +110,47 @@ const CONTENT: &[Canary] = &[
         // Also the line a declared suppression marker sits on: one line, because
         // a leak of either is the same emitter printing the same bytes.
         source: "the line a `forbid` rule matched",
+        columns: &[],
     },
     Canary {
         tag: "counted",
         source: "the body of a file counted against a declared budget",
+        columns: &[],
     },
     Canary {
         tag: "spoken",
         source: "free text inside a completed-session transcript",
+        columns: &[],
     },
     Canary {
         tag: "declared",
         source: "the subject line of a task in the session's own store",
+        columns: &[],
     },
     Canary {
         tag: "childout",
         source: "a wrapped or configured child's own stdout",
+        columns: &[],
     },
     Canary {
         tag: "childerr",
         source: "a wrapped or configured child's own stderr",
+        columns: &[],
     },
     Canary {
         tag: "mediated",
         source: "the operand of a mediated tool call, read from a `hook` payload",
+        columns: &[],
     },
     Canary {
         tag: "briefed",
         source: "free prose inside a delegation brief read by `lint brief`",
+        columns: &[],
     },
     Canary {
         tag: "captured",
         source: "the inline evidence bytes of a design-evidence capture",
+        columns: &[],
     },
     Canary {
         tag: "lineread",
@@ -141,6 +160,7 @@ const CONTENT: &[Canary] = &[
         // the widest fact on the tree surface would rest on nobody having
         // written the leak yet.
         source: "a line of a file a `policy` row declared under `lines`",
+        columns: &[],
     },
     Canary {
         tag: "boardrow",
@@ -150,6 +170,7 @@ const CONTENT: &[Canary] = &[
         // reason class, and this is the byte that decides it rather than the doc
         // comment above `run_landed_check` claiming it.
         source: "the description of a tracker row read by `landed check`",
+        columns: &[],
     },
     Canary {
         tag: "shellbody",
@@ -158,6 +179,7 @@ const CONTENT: &[Canary] = &[
         // emit is a path, a line, a unit's declared name and a count; this is the
         // byte that decides it.
         source: "a shell line inside a manifest body or a workflow step the census counts",
+        columns: &[],
     },
 ];
 
@@ -166,19 +188,130 @@ const DECLARATION: &[Canary] = &[
     Canary {
         tag: "rulepat",
         source: "a `[[rule]]` pattern",
+        columns: &["rule[].pattern"],
     },
     Canary {
         tag: "markertok",
         source: "a second `[[rule]]` pattern, doubling as a `[[marker]]` token",
+        columns: &["rule[].pattern", "marker[].token"],
     },
     Canary {
         tag: "waived",
         source: "a `[[waiver]]` reason",
+        columns: &["waiver[].reason"],
     },
     Canary {
         tag: "logged",
+        // A ledger row is the caller's declaration, but not a config column.
         source: "a ledger row's `evidence` pointer",
+        columns: &[],
     },
+    // One per prose column the corpus can carry inertly (CLOUD-1643), so a verb
+    // echoing config prose is SEEN doing it, column by column.
+    Canary {
+        tag: "glossed",
+        source: "a `[[verdict]]` gloss",
+        columns: &["verdict[].gloss"],
+    },
+    Canary {
+        tag: "classdef",
+        source: "a `[[verdict]]` class definition",
+        columns: &["verdict[].class"],
+    },
+    Canary {
+        tag: "routed",
+        source: "an override route's precondition",
+        columns: &["verdict[].route[].precondition"],
+    },
+    Canary {
+        tag: "targeted",
+        source: "a command route's target",
+        columns: &["verdict[].route[].target"],
+    },
+    Canary {
+        tag: "withdrew",
+        source: "a withdrawn class's reason",
+        columns: &["verdict[].withdrawn"],
+    },
+    Canary {
+        tag: "reasoned",
+        source: "a `[[rule]]` reason",
+        columns: &["rule[].reason"],
+    },
+    Canary {
+        tag: "nofixed",
+        source: "a `[[rule]]` no_fix_reason",
+        columns: &["rule[].no_fix_reason"],
+    },
+    Canary {
+        tag: "redirected",
+        source: "a `[[redirect]]` mutation",
+        columns: &["redirect[].mutation"],
+    },
+    Canary {
+        tag: "readvia",
+        source: "a `[[redirect]]` read route",
+        columns: &["redirect[].read"],
+    },
+    Canary {
+        tag: "verbed",
+        source: "a `[[verb]]` redirect",
+        columns: &["verb[].redirect"],
+    },
+    Canary {
+        tag: "started",
+        source: "a `[[startup]]` gloss",
+        columns: &["startup[].gloss"],
+    },
+    Canary {
+        tag: "execwhy",
+        source: "an `[[exec_pattern]]` reason",
+        columns: &["exec_pattern[].reason"],
+    },
+    Canary {
+        tag: "envwhy",
+        source: "a `[[verify_environment_pattern]]` reason",
+        columns: &["verify_environment_pattern[].reason"],
+    },
+    Canary {
+        tag: "deferred",
+        source: "a `[[deferral]]` reason",
+        columns: &["deferral[].reason"],
+    },
+    Canary {
+        tag: "perfwhy",
+        source: "a `[[perf.exempt]]` reason",
+        columns: &["perf.exempt[].reason"],
+    },
+];
+
+/// The `TEXT_CENSUS` paths the corpus does NOT seed, each with the reason
+/// (CLOUD-1643). Closed: a prose column added later reddens
+/// `the_corpus_seeds_every_prose_column` until it is seeded here or listed.
+const UNSEEDED_PROSE: &[(&str, &str)] = &[
+    (
+        "vocabulary.action[].gloss",
+        "a non-empty vocabulary turns on the id grammar, so every class, route and rule id in \
+         the corpus would have to be re-spelled from it: a different corpus",
+    ),
+    (
+        "vocabulary.condition[].gloss",
+        "as `vocabulary.action[].gloss`",
+    ),
+    (
+        "vocabulary.subject[].gloss",
+        "as `vocabulary.action[].gloss`",
+    ),
+    (
+        "rule[].no_retry_reason",
+        "accepted only on a row whose class declares `silent` applicability, so seeding it \
+         adds a repair path for the census to exercise",
+    ),
+    (
+        "rule[].criteria",
+        "belongs only to a `judge` row, which spawns its judge command; spawning kinds stay out \
+         of the shared corpus, for the reason `authority` gives for `canary-child`",
+    ),
 ];
 
 // -- The corpus --------------------------------------------------------------
@@ -212,6 +345,7 @@ fn authority(spawning: bool) -> String {
          pattern = \"{rulepat}\"\n\
          severity = \"warn\"\n\
          scope = \"tree\"\n\
+         no_fix_reason = \"{nofixed}\"\n\
          \n\
          [[rule]]\n\
          id = \"no-canary-waived\"\n\
@@ -236,7 +370,7 @@ fn authority(spawning: bool) -> String {
          severity = \"deny\"\n\
          pattern = \"rm\"\n\
          contains = \"-rf\"\n\
-         reason = \"remove it through the surface that owns it\"\n\
+         reason = \"{reasoned}\"\n\
          \n\
          [[rule]]\n\
          id = \"tree-policy\"\n\
@@ -248,13 +382,65 @@ fn authority(spawning: bool) -> String {
          \n\
          [[verdict]]\n\
          id = \"a canary line\"\n\
-         gloss = \"a canary line reached a declared source\"\n\
-         class = \"What the corpus module asserts, at explain length.\"\n\
+         gloss = \"a canary line reached {glossed}\"\n\
+         class = \"What the corpus module asserts {classdef}.\"\n\
          \n\
          [[verdict.route]]\n\
          id = \"read the module\"\n\
          kind = \"document\"\n\
          target = \"policy/lines.rego\"\n\
+         \n\
+         [[verdict.route]]\n\
+         id = \"admit the canary\"\n\
+         kind = \"override\"\n\
+         precondition = \"{routed}\"\n\
+         \n\
+         [[verdict.route]]\n\
+         id = \"run the canary\"\n\
+         kind = \"command\"\n\
+         target = \"{targeted}\"\n\
+         \n\
+         [[verdict]]\n\
+         id = \"a canary tombstone\"\n\
+         gloss = \"a retired canary class\"\n\
+         class = \"Retired.\"\n\
+         withdrawn = \"{withdrew}\"\n\
+         \n\
+         [[verdict.route]]\n\
+         id = \"read the module\"\n\
+         kind = \"document\"\n\
+         target = \"policy/lines.rego\"\n\
+         \n\
+         [[redirect]]\n\
+         glob = \"**/*.lock\"\n\
+         mutation = \"{redirected}\"\n\
+         read = \"{readvia}\"\n\
+         \n\
+         [[verb]]\n\
+         verb = \"chmod\"\n\
+         effect = \"write\"\n\
+         redirect = \"{verbed}\"\n\
+         \n\
+         [[startup]]\n\
+         id = \"canary-startup\"\n\
+         check = [\"true\"]\n\
+         gloss = \"{started}\"\n\
+         \n\
+         [[exec_pattern]]\n\
+         id = \"canary-exec\"\n\
+         pattern = \"canary-exec-never-printed\"\n\
+         reason = \"{execwhy}\"\n\
+         \n\
+         [[verify_environment_pattern]]\n\
+         id = \"canary-env\"\n\
+         pattern = \"canary-env-never-printed\"\n\
+         reason = \"{envwhy}\"\n\
+         \n\
+         [[deferral]]\n\
+         issue = \"CLOUD-1120\"\n\
+         fact = \"rust-version\"\n\
+         reaches = \"1.99\"\n\
+         reason = \"{deferred}\"\n\
          \n\
          [[waiver]]\n\
          rule = \"no-canary-waived\"\n\
@@ -300,11 +486,32 @@ fn authority(spawning: bool) -> String {
          runs = 1\n\
          budget_seconds = 0\n\
          slack_seconds = 5\n\
-         loose_factor = 1\n",
+         loose_factor = 1\n\
+         \n\
+         [[perf.exempt]]\n\
+         path = \"check\"\n\
+         ratio = \"1.5\"\n\
+         expires = \"2099-12-31\"\n\
+         reason = \"{perfwhy}\"\n",
         latency_bin = env!("CARGO_BIN_EXE_batten"),
         rulepat = canary("rulepat"),
         markertok = canary("markertok"),
         waived = canary("waived"),
+        glossed = canary("glossed"),
+        classdef = canary("classdef"),
+        routed = canary("routed"),
+        targeted = canary("targeted"),
+        withdrew = canary("withdrew"),
+        reasoned = canary("reasoned"),
+        nofixed = canary("nofixed"),
+        redirected = canary("redirected"),
+        readvia = canary("readvia"),
+        verbed = canary("verbed"),
+        started = canary("started"),
+        execwhy = canary("execwhy"),
+        envwhy = canary("envwhy"),
+        deferred = canary("deferred"),
+        perfwhy = canary("perfwhy"),
     );
     if spawning {
         // Only `enforce` evaluates a spawning kind — `check` refuses one outright
@@ -636,13 +843,32 @@ enum Disposition {
     PointerOnly,
     /// The answer **is** the caller's own declaration — a resolved config value,
     /// a schema derived from the config types, a ledger row they wrote. Held to
-    /// the content half only, which is the half rule 4 is about.
-    Echoes(&'static str),
+    /// the content half, which is the half rule 4 is about, and to the declared
+    /// [`Echoed`] on the declaration half (CLOUD-1643).
+    Echoes(&'static str, Echoed),
     /// The verb relays bytes it was handed. Held to a **count**: a canary may
     /// appear exactly as often as the caller's own command wrote it and never
     /// more, so a report that amplified the payload still fails.
     Passthrough(&'static str),
 }
+
+/// Which declarations an `Echoes` verb may put on its channels (CLOUD-1643).
+///
+/// The volume half of the pointer-only law: a verb echoing config prose names
+/// the columns it echoes, and each is a capped string leaf of the config schema.
+enum Echoed {
+    /// Batten's own compile-time declarations. No DECLARATION canary may appear.
+    Surface,
+    /// Named config columns, spelled as `batten::config::TEXT_CENSUS` spells a
+    /// path (`rule[].reason`, `verdict[].route[].precondition`).
+    Columns(&'static [&'static str]),
+    /// A whole caller-authored document returned on request. Closed list:
+    /// [`WHOLE_DOCUMENT_ECHOES`].
+    Whole,
+}
+
+/// The verbs that return a whole caller-authored document (CLOUD-1643).
+const WHOLE_DOCUMENT_ECHOES: &[&str] = &["config show", "defects add", "defects query"];
 
 /// What the verb reads on stdin. Built at run time because it carries canaries.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1309,6 +1535,7 @@ const CENSUS: &[Verb] = &[
         disposition: Disposition::Echoes(
             "the effective configuration IS the answer; a resolver that reported its own values \
              as counts would answer a question nobody asked",
+            Echoed::Whole,
         ),
     },
     Verb {
@@ -1340,6 +1567,7 @@ const CENSUS: &[Verb] = &[
         disposition: Disposition::Echoes(
             "the spec is derived from the command surface and reads no repository content at \
              all; it echoes Batten's own declarations, not the caller's tree",
+            Echoed::Surface,
         ),
     },
     Verb {
@@ -1512,6 +1740,7 @@ const CENSUS: &[Verb] = &[
         disposition: Disposition::Echoes(
             "a completion script is the command surface rendered for a shell; same reasoning as \
              `spec`, and it reads no repository content either",
+            Echoed::Surface,
         ),
     },
     Verb {
@@ -1523,6 +1752,7 @@ const CENSUS: &[Verb] = &[
              spellings, and Batten's own command — so every byte is Batten's own declaration. \
              It reads no repository content at all: not the tree, not `batten.toml`, not the \
              committed wiring it is diffed against, which is `hooks-wiring-check`'s to read",
+            Echoed::Surface,
         ),
     },
     Verb {
@@ -1532,6 +1762,7 @@ const CENSUS: &[Verb] = &[
         disposition: Disposition::Echoes(
             "the schema is derived from the config TYPES, so it describes the shape a \
              declaration may take and never a value one carries",
+            Echoed::Surface,
         ),
     },
     Verb {
@@ -1541,6 +1772,7 @@ const CENSUS: &[Verb] = &[
         disposition: Disposition::Echoes(
             "a man page is the command surface rendered as roff; the same reasoning as \
              `generate completions`, and it reads no repository content either",
+            Echoed::Surface,
         ),
     },
     Verb {
@@ -1551,6 +1783,7 @@ const CENSUS: &[Verb] = &[
             "the CLI reference is the whole command surface rendered as markdown; it echoes \
              Batten's own declarations — including the §5 effect column — and never the \
              caller's tree",
+            Echoed::Surface,
         ),
     },
     Verb {
@@ -1613,13 +1846,27 @@ const CENSUS: &[Verb] = &[
     // 4 is about. The token asked for is a literal the caller typed.
     Verb {
         path: "policy explain",
-        args: &["path write refused"],
+        // The corpus's own class, so the answer echoes CONFIG prose — the vendored
+        // `path write refused` echoes compile-time prose and no column (CLOUD-1643).
+        args: &["a canary line"],
         stdin: Stdin::Nothing,
         disposition: Disposition::Echoes(
             "the answer IS a `[[verdict]]` row — its gloss, its class definition and its \
              routes. That is the config author's own declaration rather than content read out \
              of a subject file, and it is the payload the hot path stopped carrying when a \
              refusal became a token plus a pointer",
+            Echoed::Columns(&[
+                "verdict[].gloss",
+                "verdict[].class",
+                "verdict[].route[].id",
+                "verdict[].route[].precondition",
+                "verdict[].route[].target",
+                "rule[].reason",
+                "fact[].command",
+                "redirect[].mutation",
+                "redirect[].read",
+                "verb[].redirect",
+            ]),
         ),
     },
     // `explain`'s sibling and `Echoes` for the same reason (CLOUD-1637): the
@@ -1634,12 +1881,15 @@ const CENSUS: &[Verb] = &[
     // which is 66 of this config's 128 rows.
     Verb {
         path: "policy rule",
-        args: &["cargo run loose"],
+        // A row the corpus declares, so the verb reaches its echo arm rather than
+        // exiting 1 over an id nothing declares (CLOUD-1643).
+        args: &["no-canary-command"],
         stdin: Stdin::Nothing,
         disposition: Disposition::Echoes(
             "the answer IS a `[[rule]]` row's declared remedy, echoed back to the caller who \
              named its id. CLOUD-1286 moved that prose off the hot path and named this verb as \
              where it went; carrying it here is the whole reason the verb exists",
+            Echoed::Columns(&["rule[].reason", "fact[].command"]),
         ),
     },
     // CLOUD-1051, and it is POINTER-ONLY on the channel this census reads, which
@@ -2167,6 +2417,7 @@ const CENSUS: &[Verb] = &[
             "the ledger is committed, human-authored and PR-reviewed, and `evidence` is a \
              pointer by the type's own contract; querying it back is reading the caller's file \
              to them, not surfacing content a check went and read",
+            Echoed::Whole,
         ),
     },
     Verb {
@@ -2176,6 +2427,7 @@ const CENSUS: &[Verb] = &[
         disposition: Disposition::Echoes(
             "the row being previewed arrived on stdin from the caller; a dry run reporting it \
              back is an echo of their own input",
+            Echoed::Whole,
         ),
     },
     Verb {
@@ -2881,12 +3133,67 @@ fn board_check_reaches_its_verdict_and_emits_no_body() {
     );
 }
 
+/// The declaration half of an `Echoes` verb's output, judged against what it
+/// declared it echoes (CLOUD-1643). One helper, so the sweep and the
+/// protected-mutation case cannot judge the same bytes two ways.
+fn echo_violations(argv: &[&str], emitted: &[u8], echoed: &Echoed) -> Vec<String> {
+    let mut violations = Vec::new();
+    let emitted_declarations: Vec<&Canary> = DECLARATION
+        .iter()
+        .filter(|seeded| contains(emitted, &canary(seeded.tag)))
+        .collect();
+    match echoed {
+        Echoed::Surface => {
+            for seeded in &emitted_declarations {
+                violations.push(format!(
+                    "{argv:?} echoes Batten's own surface only, but emitted {}",
+                    seeded.source
+                ));
+            }
+        }
+        Echoed::Columns(declared) => {
+            let in_declared = |seeded: &Canary| {
+                seeded
+                    .columns
+                    .iter()
+                    .any(|column| declared.contains(column))
+            };
+            for seeded in &emitted_declarations {
+                if !in_declared(seeded) {
+                    violations.push(format!(
+                        "{argv:?} emitted {} ({:?}), a column its `Echoed::Columns` does not \
+                         declare",
+                        seeded.source, seeded.columns
+                    ));
+                }
+            }
+            // NON-VACUITY: a verb declaring columns that echoed none of them on
+            // this corpus never reached its echo arm, so its silence proves nothing.
+            if !emitted_declarations
+                .iter()
+                .any(|seeded| in_declared(seeded))
+            {
+                violations.push(format!(
+                    "{argv:?} declares it echoes {declared:?} and emitted none of them, so its \
+                     echo arm was never reached"
+                ));
+            }
+        }
+        Echoed::Whole => {}
+    }
+    violations
+}
+
 #[test]
 fn no_verb_emits_content_it_merely_read() {
     // The law, swept over the whole surface. Each verb runs on its own corpus so
     // a writer cannot leave state that changes the next verb's answer, and every
     // `-J` verb runs twice — the document and the human rendering are two
     // emitters, and `output.rs` gives the ladder no reach over the first.
+    //
+    // Every violation is collected and asserted ONCE, so one run names every
+    // failing verb rather than the first (CLOUD-1643).
+    let mut violations: Vec<String> = Vec::new();
     for verb in CENSUS {
         let spawning = verb.path == "enforce";
         // `sweep-` namespaces these away from the hand-written fixtures below.
@@ -2916,56 +3223,185 @@ fn no_verb_emits_content_it_merely_read() {
 
         for argv in argvs {
             let run = run_in(&corpus, &argv, verb.stdin);
-            if !MAY_ANSWER_COULD_NOT_LOOK.contains(&verb.path) {
-                assert_ne!(
-                    run.code,
-                    Some(3),
+            if !MAY_ANSWER_COULD_NOT_LOOK.contains(&verb.path) && run.code == Some(3) {
+                violations.push(format!(
                     "{argv:?} failed internally, so what it did not emit proves nothing: {}",
                     String::from_utf8_lossy(&run.stderr)
-                );
+                ));
             }
             let emitted = run.emitted();
 
-            match verb.disposition {
+            match &verb.disposition {
                 Disposition::PointerOnly => {
                     for seeded in CONTENT.iter().chain(DECLARATION) {
-                        assert!(
-                            !contains(&emitted, &canary(seeded.tag)),
-                            "{argv:?} emitted {}. Output is a pointer, never the payload \
-                             (non-negotiable rule 4, house-style §6): report a count, a \
-                             `path:line`, or a boolean.",
-                            seeded.source,
-                        );
+                        if contains(&emitted, &canary(seeded.tag)) {
+                            violations.push(format!(
+                                "{argv:?} emitted {}. Output is a pointer, never the payload \
+                                 (non-negotiable rule 4, house-style §6): report a count, a \
+                                 `path:line`, or a boolean.",
+                                seeded.source,
+                            ));
+                        }
                     }
                 }
-                Disposition::Echoes(reason) => {
+                Disposition::Echoes(reason, echoed) => {
                     for seeded in CONTENT {
-                        assert!(
-                            !contains(&emitted, &canary(seeded.tag)),
-                            "{argv:?} is classified as echoing the caller's own declarations \
-                             ({reason}) — but it emitted {}, which is content a check READ. That \
-                             is the half rule 4 is about, and no disposition exempts it.",
-                            seeded.source,
-                        );
+                        if contains(&emitted, &canary(seeded.tag)) {
+                            violations.push(format!(
+                                "{argv:?} is classified as echoing the caller's own declarations \
+                                 ({reason}) — but it emitted {}, which is content a check READ. \
+                                 That is the half rule 4 is about, and no disposition exempts it.",
+                                seeded.source,
+                            ));
+                        }
                     }
+                    violations.extend(echo_violations(&argv, &emitted, echoed));
                 }
                 Disposition::Passthrough(reason) => {
                     // Held to a count rather than to absence: the caller's own
                     // bytes are the point of the verb, so what would be a defect
                     // is Batten adding a copy of them to its own report.
                     for seeded in CONTENT {
-                        assert!(
-                            count(&emitted, &canary(seeded.tag)) <= 1,
-                            "{argv:?} relays its child's streams ({reason}), so {} may appear \
-                             exactly as often as the child wrote it — once. A second copy is \
-                             Batten's own report carrying the payload.",
-                            seeded.source,
-                        );
+                        if count(&emitted, &canary(seeded.tag)) > 1 {
+                            violations.push(format!(
+                                "{argv:?} relays its child's streams ({reason}), so {} may \
+                                 appear exactly as often as the child wrote it — once. A second \
+                                 copy is Batten's own report carrying the payload.",
+                                seeded.source,
+                            ));
+                        }
                     }
                 }
             }
         }
     }
+    violations.sort();
+    assert!(violations.is_empty(), "{}", violations.join("\n"));
+}
+
+/// Every column an `Echoes` verb declares, and every column a canary is seeded
+/// in, is a capped string leaf of the derived config schema (CLOUD-1643).
+///
+/// `#MUTANT echo-column-unresolved` reddens here: an invented column has no
+/// leaf, so the case consults the schema rather than accepting any string.
+#[test]
+fn every_echo_declaration_resolves_to_capped_config_leaves() {
+    let schema: serde_json::Value =
+        serde_json::from_str(&batten::config::schema().expect("the schema derives"))
+            .expect("the schema is JSON");
+    let mut problems = Vec::new();
+    let mut whole: Vec<&str> = Vec::new();
+    let mut columns: Vec<(&str, &str)> = Vec::new();
+    for verb in CENSUS {
+        if let Disposition::Echoes(_, echoed) = &verb.disposition {
+            match echoed {
+                Echoed::Columns(declared) => {
+                    if declared.is_empty() {
+                        problems.push(format!("{} declares an empty column list", verb.path));
+                    }
+                    columns.extend(declared.iter().map(|column| (verb.path, *column)));
+                }
+                Echoed::Whole => whole.push(verb.path),
+                Echoed::Surface => {}
+            }
+        }
+    }
+    for seeded in DECLARATION {
+        columns.extend(seeded.columns.iter().map(|column| (seeded.tag, *column)));
+    }
+    for (owner, column) in columns {
+        let Some(leaf) = common::schema_leaf(&schema, column) else {
+            problems.push(format!("{owner}: {column} is no leaf of the config schema"));
+            continue;
+        };
+        let text =
+            leaf["type"] == "string" || leaf["type"] == serde_json::json!(["string", "null"]);
+        if !text {
+            problems.push(format!("{owner}: {column} is not a string leaf"));
+        }
+        if leaf.get("maxLength").is_none() {
+            problems.push(format!("{owner}: {column} carries no maxLength"));
+        }
+    }
+    whole.sort_unstable();
+    let mut listed = WHOLE_DOCUMENT_ECHOES.to_vec();
+    listed.sort_unstable();
+    if whole != listed {
+        problems.push(format!(
+            "the `Whole` entries {whole:?} differ from WHOLE_DOCUMENT_ECHOES {listed:?}"
+        ));
+    }
+    assert!(problems.is_empty(), "{}", problems.join("\n"));
+}
+
+/// The corpus seeds every `TEXT_CENSUS` path, or names why not (CLOUD-1643).
+///
+/// `#MUTANT prose-column-unseeded` reddens here.
+#[test]
+fn the_corpus_seeds_every_prose_column() {
+    use std::collections::BTreeSet;
+    let census: BTreeSet<&str> = batten::config::TEXT_CENSUS
+        .iter()
+        .map(|column| column.path)
+        .collect();
+    let seeded: BTreeSet<&str> = DECLARATION
+        .iter()
+        .flat_map(|seeded| seeded.columns.iter().copied())
+        .collect();
+    let unseeded: BTreeSet<&str> = UNSEEDED_PROSE.iter().map(|(path, _)| *path).collect();
+    let mut problems = Vec::new();
+    for path in &census {
+        if !seeded.contains(path) && !unseeded.contains(path) {
+            problems.push(format!("{path} is neither seeded nor in UNSEEDED_PROSE"));
+        }
+    }
+    for path in seeded.intersection(&unseeded) {
+        problems.push(format!("{path} is seeded AND listed in UNSEEDED_PROSE"));
+    }
+    for path in unseeded.difference(&census) {
+        problems.push(format!(
+            "{path} is in UNSEEDED_PROSE but is no TEXT_CENSUS path"
+        ));
+    }
+    assert!(problems.is_empty(), "{}", problems.join("\n"));
+}
+
+/// The protected-mutation arm of `policy explain`, which the sweep's single
+/// census entry never reaches (CLOUD-1643).
+///
+/// `#MUTANT redirect-arm-undeclared` reddens here.
+#[test]
+fn the_protected_mutation_arm_echoes_only_its_declared_columns() {
+    let corpus = Corpus::build("pointer-only-protected-mutation-arm", false);
+    let explain = CENSUS
+        .iter()
+        .find(|verb| verb.path == "policy explain")
+        .expect("explain is in the census");
+    let Disposition::Echoes(_, echoed) = &explain.disposition else {
+        panic!("explain is classified as echoing");
+    };
+    let mut problems = Vec::new();
+    for argv in [
+        vec!["policy", "explain", "protected-mutation"],
+        vec!["policy", "explain", "protected-mutation", "-J"],
+    ] {
+        let run = run_in(&corpus, &argv, Stdin::Nothing);
+        if run.code != Some(0) {
+            problems.push(format!(
+                "{argv:?} exited {:?}: {}",
+                run.code,
+                String::from_utf8_lossy(&run.stderr)
+            ));
+        }
+        let emitted = run.emitted();
+        problems.extend(echo_violations(&argv, &emitted, echoed));
+        for tag in ["redirected", "readvia", "verbed"] {
+            if !contains(&emitted, &canary(tag)) {
+                problems.push(format!("{argv:?} did not reach the `{tag}` declaration"));
+            }
+        }
+    }
+    assert!(problems.is_empty(), "{}", problems.join("\n"));
 }
 
 #[cfg(unix)]
