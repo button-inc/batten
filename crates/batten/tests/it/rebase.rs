@@ -1250,6 +1250,69 @@ fn a_borrowed_commit_the_trunk_took_is_dropped_only_when_onto_is_fresh() {
     );
 }
 
+/// **A borrowed commit the HOLDER republished is dropped on an unwind, though
+/// the trunk never took it** (CLOUD-2086).
+///
+/// Measured on #1065: a killed `land` left a bet on the holder's tip; the holder
+/// had since republished its range under new shas; the next run adopted the bet
+/// and replayed `holder..branch` onto the trunk. The branch's copies of the
+/// holder's commits were not on the trunk and were not the holder's current
+/// shas, so neither the trunk drop set nor ancestry removed them, and they were
+/// replayed as this branch's own, voiding a fresh verify receipt.
+#[test]
+fn a_borrowed_commit_the_holder_republished_is_dropped_on_unwind() {
+    let borrowed: Files<'_> = &[("shared.txt", "base\n"), ("from-holder.txt", "theirs\n")];
+    let ours: Files<'_> = &[
+        ("shared.txt", "base\n"),
+        ("from-holder.txt", "theirs\n"),
+        ("ours.txt", "ours\n"),
+    ];
+    let (dir, repo) = init("rebase-unwind-republished-holder");
+    let base = commit(&repo, &[], &[("shared.txt", "base\n")]);
+    let holder_old = commit(&repo, &[base], borrowed);
+    let tip = commit(&repo, &[holder_old], ours);
+    // The trunk moved, and the holder republished its change on top of it: same
+    // diff, different sha, and the trunk does NOT carry it.
+    let trunk = commit(
+        &repo,
+        &[base],
+        &[("shared.txt", "base\n"), ("unrelated.txt", "trunk\n")],
+    );
+    let holder_new = commit(
+        &repo,
+        &[trunk],
+        &[
+            ("shared.txt", "base\n"),
+            ("unrelated.txt", "trunk\n"),
+            ("from-holder.txt", "theirs\n"),
+        ],
+    );
+    point(&dir, "refs/heads/trunk", trunk);
+    point(&dir, "refs/heads/work", tip);
+    materialise(&dir, ours);
+
+    let outcome = gitwrite::replay_onto(
+        &dir,
+        "refs/heads/work",
+        &holder_new.to_hex().to_string(),
+        "refs/heads/trunk",
+    )
+    .expect("replay the unwound bet onto the trunk");
+    let Rebase::Replayed { head, commits } = outcome else {
+        panic!("the unwind must replay, got {outcome:?}");
+    };
+    assert_eq!(
+        commits, 1,
+        "the holder's change is in the bet's own upstream, so only this branch's \
+         commit is this branch's to replay"
+    );
+    let names = tree_names(&repo, head.parse().expect("replayed head resolves"));
+    assert!(
+        !names.contains(&"from-holder.txt".to_owned()),
+        "the borrowed file must not be published as this branch's own: {names:?}"
+    );
+}
+
 /// **A bet this process PLACED unwinds exactly, to the sha it recorded.**
 ///
 /// Not a replay: the undo point is this branch's own last non-speculative HEAD,
