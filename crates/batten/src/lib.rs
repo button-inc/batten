@@ -287,6 +287,18 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
     if let Ok(here) = std::env::current_dir() {
         config::declare_for_process(&here);
     }
+    // A STALE ENGINE UPDATES ITSELF BEFORE IT DECIDES ANYTHING (CLOUD-2062), off
+    // the hook path only: a hook never downloads or builds inline, and there the
+    // pre-parse refusal (CLOUD-2061) stands. The `engine` verbs are the update's
+    // own surface, and the guard bounds a session to one update per invocation.
+    let hook_path = matches!(command, Some(Command::Hook { .. }));
+    let own_surface = matches!(command, Some(Command::Engine { .. }));
+    //MUTANT-SUITE crates/batten/tests/it/engine_update.rs
+    //MUTANT hook-path-updates|s@^    let may_update = !hook_path \&\& !own_surface \&\& std::env::var_os(ENGINE_UPDATED).is_none();$@    let may_update = !own_surface \&\& std::env::var_os(ENGINE_UPDATED).is_none();@|the_hook_path_never_updates
+    let may_update = !hook_path && !own_surface && std::env::var_os(ENGINE_UPDATED).is_none();
+    if may_update && let Some(code) = update_then_reexec()? {
+        return Ok(code);
+    }
     match command {
         // Unreachable in practice: `arg_required_else_help` has clap offer the
         // subcommand listing (a usage error, exit 1) before parse returns. Kept
@@ -570,6 +582,86 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
     }
 }
 
+/// Set on the re-exec after a self-update, so the updated engine never updates
+/// again in the same invocation (CLOUD-2062).
+const ENGINE_UPDATED: &str = "BATTEN_ENGINE_UPDATED";
+
+/// When this checkout pins an engine this binary is not, install it and re-run
+/// this invocation under it; `None` when nothing was stale.
+///
+/// Best-effort on the READ: outside a repository, or with no readable
+/// `batten.toml`, there is no pin to honour and the verb runs as it is. The
+/// UPDATE is not best-effort — a pin that cannot be installed is reported, since
+/// running anyway would decide under the very engine the pin refuses.
+fn update_then_reexec() -> Result<Option<ExitCode>> {
+    let Ok(root) = git::worktree_root(Path::new(".")) else {
+        return Ok(None);
+    };
+    let Ok(text) = std::fs::read_to_string(root.join(config::CONFIG_FILE)) else {
+        return Ok(None);
+    };
+    if engine::stale(&text, engine::running_stamp).is_none() {
+        return Ok(None);
+    }
+    engine_update(&root, &mut std::io::sink())?;
+    let mut argv: Vec<String> = vec![std::env::current_exe()?.to_string_lossy().into_owned()];
+    argv.extend(std::env::args().skip(1));
+    let published = [(String::from(ENGINE_UPDATED), String::from("1"))];
+    exec::run_in_env(&root, &argv, &published).map(Some)
+}
+
+/// `batten engine update` (CLOUD-2062): install the pinned engine over the
+/// running binary. A release is fetched from the engine's own repository and
+/// verified against its `SHA256SUMS`; a source pin is built from this tree and
+/// stamped. Either is swapped in by rename, so a crash leaves the old binary.
+fn engine_update(root: &Path, out: &mut dyn Write) -> Result<ExitCode> {
+    let Ok(text) = std::fs::read_to_string(root.join(config::CONFIG_FILE)) else {
+        return Ok(ExitCode::Success);
+    };
+    let Some(pin) = engine::stale(&text, engine::running_stamp) else {
+        return Ok(ExitCode::Success);
+    };
+    let binary = std::env::current_exe()?;
+    let bytes = match (pin.release.as_deref(), pin.source.as_deref()) {
+        (Some(tag), None) => {
+            let target = engine::running_target();
+            let asset = engine::release_asset(tag, &target);
+            let repository = env!("CARGO_PKG_REPOSITORY");
+            let archive = fetch::get(&engine::release_url(repository, tag, &asset), &[])?;
+            let sums = fetch::get(&engine::release_url(repository, tag, "SHA256SUMS"), &[])?;
+            if archive.status != 200 || sums.status != 200 {
+                return Err(UsageError::raise(format!(
+                    "engine update: {tag} answered {} for {asset} and {} for SHA256SUMS; nothing was installed",
+                    archive.status, sums.status
+                )));
+            }
+            engine::verify(&archive.body, &String::from_utf8_lossy(&sums.body), &asset)?;
+            engine::extract(&archive.body, &dist::binary_file("batten", &target))?
+        }
+        (None, Some(_)) => {
+            let build: Vec<String> = ["cargo", "build", "--release", "-p", "batten"]
+                .iter()
+                .map(|word| (*word).to_owned())
+                .collect();
+            exec::run_in(root, &build)?;
+            let target_dir = std::env::var_os("CARGO_TARGET_DIR")
+                .map_or_else(|| root.join("target"), std::path::PathBuf::from);
+            std::fs::read(target_dir.join("release").join("batten"))?
+        }
+        _ => {
+            return Err(UsageError::raise(String::from(
+                "engine update: `engine` names exactly one of `release` or `source`",
+            )));
+        }
+    };
+    durable::replace(&binary, bytes)?;
+    if pin.source.is_some() {
+        engine::stamp(&binary, &engine::digest(root)?)?;
+    }
+    writeln!(out, "{}", binary.display())?;
+    Ok(ExitCode::Success)
+}
+
 /// `batten engine digest|stamp` (CLOUD-2061).
 ///
 /// The tree is the WORKTREE's, `census`' reasoning: what a branch's engine is
@@ -584,6 +676,7 @@ fn run_engine(command: cli::EngineCommand, out: &mut dyn Write) -> Result<ExitCo
             engine::stamp(&binary, &digest)?;
             writeln!(out, "{}", engine::stamp_path(&binary).display())?;
         }
+        cli::EngineCommand::Update => return engine_update(&root, out),
     }
     Ok(ExitCode::Success)
 }

@@ -7513,6 +7513,20 @@ pub const SURFACE: &[CommandDecl] = &[
         effect: Effect::Write,
         flags: &[],
     },
+    // `write`, and the write is the running binary itself (CLOUD-2062): a
+    // release is fetched, verified against its SHA256SUMS and swapped in by
+    // rename; a source pin is built from this tree and stamped. A satisfied or
+    // absent pin is a no-op. Not `destructive`: the swap is atomic, and the
+    // binary it replaces is the one the pin says is wrong.
+    CommandDecl {
+        path: "engine update",
+        id: "engine.update",
+        about: "Install the engine this config pins over the running binary, from its release or from this tree",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Write,
+        flags: &[],
+    },
     CommandDecl {
         path: "artifacts",
         id: "artifacts",

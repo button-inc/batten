@@ -941,6 +941,7 @@ mod tests {
             "engine".to_owned(),
             "engine digest".to_owned(),
             "engine stamp".to_owned(),
+            "engine update".to_owned(),
             "exec".to_owned(),
             // The schema is emitted by `generate`, not `config`: it is a
             // derivation of the config types, and §11 gives every

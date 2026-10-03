@@ -494,6 +494,8 @@ pub enum EngineCommand {
     Digest,
     /// Record this tree's source digest beside the running binary.
     Stamp,
+    /// Install the engine the config pins over the running binary (CLOUD-2062).
+    Update,
 }
 
 /// Subcommands of `artifacts` (CLOUD-1991).
@@ -3416,6 +3418,7 @@ fn engine_of(matches: &ArgMatches) -> Option<EngineCommand> {
     match matches.subcommand()?.0 {
         "digest" => Some(EngineCommand::Digest),
         "stamp" => Some(EngineCommand::Stamp),
+        "update" => Some(EngineCommand::Update),
         _ => None,
     }
 }

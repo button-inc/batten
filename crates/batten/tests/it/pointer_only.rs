@@ -1900,6 +1900,13 @@ const CENSUS: &[Verb] = &[
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
+    // CLOUD-2062: with no pin in the corpus it is a no-op that prints nothing.
+    Verb {
+        path: "engine update",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
     // The derivations' writer (CLOUD-1991). Driven with `--schema` alone, into a
     // directory of the corpus's own: the verb writes files and says where, one
     // `<kind>=<path>` line, and reads nothing of the caller's tree to do it — the

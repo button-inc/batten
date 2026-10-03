@@ -188,3 +188,177 @@ pub fn running_stamp() -> Option<String> {
     let digest = text.trim();
     (!digest.is_empty()).then(|| digest.to_owned())
 }
+
+/// The pin, when one is declared and this engine does not satisfy it.
+///
+/// [`check`]'s question without its refusal, for the caller that would rather
+/// update than refuse (CLOUD-2062). `None` covers both "no pin" and "satisfied";
+/// a malformed pin is left to [`check`] to name.
+#[must_use]
+pub fn stale(text: &str, stamp: impl FnOnce() -> Option<String>) -> Option<Pin> {
+    let pin = declared(text)?;
+    let satisfied = match (pin.release.as_deref(), pin.source.as_deref()) {
+        (Some(tag), None) => tag == release(),
+        (None, Some(digest)) => stamp().as_deref() == Some(digest),
+        _ => true,
+    };
+    (!satisfied).then_some(pin)
+}
+
+/// The target triple this binary was built for, from its own compile-time `cfg`.
+///
+/// The triple the release matrix names (`dist::archive_stem`), so a release
+/// update installs the same platform it replaces. Derived from the build itself
+/// rather than probed from the host, which is the question a self-update asks:
+/// "the release of ME".
+#[must_use]
+pub fn running_target() -> String {
+    let arch = std::env::consts::ARCH;
+    match std::env::consts::OS {
+        "linux" if cfg!(target_env = "musl") => format!("{arch}-unknown-linux-musl"),
+        "linux" => format!("{arch}-unknown-linux-gnu"),
+        "macos" => format!("{arch}-apple-darwin"),
+        "windows" if cfg!(target_env = "gnu") => format!("{arch}-pc-windows-gnu"),
+        "windows" => format!("{arch}-pc-windows-msvc"),
+        os => format!("{arch}-unknown-{os}"),
+    }
+}
+
+/// The release archive's asset name for `tag` on `target`.
+#[must_use]
+pub fn release_asset(tag: &str, target: &str) -> String {
+    let version = tag.trim_start_matches('v');
+    format!(
+        "{}{}",
+        crate::dist::archive_stem("batten", version, target),
+        crate::dist::archive_ext(target)
+    )
+}
+
+/// Where `tag`'s `file` is published, under the engine's own repository.
+#[must_use]
+pub fn release_url(repository: &str, tag: &str, file: &str) -> String {
+    format!(
+        "{}/releases/download/{tag}/{file}",
+        repository.trim_end_matches('/')
+    )
+}
+
+/// The digest `sums` (a `SHA256SUMS` body) publishes for `asset`.
+#[must_use]
+pub fn published_digest(sums: &str, asset: &str) -> Option<String> {
+    sums.lines().find_map(|line| {
+        let mut fields = line.split_whitespace();
+        let digest = fields.next()?;
+        let name = fields.next()?.trim_start_matches('*');
+        (name == asset).then(|| digest.to_ascii_lowercase())
+    })
+}
+
+//MUTANT-SUITE crates/batten/src/engine.rs
+//MUTANT digest-unchecked|s@^    if got != want {$@    if false {@|an_archive_whose_digest_disagrees_is_refused
+
+/// Refuse an archive whose SHA-256 is not the one its release published.
+///
+/// # Errors
+///
+/// A [`UsageError`] when `sums` names no digest for `asset`, or names another
+/// one: the downloaded bytes are not the release's, and nothing is installed.
+pub fn verify(archive: &[u8], sums: &str, asset: &str) -> Result<()> {
+    let want = published_digest(sums, asset).ok_or_else(|| {
+        UsageError::raise(format!(
+            "engine update: the release publishes no digest for {asset}, so it cannot be verified"
+        ))
+    })?;
+    let got = crate::receipt::hex_sha256(archive);
+    if got != want {
+        return Err(UsageError::raise(format!(
+            "engine update: {asset} hashes {got}, not the {want} its release published; nothing was installed"
+        )));
+    }
+    Ok(())
+}
+
+/// The `bin` entry at the root of a `.tar.gz` release archive.
+///
+/// # Errors
+///
+/// An archive that will not read, or one with no `bin` at its root.
+pub fn extract(archive: &[u8], bin: &str) -> Result<Vec<u8>> {
+    use std::io::Read as _;
+    let mut entries = tar::Archive::new(flate2::read::GzDecoder::new(archive));
+    for entry in entries.entries()? {
+        let mut entry = entry?;
+        let path = entry.path()?.into_owned();
+        let at_root = path
+            .to_str()
+            .is_some_and(|name| name.trim_start_matches("./") == bin);
+        if at_root {
+            let mut bytes = Vec::new();
+            entry.read_to_end(&mut bytes)?;
+            return Ok(bytes);
+        }
+    }
+    Err(UsageError::raise(format!(
+        "engine update: the release archive carries no {bin} at its root"
+    )))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_release_asset_url_is_the_dist_naming() {
+        let asset = release_asset("v0.0.200", "x86_64-unknown-linux-musl");
+        assert_eq!(asset, "batten-v0.0.200-x86_64-unknown-linux-musl.tar.gz");
+        assert_eq!(
+            release_url("https://github.com/o/r/", "v0.0.200", &asset),
+            "https://github.com/o/r/releases/download/v0.0.200/batten-v0.0.200-x86_64-unknown-linux-musl.tar.gz"
+        );
+    }
+
+    #[test]
+    fn an_archive_whose_digest_disagrees_is_refused() {
+        let archive = b"the release bytes";
+        let right = crate::receipt::hex_sha256(archive);
+        let sums = format!("{right}  a.tar.gz\n{}  b.tar.gz\n", "0".repeat(64));
+        assert!(verify(archive, &sums, "a.tar.gz").is_ok());
+        assert!(
+            verify(archive, &sums, "b.tar.gz").is_err(),
+            "a wrong digest"
+        );
+        assert!(
+            verify(archive, &sums, "c.tar.gz").is_err(),
+            "no digest at all"
+        );
+    }
+
+    #[test]
+    fn the_binary_is_extracted_from_a_release_archive() -> Result<()> {
+        let mut tarred = tar::Builder::new(Vec::new());
+        for (name, body) in [("README", &b"docs"[..]), ("batten", &b"\x7fELF engine"[..])] {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(body.len() as u64);
+            header.set_mode(0o755);
+            header.set_cksum();
+            tarred.append_data(&mut header, name, body)?;
+        }
+        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        std::io::Write::write_all(&mut gz, &tarred.into_inner()?)?;
+        let archive = gz.finish()?;
+        assert_eq!(extract(&archive, "batten")?, b"\x7fELF engine");
+        assert!(extract(&archive, "missing").is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn a_satisfied_or_absent_pin_is_not_stale() {
+        let tag = release();
+        assert!(stale("version = 1\n", || None).is_none());
+        assert!(stale(&format!("engine = {{ release = \"{tag}\" }}\n"), || None).is_none());
+        assert!(stale("engine = { release = \"v0.0.1\" }\n", || None).is_some());
+        assert!(stale("engine = { source = \"ab\" }\n", || Some("ab".into())).is_none());
+        assert!(stale("engine = { source = \"ab\" }\n", || None).is_some());
+    }
+}

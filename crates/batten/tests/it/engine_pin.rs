@@ -32,6 +32,10 @@ fn run(binary: &Path, dir: &Path, args: &[&str]) -> Output {
     std::process::Command::new(binary)
         .args(args)
         .current_dir(dir)
+        // These cases measure the pre-parse refusal, which is what a stale engine
+        // answers once its one update has run; without this the startup update
+        // (CLOUD-2062) would download or build before the refusal is reached.
+        .env("BATTEN_ENGINE_UPDATED", "1")
         .output()
         .expect("run batten")
 }

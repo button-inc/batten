@@ -3206,7 +3206,10 @@ description = "Session start: install the latest RELEASE over whatever `deps-ins
 # own rather than a flattened `1`.
 quiet = true
 silent = "stdout"
-run = "./install.sh"
+# THEN THE PIN (CLOUD-2062): `install.sh` provisions a release so a binary
+# exists at all; `batten engine update` then converges it on the engine the
+# committed `batten.toml` pins. An unpinned checkout pays nothing for it.
+run = ["./install.sh", "batten engine update"]
 
 [tasks."session:git-hooks"]
 description = "Session start: install the repo-owned git hooks, the per-clone step nothing performed for 24 commits (CLOUD-476)"
