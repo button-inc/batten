@@ -96,7 +96,7 @@ fn a_seeded_violation_of_a_default_rule_is_a_violation() {
     assert_eq!(output.status.code(), Some(2), "stderr: {}", stderr(&output));
     assert_eq!(
         stdout(&output),
-        "src/lib.rs:2 source carry broken\n",
+        "src/lib.rs:2 rule 'source carry broken'\n",
         "the finding is a pointer — `path:line rule-id`, never the matched line"
     );
     assert!(stderr(&output).contains(config::DEFAULTS_NOTE));

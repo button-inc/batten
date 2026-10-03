@@ -85,7 +85,7 @@ fn fixture(name: &str) -> PathBuf {
 fn write_payload(path: &str) -> String {
     let escaped = serde_json::to_string(path).expect("a path is encodable");
     format!(
-        "{{\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"Write\",\
+        "{{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"s1\",\"tool_name\":\"Write\",\
          \"tool_input\":{{\"file_path\":{escaped},\"content\":\"x\"}}}}"
     )
 }
@@ -337,6 +337,42 @@ fn a_subject_copied_from_the_refusal_line_admits_the_write() {
         verdict(&dir, GUARDED),
         Some(0),
         "a subject copied off the refusal line must admit the write it refused"
+    );
+}
+
+/// The override route on the line IS the request that admits (CLOUD-2075 §7
+/// case 12): on both arms, ready to run, with the subject the refusal binds.
+#[test]
+fn the_override_route_on_the_line_is_the_request_that_admits() {
+    let dir = fixture("mediated-admission-route-on-line");
+    let opener = format!(
+        "admit with batten override request --rule '{RULE}' --verdict '{CLASS}' --subject '"
+    );
+    let mut subject = String::new();
+    for _ in 0..2 {
+        let refused = run_with_stdin(
+            &dir,
+            &["adjudicate", "--harness", "exit-code"],
+            &write_payload(GUARDED),
+        );
+        assert_eq!(refused.status.code(), Some(2), "the premise");
+        let said = String::from_utf8_lossy(&refused.stderr).into_owned();
+        let rest = said
+            .split(opener.as_str())
+            .nth(1)
+            .unwrap_or_else(|| panic!("no override route on the line: {said}"));
+        subject = rest
+            .split('\'')
+            .next()
+            .expect("a quoted subject")
+            .to_owned();
+    }
+    let admission = request(&dir, &subject, "read straight off the override route");
+    assert!(spend(&dir, &admission, &subject), "spend must consume it");
+    assert_eq!(
+        verdict(&dir, GUARDED),
+        Some(0),
+        "the route's request admits"
     );
 }
 

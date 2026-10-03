@@ -37,6 +37,12 @@
 //! `$GIT_DIR` is the only way to observe a genuine first firing without reaching
 //! into the tree under test. The fixture carries the COMMITTED config, so what it
 //! measures is still this repository's rows.
+//!
+//! **EVERY PAYLOAD NAMES A SESSION (CLOUD-2075).** The store is per context —
+//! the session, plus the agent id where a subagent reads — and a payload naming
+//! no session is full on every firing and marks nothing. So the real-root
+//! repeats fire under one session this suite owns, and the fixture cases name
+//! theirs explicitly through [`fires_in`].
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -51,12 +57,28 @@ fn root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
 
+/// The session the real-root repeats fire under: this suite's own context, so
+/// it never consumes a sighting of the working session's.
+const SUITE_SESSION: &str = "refusal-ceiling-suite";
+
 fn payload(command: &str) -> String {
-    let encoded = serde_json::to_string(command).expect("a command is encodable");
-    format!(
-        "{{\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"Bash\",\
-         \"tool_input\":{{\"command\":{encoded}}}}}"
-    )
+    payload_in(Some(SUITE_SESSION), None, command)
+}
+
+/// A Bash `PreToolUse` payload in `session` (and `agent`), or naming none.
+fn payload_in(session: Option<&str>, agent: Option<&str>, command: &str) -> String {
+    let mut value = serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Bash",
+        "tool_input": {"command": command},
+    });
+    if let Some(session) = session {
+        value["session_id"] = serde_json::Value::from(session);
+    }
+    if let Some(agent) = agent {
+        value["agent_id"] = serde_json::Value::from(agent);
+    }
+    value.to_string()
 }
 
 /// The refusal text a mediated call produces on a REPEAT firing, which is what
@@ -98,17 +120,45 @@ fn refusal_once(payload: &str) -> Option<String> {
 /// ceiling had been raised or deleted, which is the whole failure the
 /// `refusal-ceiling-raised` weakening exists to report.
 fn declared_ceiling() -> usize {
+    declared("max_tokens")
+}
+
+/// The full arm's ceiling, read the same way (CLOUD-2075).
+fn declared_first_sighting_ceiling() -> usize {
+    declared("first_sighting_max_tokens")
+}
+
+fn declared(key: &str) -> usize {
     let text = std::fs::read_to_string(root().join("batten.toml"))
         .expect("the committed config is readable");
     let config: toml::Value = toml::from_str(&text).expect("the committed config parses");
     usize::try_from(
         config
             .get("refusal")
-            .and_then(|table| table.get("max_tokens"))
+            .and_then(|table| table.get(key))
             .and_then(toml::Value::as_integer)
-            .expect("`[refusal] max_tokens` is declared"),
+            .unwrap_or_else(|| panic!("`[refusal] {key}` is declared")),
     )
     .expect("a ceiling is not negative")
+}
+
+/// The committed `reason` of one `[[rule]]` row.
+fn rule_reason(id: &str) -> String {
+    let text = std::fs::read_to_string(root().join("batten.toml"))
+        .expect("the committed config is readable");
+    let config: toml::Value = toml::from_str(&text).expect("the committed config parses");
+    config
+        .get("rule")
+        .and_then(toml::Value::as_array)
+        .and_then(|rows| {
+            rows.iter()
+                .find(|row| row.get("id").and_then(toml::Value::as_str) == Some(id))
+        })
+        .and_then(|row| row.get("reason"))
+        .and_then(toml::Value::as_str)
+        .unwrap_or_else(|| panic!("`{id}` declares a reason"))
+        .trim()
+        .to_owned()
 }
 
 /// `budget.rs`'s estimator, which is what the engine's own `Ceiling::over` uses.
@@ -196,8 +246,8 @@ fn a_declared_refusal_emits_its_class_and_its_pointers_and_stops() {
     // hatch sentence. Each of the four was a copy of something declared once.
     let line = refusal("sed -n '1,40p' AGENTS.md").expect("the row refuses");
     assert!(
-        line.starts_with("tool run loose"),
-        "the class leads the line: {line}"
+        line.starts_with("verdict 'tool run loose' rule 'tool select other'"),
+        "the labelled class leads the line: {line}"
     );
     for wrapper in ["Refused by", "Fix:", "Bypass with", " ("] {
         assert!(
@@ -250,12 +300,17 @@ fn fixture(name: &str) -> PathBuf {
     staged.git().base_commit().build()
 }
 
-/// One firing in a fixture, returning the emitted line.
+/// One firing in a fixture under session `s1`, returning the emitted line.
 fn fires(repo: &Path, command: &str) -> String {
+    fires_in(repo, Some("s1"), None, command)
+}
+
+/// One firing in a fixture in `session` (plus `agent`), returning the line.
+fn fires_in(repo: &Path, session: Option<&str>, agent: Option<&str>, command: &str) -> String {
     let run = run_with_stdin(
         repo,
         &["adjudicate", "--harness", "exit-code"],
-        &payload(command),
+        &payload_in(session, agent, command),
     );
     assert_eq!(
         run.status.code(),
@@ -264,6 +319,17 @@ fn fires(repo: &Path, command: &str) -> String {
     );
     stderr(&run).trim().to_owned()
 }
+
+/// A hook event other than a Bash call, through the Claude Code adapter.
+fn hook(repo: &Path, value: &serde_json::Value) -> std::process::Output {
+    run_with_stdin(
+        repo,
+        &["adjudicate", "--harness", "claude-code"],
+        &value.to_string(),
+    )
+}
+
+const FULL: &str = " — ";
 
 /// The first sighting of a document-only class carries its definition.
 ///
@@ -282,7 +348,7 @@ fn a_first_sighting_carries_the_gloss_and_its_route_by_kind() {
     let repo = fixture("first-sighting-document-route");
     let line = fires(&repo, "head -40 batten.toml");
     assert!(
-        line.starts_with("tool run loose"),
+        line.starts_with("verdict 'tool run loose'"),
         "the class still leads the line: {line}"
     );
     assert!(
@@ -345,33 +411,258 @@ fn a_shape_first_sighting_names_the_rows_remedy_verb() {
     );
 }
 
-/// The repeat is compact, and a byte PREFIX of the first sighting.
+/// The pointer arm is a byte PREFIX of the full arm, and sheds no pointer
+/// (CLOUD-2075 §7 case 2).
 ///
-/// The prefix property is what makes the two arms one line rather than two
-/// renderings: everything the repeat says, the first sighting said first and in
-/// the same order. A reader who has met the class recognises the compact form as
-/// the head of what they already read.
+/// This reverses the repeat that dropped its routes: everything the pointer arm
+/// says, the full arm said first and in the same order, and the subjects and
+/// routes — every way out — are the same set on both.
 #[test]
-fn a_repeat_drops_the_definition_and_keeps_the_pointers() {
-    let repo = fixture("repeat-is-compact");
+fn the_pointer_arm_carries_every_route_and_subject_the_full_arm_does() {
+    let repo = fixture("pointer-carries-routes");
     let first = fires(&repo, "head -40 batten.toml");
     let repeat = fires(&repo, "head -40 batten.toml");
     assert_ne!(first, repeat, "the two arms differ, or nothing was saved");
     assert!(
         first.starts_with(&repeat),
-        "the repeat is a byte prefix of the first sighting: {repeat:?} vs {first:?}"
+        "the pointer is a byte prefix of the full arm: {repeat:?} vs {first:?}"
     );
-    assert!(
-        repeat.contains("tool select other"),
-        "the rule id stays on the repeat arm — for 66 rows it is the only \
-         discriminator (CLOUD-1637's second amendment): {repeat}"
-    );
-    for dropped in [" — ", "read rules/scanning.md"] {
+    assert!(!repeat.contains(FULL), "the pointer has no tail: {repeat}");
+    let head = first.split(FULL).next().expect("a head");
+    assert_eq!(head, repeat, "the full arm's pointers ARE the pointer arm");
+    for kept in [
+        "rule 'tool select other'",
+        "batten.toml",
+        "read rules/scanning.md",
+        "run batten policy rule 'tool select other'",
+    ] {
         assert!(
-            !repeat.contains(dropped),
-            "the repeat drops `{dropped}`: {repeat}"
+            repeat.contains(kept),
+            "the pointer keeps `{kept}`: {repeat}"
         );
     }
+}
+
+/// The full arm carries the row's own reason and both labels (CLOUD-2075 §7
+/// case 1), reversing the first sighting that left the reason out.
+#[test]
+fn a_first_sighting_carries_the_rows_reason_and_both_labels() {
+    let repo = fixture("first-sighting-reason");
+    let line = fires(&repo, "head -40 batten.toml");
+    let reason = rule_reason("tool select other");
+    let opening: String = reason.chars().take(40).collect();
+    for needle in [
+        "verdict 'tool run loose'",
+        "rule 'tool select other'",
+        "a shell text utility stood in for the structured file surface",
+        opening.as_str(),
+        "read rules/scanning.md",
+        "run batten policy rule 'tool select other'",
+        "Run batten policy explain 'tool run loose'.",
+    ] {
+        assert!(line.contains(needle), "`{needle}` missing: {line}");
+    }
+}
+
+/// A collapsed row — id equal to its class — still labels both (CLOUD-2075 §7
+/// case 3), on both arms.
+#[test]
+fn a_collapsed_row_still_labels_rule_and_verdict() {
+    let repo = fixture("collapsed-row-labels");
+    let command = "git push --force-with-lease origin main";
+    let both = "verdict 'branch write unsafe' rule 'branch write unsafe'";
+    let first = fires(&repo, command);
+    let repeat = fires(&repo, command);
+    assert!(first.starts_with(both), "{first}");
+    assert!(repeat.starts_with(both), "{repeat}");
+}
+
+/// Two contexts in one clone never consume each other's sighting (CLOUD-2075
+/// §7 case 4): session A, session B, and A's subagent each get the full arm.
+#[test]
+fn two_contexts_in_one_clone_each_get_the_full_text() {
+    let repo = fixture("two-contexts");
+    let command = "head -40 batten.toml";
+    let a = fires_in(&repo, Some("A"), None, command);
+    let b = fires_in(&repo, Some("B"), None, command);
+    let sub = fires_in(&repo, Some("A"), Some("x"), command);
+    let again = fires_in(&repo, Some("A"), None, command);
+    assert!(a.contains(FULL), "{a}");
+    assert!(b.contains(FULL), "another session is its own reader: {b}");
+    assert!(sub.contains(FULL), "a subagent is its own reader: {sub}");
+    assert!(
+        !again.contains(FULL),
+        "A's second firing is the pointer: {again}"
+    );
+}
+
+/// A `SessionStart` forgets one context and leaves the rest (CLOUD-2075 §7
+/// case 5).
+#[test]
+fn a_session_start_forgets_only_that_contexts_sightings() {
+    let repo = fixture("session-start-scoped");
+    let command = "head -40 batten.toml";
+    let _ = fires_in(&repo, Some("A"), None, command);
+    let _ = fires_in(&repo, Some("B"), None, command);
+    let started = hook(
+        &repo,
+        &serde_json::json!({
+            "hook_event_name": "SessionStart",
+            "session_id": "A",
+            "source": "startup",
+        }),
+    );
+    assert_eq!(started.status.code(), Some(0), "{}", stderr(&started));
+    let a = fires_in(&repo, Some("A"), None, command);
+    let b = fires_in(&repo, Some("B"), None, command);
+    assert!(a.contains(FULL), "A was forgotten, so A is told again: {a}");
+    assert!(!b.contains(FULL), "B was not touched: {b}");
+}
+
+/// A compaction re-delivers every item the cycle saw, at once (CLOUD-2075 §7
+/// case 6), and keeps it marked.
+#[test]
+fn a_compaction_redelivers_every_seen_item_once_at_session_start() {
+    let repo = fixture("compaction-redelivers");
+    let command = "head -40 batten.toml";
+    let full = fires_in(&repo, Some("A"), None, command);
+    assert!(full.contains(FULL), "{full}");
+    let compacted = hook(
+        &repo,
+        &serde_json::json!({
+            "hook_event_name": "SessionStart",
+            "session_id": "A",
+            "source": "compact",
+        }),
+    );
+    assert_eq!(compacted.status.code(), Some(0), "{}", stderr(&compacted));
+    let document: serde_json::Value = String::from_utf8_lossy(&compacted.stdout)
+        .lines()
+        .find_map(|line| serde_json::from_str(line).ok())
+        .expect("the session start emits its advisory document");
+    let context = document["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .expect("an additionalContext string");
+    assert!(
+        context.contains(&full),
+        "the full arm is re-delivered byte for byte: {context}"
+    );
+    let next = fires_in(&repo, Some("A"), None, command);
+    assert!(!next.contains(FULL), "and stays marked: {next}");
+}
+
+/// An edit to a definition mid-cycle is a new item (CLOUD-2075 §7 case 7,
+/// CLOUD-1582's pair absorbed).
+#[test]
+fn an_edited_definition_is_a_new_item_mid_cycle() {
+    let repo = fixture("definition-edited");
+    let command = "head -40 batten.toml";
+    let first = fires_in(&repo, Some("A"), None, command);
+    assert!(first.contains(FULL), "{first}");
+    let config = repo.join("batten.toml");
+    let text = std::fs::read_to_string(&config).expect("the fixture config");
+    let reason = rule_reason("tool select other");
+    let opening: String = reason.chars().take(40).collect();
+    assert!(
+        text.contains(&opening),
+        "the fixture carries the committed reason"
+    );
+    let edited = text.replacen(&opening, "An edited sentence names the same remedy", 1);
+    std::fs::write(&config, edited).expect("rewrite the fixture config");
+    let second = fires_in(&repo, Some("A"), None, command);
+    assert!(
+        second.contains(FULL) && second.contains("An edited sentence"),
+        "an edited definition renders in full again: {second}"
+    );
+    let third = fires_in(&repo, Some("A"), None, command);
+    assert!(!third.contains(FULL), "an unchanged one does not: {third}");
+}
+
+/// A payload naming no session is full on every firing and marks nothing
+/// (CLOUD-2075 §7 case 8).
+#[test]
+fn a_session_less_payload_is_full_on_every_firing() {
+    let repo = fixture("session-less");
+    let command = "head -40 batten.toml";
+    let first = fires_in(&repo, None, None, command);
+    let second = fires_in(&repo, None, None, command);
+    assert!(first.contains(FULL) && second.contains(FULL), "{second}");
+    assert!(
+        !repo.join(".git/batten-sightings").exists(),
+        "a reader that cannot be named shares no key"
+    );
+}
+
+/// The `PostToolUse` boundary marks a full arm read from tool output
+/// (CLOUD-2075 §7 case 9); a later hook firing in that context is the pointer.
+#[test]
+fn the_boundary_marks_and_collapses_a_full_arm_in_tool_output() {
+    let repo = fixture("boundary-marks");
+    let command = "head -40 batten.toml";
+    let full = fires_in(&repo, Some("B"), None, command);
+    assert!(full.contains(FULL), "{full}");
+    let output = format!("{full}\ncanary\n{full}\n");
+    let posted = hook(
+        &repo,
+        &serde_json::json!({
+            "hook_event_name": "PostToolUse",
+            "session_id": "A",
+            "tool_name": "Bash",
+            "tool_input": {"command": "batten check"},
+            "tool_response": {"stdout": output, "stderr": "", "interrupted": false},
+        }),
+    );
+    assert_eq!(posted.status.code(), Some(0), "{}", stderr(&posted));
+    let rewrites = batten::hook::Harness::ClaudeCode
+        .capabilities()
+        .rewrites_tool_output
+        .is_capturable();
+    let said = String::from_utf8_lossy(&posted.stdout);
+    if rewrites {
+        assert!(said.contains("updatedToolOutput"), "{said}");
+    } else {
+        assert!(
+            !said.contains("updatedToolOutput"),
+            "no rewrite where none is measured: {said}"
+        );
+    }
+    let next = fires_in(&repo, Some("A"), None, command);
+    assert!(!next.contains(FULL), "the boundary marked it: {next}");
+}
+
+/// Every arm the corpus emits is within its declared ceiling (CLOUD-2075 §7
+/// case 1b): the full arm against `first_sighting_max_tokens`, the pointer arm
+/// against `max_tokens`. A measurement, so it prints what it measured.
+#[test]
+fn every_arm_the_corpus_emits_is_within_its_declared_ceiling() {
+    let full_ceiling = declared_first_sighting_ceiling();
+    let pointer_ceiling = declared_ceiling();
+    let repo = fixture("corpus-arms");
+    let mut widest = (0_usize, String::new(), 0_usize, String::new());
+    let mut over: Vec<(usize, String)> = Vec::new();
+    for (index, command) in CORPUS.iter().enumerate() {
+        let session = format!("corpus-{index}");
+        let full = fires_in(&repo, Some(&session), None, command);
+        let pointer = fires_in(&repo, Some(&session), None, command);
+        let (full_cost, pointer_cost) = (estimated_tokens(&full), estimated_tokens(&pointer));
+        if full_cost > widest.0 {
+            widest.0 = full_cost;
+            widest.1.clone_from(&full);
+        }
+        if pointer_cost > widest.2 {
+            widest.2 = pointer_cost;
+            widest.3.clone_from(&pointer);
+        }
+        if full_cost > full_ceiling {
+            over.push((full_cost, full));
+        }
+        if pointer_cost > pointer_ceiling {
+            over.push((pointer_cost, pointer));
+        }
+    }
+    eprintln!("measured full {} {}", widest.0, widest.1);
+    eprintln!("measured pointer {} {}", widest.2, widest.3);
+    assert!(over.is_empty(), "over a declared ceiling: {over:?}");
 }
 
 /// The store is WRITTEN between the two firings, which is what makes the arms
@@ -549,10 +840,16 @@ fn the_ceiling_can_fail() {
     // because the tree passing is the point of the corpus and a tree that could
     // fail it would be a defect rather than a fixture.
     let ceiling = declared_ceiling();
-    let long = "path write refused ".to_owned() + &"a/very/deep/".repeat(20) + "file.rs";
+    let long = "path write refused ".to_owned() + &"a/very/deep/".repeat(60) + "file.rs";
     assert!(
         estimated_tokens(&long) > ceiling,
         "a line this long must be over the ceiling, or the comparison decides nothing"
+    );
+    let full_ceiling = declared_first_sighting_ceiling();
+    let long_full = long.clone() + " — " + &"a sentence that runs on ".repeat(80);
+    assert!(
+        estimated_tokens(&long_full) > full_ceiling,
+        "a full arm this long must be over its ceiling, or that comparison decides nothing"
     );
     let short = refusal("nohup mise run verify &").expect("the row refuses");
     assert!(

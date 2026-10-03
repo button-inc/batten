@@ -167,7 +167,7 @@ fn row(id: &str, column: &str, hold: &str) -> String {
 /// Which kind it is — held or refused, and the board gate's rule — is the
 /// record's `issue` and `refusal` lines, echoed above it.
 fn refusal(text: &str, pointer: &str) -> bool {
-    let line = format!("{pointer} {RULE}");
+    let line = format!("{pointer} rule '{RULE}'");
     text.lines().any(|said| said.trim() == line)
 }
 
@@ -176,7 +176,7 @@ fn refuses(text: &str, id: &str) -> bool {
     let lead = format!("{id} ");
     text.lines()
         .map(str::trim)
-        .any(|said| said.starts_with(&lead) && said.ends_with(RULE))
+        .any(|said| said.starts_with(&lead) && said.ends_with(&format!("rule '{RULE}'")))
 }
 
 #[test]

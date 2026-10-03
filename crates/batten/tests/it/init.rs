@@ -104,7 +104,8 @@ fn a_second_init_refuses_and_leaves_the_file_untouched() {
     // `Refusal` type makes the clause impossible to omit, and this proves the
     // projection reaches the channel rather than stopping at the constructor.
     assert!(
-        reason.contains(batten::init::CONFIG_EXISTS) && reason.contains("Fix:"),
+        reason.contains(batten::init::CONFIG_EXISTS)
+            && reason.contains("edit batten.toml in place"),
         "the refusal must name its rule and its fix: {reason}"
     );
     assert_eq!(
@@ -200,7 +201,7 @@ fn the_refusal_survives_silent() {
     let reason = stderr(&output);
     assert!(reason.contains("batten.toml"));
     assert!(
-        reason.contains("Fix:"),
+        reason.contains("edit batten.toml in place"),
         "the fix clause is not chatter: {reason}"
     );
 }

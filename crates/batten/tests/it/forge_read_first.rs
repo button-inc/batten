@@ -24,11 +24,16 @@ fn root() -> PathBuf {
 
 /// A fixture copy of the committed row and class, over the committed module.
 fn bench(name: &str) -> PathBuf {
+    bench_with(name, "")
+}
+
+/// [`bench`] with `extra` appended to the fixture's config.
+fn bench_with(name: &str, extra: &str) -> PathBuf {
     let module = std::fs::read_to_string(root().join("policy/forge-read-first.rego"))
         .expect("the module is readable");
     Fixture::new(name)
         .config(
-            "version = 1\n\n\
+            &("version = 1\n\n\
              [[rule]]\nid = \"forge read first\"\nkind = \"policy\"\n\
              scope = \"mediated_call\"\nmodule = \"policy/forge-read-first.rego\"\n\
              severity = \"warn\"\n\n\
@@ -36,7 +41,9 @@ fn bench(name: &str) -> PathBuf {
              gloss = \"a code-host call; read the memory documenting this host's GitHub access first\"\n\
              class = \"A fixture copy of the committed class.\"\n\n\
              [[verdict.route]]\nid = \"memory read first\"\nkind = \"document\"\n\
-             target = \".serena/memories/github-access.md\"\n",
+             target = \".serena/memories/github-access.md\"\n"
+                .to_owned()
+                + extra),
         )
         .file("policy/forge-read-first.rego", &module)
         .git()
@@ -45,8 +52,14 @@ fn bench(name: &str) -> PathBuf {
 }
 
 fn bash(command: &str) -> String {
+    bash_in("s1", command)
+}
+
+/// A Bash call in `session` (CLOUD-2075: the lifecycle is per context).
+fn bash_in(session: &str, command: &str) -> String {
     serde_json::json!({
         "hook_event_name": "PreToolUse",
+        "session_id": session,
         "tool_name": "Bash",
         "tool_input": {"command": command},
     })
@@ -56,6 +69,7 @@ fn bash(command: &str) -> String {
 fn tool(name: &str) -> String {
     serde_json::json!({
         "hook_event_name": "PreToolUse",
+        "session_id": "s1",
         "tool_name": name,
         "tool_input": {},
     })
@@ -129,4 +143,47 @@ fn the_committed_policy_hands_a_gh_read_its_memory() {
         !said.contains("run run "),
         "no route repeats its verb: {said}"
     );
+}
+
+/// A warn advisory is the full arm once per context, then the pointer
+/// (CLOUD-2075 §7 case 10).
+#[test]
+fn a_warn_advisory_is_full_once_then_a_pointer() {
+    let dir = bench("forge-read-first-lifecycle");
+    let (first_code, first) = adjudicate(&dir, &bash_in("s1", "gh pr view 1"));
+    let (second_code, second) = adjudicate(&dir, &bash_in("s1", "gh pr view 1"));
+    assert_eq!((first_code, second_code), (Some(0), Some(0)));
+    let labels = "verdict 'forge read first' rule 'forge read first'";
+    assert!(first.contains(labels) && first.contains(" —"), "{first}");
+    assert!(
+        first.contains("code-host call"),
+        "the gloss rides the full arm: {first}"
+    );
+    assert!(
+        second.contains(labels) && second.contains(POINTER),
+        "{second}"
+    );
+    assert!(
+        !second.contains(" —"),
+        "the second is the pointer: {second}"
+    );
+}
+
+/// A document route into a read-redirected path names its reader (CLOUD-2075
+/// §7 case 11), and only where the consumer declares one.
+#[test]
+fn a_document_route_into_a_read_redirected_path_names_its_reader() {
+    let redirected = bench_with(
+        "forge-read-first-reader",
+        "\n[[redirect]]\nglob = \".serena/memories/**\"\n\
+         mutation = \"use the memory tools\"\nread = \"read_memory\"\n",
+    );
+    let (_, said) = adjudicate(&redirected, &bash("gh pr view 1"));
+    assert!(
+        said.contains(&format!("{POINTER} via read_memory")),
+        "{said}"
+    );
+    let plain = bench("forge-read-first-no-reader");
+    let (_, said) = adjudicate(&plain, &bash("gh pr view 1"));
+    assert!(!said.contains(" via "), "{said}");
 }

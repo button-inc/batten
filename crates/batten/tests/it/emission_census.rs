@@ -171,3 +171,105 @@ fn the_scan_discriminates() {
             .is_empty()
     );
 }
+
+// --- the finding label census (CLOUD-2075) ----------------------------------
+
+/// The two labels a finding line carries, which only `refusal::label` spells.
+const LABELS: &[&str] = &["verdict '", "rule '"];
+
+/// The renderers CLOUD-2075 deleted; their return would be a second grammar.
+const RETIRED: &[&str] = &[
+    "fn deny_text(",
+    "fn ask_text(",
+    "fn first_sighting_line(",
+    "fn render_advice(",
+];
+
+/// Every hand-spelled label in `source`'s production half: a `verdict '` or
+/// `rule '` inside a string literal, before the first `#[cfg(test)]`, on a line
+/// that is not a comment.
+fn hand_spelled_labels(source: &str) -> Vec<(usize, String)> {
+    let production = source.split("#[cfg(test)]").next().unwrap_or(source);
+    let mut found = Vec::new();
+    for (index, line) in production.lines().enumerate() {
+        if line.trim_start().starts_with("//") {
+            continue;
+        }
+        for label in LABELS {
+            for (at, _) in line.match_indices(label) {
+                // Inside a literal when an odd number of quotes precede it.
+                if line[..at].matches('"').count() % 2 == 1 {
+                    found.push((index + 1, line.trim().to_owned()));
+                }
+            }
+        }
+    }
+    found
+}
+
+/// Every `.rs` file under `dir`, recursively.
+fn sources(dir: &std::path::Path, into: &mut Vec<std::path::PathBuf>) {
+    for entry in fs::read_dir(dir).expect("the source tree is readable") {
+        let path = entry.expect("a directory entry").path();
+        if path.is_dir() {
+            sources(&path, into);
+        } else if path.extension().is_some_and(|extension| extension == "rs") {
+            into.push(path);
+        }
+    }
+}
+
+#[test]
+fn no_finding_label_is_spelled_outside_the_projection() {
+    let mut files = Vec::new();
+    sources(&at_root("crates/batten/src"), &mut files);
+    assert!(files.len() > 10, "the census reads the source tree");
+    let mut spelled = Vec::new();
+    for path in &files {
+        let source = fs::read_to_string(path).expect("a source file is readable");
+        for retired in RETIRED {
+            assert!(
+                !source.contains(retired),
+                "{} brings back `{retired}`",
+                path.display()
+            );
+        }
+        if path.ends_with("refusal.rs") {
+            continue;
+        }
+        for (line, text) in hand_spelled_labels(&source) {
+            spelled.push(format!("{}:{line} {text}", path.display()));
+        }
+    }
+    assert!(
+        spelled.is_empty(),
+        "spell a label through `refusal::label`, never by hand: {spelled:#?}"
+    );
+}
+
+#[test]
+fn the_label_census_discriminates() {
+    let seeded = "fn a() {\n    let rule = format!(\"rule '{}'\", id);\n}\n";
+    assert_eq!(hand_spelled_labels(seeded).len(), 1, "a literal is found");
+    assert!(
+        hand_spelled_labels("// rule 'x'\n").is_empty(),
+        "a comment line is not an emission"
+    );
+    let tail = "fn a() {}\n#[cfg(test)]\nmod tests { const X: &str = \"rule 'x'\"; }\n";
+    assert!(
+        hand_spelled_labels(tail).is_empty(),
+        "a test tail is not production"
+    );
+}
+
+#[test]
+fn every_hook_source_declares_its_finding_lifecycle() {
+    use batten::hook::{HookSource, Lifecycle};
+    for source in HookSource::ALL {
+        let expected = match source {
+            HookSource::Harness => Lifecycle::Sighted,
+            HookSource::Cli | HookSource::Git | HookSource::Ci => Lifecycle::PrintedFull,
+        };
+        assert_eq!(source.finding_lifecycle(), expected, "{}", source.as_str());
+    }
+}

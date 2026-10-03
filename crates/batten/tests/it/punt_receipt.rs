@@ -227,14 +227,11 @@ fn the_refusal_names_the_row_and_its_remedy() {
         refusal.contains("verify"),
         "names the check it wants proved: {refusal}"
     );
-    // THE PROSE IS NOT ON THIS CHANNEL, and asserting it were would have been
-    // this case arguing against the posture its own row follows. `reason` is
-    // reached through `batten policy rule`, which is where a remedy belongs
-    // (house-style §6, non-negotiable rule 4): the channel carries a pointer and
-    // the document carries the payload.
+    // THE ROW'S REMEDY RIDES THE FULL ARM (CLOUD-2075), once per context per
+    // compaction cycle; this payload names no session, so every firing is full.
     assert!(
-        !refusal.contains("mise run land"),
-        "the remedy stays in the config the refusal points at: {refusal}"
+        refusal.contains("mise run land"),
+        "the full arm carries the row's remedy: {refusal}"
     );
     assert!(
         !refusal.contains("batten-receipts"),
@@ -398,14 +395,10 @@ fn override_as(dir: &Path, class: &str, verb: &[&str], stdin: &str) -> std::proc
         String::from_utf8_lossy(&refused.stdout),
         stderr(&refused)
     );
-    let subject = said
-        .lines()
-        .find_map(|line| {
-            let rest = line.split(&format!("{class} ")).nth(1)?;
-            let artifacts = rest.split(" turn mint ahead").next()?;
-            Some(artifacts.split_whitespace().collect::<Vec<_>>().join(","))
-        })
-        .unwrap_or_else(|| panic!("the write is refused as `{class}`: {said}"));
+    let subject = crate::common::printed_pointers(&said, class, "turn mint ahead")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(",");
     let mut args = vec!["override"];
     args.extend_from_slice(verb);
     args.extend_from_slice(&[

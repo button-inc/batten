@@ -222,7 +222,7 @@ fn a_manifest_with_no_verify_task_cannot_be_judged_and_says_so() {
     let lines: Vec<&str> = said.lines().filter(|line| !line.is_empty()).collect();
     assert_eq!(
         lines,
-        vec!["mise.toml gate report silent"],
+        vec!["mise.toml rule 'gate report silent'"],
         "the could-not-look arm names the manifest, once: {lines:?}"
     );
 }

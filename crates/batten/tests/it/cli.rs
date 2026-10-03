@@ -1176,7 +1176,7 @@ fn check_violation_exits_two_with_pointer_only_output() {
     assert_eq!(output.status.code(), Some(2), "a finding is a violation");
     let stdout = String::from_utf8_lossy(&output.stdout);
     // Pointer only: the location and rule id, never the offending line text.
-    assert_eq!(stdout, "lib.rs:2 no-todo\n");
+    assert_eq!(stdout, "lib.rs:2 rule 'no-todo'\n");
     assert!(
         !stdout.contains("fix this"),
         "output must not leak the bytes"
@@ -1278,7 +1278,8 @@ fn check_refuses_a_command_rule_rather_than_skipping_it() {
     // refusal carries the `batten:` prefix that belongs to 1 and 3, and no
     // bypass hatch, because a read-only run has nothing to bypass.
     assert!(
-        stderr.contains("Refused by dyn:") && stderr.contains("Fix: batten enforce."),
+        stderr.contains("verdict 'spawn run refused' rule 'dyn'")
+            && stderr.contains("run batten enforce"),
         "the refusal must adopt the one shape, got: {stderr}"
     );
     assert!(
@@ -1302,7 +1303,10 @@ fn enforce_runs_a_command_rule_and_maps_its_exit_code() {
         "a non-zero command exit is a violation"
     );
     // Rule-scoped pointer: no invented line number, and never the command output.
-    assert_eq!(String::from_utf8_lossy(&output.stdout), "**/*.rs dyn\n");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "**/*.rs rule 'dyn'\n"
+    );
 }
 
 #[test]
@@ -1715,7 +1719,7 @@ fn a_local_override_may_add_a_rule_but_not_redefine_one() {
     assert_eq!(output.status.code(), Some(2), "the added rule must fire");
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
-        "lib.rs:1 no-fixme\n"
+        "lib.rs:1 rule 'no-fixme'\n"
     );
 
     // Redefining a committed rule could weaken it, so it is refused outright.
@@ -1975,6 +1979,8 @@ fn the_matrix_covers_every_supported_harness() {
 struct FixCase {
     /// A mediated command the row refuses.
     command: &'static str,
+    /// The row that refuses it, which the line must label (CLOUD-2075).
+    rule: &'static str,
     /// The remedy that row declares, which the refusal must carry.
     fix: &'static str,
 }
@@ -1982,18 +1988,22 @@ struct FixCase {
 const FIX_CASES: &[FixCase] = &[
     FixCase {
         command: "gh pr merge 42",
+        rule: "commit ship other",
         fix: "use `mise run land`",
     },
     FixCase {
         command: "gh pr comment 7 --body /fast-forward",
+        rule: "review ship early",
         fix: "use `mise run land`",
     },
     FixCase {
         command: "gh pr checks --watch",
+        rule: "check watch loose",
         fix: "use `mise run ci-wait`",
     },
     FixCase {
         command: "gh run watch 123",
+        rule: "job watch loose",
         fix: "use `mise run ci-wait`",
     },
 ];
@@ -2018,42 +2028,21 @@ fn every_hook_policy_table_deny_names_its_fix() {
         let output = run_hook_in(&dir, "exit-code", &claude_payload(case.command));
         assert_eq!(output.status.code(), Some(2), "{}: deny", case.command);
         let stderr = String::from_utf8_lossy(&output.stderr);
-        // CLOUD-1286: the sanctioned command is ONE HOP away rather than
-        // inline, and this case is what proves the hop actually lands. The
-        // emitted line carries the rule id; `batten policy rule <id>` resolves
-        // that id to the row's own remedy. Asserting only the absence would pass
-        // over a refusal that points nowhere, which is worse than the repetition
-        // it replaced.
-        //
-        // THE ID IS THE LAST TOKEN OF THE HEAD, NOT OF THE LINE (CLOUD-1637). A
-        // first sighting is `<token> <pointers> <rule-id> — <gloss>; <routes>`,
-        // so the last token of the whole line is now the final route's target
-        // and taking it grabbed `batten.toml`. Splitting on the em-dash reads the
-        // id on both arms: the repeat has no such clause and the head IS the
-        // line, which is the byte-prefix property doing useful work.
-        //
-        // `policy rule` rather than `policy explain`, which is the verb this hop
-        // was always named after: `explain` answers about the CLASS and resolves
-        // a rule id only as a fallback, and the two are different questions
-        // wherever a class has more than one raiser.
-        // AND THE ID IS THREE WORDS, NOT ONE (CLOUD-1638). Taking the last
-        // whitespace token grabbed `other` out of `commit ship other`. The head
-        // is `<class> <pointers> <rule-id>` where the id is present only when it
-        // DIFFERS from the class, so: the last three words are the id on a
-        // discriminating row, and on a collapsed row the class token — the first
-        // three words — is the id, because that is what collapsing means.
-        let head = stderr.split(" — ").next().unwrap_or(&stderr);
-        let words: Vec<&str> = head.split_whitespace().collect();
+        // CLOUD-1286: the sanctioned command is ONE HOP away, and this case is
+        // what proves the hop lands. CLOUD-2075 LABELS the rule, so the id is
+        // read off `rule '<id>'` rather than guessed from word positions.
+        let label = format!("rule '{}'", case.rule);
         assert!(
-            words.len() >= 3,
-            "a deny names the class that fired: {stderr}"
+            stderr.contains(&label),
+            "{}: the line labels its rule, got: {stderr}",
+            case.command
         );
-        let tail = words[words.len() - 3..].join(" ");
-        let class = words[..3].join(" ");
-        let mut explained = batten_with(&dir, &["policy", "rule", &tail], &[]);
-        if explained.status.code() != Some(0) {
-            explained = batten_with(&dir, &["policy", "rule", &class], &[]);
-        }
+        let id = stderr
+            .split("rule '")
+            .nth(1)
+            .and_then(|rest| rest.split('\'').next())
+            .expect("a labelled rule id");
+        let explained = batten_with(&dir, &["policy", "rule", id], &[]);
         assert_eq!(
             explained.status.code(),
             Some(0),
@@ -2276,13 +2265,15 @@ fn a_deny_names_the_path_classs_own_mutation_over_the_verbs() {
         stderr.contains("guarded/thing.md"),
         "the path class that matched is the pointer, got: {stderr}"
     );
+    // CLOUD-2075: the full arm carries the WINNING remedy — the path class's —
+    // and never the verb's fallback beside it.
     assert!(
-        !stderr.contains("change it in a pull request"),
-        "the remedy is dereferenced rather than inlined, got: {stderr}"
+        stderr.contains("change it in a pull request"),
+        "the full arm carries the path class's remedy, got: {stderr}"
     );
     assert!(
         !stderr.contains("restore it with git"),
-        "the verb's general remedy must not appear either, got: {stderr}"
+        "the verb's general remedy must not appear, got: {stderr}"
     );
 
     let unclaimed = run_hook_in(&dir, "exit-code", &claude_payload("rm vendor/thing.md"));
@@ -2524,21 +2515,21 @@ fn an_absent_session_degrades_to_per_invocation_without_panicking() {
     // adjudicated exactly as one that does — the deny is a function of the
     // command, and nothing here is keyed on a session yet.
     //
-    // TWO IDENTICAL FIXTURES, advancing in lockstep: a refusal renders long on
-    // its first sighting and short after, and the sighting store lives under the
-    // fixture's `$GIT_DIR` (`refusal::first_sighting`). One fixture would compare
-    // a first sighting with a repeat and report the store as a session effect.
+    // TWO FIXTURES, and a FRESH SESSION per harness (CLOUD-2075): a session's
+    // first firing is the full arm, and a session-less payload is the full arm
+    // on every firing, so the two documents match exactly when each named
+    // session is new to the store.
     let dir = repo_with_gh_policy("session-absent");
     let twin = repo_with_gh_policy("session-absent-twin");
-    let with = serde_json::json!({
-        "hook_event_name": "PreToolUse",
-        "session_id": "abc123",
-        "tool_name": "Bash",
-        "tool_input": { "command": "gh pr merge 42" }
-    })
-    .to_string();
     let without = payload_at("PreToolUse", "gh pr merge 42");
     for harness in harnesses() {
+        let with = serde_json::json!({
+            "hook_event_name": "PreToolUse",
+            "session_id": format!("abc-{harness}"),
+            "tool_name": "Bash",
+            "tool_input": { "command": "gh pr merge 42" }
+        })
+        .to_string();
         let a = run_hook_in(&dir, harness, &with);
         let b = run_hook_in(&twin, harness, &without);
         assert_eq!(
@@ -3584,9 +3575,8 @@ fn the_committed_shape_rules_fire_on_every_banned_shape() {
         // the head ends with the id. The strictness this case wants is preserved
         // exactly by reading the head: on a repeat the head IS the line, which is
         // the byte-prefix property the two arms are built to have.
-        let head = stderr.split(" — ").next().unwrap_or(&stderr);
         assert!(
-            head.trim().ends_with(&case.rule),
+            common::refusing_rule(&stderr).as_deref() == Some(case.rule),
             "{:?} must be refused by {}, got: {stderr}",
             case.call.describe(),
             case.rule
@@ -6705,7 +6695,7 @@ fn the_committed_repo_config_gates_a_repository() {
     );
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
-        "crates/** source carry broken\n",
+        "crates/** rule 'source carry broken'\n",
         "a command condemns a batch, so the pointer is the glob and carries no line"
     );
 }
@@ -6922,17 +6912,17 @@ fn the_committed_repo_agnosticism_rules_fire_on_every_banned_shape() {
     );
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
-        "crates/demo/notes.txt:1 fact name other\n\
-         crates/demo/notes.txt:2 path name other\n\
-         crates/demo/notes.txt:3 source name other\n\
-         crates/demo/notes.txt:4 issue name other\n\
-         crates/demo/notes.txt:5 issue name other\n\
-         crates/demo/src/lib.rs:1 fact name other\n\
-         crates/demo/src/lib.rs:2 path name other\n\
-         crates/demo/src/lib.rs:3 source name other\n\
-         crates/demo/src/lib.rs:4 issue name other\n\
-         crates/demo/src/lib.rs:5 issue name other\n\
-         policy/demo.rego:1 pattern name other\n",
+        "crates/demo/notes.txt:1 rule 'fact name other'\n\
+         crates/demo/notes.txt:2 rule 'path name other'\n\
+         crates/demo/notes.txt:3 rule 'source name other'\n\
+         crates/demo/notes.txt:4 rule 'issue name other'\n\
+         crates/demo/notes.txt:5 rule 'issue name other'\n\
+         crates/demo/src/lib.rs:1 rule 'fact name other'\n\
+         crates/demo/src/lib.rs:2 rule 'path name other'\n\
+         crates/demo/src/lib.rs:3 rule 'source name other'\n\
+         crates/demo/src/lib.rs:4 rule 'issue name other'\n\
+         crates/demo/src/lib.rs:5 rule 'issue name other'\n\
+         policy/demo.rego:1 rule 'pattern name other'\n",
         "one sorted pointer per banned shape per file, and nothing else"
     );
 
@@ -7068,12 +7058,12 @@ fn the_committed_portability_rules_fire_on_every_banned_shape() {
     );
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
-        "mise-tasks/seed.sh:1 shell parse unsafe\n\
-         mise-tasks/seed.sh:2 shell edit unsafe\n\
-         mise-tasks/seed.sh:3 shell read unsafe\n\
-         mise-tasks/seed.sh:4 shell list unsafe\n\
-         mise-tasks/seed.sh:5 shell guard unsafe\n\
-         tests/seed.bats:2 branch edit unsafe\n",
+        "mise-tasks/seed.sh:1 rule 'shell parse unsafe'\n\
+         mise-tasks/seed.sh:2 rule 'shell edit unsafe'\n\
+         mise-tasks/seed.sh:3 rule 'shell read unsafe'\n\
+         mise-tasks/seed.sh:4 rule 'shell list unsafe'\n\
+         mise-tasks/seed.sh:5 rule 'shell guard unsafe'\n\
+         tests/seed.bats:2 rule 'branch edit unsafe'\n",
         "one sorted pointer per banned construct, and nothing else"
     );
 
@@ -7172,7 +7162,7 @@ fn the_committed_example_config_loads_over_the_binary() {
     );
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
-        "**/*.rs source carry broken\n",
+        "**/*.rs rule 'source carry broken'\n",
         "a command condemns a batch, so the pointer is the glob and carries no line"
     );
 }
@@ -7226,7 +7216,7 @@ fn the_shipped_starter_config_loads_over_the_binary() {
     );
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
-        "src/main.rs:1 source carry broken\n",
+        "src/main.rs:1 rule 'source carry broken'\n",
         "a forbid rule points at the line, not at the batch a command condemns"
     );
 }
@@ -7315,7 +7305,7 @@ fn warn_findings_report_without_failing_the_run() {
     );
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
-        "lib.rs:1 no-todo\n",
+        "lib.rs:1 rule 'no-todo'\n",
         "the warn finding must still be reported"
     );
 }
@@ -12418,7 +12408,7 @@ fn a_tracked_instruction_may_not_prescribe_the_denied_commit_identity() {
     );
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
-        "HOWTO.md:2 remedy carry refused\n",
+        "HOWTO.md:2 rule 'remedy carry refused'\n",
         "one pointer, and the matched line is never echoed"
     );
 
@@ -13036,7 +13026,7 @@ fn a_met_precondition_lets_the_rule_run_normally() {
         "a met precondition is not a filter: {}",
         stderr(&output)
     );
-    assert_eq!(stdout(&output), "lib.rs:1 needs-the-vendor-tree\n");
+    assert_eq!(stdout(&output), "lib.rs:1 rule 'needs-the-vendor-tree'\n");
 }
 
 /// A ratchet still fires on an empty match set, which the new skip must not
@@ -13105,7 +13095,7 @@ fn a_deciding_kind_over_the_same_tree_does_block() {
         "the control must block, or the approximating case proves nothing: {}",
         stderr(&output)
     );
-    assert_eq!(stdout(&output), "lib.rs:1 no-todo\n");
+    assert_eq!(stdout(&output), "lib.rs:1 rule 'no-todo'\n");
 }
 
 /// Every kind carries a classification, and the vocabulary is total.

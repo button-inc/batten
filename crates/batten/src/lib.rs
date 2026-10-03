@@ -1616,7 +1616,7 @@ fn run_init(
                     file = config::CONFIG_FILE
                 )),
             );
-            output::verdict(err, &refusal.render())?;
+            output::verdict(err, &refusal.render_finding(refusal::Arm::Full))?;
             Ok(ExitCode::Violation)
         }
     }
@@ -1751,7 +1751,7 @@ fn run_hk(
                 }],
                 Fix::None,
             );
-            output::verdict(err, &refusal.render())?;
+            output::verdict(err, &refusal.render_finding(refusal::Arm::Full))?;
             Ok(ExitCode::Violation)
         }
     }
@@ -15808,6 +15808,7 @@ fn run_hook(
     // same `Fix::Run`, which is the safe direction and a visible one.
     if envelope.event == hook::Event::PostTool {
         record_post_tool(overrides, &envelope, harness, &mut advice);
+        collapse_seen_output(harness, &envelope, out)?;
     }
     // THE SAME CORRECTION AGAIN, ONE SELECTOR LATER (CLOUD-924). The paragraph
     // above records CLOUD-312 finding that "command-less" had stopped meaning
@@ -16131,16 +16132,20 @@ fn run_hook(
     // a `retry` becomes a different refusal and a `silent` becomes an allow, and
     // advice about the original call would then be advice about a call that no
     // longer happened.
-    let decision = settle_repair(&policy, &envelope, decision);
+    let decision = settle_repair(&policy, &envelope, decision)
+        .map_refusal(|refusal| refusal.read_through(&policy.redirects));
     let ceiling = policy.advisory.as_ref();
     // A PRE-APPROVAL TAKES THE ADVICE INTO ITS OWN DOCUMENT (CLOUD-1949): two
     // documents on one stream is the collision above, with the grant as the
     // discarded one.
     let context = matches!(decision, hook::Decision::Preapproved(_)) && !advice.is_empty();
-    let context = context.then(|| advisory::admit(std::mem::take(&mut advice), ceiling).text);
+    let context = context.then(|| {
+        let mut taken = std::mem::take(&mut advice);
+        sight_advice(&envelope, &mut taken);
+        advisory::admit(taken, ceiling).text
+    });
     emit_channel(harness, &envelope, out, err, advice, ceiling, &decision)?;
     let rendering = Rendering {
-        ceiling: policy.refusal.as_ref(),
         context: context.as_deref(),
     };
     render(harness, &envelope, decision, &rendering, mode, out, err)
@@ -16474,11 +16479,8 @@ fn unadjudicable_remedy() -> Fix {
 /// [`ExitCode::Violation`]. Raising a [`Denial`] here would send `2` to the one
 /// host that reads the document instead of the number.
 ///
-/// **The rendering carries no ceiling and no hatch**, because both live on the
-/// policy that would not load. `None` reads downstream as "no declared
-/// bound" rather than as a bound of zero, which is the direction that keeps a
-/// refusal about an unreadable config from being truncated by a value nobody
-/// could read.
+/// **The refusal is `unloaded`**: no `policy rule` hop resolves when the config
+/// did not load, so its line names none (CLOUD-2075).
 //MUTANT refusal-drops-the-cause|s@^        .filter(\x7cline\x7c !is_source_excerpt(line))$@        .take(1)@|a_fact_row_that_states_no_returns_is_refused_at_load_over_the_binary
 fn deny_unadjudicable(
     harness: hook::Harness,
@@ -16519,7 +16521,7 @@ fn deny_unadjudicable(
         .filter(|line| !line.is_empty())
         .collect::<Vec<_>>()
         .join(" ");
-    let refusal = Refusal::new(
+    let refusal = Refusal::unloaded(
         "engine-cannot-adjudicate",
         format!(
             "this build could not load the rules it is registered to enforce, so nothing judged \
@@ -16527,10 +16529,7 @@ fn deny_unadjudicable(
         ),
         unadjudicable_remedy(),
     );
-    let rendering = Rendering {
-        ceiling: None,
-        context: None,
-    };
+    let rendering = Rendering { context: None };
     // WHICH CHANNEL CARRIED THE REFUSAL IS `render`'S OWN ANSWER, and reading it
     // here is what lets the number say could-not-look without ever spending the
     // refusal to do it (CLOUD-1677's exit-code half).
@@ -16879,14 +16878,18 @@ fn fill_turn_advice(
     raw: &str,
     advice: &mut Vec<advisory::Advice>,
 ) {
-    if advice.is_empty()
-        && let Some(nudge) = hook::stop_advice(policy, envelope, facts)
-            .or_else(|| stop_nudges(overrides, envelope, raw))
-    {
-        advice.push(advisory::Advice::new(
-            severity::AdvisoryTier::Caution,
-            nudge,
-        ));
+    if advice.is_empty() {
+        if let Some(refusal) = hook::stop_advice(policy, envelope, facts) {
+            advice.push(advisory::Advice::finding(
+                severity::AdvisoryTier::Caution,
+                refusal.read_through(&policy.redirects),
+            ));
+        } else if let Some(nudge) = stop_nudges(overrides, envelope, raw) {
+            advice.push(advisory::Advice::new(
+                severity::AdvisoryTier::Caution,
+                nudge,
+            ));
+        }
     }
     // THE WRITE-TIME SIGNAL (CLOUD-1131), and it is the delivery half of the
     // demotion `hook::policy_rules` performs. A `mediated_call` module enabled at
@@ -16902,15 +16905,33 @@ fn fill_turn_advice(
     // already spoke would make the signal arrive at some calls and not others for
     // reasons the reader cannot see. `policy_advice` is empty at `Stop` (the
     // block above owns that moment), and returns every non-blocking module's
-    // line on a call (CLOUD-1470); the equality test drops a line two bundles
-    // rendered identically.
+    // line on a call (CLOUD-1470); the key test drops a finding two bundles
+    // raised identically (CLOUD-2075).
     for refusal in hook::policy_advice(policy, envelope, facts) {
-        let signal = hook::render_advice(&refusal);
-        if !advice.iter().any(|entry| entry.text == signal) {
-            advice.push(advisory::Advice::new(
+        let refusal = refusal.read_through(&policy.redirects);
+        let key = refusal.sighting_key();
+        let seen = advice.iter().any(|entry| {
+            entry
+                .finding
+                .as_ref()
+                .is_some_and(|other| other.sighting_key() == key)
+        });
+        if !seen {
+            advice.push(advisory::Advice::finding(
                 severity::AdvisoryTier::Warning,
-                signal,
+                refusal,
             ));
+        }
+    }
+}
+
+/// Render each classed entry's finding at the moment it is emitted, through the
+/// one chooser, so the context's store is marked only for what reaches it.
+fn sight_advice(envelope: &hook::Envelope, advice: &mut [advisory::Advice]) {
+    for entry in advice {
+        if let Some(refusal) = entry.finding.take() {
+            let arm = arm_for(hook::HookSource::Harness, envelope, &refusal);
+            entry.text = refusal.render_finding(arm);
         }
     }
 }
@@ -17003,6 +17024,7 @@ fn collect_batch_advice(
     // process, in this order, the record describing what this session LOADED is
     // dropped before a repair can write one describing what it FIXED.
     expire_wiring_record(envelope);
+    expire_sightings(envelope, advice);
     repair_startup_rows(envelope, overrides);
     report_container_health(envelope, overrides, advice);
     Ok(())
@@ -17243,12 +17265,95 @@ fn expire_wiring_record(envelope: &hook::Envelope) {
         return;
     }
     let _ = wiring::clear_at_load(hook_authority_root());
-    // AND THE CLASSES THIS SESSION HAS ALREADY BEEN TOLD (CLOUD-1386), on the
-    // same event and for the same reason: the event is the session identity, and
-    // a sighting that outlived its session would withhold a remedy from a reader
-    // who has never seen it. Clearing costs a directory removal; not clearing
-    // costs the exact defect the store exists to prevent.
-    refusal::forget_sightings(hook_authority_root());
+}
+
+/// Decide this context's sightings at `SessionStart`, per source (CLOUD-2075).
+///
+/// **`compact` re-delivers eagerly**: every full arm the previous cycle saw goes
+/// out in full on this event's `additionalContext`, and stays marked, so the
+/// context holds exactly one copy at every moment. **Every other source** forgets
+/// this context alone; its next firing is full. Other contexts in the clone are
+/// never touched.
+//MUTANT compact-not-redelivered|s@^    if envelope.start_source.as_deref() == Some(hook::COMPACT_SOURCE) {$@    if false {@|a_compaction_redelivers_every_seen_item_once_at_session_start
+//MUTANT drain-result-kept|s@^    forget_drain_result(envelope);$@    let _ = forget_drain_result;@|a_session_start_relists_the_drain_payload
+fn expire_sightings(envelope: &hook::Envelope, advice: &mut Vec<advisory::Advice>) {
+    if envelope.event != hook::Event::SessionStart {
+        return;
+    }
+    forget_drain_result(envelope);
+    let Some(context) = envelope.context() else {
+        return;
+    };
+    if envelope.start_source.as_deref() == Some(hook::COMPACT_SOURCE) {
+        for text in refusal::sighted(hook_authority_root(), &context) {
+            advice.push(advisory::Advice::delivered(
+                severity::AdvisoryTier::Warning,
+                text,
+            ));
+        }
+        return;
+    }
+    refusal::forget_sightings(hook_authority_root(), &context);
+}
+
+/// Mark every finding a tool's output carries as seen in this context, and cut
+/// the ones it had already seen to their pointer (CLOUD-2075 §D).
+///
+/// A Bash child cannot see which context it prints into; the hook payload names
+/// it. The marking happens on every harness, so a CLI first sighting joins the
+/// same lifecycle as a hook one. The rewrite document is emitted only where the
+/// host is measured to honour it ([`hook::encode_tool_output`]) and only when a
+/// line changed. A session-less payload marks nothing.
+fn collapse_seen_output(
+    harness: hook::Harness,
+    envelope: &hook::Envelope,
+    out: &mut dyn Write,
+) -> Result<()> {
+    let Some(context) = envelope.context() else {
+        return Ok(());
+    };
+    let root = hook_authority_root();
+    let mut rewritten = envelope.result.clone();
+    let mut changed = false;
+    for stream in ["stdout", "stderr"] {
+        let Some(text) = envelope.result.get(stream).and_then(|value| value.as_str()) else {
+            continue;
+        };
+        let cut = refusal::collapse(text, |key, full| {
+            refusal::first_sighting(root, &context, key, full)
+        });
+        if cut != text {
+            changed = true;
+            rewritten[stream] = serde_json::Value::String(cut);
+        }
+    }
+    if changed
+        && let Some(body) = hook::encode_tool_output(harness, &envelope.raw_event, &rewritten)?
+    {
+        writeln!(out, "{body}")?;
+    }
+    Ok(())
+}
+
+/// Clear the drain's `unchanged` watermark for this session's lineage, so the
+/// first drain of a new cycle lists in full (CLOUD-2075). Silent on every
+/// failure: a missed clear costs one `unchanged` marker, never a verdict.
+fn forget_drain_result(envelope: &hook::Envelope) {
+    let Some(session) = envelope.session.as_deref() else {
+        return;
+    };
+    let Ok(repo) = git::repo_root(hook_authority_root()) else {
+        return;
+    };
+    let Ok(resolved) = store::resolve(&repo) else {
+        return;
+    };
+    let Some(dir) = store::bound_dir(&resolved) else {
+        return;
+    };
+    if let Ok(root) = session::root(&dir, session) {
+        let _ = session::forget_result(&dir, &root);
+    }
 }
 
 /// Run the declared handlers for this envelope's event (CLOUD-898).
@@ -17349,14 +17454,7 @@ fn dispatch_handlers(
         }
         return None;
     };
-    if !envelope.event.carries_a_verdict() {
-        advice.push(advisory::Advice::new(
-            severity::AdvisoryTier::Caution,
-            format!("hook.handler.{id}: {reason}"),
-        ));
-        return None;
-    }
-    Some(hook::Decision::Deny(crate::refusal::Refusal::declared(
+    let refused = crate::refusal::Refusal::declared(
         format!("hook.handler.{id}"),
         verdict::Native::HandlerDenied,
         // THE HANDLER'S OWN WORDS TRAVEL AS A SUBJECT, not as the reason
@@ -17373,7 +17471,16 @@ fn dispatch_handlers(
         // "every refusal names something to run" is now the REGISTRY's obligation
         // and `verdict::validate` refuses a class that fails it.
         crate::refusal::Fix::None,
-    )))
+    );
+    // The demotion is the SAME refusal, carried as a classed finding (CLOUD-2075).
+    if !envelope.event.carries_a_verdict() {
+        advice.push(advisory::Advice::finding(
+            severity::AdvisoryTier::Caution,
+            refused,
+        ));
+        return None;
+    }
+    Some(hook::Decision::Deny(refused))
 }
 
 /// Assemble a `requires_key` row's checkout evidence (CLOUD-446).
@@ -17593,6 +17700,10 @@ fn emit_channel(
     if advice.is_empty() || speaks_a_verdict {
         return Ok(());
     }
+    // Marked only here, after the verdict's early return, so advice dropped
+    // beside a verdict is never recorded as seen (CLOUD-2075).
+    let mut advice = advice;
+    sight_advice(envelope, &mut advice);
     let emission = advisory::admit(advice, ceiling);
     emit_advisory(harness, envelope, out, err, &emission.text)
 }
@@ -18043,13 +18154,10 @@ fn drain_advisories(
         Verbosity::Verbose,
         err,
         &format!(
-            "hook: drained {} line(s); withheld {} out of scope, {} over the cardinality cap, {} \
-             over the token budget, {} flapping; {} rule(s) with a flapping identity",
+            "hook: drained {} line(s); withheld {} out of scope; {} rule(s) with a flapping \
+             identity",
             drained.lines.len(),
             drained.scope_filtered.len(),
-            drained.capped.len(),
-            drained.over_budget.len(),
-            drained.flap_suppressed.len(),
             drained.flapping.len(),
         ),
     )?;
@@ -19958,24 +20066,31 @@ fn load_exec_settings(
 /// What a refusal line needs to render, resolved by the caller.
 ///
 /// TWO VALUES THAT TRAVEL TOGETHER, and bundling them is what keeps [`render`]'s
-/// signature honest rather than merely short: both are resolved from the policy at
-/// the boundary, and NEITHER is an input to the decision. The hatch is a name the
-/// renderer prints; the ceiling is a bound on how long the printed line may be.
-/// Reaching for `policy` inside `render` to fetch either would give it back the
-/// inputs CLOUD-898 says it must not have, over values that decide nothing about
-/// the call.
+/// signature honest rather than merely short: it is resolved at the boundary and
+/// is NOT an input to the decision. No renderer takes a ceiling (CLOUD-2075): a
+/// ceiling reports in the corpus case and never sheds a pointer.
 ///
-/// Growing this struct is therefore the test for a third one: it belongs here if
-/// the renderer only prints or measures it, and belongs nowhere near here if the
+/// Growing this struct is the test for another value: it belongs here if the
+/// renderer only prints or measures it, and belongs nowhere near here if the
 /// renderer would have to branch on it to decide.
 struct Rendering<'a> {
-    /// What one emitted mediated line may cost, or no declared bound.
-    ceiling: Option<&'a refusal::Ceiling>,
     /// The admitted advice a pre-approval carries in its own document
     /// (CLOUD-1949). Printed, never branched on — the test above.
     context: Option<&'a str>,
 }
 
+/// The one chooser between a finding's two arms (CLOUD-2075): the source's
+/// declared lifecycle, consulted against the context's store.
+fn arm_for(source: hook::HookSource, envelope: &hook::Envelope, refusal: &Refusal) -> refusal::Arm {
+    match (source.finding_lifecycle(), envelope.context()) {
+        (hook::Lifecycle::Sighted, Some(context)) => {
+            refusal::sight(hook_authority_root(), &context, refusal)
+        }
+        (hook::Lifecycle::Sighted, None) | (hook::Lifecycle::PrintedFull, _) => refusal::Arm::Full,
+    }
+}
+
+//MUTANT ask-arm-sighted|s@^            let asked = refusal.render_finding(refusal::Arm::Full);$@            let asked = refusal.render_finding(arm_for(hook::HookSource::Harness, envelope, \&refusal));@|an_ask_carries_the_full_arm_on_every_firing
 fn render(
     harness: hook::Harness,
     envelope: &hook::Envelope,
@@ -19985,7 +20100,7 @@ fn render(
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
-    let Rendering { ceiling, context } = *rendering;
+    let Rendering { context } = *rendering;
     // THE DECISION ARRIVES AS A VALUE, which is what makes this a renderer
     // rather than a second adjudicator (CLOUD-898). A handler's refusal and the
     // engine's own reach the host through the identical match below: a
@@ -20051,20 +20166,11 @@ fn render(
         // whether it named a fix.
         hook::Decision::Deny(refusal) => {
             // THE EFFECT IS HERE AND THE RENDERING IS NOT (CLOUD-1386).
-            // `deny_text` decides between two projections and stays pure;
-            // consulting-and-marking a store is a write, and a write belongs at
-            // the boundary with every other one. A renderer that touched the disk
-            // would also be one no test could drive twice.
-            // KEYED ON THE RULE AND THE CLASS (CLOUD-1637). It was keyed on the
-            // class token alone, which meant an UNDECLARED refusal — no token —
-            // skipped the store and always read as a first sighting, so its long
-            // form repeated forever. Every refusal has a key now, so both arms
-            // consult the store and both are bounded;
-            // `refusal::first_sighting` carries why neither name alone is the
-            // right key and what was measured in each direction.
-            let first_sighting =
-                refusal::first_sighting(hook_authority_root(), &refusal.sighting_key());
-            let reason = hook::deny_text(&refusal, first_sighting, ceiling);
+            // `render_finding` projects and stays pure; consulting-and-marking
+            // the context's store is a write, and a write belongs at the boundary
+            // with every other one. `arm_for` is the one chooser (CLOUD-2075).
+            let arm = arm_for(hook::HookSource::Harness, envelope, &refusal);
+            let reason = refusal.render_finding(arm);
             match hook::encode_deny(harness, &envelope.raw_event, &reason)? {
                 Some(body) => {
                     writeln!(out, "{body}")?;
@@ -20089,19 +20195,16 @@ fn render(
             // withholding the remedy to save a clause would be spending their
             // attention rather than the model's.
             //
-            // IT ALSO DOES NOT TAKE THE REFUSAL'S PROJECTION (CLOUD-1637). It used
-            // to call `deny_text` with `first_sighting = true`, which was the right
-            // answer to the wrong question: the arms of `deny_text` differ in how
-            // much an AGENT has already read, and a person has read none of it and
-            // will not run a lookup to answer the question in front of them.
-            // `ask_text` carries why the long form is theirs.
-            let reason = hook::ask_text(&refusal);
-            match hook::encode_ask(harness, &envelope.raw_event, &reason)? {
+            // The full arm on every firing (CLOUD-2075): a person has read none
+            // of the earlier firings and will not run a lookup to answer the
+            // question in front of them.
+            let asked = refusal.render_finding(refusal::Arm::Full);
+            match hook::encode_ask(harness, &envelope.raw_event, &asked)? {
                 Some(body) => {
                     writeln!(out, "{body}")?;
                     Ok(ExitCode::Success)
                 }
-                None => Err(Denial::raise(reason)),
+                None => Err(Denial::raise(asked)),
             }
         }
         // The pre-approval, and it is the mirror image of the arm above it. An
