@@ -2120,7 +2120,9 @@ const FILE_UNREADABLE: &str = "hook-wiring-file-unreadable";
 fn diagnose_harness(dir: &Path, harness: hook::Harness, exclusive: bool) -> Option<HarnessWiring> {
     let wiring = harness.wiring()?;
     let path = match wiring.file {
-        hook::WiringFile::Key { path, .. } | hook::WiringFile::Whole(path) => path,
+        hook::WiringFile::Key { path, .. }
+        | hook::WiringFile::Whole(path)
+        | hook::WiringFile::Root(path) => path,
     };
     let derived = wiring.registrations(harness);
     let command = hook::wiring_command(harness);
@@ -3392,7 +3394,9 @@ mod tests {
             .expect("the harness declares a surface")
             .file
         {
-            hook::WiringFile::Key { path, .. } | hook::WiringFile::Whole(path) => path,
+            hook::WiringFile::Key { path, .. }
+            | hook::WiringFile::Whole(path)
+            | hook::WiringFile::Root(path) => path,
         }
     }
 
