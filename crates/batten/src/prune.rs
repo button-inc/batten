@@ -2162,6 +2162,9 @@ fn reclaim_superseded(root: &Path, keep: usize) -> (usize, u64) {
             pruned += orphans;
             bytes += orphan_bytes;
         }
+        let (stale, stale_bytes) = reclaim_superseded_debuginfo(&deps);
+        pruned += stale;
+        bytes += stale_bytes;
     }
     (pruned, bytes)
 }
@@ -2219,6 +2222,108 @@ fn reclaim_orphaned_debuginfo(deps: &Path, fingerprints: &Path) -> (usize, u64) 
         }
     }
     (removed, bytes)
+}
+
+/// Remove every `.dwo` in `deps` that its LIVE owner's current artifacts no
+/// longer name (CLOUD-2105).
+///
+/// [`reclaim_orphaned_debuginfo`] reaches a unit only once its fingerprint is
+/// gone. A live unit rebuilt incrementally gets fresh codegen-unit names on every
+/// build, so each rebuild left one more full `.dwo` set beside the current one.
+/// Measured 2026-10-03, straight after a lap-close prune: 5,210 MB of 7,786 MB in
+/// `target/debug/deps` was `.dwo`, and `batten-74d53bfe8b80e4a5` alone had 8,960
+/// files across 9.7 hours while its rlib named exactly 256, all present. That
+/// growth put lap close under the warm floor, and the escalation then took
+/// `perf*` and `semver*` whole.
+///
+/// **THE ARTIFACT IS THE AUTHORITY.** An rlib's object members and a linked
+/// binary's skeleton units carry each `.dwo` they read by name, so the owner's
+/// own `lib<owner>.rlib`, `lib<owner>.so`, `<owner>` and `<owner>.exe` name its
+/// live set exactly. An owner with no readable artifact, or whose artifacts name
+/// none, keeps every `.dwo`: could-not-look reclaims nothing.
+fn reclaim_superseded_debuginfo(deps: &Path) -> (usize, u64) {
+    let Ok(files) = std::fs::read_dir(deps) else {
+        return (0, 0);
+    };
+    let mut by_owner: std::collections::BTreeMap<String, Vec<PathBuf>> =
+        std::collections::BTreeMap::new();
+    for entry in files.flatten() {
+        // A FILE BY ITS OWN TYPE, never through a link, for `superseded_in`'s reason.
+        if !entry.file_type().is_ok_and(|kind| kind.is_file()) {
+            continue;
+        }
+        let Ok(name) = entry.file_name().into_string() else {
+            continue;
+        };
+        let Some(owner) = name
+            .strip_suffix(".dwo")
+            .and_then(|stem| stem.split('.').next())
+        else {
+            continue;
+        };
+        if artifact_hash(owner).is_none() {
+            continue;
+        }
+        by_owner
+            .entry(owner.to_owned())
+            .or_default()
+            .push(entry.path());
+    }
+    let mut removed = 0;
+    let mut bytes = 0;
+    for (owner, debuginfo) in by_owner {
+        let named = named_debuginfo(deps, &owner);
+        if named.is_empty() {
+            continue;
+        }
+        for dwo in debuginfo {
+            let current = dwo
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| named.contains(name));
+            if current {
+                continue;
+            }
+            let size = dwo.metadata().map_or(0, |meta| meta.len());
+            if std::fs::remove_file(&dwo).is_ok() {
+                removed += 1;
+                bytes += size;
+            }
+        }
+    }
+    (removed, bytes)
+}
+
+/// Every `<owner>.….rcgu.dwo` name `owner`'s own artifacts in `deps` carry.
+//MUTANT superseded-dwo-kept|s@^            named.extend(@            let _ = (@|a_live_units_superseded_dwo_are_reclaimed_and_its_current_set_kept
+fn named_debuginfo(deps: &Path, owner: &str) -> std::collections::BTreeSet<String> {
+    let mut named = std::collections::BTreeSet::new();
+    let Ok(pattern) = regex::bytes::Regex::new(&format!(
+        r"{}\.[A-Za-z0-9_.\-]+?\.rcgu\.dwo",
+        regex::escape(owner)
+    )) else {
+        return named;
+    };
+    for artifact in [
+        format!("lib{owner}.rlib"),
+        format!("lib{owner}.so"),
+        owner.to_owned(),
+        format!("{owner}.exe"),
+    ] {
+        let path = deps.join(artifact);
+        if !std::fs::symlink_metadata(&path).is_ok_and(|meta| meta.is_file()) {
+            continue;
+        }
+        if let Ok(contents) = std::fs::read(&path) {
+            named.extend(
+                pattern
+                    .find_iter(&contents)
+                    .filter_map(|found| std::str::from_utf8(found.as_bytes()).ok())
+                    .map(str::to_owned),
+            );
+        }
+    }
+    named
 }
 
 /// The owning unit's hash of a split-debuginfo file: `batten-<hash>.<cgu>.rcgu.dwo`
@@ -3284,6 +3389,50 @@ mod tests {
         let (removed, _, _) = drop_regrowable(&root, &declared, false, &mut || false);
         assert_eq!(removed, 1, "still short, the next row is taken");
         assert!(!root.join("perf").exists());
+    }
+
+    #[test]
+    fn a_live_units_superseded_dwo_are_reclaimed_and_its_current_set_kept() {
+        // CLOUD-2105: the owner's artifact names its current set. A `.dwo` it
+        // does not name is a past incremental generation's and goes; one it
+        // names stays; an owner with no artifact keeps everything.
+        let root = build_root("superseded-dwo");
+        let deps = root.join("debug/deps");
+        mkdir(&deps);
+        let write = |name: &str, contents: &[u8]| {
+            if let Err(why) = std::fs::write(deps.join(name), contents) {
+                panic!("fixture: could not write {name}: {why}");
+            }
+        };
+        let owner = "cli-0123456789abcdef";
+        write(
+            &format!("lib{owner}.rlib"),
+            format!("!<arch>\0{owner}.cli.aaaa-cgu.0.rcgu.dwo\0tail").as_bytes(),
+        );
+        write(&format!("{owner}.cli.aaaa-cgu.0.rcgu.dwo"), b"current");
+        write(&format!("{owner}.cli.bbbb-cgu.0.rcgu.dwo"), b"superseded");
+        let unbuilt = "bench-fedcba9876543210";
+        write(
+            &format!("{unbuilt}.bench.cccc-cgu.0.rcgu.dwo"),
+            b"no artifact",
+        );
+
+        let (removed, _) = reclaim_superseded_debuginfo(&deps);
+        assert_eq!(removed, 1, "only the generation no artifact names");
+        assert!(
+            deps.join(format!("{owner}.cli.aaaa-cgu.0.rcgu.dwo"))
+                .is_file()
+        );
+        assert!(
+            !deps
+                .join(format!("{owner}.cli.bbbb-cgu.0.rcgu.dwo"))
+                .exists()
+        );
+        assert!(
+            deps.join(format!("{unbuilt}.bench.cccc-cgu.0.rcgu.dwo"))
+                .is_file(),
+            "could-not-look reclaims nothing"
+        );
     }
 
     #[test]
