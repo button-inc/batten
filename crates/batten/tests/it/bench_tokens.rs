@@ -108,7 +108,7 @@ fn the_committed_table_reproduces() {
     if !cfg!(unix) {
         return;
     }
-    let outcome = check(repo());
+    let outcome = check(&bench_copy("bench-tokens-reproduces"));
     let (answer, cause) = (stdout(&outcome), stderr(&outcome));
     assert_eq!(
         outcome.status.code(),
@@ -140,9 +140,12 @@ fn two_checks_at_once_do_not_measure_each_other() {
     if !cfg!(unix) {
         return;
     }
-    let root = repo().to_owned();
-    let other = std::thread::spawn(move || check(&root));
-    let mine = check(repo());
+    // ONE copy, both runs over it: the property is that two runs against ONE
+    // checkout do not see each other's scratch.
+    let root = bench_copy("bench-tokens-concurrent");
+    let shared = root.clone();
+    let other = std::thread::spawn(move || check(&shared));
+    let mine = check(&root);
     let theirs = other.join().expect("the second check ran");
     assert_eq!(
         (mine.status.code(), theirs.status.code()),
@@ -167,6 +170,31 @@ fn copy_tree(from: &Path, to: &Path) {
     }
 }
 
+/// The benchmark in a repository of its own, with the binary under test linked
+/// where the verb looks for one.
+///
+/// THE BINARY UNDER TEST, NEVER THE CHECKOUT'S (CLOUD-2059). `bench tokens`
+/// measures `<root>/target/debug/batten`, and run at the real root that is
+/// whatever an earlier build left there: another profile's, another commit's, or
+/// none at all on a leg that builds under a target triple. Copied, the verb
+/// measures this build, and a case perturbs only its copy (CLOUD-1913).
+fn bench_copy(name: &str) -> std::path::PathBuf {
+    let copy = Fixture::new(name).git().build();
+    copy_tree(&repo().join("bench/tokens"), &copy.join("bench/tokens"));
+    std::fs::create_dir_all(copy.join("target/debug")).expect("a binary directory");
+    // Linked under the name the verb looks for: `batten.exe` on Windows, where a
+    // bare `batten` is absent.
+    std::fs::hard_link(
+        env!("CARGO_BIN_EXE_batten"),
+        copy.join(format!(
+            "target/debug/batten{}",
+            std::env::consts::EXE_SUFFIX
+        )),
+    )
+    .expect("link the binary under test");
+    copy
+}
+
 /// THE HONESTY HALF FIRES, and this is the case the withdrawn rego module could
 /// never give: it runs the engine-fed path over a table with its baselines
 /// removed, rather than a fabricated input.
@@ -181,19 +209,7 @@ fn copy_tree(from: &Path, to: &Path) {
 /// linked beside it, and only the copy is perturbed.
 #[test]
 fn an_unmethodical_table_is_refused() {
-    let copy = Fixture::new("bench-tokens-unmethodical").git().build();
-    copy_tree(&repo().join("bench/tokens"), &copy.join("bench/tokens"));
-    std::fs::create_dir_all(copy.join("target/debug")).expect("a binary directory");
-    // The binary under test by its own path, and linked under the name the
-    // verb looks for: `batten.exe` on Windows, where a bare `batten` is absent.
-    std::fs::hard_link(
-        env!("CARGO_BIN_EXE_batten"),
-        copy.join(format!(
-            "target/debug/batten{}",
-            std::env::consts::EXE_SUFFIX
-        )),
-    )
-    .expect("link the binary under test");
+    let copy = bench_copy("bench-tokens-unmethodical");
 
     let published = copy.join("bench/tokens/RESULTS.md");
     let original = std::fs::read_to_string(&published).expect("the copied table");
