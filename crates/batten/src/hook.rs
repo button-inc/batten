@@ -5880,6 +5880,49 @@ fn receipt_refusal(
     Refusal::declared(&rule.id, native, &subjects, fix)
 }
 
+//MUTANT override-subject-unchecked|s@^    if rule.kind != RuleKind::Receipt {$@    if true {@|an_override_request_naming_a_subject_no_refusal_binds_is_refused
+//MUTANT bindable-subjects-empty|s@^    Some(bindable)$@    Some(Vec::new())@|a_spent_admission_clears_a_superseded_receipt
+//MUTANT class-filter-dropped|s@^            if refusal.verdict() == Some(class) {$@            if true {@|a_receipt_rows_age_bound_binds_only_under_the_expiry_class
+/// Every subject a refusal of `class` by this RECEIPT row binds, or `None` for
+/// a row of any other kind (CLOUD-1996).
+///
+/// A receipt row's subjects depend on the row alone — the check, the key kind,
+/// and `max_age` under expiry — so the set can be listed from config by calling
+/// [`receipt_refusal`] itself, which is what keeps this from being a second
+/// authority over a receipt refusal's subject. Every other mediated kind takes
+/// its subject from the call and cannot be listed here.
+///
+/// `override request` refuses a subject outside this set, because an admission
+/// bound to it would be issued, spent, and admit nothing. A future [`Validity`]
+/// missing from the list below fails closed: its class gets an empty set, and a
+/// request is refused naming zero subjects rather than issued silently. An
+/// alternation refusal carries no class, so it contributes nothing.
+#[must_use]
+pub(crate) fn bindable_subjects(rule: &Rule, class: &str) -> Option<Vec<String>> {
+    const NON_VALID: [Validity; 5] = [
+        Validity::Missing,
+        Validity::Expired,
+        Validity::Refuted,
+        Validity::StaleHead,
+        Validity::StaleMain,
+    ];
+    if rule.kind != RuleKind::Receipt {
+        return None;
+    }
+    let mut bindable: Vec<String> = Vec::new();
+    for check in rule.checks.iter().flatten() {
+        for validity in NON_VALID {
+            let refusal = receipt_refusal(rule, check, validity, None);
+            if refusal.verdict() == Some(class) {
+                bindable.extend_from_slice(refusal.bindings());
+            }
+        }
+    }
+    bindable.sort_unstable();
+    bindable.dedup();
+    Some(bindable)
+}
+
 /// The id-free half of the pipeline verdict: which shape a command commits.
 ///
 /// Three causes rather than three rules, on [`receipt_refusal`]'s precedent — the
@@ -14136,6 +14179,31 @@ deny contains "refused by themodule" if {
             refusal.render()
         );
         assert_eq!(refusal.bindings(), ["call,name,refused"]);
+    }
+
+    /// A receipt row's bindable subjects are listed per class, and its age
+    /// bound binds only under the expiry class it is the measure for
+    /// (CLOUD-1996). A row of any other kind has no listable set.
+    #[test]
+    fn a_receipt_rows_age_bound_binds_only_under_the_expiry_class() {
+        let mut rule = shape("r", "unused", None);
+        rule.kind = RuleKind::Receipt;
+        rule.checks = Some(vec!["verify".to_owned()]);
+        rule.max_age = Some(300);
+        assert_eq!(
+            bindable_subjects(&rule, "receipt read late"),
+            Some(vec!["verify,commit,300s".to_owned()])
+        );
+        assert_eq!(
+            bindable_subjects(&rule, "receipt read other"),
+            Some(vec!["verify,commit".to_owned()])
+        );
+        assert_eq!(
+            bindable_subjects(&rule, "receipt read missing"),
+            Some(vec!["verify,commit".to_owned()])
+        );
+        rule.kind = RuleKind::Shape;
+        assert_eq!(bindable_subjects(&rule, "receipt read other"), None);
     }
 
     /// Every pointer the refusal prints travels in the binding (CLOUD-1871).

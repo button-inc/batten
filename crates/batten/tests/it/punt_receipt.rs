@@ -419,6 +419,56 @@ fn override_as(dir: &Path, class: &str, verb: &[&str], stdin: &str) -> std::proc
     run_with_stdin(dir, &args, stdin)
 }
 
+/// A subject no refusal of the row binds is refused at REQUEST, before an
+/// admission is issued that would be spent and honoured by nothing (CLOUD-1996).
+///
+/// The subjects are typed, not read off the line: `verify` and the class token
+/// are the two wrong spellings measured spent and refused on real PRs.
+#[test]
+fn an_override_request_naming_a_subject_no_refusal_binds_is_refused() {
+    let dir = superseded("punt-unbindable-subject");
+    for typed in ["verify", "receipt read other"] {
+        let requested = run_with_stdin(
+            &dir,
+            &[
+                "override",
+                "request",
+                "--rule",
+                "turn mint ahead",
+                "--verdict",
+                "receipt read other",
+                "--subject",
+                typed,
+            ],
+            ANSWERS,
+        );
+        let said = stderr(&requested);
+        assert_eq!(requested.status.code(), Some(1), "{typed}: {said}");
+        assert!(
+            requested.stdout.is_empty(),
+            "{typed}: no address may be issued: {}",
+            String::from_utf8_lossy(&requested.stdout)
+        );
+        for needle in [
+            "`turn mint ahead`",
+            "`receipt read other`",
+            "1 subject(s)",
+            "verify,commit",
+        ] {
+            assert!(
+                said.contains(needle),
+                "{typed}: {needle} missing from {said}"
+            );
+        }
+        if typed == "verify" {
+            assert!(
+                said.contains("`verify`"),
+                "the bound subject is named: {said}"
+            );
+        }
+    }
+}
+
 #[test]
 fn a_spent_admission_clears_a_superseded_receipt() {
     // CLOUD-1889 — the half this file never had. The three cases above prove the
