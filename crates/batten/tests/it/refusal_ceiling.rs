@@ -311,6 +311,40 @@ fn a_first_sighting_carries_the_gloss_and_its_route_by_kind() {
     );
 }
 
+/// A shape deny's first sighting names the verb that prints the ROW's remedy,
+/// never the file that refused it (CLOUD-1806).
+///
+/// The class's only route used to be `read batten.toml` — back to the config the
+/// refusing row lives in. The `read batten.toml` negation and the `policy
+/// explain` assertion stay here even once the line carries the row's real id,
+/// because those are what discriminate a regression to the circular route.
+#[test]
+fn a_shape_first_sighting_names_the_rows_remedy_verb() {
+    let repo = fixture("shape-first-sighting-remedy");
+    let line = fires(&repo, "gh pr merge 5");
+    for needle in [
+        "call name refused",
+        "commit ship other",
+        "batten policy rule '",
+    ] {
+        assert!(line.contains(needle), "{needle} missing: {line}");
+    }
+    assert!(
+        !line.contains("read batten.toml"),
+        "the route must not send the reader back to the refusing file: {line}"
+    );
+    let explained = common::run(&repo, &["policy", "explain", "call name refused"]);
+    let said = String::from_utf8_lossy(&explained.stdout);
+    assert!(
+        said.contains("articulate the call"),
+        "the class declares its override route: {said}"
+    );
+    assert!(
+        !said.contains("batten.toml"),
+        "and no route names the config file: {said}"
+    );
+}
+
 /// The repeat is compact, and a byte PREFIX of the first sighting.
 ///
 /// The prefix property is what makes the two arms one line rather than two
@@ -367,8 +401,9 @@ fn the_sightings_store_is_written_by_a_first_firing() {
 /// **The second amendment's correction, as a case.** The store digested the CLASS
 /// token for its whole life, so under a shared class the first row to fire
 /// consumed the sighting for all of them and the next row's first firing rendered
-/// as a repeat — its rule-specific remedy never pointed at. Fourteen `shape` rows
-/// in this config raise `call name refused`; two of them are enough to decide it.
+/// as a repeat — its rule-specific remedy never pointed at. Every plain `shape`
+/// row (eleven in this config when CLOUD-1806 counted) raises `call name
+/// refused`; two of them are enough to decide it.
 #[test]
 fn a_second_row_of_a_shared_class_still_gets_its_definition() {
     let repo = fixture("shared-class-two-rows");

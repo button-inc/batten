@@ -4835,8 +4835,9 @@ fn command_line_gates(policy: &Policy, envelope: &Envelope, receipts: &ReceiptFa
 /// through `batten policy explain <token>`, and the rule id through
 /// `batten policy rule <id>`. The id is not redundant with the class — 66
 /// `[[rule]]` rows declare no class of their own and raise their kind's native
-/// one, so fourteen `shape` rows all raise `call name refused` and the id is the
-/// only thing that says which fired. It stays on the repeat arm too, which is
+/// one, so every plain `shape` row (eleven in this config when CLOUD-1806
+/// counted) raises `call name refused` and the id is the only thing that says
+/// which fired. It stays on the repeat arm too, which is
 /// also what keeps the repeat a byte prefix of the first sighting.
 ///
 /// **What goes is the consumer `reason` reaching the line as [`Fix::Run`].** It
@@ -5881,6 +5882,7 @@ fn receipt_refusal(
 //MUTANT override-subject-unchecked|s@^    if rule.kind != RuleKind::Receipt {$@    if true {@|an_override_request_naming_a_subject_no_refusal_binds_is_refused
 //MUTANT bindable-subjects-empty|s@^    Some(bindable)$@    Some(Vec::new())@|a_spent_admission_clears_a_superseded_receipt
 //MUTANT class-filter-dropped|s@^            if refusal.verdict() == Some(class) {$@            if true {@|a_receipt_rows_age_bound_binds_only_under_the_expiry_class
+//MUTANT shape-subject-unchecked|s@^    if rule.kind == RuleKind::Shape && rule.max.is_none() && rule.requires_key.is_none() {$@    if false {@|a_shape_admission_for_an_unbindable_subject_is_refused
 /// Every subject a refusal of `class` by this RECEIPT row binds, or `None` for
 /// a row of any other kind (CLOUD-1996).
 ///
@@ -5904,6 +5906,18 @@ pub(crate) fn bindable_subjects(rule: &Rule, class: &str) -> Option<Vec<String>>
         Validity::StaleHead,
         Validity::StaleMain,
     ];
+    // A PLAIN SHAPE ROW BINDS WHAT THE ROW ALONE DETERMINES (CLOUD-1806):
+    // `shape_refusal` reads nothing from the call, so the spelling a request
+    // must name is computable here exactly as a receipt row's is.
+    if rule.kind == RuleKind::Shape && rule.max.is_none() && rule.requires_key.is_none() {
+        let refusal = shape_refusal(rule);
+        let fits = refusal.verdict() == Some(class);
+        return Some(if fits {
+            refusal.bindings().to_vec()
+        } else {
+            Vec::new()
+        });
+    }
     if rule.kind != RuleKind::Receipt {
         return None;
     }
@@ -14084,6 +14098,9 @@ deny contains "refused by themodule" if {
         if class == crate::verdict::Native::HistoryDropUnpushed.id() {
             return history_drop_refusal(&["aaaaaaa".to_owned()]);
         }
+        if class == crate::verdict::Native::ShapeRefused.id() {
+            return shape_refusal(&shape("r", "x", None));
+        }
         if class == crate::verdict::Native::ReceiptSuperseded.id() {
             return receipt_refusal(
                 &shape("r", "unused", None),
@@ -14195,7 +14212,13 @@ deny contains "refused by themodule" if {
             bindable_subjects(&rule, "receipt read missing"),
             Some(vec!["verify,commit".to_owned()])
         );
+        // A plain shape row only ever raises `call name refused` (CLOUD-1806).
         rule.kind = RuleKind::Shape;
+        assert_eq!(
+            bindable_subjects(&rule, "receipt read other"),
+            Some(Vec::new())
+        );
+        rule.max = Some(1);
         assert_eq!(bindable_subjects(&rule, "receipt read other"), None);
     }
 
