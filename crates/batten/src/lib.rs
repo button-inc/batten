@@ -14436,6 +14436,54 @@ fn lease_receipt_path(root: &Path, branch: &str) -> Option<std::path::PathBuf> {
     )
 }
 
+/// The enforced set narrowed to what changed since `$MUTANT_CHANGED_SINCE`
+/// (CLOUD-2072), or `None` where the change touched no gate and that has been
+/// said on `out`.
+///
+/// Could-not-look WIDENS, as `ci suites` does: a base that cannot be diffed
+/// sweeps the whole set, because a sweep that is too wide shows up in the bill
+/// and one that is too narrow has no symptom at all.
+///
+/// THE BASE IS AN ENVIRONMENT VALUE, beside `$MUTANT_GATES` and `$MUTANT_TASKS`,
+/// rather than a flag: the sweep's whole scope is already declared that way, and
+/// a flag would change the public `MutateCommand` — measured, `cargo
+/// semver-checks` read it as three major breaks (a removed `Copy`, a unit variant
+/// changing kind).
+fn narrow_to_change(
+    root: &Path,
+    names: Vec<String>,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<Option<Vec<String>>> {
+    let Some(base) = mutate::changed_since() else {
+        return Ok(Some(names));
+    };
+    let Ok(Some(delta)) = git::base_delta(root, &base, &[String::from("**")], false) else {
+        writeln!(
+            err,
+            "mutate sweep: sweeping every enforced gate — no {base} to compare against, so \
+             the changed set is unknowable"
+        )?;
+        return Ok(Some(names));
+    };
+    let changed: std::collections::BTreeSet<String> = delta
+        .added
+        .iter()
+        .chain(delta.edited.iter())
+        .chain(delta.deleted.iter())
+        .cloned()
+        .collect();
+    let narrowed = mutate::touched(root, &names, &changed);
+    if narrowed.is_empty() {
+        writeln!(
+            out,
+            "mutate sweep: no enforced gate's source or suite changed since {base}"
+        )?;
+        return Ok(None);
+    }
+    Ok(Some(narrowed))
+}
+
 /// `batten mutate`: does each declared gate have a mutation its declared suite
 /// is proven to catch (CLOUD-418, CLOUD-1267)?
 ///
@@ -14503,6 +14551,9 @@ fn run_mutate(
             Ok(ExitCode::Violation)
         }
         cli::MutateCommand::Sweep => {
+            let Some(names) = narrow_to_change(root, names, out, err)? else {
+                return Ok(ExitCode::Success);
+            };
             // The staged tree lives beside the build artefacts rather than in
             // the system temporary directory, and it PERSISTS between runs. Both
             // are the same economy: a declared suite can be a compiled tier, and

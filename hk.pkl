@@ -111,6 +111,17 @@ local gate = new Mapping<String, Step> {
     glob = List("mise-tasks/**", "policy/*.rego", "mise.toml")
     check = "mise run mutant-census"
   }
+  ["mutant-changed"] {
+    // `slow` tier: it builds the engine, so a commit would pay a compile
+    // (CLOUD-1397). It runs at `verify` and in CI, before merge.
+    //
+    // NO GLOB, as `cargo-clippy` carries none: a gate's sources are whatever
+    // `$MUTANT_GATES` resolves to — Rust, Rego, Pkl, manifests — so any list here
+    // would go stale the day a gate is enrolled. The task narrows itself to the
+    // touched gates, and a change touching none costs one diff (CLOUD-2072).
+    profiles = List("slow")
+    check = "mise run mutant:changed"
+  }
   // The memory glob is CLOUD-770's, and it has to be here rather than only in the
   // task: the gate now walks `.serena/memories/**`, and a step that does not list
   // it never fires on a memory-only commit — the widening would hold in `verify`
