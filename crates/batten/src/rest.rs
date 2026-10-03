@@ -375,6 +375,12 @@ pub(crate) fn declared_credential() -> Option<String> {
     credential(DECLARED.get())
 }
 
+/// The forge this process declared, for a case asserting the declaration.
+#[cfg(test)]
+pub(crate) fn declared() -> Option<&'static Forge> {
+    DECLARED.get()
+}
+
 /// The bearer token this forge needs, or `None`.
 ///
 /// **Resolved here and returned to nobody outside this module.** It is

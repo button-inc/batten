@@ -1238,15 +1238,30 @@ pub fn parse(text: &str, source: &str) -> Result<Config> {
 /// or a min-version refusal is a policy verdict, and reading a credential name is
 /// not the place to reach one. Where nothing is declared, the REST tier keeps its
 /// could-not-look rather than falling back to a spelling it guessed.
+///
+/// **THE `[forge]` TABLE ALONE, NEVER THE WHOLE LOAD** (CLOUD-2095). This runs
+/// in every invocation's prologue, and it used to run [`parse_ungated`] — the
+/// full `Config` deserialize and every load-time validator over the whole
+/// authority — to keep two keys, before the verb parsed the same bytes again.
+/// The outer shape here is lenient so no row is built; [`crate::rest::Forge`]
+/// stays strict, so a `[forge]` key this build predates declares nothing rather
+/// than half a table.
+//MUTANT forge-declared-by-full-parse|s@    let Ok(only) = toml::from_str::<ForgeOnly>(&text) else {@    let Ok(only) = parse_ungated(&text, "x").map(\x7cconfig\x7c ForgeOnly { forge: config.forge }) else {@|declaring_the_forge_parses_no_config
 pub fn declare_for_process(dir: &Path) {
+    /// The one table this read needs. No `deny_unknown_fields`: every other
+    /// key in the authority is some other reader's.
+    #[derive(serde::Deserialize)]
+    struct ForgeOnly {
+        forge: Option<crate::rest::Forge>,
+    }
     let path = dir.join(CONFIG_FILE);
     let Ok(text) = std::fs::read_to_string(&path) else {
         return;
     };
-    let Ok(config) = parse_ungated(&text, &path.display().to_string()) else {
+    let Ok(only) = toml::from_str::<ForgeOnly>(&text) else {
         return;
     };
-    if let Some(forge) = config.forge {
+    if let Some(forge) = only.forge {
         crate::rest::declare(forge);
     }
 }
@@ -3562,6 +3577,7 @@ fn parse_ungated(text: &str, source: &str) -> Result<Config> {
 }
 
 fn parse_ungated_with(text: &str, source: &str, grammar: Grammar) -> Result<Config> {
+    CONFIG_PARSES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     // THE COMMON CASE COSTS ONE PARSE, and it used to cost three.
     //
     // A config this build fully understands succeeds here and is DONE — it
@@ -3744,6 +3760,19 @@ static SCHEMA_DERIVATIONS: std::sync::atomic::AtomicUsize = std::sync::atomic::A
 #[must_use]
 pub fn schema_derivations() -> usize {
     SCHEMA_DERIVATIONS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Every full config load this process has performed (CLOUD-2095).
+///
+/// [`SCHEMA_DERIVATIONS`]' shape: a counter, never a clock, read as a delta
+/// around one call, and process-global, so the case asserting it relies on
+/// nextest's process-per-test.
+static CONFIG_PARSES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// How many full config loads this process has performed. Monotonic.
+#[must_use]
+pub fn config_parses() -> usize {
+    CONFIG_PARSES.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 impl Config {
@@ -5229,6 +5258,33 @@ mod tests {
         assert_eq!(present, Authority::Absent);
         assert_eq!(config, defaults());
         assert_eq!(config.version, SUPPORTED_VERSION);
+    }
+
+    /// CLOUD-2095: the prologue's forge read costs no full config load, and
+    /// still declares the forge. The authority carries a key no build knows, so
+    /// a whole-file load would refuse it and declare nothing — the read must
+    /// reach `[forge]` anyway.
+    #[test]
+    fn declaring_the_forge_parses_no_config() {
+        let dir = std::env::temp_dir().join("batten-config-forge-alone");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join(CONFIG_FILE),
+            "version = 1\nkey_no_build_knows = true\n\n[forge]\ncredential_names = [\"BATTEN_FORGE_ALONE\"]\n",
+        )
+        .unwrap();
+        let before = config_parses();
+        declare_for_process(&dir);
+        assert_eq!(
+            config_parses(),
+            before,
+            "the prologue's forge read must not load the whole authority"
+        );
+        assert_eq!(
+            crate::rest::declared().map(|forge| forge.credential_names.clone()),
+            Some(vec![String::from("BATTEN_FORGE_ALONE")]),
+            "the forge is still declared"
+        );
     }
 
     #[test]
