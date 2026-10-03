@@ -1148,8 +1148,8 @@ fn spawn(
     // hangs is precisely what a sweep must survive — but a watchdog that only
     // fires on a hang costs nothing on the rows that pass.
     //
-    // THE DIRECT CHILD ONLY — see `reap`, which records why signalling the
-    // process group instead cost three unrelated suites in CI.
+    // ITS OWN GROUP, ENDED WHOLE — see `wait_bounded`, which records why the
+    // direct child alone left every hung suite's test binary alive under init.
     // UNSET, NOT SET SMALL, AND THE DIFFERENCE IS THE WHOLE DEFECT. `bats-exec-test`
     // implements `BATS_TEST_TIMEOUT` as a literal `sleep N` child that it does not
     // reap on a FAILING case — observed directly, `sleep 300` still running under a
@@ -1190,47 +1190,149 @@ fn spawn(
         fs::File::create(&err_path) // stream: a child's stderr sink
             .with_context(|| format!("mutate: could not open {}", err_path.display()))?,
     ));
-    let mut child = command
+    // A GROUP OF ITS OWN, AND THE SWEEP FORWARDS WHAT IT IS SENT. Leading a group
+    // is what lets the teardown reach the suite's grandchildren; it also takes the
+    // suite out of the group an outer runner signals — nextest's terminate, a
+    // ^C, mise's cancel — so the forwarder is armed BEFORE the spawn, for
+    // `exec::Forwarding::arm`'s stated reason, and hands those signals on.
+    crate::exec::lead_group(&mut command);
+    let forwarding = crate::exec::Forwarding::arm(crate::exec::GroupDecision::OWNED)?;
+    let child = command
         .spawn()
         .with_context(|| format!("mutate: could not run {program}"))?;
-    // A BLOCKING WAIT WITH A DEADLINE, NOT A POLL. `std::thread::sleep` is a
-    // denied method here (`clippy.toml`) and the ban draws exactly the right
-    // line: "a poll bounded by a real terminal state is legitimate, a timer
-    // standing in for an exit condition is not". A poll loop would have needed
-    // an exemption, and `delay-waivers-not-growing` refuses a twelfth — rightly,
-    // because this wait has a terminal state to block on and therefore needs no
-    // delay at all.
-    //
-    // The worker owns the child and calls `wait`; the receive carries the bound.
-    // A suite that returns wakes this immediately, and one that hangs runs into
-    // `recv_timeout` — no interval, nothing to tune, and no sleep.
+    forwarding.adopt(child.id())?;
+    let waited = wait_bounded(child, bound);
+    // A signal outranks the row: the sweep was asked to stop, so it stops, with
+    // the signal's own status rather than a verdict on a suite it interrupted.
+    if let Some(signal) = forwarding.finish() {
+        reraise(signal)?;
+    }
+    let (status, timed_out) =
+        waited.with_context(|| format!("mutate: could not wait for {program}"))?;
+    // The ONE place a `Ran` may say `timed_out`: `finish` describes a child that
+    // reached its own exit, and only the bound expiring here makes that untrue.
+    Ok(Ran {
+        timed_out,
+        ..finish(status, &out_path, &err_path, &capture)
+    })
+}
+
+/// Wait for `child` until `bound`, end its whole process group, then reap it,
+/// answering its status and whether the bound ran out (CLOUD-1860, CLOUD-2059).
+///
+/// A BLOCKING WAIT WITH A DEADLINE, NOT A POLL. `std::thread::sleep` is a denied
+/// method here (`clippy.toml`), and this wait has a terminal state to block on:
+/// a worker blocks on the child's exit, the receive carries the bound, and a
+/// suite that returns wakes this immediately.
+///
+/// **KILL THE GROUP, THEN REAP THE LEADER, IN THAT ORDER.** The worker waits with
+/// `WNOWAIT`, which reports the exit without reaping, so the leader stays an
+/// unreaped zombie and its pid — which IS the group id — cannot be reused while
+/// the group is signalled. Then the group is killed whatever happened: on a hang
+/// that ends the suite; on a normal exit it ends whatever the suite left running.
+/// Only then is the leader reaped.
+///
+/// The earlier contract killed the direct child alone, reasoning that a group
+/// that failed to form would make `kill(-pid)` land on the sweep's own siblings.
+/// Neither half held: `std` reports a failed `setpgid` as a failed spawn, and a
+/// pid that leads no group answers `ESRCH`. What it cost was measured: every hung
+/// cargo suite left its test binary — which a mutant can make loop forever —
+/// alive under init, two of them found 35 and 56 minutes after their runs.
+//MUTANT hung-suite-not-reported|s@^        Err(_) => true,$@        Err(_) => false,@|a_suite_that_hangs_is_ended_by_the_sweeps_own_bound
+//MUTANT suite-reap-leader-only|s@^        let _ = rustix::process::kill_process_group(group, @        let _ = rustix::process::kill_process(group, @|a_suite_that_hangs_is_ended_by_the_sweeps_own_bound
+//MUTANT suite-ungrouped|s@^    crate::exec::lead_group(&mut command);$@    let _ = \&mut command;@|a_suite_that_hangs_is_ended_by_the_sweeps_own_bound
+//MUTANT forwarding-unadopted|s@^    forwarding.adopt(child.id())?;$@@|a_signalled_sweep_takes_its_suite_with_it
+#[cfg(unix)]
+fn wait_bounded(
+    mut child: std::process::Child,
+    bound: std::time::Duration,
+) -> std::io::Result<(std::process::ExitStatus, bool)> {
     let pid = child.id();
-    let (send_status, statuses) = std::sync::mpsc::channel();
+    let (send, exits) = std::sync::mpsc::channel();
     let worker = std::thread::spawn(move || {
-        let status = child.wait();
-        // The receiver is gone only when this call already timed out and the
-        // caller stopped listening, which is the hang path below; the status it
-        // would have carried is the kill this function reports.
-        let _ = send_status.send(status);
+        // The receiver is gone only when the bound already ran out and the
+        // caller stopped listening; the group kill below is what ends this wait.
+        let _ = send.send(await_exit(pid));
     });
-    let Ok(reported) = statuses.recv_timeout(bound) else {
-        // The bound ran out, so the suite is hung. Kill it and take the status
-        // the worker's `wait` returns once it does.
-        reap(pid);
-        let reaped = statuses
-            .recv()
-            .map_err(|_| anyhow::anyhow!("mutate: the wait for {program} was lost"))?
-            .with_context(|| format!("mutate: could not reap {program}"))?;
-        let _ = worker.join();
-        return Ok(Ran {
-            timed_out: true,
-            ..finish(reaped, &out_path, &err_path, &capture)
-        });
+    let timed_out = match exits.recv_timeout(bound) {
+        Ok(Ok(())) => false,
+        Ok(Err(failed)) => {
+            // The wait itself failed, so whether the suite exited is unknown.
+            // It is ended rather than left running, and the failure is the answer.
+            kill_group(pid);
+            let _ = worker.join();
+            let _ = child.wait();
+            return Err(failed);
+        }
+        Err(_) => true,
     };
-    let status = reported.with_context(|| format!("mutate: could not wait for {program}"))?;
-    // The worker is finished: it has sent, so its `wait` returned.
+    kill_group(pid);
     let _ = worker.join();
-    Ok(finish(status, &out_path, &err_path, &capture))
+    let status = child.wait()?;
+    Ok((status, timed_out))
+}
+
+/// [`wait_bounded`] off unix, as it was: no `waitid`, no group, and no `kill(2)`
+/// to reach for, so a hung suite there is waited out rather than ended.
+#[cfg(not(unix))]
+fn wait_bounded(
+    mut child: std::process::Child,
+    bound: std::time::Duration,
+) -> std::io::Result<(std::process::ExitStatus, bool)> {
+    let (send, statuses) = std::sync::mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        let _ = send.send(child.wait());
+    });
+    let (status, timed_out) = match statuses.recv_timeout(bound) {
+        Ok(status) => (status?, false),
+        Err(_) => (
+            statuses
+                .recv()
+                .map_err(|_| std::io::Error::other("mutate: the wait for the suite was lost"))??,
+            true,
+        ),
+    };
+    let _ = worker.join();
+    Ok((status, timed_out))
+}
+
+/// Block until `pid` has exited, WITHOUT reaping it (`WNOWAIT`), so its pid and
+/// its group id stay reserved until [`wait_bounded`] has signalled the group.
+#[cfg(unix)]
+fn await_exit(pid: u32) -> std::io::Result<()> {
+    let pid = rustix::process::Pid::from_raw(i32::try_from(pid).unwrap_or_default())
+        .ok_or_else(|| std::io::Error::other("mutate: the suite reported an unusable pid"))?;
+    loop {
+        match rustix::process::waitid(
+            rustix::process::WaitId::Pid(pid),
+            rustix::process::WaitIdOptions::EXITED | rustix::process::WaitIdOptions::NOWAIT,
+        ) {
+            Ok(_) => return Ok(()),
+            // A forwarded signal can interrupt the wait; the child is still the
+            // child, so the wait resumes.
+            Err(rustix::io::Errno::INTR) => {}
+            Err(errno) => return Err(errno.into()),
+        }
+    }
+}
+
+/// Re-raise the signal the sweep was sent, after its suite group is gone.
+#[cfg(unix)]
+fn reraise(signal: i32) -> Result<()> {
+    // Restores the default disposition and raises on self, so this does not
+    // return.
+    signal_hook::low_level::emulate_default_handler(signal)
+        .context("mutate: re-raise the signal the sweep was sent")
+}
+
+/// [`reraise`] where there is no POSIX signal to re-raise.
+#[cfg(not(unix))]
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "one signature across both platforms; the unix half genuinely fails"
+)]
+const fn reraise(_signal: i32) -> Result<()> {
+    Ok(())
 }
 
 /// Read back what the child wrote and drop the capture.
@@ -1335,36 +1437,21 @@ fn build_bound() -> std::time::Duration {
     )
 }
 
-/// Stop the child, best effort.
+/// `SIGKILL` the process group `leader` leads, and the leader itself.
 ///
-/// THE DIRECT CHILD ONLY, AND NEVER ITS PROCESS GROUP. An earlier version made
-/// the child a group leader and signalled the group, reasoning that bats forks
-/// twice and the leader alone leaves the rest orphaned. That is true and it is
-/// not worth the hazard: `kill(-pid)` addresses whatever group carries that id,
-/// so if the group never formed — the call is best effort and its failure is
-/// invisible here — the signal lands on the group this process is already in,
-/// which under a parallel test runner is its SIBLINGS. Measured: the
-/// group-signalling version reddened three `symbols` cases in CI with "the
-/// analyser did not resolve", a suite that shares nothing with this module
-/// except that it was running at the same time.
-///
-/// What an orphan costs by comparison is bounded: a `sleep` under a staged tree
-/// this sweep is about to replace, which exits on its own.
-///
-/// Best effort is the honest contract, for `exec.rs`'s stated reason: the
-/// process may already have gone, which is the outcome being asked for, and
-/// `ESRCH` on the way out is not a failure anyone can act on.
+/// No grace, for `exec::escalate_group`'s measured reason: a suite past its bound
+/// is hung by definition, and a polite signal it ignores only spends the bound
+/// again. The leader is signalled as well so that a group that somehow did not
+/// form still ends its direct child — a leak the descendant case would report,
+/// never a hang. Best effort, because `ESRCH` means the process is already gone,
+/// which is the outcome being asked for.
 #[cfg(unix)]
-fn reap(pid: u32) {
-    if let Some(pid) = rustix::process::Pid::from_raw(i32::try_from(pid).unwrap_or_default()) {
-        let _ = rustix::process::kill_process(pid, rustix::process::Signal::KILL);
+fn kill_group(leader: u32) {
+    if let Some(group) = rustix::process::Pid::from_raw(i32::try_from(leader).unwrap_or_default()) {
+        let _ = rustix::process::kill_process_group(group, rustix::process::Signal::KILL);
+        let _ = rustix::process::kill_process(group, rustix::process::Signal::KILL);
     }
 }
-
-/// Off unix there is no `kill(2)` to reach for here, and the wait above has
-/// already stopped listening — the worker thread is what still holds the child.
-#[cfg(not(unix))]
-fn reap(_pid: u32) {}
 
 // ---------------------------------------------------------------------------
 // Running a suite.

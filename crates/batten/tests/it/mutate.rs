@@ -293,30 +293,9 @@ fn census(root: &Path, gates: &str) -> (i32, String, String) {
 #[cfg(unix)]
 #[test]
 fn a_suite_that_hangs_is_ended_by_the_sweeps_own_bound() {
-    let root = toy("hangs");
-    let mut gate = String::from(TOY_GATE);
-    gate.push_str(CAUGHT);
-    gate.push('\n');
-    write_program(&root, "mise-tasks/toy.sh", &gate);
-    // The case never returns on its own. `read` on a closed stdin would, so the
-    // wait has to be one nothing external can satisfy.
-    write(
-        &root,
-        "tests/toy.rs",
-        &format!(
-            "{}{}{}",
-            runs("toy.sh"),
-            case(
-                "over_the_limit_is_refused",
-                "std::thread::sleep(std::time::Duration::from_secs(3600));"
-            ),
-            case("under_the_limit_passes", "assert!(gate(\"1\").is_some());"),
-        ),
-    );
-    cargo_package(&root);
-    track(&root);
+    let note = common::scratch("mutate-hangs-note").join("pids");
+    let root = hung_toy("hangs", &note);
 
-    let started = std::time::Instant::now();
     let answer = common::batten()
         .args(["mutate", "sweep"])
         .current_dir(&root)
@@ -327,20 +306,22 @@ fn a_suite_that_hangs_is_ended_by_the_sweeps_own_bound() {
         .env("BATTEN_MUTATE_SUITE_TIMEOUT", "10")
         .output()
         .expect("run batten mutate");
-    let waited = started.elapsed();
 
-    // The window holds the toy's one cold build as well as the bound, so it is
-    // wider than a bats run needed — and still an order of magnitude inside the
-    // hour the case sleeps, which is the discrimination this asserts.
+    // THE BOUND FIRED, READ FROM WHAT THE SWEEP RECORDED RATHER THAN FROM A
+    // CLOCK (CLOUD-2059). `suite-timed-out` is set in exactly one place, when
+    // the bound runs out, and a bound that never fired would not return at all
+    // before the hour the case sleeps — so the elapsed-time ceiling this case
+    // used to assert added nothing the verdict below does not already decide.
     //
-    // CHANGED ASSERTION, RECORDED (CLOUD-843): over the bats toy this window was
-    // 60s and the bound 2s; over the Rust toy they are 300s and 10s, here and in
-    // the mirror below. It is a loosening of the assertion's numbers, not of what
-    // it separates: a bound that never fires still waits the full 3600s sleep.
+    // AND NOTHING THE SUITE STARTED OUTLIVES IT (CLOUD-2059). Killing the direct
+    // child alone left the test binary and its own child alive under init; two
+    // were found 35 and 56 minutes after their runs, on the machine running
+    // this suite. Both pids the hung case recorded must be gone.
+    let survivors = survivors_of(&note);
     assert!(
-        waited < std::time::Duration::from_secs(300),
-        "the sweep waited {waited:?} on a suite that never returns, so the bound \
-         did not fire and a hanging mutant would hold it forever"
+        survivors.is_empty(),
+        "the sweep ended its hung suite but left {survivors:?} running: the bound must end \
+         the suite's whole process group, not its direct child"
     );
     // AND WHAT IT REPORTS, WHICH THIS CASE USED TO DECLINE TO ASSERT
     // (CLOUD-1860). The declining comment read: *"what a killed suite reports is
@@ -366,6 +347,208 @@ fn a_suite_that_hangs_is_ended_by_the_sweeps_own_bound() {
         "blaming the filter sends the reader to repair a declaration that is \
          already correct: {out}"
     );
+}
+
+/// THE SWEEP'S OWN SIGNAL REACHES ITS SUITE (CLOUD-2059).
+///
+/// The suite leads a process group of its own so the bound can end it whole —
+/// which takes it out of the group an outer runner signals. nextest's terminate,
+/// a ^C or mise's cancel then reaches the sweep and not the suite, and a sweep
+/// that died of it would orphan the suite for the rest of its hour. So the sweep
+/// forwards what it is sent, waits for the group to go, and dies of the same
+/// signal: TERM to the sweep alone, and nothing it started may outlive it.
+#[cfg(unix)]
+#[test]
+fn a_signalled_sweep_takes_its_suite_with_it() {
+    use std::os::unix::process::ExitStatusExt as _;
+
+    let note = common::scratch("mutate-signalled-note").join("pids");
+    let root = hung_toy("signalled", &note);
+    let mut sweep = common::batten()
+        .args(["mutate", "sweep"])
+        .current_dir(&root)
+        .env("MUTANT_GATES", "toy")
+        .env("MUTANT_TASKS", "mise.toml")
+        // Far past PATIENCE, so the bound cannot be what ends the suite here.
+        .env("BATTEN_MUTATE_SUITE_TIMEOUT", "3000")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("spawn batten mutate");
+    await_note(&note, &mut sweep);
+
+    kill(sweep.id(), "TERM");
+    // Survivors are collected BEFORE anything is asserted, so a red run kills
+    // what it found rather than leaving it for the next one to trip over.
+    let status = await_exit(&mut sweep);
+    let survivors = survivors_of(&note);
+    assert!(
+        survivors.is_empty(),
+        "the sweep was TERMed but left {survivors:?} running: it must forward what it is \
+         sent to the suite's group"
+    );
+    let status = status.expect("the sweep must exit on its signal rather than wait out its suite");
+    assert_eq!(
+        status.signal(),
+        Some(15),
+        "a sweep asked to stop stops with the signal's own status, not a verdict: {status:?}"
+    );
+}
+
+/// How long a case waits for the hung toy to start: its cold build comes first.
+#[cfg(unix)]
+const BUILD_PATIENCE: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// How long a case waits for a process to go or a sweep to exit. Either happens
+/// in milliseconds when the teardown works, so this bounds only a red run.
+#[cfg(unix)]
+const PATIENCE: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// A toy whose `over_the_limit_is_refused` case never returns, and leaves a
+/// process of its own: it spawns `sleep 3600`, writes its own pid and the
+/// sleep's into `note`, then sleeps an hour. `read` on a closed stdin would
+/// return, so the wait has to be one nothing external can satisfy.
+#[cfg(unix)]
+fn hung_toy(name: &str, note: &Path) -> PathBuf {
+    let root = toy(name);
+    let mut gate = String::from(TOY_GATE);
+    gate.push_str(CAUGHT);
+    gate.push('\n');
+    write_program(&root, "mise-tasks/toy.sh", &gate);
+    let note = note.display().to_string();
+    let hang = format!(
+        "let held = std::process::Command::new(\"sleep\").arg(\"3600\").spawn().expect(\"spawn \
+         the grandchild\");\n    std::fs::write({note:?}, format!(\"{{}} {{}}\", \
+         std::process::id(), held.id())).expect(\"write the note\");\n    \
+         std::thread::sleep(std::time::Duration::from_secs(3600));"
+    );
+    write(
+        &root,
+        "tests/toy.rs",
+        &format!(
+            "{}{}{}",
+            runs("toy.sh"),
+            case("over_the_limit_is_refused", &hang),
+            case("under_the_limit_passes", "assert!(gate(\"1\").is_some());"),
+        ),
+    );
+    cargo_package(&root);
+    track(&root);
+    root
+}
+
+/// The pids a hung toy recorded — its test binary, then the process it spawned —
+/// that are still running once [`PATIENCE`] is spent. Each survivor is killed
+/// before this returns, so a red case never leaks what it found.
+#[cfg(unix)]
+fn survivors_of(note: &Path) -> Vec<u32> {
+    let text = fs::read_to_string(note).expect("the hung case recorded its pids before it hung");
+    let pids: Vec<u32> = text
+        .split_whitespace()
+        .map(|pid| pid.parse().expect("a recorded pid"))
+        .collect();
+    assert_eq!(pids.len(), 2, "the test binary and its child: {text}");
+    let survivors: Vec<u32> = pids.into_iter().filter(|pid| !await_gone(*pid)).collect();
+    for pid in &survivors {
+        kill(*pid, "KILL");
+    }
+    survivors
+}
+
+/// Whether `pid` has gone: no such process, or a zombie whose reaping is its new
+/// parent's business. A container's pid 1 need not reap, and a zombie runs
+/// nothing, so counting one as alive would redden a case for its host.
+#[cfg(unix)]
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays, and test-only: `ps` is the POSIX way to ask for a process's state, and this suite runs on macOS where `/proc` is not an answer"
+)]
+fn gone(pid: u32) -> bool {
+    let answer = std::process::Command::new("ps")
+        .args(["-o", "stat=", "-p", &pid.to_string()])
+        .output()
+        .expect("run ps");
+    let state = String::from_utf8_lossy(&answer.stdout);
+    let state = state.trim();
+    state.is_empty() || state.starts_with('Z')
+}
+
+/// Block until `pid` is [`gone`], reporting whether it got there in time.
+#[cfg(unix)]
+fn await_gone(pid: u32) -> bool {
+    let deadline = std::time::Instant::now() + PATIENCE;
+    while std::time::Instant::now() < deadline {
+        if gone(pid) {
+            return true;
+        }
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "the interval of a poll whose exit condition is `gone`, bounded by `PATIENCE` \
+                      — running out is what this reports as `false` (CLOUD-1177)"
+        )]
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    false
+}
+
+/// Block until a hung case's `note` holds its two pids, failing if the sweep
+/// exits first or [`BUILD_PATIENCE`] runs out — and killing the sweep either way.
+#[cfg(unix)]
+fn await_note(note: &Path, sweep: &mut std::process::Child) {
+    let deadline = std::time::Instant::now() + BUILD_PATIENCE;
+    while std::time::Instant::now() < deadline {
+        if fs::read_to_string(note).is_ok_and(|text| text.split_whitespace().count() == 2) {
+            return;
+        }
+        if let Ok(Some(status)) = sweep.try_wait() {
+            panic!("the sweep exited {status:?} before its hung case started");
+        }
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "the interval of a poll whose exit condition is the note holding two pids, \
+                      bounded by `BUILD_PATIENCE` — past that this kills the sweep and panics \
+                      (CLOUD-1177)"
+        )]
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    kill(sweep.id(), "KILL");
+    panic!(
+        "the hung case never recorded its pids in {}",
+        note.display()
+    );
+}
+
+/// Block until `child` exits, or kill it and answer `None` once [`PATIENCE`]
+/// runs out — never panicking, so the caller still collects what it left behind.
+#[cfg(unix)]
+fn await_exit(child: &mut std::process::Child) -> Option<std::process::ExitStatus> {
+    let deadline = std::time::Instant::now() + PATIENCE;
+    while std::time::Instant::now() < deadline {
+        if let Some(status) = child.try_wait().expect("poll the sweep") {
+            return Some(status);
+        }
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "the interval of a poll whose exit condition is the sweep exiting, bounded by \
+                      `PATIENCE` — past that this kills it and answers `None` (CLOUD-1177)"
+        )]
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    kill(child.id(), "KILL");
+    let _ = child.wait();
+    None
+}
+
+/// Send `signal` to `pid`, by name, best effort: the pid may already be gone.
+#[cfg(unix)]
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays, and test-only: delivering a real signal to a real pid is what the forwarding and teardown are asserted against"
+)]
+fn kill(pid: u32, signal: &str) {
+    let _ = std::process::Command::new("kill")
+        .args([&format!("-{signal}"), &pid.to_string()])
+        .status();
 }
 
 /// **THE MIRROR, and without it this fix is indistinguishable from deleting the

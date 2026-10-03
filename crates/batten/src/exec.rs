@@ -432,6 +432,11 @@ impl ExecConfig {
 pub(crate) struct GroupDecision(bool);
 
 impl GroupDecision {
+    /// Batten owns the group outright: the decision of a caller that always leads
+    /// one, such as `mutate`'s suites ([`lead_group`]), rather than one that
+    /// negotiates with an ancestor through the environment.
+    pub(crate) const OWNED: Self = Self::decide(true, false, false);
+
     /// The predicate itself, over facts a caller supplies.
     ///
     /// Separated from the observation so both branches of each rule are
@@ -1137,10 +1142,8 @@ impl Record<'_> {
     reason = "stays with the spawn it configures: the pgroup handshake is negotiated against mise's supervisor and is a property of the builder, not of a library call (CLOUD-427)"
 )]
 fn group_at_spawn(builder: &mut Command, decision: GroupDecision) {
-    use std::os::unix::process::CommandExt as _;
-
     if decision.groups() {
-        builder.process_group(0).env(TASK_PGID_MANAGED_ENV, "1");
+        lead_group(builder);
     }
 }
 
@@ -1151,6 +1154,33 @@ fn group_at_spawn(builder: &mut Command, decision: GroupDecision) {
     reason = "stays with the spawn it configures: the no-op twin of the unix arm above, and it must carry the same verdict or a Windows clippy run reports an unannotated site (CLOUD-427)"
 )]
 fn group_at_spawn(_builder: &mut Command, _decision: GroupDecision) {}
+
+/// Make the child of `builder` lead a process group of its own, marked so a
+/// nested mise knows an ancestor already manages it.
+///
+/// [`group_at_spawn`]'s two halves without its decision, for a caller that always
+/// owns the teardown: `mutate` runs a suite it must be able to end WHOLE, and a
+/// suite left in the sweep's own group cannot be signalled apart from the sweep —
+/// so killing it reached its direct child only, and every hung suite left its test
+/// binary sleeping under init (CLOUD-2059).
+#[cfg(unix)]
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays with the spawn it configures: the pgroup handshake is negotiated against mise's supervisor and is a property of the builder, not of a library call (CLOUD-427)"
+)]
+pub(crate) fn lead_group(builder: &mut Command) {
+    use std::os::unix::process::CommandExt as _;
+
+    builder.process_group(0).env(TASK_PGID_MANAGED_ENV, "1");
+}
+
+/// [`lead_group`] where there are no process groups.
+#[cfg(not(unix))]
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays with the spawn it configures: the no-op twin of the unix arm above, and it must carry the same verdict or a Windows clippy run reports an unannotated site (CLOUD-427)"
+)]
+pub(crate) fn lead_group(_builder: &mut Command) {}
 
 /// The on-disk note that a group is currently owned, and by which Batten.
 ///
@@ -1222,7 +1252,7 @@ const FORWARDED: &[i32] = &[
 /// an invocation with the opt-in off installs no disposition at all and the
 /// process topology is byte-for-byte what it was before CLOUD-427.
 #[cfg(unix)]
-struct Forwarding {
+pub(crate) struct Forwarding {
     /// `None` when Batten is not managing this child's group.
     active: Option<ForwardingThread>,
 }
@@ -1312,7 +1342,7 @@ impl Forwarding {
     /// internal error rather than a silent downgrade to unmanaged: a caller that
     /// asked Batten to own the tree and got an unowned one would find out by
     /// leaking processes, which is exactly the state this issue exists to end.
-    fn arm(decision: GroupDecision) -> Result<Self> {
+    pub(crate) fn arm(decision: GroupDecision) -> Result<Self> {
         use std::sync::atomic::{AtomicI32, Ordering};
 
         if !decision.groups() {
@@ -1409,7 +1439,7 @@ impl Forwarding {
     ///
     /// Returns an error when the child's pid is not a usable group id — the same
     /// refuse-rather-than-downgrade posture arming has, and for the same reason.
-    fn adopt(&self, child_pid: u32) -> Result<()> {
+    pub(crate) fn adopt(&self, child_pid: u32) -> Result<()> {
         use std::sync::atomic::Ordering;
 
         let Some(active) = self.active.as_ref() else {
@@ -1434,7 +1464,7 @@ impl Forwarding {
     /// escalation before Batten's own exit — a supervisor that reported the
     /// teardown and then left it half-done would be the bug wearing the fix's
     /// clothes.
-    fn finish(self) -> Option<i32> {
+    pub(crate) fn finish(self) -> Option<i32> {
         use std::sync::atomic::Ordering;
 
         let active = self.active?;
@@ -1451,7 +1481,7 @@ impl Forwarding {
 
 /// [`Forwarding`] where there are no signals to forward.
 #[cfg(not(unix))]
-struct Forwarding;
+pub(crate) struct Forwarding;
 
 #[cfg(not(unix))]
 impl Forwarding {
@@ -1460,7 +1490,7 @@ impl Forwarding {
         clippy::unnecessary_wraps,
         reason = "one signature across both platforms; the unix half genuinely fails"
     )]
-    fn arm(_decision: GroupDecision) -> Result<Self> {
+    pub(crate) fn arm(_decision: GroupDecision) -> Result<Self> {
         Ok(Self)
     }
 
@@ -1469,12 +1499,12 @@ impl Forwarding {
         clippy::unnecessary_wraps,
         reason = "one signature across both platforms; the unix half genuinely fails"
     )]
-    fn adopt(&self, _child_pid: u32) -> Result<()> {
+    pub(crate) fn adopt(&self, _child_pid: u32) -> Result<()> {
         Ok(())
     }
 
     /// Nothing was forwarded, so nothing outranks the child's own status.
-    const fn finish(self) -> Option<i32> {
+    pub(crate) const fn finish(self) -> Option<i32> {
         None
     }
 }
@@ -2950,7 +2980,7 @@ mod tests {
         // is that the two are set by one function and cannot be separated.
         let source = include_str!("exec.rs");
         let body = source
-            .split("fn group_at_spawn(builder: &mut Command, decision: GroupDecision) {")
+            .split("pub(crate) fn lead_group(builder: &mut Command) {")
             .nth(1)
             .expect("the unix grouping function is declared here");
         let body = &body[..body.find("\n}").expect("the function closes")];
