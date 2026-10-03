@@ -16758,27 +16758,10 @@ fn admit_mediated(decision: hook::Decision, out: &mut dyn Write) -> Result<hook:
     let Some(class) = refusal.verdict() else {
         return Ok(decision);
     };
-    // A CLASS WHOSE REFUSAL NAMES NO PATH BINDS TO ITS OWN TOKEN (CLOUD-1889).
-    // `Refusal::declared` keeps `Artifact` subjects out of `subject`, deliberately:
-    // an admission bound to one "would name something the store cannot compare
-    // against the tree". Every receipt-kind refusal carries only `Artifact`
-    // subjects, so requiring a path here returned early for the whole class, and
-    // the `admit(...)` route CLOUD-1823 declared could never fire — the
-    // declaration took the general hook hatch away and nothing replaced it.
-    //
-    // THE SUBJECT IS THE REFUSAL'S ARTIFACTS, JOINED BY `,`, WHEN IT NAMES ANY
-    // (`refusal::admission_subject`), and the class token only when it names none.
-    // A receipt refusal names its artifacts — `turn mint ahead`'s line renders
-    // `verify commit`, which binds as `verify,commit` — and `override request`
-    // canonicalises a subject copied off that line to the same string. Minting
-    // against the class token instead binds a subject this lookup never asks for:
-    // measured, two such admissions were issued and spent and admitted nothing.
-    //
-    // The class token is a subject both sides can name without reading the call,
-    // so no payload reaches the refusal. What pins the admission to a situation is
-    // the anchor below: `Anchor::Call { head }`, the head a receipt is keyed to, so
-    // one commit unbinds it exactly as it voids the receipt.
-    let subject = refusal.subject().unwrap_or(class);
+    // Which spellings a mediated refusal binds, and why each, is
+    // `refusal::admission_bindings`'s (CLOUD-1826); the first that admits wins.
+    // What pins the admission to a situation is the anchor below:
+    // `Anchor::Call { head }`, so one commit unbinds it as it voids a receipt.
     let root = hook_authority_root();
     let Ok(head) = git::head_commit(root) else {
         return Ok(decision);
@@ -16787,17 +16770,21 @@ fn admit_mediated(decision: hook::Decision, out: &mut dyn Write) -> Result<hook:
         return Ok(decision);
     };
     let anchor = admission::Anchor::Call { head }.token();
-    let Some(address) = admission::admitted(root, refusal.rule(), class, subject, &anchor, &epoch)?
-    else {
-        return Ok(decision);
-    };
-    // POINTER, NEVER THE ANSWERS (rule 4), and the same line `filter_admitted`
-    // emits: the address and the class are what a reader needs to find the record;
-    // the reasoning the author typed stays in the store where they wrote it.
-    // Saying WHICH record admitted the call is what stops this being the silent
-    // bypass again, wearing a record's clothes.
-    writeln!(out, "batten: {class} admitted by {address} — {subject}")?;
-    Ok(hook::Decision::Allow)
+    for subject in refusal.bindings() {
+        let Some(address) =
+            admission::admitted(root, refusal.rule(), class, subject, &anchor, &epoch)?
+        else {
+            continue;
+        };
+        // POINTER, NEVER THE ANSWERS (rule 4), and the same line `filter_admitted`
+        // emits: the address and the class are what a reader needs to find the
+        // record; the reasoning the author typed stays in the store where they
+        // wrote it. Saying WHICH record admitted the call is what stops this being
+        // the silent bypass again, wearing a record's clothes.
+        writeln!(out, "batten: {class} admitted by {address} — {subject}")?;
+        return Ok(hook::Decision::Allow);
+    }
+    Ok(decision)
 }
 
 /// The break-glass, applied to a refusal a LOADED policy produced (CLOUD-1847).

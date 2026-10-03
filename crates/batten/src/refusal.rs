@@ -272,14 +272,11 @@ pub struct Refusal {
     reason: String,
     /// What to run instead, or an explicit none.
     fix: Fix,
-    /// The canonical subject an admission binds to, when this refusal names one.
+    /// Every spelling a MEDIATED admission binds to, in order
+    /// ([`admission_bindings`] carries which and why).
     ///
-    /// The first path-bearing subject where there is one, which is already the
-    /// finding's own pointer by `rules/policy-modules.md`'s rule — so that is the
-    /// same choice the tree surface makes, not a second one. Where there is no
-    /// path, every artifact joined; [`admission_subject`] carries why, and why a
-    /// path-only answer left two classes with an override route nobody could
-    /// reach (CLOUD-1871).
+    /// The tree surface binds `finding.path` instead and anchors by fingerprint,
+    /// so it never reads this; the two are different questions (CLOUD-1826).
     ///
     /// **Carried rather than re-derived at the boundary**, and that is the whole
     /// reason the field exists. [`crate::admission::admitted`] binds five fields,
@@ -289,81 +286,60 @@ pub struct Refusal {
     /// normalization cases that made CLOUD-1133 a defect.
     ///
     /// **Not serialized**, so `-J` output is byte-identical to before (house style
-    /// §6). It is an internal binding rather than news: the same pointer is
+    /// §6). It is an internal binding rather than news: the same pointers are
     /// already in `reason`, and a consumer gains nothing from a second copy under
     /// its own key.
     #[serde(skip_serializing)]
-    subject: Option<String>,
+    bindings: Vec<String>,
 }
 
-/// The subject an admission binds to, for a refusal naming `subjects`.
+/// Every spelling a mediated refusal of `token` naming `subjects` binds, in
+/// order (CLOUD-1826).
 ///
-/// A path first, and every artifact when there is no path (CLOUD-1871).
+/// - **(a) The printed spelling, always first** —
+///   [`crate::verdict::bound_subject`] of exactly the pointers
+///   [`crate::verdict::render_line`] prints, counts included. A reader pastes
+///   the line into `override request --subject`, which spells through the same
+///   function, so the pasted line binds as the refusal does.
+/// - **(b) The first path**, when it differs from (a): the `--subject <path>`
+///   spelling the protected-path route documents.
+/// - **(c) The class token in bound spelling**, only when there are no subjects:
+///   `call name refused` binds `call,name,refused`, which is exactly what a
+///   request for that subject stores. The raw token it replaces was a spelling no
+///   request could produce.
 ///
-/// # A path-only answer made two classes unadmittable
+/// Every entry is a fixed point of `bound_subject`, so any spelling the boundary
+/// asks about is one a request can store.
 ///
-/// This used to return the first path-bearing subject and `None` for anything
-/// else, on the reasoning that "an artifact is not a path, so an admission bound
-/// to it would name something the store cannot compare against the tree". That
-/// is true of a TREE finding, which is anchored by fingerprint and whose subject
-/// is compared against the tree — and it is the wrong question for a MEDIATED
-/// refusal, which [`crate::admission::Anchor::Call`] already anchors to a head.
-/// There the subject is simply what the refusal named, and a commit id or a
-/// check name is a perfectly comparable binding.
+/// # A count binds only inside the whole printed spelling
 ///
-/// The cost of the narrower answer was not theoretical. `admit_mediated` returns
-/// early with no subject, so `history drop unpushed` (a `Count` and one
-/// `Artifact` per commit) and `receipt read other` (artifacts, its subject
-/// deliberately unnamed to keep payload out of a refusal) could never be
-/// admitted — while both declare an `override` route, which makes
-/// leave their declared routes as the only way through.
-/// No hatch and no admission is the state that function's own doc calls "the
-/// wall in its worst form" and asserts cannot happen. It had happened, to two of
-/// the three classes that declare such a route; `path write refused` escaped
-/// only because it leads with a path.
+/// So an admission for `1 <sha>` cannot fit `2 <sha> <sha>` — the harvest hole
+/// CLOUD-1871 closed stays closed. A count-only class with no override route
+/// stays inert, because `override request` refuses such a class.
 ///
-/// # EVERY artifact, not the first
+/// # Why not `rules::first_pointer`
 ///
-/// The join is what keeps the binding honest. One artifact out of several would
-/// let an admission earned for commit A admit a later reset discarding A **and**
-/// B — the harvesting hole `an_admission_bound_to_another_subject_is_refused`
-/// exists to close, reopened one variant over. Rendered order, so the value is
-/// byte-stable for a given refusal.
+/// That is the TREE pointer: one path slot, anchored by fingerprint. Forcing it
+/// to equal this binding would either widen tree output or drop pointers here.
 ///
-/// # A count is not an identity
-///
-/// Counts stay out: they are derivable from what the refusal already names, and
-/// binding one would make an admission for "1 commit" fit a different single
-/// commit. A class whose subjects are ONLY counts therefore still has no
-/// binding — which is not silently tolerated: `every_admissible_class_can_be_
-/// bound` refuses a class that declares an override route and cannot produce one.
-///
-/// Rule 4 is untouched either way. This binds only what the refusal already
-/// renders; it puts no new byte on any channel, and `subject` is
-/// `skip_serializing`, so `-J` output and `schema/*.json` do not move.
+/// Rule 4 is untouched: this binds only what the refusal already renders, and
+/// `bindings` is `skip_serializing`, so `-J` output and `schema/*.json` do not
+/// move.
 //MUTANT-SUITE crates/batten/src/hook.rs
-//MUTANT artifact-binding-dropped|s@^    (!artifacts.is_empty()).then(\x7c\x7c artifacts.join(","))@    None@|every_class_declaring_an_override_route_can_be_bound
-fn admission_subject(subjects: &[crate::verdict::Subject]) -> Option<String> {
-    if let Some(path) = subjects.iter().find_map(|subject| match subject {
-        crate::verdict::Subject::Path { path } | crate::verdict::Subject::Line { path, .. } => {
-            Some(path.clone())
-        }
-        crate::verdict::Subject::Count { .. } | crate::verdict::Subject::Artifact { .. } => None,
-    }) {
-        return Some(path);
+//MUTANT printed-spelling-dropped|s@^    let mut spellings = vec!\[bound_subject(&render_subjects(subjects))\];$@    let mut spellings: Vec<String> = Vec::new();@|a_subject_copied_from_the_refusal_line_admits_the_write
+//MUTANT path-spelling-dropped|s@^    let path = subjects.iter().find_map(crate::verdict::Subject::path).map(bound_subject);$@    let path: Option<String> = None;@|a_spent_admission_admits_the_write_it_was_taken_for
+//MUTANT class-spelling-raw|s@^        return vec!\[bound_subject(token)\];$@        return vec![token.to_owned()];@|a_refusal_naming_nothing_binds_its_class_as_a_request_spells_it
+fn admission_bindings(token: &str, subjects: &[crate::verdict::Subject]) -> Vec<String> {
+    use crate::verdict::{bound_subject, render_subjects};
+    if subjects.is_empty() {
+        return vec![bound_subject(token)];
     }
-    let artifacts: Vec<&str> = subjects
-        .iter()
-        .filter_map(|subject| match subject {
-            crate::verdict::Subject::Artifact { artifact } => Some(artifact.as_str()),
-            crate::verdict::Subject::Count { .. }
-            | crate::verdict::Subject::Path { .. }
-            | crate::verdict::Subject::Line { .. } => None,
-        })
-        .collect();
-    // The restored defect, exactly: a path-only answer, which is what left two
-    // classes with an override route nobody could reach.
-    (!artifacts.is_empty()).then(|| artifacts.join(","))
+    let mut spellings = vec![bound_subject(&render_subjects(subjects))];
+    // One line, because `path-spelling-dropped` anchors on it whole.
+    #[rustfmt::skip]
+    let path = subjects.iter().find_map(crate::verdict::Subject::path).map(bound_subject);
+    spellings.extend(path.filter(|path| !spellings.contains(path)));
+    spellings
 }
 
 /// What [`Fix::None`] renders as: the gap, stated, plus the general recourse.
@@ -491,9 +467,9 @@ impl Refusal {
             reason: reason.into(),
             fix,
             // A consumer-composed refusal carries no declared class, so there is
-            // no token an admission could bind (`rules.rs`'s own words) — and a
-            // subject with nothing to bind it to would read as admissible.
-            subject: None,
+            // nothing a request could name — and a binding with no class behind
+            // it would read as admissible.
+            bindings: Vec::new(),
         }
     }
 
@@ -556,14 +532,15 @@ impl Refusal {
             verdict: Some(token.to_owned()),
             reason: crate::verdict::render_line(registry, token, subjects),
             fix,
-            subject: admission_subject(subjects),
+            bindings: admission_bindings(token, subjects),
         }
     }
 
-    /// The canonical subject an admission binds to, when this refusal names one.
+    /// Every spelling a mediated admission binds to, printed spelling first
+    /// ([`admission_bindings`]). Empty only for a consumer-composed refusal.
     #[must_use]
-    pub fn subject(&self) -> Option<&str> {
-        self.subject.as_deref()
+    pub fn bindings(&self) -> &[String] {
+        &self.bindings
     }
 
     /// The declared class, or `None` for a refusal composed from consumer prose.

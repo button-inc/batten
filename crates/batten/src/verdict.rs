@@ -425,6 +425,15 @@ impl Subject {
         }
     }
 
+    /// The path this subject names, for a `Path` or a `Line`; `None` otherwise.
+    #[must_use]
+    pub fn path(&self) -> Option<&str> {
+        match self {
+            Subject::Path { path } | Subject::Line { path, .. } => Some(path),
+            Subject::Count { .. } | Subject::Artifact { .. } => None,
+        }
+    }
+
     /// Read one subject off a policy module's `subjects` array.
     ///
     /// `None` is could-not-look, never an empty subject: a member whose shape
@@ -474,6 +483,30 @@ pub fn render_subjects(subjects: &[Subject]) -> String {
         .map(Subject::render)
         .collect::<Vec<String>>()
         .join(" ")
+}
+
+/// The spelling an admission binds a subject in — the one function both sides
+/// of the mediated surface spell through (CLOUD-1826, CLOUD-1997).
+///
+/// A refusal PRINTS its pointers joined by a space ([`render_subjects`]); a
+/// reader copies that line into `override request --subject`. So whitespace is
+/// rejoined with `,`, and the binding side (`refusal::admission_bindings`) runs
+/// what it prints through this same function — which is what makes a pasted line
+/// bind as the refusal does.
+///
+/// **The `/` exception exists for the TREE surface**: a tree admission is matched
+/// against `finding.path` verbatim, and a path like `docs/a b.md` rejoined would
+/// name nothing any finding carries. Idempotent: a `/`-bearing text comes back
+/// trimmed, and any other text has no whitespace left after the join.
+//MUTANT rendered-subject-unmatched|s@^    trimmed.split_whitespace().collect::<Vec<_>>().join(",")$@    trimmed.to_owned()@|a_subject_copied_from_the_refusal_line_binds_as_the_refusal_does
+//MUTANT path-subject-split|s@^    if trimmed.contains('/') {$@    if false {@|a_subject_copied_from_the_refusal_line_binds_as_the_refusal_does
+#[must_use]
+pub fn bound_subject(text: &str) -> String {
+    let trimmed = text.trim();
+    if trimmed.contains('/') {
+        return trimmed.to_owned();
+    }
+    trimmed.split_whitespace().collect::<Vec<_>>().join(",")
 }
 
 /// What a refusal says on the hot path: the token and its pointers, and stops

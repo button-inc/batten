@@ -167,6 +167,9 @@ fn a_subject_copied_from_the_refusal_line_binds_as_the_refusal_does() {
         admission::subject_as_bound("policy/agent-spawn.rego"),
         "policy/agent-spawn.rego"
     );
+    // The tree surface matches `finding.path` verbatim, so a path with a space
+    // must not be rejoined into a name no finding carries (CLOUD-1826).
+    assert_eq!(admission::subject_as_bound("docs/a b.md"), "docs/a b.md");
     let root = fixture("copied-subject");
     let issued = admission::issue(
         &root,
