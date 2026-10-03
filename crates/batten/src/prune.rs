@@ -2119,6 +2119,8 @@ fn lap(
 /// It does not try to tell current from stale: cargo keeps every generation's
 /// fingerprint, so "has a fingerprint" would mark everything live and reclaim
 /// nothing, which is CLOUD-766's disk exhaustion back.
+//MUTANT-SUITE crates/batten/tests/it/target_prune.rs
+//MUTANT examples-never-pruned|s@\.chain(examples)@.chain(Vec::<PathBuf>::new())@|superseded_example_generations_are_reclaimed_like_deps
 fn reclaim_superseded(root: &Path, keep: usize) -> (usize, u64) {
     let mut pruned = 0;
     let mut bytes = 0;
@@ -2129,8 +2131,6 @@ fn reclaim_superseded(root: &Path, keep: usize) -> (usize, u64) {
     // every bench: 56 units for 4 examples, 1,082 MB, measured 2026-09-30. Only an
     // `examples` whose parent is a profile (it carries `.fingerprint`) is a cargo
     // output; the name alone is one a fixture under `target/` could spell.
-    //MUTANT-SUITE crates/batten/tests/it/target_prune.rs
-    //MUTANT examples-never-pruned|s@\.chain(examples)@.chain(Vec::<PathBuf>::new())@|superseded_example_generations_are_reclaimed_like_deps
     let examples: Vec<PathBuf> = directories_named(root, "examples")
         .into_iter()
         .filter(|dir| {
