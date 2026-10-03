@@ -2446,6 +2446,27 @@ run = [
   "{{vars.batten}} check --rule 'issue state other'",
 ]
 
+# The engine pin's landing gate (CLOUD-2063). A source pin never lands, and a
+# release pin must load this config and carry every verb the released-binary
+# lanes invoke. The lanes are named here, as consumer facts, never in the engine
+# (non-negotiable rule 1): these three install a release and then call it.
+[tasks.engine-pin-check]
+description = "Gate: the engine pin names a release, and that release loads this config and carries every verb the released lanes call (CLOUD-2063)"
+run = [
+  "{{vars.batten}} engine gate --lane .github/workflows/auto-bot-land.yml --lane .github/workflows/auto-release-land.yml --lane .github/workflows/fast-forward.yml",
+]
+
+# The hk step's two halves (CLOUD-2063): a declared source pin is moved to this
+# tree's digest, so a branch's pin never goes stale under its own edits. With
+# no source pin both are no-ops.
+[tasks."engine-pin:check"]
+description = "Gate: a declared source pin equals this tree's digest (CLOUD-2063)"
+run = ["{{vars.batten}} engine pin --check"]
+
+[tasks."engine-pin:fix"]
+description = "Effect: move a declared source pin to this tree's digest (CLOUD-2063)"
+run = ["{{vars.batten}} engine pin"]
+
 [tasks.record-verdicts]
 description = "Effect: run each declared validator and record its exit code, then record the forge's answered verdicts for HEAD (CLOUD-1265)"
 # THE THREE ARMS ARE VERBS NOW (CLOUD-843). Each validator is a `[[rule.tools]]`
@@ -4566,6 +4587,7 @@ run = [
   "mise run verify:config-lint",
   "mise run evaluator-io-record",
   "mise run batten -- check --rule 'test cover never'",
+  "mise run engine-pin-check",
   "mise run perf-gate",
   "mise run prose-only-check",
   "mise run batten -- ci step --verdict needed --on 0=true --on 2=false -- mise run ci-slow-needed origin/main",

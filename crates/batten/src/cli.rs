@@ -487,7 +487,7 @@ pub enum Command {
 }
 
 /// Subcommands of `engine` (CLOUD-2061).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum EngineCommand {
     /// Print this tree's source digest.
@@ -496,6 +496,18 @@ pub enum EngineCommand {
     Stamp,
     /// Install the engine the config pins over the running binary (CLOUD-2062).
     Update,
+    /// Set or refresh the config's pin (CLOUD-2063).
+    Pin {
+        /// A release tag, `source`, or `version`; `None` refreshes a source pin.
+        value: Option<String>,
+        /// Report whether the pin would change, writing nothing.
+        check: bool,
+    },
+    /// The landing gate over the pin (CLOUD-2063).
+    Gate {
+        /// Workflows whose command lines run the released binary.
+        lanes: Vec<String>,
+    },
 }
 
 /// Subcommands of `artifacts` (CLOUD-1991).
@@ -3415,10 +3427,20 @@ fn artifacts_of(matches: &ArgMatches) -> Option<ArtifactsCommand> {
 }
 
 fn engine_of(matches: &ArgMatches) -> Option<EngineCommand> {
-    match matches.subcommand()?.0 {
-        "digest" => Some(EngineCommand::Digest),
-        "stamp" => Some(EngineCommand::Stamp),
-        "update" => Some(EngineCommand::Update),
+    match matches.subcommand()? {
+        ("digest", _) => Some(EngineCommand::Digest),
+        ("stamp", _) => Some(EngineCommand::Stamp),
+        ("update", _) => Some(EngineCommand::Update),
+        ("pin", matches) => Some(EngineCommand::Pin {
+            value: matches.get_one::<String>("value").cloned(),
+            check: flag(matches, "check"),
+        }),
+        ("gate", matches) => Some(EngineCommand::Gate {
+            lanes: matches
+                .get_many::<String>("lane")
+                .map(|values| values.cloned().collect())
+                .unwrap_or_default(),
+        }),
         _ => None,
     }
 }

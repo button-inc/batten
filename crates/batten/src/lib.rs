@@ -666,8 +666,147 @@ fn run_engine(command: cli::EngineCommand, out: &mut dyn Write) -> Result<ExitCo
             writeln!(out, "{}", engine::stamp_path(&binary).display())?;
         }
         cli::EngineCommand::Update => return engine_update(&root, out),
+        cli::EngineCommand::Pin { value, check } => {
+            return engine_pin(&root, &digest, value.as_deref(), check, out);
+        }
+        cli::EngineCommand::Gate { lanes } => return engine_gate(&root, &lanes, out),
     }
     Ok(ExitCode::Success)
+}
+
+/// `batten engine pin` (CLOUD-2063): write the config's one `engine` line.
+///
+/// With no value it is the hk fixer: a declared SOURCE pin is moved to this
+/// tree's digest, so a branch's pin never goes stale under its own edits, and
+/// anything else — no pin, a release pin — is left alone. `version` pins this
+/// engine's own release, which is how the release pull request moves the pin
+/// with the version it bumps.
+fn engine_pin(
+    root: &Path,
+    digest: &str,
+    value: Option<&str>,
+    check: bool,
+    out: &mut dyn Write,
+) -> Result<ExitCode> {
+    let path = root.join(config::CONFIG_FILE);
+    let text = std::fs::read_to_string(&path)?;
+    let source = |digest: &str| engine::Pin {
+        release: None,
+        source: Some(digest.to_owned()),
+    };
+    let release = |tag: String| engine::Pin {
+        release: Some(tag),
+        source: None,
+    };
+    let pin = match value {
+        None => match engine::declared(&text) {
+            Some(engine::Pin {
+                release: None,
+                source: Some(_),
+            }) => source(digest),
+            _ => return Ok(ExitCode::Success),
+        },
+        Some("source") => source(digest),
+        Some("version") => release(engine::release()),
+        Some(tag) if tag.starts_with('v') => release(tag.to_owned()),
+        Some(other) => {
+            return Err(UsageError::raise(format!(
+                "engine pin: {other} is not a release tag (v0.0.201), `source` or `version`"
+            )));
+        }
+    };
+    let rewritten = engine::rewrite(&text, &pin);
+    if rewritten == text {
+        return Ok(ExitCode::Success);
+    }
+    if check {
+        writeln!(out, "{} engine pin stale", path.display())?;
+        return Ok(ExitCode::Violation);
+    }
+    durable::replace(&path, rewritten)?;
+    writeln!(out, "{}", path.display())?;
+    Ok(ExitCode::Success)
+}
+
+/// `batten engine gate` (CLOUD-2063): the pin as the landing path judges it.
+///
+/// - A SOURCE pin never lands: it names a build only this branch can make.
+/// - A RELEASE pin must be the engine this tree can run under: that release's
+///   own binary — fetched and verified once, then cached — must load this
+///   config, and every verb a released lane's command lines invoke must exist
+///   in it. A key or verb newer than the pin is feature drift, refused here
+///   rather than discovered when a lane on `main` fails.
+/// - No pin is nothing to judge.
+///
+/// Every finding is a pointer: the file, the token, the pin.
+//MUTANT-SUITE crates/batten/tests/it/engine_gates.rs
+//MUTANT source-pin-admitted|s@^    if pin.source.is_some() {$@    if false {@|a_source_pin_is_refused_on_the_landing_path
+fn engine_gate(root: &Path, lanes: &[String], out: &mut dyn Write) -> Result<ExitCode> {
+    let config_path = root.join(config::CONFIG_FILE);
+    let text = std::fs::read_to_string(&config_path)?;
+    let Some(pin) = engine::declared(&text) else {
+        return Ok(ExitCode::Success);
+    };
+    if pin.source.is_some() {
+        writeln!(
+            out,
+            "{} engine pin source never lands: pin a release with `batten engine pin <tag>`",
+            config_path.display()
+        )?;
+        return Ok(ExitCode::Violation);
+    }
+    // A malformed pin is `engine::check`'s to name, on every load.
+    let Some(tag) = pin.release.as_deref() else {
+        return Ok(ExitCode::Success);
+    };
+    let common = PathBuf::from(git::common_dir(root)?);
+    let binary = engine::pinned_release(&common, env!("CARGO_PKG_REPOSITORY"), tag)?;
+    // The pinned engine must decide as itself: never update itself mid-gate.
+    let published = [(String::from(ENGINE_UPDATED), String::from("1"))];
+    // A non-zero child arrives as a `Passthrough` ERROR, which is the right shape
+    // for a re-exec and the wrong one here: the pinned engine refusing is this
+    // gate's answer, not its failure, so it reads as "did not succeed".
+    let runs = |args: &[&str]| -> Result<bool> {
+        let mut argv = vec![binary.to_string_lossy().into_owned()];
+        argv.extend(args.iter().map(|arg| (*arg).to_owned()));
+        match exec::run_in_env(root, &argv, &published) {
+            Ok(code) => Ok(code == ExitCode::Success),
+            Err(why) if why.downcast_ref::<Passthrough>().is_some() => Ok(false),
+            Err(why) => Err(why),
+        }
+    };
+    let mut findings = 0_usize;
+    if !runs(&["config", "show"])? {
+        writeln!(
+            out,
+            "{} engine pin {tag} cannot load this config",
+            config_path.display()
+        )?;
+        findings += 1;
+    }
+    for lane in lanes {
+        let workflow = std::fs::read_to_string(root.join(lane))?;
+        for verb in engine::invoked_verbs(&workflow) {
+            let mut args: Vec<&str> = verb.split(' ').collect();
+            args.push("--help");
+            if !verb_exists(&runs, &args)? {
+                writeln!(out, "{lane} batten {verb} not in engine pin {tag}")?;
+                findings += 1;
+            }
+        }
+    }
+    Ok(if findings == 0 {
+        ExitCode::Success
+    } else {
+        ExitCode::Violation
+    })
+}
+
+/// Whether the pinned binary answers `--help` for a verb, which clap does only
+/// for a subcommand it declares.
+//MUTANT verb-drift-unchecked|s@^    runs(args)$@    Ok(true)@|a_verb_the_pinned_release_lacks_is_drift
+fn verb_exists(runs: &dyn Fn(&[&str]) -> Result<bool>, args: &[&str]) -> Result<bool> {
+    runs(args)
 }
 
 /// `batten artifacts write` (CLOUD-1991): the committed derivations of the

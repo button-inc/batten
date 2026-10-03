@@ -940,6 +940,8 @@ mod tests {
             "enforce".to_owned(),
             "engine".to_owned(),
             "engine digest".to_owned(),
+            "engine gate".to_owned(),
+            "engine pin".to_owned(),
             "engine stamp".to_owned(),
             "engine update".to_owned(),
             "exec".to_owned(),

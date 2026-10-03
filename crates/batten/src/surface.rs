@@ -925,6 +925,42 @@ const REFS_FIRST_ONLY: FlagDecl = FlagDecl {
 const MANIFEST: FlagDecl =
     FlagDecl::positional("manifest", "The manifest whose declared tool table to read");
 
+/// `engine pin`'s value (CLOUD-2063): a release tag, `source`, or `version`.
+const ENGINE_PIN_VALUE: FlagDecl = FlagDecl::positional_optional(
+    "value",
+    "The pin to write: a release tag (v0.0.201), `source` for this tree's digest, or `version` for this engine's own release; omitted, refresh a declared source pin",
+);
+
+/// `engine pin --check`: say whether the file would change, and change nothing.
+const ENGINE_PIN_CHECK: FlagDecl = FlagDecl {
+    id: "check",
+    long: Some("check"),
+    short: None,
+    help: "Exit 1 when the pin would change, and write nothing",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Bool,
+};
+
+/// `engine gate --lane`: a workflow whose command lines run the released binary.
+const ENGINE_LANE: FlagDecl = FlagDecl {
+    id: "lane",
+    long: Some("lane"),
+    short: None,
+    help: "A workflow that runs the released binary; every verb its command lines invoke must exist in the pinned release (repeatable)",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::StrMany,
+};
+
 const JSON: FlagDecl = FlagDecl {
     id: "json",
     long: Some("json"),
@@ -7526,6 +7562,31 @@ pub const SURFACE: &[CommandDecl] = &[
         exits: EXITS_STANDARD,
         effect: Effect::Write,
         flags: &[],
+    },
+    // `write`: the one `engine` line of the committed config (CLOUD-2063), and
+    // nothing else in it. `--check` writes nothing, which is how the hk step asks
+    // before its fixer runs.
+    CommandDecl {
+        path: "engine pin",
+        id: "engine.pin",
+        about: "Set the config's engine pin, or refresh a declared source pin to this tree's digest",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Write,
+        flags: &[ENGINE_PIN_VALUE, ENGINE_PIN_CHECK],
+    },
+    // `write`, for the cache: a release pin's binary is fetched, verified and
+    // kept under git's common directory, then run over this tree (CLOUD-2063).
+    // The verdict is the gate's: a source pin never lands, and a release pin
+    // must load this config and carry every verb the released lanes invoke.
+    CommandDecl {
+        path: "engine gate",
+        id: "engine.gate",
+        about: "Refuse a source pin, or a release pin that cannot load this config or lacks a verb the released lanes call",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Write,
+        flags: &[ENGINE_LANE],
     },
     CommandDecl {
         path: "artifacts",

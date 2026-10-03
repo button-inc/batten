@@ -329,9 +329,162 @@ pub fn extract(archive: &[u8], bin: &str) -> Result<Vec<u8>> {
     )))
 }
 
+/// The one config line that declares `pin`.
+#[must_use]
+pub fn line(pin: &Pin) -> String {
+    match (pin.release.as_deref(), pin.source.as_deref()) {
+        (Some(tag), _) => format!("engine = {{ release = \"{tag}\" }}"),
+        (None, Some(digest)) => format!("engine = {{ source = \"{digest}\" }}"),
+        (None, None) => String::from("engine = {}"),
+    }
+}
+
+/// Whether `line` is the top-level `engine` key.
+fn is_pin_line(line: &str) -> bool {
+    line.trim_start()
+        .strip_prefix("engine")
+        .is_some_and(|rest| rest.trim_start().starts_with('='))
+}
+
+/// `text` with its top-level pin set to `pin` (CLOUD-2063).
+///
+/// The existing line is replaced in place. With none, the pin goes directly
+/// after the first top-level key, so it stays above every table header — where
+/// [`declared`] reads it — and no comment block is separated from its table.
+/// Every other byte is kept.
+#[must_use]
+pub fn rewrite(text: &str, pin: &Pin) -> String {
+    let wanted = line(pin);
+    let mut lines: Vec<String> = text.lines().map(str::to_owned).collect();
+    let header = lines
+        .iter()
+        .position(|line| line.trim_start().starts_with('['))
+        .unwrap_or(lines.len());
+    if let Some(at) = lines[..header].iter().position(|line| is_pin_line(line)) {
+        lines[at] = wanted;
+    } else {
+        let key = lines[..header].iter().position(|line| {
+            let trimmed = line.trim_start();
+            !trimmed.is_empty() && !trimmed.starts_with('#')
+        });
+        lines.insert(key.map_or(0, |at| at + 1), wanted);
+    }
+    let mut out = lines.join("\n");
+    if text.ends_with('\n') {
+        out.push('\n');
+    }
+    out
+}
+
+/// The `batten` verbs a workflow's command lines invoke (CLOUD-2063).
+///
+/// A command line is one whose trimmed text, less a YAML `- ` list marker,
+/// starts `batten ` or `run: batten `;
+/// prose and comments that merely mention a verb are not invocations. The verb
+/// is the leading lowercase words after `batten`, at most two, so
+/// `batten pr ensure "$PR_NUM"` is `pr ensure`. `mise run batten -- …` builds
+/// the engine from source and is not a released-binary call, which the rule
+/// excludes by construction: the line does not start with `batten`.
+#[must_use]
+pub fn invoked_verbs(text: &str) -> std::collections::BTreeSet<String> {
+    text.lines()
+        .filter_map(|line| {
+            let trimmed = line.trim_start();
+            let trimmed = trimmed.strip_prefix("- ").unwrap_or(trimmed);
+            trimmed
+                .strip_prefix("run: batten ")
+                .or_else(|| trimmed.strip_prefix("batten "))
+        })
+        .map(|rest| {
+            rest.split_whitespace()
+                .take_while(|word| {
+                    word.chars().next().is_some_and(|c| c.is_ascii_lowercase())
+                        && word.chars().all(|c| c.is_ascii_lowercase() || c == '-')
+                })
+                .take(2)
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .filter(|verb| !verb.is_empty())
+        .collect()
+}
+
+/// Where the pinned release's binary is kept once fetched: under git's common
+/// directory, so every worktree of one clone shares one download per tag.
+#[must_use]
+pub fn cached_release(common_dir: &Path, tag: &str) -> PathBuf {
+    common_dir
+        .join("batten-engine")
+        .join(tag)
+        .join(crate::dist::binary_file("batten", &running_target()))
+}
+
+/// The pinned release's binary, fetched and verified once and cached after.
+///
+/// # Errors
+///
+/// As [`fetch_release`], or a cache that will not write.
+pub fn pinned_release(common_dir: &Path, repository: &str, tag: &str) -> Result<PathBuf> {
+    let path = cached_release(common_dir, tag);
+    if path.is_file() {
+        return Ok(path);
+    }
+    let bytes = fetch_release(repository, tag)?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    crate::durable::replace(&path, bytes)?;
+    make_executable(&path)?;
+    Ok(path)
+}
+
+#[cfg(unix)]
+fn make_executable(path: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt as _;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn make_executable(_path: &Path) -> Result<()> {
+    // Windows has no executable bit; the extension carries it.
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_pin_is_rewritten_in_place_or_inserted_above_every_table() {
+        let release = Pin {
+            release: Some("v0.0.201".into()),
+            source: None,
+        };
+        let pinned = "version = 1\nengine = { source = \"ab\" }\n\n# rows\n[x]\ny = 1\n";
+        assert_eq!(
+            rewrite(pinned, &release),
+            "version = 1\nengine = { release = \"v0.0.201\" }\n\n# rows\n[x]\ny = 1\n"
+        );
+        let bare = "# head\nversion = 1\n\n# rows\n[x]\nengine = 2\n";
+        let inserted = rewrite(bare, &release);
+        assert_eq!(
+            inserted,
+            "# head\nversion = 1\nengine = { release = \"v0.0.201\" }\n\n# rows\n[x]\nengine = 2\n"
+        );
+        assert_eq!(declared(&inserted), Some(release));
+    }
+
+    #[test]
+    fn only_command_lines_invoke_a_verb() {
+        let workflow = "      # hands them to `batten checks green`, a pure function\n\
+                        \x20       run: |\n\
+                        \x20         batten pr ensure \"$PR_NUM\"\n\
+                        \x20     - run: batten checks green --sha x\n\
+                        \x20     - run: mise run batten -- ci step -- true\n";
+        let verbs: Vec<_> = invoked_verbs(workflow).into_iter().collect();
+        assert_eq!(verbs, ["checks green", "pr ensure"]);
+    }
 
     #[test]
     fn the_release_asset_url_is_the_dist_naming() {

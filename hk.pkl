@@ -630,6 +630,18 @@ local gate = new Mapping<String, Step> {
   // about what "formatted" means. The tasks feed `git ls-files '*.rego'` rather
   // than taking `{{files}}`, because the check must never reach a deliberately
   // malformed fixture a suite writes under `target/`.
+  // CLOUD-2063. A declared SOURCE engine pin names this tree's digest, which
+  // moves with every edit under `crates/` or the root manifests — so a fixer,
+  // never a refusal, keeps it current and a commit never stalls on it. With no
+  // source pin both halves are no-ops. `slow` for `deno-fmt`'s reason: a PATH
+  // release older than CLOUD-2063 has no `engine pin`, so the task builds the
+  // engine. `verify` refuses a source pin outright (`engine-pin-check`).
+  ["engine-pin"] {
+    profiles = List("slow")
+    glob = List("crates/**", "Cargo.toml", "Cargo.lock", "batten.toml")
+    check = "mise run engine-pin:check"
+    fix = "mise run engine-pin:fix"
+  }
   ["rego"] {
     // `slow` tier since CLOUD-1991: the task selects its files through
     // `batten exec --tracked`, which a PATH release does not carry yet, so it
