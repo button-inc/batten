@@ -2390,6 +2390,16 @@
           "const": "codex-cli"
         },
         {
+          "description": "Factory Droid. Claude Code's wire shape — the same event names, the same\n`hookSpecificOutput.permissionDecision` verdict object — over a different\ntool vocabulary (`Create`/`Edit`/`ApplyPatch` write, `Execute` runs a\nshell) and its own hooks-only project file. Fetched 2026-10-03 from\n`docs.factory.com/reference/hooks-reference` (CLOUD-1942).",
+          "type": "string",
+          "const": "factory"
+        },
+        {
+          "description": "OpenCode. No stdin/stdout hook contract at all: its plugin API's\n`tool.execute.before(input, output)` blocks by THROWING. So the adapter is\na plugin Batten generates (`batten generate hooks --harness opencode`),\nwhich hands the engine a Claude-shaped envelope and throws the reason on\nexit 2. Fetched 2026-10-03 from `opencode.ai/docs/plugins/` (CLOUD-1942).\n\nThe token is one word because the product is: the derive would spell it\n`open-code`, a name the host never uses.",
+          "type": "string",
+          "const": "opencode"
+        },
+        {
           "description": "The neutral core contract: envelope in, decision as exit code out —\n`0` allow, `2` deny (reason on stderr), for any host whose only decision\nchannel is an exit status. Both codes are the §7 table's, unmodified.",
           "type": "string",
           "const": "exit-code"

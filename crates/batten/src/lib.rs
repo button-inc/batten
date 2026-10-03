@@ -2890,7 +2890,11 @@ fn mcp_settings(repo: &Path, given: Option<&str>) -> PathBuf {
         return PathBuf::from(given);
     }
     match hook::Harness::ClaudeCode.wiring().map(|wiring| wiring.file) {
-        Some(hook::WiringFile::Key { path, .. } | hook::WiringFile::Whole(path)) => repo.join(path),
+        Some(
+            hook::WiringFile::Key { path, .. }
+            | hook::WiringFile::Whole(path)
+            | hook::WiringFile::Root(path),
+        ) => repo.join(path),
         None => repo.to_path_buf(),
     }
 }
@@ -23836,6 +23840,13 @@ fn run_generate(command: &GenerateCommand, out: &mut dyn Write) -> Result<ExitCo
         // register with". `UsageError` is exit 1 — the caller named something
         // that cannot be asked for, which is a statement about the invocation.
         GenerateCommand::Hooks { harness } => {
+            // A host whose adapter is code rather than a registration gets the
+            // code (CLOUD-1942). The caller writes it to the path named in its
+            // header, exactly as it redirects every other generated artifact.
+            if harness.plugin().is_some() {
+                writeln!(out, "{}", hook::render_opencode_plugin())?;
+                return Ok(ExitCode::Success);
+            }
             let wiring = harness.wiring().ok_or_else(|| {
                 UsageError::raise(format!(
                     "generate hooks: {} is the neutral contract, not a host — it has no \
