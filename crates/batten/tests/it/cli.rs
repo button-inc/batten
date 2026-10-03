@@ -1871,6 +1871,22 @@ const MATRIX: &[Row] = &[
         expected: 2,
         channel: Channel::StderrReason,
     },
+    // Factory documents Claude Code's verdict object, so its deny is the same
+    // in-band document on exit 0.
+    Row {
+        harness: "factory",
+        case: "allow",
+        command: "gh pr view 42",
+        expected: 0,
+        channel: Channel::Silent,
+    },
+    Row {
+        harness: "factory",
+        case: "deny",
+        command: "gh pr merge 42",
+        expected: 0,
+        channel: Channel::StdoutDenyJson,
+    },
     Row {
         harness: "exit-code",
         case: "allow",
@@ -3948,6 +3964,7 @@ fn every_host_denies_the_same_call_through_its_own_channel() {
             "\"permissionDecision\":\"deny\"",
         ),
         ("cursor", "cursor", "\"permission\":\"deny\""),
+        ("factory", "factory", "\"permissionDecision\":\"deny\""),
     ] {
         let output = run_hook_in(&dir, harness, &host_fixture(stem));
         assert_eq!(
@@ -3991,6 +4008,30 @@ fn every_host_denies_the_same_call_through_its_own_channel() {
             "{harness}: the decision travels on stderr here"
         );
     }
+}
+
+/// Factory's deny carries its reason INSIDE the verdict object (CLOUD-1942).
+///
+/// The vendor reference documents `permissionDecisionReason` beside
+/// `permissionDecision`, and the deny exits 0 — so stderr is not read, and a body
+/// without the reason would refuse the call while telling the model nothing about
+/// why. The pinned fixture is the reference's own `PreToolUse` shape, with
+/// Factory's `Execute` shell tool.
+#[test]
+fn a_factory_deny_carries_its_reason_in_the_verdict_object() {
+    let dir = repo_with_gh_policy("factory-deny-reason");
+    let output = run_hook_in(&dir, "factory", &host_fixture("factory"));
+    assert_eq!(output.status.code(), Some(0), "the body is the verdict");
+    let body: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .unwrap_or_else(|err| panic!("a Factory deny is one JSON document: {err}"));
+    let verdict = &body["hookSpecificOutput"];
+    assert_eq!(verdict["permissionDecision"], "deny");
+    assert!(
+        verdict["permissionDecisionReason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("commit ship other")),
+        "the reason names the row that refused, got: {body}"
+    );
 }
 
 /// A policy declaring one protected path and **Claude Code's** write vocabulary.
@@ -4038,7 +4079,7 @@ redirect = "write through the surface that owns the file"
 /// below asserts one verdict per harness rather than one per channel.
 fn denied(harness: &str, output: &Output) -> bool {
     match harness {
-        "claude-code" => {
+        "claude-code" | "factory" => {
             String::from_utf8_lossy(&output.stdout).contains("\"permissionDecision\":\"deny\"")
         }
         "cursor" => String::from_utf8_lossy(&output.stdout).contains("\"permission\":\"deny\""),
@@ -4065,6 +4106,7 @@ fn a_protected_write_is_refused_on_every_harness_in_its_own_vocabulary() {
         ("copilot-cli", "copilot-cli-write"),
         ("gemini-cli", "gemini-cli-write"),
         ("codex-cli", "codex-cli-write"),
+        ("factory", "factory-write"),
     ] {
         let output = run_hook_in(&dir, harness, &host_fixture(stem));
         assert!(
@@ -4118,7 +4160,13 @@ fn a_read_of_a_protected_path_is_not_refused_on_any_harness() {
     // table. A gate keyed on "the payload names a protected path" would refuse
     // reading the policy file everywhere at once.
     let dir = repo_with_config("protected-read-matrix", PROTECTED_WRITE_CONFIG);
-    for harness in ["claude-code", "cursor", "gemini-cli", "codex-cli"] {
+    for harness in [
+        "claude-code",
+        "cursor",
+        "gemini-cli",
+        "codex-cli",
+        "factory",
+    ] {
         let output = run_hook_in(
             &dir,
             harness,
@@ -4175,7 +4223,13 @@ fn an_event_a_host_does_not_declare_degrades_cleanly() {
     );
 
     // Undeclared: still an allow, still nothing on the answer channel.
-    for harness in ["cursor", "copilot-cli", "gemini-cli", "codex-cli"] {
+    for harness in [
+        "cursor",
+        "copilot-cli",
+        "gemini-cli",
+        "codex-cli",
+        "factory",
+    ] {
         let output = run_hook_in(&dir, harness, &payload);
         assert_eq!(
             output.status.code(),
@@ -4217,6 +4271,7 @@ fn a_payload_that_fits_no_host_fails_open_on_every_host() {
         "copilot-cli",
         "gemini-cli",
         "codex-cli",
+        "factory",
         "exit-code",
     ] {
         let output = run_hook_in(&dir, harness, "not json at all");
@@ -10656,6 +10711,7 @@ const INSTALLABLE_HARNESSES: &[&str] = &[
     "copilot-cli",
     "gemini-cli",
     "codex-cli",
+    "factory",
 ];
 
 #[test]
@@ -10748,7 +10804,7 @@ fn generate_hooks_refuses_the_contract_only_harness() {
 // judge the identity the sandbox's git happens to resolve, which is asserting a
 // premise the fixture never created (`rules/rust.md`, CLOUD-249).
 
-/// The six harness tokens, as the binary accepts them.
+/// The seven harness tokens, as the binary accepts them.
 ///
 /// Spelled here rather than read off `Harness::ALL` at runtime **and** checked
 /// against it below, so a new host cannot join the enum without joining this
@@ -10759,6 +10815,7 @@ const ATTRIBUTION_HOSTS: &[&str] = &[
     "copilot-cli",
     "gemini-cli",
     "codex-cli",
+    "factory",
     "exit-code",
 ];
 

@@ -2890,7 +2890,11 @@ fn mcp_settings(repo: &Path, given: Option<&str>) -> PathBuf {
         return PathBuf::from(given);
     }
     match hook::Harness::ClaudeCode.wiring().map(|wiring| wiring.file) {
-        Some(hook::WiringFile::Key { path, .. } | hook::WiringFile::Whole(path)) => repo.join(path),
+        Some(
+            hook::WiringFile::Key { path, .. }
+            | hook::WiringFile::Whole(path)
+            | hook::WiringFile::Root(path),
+        ) => repo.join(path),
         None => repo.to_path_buf(),
     }
 }

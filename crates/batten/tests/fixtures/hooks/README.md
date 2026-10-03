@@ -23,6 +23,12 @@ translation surface the shims exist for:
 | copilot-cli | `PreToolUse`           | `tool_name` | `tool_input`  | `session_id`      |
 | gemini-cli  | `BeforeTool`           | `tool_name` | `tool_input`  | `session_id`      |
 | cursor      | `beforeShellExecution` | _(derived)_ | _(top level)_ | `conversation_id` |
+| factory     | `PreToolUse`           | `tool_name` | `tool_input`  | `session_id`      |
+
+`factory.json` and `factory-write.json` are later than the M1 survey: they follow
+the `PreToolUse` input example in Factory's own hooks reference
+(`docs.factory.com/reference/hooks-reference`, fetched 2026-10-03, CLOUD-1942),
+including its `Execute` shell tool and its `permission_mode` value.
 
 `copilot-cli` is registered in its **PascalCase** dialect deliberately: the
 camelCase one omits the event name entirely, and an adapter that cannot read the
@@ -47,6 +53,7 @@ gate against one host.
 | gemini-cli  | `WriteFile`                    | **allowed**           |
 | copilot-cli | `StrReplaceEditor`             | **allowed**           |
 | codex-cli   | `NotebookEdit`                 | refused               |
+| factory     | `Create`                       | _(added 2026-10-03)_  |
 
 The three allows were measured against a `[[verb]]` table naming Claude Code's
 four write tools — the table a consumer actually writes. Nothing reported them,
@@ -59,6 +66,6 @@ write target through the tool at all, because its targets live in the command
 text. It is `Operation::Execute`, and the same gate judges it — which is what
 stops the shell path and the tool path from being two implementations that drift.
 
-The spellings come from `Harness::write_tools`, which is the M1 survey's output,
-not from re-derivation. There is no `exit-code` fixture here for the same reason
+The spellings come from `Harness::write_tools`, which is the M1 survey's output
+(Factory's from its own reference, above), not from re-derivation. There is no `exit-code` fixture here for the same reason
 there is none above: it is a contract, not a host.

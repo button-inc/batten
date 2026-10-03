@@ -2390,6 +2390,11 @@
           "const": "codex-cli"
         },
         {
+          "description": "Factory Droid. Claude Code's wire shape — the same event names, the same\n`hookSpecificOutput.permissionDecision` verdict object — over a different\ntool vocabulary (`Create`/`Edit`/`ApplyPatch` write, `Execute` runs a\nshell) and its own hooks-only project file. Fetched 2026-10-03 from\n`docs.factory.com/reference/hooks-reference` (CLOUD-1942).",
+          "type": "string",
+          "const": "factory"
+        },
+        {
           "description": "The neutral core contract: envelope in, decision as exit code out —\n`0` allow, `2` deny (reason on stderr), for any host whose only decision\nchannel is an exit status. Both codes are the §7 table's, unmodified.",
           "type": "string",
           "const": "exit-code"
