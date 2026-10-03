@@ -105,6 +105,27 @@ test_git_is_left_to_the_git_preset if {
 	count(preapprove) == 0 with input as shell("auto", [program("git", ["reset", "--hard"])])
 }
 
+# A compound line is judged program by program, so `rm` in the second segment
+# withholds the grant as surely as `rm` alone: the case `module-tested-bare-only`
+# asks every mediated module for (CLOUD-857).
+test_a_later_segment_rm_withholds_the_grant if {
+	count(preapprove) == 0 with input as {"call": {
+		"event": "pre-tool", "tool": "Bash", "permission-mode": "auto",
+		"command": "cd /x && python3 y.py && rm -rf build",
+		"segments": [{"words": ["cd", "/x"]}, {"words": ["python3", "y.py"]}, {"words": ["rm", "-rf", "build"]}],
+		"programs": [program("cd", ["/x"]), program("python3", ["y.py"]), program("rm", ["-rf", "build"])],
+	}}
+}
+
+test_a_compound_write_is_granted if {
+	"call grant now" in preapprove with input as {"call": {
+		"event": "pre-tool", "tool": "Bash", "permission-mode": "auto",
+		"command": "cd /x && python3 y.py | tee out.log",
+		"segments": [{"words": ["cd", "/x"]}, {"words": ["python3", "y.py"]}, {"words": ["tee", "out.log"]}],
+		"programs": [program("cd", ["/x"]), program("python3", ["y.py"]), program("tee", ["out.log"])],
+	}}
+}
+
 test_a_destructive_batten_verb_is_left_to_the_host if {
 	count(preapprove) == 0 with input as shell("auto", [{"name": "batten", "arguments": ["target", "prune"], "batten-effect": "destructive"}])
 }
