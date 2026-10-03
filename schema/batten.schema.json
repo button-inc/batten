@@ -2327,8 +2327,11 @@
           }
         },
         "nothing_graded": {
-          "description": "The check-runs read's statuses that mean \"no runs recorded\" rather than\ncould-not-look (CLOUD-2080).\n\n**Declared, never an engine constant.** A status here turns a refusal\ninto a clean answer, so adding one narrows what reads as \"could not\nlook\" — `trust.rs` reports any status added against the base as a\nweakening, and `config lint` puts it to the recorded question. Empty is\nthe strict reading: every refusal is could-not-look.",
-          "type": "array",
+          "description": "The check-runs read's statuses that mean \"no runs recorded\" rather than\ncould-not-look (CLOUD-2080).\n\n**Absent is the documented default, [`NOTHING_GRADED_DEFAULT`]** — the\n422 \"no commit found for SHA\" a head `land` has replayed and not yet\npushed answers with — so a consumer who never declares the key keeps\nthe behaviour every release before this one had. Declared, it is exactly\nthe list: `[]` makes every refusal could-not-look. `trust.rs` compares\nthe EFFECTIVE lists, so a status added over the base's is a weakening\n`config lint` puts to the recorded question, and narrowing is not.",
+          "type": [
+            "array",
+            "null"
+          ],
           "items": {
             "type": "integer",
             "format": "uint16",

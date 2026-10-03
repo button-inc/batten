@@ -93,13 +93,15 @@ pub struct Forge {
     /// The check-runs read's statuses that mean "no runs recorded" rather than
     /// could-not-look (CLOUD-2080).
     ///
-    /// **Declared, never an engine constant.** A status here turns a refusal
-    /// into a clean answer, so adding one narrows what reads as "could not
-    /// look" — `trust.rs` reports any status added against the base as a
-    /// weakening, and `config lint` puts it to the recorded question. Empty is
-    /// the strict reading: every refusal is could-not-look.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub nothing_graded: Vec<u16>,
+    /// **Absent is the documented default, [`NOTHING_GRADED_DEFAULT`]** — the
+    /// 422 "no commit found for SHA" a head `land` has replayed and not yet
+    /// pushed answers with — so a consumer who never declares the key keeps
+    /// the behaviour every release before this one had. Declared, it is exactly
+    /// the list: `[]` makes every refusal could-not-look. `trust.rs` compares
+    /// the EFFECTIVE lists, so a status added over the base's is a weakening
+    /// `config lint` puts to the recorded question, and narrowing is not.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nothing_graded: Option<Vec<u16>>,
     /// The paginated reads this consumer declares, each recorded by
     /// `batten record query <id>` (CLOUD-843).
     ///
@@ -385,15 +387,27 @@ pub(crate) fn declared_credential() -> Option<String> {
     credential(DECLARED.get())
 }
 
-/// Whether the consumer declared `status` a "nothing graded" answer for the
-/// check-runs read (CLOUD-2080). Undeclared, or no `[forge]`, is `false`: the
-/// status stays could-not-look.
+/// The check-runs statuses read as "nothing graded" when `[forge]` declares no
+/// `nothing_graded` (CLOUD-2080): the endpoint's "no commit found for SHA".
+pub const NOTHING_GRADED_DEFAULT: &[u16] = &[422];
+
+/// Whether the consumer's effective `nothing_graded` covers `status`
+/// (CLOUD-2080). With no `[forge]`, or no key in it, that is
+/// [`NOTHING_GRADED_DEFAULT`].
 pub(crate) fn declared_nothing_graded(status: u16) -> bool {
     nothing_graded(DECLARED.get(), status)
 }
 
+/// The effective `nothing_graded` list: the declared one, else the default.
+#[must_use]
+pub fn effective_nothing_graded(forge: Option<&Forge>) -> Vec<u16> {
+    forge
+        .and_then(|forge| forge.nothing_graded.clone())
+        .unwrap_or_else(|| NOTHING_GRADED_DEFAULT.to_vec())
+}
+
 fn nothing_graded(forge: Option<&Forge>, status: u16) -> bool {
-    forge.is_some_and(|forge| forge.nothing_graded.contains(&status))
+    effective_nothing_graded(forge).contains(&status)
 }
 
 /// The forge this process declared, for a case asserting the declaration.
@@ -1024,10 +1038,6 @@ mod tests {
         assert!(with(200).is_reading());
         for status in [304, 401, 403, 404, 422, 500, 502] {
             assert!(
-                !nothing_graded(None, status),
-                "{status} with no [forge] is could-not-look"
-            );
-            assert!(
                 !with(status).is_reading(),
                 "{status} is the forge declining, not a reading"
             );
@@ -1066,18 +1076,24 @@ mod tests {
     /// fallback — an undeclared forge must yield `None`, never the pair the engine
     /// used to carry, because a fallback is precisely how this seam stayed
     /// invisible.
-    /// A status is "nothing graded" only where the consumer declared it
-    /// (CLOUD-2080); everything else, and every status with no `[forge]`, stays
-    /// could-not-look.
+    /// Absent is the default `[422]`; declared is exactly the list, and `[]` is
+    /// all-could-not-look (CLOUD-2080).
     #[test]
     fn an_undeclared_status_is_could_not_look() {
-        let forge = Forge {
-            nothing_graded: vec![422],
+        assert!(
+            nothing_graded(None, 422),
+            "absent is the documented default"
+        );
+        assert!(!nothing_graded(None, 404));
+        let declared = |list: Vec<u16>| Forge {
+            nothing_graded: Some(list),
             ..Forge::default()
         };
-        assert!(nothing_graded(Some(&forge), 422));
-        assert!(!nothing_graded(Some(&forge), 404));
-        assert!(!nothing_graded(None, 422));
+        assert!(nothing_graded(Some(&declared(vec![422, 404])), 404));
+        assert!(
+            !nothing_graded(Some(&declared(Vec::new())), 422),
+            "declared empty, every refusal is could-not-look"
+        );
     }
 
     #[test]
@@ -1099,7 +1115,7 @@ mod tests {
                     credential_names: Vec::new(),
                     query: Vec::new(),
                     probe: Vec::new(),
-                    nothing_graded: Vec::new(),
+                    nothing_graded: None,
                 },
                 env
             ),
@@ -1112,7 +1128,7 @@ mod tests {
                     credential_names: vec![String::from("TOKEN")],
                     query: Vec::new(),
                     probe: Vec::new(),
-                    nothing_graded: Vec::new(),
+                    nothing_graded: None,
                 },
                 env
             ),
@@ -1128,7 +1144,7 @@ mod tests {
                     credential_names: vec![String::from("TOKEN")],
                     query: Vec::new(),
                     probe: Vec::new(),
-                    nothing_graded: Vec::new(),
+                    nothing_graded: None,
                 },
                 |name| if name == "GH_TOKEN" {
                     Some(String::from("leaked"))
@@ -1150,7 +1166,7 @@ mod tests {
                     credential_names: vec![String::from("EMPTY"), String::from("TOKEN")],
                     query: Vec::new(),
                     probe: Vec::new(),
-                    nothing_graded: Vec::new(),
+                    nothing_graded: None,
                 },
                 env
             ),

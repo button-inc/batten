@@ -2864,13 +2864,9 @@ fn mcp_weakenings(
 //MUTANT-SUITE crates/batten/src/trust.rs
 //MUTANT nothing-graded-unchecked|s@^        if !before.contains(\&status) {$@        if false {@|widening_nothing_graded_is_a_weakening
 fn nothing_graded_added(base: &Config, working: &Config) -> Vec<u16> {
-    let declared = |config: &Config| {
-        config
-            .forge
-            .as_ref()
-            .map(|table| table.nothing_graded.clone())
-            .unwrap_or_default()
-    };
+    // The EFFECTIVE lists, so an absent key (the documented default) and the
+    // same list declared explicitly are one reading.
+    let declared = |config: &Config| crate::rest::effective_nothing_graded(config.forge.as_ref());
     let before = declared(base);
     let mut added = Vec::new();
     for status in declared(working) {
@@ -6027,13 +6023,15 @@ mod tests {
         );
     }
 
-    /// A status added to `[forge] nothing_graded` turns a could-not-look into a
-    /// clean answer, so it is a weakening; dropping one is not (CLOUD-2080).
+    /// A status added to the EFFECTIVE `[forge] nothing_graded` turns a
+    /// could-not-look into a clean answer, so it is a weakening; dropping one is
+    /// not (CLOUD-2080). Absent is the default `[422]`, so declaring that same
+    /// list is no change at all.
     #[test]
     fn widening_nothing_graded_is_a_weakening() {
-        let base = config("[forge]\nnothing_graded = [422]\n");
+        let absent = config("");
         assert_eq!(
-            only(&base, &config("[forge]\nnothing_graded = [422, 404]\n")),
+            only(&absent, &config("[forge]\nnothing_graded = [422, 404]\n")),
             Weakening::new(
                 WeakeningKind::ForgeNothingGradedWidened,
                 "forge.nothing_graded",
@@ -6041,14 +6039,19 @@ mod tests {
                 "404 nothing graded",
             )
         );
+        assert!(
+            weakenings(&absent, &config("[forge]\nnothing_graded = [422]\n")).is_empty(),
+            "declaring the default is no change"
+        );
+        let strict = config("[forge]\nnothing_graded = []\n");
         assert_eq!(
-            only(&config(""), &base).kind,
+            only(&strict, &absent).kind,
             WeakeningKind::ForgeNothingGradedWidened,
-            "declaring the first status is the same widening"
+            "removing a strict declaration falls back to the default, which widens"
         );
         assert!(
-            weakenings(&base, &config("[forge]\nnothing_graded = []\n")).is_empty(),
-            "narrowing back to could-not-look is a strengthening"
+            weakenings(&absent, &strict).is_empty(),
+            "narrowing to all-could-not-look is a strengthening"
         );
     }
 
