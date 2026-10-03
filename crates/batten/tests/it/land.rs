@@ -961,6 +961,77 @@ fn a_rebased_branch_replaces_its_own_pre_rebase_head() {
     assert!(land::admitted(&repo, &branch, &before, &after));
 }
 
+/// Replays chain: a branch replayed twice before it pushes still replaces the
+/// head the FIRST replay rewrote. Measured on #1073, replayed three times with
+/// the remote still reading its original head.
+#[test]
+fn a_branch_replayed_twice_replaces_its_first_pre_rebase_head() {
+    let repo = repo("land-admit-replayed-twice");
+    let branch = branch_of(&repo);
+    let base = common::git_in(&repo, &["rev-parse", "HEAD"]);
+    let pushed = commit_on(&repo, "ours, pushed");
+    reset_to(&repo, &base);
+    let middle = commit_on(&repo, "ours, replayed once");
+    reset_to(&repo, &base);
+    let sibling = commit_on(&repo, "sibling: pushed by another clone");
+    reset_to(&repo, &base);
+    let after = commit_on(&repo, "ours, replayed twice");
+    for (head, from) in [(&middle, &pushed), (&after, &middle)] {
+        land::record(
+            &repo,
+            &branch,
+            &Replay::Replayed {
+                head: head.clone(),
+                commits: 1,
+                from: from.clone(),
+            },
+        )
+        .expect("record the replay");
+    }
+    assert!(
+        land::admitted(&repo, &branch, &pushed, &after),
+        "the first replay's pre-rebase head is this clone's own work"
+    );
+    assert!(
+        !land::admitted(&repo, &branch, &sibling, &after),
+        "following the chain admits nothing it does not reach"
+    );
+}
+
+/// A row pulled onto the branch re-mints its claim and so moves the lap record
+/// to a fresh partition. The replay recorded before that is still this clone's
+/// own work, so the lease still admits the head it rewrote. Measured on #1073.
+#[test]
+fn a_replay_recorded_before_a_re_claim_still_admits_its_pre_rebase_head() {
+    let repo = repo("land-admit-reclaimed");
+    let branch = branch_of(&repo);
+    let base = common::git_in(&repo, &["rev-parse", "HEAD"]);
+    let before = commit_on(&repo, "ours, before the replay");
+    reset_to(&repo, &base);
+    let after = commit_on(&repo, "ours, replayed");
+    land::record(
+        &repo,
+        &branch,
+        &Replay::Replayed {
+            head: after.clone(),
+            commits: 1,
+            from: before.clone(),
+        },
+    )
+    .expect("record the replay");
+    let receipts = repo.join(".git").join("batten-receipts");
+    std::fs::create_dir_all(&receipts).expect("receipts dir");
+    std::fs::write(
+        receipts.join(format!("claim.{}", branch.replace('/', "-"))),
+        "CLOUD-1\n",
+    )
+    .expect("write the re-minted claim");
+    assert!(
+        land::admitted(&repo, &branch, &before, &after),
+        "a re-claim hides the replay from the lap, never from the lease"
+    );
+}
+
 /// The remote is behind the pre-rebase head: it carries nothing the replay did
 /// not rewrite.
 #[test]

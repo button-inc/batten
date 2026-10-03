@@ -614,6 +614,53 @@ fn lap_lines(root: &Path, branch: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// Every partition of this branch's lap record, oldest file first, as one list.
+///
+/// **THE LEASE'S READER, AND ONLY ITS.** A claim re-minted mid-branch (a second
+/// row pulled onto it) moves [`lap_lines`] to a fresh partition, and the replays
+/// and pushes this clone recorded under the old claim vanish from it. For the
+/// lap's own bookkeeping that partition is the point (CLOUD-1300), but the lease
+/// asks a different question — did THIS CLONE produce what the remote holds —
+/// and a re-claim does not change the answer. Measured on #1073: claiming
+/// CLOUD-2082 hid three replays and `land push` refused the clone's own head.
+/// Whatever it reads, admission still requires containment or an exact sha this
+/// clone pushed, so an older partition can only admit this clone's own work.
+fn branch_lap_lines(root: &Path, branch: &str) -> Vec<String> {
+    let Ok(git_dir) = crate::git::git_dir(root) else {
+        return Vec::new();
+    };
+    let unpartitioned = crate::recorder::record_path(&git_dir, LAP_RECORD, branch, None);
+    let (Some(dir), Some(name)) = (
+        unpartitioned.parent(),
+        unpartitioned.file_name().and_then(|name| name.to_str()),
+    ) else {
+        return Vec::new();
+    };
+    let prefix = format!("{name}.");
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut files: Vec<(std::time::SystemTime, std::path::PathBuf)> = entries
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_str()
+                .is_some_and(|file| file == name || file.starts_with(&prefix))
+        })
+        .filter_map(|entry| {
+            let modified = entry.metadata().and_then(|meta| meta.modified()).ok()?;
+            Some((modified, entry.path()))
+        })
+        .collect();
+    files.sort();
+    files
+        .iter()
+        .filter_map(|(_, path)| std::fs::read_to_string(path).ok())
+        .flat_map(|text| text.lines().map(str::to_owned).collect::<Vec<_>>())
+        .collect()
+}
+
 /// Whether `ancestor` is reachable from `tip` — every commit it carries is
 /// already in `tip`'s history.
 fn contains(root: &Path, tip: &str, ancestor: &str) -> bool {
@@ -639,11 +686,13 @@ fn contains(root: &Path, tip: &str, ancestor: &str) -> bool {
 /// receive-pack CAS still refuses if it appears before the swap.
 #[must_use]
 //MUTANT admits-ignored|s@^    if last_pushed.as_deref() == Some(remote) {$@    if true {@|a_sibling_commit_on_the_branch_is_never_admitted
+//MUTANT replay-chain-unfollowed|s@^    for line in lines.iter().rev() {$@    for line in lines.iter() {@|a_branch_replayed_twice_replaces_its_first_pre_rebase_head
+//MUTANT lease-reads-one-partition|s@^    let lines = branch_lap_lines(root, branch);$@    let lines = lap_lines(root, branch);@|a_replay_recorded_before_a_re_claim_still_admits_its_pre_rebase_head
 pub fn admitted(root: &Path, branch: &str, remote: &str, head: &str) -> bool {
     if remote == crate::lease::ZERO || contains(root, head, remote) {
         return true;
     }
-    let lines = lap_lines(root, branch);
+    let lines = branch_lap_lines(root, branch);
     let last_pushed = lines.iter().rev().find_map(|line| {
         let columns: Vec<&str> = line.split(' ').collect();
         (columns.len() == 4 && columns[0] == "push" && columns[1] == "landed")
@@ -652,15 +701,25 @@ pub fn admitted(root: &Path, branch: &str, remote: &str, head: &str) -> bool {
     if last_pushed.as_deref() == Some(remote) {
         return true;
     }
-    lines.iter().rev().any(|line| {
+    // THE REPLAYS CHAIN, newest first. A branch replayed twice before it pushes
+    // carries a `from` its head no longer contains: the second replay rewrote the
+    // first one's result. So each replay whose result a reached head carries adds
+    // its own `from` to the reached set, and the remote is admitted when any
+    // reached head contains it. Measured on #1073: three replays, and the remote
+    // still read the head the first one rewrote.
+    let mut reached = vec![head.to_owned()];
+    for line in lines.iter().rev() {
         let columns: Vec<&str> = line.split(' ').collect();
-        columns.len() == 4
+        if columns.len() == 4
             && columns[0] == "rebase"
             && columns[1] == "replayed"
             && columns[3] != "-"
-            && contains(root, head, columns[2])
-            && contains(root, columns[3], remote)
-    })
+            && reached.iter().any(|tip| contains(root, tip, columns[2]))
+        {
+            reached.push(columns[3].to_owned());
+        }
+    }
+    reached[1..].iter().any(|tip| contains(root, tip, remote))
 }
 
 /// The record this module writes, and the one `record::VERB_WRITTEN` names so a
