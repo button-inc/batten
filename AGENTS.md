@@ -50,10 +50,9 @@ fix, never the record**: what you decline to fix, you file. **A WRONGLY refusing
 gate is a defect, not an answer** — repair it and carry on this session; ticketing
 one is a punt in gate's clothing (CLOUD-597/615). **A punt is any deferral you
 could have closed**, a predicate not a list: a block reported as a decision (a
-block is a bug); "that's your call" on what your evidence settles; an action you
-are already authorized to take, offered; a command handed to the operator (only
-you can touch your container); an unbuilt mechanism awaited instead of the
-instance in hand; your own landed work spared. Can do it, do it; can't, file it.
+block is a bug); "that's your call" on what your evidence settles; an authorized
+action offered, or handed to a human to run; an unbuilt mechanism awaited over
+the instance in hand; your own landed work spared. Can do it, do it; can't, file it.
 
 **An override ask is ONE yes/no on the override, never a menu of routes**
 (CLOUD-680). It carries the refusing gate and its verdict string, what the gate
