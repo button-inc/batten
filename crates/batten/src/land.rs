@@ -2921,6 +2921,23 @@ impl Ledger {
         self.laps = self.laps.saturating_add(1);
     }
 
+    /// Whether another lap may open under `budget`, counting only the laps that
+    /// were CHARGED (CLOUD-1700).
+    ///
+    /// **THE LOOP READS THIS, NOT ITS OWN INDEX.** The refunds above — a lost
+    /// lease, a reclaimed gate, a speculative refusal — decrement `laps` because
+    /// the pass bought nothing, and each is held to its own bound instead. A loop
+    /// bounded by `1..=budget` ignored every one of them, so two laps lost to
+    /// another branch holding the lease ended the landing having spent nothing,
+    /// and the agent was told to "run this again" — the shell predecessor's
+    /// `charge_wait` refund, retired into a counter nothing read.
+    //MUTANT-SUITE crates/batten/tests/it/land.rs
+    //MUTANT lease-loss-charges-a-lap|s@^        self.laps < budget$@        self.laps.saturating_add(self.lease_waits) < budget@|a_lap_lost_to_the_lease_leaves_the_lap_budget_unchanged
+    #[must_use]
+    pub const fn may_open_a_lap(&self, budget: u32) -> bool {
+        self.laps < budget
+    }
+
     /// A matrix was bought. **The one site that increments this.**
     pub const fn bought_a_matrix(&mut self) {
         self.paid = self.paid.saturating_add(1);

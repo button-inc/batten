@@ -9665,6 +9665,47 @@ fn lease_wait_bound() -> u32 {
         .unwrap_or(60)
 }
 
+/// Pause a pass lost to the landing lease before the next one (CLOUD-1700).
+///
+/// A LEASE WAIT IS PACED, every other refund is not: a reclaimed gate or a
+/// borrowed base is already waiting on the trunk moving, while a held lease
+/// answers the same until its holder lands — so without this a refunded pass is
+/// a busy-poll of the lease ref.
+///
+/// # Errors
+///
+/// Only for a stream that will not accept output.
+fn wait_out_the_lease(root: &Path, out: &mut dyn Write) -> Result<()> {
+    let pause = lease_wait_pause(root);
+    writeln!(
+        out,
+        "land: another branch holds the landing lease; waiting {pause}s before asking again (charged nothing)"
+    )?;
+    pr_watch::pause_until(f64::from(pause), &std::sync::atomic::AtomicBool::new(false));
+    Ok(())
+}
+
+/// How long a pass lost to the landing lease waits before asking again
+/// (CLOUD-1700), in seconds.
+///
+/// **One lease TTL, the longest a re-observation can usefully wait.** The holder
+/// renews every beat, so a live holder still holds it after any shorter pause and
+/// a dead one is reapable only once its TTL has lapsed — a TTL apart, one reading
+/// per lapse. `LAND_LEASE_WAIT_SECONDS` overrides it, and `0` turns the pause off
+/// for a caller that paces itself. A clone with no lease terms falls back to the
+/// shipped TTL: the lease step that just answered could read them, so this is the
+/// unreachable arm, and a guessed pause beats a spin.
+fn lease_wait_pause(root: &Path) -> u32 {
+    if let Some(declared) = std::env::var("LAND_LEASE_WAIT_SECONDS")
+        .ok()
+        .and_then(|raw| raw.trim().parse::<u32>().ok())
+    {
+        return declared;
+    }
+    let ttl = lease::terms(root).map_or_else(|_| lease::Terms::default().ttl, |terms| terms.ttl);
+    u32::try_from(ttl.max(0)).unwrap_or(u32::MAX)
+}
+
 /// How many laps before the loop gives up, when the caller names none.
 ///
 /// TWO, matching the predecessor. It is a RUNAWAY BACKSTOP rather than a budget:
@@ -10088,30 +10129,28 @@ fn run_land_laps(run: Laps<'_>, out: &mut dyn Write, err: &mut dyn Write) -> Res
     // somebody else's commits, which is the exact hazard the undo exists to
     // remove. `speculation::Bet`'s own header states it.
     let mut bet = speculation::Bet::default();
-    // **THE REFUND IS WIRED AND THE LOOP BOUND IS NOT MOVED, WHICH LEAVES IT
-    // INERT — DELIBERATELY, AND THIS IS THE SECOND ATTEMPT** (review of #848).
+    // **THE LOOP IS BOUNDED BY THE CHARGED LAPS, SO A REFUND BUYS A LAP**
+    // (CLOUD-1700). It was bounded by its own index, which left every refund in
+    // `Ledger` inert: two laps lost to another branch holding the lease ended the
+    // landing having spent nothing, told the agent to "run this again", and the
+    // agent stopped — measured, six times in a row on one branch, every lap
+    // `passed the configured gate`.
     //
-    // `Ledger::waited` decrements `laps` so a pass that never won the lease does
-    // not consume the budget. Making the loop read `ledger.laps` does activate
-    // that, and it was tried: the effect is that a refunded pass re-enters the
-    // lap at `Replay`, and `Lease` sits AFTER `Verify` in the composition — so
-    // every refunded wait re-runs the rebase and the full `$LAND_VERIFY` gate,
-    // which this file's own comments price at ~200s, with no backoff. At the
-    // default sixty waits that is ~61 full verify cycles where the shipped bound
-    // is two. "Waiting is free" is true of the lease and false at this position
-    // in the pipeline.
+    // The reason it was left inert no longer holds. It was that a refunded pass
+    // re-enters at `Replay` ahead of `Lease`, so each wait re-ran the full
+    // `$LAND_VERIFY` gate (~200s then, ~20min now). CLOUD-1891's receipt answers a
+    // head the gate already proved without running it, and a replay onto an
+    // unmoved trunk replays nothing — so on an unmoved trunk the re-entry costs a
+    // fetch and a receipt read, and on a moved one the gate it re-runs is one the
+    // new base genuinely owes.
     //
-    // The three ways out are a design decision rather than a patch: hold the wait
-    // INSIDE the `Lease` primitive (which then carries a verify receipt taken
-    // before the wait, so a trunk that moved during it is unnoticed until the
-    // next precheck), move `Lease` ahead of `Verify` (which holds the lease
-    // across every waiter's verify and serialises the fleet on gate time), or
-    // give the refunded pass a resume point rather than restarting the lap.
-    //
-    // So the counter is charged and read for its REPORT — the refusal can say
-    // the fleet was saturated rather than blaming a conflict — and the budget is
-    // unchanged from what shipped. `LAND_MAX_LEASE_WAITS` bounds the charge, not
-    // the loop.
+    // What a refund still must not become is a busy-poll of the lease, so a pass
+    // lost to the lease waits one lease TTL before the next (`lease_wait_pause`):
+    // the holder renews every beat, so a TTL is the longest a re-observation can
+    // usefully wait, and the default sixty waits then span about two hours.
+    // `LAND_MAX_LEASE_WAITS`, `LAND_MAX_GATE_RECLAIMS` and
+    // `LAND_MAX_SPECULATIVE_REFUSALS` bound the refunded passes; `budget` bounds
+    // the charged ones.
     // WHAT HAS BEEN ENTERED AND NOT YET UNDONE, which is what an undo is owed
     // for. A lap that stopped at `verify` never readied, so it owes no re-draft
     // — computing the owed set from the composition alone would compensate
@@ -10133,13 +10172,16 @@ fn run_land_laps(run: Laps<'_>, out: &mut dyn Write, err: &mut dyn Write) -> Res
     // Who asked this holder to stand down, latched across laps — see
     // `honour_the_notice` for why it is a latch and why it is read here.
     let mut stood_down: Option<String> = None;
-    'laps: for lap in 1..=laps {
+    // Passes opened, refunded or not: what the log numbers, never what bounds.
+    let mut lap: u32 = 0;
+    'laps: while ledger.may_open_a_lap(laps) {
+        lap = lap.saturating_add(1);
         // Checked BEFORE `attempt`, so a lap that will not run is not charged.
         if let Some(from) = stood_down.take() {
             return honour_the_notice(&from, root, branch, &pipeline, &mut entered, out, err);
         }
         ledger.attempt();
-        writeln!(out, "land: lap {lap} of {laps}")?;
+        writeln!(out, "land: lap {lap} — {} of {laps} charged", ledger.laps)?;
         // WHAT THE WAIT SAW, or `None` where no lap took a reading. The tap
         // refuses to draft on `None` deliberately — see `land::closes_the_tap`.
         let mut seen: Option<land::TapVerdict> = None;
@@ -10244,6 +10286,9 @@ fn run_land_laps(run: Laps<'_>, out: &mut dyn Write, err: &mut dyn Write) -> Res
                         out,
                         "land: lap {lap} — {step:?} says lap; rebasing and retrying"
                     )?;
+                    if step == land::Step::Lease {
+                        wait_out_the_lease(root, out)?;
+                    }
                     // A LAP COMPENSATES TOO, and missing this is what a
                     // `Progress::Compensate` variant would have done: a lap that
                     // readied, spent and then laps has a ready pull request and a
