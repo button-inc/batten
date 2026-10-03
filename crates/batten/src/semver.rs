@@ -352,6 +352,42 @@ pub fn toolchain(root: &Path) -> Option<String> {
     (!version.is_empty()).then(|| version.to_owned())
 }
 
+/// Ready a lock-route scratch directory for the next build, KEEPING its target
+/// (CLOUD-2099).
+///
+/// The caller used to `remove_dir_all` the whole directory before each build,
+/// so `cargo doc --no-deps` — which still checks every dependency — checked the
+/// whole graph cold, on both sides, every lap: 186 s and 498 CPU-s for one run
+/// measured straight after a lap that had just built the same graph.
+///
+/// What must not survive is replaced: the materialized `tree`, so no file of an
+/// older baseline lingers into this one, and the previous `<package>.json`, so a
+/// build that writes nothing can never hand back a stale document as this run's.
+/// The `target` is cargo's to keep fresh, which its fingerprints do.
+///
+/// # Errors
+///
+/// The directory cannot be created, or a stale tree or document cannot be
+/// removed.
+//MUTANT scratch-target-wiped|s@^    let stale = \[at.join("tree"), at.join("target").join("doc").join(format!("{package}.json"))\];$@    let stale = [at.join("tree"), at.join("target")];@|scratch_keeps_the_target_and_drops_the_tree_and_json
+pub fn prepare_scratch(at: &Path, package: &str) -> std::io::Result<()> {
+    std::fs::create_dir_all(at)?;
+    let stale = [
+        at.join("tree"),
+        at.join("target")
+            .join("doc")
+            .join(format!("{package}.json")),
+    ];
+    for path in stale {
+        if path.is_dir() {
+            std::fs::remove_dir_all(&path)?;
+        } else if path.exists() {
+            std::fs::remove_file(&path)?;
+        }
+    }
+    Ok(())
+}
+
 /// Build the baseline's rustdoc JSON from the lock it committed.
 ///
 /// # Why every flag here is load-bearing
@@ -697,6 +733,33 @@ pub fn reconcile(compared: &Compared, commits: &[Commit]) -> Verdict {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// CLOUD-2099: the dependency build survives; the tree and the last
+    /// document, which belong to the previous run, do not.
+    #[test]
+    fn scratch_keeps_the_target_and_drops_the_tree_and_json() -> std::io::Result<()> {
+        let at = std::env::temp_dir().join(format!("batten-semver-scratch-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&at);
+        let doc = at.join("target").join("doc");
+        std::fs::create_dir_all(&doc)?;
+        std::fs::create_dir_all(at.join("tree").join("src"))?;
+        std::fs::write(at.join("tree").join("src").join("lib.rs"), "old baseline")?;
+        std::fs::write(doc.join("batten.json"), "stale")?;
+        let kept = at.join("target").join("debug").join("deps");
+        std::fs::create_dir_all(&kept)?;
+        std::fs::write(kept.join("libdep.rmeta"), "checked once")?;
+        prepare_scratch(&at, "batten")?;
+        assert!(
+            kept.join("libdep.rmeta").is_file(),
+            "the dependency build is kept"
+        );
+        assert!(!at.join("tree").exists(), "the old tree is gone");
+        assert!(
+            !doc.join("batten.json").exists(),
+            "the old document is gone"
+        );
+        Ok(())
+    }
 
     fn report(body: &str) -> Compared {
         Compared {
