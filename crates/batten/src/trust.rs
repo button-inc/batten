@@ -778,11 +778,6 @@ pub enum WeakeningKind {
     /// reason: the raise-only clamp compares kinds, and this is the deniable
     /// spelling of switching the forge reads off.
     ForgeCredentialsRemoved,
-    /// A check-runs status was added to `[forge] nothing_graded` (CLOUD-2080):
-    /// a refusal the read reported as could-not-look now records "nothing
-    /// graded" and exits clean. Narrowing is the strict direction and is not
-    /// reported.
-    ForgeNothingGradedWidened,
     /// The `[advisory]` channel ceiling rose, or stopped being declared
     /// (CLOUD-896). Same direction as the two below: smaller is stricter, and an
     /// absent ceiling is unenforced rather than zero.
@@ -1075,6 +1070,12 @@ pub enum WeakeningKind {
     ///
     /// Appended, for the `Ord` reason its neighbours give.
     ShellCensusNarrowed,
+    /// A check-runs status was added to the effective `[forge] nothing_graded`
+    /// (CLOUD-2080): a refusal the read reported as could-not-look now records
+    /// "nothing graded" and exits clean. Narrowing is the strict direction and is
+    /// not reported. Appended, for the `Ord` reason its neighbours give —
+    /// measured, inserting it beside `ForgeCredentialsRemoved` was a semver break.
+    ForgeNothingGradedWidened,
 }
 
 impl WeakeningKind {
@@ -1125,7 +1126,6 @@ impl WeakeningKind {
         WeakeningKind::TranscriptPathRemoved,
         WeakeningKind::TranscriptHarnessRemoved,
         WeakeningKind::ForgeCredentialsRemoved,
-        WeakeningKind::ForgeNothingGradedWidened,
         WeakeningKind::AdvisoryCeilingRaised,
         WeakeningKind::HookOutputCeilingRaised,
         WeakeningKind::HookRepeatsRaised,
@@ -1158,6 +1158,7 @@ impl WeakeningKind {
         WeakeningKind::BoardSweepAbstentionAdded,
         WeakeningKind::BoardSweepRefusalWidened,
         WeakeningKind::ShellCensusNarrowed,
+        WeakeningKind::ForgeNothingGradedWidened,
     ];
 
     /// The stable, lowercase identifier used in machine output (§6).
