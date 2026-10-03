@@ -49,9 +49,11 @@ fn text(output: &Output) -> String {
     )
 }
 
-/// A stand-in for the pinned release: `config show` answers `config_exit`, and
-/// `--help` succeeds only for the verbs it is told it has.
-fn seed_release(dir: &Path, tag: &str, config_exit: u8, verbs: &[&str]) {
+/// A stand-in for the pinned release. `config show` always exits 0, as a real
+/// older engine's does even when it drops a row it cannot read (CLOUD-2096);
+/// `config lint` answers `lint_exit`, and `--help` succeeds only for the verbs
+/// it is told it has.
+fn seed_release(dir: &Path, tag: &str, lint_exit: u8, verbs: &[&str]) {
     let root = dir.canonicalize().unwrap();
     let cache = data_dir(dir)
         .join("batten")
@@ -59,8 +61,9 @@ fn seed_release(dir: &Path, tag: &str, config_exit: u8, verbs: &[&str]) {
         .join("engine")
         .join(tag);
     std::fs::create_dir_all(&cache).unwrap();
-    let mut script =
-        format!("#!/bin/sh\nif [ \"$1 $2\" = \"config show\" ]; then exit {config_exit}; fi\n");
+    let mut script = format!(
+        "#!/bin/sh\nif [ \"$1 $2\" = \"config show\" ]; then exit 0; fi\nif [ \"$1 $2\" = \"config lint\" ]; then exit {lint_exit}; fi\n"
+    );
     for verb in verbs {
         script.push_str("if [ \"$*\" = \"");
         script.push_str(verb);
@@ -177,13 +180,17 @@ fn a_verb_the_pinned_release_lacks_is_drift() {
     );
 }
 
+/// `config show` exits 0 and `config lint` refuses: the pinned engine LOADED
+/// this config by dropping a row it cannot read (CLOUD-2096). Measured on
+/// `v0.0.201` over a branch adding `[forge] nothing_graded`: a gate reading
+/// `config show` passed it, and the key the config relies on enforced nothing.
 #[test]
-fn a_config_the_pinned_release_cannot_load_is_drift() {
+fn a_config_the_pinned_release_drops_a_row_of_is_drift() {
     let dir = repo(
         "engine-gate-config",
         "version = 1\nengine = { release = \"v9.9.9\" }\n",
     );
-    seed_release(&dir, "v9.9.9", 1, &[]);
+    seed_release(&dir, "v9.9.9", 2, &[]);
     let output = run(&dir, &["engine", "gate"]);
     assert!(!output.status.success(), "{}", text(&output));
     assert!(

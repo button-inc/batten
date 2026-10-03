@@ -755,6 +755,7 @@ fn engine_pin(
 /// Every finding is a pointer: the file, the token, the pin.
 //MUTANT-SUITE crates/batten/tests/it/engine_gates.rs
 //MUTANT source-pin-admitted|s@^    if pin.source.is_some() {$@    if false {@|a_source_pin_is_refused_on_the_landing_path
+//MUTANT dropped-row-unchecked|s@^    if !runs(\&\["config", "lint"\])? {$@    if !runs(\&["config", "show"])? {@|a_config_the_pinned_release_drops_a_row_of_is_drift
 fn engine_gate(root: &Path, lanes: &[String], out: &mut dyn Write) -> Result<ExitCode> {
     let config_path = root.join(config::CONFIG_FILE);
     let text = std::fs::read_to_string(&config_path)?;
@@ -790,7 +791,13 @@ fn engine_gate(root: &Path, lanes: &[String], out: &mut dyn Write) -> Result<Exi
         }
     };
     let mut findings = 0_usize;
-    if !runs(&["config", "show"])? {
+    // `config lint`, NOT `config show` (CLOUD-2096). An older engine LOADS a
+    // config carrying a key it does not know: it drops the row, warns, and
+    // `config show` still exits 0 — measured, `v0.0.201` over a branch adding
+    // `[forge] nothing_graded`. Lint reports the dropped row as
+    // `config-row-unresolved` and exits non-zero, which is the drift this gate
+    // exists to refuse.
+    if !runs(&["config", "lint"])? {
         writeln!(
             out,
             "{} engine pin {tag} cannot load this config",
