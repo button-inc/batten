@@ -1646,9 +1646,9 @@ pub struct VendoredVerdict {
     /// What the boundary may do about it (CLOUD-1639).
     ///
     /// A plain field with no default, unlike the consumer table's: a `const`
-    /// initialiser cannot omit one, and spelling `Applicability::Advice` on each
-    /// vendored row is what makes any that is NOT advice visible
-    /// in a diff rather than inferred from an absence.
+    /// initialiser cannot omit one, and spelling `Applicability::Advice` on every
+    /// vendored row is what makes the ones that are NOT advice visible in a diff
+    /// rather than inferred from an absence.
     pub applicability: Applicability,
 }
 
@@ -1687,6 +1687,7 @@ pub const fn read(id: &'static str, target: &'static str) -> VendoredRoute {
     }
 }
 
+//MUTANT write-admission-dropped|s@^        kind: RouteKind::Override,$@        kind: RouteKind::Document,@|every_class_routed_only_into_a_protected_path_is_admissible
 /// An `override`-kind route, which is the only kind whose precondition is
 /// REQUIRED rather than optional.
 ///
@@ -2637,6 +2638,65 @@ pub fn declared_from(entry: &VendoredVerdict) -> DeclaredVerdict {
         successor: None,
         withdrawn: None,
     }
+}
+
+//MUTANT protected-route-unread|s@protects(&route[.]target)@protects("")@|every_class_routed_only_into_a_protected_path_is_admissible
+//MUTANT own-override-ignored|s@ !declares_override(entry))$@ !entry.id.is_empty())@|every_class_routed_only_into_a_protected_path_is_admissible
+fn declares_override(entry: &DeclaredVerdict) -> bool {
+    entry
+        .routes
+        .iter()
+        .any(|route| route.kind == RouteKind::Override)
+}
+
+/// Every live class whose only ways out end in a path `protects` covers, and
+/// that has no admission of its own — empty whenever `path write refused`, the
+/// class blocking those paths, declares one (CLOUD-1893).
+///
+/// A refusal whose only way out is an action another refusal blocks is a
+/// deadlock with every gate green; CLOUD-1051/1357 shipped it once. This is the
+/// graph edge that names it, computed from the registry and a path set.
+///
+/// - A `document` route into a protected path is read as asking for a CHANGE,
+///   because the kind cannot tell a read from an edit. That reading is safe:
+///   this refuses nothing, and its only discharge is an admission that exists.
+/// - `command` and `issue` routes count as unblocked — whether running one
+///   clears the refusal is a model verdict (rule 3), which
+///   `policy/verdict-routes-resolve.rego` disclaims too.
+/// - There is no load-time arm. The blocker is vendored and a consumer cannot
+///   redeclare it, so the predicate over `consumer ∪ vendored()` is empty
+///   exactly when it is empty over `vendored()`; a consumer load refused over
+///   the binary's own table would be the wrongly-refusing gate.
+/// - One override per class is rejected: it would be one admission in many
+///   costumes, the shape CLOUD-680 measured.
+#[must_use]
+pub fn routed_only_into_protection(
+    registry: &[DeclaredVerdict],
+    protects: impl Fn(&str) -> bool,
+) -> Vec<String> {
+    let blocker = Native::ProtectedMutation.id();
+    if registry
+        .iter()
+        .any(|entry| entry.id == blocker && declares_override(entry))
+    {
+        return Vec::new();
+    }
+    #[rustfmt::skip]
+    let blocked = |route: &Route| route.kind == RouteKind::Document && protects(&route.target);
+    registry
+        .iter()
+        .filter(|entry| entry.successor.is_none() && entry.withdrawn.is_none())
+        .filter(|entry| !declares_override(entry))
+        .filter(|entry| {
+            let ways: Vec<&Route> = entry
+                .routes
+                .iter()
+                .filter(|route| route.kind != RouteKind::Override)
+                .collect();
+            !ways.is_empty() && ways.iter().all(|route| blocked(route))
+        })
+        .map(|entry| entry.id.clone())
+        .collect()
 }
 
 #[cfg(test)]
