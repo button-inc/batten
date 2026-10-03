@@ -1740,6 +1740,7 @@ pub struct OverrideConfig {
 /// `version`, a table that fails its own validator, or **any key outside the
 /// override surface** — including one that is perfectly valid in the file it was
 /// copied from, which is the case this type exists to catch.
+//MUTANT text-meter-override-unwired|s@^    under(Native::ProseColumnRefused, meter_text(\&config))?;$@    under(Native::ProseColumnRefused, Ok(()))?;@|an_override_column_over_its_cap_is_refused_too
 pub fn parse_override(text: &str, source: &str) -> Result<OverrideConfig> {
     // THE SAME PRUNE THE AUTHORITY GETS, for the same measured reason. A key
     // this build predates in `batten.local.toml` used to fail the whole
@@ -1787,6 +1788,8 @@ pub fn parse_override(text: &str, source: &str) -> Result<OverrideConfig> {
         Native::WaiverTableRefused,
         crate::waiver::validate(&config.waivers),
     )?;
+    // Always metered: an override is never read from a ref (CLOUD-1642).
+    under(Native::ProseColumnRefused, meter_text(&config))?;
     Ok(config)
 }
 
@@ -1800,9 +1803,9 @@ pub fn parse_override(text: &str, source: &str) -> Result<OverrideConfig> {
 ///
 /// Returns an error when the schema cannot be serialized.
 pub fn override_schema() -> Result<String> {
-    Ok(serde_json::to_string_pretty(&schemars::schema_for!(
-        OverrideConfig
-    ))?)
+    let mut schema = schemars::schema_for!(OverrideConfig);
+    cap_text_leaves(&mut schema)?;
+    Ok(serde_json::to_string_pretty(&schema)?)
 }
 
 /// Attach a table's declared class to a validator's refusal (CLOUD-1313).
@@ -1833,6 +1836,652 @@ fn under<T>(native: crate::verdict::Native, result: Result<T>) -> Result<T> {
         Ok(usage) => anyhow::Error::new(usage),
         Err(other) => other,
     })
+}
+
+// --- config prose length (CLOUD-1642) -----------------------------------------
+//
+// House style §6 makes one exception to pointer-only output: config prose that
+// Batten echoes back (`policy explain`, `policy rule`, a first sighting). This is
+// that exception's VOLUME half. Every string a config declares is held to a cap
+// at load — refused, never truncated, because a truncated reason is a remedy
+// missing its second half — and the derived schemas carry the same cap as
+// `maxLength`, so an editor refuses what the loader refuses.
+
+/// One config column held to a cap tighter than [`TEXT_MAX`] (CLOUD-1642).
+///
+/// `path` is the serialized TOML spelling: `.` joins keys, `[]` marks an array
+/// element (a string array's element too, `startup[].check[]`), and `*` marks a
+/// map value (`program.*.command`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TextColumn {
+    /// The column, in the spelling above.
+    pub path: &'static str,
+    /// The longest value it may hold, in characters (`chars().count()`, the
+    /// unit JSON Schema's `maxLength` counts in).
+    pub cap: usize,
+}
+
+/// The sentence tier: a route, a remedy, a note.
+///
+/// MEASURED 2026-10-03 at `4ed344a`: the tier's largest committed value is
+/// `verdict[].withdrawn` at 495 characters, rounded up to the next multiple of
+/// 512. A growth bound over what exists, not a target for it.
+pub const SENTENCE_MAX: usize = 512;
+
+/// The paragraph tier, and the ceiling for every column not listed tighter.
+///
+/// MEASURED 2026-10-03 at `4ed344a`: the largest string in any column of this
+/// repository's config, its example, the init starter or the vendored registry
+/// is 1402 characters (a `[[rule]]` reason), rounded up to the next multiple of
+/// 512. A column added later is bounded by this from its first commit, with no
+/// classification owed.
+pub const TEXT_MAX: usize = 1536;
+
+const fn column(path: &'static str, cap: usize) -> TextColumn {
+    TextColumn { path, cap }
+}
+
+/// The columns held tighter than [`TEXT_MAX`], plus the paragraph columns named
+/// so a reader sees them (CLOUD-1642).
+///
+/// The one authority over config prose length: the load meter and both derived
+/// schemas read it, so a column cannot be capped in one and not the other. The
+/// line tier reuses [`crate::verdict::GLOSS_MAX`] rather than restating it — that
+/// number is CHOSEN, and says so where it is declared.
+pub const TEXT_CENSUS: &[TextColumn] = &[
+    // Line.
+    column("verdict[].gloss", crate::verdict::GLOSS_MAX),
+    column("startup[].gloss", crate::verdict::GLOSS_MAX),
+    column("vocabulary.subject[].gloss", crate::verdict::GLOSS_MAX),
+    column("vocabulary.action[].gloss", crate::verdict::GLOSS_MAX),
+    column("vocabulary.condition[].gloss", crate::verdict::GLOSS_MAX),
+    // Sentence.
+    column("verdict[].withdrawn", SENTENCE_MAX),
+    column("verdict[].route[].precondition", SENTENCE_MAX),
+    column("verdict[].route[].target", SENTENCE_MAX),
+    column("rule[].no_fix_reason", SENTENCE_MAX),
+    column("rule[].no_retry_reason", SENTENCE_MAX),
+    column("redirect[].mutation", SENTENCE_MAX),
+    column("redirect[].read", SENTENCE_MAX),
+    column("verb[].redirect", SENTENCE_MAX),
+    column("perf.exempt[].reason", SENTENCE_MAX),
+    column("exec_pattern[].reason", SENTENCE_MAX),
+    column("verify_environment_pattern[].reason", SENTENCE_MAX),
+    column("deferral[].reason", SENTENCE_MAX),
+    // Paragraph.
+    column("rule[].reason", TEXT_MAX),
+    column("rule[].criteria", TEXT_MAX),
+    column("verdict[].class", TEXT_MAX),
+    column("waiver[].reason", TEXT_MAX),
+];
+
+/// The cap a column's values are held to: its census row, else [`TEXT_MAX`].
+///
+/// A loop rather than a closure, because a `//MUTANT` anchor may not hold `|`.
+//MUTANT text-tier-flattened|s@^            return column.cap;$@            return TEXT_MAX;@|a_column_one_over_its_tier_is_refused_by_pointer_and_at_its_cap_loads
+//MUTANT text-ceiling-census-only|s@^    TEXT_MAX$@    usize::MAX@|an_unlisted_string_column_is_held_to_the_text_ceiling
+fn text_cap(path: &str) -> usize {
+    for column in TEXT_CENSUS {
+        if column.path == path {
+            return column.cap;
+        }
+    }
+    TEXT_MAX
+}
+
+/// Join census segments: `.` between keys, nothing before an element marker.
+fn join_segments<'a>(segments: impl Iterator<Item = &'a str>) -> String {
+    let mut joined = String::new();
+    for segment in segments {
+        if segment.is_empty() {
+            continue;
+        }
+        if !joined.is_empty() && !segment.starts_with('[') {
+            joined.push('.');
+        }
+        joined.push_str(segment);
+    }
+    joined
+}
+
+/// Every serialized string over its column's cap, as pointers (CLOUD-1642).
+///
+/// Each offender is `<path with indices> <len> over <cap>` — for example
+/// `startup[0].gloss 121 over 120` — in serialization order, and never the
+/// value (rule 4). `prefix` names the root, so a bare table can be metered as
+/// the column it would be in a config (`"verdict"` for the vendored registry).
+pub(crate) fn text_offenders<T: Serialize + ?Sized>(
+    prefix: &'static str,
+    value: &T,
+) -> Vec<String> {
+    let mut meter = TextMeter {
+        path: vec![prefix],
+        pointer: vec![prefix.to_owned()],
+        index: Vec::new(),
+        key: String::new(),
+        offenders: Vec::new(),
+    };
+    if let Err(error) = value.serialize(&mut meter) {
+        // Loud rather than a pass: a value the meter could not walk was not
+        // measured, and an empty list would read as "measured and clean".
+        meter.offenders.push(format!(
+            "{} unmeterable ({error})",
+            join_segments(meter.pointer.iter().map(String::as_str))
+        ));
+    }
+    meter.offenders
+}
+
+/// Refuse a value carrying any over-cap string, naming every offender at once.
+fn meter_text<T: Serialize>(value: &T) -> Result<()> {
+    let offenders = text_offenders("", value);
+    if offenders.is_empty() {
+        Ok(())
+    } else {
+        Err(UsageError::raise(offenders.join(", ")))
+    }
+}
+
+/// A `serde::Serializer` that measures strings and writes nothing.
+///
+/// One serde pass and no `serde_json::Value`: `hook` resolves the config on every
+/// adjudicated call, so the meter is on the mediated path's budget. Map keys and
+/// unit-variant names are identifiers and enum values, never authored prose, so
+/// they are not metered.
+struct TextMeter {
+    /// Where the serializer is, in census spelling.
+    path: Vec<&'static str>,
+    /// The same, with each element index and map key filled in, for the pointer.
+    pointer: Vec<String>,
+    /// The next element index of each open sequence.
+    index: Vec<usize>,
+    /// The map key whose value is about to be serialized.
+    key: String,
+    /// Every pointer found over its cap.
+    offenders: Vec<String>,
+}
+
+impl TextMeter {
+    fn meter(&mut self, value: &str) {
+        // A byte length bounds the character count from above and no cap is
+        // below the line tier, so a short string costs one comparison.
+        if value.len() <= crate::verdict::GLOSS_MAX {
+            return;
+        }
+        let len = value.chars().count();
+        let cap = text_cap(&join_segments(self.path.iter().copied()));
+        if len > cap {
+            let at = join_segments(self.pointer.iter().map(String::as_str));
+            self.offenders.push(format!("{at} {len} over {cap}"));
+        }
+    }
+
+    fn open_sequence(&mut self) {
+        self.path.push("[]");
+        self.index.push(0);
+    }
+
+    fn close_sequence(&mut self) {
+        self.path.pop();
+        self.index.pop();
+    }
+
+    fn element<T: Serialize + ?Sized>(&mut self, value: &T) -> std::result::Result<(), MeterError> {
+        let at = self.index.last().copied().unwrap_or_default();
+        self.pointer.push(format!("[{at}]"));
+        let result = value.serialize(&mut *self);
+        self.pointer.pop();
+        if let Some(next) = self.index.last_mut() {
+            *next += 1;
+        }
+        result
+    }
+
+    fn field<T: Serialize + ?Sized>(
+        &mut self,
+        key: &'static str,
+        value: &T,
+    ) -> std::result::Result<(), MeterError> {
+        self.path.push(key);
+        self.pointer.push(key.to_owned());
+        let result = value.serialize(&mut *self);
+        self.path.pop();
+        self.pointer.pop();
+        result
+    }
+}
+
+/// The meter's error: only ever a serde `custom` message.
+#[derive(Debug)]
+struct MeterError(String);
+
+impl std::fmt::Display for MeterError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for MeterError {}
+
+impl serde::ser::Error for MeterError {
+    fn custom<T: std::fmt::Display>(message: T) -> Self {
+        MeterError(message.to_string())
+    }
+}
+
+impl serde::Serializer for &mut TextMeter {
+    type Ok = ();
+    type Error = MeterError;
+    type SerializeSeq = Self;
+    type SerializeTuple = Self;
+    type SerializeTupleStruct = Self;
+    type SerializeTupleVariant = Self;
+    type SerializeMap = Self;
+    type SerializeStruct = Self;
+    type SerializeStructVariant = Self;
+
+    fn serialize_bool(self, _: bool) -> std::result::Result<(), MeterError> {
+        Ok(())
+    }
+    fn serialize_i8(self, _: i8) -> std::result::Result<(), MeterError> {
+        Ok(())
+    }
+    fn serialize_i16(self, _: i16) -> std::result::Result<(), MeterError> {
+        Ok(())
+    }
+    fn serialize_i32(self, _: i32) -> std::result::Result<(), MeterError> {
+        Ok(())
+    }
+    fn serialize_i64(self, _: i64) -> std::result::Result<(), MeterError> {
+        Ok(())
+    }
+    fn serialize_u8(self, _: u8) -> std::result::Result<(), MeterError> {
+        Ok(())
+    }
+    fn serialize_u16(self, _: u16) -> std::result::Result<(), MeterError> {
+        Ok(())
+    }
+    fn serialize_u32(self, _: u32) -> std::result::Result<(), MeterError> {
+        Ok(())
+    }
+    fn serialize_u64(self, _: u64) -> std::result::Result<(), MeterError> {
+        Ok(())
+    }
+    fn serialize_f32(self, _: f32) -> std::result::Result<(), MeterError> {
+        Ok(())
+    }
+    fn serialize_f64(self, _: f64) -> std::result::Result<(), MeterError> {
+        Ok(())
+    }
+    fn serialize_char(self, _: char) -> std::result::Result<(), MeterError> {
+        Ok(())
+    }
+    fn serialize_str(self, value: &str) -> std::result::Result<(), MeterError> {
+        self.meter(value);
+        Ok(())
+    }
+    fn serialize_bytes(self, _: &[u8]) -> std::result::Result<(), MeterError> {
+        Ok(())
+    }
+    fn serialize_none(self) -> std::result::Result<(), MeterError> {
+        Ok(())
+    }
+    fn serialize_some<T: Serialize + ?Sized>(
+        self,
+        value: &T,
+    ) -> std::result::Result<(), MeterError> {
+        value.serialize(self)
+    }
+    fn serialize_unit(self) -> std::result::Result<(), MeterError> {
+        Ok(())
+    }
+    fn serialize_unit_struct(self, _: &'static str) -> std::result::Result<(), MeterError> {
+        Ok(())
+    }
+    fn serialize_unit_variant(
+        self,
+        _: &'static str,
+        _: u32,
+        _: &'static str,
+    ) -> std::result::Result<(), MeterError> {
+        Ok(())
+    }
+    fn serialize_newtype_struct<T: Serialize + ?Sized>(
+        self,
+        _: &'static str,
+        value: &T,
+    ) -> std::result::Result<(), MeterError> {
+        value.serialize(self)
+    }
+    fn serialize_newtype_variant<T: Serialize + ?Sized>(
+        self,
+        _: &'static str,
+        _: u32,
+        variant: &'static str,
+        value: &T,
+    ) -> std::result::Result<(), MeterError> {
+        self.field(variant, value)
+    }
+    fn serialize_seq(self, _: Option<usize>) -> std::result::Result<Self, MeterError> {
+        self.open_sequence();
+        Ok(self)
+    }
+    fn serialize_tuple(self, _: usize) -> std::result::Result<Self, MeterError> {
+        self.open_sequence();
+        Ok(self)
+    }
+    fn serialize_tuple_struct(
+        self,
+        _: &'static str,
+        _: usize,
+    ) -> std::result::Result<Self, MeterError> {
+        self.open_sequence();
+        Ok(self)
+    }
+    fn serialize_tuple_variant(
+        self,
+        _: &'static str,
+        _: u32,
+        variant: &'static str,
+        _: usize,
+    ) -> std::result::Result<Self, MeterError> {
+        self.path.push(variant);
+        self.pointer.push(variant.to_owned());
+        self.open_sequence();
+        Ok(self)
+    }
+    fn serialize_map(self, _: Option<usize>) -> std::result::Result<Self, MeterError> {
+        self.path.push("*");
+        Ok(self)
+    }
+    fn serialize_struct(self, _: &'static str, _: usize) -> std::result::Result<Self, MeterError> {
+        Ok(self)
+    }
+    fn serialize_struct_variant(
+        self,
+        _: &'static str,
+        _: u32,
+        variant: &'static str,
+        _: usize,
+    ) -> std::result::Result<Self, MeterError> {
+        self.path.push(variant);
+        self.pointer.push(variant.to_owned());
+        Ok(self)
+    }
+}
+
+impl serde::ser::SerializeSeq for &mut TextMeter {
+    type Ok = ();
+    type Error = MeterError;
+    fn serialize_element<T: Serialize + ?Sized>(
+        &mut self,
+        value: &T,
+    ) -> std::result::Result<(), MeterError> {
+        self.element(value)
+    }
+    fn end(self) -> std::result::Result<(), MeterError> {
+        self.close_sequence();
+        Ok(())
+    }
+}
+
+impl serde::ser::SerializeTuple for &mut TextMeter {
+    type Ok = ();
+    type Error = MeterError;
+    fn serialize_element<T: Serialize + ?Sized>(
+        &mut self,
+        value: &T,
+    ) -> std::result::Result<(), MeterError> {
+        self.element(value)
+    }
+    fn end(self) -> std::result::Result<(), MeterError> {
+        self.close_sequence();
+        Ok(())
+    }
+}
+
+impl serde::ser::SerializeTupleStruct for &mut TextMeter {
+    type Ok = ();
+    type Error = MeterError;
+    fn serialize_field<T: Serialize + ?Sized>(
+        &mut self,
+        value: &T,
+    ) -> std::result::Result<(), MeterError> {
+        self.element(value)
+    }
+    fn end(self) -> std::result::Result<(), MeterError> {
+        self.close_sequence();
+        Ok(())
+    }
+}
+
+impl serde::ser::SerializeTupleVariant for &mut TextMeter {
+    type Ok = ();
+    type Error = MeterError;
+    fn serialize_field<T: Serialize + ?Sized>(
+        &mut self,
+        value: &T,
+    ) -> std::result::Result<(), MeterError> {
+        self.element(value)
+    }
+    fn end(self) -> std::result::Result<(), MeterError> {
+        self.close_sequence();
+        self.path.pop();
+        self.pointer.pop();
+        Ok(())
+    }
+}
+
+impl serde::ser::SerializeMap for &mut TextMeter {
+    type Ok = ();
+    type Error = MeterError;
+    fn serialize_key<T: Serialize + ?Sized>(
+        &mut self,
+        key: &T,
+    ) -> std::result::Result<(), MeterError> {
+        // An identifier, never metered; captured only to fill the pointer.
+        self.key = match serde_json::to_value(key) {
+            Ok(serde_json::Value::String(key)) => key,
+            Ok(other) => other.to_string(),
+            Err(error) => return Err(MeterError(error.to_string())),
+        };
+        Ok(())
+    }
+    fn serialize_value<T: Serialize + ?Sized>(
+        &mut self,
+        value: &T,
+    ) -> std::result::Result<(), MeterError> {
+        self.pointer.push(std::mem::take(&mut self.key));
+        let result = value.serialize(&mut **self);
+        self.pointer.pop();
+        result
+    }
+    fn end(self) -> std::result::Result<(), MeterError> {
+        self.path.pop();
+        Ok(())
+    }
+}
+
+impl serde::ser::SerializeStruct for &mut TextMeter {
+    type Ok = ();
+    type Error = MeterError;
+    fn serialize_field<T: Serialize + ?Sized>(
+        &mut self,
+        key: &'static str,
+        value: &T,
+    ) -> std::result::Result<(), MeterError> {
+        self.field(key, value)
+    }
+    fn end(self) -> std::result::Result<(), MeterError> {
+        Ok(())
+    }
+}
+
+impl serde::ser::SerializeStructVariant for &mut TextMeter {
+    type Ok = ();
+    type Error = MeterError;
+    fn serialize_field<T: Serialize + ?Sized>(
+        &mut self,
+        key: &'static str,
+        value: &T,
+    ) -> std::result::Result<(), MeterError> {
+        self.field(key, value)
+    }
+    fn end(self) -> std::result::Result<(), MeterError> {
+        self.path.pop();
+        self.pointer.pop();
+        Ok(())
+    }
+}
+
+/// Set `maxLength` on every text leaf of a derived schema, from the census
+/// (CLOUD-1642).
+///
+/// Walks `properties` (a key segment), `items` and `prefixItems` (`[]`),
+/// `additionalProperties` and `patternProperties` (`*`), `$ref` into `$defs`,
+/// and the combinators (no segment). A leaf is a schema whose `type` is or holds
+/// `"string"` and that carries no `enum` or `const`. The array schema itself gets
+/// no `maxLength`; its string `items` do, under `<path>[]`.
+///
+/// # Errors
+///
+/// A `$def` reached under two paths whose caps differ cannot carry both, so it
+/// is refused — naming the leaf and both paths — rather than silently capped by
+/// whichever path the walk reached first.
+///
+/// In place on the `Schema` rather than through a `serde_json::Value`: `Schema`
+/// serializes its keywords in its own order, which a round-trip would lose.
+fn cap_text_leaves(schema: &mut schemars::Schema) -> Result<()> {
+    let root = schema.as_value().clone();
+    let mut caps = std::collections::BTreeMap::new();
+    collect_text_leaves(&root, &root, "", "", &mut Vec::new(), &mut caps)?;
+    for (at, (cap, _)) in caps {
+        if let Some(serde_json::Value::Object(leaf)) = schema.pointer_mut(&at) {
+            leaf.insert("maxLength".to_owned(), cap.into());
+        }
+    }
+    Ok(())
+}
+
+/// One JSON-pointer token, escaped.
+fn pointer_token(token: &str) -> String {
+    token.replace('~', "~0").replace('/', "~1")
+}
+
+/// Extend a census path by one segment, in [`join_segments`]' spelling.
+fn extend_path(path: &str, segment: &str) -> String {
+    join_segments([path, segment].into_iter())
+}
+
+/// The recursive half of [`cap_text_leaves`]: record `(cap, path)` per leaf.
+fn collect_text_leaves(
+    root: &serde_json::Value,
+    node: &serde_json::Value,
+    at: &str,
+    path: &str,
+    visiting: &mut Vec<String>,
+    caps: &mut std::collections::BTreeMap<String, (usize, String)>,
+) -> Result<()> {
+    let Some(object) = node.as_object() else {
+        return Ok(());
+    };
+    if let Some(name) = object
+        .get("$ref")
+        .and_then(serde_json::Value::as_str)
+        .and_then(|reference| reference.strip_prefix("#/$defs/"))
+    {
+        if !visiting.iter().any(|seen| seen == name) {
+            if let Some(def) = root.get("$defs").and_then(|defs| defs.get(name)) {
+                visiting.push(name.to_owned());
+                let def_at = format!("/$defs/{}", pointer_token(name));
+                collect_text_leaves(root, def, &def_at, path, visiting, caps)?;
+                visiting.pop();
+            }
+        }
+    }
+    let typed_text = match object.get("type") {
+        Some(serde_json::Value::String(kind)) => kind == "string",
+        Some(serde_json::Value::Array(kinds)) => kinds.iter().any(|kind| kind == "string"),
+        _ => false,
+    };
+    if typed_text && !object.contains_key("enum") && !object.contains_key("const") {
+        let cap = text_cap(path);
+        if let Some((held, first)) = caps.get(at) {
+            if *held != cap {
+                return Err(anyhow::anyhow!(
+                    "schema leaf `{at}` is reached as `{first}` (cap {held}) and as `{path}` (cap \
+                     {cap}); one `$def` cannot carry two caps"
+                ));
+            }
+        } else {
+            caps.insert(at.to_owned(), (cap, path.to_owned()));
+        }
+    }
+    if let Some(serde_json::Value::Object(properties)) = object.get("properties") {
+        for (key, child) in properties {
+            let child_at = format!("{at}/properties/{}", pointer_token(key));
+            collect_text_leaves(
+                root,
+                child,
+                &child_at,
+                &extend_path(path, key),
+                visiting,
+                caps,
+            )?;
+        }
+    }
+    let element = extend_path(path, "[]");
+    match object.get("items") {
+        Some(items @ serde_json::Value::Object(_)) => {
+            collect_text_leaves(
+                root,
+                items,
+                &format!("{at}/items"),
+                &element,
+                visiting,
+                caps,
+            )?;
+        }
+        Some(serde_json::Value::Array(items)) => {
+            for (index, item) in items.iter().enumerate() {
+                let item_at = format!("{at}/items/{index}");
+                collect_text_leaves(root, item, &item_at, &element, visiting, caps)?;
+            }
+        }
+        _ => {}
+    }
+    if let Some(serde_json::Value::Array(items)) = object.get("prefixItems") {
+        for (index, item) in items.iter().enumerate() {
+            let item_at = format!("{at}/prefixItems/{index}");
+            collect_text_leaves(root, item, &item_at, &element, visiting, caps)?;
+        }
+    }
+    let value_path = extend_path(path, "*");
+    if let Some(additional @ serde_json::Value::Object(_)) = object.get("additionalProperties") {
+        let child_at = format!("{at}/additionalProperties");
+        collect_text_leaves(root, additional, &child_at, &value_path, visiting, caps)?;
+    }
+    if let Some(serde_json::Value::Object(patterns)) = object.get("patternProperties") {
+        for (key, child) in patterns {
+            let child_at = format!("{at}/patternProperties/{}", pointer_token(key));
+            collect_text_leaves(root, child, &child_at, &value_path, visiting, caps)?;
+        }
+    }
+    for combinator in ["anyOf", "oneOf", "allOf"] {
+        if let Some(serde_json::Value::Array(branches)) = object.get(combinator) {
+            for (index, branch) in branches.iter().enumerate() {
+                let branch_at = format!("{at}/{combinator}/{index}");
+                collect_text_leaves(root, branch, &branch_at, path, visiting, caps)?;
+            }
+        }
+    }
+    for conditional in ["if", "then", "else"] {
+        if let Some(branch) = object.get(conditional) {
+            let branch_at = format!("{at}/{conditional}");
+            collect_text_leaves(root, branch, &branch_at, path, visiting, caps)?;
+        }
+    }
+    Ok(())
 }
 
 /// The shared body: deserialize and check the schema `version`.
@@ -2139,7 +2788,7 @@ fn validate_tables(config: &Config, text: &str, source: &str, grammar: Grammar) 
                 .collect(),
         ),
     )?;
-    validate_sections(config)
+    validate_sections(config, grammar)
 }
 
 /// Prove the SINGLETON sections well formed — the `Option<T>` tables the census
@@ -2159,7 +2808,9 @@ fn validate_tables(config: &Config, text: &str, source: &str, grammar: Grammar) 
 /// # Errors
 ///
 /// As [`validate_tables`].
-fn validate_sections(config: &Config) -> Result<()> {
+//MUTANT text-meter-unwired|s@^        under(Native::ProseColumnRefused, meter_text(config))?;$@        under(Native::ProseColumnRefused, Ok(()))?;@|every_config_fault_names_its_table_s_declared_class
+//MUTANT text-meter-judges-the-base|s@^    if grammar == Grammar::Enforced {$@    if grammar == grammar {@|an_over_cap_base_ref_is_compared_not_refused
+fn validate_sections(config: &Config, grammar: Grammar) -> Result<()> {
     // The verb-written record families (CLOUD-1810). HERE rather than beside the
     // recorder table one function up, and the placement is forced rather than
     // chosen: `validate_tables` sits exactly at its hundred-line cap, so the call
@@ -2280,6 +2931,13 @@ fn validate_sections(config: &Config) -> Result<()> {
         Native::StartupTableRefused,
         crate::startup::validate(&config.startup),
     )?;
+    // LAST, after every table validator, so a multi-fault config still reports
+    // its table's class first. Working tree only: a config read from a git ref is
+    // COMPARED, and a consumer shrinking an over-cap row compares against a base
+    // that still holds it — the exemption the rule-id grammar takes (CLOUD-1642).
+    if grammar == Grammar::Enforced {
+        under(Native::ProseColumnRefused, meter_text(config))?;
+    }
     Ok(())
 }
 
@@ -3739,13 +4397,16 @@ pub(crate) fn report(text: &str) {
 /// compiled-in type, and every failing config load used to pay for it again.
 /// Across processes it is still recomputed, so a stale committed artifact still
 /// disagrees with the derivation the next run makes.
+//MUTANT text-schema-uncapped|s@^    cap_text_leaves(\&mut derived)?;$@    let _uncapped = 0;@|every_text_leaf_in_both_schemas_carries_its_census_cap
 pub fn schema() -> Result<String> {
     static DERIVED: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     if let Some(derived) = DERIVED.get() {
         return Ok(derived.clone());
     }
     SCHEMA_DERIVATIONS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let derived = serde_json::to_string_pretty(&schemars::schema_for!(Config))?;
+    let mut derived = schemars::schema_for!(Config);
+    cap_text_leaves(&mut derived)?;
+    let derived = serde_json::to_string_pretty(&derived)?;
     Ok(DERIVED.get_or_init(|| derived).clone())
 }
 
@@ -4423,10 +5084,14 @@ mod tests {
     /// It is listed anyway because it is the refusal CLOUD-1189 owed a class to
     /// and could not declare one for, which is the case that produced
     /// CLOUD-1313: leaving it out would close the row without closing its cause.
-    const CLASSED_BESIDE_THE_TABLES: &[(&str, Native)] = &[(
-        "crate::redirect::validate_remedies(",
-        Native::RemedyUnresolved,
-    )];
+    const CLASSED_BESIDE_THE_TABLES: &[(&str, Native)] = &[
+        (
+            "crate::redirect::validate_remedies(",
+            Native::RemedyUnresolved,
+        ),
+        // Not a table: a census over every table's prose, run last (CLOUD-1642).
+        ("meter_text(config)", Native::ProseColumnRefused),
+    ];
 
     /// Tables proven well formed somewhere else, each with the reason. Listing
     /// an exemption is the point: a reader sees the justification rather than
@@ -4638,6 +5303,130 @@ mod tests {
 
     fn is_usage_error(err: &anyhow::Error) -> bool {
         err.downcast_ref::<UsageError>().is_some()
+    }
+
+    // --- config prose length (CLOUD-1642) ------------------------------------
+
+    /// A value `len` characters long that starts with a sentinel no refusal may
+    /// echo, so "pointer-only" is asserted rather than assumed.
+    fn prose(len: usize) -> String {
+        let mut value = "ZQXPROSE".to_owned();
+        while value.len() < len {
+            value.push('x');
+        }
+        value
+    }
+
+    /// The refusal `parse` raised, asserted to be the prose class and to carry
+    /// none of the value.
+    fn prose_refusal(err: &anyhow::Error) -> String {
+        let usage = err
+            .downcast_ref::<UsageError>()
+            .unwrap_or_else(|| panic!("a usage error, got {err:#}"));
+        assert_eq!(usage.verdict, Some(Native::ProseColumnRefused), "{err:#}");
+        assert!(!usage.message.contains("ZQXPROSE"), "{}", usage.message);
+        usage.message.clone()
+    }
+
+    /// `#MUTANT text-tier-flattened` reddens here: one column per tier, at its cap
+    /// and one over.
+    #[test]
+    fn a_column_one_over_its_tier_is_refused_by_pointer_and_at_its_cap_loads() {
+        let startup = |len| {
+            format!(
+                "version = 1\n[[startup]]\nid = \"long\"\ncheck = [\"true\"]\ngloss = \"{}\"\n",
+                prose(len)
+            )
+        };
+        let redirect = |len| {
+            format!(
+                "version = 1\n[[redirect]]\nglob = \"*.frob\"\nmutation = \"{}\"\n",
+                prose(len)
+            )
+        };
+        let reason = |len| {
+            format!(
+                "version = 1\n[[rule]]\nid = \"r\"\nkind = \"shape\"\nscope = \"mediated_call\"\n\
+                 pattern = \"x\"\nseverity = \"deny\"\nreason = \"{}\"\n",
+                prose(len)
+            )
+        };
+        for (config, cap, pointer) in [
+            (
+                &startup as &dyn Fn(usize) -> String,
+                120,
+                "startup[0].gloss",
+            ),
+            (&redirect, 512, "redirect[0].mutation"),
+            (&reason, 1536, "rule[0].reason"),
+        ] {
+            parse(&config(cap), "test").unwrap_or_else(|err| panic!("{pointer} at cap: {err:#}"));
+            let err = parse(&config(cap + 1), "test").expect_err(pointer);
+            let message = prose_refusal(&err);
+            assert!(
+                message.contains(&format!("{pointer} {} over {cap}", cap + 1)),
+                "{message}"
+            );
+        }
+
+        let mut seen = std::collections::BTreeSet::new();
+        for column in TEXT_CENSUS {
+            assert!(
+                column.cap >= crate::verdict::GLOSS_MAX && column.cap <= TEXT_MAX,
+                "{} is capped outside the tiers",
+                column.path
+            );
+            assert!(seen.insert(column.path), "{} is listed twice", column.path);
+        }
+    }
+
+    /// `#MUTANT text-ceiling-census-only` reddens here: a column the census does
+    /// not name is still held to the ceiling.
+    #[test]
+    fn an_unlisted_string_column_is_held_to_the_text_ceiling() {
+        let forbid = |len| {
+            format!(
+                "version = 1\n[[rule]]\nid = \"r\"\nkind = \"forbid\"\nglob = \"{}\"\n\
+                 pattern = \"x\"\nseverity = \"deny\"\n",
+                prose(len)
+            )
+        };
+        parse(&forbid(TEXT_MAX), "test").expect("an unlisted column at the ceiling loads");
+        let err = parse(&forbid(TEXT_MAX + 1), "test").expect_err("one over the ceiling");
+        let message = prose_refusal(&err);
+        assert!(message.contains("rule[0].glob 1537 over 1536"), "{message}");
+    }
+
+    /// `#MUTANT text-meter-override-unwired` reddens here.
+    #[test]
+    fn an_override_column_over_its_cap_is_refused_too() {
+        let waiver = |len| {
+            format!(
+                "version = 1\n[[waiver]]\nrule = \"absent\"\nexpires = \"2999-01-01\"\n\
+                 reason = \"{}\"\n",
+                prose(len)
+            )
+        };
+        parse_override(&waiver(TEXT_MAX), "local").expect("an override reason at its cap loads");
+        let err = parse_override(&waiver(TEXT_MAX + 1), "local").expect_err("one over");
+        let message = prose_refusal(&err);
+        assert!(
+            message.contains("waiver[0].reason 1537 over 1536"),
+            "{message}"
+        );
+    }
+
+    /// `#MUTANT text-meter-judges-the-base` reddens here: a config read from a
+    /// ref is compared, never metered.
+    #[test]
+    fn an_over_cap_base_ref_is_compared_not_refused() {
+        let text = format!(
+            "version = 1\n[[startup]]\nid = \"long\"\ncheck = [\"true\"]\ngloss = \"{}\"\n",
+            prose(121)
+        );
+        parse_base(&text, "origin/main:batten.toml").expect("a base ref is compared, not metered");
+        let err = parse(&text, "test").expect_err("the working tree is metered");
+        prose_refusal(&err);
     }
 
     #[test]

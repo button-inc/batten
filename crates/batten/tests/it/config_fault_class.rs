@@ -206,6 +206,15 @@ const FAULTS: &[(&str, &str, &str)] = &[
         "redirect.mutation",
         "version = 1\n\
          [[redirect]]\nglob = \"*.frob\"\nmutation = \"run `batten frobnicate the thing`\"\n",
+    ), // CLOUD-1642. The row is otherwise well formed — `startup::validate` checks
+    // only that a gloss is non-empty — so only the prose meter can refuse it: a
+    // 121-character gloss, one over the line tier.
+    (
+        "prose declare refused",
+        "startup.gloss",
+        "version = 1\n\
+         [[startup]]\nid = \"long\"\ncheck = [\"true\"]\n\
+         gloss = \"a gloss that runs past one line a gloss that runs past one line a gloss that runs past one line a gloss that runs past on\"\n",
     ),
 ];
 

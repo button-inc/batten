@@ -995,3 +995,139 @@ fn the_reading_leaves_the_tree_it_judges_unmodified() {
         "the same tree must fail twice"
     );
 }
+
+// --- every text leaf carries its census cap (CLOUD-1642) ----------------------
+
+/// Every string leaf of `schema`, as `(census path, maxLength)`.
+///
+/// A SECOND walker, deliberately not a call into the one that writes the caps:
+/// the property is that the published schema agrees with the census, and a
+/// case reusing the writer's own walk would agree with it by construction.
+fn text_leaves(schema: &serde_json::Value) -> Vec<(String, Option<u64>)> {
+    fn extend(path: &str, segment: &str) -> String {
+        if path.is_empty() || segment.starts_with('[') {
+            format!("{path}{segment}")
+        } else {
+            format!("{path}.{segment}")
+        }
+    }
+    fn walk(
+        root: &serde_json::Value,
+        node: &serde_json::Value,
+        path: &str,
+        stack: &mut Vec<String>,
+        out: &mut Vec<(String, Option<u64>)>,
+    ) {
+        let Some(object) = node.as_object() else {
+            return;
+        };
+        let reference = object
+            .get("$ref")
+            .and_then(|r| r.as_str())
+            .and_then(|r| r.strip_prefix("#/$defs/"))
+            .filter(|name| !stack.iter().any(|seen| seen == name));
+        if let Some(name) = reference {
+            stack.push(name.to_owned());
+            walk(root, &root["$defs"][name], path, stack, out);
+            stack.pop();
+        }
+        let text = match object.get("type") {
+            Some(serde_json::Value::String(kind)) => kind == "string",
+            Some(serde_json::Value::Array(kinds)) => kinds.iter().any(|k| k == "string"),
+            _ => false,
+        };
+        if text && !object.contains_key("enum") && !object.contains_key("const") {
+            out.push((
+                path.to_owned(),
+                object.get("maxLength").and_then(serde_json::Value::as_u64),
+            ));
+        }
+        if let Some(properties) = object.get("properties").and_then(|p| p.as_object()) {
+            for (key, child) in properties {
+                walk(root, child, &extend(path, key), stack, out);
+            }
+        }
+        if let Some(items) = object.get("items") {
+            walk(root, items, &extend(path, "[]"), stack, out);
+        }
+        if let Some(additional) = object.get("additionalProperties") {
+            walk(root, additional, &extend(path, "*"), stack, out);
+        }
+        for combinator in ["anyOf", "oneOf", "allOf"] {
+            for branch in object
+                .get(combinator)
+                .and_then(|b| b.as_array())
+                .into_iter()
+                .flatten()
+            {
+                walk(root, branch, path, stack, out);
+            }
+        }
+        for conditional in ["if", "then", "else"] {
+            if let Some(branch) = object.get(conditional) {
+                walk(root, branch, path, stack, out);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(schema, schema, "", &mut Vec::new(), &mut out);
+    out
+}
+
+/// The cap the census declares for `path`, else the ceiling.
+fn census_cap(path: &str) -> u64 {
+    let cap = batten::config::TEXT_CENSUS
+        .iter()
+        .find(|column| column.path == path)
+        .map_or(batten::config::TEXT_MAX, |column| column.cap);
+    u64::try_from(cap).expect("a cap fits in u64")
+}
+
+/// `#MUTANT text-schema-uncapped` reddens here.
+#[test]
+fn every_text_leaf_in_both_schemas_carries_its_census_cap() {
+    let mut problems = Vec::new();
+    let config_leaves = text_leaves(&derived_schema());
+    for (surface, leaves) in [
+        ("config", config_leaves.clone()),
+        ("override", text_leaves(&derived_override_schema())),
+    ] {
+        assert!(!leaves.is_empty(), "{surface}: the walk found no text leaf");
+        for (path, max) in leaves {
+            let want = census_cap(&path);
+            if max != Some(want) {
+                problems.push(format!(
+                    "{surface} {path}: maxLength {max:?}, census {want}"
+                ));
+            }
+        }
+    }
+    for column in batten::config::TEXT_CENSUS {
+        if !config_leaves.iter().any(|(path, _)| path == column.path) {
+            problems.push(format!("census {} names no text leaf", column.path));
+        }
+    }
+    assert!(problems.is_empty(), "{}", problems.join("\n"));
+}
+
+/// The length half of `the_schema_refuses_what_the_binary_refuses`.
+#[test]
+fn an_over_cap_column_is_refused_by_both_the_schema_and_the_binary() {
+    let gloss = "g".repeat(121);
+    let bad = format!(
+        "version = 1\n[[startup]]\nid = \"long\"\ncheck = [\"true\"]\ngloss = \"{gloss}\"\n"
+    );
+    let schema = derived_schema();
+    let validator = jsonschema::validator_for(&schema).expect("the schema compiles");
+    assert!(
+        !validator.is_valid(&as_json(&bad)),
+        "the schema accepted a gloss over its cap"
+    );
+    let output = check_in(&repo_with_config("schema-over-cap", &bad));
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("prose declare refused"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}

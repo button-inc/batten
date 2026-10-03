@@ -85,7 +85,7 @@ use crate::error::UsageError;
 /// CLOUD-1117 is that trial. Until it reports, this bound is a guard against the
 /// gloss growing back into a paragraph, which is a job a chosen number does
 /// perfectly well.
-const GLOSS_MAX: usize = 120;
+pub(crate) const GLOSS_MAX: usize = 120;
 
 /// What a route offers the reader.
 ///
@@ -1405,6 +1405,12 @@ pub enum Native {
     TaggerUnaccountable,
     /// A tag carries no tagger identity at all.
     TaggerUnannotated,
+    /// A config string is longer than the cap its column declares (CLOUD-1642).
+    ///
+    /// **APPENDED LAST**, for [`Native::RecordTableRefused`]'s reason. A config
+    /// fault, raised by the loader after every table validator, so it is in
+    /// [`Native::CONFIG_FAULTS`].
+    ProseColumnRefused,
 }
 
 impl Native {
@@ -1472,6 +1478,7 @@ impl Native {
         Native::BodyDenied,
         Native::TaggerUnaccountable,
         Native::TaggerUnannotated,
+        Native::ProseColumnRefused,
     ];
 
     /// The classes the CONFIG LOADER raises, in `parse_ungated` order.
@@ -1507,6 +1514,7 @@ impl Native {
         Native::ProvisionTableRefused,
         Native::StartupTableRefused,
         Native::StepTableRefused,
+        Native::ProseColumnRefused,
     ];
 
     /// The token this class is declared and rendered under.
@@ -1571,6 +1579,7 @@ impl Native {
             Native::BodyDenied => "commit state refused",
             Native::TaggerUnaccountable => "tag own refused",
             Native::TaggerUnannotated => "tag own unnamed",
+            Native::ProseColumnRefused => "prose declare refused",
         }
     }
 }
@@ -2517,6 +2526,21 @@ would pass. Replace it with an annotated tag cut under the accountable identity.
         ],
         applicability: Applicability::Advice,
     },
+    VendoredVerdict {
+        id: "prose declare refused",
+        gloss: "a config column's text is longer than the cap its column declares",
+        class: "Batten echoes config prose back -- `batten policy explain` prints a class, \
+`batten policy rule` prints a row's reason, and a first sighting renders the reason in full -- \
+so the length of every string a config declares is paid in every reader's context. Each \
+column is held to a cap at load: one line for a gloss, a sentence for a route, a remedy or a \
+note, a paragraph for a class or a reason, and the paragraph ceiling for any column not listed \
+tighter. An over-cap value is refused rather than truncated, because a truncated reason is a \
+remedy missing its second half. The refusal names the column, the row index, the length and \
+the cap, never the text. Shorten the value; provenance and evidence belong in a TOML comment \
+beside the row, which is never parsed or emitted.",
+        routes: &[read("config read first", "batten.toml")],
+        applicability: Applicability::Advice,
+    },
 ];
 
 /// Every class the binary ships, as the registry carries them.
@@ -2927,7 +2951,8 @@ mod tests {
                 | Native::TrailerDenied
                 | Native::BodyDenied
                 | Native::TaggerUnaccountable
-                | Native::TaggerUnannotated => native.id(),
+                | Native::TaggerUnannotated
+                | Native::ProseColumnRefused => native.id(),
             };
             // The prefix is gone (CLOUD-1284), so what makes this a token is the
             // ARITY: exactly three words. Asserting that here rather than a
@@ -2965,6 +2990,13 @@ mod tests {
                 native.id()
             );
         }
+        // Held to the same prose census as a consumer's rows (CLOUD-1642),
+        // whatever the vendored count is when a class lands.
+        assert_eq!(
+            crate::config::text_offenders("verdict", &table),
+            Vec::<String>::new(),
+            "a vendored class is longer than its column's cap"
+        );
     }
 
     #[test]
