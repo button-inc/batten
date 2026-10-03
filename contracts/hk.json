@@ -314,6 +314,7 @@
             "prettier",
             "deno-fmt",
             "rego",
+            "engine-pin",
             "cargo-fmt"
           ]
         }
@@ -356,9 +357,15 @@
           "parallelGroupId": "group_0"
         },
         {
-          "name": "cargo-fmt",
+          "name": "engine-pin",
           "status": "included",
           "orderIndex": 6,
+          "parallelGroupId": "group_0"
+        },
+        {
+          "name": "cargo-fmt",
+          "status": "included",
+          "orderIndex": 7,
           "parallelGroupId": "group_0"
         }
       ]

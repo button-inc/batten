@@ -955,6 +955,7 @@ local fixers = new Mapping<String, Step> {
   ["prettier"] = gate["prettier"]
   ["deno-fmt"] = gate["deno-fmt"]
   ["rego"] = gate["rego"]
+  ["engine-pin"] = gate["engine-pin"]
   ["cargo-fmt"] = gate["cargo-fmt"]
 }
 

@@ -1,5 +1,9 @@
 name: release-plz
 
+# workflow-shell: CLOUD-2063 the step count rises by the seven single-command
+# steps that move the engine pin onto the release PR; each is plain argv, and
+# none carries a shell body.
+
 # Automatic semver from Conventional Commits, via release-plz
 # (https://release-plz.dev), installed and pinned by mise like every other tool.
 # On each push to main it publishes any pending release (tag + GitHub release for
