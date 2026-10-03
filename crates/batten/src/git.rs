@@ -3819,6 +3819,47 @@ pub(crate) fn patch_identities(
     Ok(found)
 }
 
+/// Whether every commit `other` carries beyond `tip` is, by patch identity, a
+/// change `tip` already carries (CLOUD-2089).
+///
+/// The question a lease asks of a remote value it did not itself write: is any
+/// of it work this clone never saw? A branch pushed by hand and then replayed
+/// carries the same changes under new shas, so reachability says "unseen" and
+/// patch identity says "already here" — and patch identity is the one this
+/// repository decides merged-ness by (CLOUD-36).
+///
+/// **A commit with no identity is never contained.** An empty commit, or one
+/// whose identity could not be computed, proves nothing about what it carried,
+/// so the answer is `false` — the direction that keeps a sibling's work from
+/// being overwritten. So is any range that will not resolve, including an
+/// `other` this clone has not fetched.
+#[must_use]
+//MUTANT-SUITE crates/batten/tests/it/land.rs
+//MUTANT identity-less-commit-contained|s@let Some(identity) = commit_identity(&repo, &id) else {@let Some(identity) = commit_identity(&repo, &id).or_else(|| ours.iter().next().cloned()) else {@|an_empty_sibling_commit_is_never_admitted_by_patch_identity
+pub fn patches_contained(dir: &Path, tip: &str, other: &str) -> bool {
+    let Ok(repo) = open(dir) else {
+        return false;
+    };
+    let (Ok(theirs), Ok(ours)) = (
+        rev_list(dir, Window::DEFAULT, &format!("{tip}..{other}")),
+        patch_identities(dir, Window::DEFAULT, &format!("{other}..{tip}")),
+    ) else {
+        return false;
+    };
+    for commit in theirs {
+        let Ok(id) = gix::ObjectId::from_hex(commit.as_bytes()) else {
+            return false;
+        };
+        let Some(identity) = commit_identity(&repo, &id) else {
+            return false;
+        };
+        if !ours.contains(&identity) {
+            return false;
+        }
+    }
+    true
+}
+
 /// Where this branch and `base_ref` diverged, for RANGE SELECTION.
 ///
 /// The same line [`cumulative_patch_id`] draws, and the reason this is here at

@@ -697,6 +697,7 @@ fn contains(root: &Path, tip: &str, ancestor: &str) -> bool {
 #[must_use]
 //MUTANT admits-ignored|s@^    if last_pushed.as_deref() == Some(remote) {$@    if true {@|a_sibling_commit_on_the_branch_is_never_admitted
 //MUTANT replay-chain-unfollowed|s@^    for line in lines.iter().rev() {$@    for line in lines.iter() {@|a_branch_replayed_twice_replaces_its_first_pre_rebase_head
+//MUTANT patch-identity-unasked|s@^    if crate::git::patches_contained(root, head, remote) {$@    if false {@|a_hand_pushed_head_replayed_onto_trunk_is_admitted
 //MUTANT lease-reads-one-partition|s@^    let prefix = format!("{name}.");$@    let prefix = format!("{name}.unread.");@|a_replay_recorded_before_a_re_claim_still_admits_its_pre_rebase_head
 pub fn admitted(root: &Path, branch: &str, remote: &str, head: &str) -> bool {
     if remote == crate::lease::ZERO || contains(root, head, remote) {
@@ -709,6 +710,15 @@ pub fn admitted(root: &Path, branch: &str, remote: &str, head: &str) -> bool {
             .then(|| columns[2].to_owned())
     });
     if last_pushed.as_deref() == Some(remote) {
+        return true;
+    }
+    // PUSHED BY HAND, THEN REPLAYED (CLOUD-2089). A head this clone pushed with
+    // plain `git` leaves no `push landed` line, and a replay that lap recorded
+    // from a different head leaves no `from` naming it — so the remote read as a
+    // sibling's work and every lap's push was refused while the gate passed.
+    // Every commit on it being a change `head` already carries is the same
+    // admission by patch identity rather than by record.
+    if crate::git::patches_contained(root, head, remote) {
         return true;
     }
     // THE REPLAYS CHAIN, newest first. A branch replayed twice before it pushes

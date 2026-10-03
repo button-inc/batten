@@ -935,6 +935,54 @@ fn a_sibling_commit_on_the_branch_is_never_admitted() {
     );
 }
 
+/// A commit that changes `file` to `body`, so it carries a patch identity.
+fn change_on(repo: &Path, file: &str, body: &str, subject: &str) -> String {
+    std::fs::write(repo.join(file), body).expect("write the change");
+    common::git_in(repo, &["add", file]);
+    common::git_in(repo, &["commit", "-q", "-m", subject]);
+    common::git_in(repo, &["rev-parse", "HEAD"])
+}
+
+/// CLOUD-2089: a head pushed by hand and then replayed onto a moved trunk. No
+/// lap record names it, so only patch identity can say it is this clone's own
+/// work — and without it every lap's push was refused while the gate passed.
+#[test]
+fn a_hand_pushed_head_replayed_onto_trunk_is_admitted() {
+    let repo = repo("land-admit-hand-pushed");
+    let branch = branch_of(&repo);
+    let base = common::git_in(&repo, &["rev-parse", "HEAD"]);
+    let pushed = change_on(&repo, "ours.txt", "the fix\n", "ours, pushed by hand");
+    reset_to(&repo, &base);
+    change_on(&repo, "trunk.txt", "someone else's\n", "trunk moved");
+    let after = change_on(&repo, "ours.txt", "the fix\n", "ours, replayed");
+    assert!(
+        land::admitted(&repo, &branch, &pushed, &after),
+        "every commit on the remote is a change the head already carries"
+    );
+}
+
+/// The mirror: patch identity admits nothing it cannot prove. A sibling's
+/// EMPTY commit has no identity, and a sibling's real change is not ours.
+#[test]
+fn an_empty_sibling_commit_is_never_admitted_by_patch_identity() {
+    let repo = repo("land-admit-empty-sibling");
+    let branch = branch_of(&repo);
+    let base = common::git_in(&repo, &["rev-parse", "HEAD"]);
+    let empty = commit_on(&repo, "sibling: empty");
+    reset_to(&repo, &base);
+    let different = change_on(&repo, "theirs.txt", "theirs\n", "sibling: a change");
+    reset_to(&repo, &base);
+    let head = change_on(&repo, "ours.txt", "ours\n", "ours");
+    assert!(
+        !land::admitted(&repo, &branch, &empty, &head),
+        "an empty commit proves nothing about what it carried"
+    );
+    assert!(
+        !land::admitted(&repo, &branch, &different, &head),
+        "a change the head does not carry is a sibling's work"
+    );
+}
+
 /// The lap's own case: the remote holds the head the replay rewrote.
 #[test]
 fn a_rebased_branch_replaces_its_own_pre_rebase_head() {
