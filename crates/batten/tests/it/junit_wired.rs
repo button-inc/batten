@@ -27,11 +27,18 @@ fn junit_path(config: &toml::Table, profile: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
+/// The committed nextest config, parsed.
+fn nextest_config() -> toml::Table {
+    std::fs::read_to_string(common::at_root(".config/nextest.toml"))
+        .expect("read the committed nextest config")
+        .parse()
+        .expect("the nextest config is TOML")
+}
+
+/// The default profile writes the report, under the reader's own file name.
 #[test]
 fn the_default_profile_writes_a_junit_report() {
-    let text = std::fs::read_to_string(common::at_root(".config/nextest.toml"))
-        .expect("read the committed nextest config");
-    let config: toml::Table = text.parse().expect("the nextest config is TOML");
+    let config = nextest_config();
     // THE READER'S OWN NAME, not merely a non-empty one: `derive_nextest` reads
     // `NEXTEST_REPORT_FILE`, so a stanza writing any other file leaves a report
     // nothing reads.
@@ -42,12 +49,39 @@ fn the_default_profile_writes_a_junit_report() {
         ".config/nextest.toml must write `[profile.default.junit] path = '{reader}'`, or a run \
          leaves no per-case times `record suites` can read"
     );
-    // `ci` inherits `default`'s; a ci profile that set its own path to anything
-    // else would silently move the CI legs' report out from under the reader.
+}
+
+/// EVERY REPORT LANDS WHERE `record suites` READS IT (review of #1089). The reader
+/// opens `NEXTEST_REPORT_DIR/<profile>/NEXTEST_REPORT_FILE`, so two edits to this
+/// config would move a report out from under it while the case above stayed
+/// green: a `[store] dir`, which relocates every profile's directory, and a
+/// profile that names its own junit file. EVERY declared profile is judged, not
+/// a list of the ones that exist today, so a profile added later is covered by
+/// construction.
+#[test]
+fn every_report_lands_where_record_suites_reads_it() {
+    let config = nextest_config();
+    let store = config
+        .get("store")
+        .and_then(|store| store.get("dir"))
+        .map(|dir| dir.as_str().unwrap_or_default().trim_end_matches('/'));
     assert!(
-        junit_path(&config, "ci").is_none_or(|path| path == reader),
-        "the ci profile overrides the junit path the reader expects"
+        store.is_none_or(|dir| dir == batten::suites::NEXTEST_REPORT_DIR),
+        "`[store] dir = {store:?}` moves every report out of `{}`, where `record suites` reads it",
+        batten::suites::NEXTEST_REPORT_DIR
     );
+    let profiles = config
+        .get("profile")
+        .and_then(toml::Value::as_table)
+        .expect("the nextest config declares profiles");
+    for name in profiles.keys() {
+        let path = junit_path(&config, name);
+        assert!(
+            path.as_deref()
+                .is_none_or(|path| path == batten::suites::NEXTEST_REPORT_FILE),
+            "profile `{name}` writes its report to {path:?}, a file `record suites` never reads"
+        );
+    }
 }
 
 /// A SUBSET GATE NEVER OVERWRITES THE FULL SUITE'S REPORT. nextest writes the junit
@@ -58,10 +92,7 @@ fn the_default_profile_writes_a_junit_report() {
 /// suite reports into.
 #[test]
 fn a_subset_gate_never_overwrites_the_full_suites_report() {
-    let nextest: toml::Table = std::fs::read_to_string(common::at_root(".config/nextest.toml"))
-        .expect("read the committed nextest config")
-        .parse()
-        .expect("the nextest config is TOML");
+    let nextest = nextest_config();
     let manifest: toml::Table = std::fs::read_to_string(common::at_root("mise.toml"))
         .expect("read the manifest")
         .parse()
@@ -120,6 +151,7 @@ fn run_left(name: &str, report: Option<&str>) -> std::path::PathBuf {
     dir
 }
 
+/// `batten record suites` in `dir`, reading the default profile's report.
 fn record(dir: &Path) -> Output {
     common::batten()
         .args(["record", "suites"])
@@ -129,6 +161,8 @@ fn record(dir: &Path) -> Output {
         .expect("run batten record suites")
 }
 
+/// The verb reads a nextest report into one row per module, summed and ordered
+/// by cost.
 #[test]
 fn record_suites_reads_a_nextest_report_per_module() {
     let dir = run_left(
@@ -192,6 +226,7 @@ fn a_retired_bats_report_does_not_shadow_the_nextest_one() {
     assert!(said.contains("`pkg::it::only`"), "{said}");
 }
 
+/// No report is could-not-look, never an empty table that reads as a fast suite.
 #[test]
 fn an_absent_nextest_report_is_could_not_look() {
     let dir = run_left("junit-wired-absent", None);

@@ -151,6 +151,7 @@ setup = "clear-scratch"
 # row would assert a bound it no longer sets. CLOUD-1641 still owns
 # `agentic_record`'s real cost and is NOT closed by this: the override went away
 # because the floor rose, not because the case got fast.
+#MUTANT store-moved|s@^\[profile\.default\]$@[store]\ndir = "target/elsewhere"\n\n[profile.default]@|every_report_lands_where_record_suites_reads_it
 [profile.default]
 slow-timeout = { period = "10s", terminate-after = 120 }
 # EVERY RUN REPORTS EVERY FAILURE. nextest's default fail-fast stops scheduling
@@ -187,6 +188,7 @@ path = "junit.xml"
 # Those tasks select this profile through `NEXTEST_PROFILE`, and it inherits
 # every key from `default`, so they report into `target/nextest/narrow/` instead.
 #MUTANT narrow-profile-undeclared|s@^\[profile\.narrow\]$@[profile.narrow-gone]@|a_subset_gate_never_overwrites_the_full_suites_report
+#MUTANT narrow-report-renamed|s@^\[profile\.narrow\]$@[profile.narrow]\njunit = { path = "narrow.xml" }@|every_report_lands_where_record_suites_reads_it
 [profile.narrow]
 
 [[profile.default.overrides]]
