@@ -628,6 +628,41 @@ fn a_receipt_for_an_earlier_head_runs_the_gate() {
     );
 }
 
+/// **A lap lost to the landing lease spends none of the lap budget** (CLOUD-1700).
+///
+/// Through the ledger the loop now reads, because this tier cannot drive a whole
+/// lap without a live git server (see the case below). Measured before the fix:
+/// a two-lap budget, two passes lost to another branch's lease, every one green,
+/// and the landing ended telling the agent to run it again.
+///
+/// MUTANT `lease-loss-charges-a-lap`: counting lease waits against the budget
+/// exhausts it after the second loss, so the first assertion goes red.
+#[test]
+fn a_lap_lost_to_the_lease_leaves_the_lap_budget_unchanged() {
+    let mut ledger = batten::land::Ledger::default();
+    for loss in 1..=5 {
+        assert!(
+            ledger.may_open_a_lap(2),
+            "after {loss} lease loss(es) a two-lap budget must still open a lap"
+        );
+        ledger.attempt();
+        assert_eq!(ledger.waited(60), batten::land::Charge::Lap);
+    }
+    assert_eq!(
+        ledger.lease_waits, 5,
+        "the losses are charged to their own bound"
+    );
+    assert_eq!(ledger.paid, 0, "and none of them bought a matrix");
+
+    // THE MIRROR: charged laps still exhaust it, so the backstop is intact.
+    ledger.attempt();
+    ledger.attempt();
+    assert!(
+        !ledger.may_open_a_lap(2),
+        "two charged laps spend a two-lap budget"
+    );
+}
+
 /// `batten land lap`, with the lap bound named in the environment.
 ///
 /// `$LAND_VERIFY` is a gate that always REFUSES, which is what makes the stop
