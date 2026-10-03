@@ -58,6 +58,14 @@ following them re-derived hand dispatch.
      option, and offer the option labelled exactly `Approve dispatch`. That
      answer writes `dispatch-approved.<sha256>`.
   3. Send the byte-identical prompt. The preset rule `call open now` grants it.
+- **Before you ask, read your own mode as the SERVER records it** (CLOUD-2088):
+  `get_session` with no `session_id`. A child can never come up more
+  permissive than that record, and approving a plan does not move it. Measured
+  2026-10-03: `permission_mode_seq` stayed unchanged after `ExitPlanMode` was
+  approved, and `create_session` with `auto` was refused three times. So offer
+  only modes the record reaches. If the owner wants `auto` and the record reads
+  `plan`, the question says so: the owner switches this session to Auto first.
+  Offering `auto` anyway is a false choice.
 - **Any other answer is not a refusal.** It means improve the prompts or wait
   for input. Revise, re-lint, and ask again.
 - An edited prompt has a new digest and prompts again.

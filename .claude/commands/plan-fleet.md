@@ -123,8 +123,24 @@ dispatching CLOUD-703's six bundles:
 | `auto`          | omitted   | `default`                                                              |
 | `plan`          | `auto`    | refused at the call — "requires the parent session to be in auto mode" |
 | `plan`          | `default` | `plan`                                                                 |
+| `plan`†         | omitted   | `default`                                                              |
 
-No single rule fits all three rows. Omission does not inherit the caller's mode
+† Measured 2026-10-03 (CLOUD-2088). The dispatcher's `ExitPlanMode` had been
+approved, and its own tools ran unrestricted. But `get_session` with no
+`session_id` still read `permission_mode: "plan"`, with `permission_mode_seq`
+unchanged from before the approval. `create_session` with `auto` was refused
+three times on that record.
+
+**THE DISPATCHER'S MODE IS THE SERVER'S RECORD, NOT WHAT YOUR TOOLS LET YOU DO.**
+Approving a plan does not move that record. So before you put a mode to the
+owner, read your own mode with `get_session` and no `session_id`, and offer only
+modes that record can reach: `auto` only when it reads `auto`. Asking the owner
+to pick `auto` from a session the server holds in `plan` is a false choice. The
+owner answers, the call is refused, and the answer is wasted. If the owner wants
+`auto` and the record reads otherwise, say exactly that in the question: they
+switch this session's mode selector to Auto, and then you dispatch.
+
+No single rule fits all four rows. Omission does not inherit the caller's mode
 (row 1), and a value below the caller's is not honoured either (row 3) — so the
 reachable set is bounded by the dispatcher's own mode at the moment of the call,
 which drifts as plan mode is entered and left. **Read the child's mode back
