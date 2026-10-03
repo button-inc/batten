@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.201](https://github.com/button-inc/batten/compare/v0.0.200...v0.0.201) - 2026-10-03
+
+### Added
+
+- *(engine)* update the engine to its pin at startup, off the hook path
+
+### Fixed
+
+- *(land)* unwind a speculation the gate refused, and never stop carrying one
+- *(engine)* fetch a pinned release from the engine module, rows at column 0
+- *(testing)* judge fall-through in the resolver's spelling, not canonicalize's
+- *(mutate)* count a mutation's changed lines as a multiset, not a set
+- *(test)* a subset gate no longer overwrites the full suite's JUnit report
+- *(config)* a duplicate close of a filed row records the tracker's status
+- *(record)* one record decide at a time, so none clears another's reading
+- *(lease)* a ref the remote does not advertise is bad input, exit 1
+- *(git)* an unrelated ceiling no longer refuses a valid repository
+- *(suites)* a nextest table labels its rows as modules, not suites
+- *(record)* a retired bats lane's last report no longer shadows the nextest table
+- *(suites)* a setup script is not a module row
+- *(record)* a subdirectory abstention clears the stale record a root run left
+- *(record)* a turn decided from a directory with no authority abstains
+- *(suites)* a nextest table keeps nested modules apart and says its figures are summed
+
+### Other
+
+- *(engine)* regenerate completions, man pages and the schema snapshot for engine update
+- *(test)* document the functions this branch adds or touches
+- *(suite)* every nextest report lands where record suites reads it
+- *(harness)* the task and piped doors refuse at spawn, on any target layout
+- *(harness)* the task door refuses a fall-through as the binary's door does
+- *(mutate)* repair the 19 rows the first sweep of the revived gates refused
+- *(mutate)* move the indented row main's perf-pair fix brought in
+- *(config)* withdraw the duplicate-close recorder until a human admits it
+- *(mutate)* a Rust mutation row sits at column 0, and 36 dead ones come alive
+- *(harness)* a full run writes nothing to the real state store, and every door pins the home
+- *(harness)* refuse a fall-through before the spawn, judged by the resolver the binary uses
+- *(harness)* main's git preset suite and the last two fixtures run in a repository of their own
+- *(harness)* every fixture the binary runs in is a repository of its own
+- *(harness)* every spawn writes the case's own state root, and a fixture that falls through to the checkout is refused
+- *(suite)* every nextest run leaves per-case times, and record suites reads them
+
 ## [0.0.200](https://github.com/button-inc/batten/compare/v0.0.199...v0.0.200) - 2026-10-02
 
 ### Added
