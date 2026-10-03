@@ -2389,15 +2389,13 @@ fn collect_text_leaves(
         .get("$ref")
         .and_then(serde_json::Value::as_str)
         .and_then(|reference| reference.strip_prefix("#/$defs/"))
+        && !visiting.iter().any(|seen| seen == name)
+        && let Some(def) = root.get("$defs").and_then(|defs| defs.get(name))
     {
-        if !visiting.iter().any(|seen| seen == name) {
-            if let Some(def) = root.get("$defs").and_then(|defs| defs.get(name)) {
-                visiting.push(name.to_owned());
-                let def_at = format!("/$defs/{}", pointer_token(name));
-                collect_text_leaves(root, def, &def_at, path, visiting, caps)?;
-                visiting.pop();
-            }
-        }
+        visiting.push(name.to_owned());
+        let def_at = format!("/$defs/{}", pointer_token(name));
+        collect_text_leaves(root, def, &def_at, path, visiting, caps)?;
+        visiting.pop();
     }
     let typed_text = match object.get("type") {
         Some(serde_json::Value::String(kind)) => kind == "string",
