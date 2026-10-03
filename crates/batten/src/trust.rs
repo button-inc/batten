@@ -778,6 +778,11 @@ pub enum WeakeningKind {
     /// reason: the raise-only clamp compares kinds, and this is the deniable
     /// spelling of switching the forge reads off.
     ForgeCredentialsRemoved,
+    /// A check-runs status was added to `[forge] nothing_graded` (CLOUD-2080):
+    /// a refusal the read reported as could-not-look now records "nothing
+    /// graded" and exits clean. Narrowing is the strict direction and is not
+    /// reported.
+    ForgeNothingGradedWidened,
     /// The `[advisory]` channel ceiling rose, or stopped being declared
     /// (CLOUD-896). Same direction as the two below: smaller is stricter, and an
     /// absent ceiling is unenforced rather than zero.
@@ -1120,6 +1125,7 @@ impl WeakeningKind {
         WeakeningKind::TranscriptPathRemoved,
         WeakeningKind::TranscriptHarnessRemoved,
         WeakeningKind::ForgeCredentialsRemoved,
+        WeakeningKind::ForgeNothingGradedWidened,
         WeakeningKind::AdvisoryCeilingRaised,
         WeakeningKind::HookOutputCeilingRaised,
         WeakeningKind::HookRepeatsRaised,
@@ -1215,6 +1221,7 @@ impl WeakeningKind {
             WeakeningKind::TranscriptPathRemoved => "transcript-path-removed",
             WeakeningKind::TranscriptHarnessRemoved => "transcript-harness-removed",
             WeakeningKind::ForgeCredentialsRemoved => "forge-credentials-removed",
+            WeakeningKind::ForgeNothingGradedWidened => "forge-nothing-graded-widened",
             WeakeningKind::AdvisoryCeilingRaised => "advisory-ceiling-raised",
             WeakeningKind::HookOutputCeilingRaised => "hook-output-ceiling-raised",
             WeakeningKind::HookRepeatsRaised => "hook-repeats-raised",
@@ -1654,7 +1661,10 @@ pub const CENSUS: &[FieldCoverage] = &[
     },
     FieldCoverage {
         field: "forge",
-        coverage: Coverage::Compared(&[WeakeningKind::ForgeCredentialsRemoved]),
+        coverage: Coverage::Compared(&[
+            WeakeningKind::ForgeCredentialsRemoved,
+            WeakeningKind::ForgeNothingGradedWidened,
+        ]),
     },
     FieldCoverage {
         field: "credential",
@@ -2849,6 +2859,30 @@ fn mcp_weakenings(
 /// than inline in [`scalar_weakenings`], which `clippy::too_many_lines` refuses
 /// once both arms are there — and the two arms are one subject, so a reader
 /// comparing them has them adjacent.
+/// The `[forge] nothing_graded` statuses `working` declares and `base` does not,
+/// ascending (CLOUD-2080).
+//MUTANT-SUITE crates/batten/src/trust.rs
+//MUTANT nothing-graded-unchecked|s@^        if !before.contains(\&status) {$@        if false {@|widening_nothing_graded_is_a_weakening
+fn nothing_graded_added(base: &Config, working: &Config) -> Vec<u16> {
+    let declared = |config: &Config| {
+        config
+            .forge
+            .as_ref()
+            .map(|table| table.nothing_graded.clone())
+            .unwrap_or_default()
+    };
+    let before = declared(base);
+    let mut added = Vec::new();
+    for status in declared(working) {
+        if !before.contains(&status) {
+            added.push(status);
+        }
+    }
+    added.sort_unstable();
+    added.dedup();
+    added
+}
+
 fn transcript_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
     let mut found = Vec::new();
 
@@ -2869,6 +2903,20 @@ fn transcript_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
             "forge.credential_names",
             "present",
             "absent",
+        ));
+    }
+
+    // A STATUS NEWLY READ AS "NOTHING GRADED" (CLOUD-2080). Each one turns a
+    // refusal the check-runs read reported as could-not-look into a clean,
+    // empty answer, so a status the working list adds over the base's is a
+    // weakening; dropping one is the strict direction. One finding per status,
+    // so the recorded question names which refusal it admits.
+    for status in nothing_graded_added(base, working) {
+        found.push(Weakening::new(
+            WeakeningKind::ForgeNothingGradedWidened,
+            "forge.nothing_graded",
+            "could-not-look",
+            format!("{status} nothing graded"),
         ));
     }
 
@@ -5976,6 +6024,31 @@ mod tests {
         assert!(
             weakenings(&config(""), &base).is_empty(),
             "declaring the forge's credentials is a strengthening, never a weakening"
+        );
+    }
+
+    /// A status added to `[forge] nothing_graded` turns a could-not-look into a
+    /// clean answer, so it is a weakening; dropping one is not (CLOUD-2080).
+    #[test]
+    fn widening_nothing_graded_is_a_weakening() {
+        let base = config("[forge]\nnothing_graded = [422]\n");
+        assert_eq!(
+            only(&base, &config("[forge]\nnothing_graded = [422, 404]\n")),
+            Weakening::new(
+                WeakeningKind::ForgeNothingGradedWidened,
+                "forge.nothing_graded",
+                "could-not-look",
+                "404 nothing graded",
+            )
+        );
+        assert_eq!(
+            only(&config(""), &base).kind,
+            WeakeningKind::ForgeNothingGradedWidened,
+            "declaring the first status is the same widening"
+        );
+        assert!(
+            weakenings(&base, &config("[forge]\nnothing_graded = []\n")).is_empty(),
+            "narrowing back to could-not-look is a strengthening"
         );
     }
 

@@ -90,6 +90,16 @@ pub struct Forge {
     /// spellings it used to carry.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub credential_names: Vec<String>,
+    /// The check-runs read's statuses that mean "no runs recorded" rather than
+    /// could-not-look (CLOUD-2080).
+    ///
+    /// **Declared, never an engine constant.** A status here turns a refusal
+    /// into a clean answer, so adding one narrows what reads as "could not
+    /// look" — `trust.rs` reports any status added against the base as a
+    /// weakening, and `config lint` puts it to the recorded question. Empty is
+    /// the strict reading: every refusal is could-not-look.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub nothing_graded: Vec<u16>,
     /// The paginated reads this consumer declares, each recorded by
     /// `batten record query <id>` (CLOUD-843).
     ///
@@ -373,6 +383,17 @@ pub(crate) fn declare(forge: Forge) {
 /// holds it" rather than two.
 pub(crate) fn declared_credential() -> Option<String> {
     credential(DECLARED.get())
+}
+
+/// Whether the consumer declared `status` a "nothing graded" answer for the
+/// check-runs read (CLOUD-2080). Undeclared, or no `[forge]`, is `false`: the
+/// status stays could-not-look.
+pub(crate) fn declared_nothing_graded(status: u16) -> bool {
+    nothing_graded(DECLARED.get(), status)
+}
+
+fn nothing_graded(forge: Option<&Forge>, status: u16) -> bool {
+    forge.is_some_and(|forge| forge.nothing_graded.contains(&status))
 }
 
 /// The forge this process declared, for a case asserting the declaration.
@@ -1003,6 +1024,10 @@ mod tests {
         assert!(with(200).is_reading());
         for status in [304, 401, 403, 404, 422, 500, 502] {
             assert!(
+                !nothing_graded(None, status),
+                "{status} with no [forge] is could-not-look"
+            );
+            assert!(
                 !with(status).is_reading(),
                 "{status} is the forge declining, not a reading"
             );
@@ -1041,6 +1066,20 @@ mod tests {
     /// fallback — an undeclared forge must yield `None`, never the pair the engine
     /// used to carry, because a fallback is precisely how this seam stayed
     /// invisible.
+    /// A status is "nothing graded" only where the consumer declared it
+    /// (CLOUD-2080); everything else, and every status with no `[forge]`, stays
+    /// could-not-look.
+    #[test]
+    fn an_undeclared_status_is_could_not_look() {
+        let forge = Forge {
+            nothing_graded: vec![422],
+            ..Forge::default()
+        };
+        assert!(nothing_graded(Some(&forge), 422));
+        assert!(!nothing_graded(Some(&forge), 404));
+        assert!(!nothing_graded(None, 422));
+    }
+
     #[test]
     fn an_undeclared_forge_yields_no_credential_rather_than_a_default() {
         let env = |name: &str| match name {
@@ -1060,6 +1099,7 @@ mod tests {
                     credential_names: Vec::new(),
                     query: Vec::new(),
                     probe: Vec::new(),
+                    nothing_graded: Vec::new(),
                 },
                 env
             ),
@@ -1072,6 +1112,7 @@ mod tests {
                     credential_names: vec![String::from("TOKEN")],
                     query: Vec::new(),
                     probe: Vec::new(),
+                    nothing_graded: Vec::new(),
                 },
                 env
             ),
@@ -1087,6 +1128,7 @@ mod tests {
                     credential_names: vec![String::from("TOKEN")],
                     query: Vec::new(),
                     probe: Vec::new(),
+                    nothing_graded: Vec::new(),
                 },
                 |name| if name == "GH_TOKEN" {
                     Some(String::from("leaked"))
@@ -1108,6 +1150,7 @@ mod tests {
                     credential_names: vec![String::from("EMPTY"), String::from("TOKEN")],
                     query: Vec::new(),
                     probe: Vec::new(),
+                    nothing_graded: Vec::new(),
                 },
                 env
             ),

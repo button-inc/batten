@@ -11363,6 +11363,11 @@ names = ["GITHUB_PERSONAL_ACCESS_TOKEN", "BATTEN_GITHUB_TOKEN"]
 # needed" — there is deliberately no fallback in the engine to fall back to.
 [forge]
 credential_names = ["BATTEN_GITHUB_TOKEN", "GITHUB_PERSONAL_ACCESS_TOKEN"]
+# The check-runs endpoint's 422 is "no commit found for SHA": the ordinary state
+# of a head `land` has just replayed and not yet pushed, so it reads as nothing
+# graded rather than could-not-look (CLOUD-2080; measured 2026-10-01, every
+# replayed lap's `verify` died of the environment while it was could-not-look).
+nothing_graded = [422]
 
 # THE CLAIMS THIS REPOSITORY'S TASKS NEED, each with the endpoint that proves it
 # (CLOUD-843, retiring `[tasks.gh-preflight]`'s bash table into rows

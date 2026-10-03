@@ -2326,6 +2326,16 @@
             "maxLength": 1536
           }
         },
+        "nothing_graded": {
+          "description": "The check-runs read's statuses that mean \"no runs recorded\" rather than\ncould-not-look (CLOUD-2080).\n\n**Declared, never an engine constant.** A status here turns a refusal\ninto a clean answer, so adding one narrows what reads as \"could not\nlook\" — `trust.rs` reports any status added against the base as a\nweakening, and `config lint` puts it to the recorded question. Empty is\nthe strict reading: every refusal is could-not-look.",
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0
+          }
+        },
         "probe": {
           "description": "The claims this consumer's tasks need from the credential, each with the\nread endpoint that proves it, which `batten doctor forge` probes\n(CLOUD-843, retiring `gh-preflight`).\n\n**Declared HERE, interpreted in [`crate::preflight`]**, for `query`'s\nreason directly above: which endpoints a consumer calls and which claim\neach needs are the consumer's facts, and walking them is mechanism.\n\n**No weakening comparison in `trust.rs`, and the absence is argued.** A\nprobe row is a DIAGNOSIS, not a gate: dropping one makes the report\nshorter and refuses nothing it refused before, because no verdict any rule\nrenders reads it.",
           "type": "array",

@@ -556,9 +556,6 @@ fn forge_fetch(
     Ok(Some(Fetch { fanin, answered }))
 }
 
-/// The check-runs endpoint's status for a sha it holds no commit for.
-const UNKNOWN_COMMIT: u16 = 422;
-
 /// `record forge --fetch`: read the commit's check-runs from the forge and
 /// record their answered conclusions, gated on the fan-in.
 fn run_forge_fetch(reference: &str, fetch: &Fetch, err: &mut dyn Write) -> Result<ExitCode> {
@@ -594,7 +591,12 @@ fn run_forge_fetch(reference: &str, fetch: &Fetch, err: &mut dyn Write) -> Resul
     // and the retired body read it as nothing graded. Calling it could-not-look
     // made every replayed lap's `verify` die of the environment (measured
     // 2026-10-01). Every other refusal still is could-not-look.
-    if answer.status == UNKNOWN_COMMIT {
+    //
+    // WHICH STATUSES SAY SO IS THE CONSUMER'S, IN `[forge] nothing_graded`
+    // (CLOUD-2080), never a constant here: a status read as "nothing graded" is
+    // a refusal turned into a clean answer, so widening the set is a weakening
+    // `trust.rs` reports and `config lint` puts to the recorded question.
+    if crate::rest::declared_nothing_graded(answer.status) {
         writeln!(
             err,
             "record forge: the forge has no such commit yet, so nothing is graded; nothing recorded"
