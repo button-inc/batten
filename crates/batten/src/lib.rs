@@ -8521,6 +8521,25 @@ fn run_override_request(
             resolved.id
         )));
     };
+    // A RECEIPT ROW'S SUBJECTS ARE LISTABLE FROM CONFIG, so a request naming one
+    // no refusal of that row binds is refused here rather than issued, spent and
+    // honoured by nothing (CLOUD-1996). `subject` is already in bound spelling.
+    if let Some(row) = config.rules.iter().find(|row| row.id == rule)
+        && let Some(bound) = hook::bindable_subjects(row, &resolved.id)
+        && !bound.iter().any(|spelling| spelling == subject)
+    {
+        let listed = if bound.is_empty() {
+            "none".to_owned()
+        } else {
+            bound.join(", ")
+        };
+        return Err(error::UsageError::raise(format!(
+            "no `{rule}` refusal under `{}` binds subject `{subject}`, so an admission bound \
+             to it would admit nothing; that rule binds {} subject(s) here: {listed}",
+            resolved.id,
+            bound.len()
+        )));
+    }
 
     // BEFORE THE ARTICULATION IS ASKED FOR, never after it has been written
     // (CLOUD-1551). Resolving the anchor can now REFUSE — a rule that fired
