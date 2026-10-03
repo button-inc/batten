@@ -16247,17 +16247,29 @@ fn run_hook(
     // A PRE-APPROVAL TAKES THE ADVICE INTO ITS OWN DOCUMENT (CLOUD-1949): two
     // documents on one stream is the collision above, with the grant as the
     // discarded one.
-    let context = matches!(decision, hook::Decision::Preapproved(_)) && !advice.is_empty();
-    let context = context.then(|| {
-        let mut taken = std::mem::take(&mut advice);
-        sight_advice(&envelope, &mut taken);
-        advisory::admit(taken, ceiling).text
-    });
+    let context = preapproval_context(&decision, &envelope, &mut advice, ceiling);
     emit_channel(harness, &envelope, out, err, advice, ceiling, &decision)?;
     let rendering = Rendering {
         context: context.as_deref(),
     };
     render(harness, &envelope, decision, &rendering, mode, out, err)
+}
+
+/// The advice a pre-approval carries in its own document (CLOUD-1949), taken
+/// out of `advice` and marked seen at this emission (CLOUD-2075), or `None`
+/// when the decision is not a pre-approval or there is nothing to carry.
+fn preapproval_context(
+    decision: &hook::Decision,
+    envelope: &hook::Envelope,
+    advice: &mut Vec<advisory::Advice>,
+    ceiling: Option<&advisory::Channel>,
+) -> Option<String> {
+    if !matches!(decision, hook::Decision::Preapproved(_)) || advice.is_empty() {
+        return None;
+    }
+    let mut taken = std::mem::take(advice);
+    sight_advice(envelope, &mut taken);
+    Some(advisory::admit(taken, ceiling).text)
 }
 
 /// The note for an event this host does not declare, or `None` to carry on.

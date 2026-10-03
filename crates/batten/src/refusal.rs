@@ -709,11 +709,10 @@ fn finding_line(refusal: &Refusal, arm: Arm) -> String {
         line.push_str(&sentence(remedy));
     }
     for (id, precondition) in refusal.preconditions() {
-        line.push_str(&format!(
-            " Admissible as {} when {}",
-            quoted(id),
-            sentence(precondition)
-        ));
+        line.push_str(" Admissible as ");
+        line.push_str(&quoted(id));
+        line.push_str(" when ");
+        line.push_str(&sentence(precondition));
     }
     if let Some(class) = refusal.verdict() {
         line.push_str(" Run batten policy explain ");

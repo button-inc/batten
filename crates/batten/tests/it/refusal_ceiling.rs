@@ -660,8 +660,16 @@ fn every_arm_the_corpus_emits_is_within_its_declared_ceiling() {
             over.push((pointer_cost, pointer));
         }
     }
-    eprintln!("measured full {} {}", widest.0, widest.1);
-    eprintln!("measured pointer {} {}", widest.2, widest.3);
+    // THE MEASUREMENT IS THE OUTPUT: the `[refusal]` comment's table is read
+    // off these two lines (CLOUD-2075 §E), so they print pass or fail.
+    #[expect(
+        clippy::print_stderr,
+        reason = "the case reports the measured widest arm the ceilings are declared from"
+    )]
+    {
+        eprintln!("measured full {} {}", widest.0, widest.1);
+        eprintln!("measured pointer {} {}", widest.2, widest.3);
+    }
     assert!(over.is_empty(), "over a declared ceiling: {over:?}");
 }
 
