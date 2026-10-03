@@ -689,6 +689,51 @@ pub fn base_arm_is_built(perf_dir: &Path, key: &str) -> bool {
     base_binary(perf_dir, key).is_file() && marked_for(perf_dir, key)
 }
 
+/// File a head arm's binary as the base arm for `key`, the head's own tree key
+/// (CLOUD-2097).
+///
+/// **The head a lap measures is very often the next lap's base.** A branch that
+/// lands by fast-forward makes its head `main` exactly, so the base key of the
+/// next pair over that `main` is this head's key — and before this, that next
+/// pair rebuilt the very binary this lap had just built and thrown away. Measured
+/// on the 2026-10-03 lap after #1080 landed: the base arm was #1080's head,
+/// rebuilt for 2m19s.
+///
+/// The `built-for` marker is written last, so a copy killed midway is a binary
+/// [`base_arm_is_built`] still refuses. Every OTHER `base-*` directory except
+/// `keep` is removed, so the cache holds the live base and this head and never
+/// grows past two release binaries.
+///
+/// The caller owns the one precondition this cannot check: `head_bin` must be
+/// the build of exactly the tree `key` names, which means a clean checkout.
+///
+/// # Errors
+///
+/// A directory that cannot be created, or a copy or marker write that fails.
+//MUTANT kept-head-unmarked|s@^    crate::durable::replace(built_for(perf_dir, key), key)$@    Ok::<(), anyhow::Error>(())@|a_kept_head_answers_as_the_next_base
+pub fn keep_as_base(perf_dir: &Path, key: &str, head_bin: &Path, keep: &str) -> Result<()> {
+    if let Ok(entries) = std::fs::read_dir(perf_dir) {
+        for entry in entries.filter_map(std::result::Result::ok) {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let stale = name.starts_with("base-")
+                && name != format!("base-{key}")
+                && name != format!("base-{keep}");
+            if stale {
+                let _ = std::fs::remove_dir_all(entry.path());
+            }
+        }
+    }
+    let dest = base_binary(perf_dir, key);
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("perf-pair: could not create {}", parent.display()))?;
+    }
+    std::fs::copy(head_bin, &dest)
+        .with_context(|| format!("perf-pair: could not keep the head as {}", dest.display()))?;
+    crate::durable::replace(built_for(perf_dir, key), key)
+        .context("perf-pair: could not record which tree the kept head was built from")
+}
+
 /// Whether the `built-for` marker names `key`.
 fn marked_for(perf_dir: &Path, key: &str) -> bool {
     std::fs::read_to_string(built_for(perf_dir, key)).is_ok_and(|text| text == key)
@@ -1131,6 +1176,18 @@ fn measure(repo: &Path, options: Options, base_sha: &str) -> Result<Vec<Record>>
     build(repo, Some(&shared), "head", PAIR_PROFILE)?;
     let head_bin = out.join("batten-head");
     take_arm(&shared, &head_bin, "head")?;
+    // THE HEAD IS THE NEXT LAP'S BASE once it lands (CLOUD-2097), so a clean
+    // checkout files this binary under its own tree key. Best-effort: a failure
+    // here costs a later lap one base build, never this lap's verdict. A dirty
+    // tree is skipped, because then the binary is not the build of HEAD's trees.
+    if !options.null && crate::git::uncommitted(repo).is_ok_and(|changed| changed == 0) {
+        let perf = perf_dir(repo);
+        if let (Ok(head_key), Ok(keep)) = (base_key(repo, "HEAD"), base_key(repo, base_sha))
+            && !base_arm_is_built(&perf, &head_key)
+        {
+            let _ = keep_as_base(&perf, &head_key, &head_bin, &keep);
+        }
+    }
     // THE GUARD THE MEASURED DEFECT LACKED (CLOUD-2060): a pair whose arms are
     // the same bytes measures nothing, and its ratio of ~1 reads as a pass. A lap
     // reaches here only when the crate changed, so identical arms mean a build
@@ -3265,6 +3322,30 @@ mod tests {
             "a seeded directory must not answer as this base's build"
         );
         std::fs::remove_dir_all(&perf)?;
+        Ok(())
+    }
+
+    /// CLOUD-2097: a head filed under its tree key answers as that tree's base,
+    /// and the cache keeps only the live base and the kept head.
+    #[test]
+    fn a_kept_head_answers_as_the_next_base() -> Result<()> {
+        let perf = std::env::temp_dir().join(format!("batten-perf-keep-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&perf);
+        std::fs::create_dir_all(&perf)?;
+        let head = perf.join("batten-head");
+        std::fs::write(&head, b"the head this lap built")?;
+        let stale = base_target_dir(&perf, "older");
+        std::fs::create_dir_all(&stale)?;
+        keep_as_base(&perf, "headkey", &head, "livebase")?;
+        assert!(
+            base_arm_is_built(&perf, "headkey"),
+            "the kept head answers as the next pair's base"
+        );
+        assert_eq!(
+            std::fs::read(base_binary(&perf, "headkey"))?,
+            std::fs::read(&head)?
+        );
+        assert!(!stale.exists(), "a base neither live nor kept is removed");
         Ok(())
     }
 
