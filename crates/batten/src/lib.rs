@@ -596,6 +596,8 @@ const ENGINE_UPDATED: &str = "BATTEN_ENGINE_UPDATED";
 /// `batten.toml`, there is no pin to honour and the verb runs as it is. The
 /// UPDATE is not best-effort — a pin that cannot be installed is reported, since
 /// running anyway would decide under the very engine the pin refuses.
+//MUTANT-SUITE crates/batten/tests/it/engine_update.rs
+//MUTANT checkout-build-replaced|s@^    if exe.starts_with(\&root) {$@    if false {@|a_build_inside_the_checkout_is_never_replaced
 fn update_then_reexec() -> Result<Option<ExitCode>> {
     let Ok(root) = git::worktree_root(Path::new(".")) else {
         return Ok(None);
@@ -606,8 +608,19 @@ fn update_then_reexec() -> Result<Option<ExitCode>> {
     if engine::stale(&text, engine::running_stamp).is_none() {
         return Ok(None);
     }
+    // READ BEFORE THE SWAP. After the rename Linux reports the running image as
+    // `<path> (deleted)`, which is not a program — measured: the re-exec failed
+    // with "cannot run `…/target/debug/batten (deleted)`".
+    let exe = std::env::current_exe()?;
+    // A BUILD OF THIS CHECKOUT IS NEVER REPLACED (CLOUD-2063). A binary inside
+    // the tree it judges is `cargo`'s output, not an installed engine: swapping
+    // it overwrote `target/debug/batten` with the pinned release under `verify`'s
+    // own `cargo run`. Its staleness is the pre-parse refusal's to name.
+    if exe.starts_with(&root) {
+        return Ok(None);
+    }
     engine_update(&root, &mut std::io::sink())?;
-    let mut argv: Vec<String> = vec![std::env::current_exe()?.to_string_lossy().into_owned()];
+    let mut argv: Vec<String> = vec![exe.to_string_lossy().into_owned()];
     argv.extend(std::env::args().skip(1));
     let published = [(String::from(ENGINE_UPDATED), String::from("1"))];
     exec::run_in_env(&root, &argv, &published).map(Some)

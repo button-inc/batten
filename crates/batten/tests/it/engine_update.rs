@@ -142,6 +142,31 @@ fn a_source_pin_builds_installs_and_stamps() {
     );
 }
 
+/// A binary inside the checkout is `cargo`'s output, never an installed engine:
+/// the startup update leaves it alone and the pre-parse refusal names the update
+/// instead (CLOUD-2063). Measured before the guard: `verify`'s own `cargo run`
+/// overwrote `target/debug/batten` with the pinned release.
+#[test]
+fn a_build_inside_the_checkout_is_never_replaced() {
+    let dir = repo("engine-update-checkout-build");
+    stub_cargo(&dir);
+    let binary = private_binary(&dir);
+    let before = std::fs::read(&binary).unwrap();
+    pin_source(&dir, &"0".repeat(64));
+    let output = run(&binary, &dir, &["config", "show"], "");
+    assert!(
+        !dir.join("cargo-ran").exists(),
+        "a build of this checkout must not rebuild itself: {}",
+        text(&output)
+    );
+    assert_eq!(std::fs::read(&binary).unwrap(), before, "nothing replaced");
+    assert!(
+        text(&output).contains("install:local"),
+        "the stale build is refused and the update named: {}",
+        text(&output)
+    );
+}
+
 #[test]
 fn the_hook_path_never_updates() {
     let dir = repo("engine-update-hook");
