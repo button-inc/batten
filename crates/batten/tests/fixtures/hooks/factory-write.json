@@ -1,0 +1,12 @@
+{
+  "session_id": "sess-factory-write",
+  "transcript_path": "/home/me/.factory/projects/repo/session.jsonl",
+  "cwd": "/repo",
+  "permission_mode": "off",
+  "hook_event_name": "PreToolUse",
+  "tool_name": "Create",
+  "tool_input": {
+    "file_path": "guarded.txt",
+    "content": "file content"
+  }
+}
