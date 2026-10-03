@@ -149,6 +149,26 @@ fn scan_declared_patterns() -> String {
     rows
 }
 
+/// The pointers a refusal of `class` printed, between the class and the `rule`
+/// that refused, exactly as a reader would copy them — trimmed, NOT rejoined
+/// (CLOUD-1826).
+///
+/// `said` is a run's stdout followed by its stderr. The one place a binary case
+/// reads the refusal line's grammar, so a change to that grammar re-points this.
+///
+/// # Panics
+///
+/// When no line carries the class, naming what was said.
+pub(crate) fn printed_pointers(said: &str, class: &str, rule: &str) -> String {
+    said.lines()
+        .find_map(|line| {
+            let rest = line.split(&format!("{class} ")).nth(1)?;
+            let pointers = rest.split(&format!(" {rule}")).next()?;
+            Some(pointers.trim().to_owned())
+        })
+        .unwrap_or_else(|| panic!("no line refuses as `{class}`: {said}"))
+}
+
 pub(crate) fn at_root(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../..")

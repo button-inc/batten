@@ -196,20 +196,6 @@ fn the_refusal_carries_a_count_and_shas_and_no_content() {
 /// The rule id, beside [`CLASS`], for the admission cases below.
 const RULE: &str = "history-drop";
 
-/// Every short sha the refusal names, in the order it named them.
-///
-/// **Read off the rendered refusal rather than computed from the fixture**, and
-/// that is the point: it is what an AGENT can do. The binding is the commits the
-/// refusal listed, so a case that recomputed them with `git rev-parse` could pass
-/// while the only spelling a reader has access to did not fit.
-fn shas_in(cause: &str) -> Vec<String> {
-    cause
-        .split_whitespace()
-        .filter(|token| token.len() >= 7 && token.chars().all(|char| char.is_ascii_hexdigit()))
-        .map(str::to_owned)
-        .collect()
-}
-
 /// Answer the class's three declared questions and return the issued address.
 fn request(dir: &Path, subject: &str) -> String {
     let answers = "precondition=the commits are a duplicate of what is already pushed, \
@@ -273,19 +259,23 @@ fn spend(dir: &Path, admission: &str, subject: &str) -> bool {
 /// `admit_mediated` returned early on a refusal naming a count and commits, and
 /// the class had no way through at all. Measured before the fix by two admissions
 /// spent against a reset that refused unchanged after each.
+///
+/// **The subject is pasted off the rendered refusal**, which is what an AGENT can
+/// do: `1 <sha>`, count included. The binding used to drop the count, so the
+/// paste bound `1,<sha>` against `<sha>` and admitted nothing (CLOUD-1826).
 #[test]
-fn a_spent_admission_admits_the_reset_it_was_taken_for() {
+fn a_subject_copied_from_the_refusal_line_admits_the_reset() {
     let dir = fixture("history-drop-admits");
     unpushed(&dir, "local.txt");
 
     let (code, cause) = adjudicate(&dir, "git reset --hard HEAD~1");
     assert_eq!(code, Some(2), "the premise\n{cause}");
 
-    let subject = shas_in(&cause).join(",");
+    let subject = common::printed_pointers(&cause, CLASS, RULE);
     assert!(
-        !subject.is_empty(),
-        "the refusal must name the commits it is about, or an asker has no \
-         subject to bind\n{cause}"
+        subject.starts_with("1 "),
+        "the refusal must name a count and the commit it is about, or an asker \
+         has no subject to bind\n{cause}"
     );
 
     let admission = request(&dir, &subject);
@@ -311,7 +301,8 @@ fn an_admission_for_one_commit_does_not_admit_a_deeper_reset() {
 
     let (code, shallow) = adjudicate(&dir, "git reset --hard HEAD~1");
     assert_eq!(code, Some(2), "the premise\n{shallow}");
-    let one = shas_in(&shallow).join(",");
+    let one = common::printed_pointers(&shallow, CLASS, RULE);
+    assert!(one.starts_with("1 "), "the premise\n{shallow}");
     let admission = request(&dir, &one);
     assert!(spend(&dir, &admission, &one), "spend must consume it");
 

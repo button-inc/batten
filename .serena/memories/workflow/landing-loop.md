@@ -190,7 +190,8 @@ exist in no other clone, so `history-drop` reads the reset as discarding work an
 stops it. Measured 2026-09-19, and the class's own override did not open it: a
 `history drop unpushed` admission was requested, answered and spent TWICE — once
 against the commit sha, once against the subject its refusal line prints — and
-the reset was refused unchanged after each. CLOUD-1871 owns that gap. The rebase
+the reset was refused unchanged after each. Fixed by CLOUD-1826: paste the
+pointers the refusal prints (`1 <sha>`), not the sha alone. The rebase
 went through on the first try.
 
 Take the second anyway, on the rare tree where the guard lets it, and two things

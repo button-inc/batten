@@ -14005,10 +14005,10 @@ deny contains "refused by themodule" if {
     /// The subset of those the ENGINE ITSELF raises at the mediated boundary.
     ///
     /// **The surface is the whole distinction, and the gate's first run taught it.**
-    /// `Refusal::subject()` has exactly one consumer, `admit_mediated`, so the
+    /// `Refusal::bindings()` has exactly one consumer, `admit_mediated`, so the
     /// binding is what a MEDIATED refusal needs. A tree-scoped class is admitted
     /// through `apply_admissions`, which is anchored by the finding's fingerprint
-    /// and keyed on the finding's own path — `subject()` never enters it. The
+    /// and keyed on the finding's own path — `bindings()` never enters it. The
     /// landing-loop preset's `head grade twice` is one of those: its module emits
     /// `subjects: [{"artifact": sha}]` and it is admitted through the finding path,
     /// which is why demanding a boundary binding of it would fail a class that is
@@ -14065,22 +14065,15 @@ deny contains "refused by themodule" if {
         )
     }
 
-    /// A class that advertises an override must carry something to bind it to
-    /// (CLOUD-1871).
+    /// A class that advertises an override must bind the spelling it PRINTS
+    /// (CLOUD-1871, CLOUD-1826).
     ///
-    /// a declared route is the only way through for any class
-    /// declaring an override route with a precondition, on the stated ground that
-    /// such a class "already has a way through that leaves a record … and
-    /// `admit_mediated` honours the spent admission". `admit_mediated` returns
-    /// early unless the refusal carries a subject. So the two must agree, and that
-    /// function's own doc says what it costs when they do not: *"a disagreement
-    /// here would mean a class the hatch stopped opening and no admission could
-    /// open either, which is the wall in its worst form."*
-    ///
-    /// They disagreed. `history drop unpushed` names a count and per-commit
-    /// artifacts; `receipt read other` names artifacts and deliberately no path.
-    /// Both were unadmittable and unbypassable — measured by two admissions spent
-    /// against a `git reset --hard` that refused unchanged after each.
+    /// A declared override route is the only way through such a class, and
+    /// `admit_mediated` asks the store about `bindings()` alone. The first binding
+    /// must be the printed pointers in request spelling, because a reader pastes
+    /// the line: the protected sample `rm .serena/memories/core.md` prints
+    /// `.serena/memories/core.md rm`, and binding the bare path left that paste
+    /// honoured by nothing.
     #[test]
     fn every_class_declaring_an_override_route_can_be_bound() {
         let overridable = mediated_classes_with_an_override_route();
@@ -14096,43 +14089,49 @@ deny contains "refused by themodule" if {
                 Some(class.as_str()),
                 "a sample must carry the class it stands for"
             );
-            assert!(
-                refusal.subject().is_some(),
-                "{class} declares an override route, which takes the hatch away, and \
-                 its refusal carries nothing an admission can bind — so the class has \
-                 no way through at all: {}",
+            let printed = refusal
+                .reason()
+                .strip_prefix(class.as_str())
+                .expect("a declared reason leads with its token")
+                .trim();
+            let want =
+                crate::verdict::bound_subject(if printed.is_empty() { class } else { printed });
+            assert_eq!(
+                refusal.bindings().first(),
+                Some(&want),
+                "{class} must bind the pointers its line prints: {}",
                 refusal.render()
             );
         }
     }
 
-    /// The anti-vacuity arm, and it is load-bearing (CLOUD-1871).
+    /// A refusal naming nothing binds its class in the spelling a request
+    /// stores (CLOUD-1826).
     ///
-    /// Without it the case above is satisfied by "every refusal names a subject",
-    /// which is a different and FALSE claim. A class that keeps its hatch has a
-    /// way through already and owes no binding: `call count over` names two counts
-    /// because two numbers are what a reader acts on, and a count is not an
-    /// identity — binding one would let an admission for "1 commit" fit a
-    /// different single commit.
+    /// The raw token `call name refused` was a binding no `override request`
+    /// could produce, since the request rejoins whitespace with `,`. The ceiling
+    /// class keeps its hatch and declares no override route, which is why a
+    /// count-only binding there stays inert.
     #[test]
-    fn a_class_that_keeps_its_hatch_owes_no_binding() {
-        let ceiling = ceiling_refusal(&ceiling_row("c", "Task", 10), 11, 10);
+    fn a_refusal_naming_nothing_binds_its_class_as_a_request_spells_it() {
         assert!(
             !mediated_classes_with_an_override_route()
                 .iter()
                 .any(|class| class == crate::verdict::Native::CeilingExceeded.id()),
-            "this arm is about a class that keeps its hatch; if the ceiling class \
-             gained an override route it belongs in the case above instead"
+            "the ceiling class keeps its hatch; if it gained an override route its \
+             count binding would no longer be inert"
         );
-        assert!(
-            ceiling.subject().is_none(),
-            "a count is not an identity, so it must not become a binding an \
-             admission could harvest: {}",
-            ceiling.render()
+        let refusal = shape_refusal(&shape("r", "x", None));
+        assert_eq!(
+            refusal.bindings(),
+            [crate::admission::subject_as_bound("call name refused")],
+            "{}",
+            refusal.render()
         );
+        assert_eq!(refusal.bindings(), ["call,name,refused"]);
     }
 
-    /// Every artifact the refusal names travels in the binding (CLOUD-1871).
+    /// Every pointer the refusal prints travels in the binding (CLOUD-1871).
     ///
     /// Binding one of several would let an admission earned for one commit admit a
     /// later reset discarding that commit AND another —
@@ -14142,15 +14141,14 @@ deny contains "refused by themodule" if {
     fn a_refusal_naming_several_artifacts_binds_all_of_them() {
         let one = history_drop_refusal(&["aaaaaaa".to_owned()]);
         let two = history_drop_refusal(&["aaaaaaa".to_owned(), "bbbbbbb".to_owned()]);
-        assert_eq!(one.subject(), Some("aaaaaaa"));
+        assert_eq!(one.bindings(), ["1,aaaaaaa"]);
         assert_eq!(
-            two.subject(),
-            Some("aaaaaaa,bbbbbbb"),
+            two.bindings(),
+            ["2,aaaaaaa,bbbbbbb"],
             "every commit the refusal names travels in the binding"
         );
-        assert_ne!(
-            one.subject(),
-            two.subject(),
+        assert!(
+            one.bindings().iter().all(|b| !two.bindings().contains(b)),
             "an admission for one commit must not fit a reset discarding two"
         );
     }

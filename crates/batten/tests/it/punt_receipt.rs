@@ -419,24 +419,6 @@ fn override_as(dir: &Path, class: &str, verb: &[&str], stdin: &str) -> std::proc
     run_with_stdin(dir, &args, stdin)
 }
 
-// CLOUD-1889's declared mutation, and why the row is in THIS file.
-//
-// `test name undefined` reads the declared file for a line carrying
-// `MUTANT <slug>|`, and its `line_sources` cover `crates/batten/tests/**` and not
-// `crates/batten/src/**` — so the row lives here although the expression it applies
-// belongs to `lib.rs`'s `admit_mediated`. It reinstates the early return on a
-// path-less refusal, which is the defect exactly.
-//
-// INERT UNDER THE SWEEP, as `rebase.rs` records for its own rows (CLOUD-1486):
-// `mutate::apply` seds the file that DECLARED the row, so this row rewrites this
-// file and never reaches the engine. The kill was demonstrated BY HAND at
-// implementation — the expression applied to `lib.rs`, the case below observed
-// red, the file restored — and this paragraph is the only record of it.
-/*
-#MUTANT-SUITE crates/batten/tests/it/punt_receipt.rs
-#MUTANT admission-not-honoured|s@    let subject = refusal.subject().unwrap_or(class);@    let Some(subject) = refusal.subject() else { return Ok(decision); };@|a_spent_admission_clears_a_superseded_receipt
-*/
-
 #[test]
 fn a_spent_admission_clears_a_superseded_receipt() {
     // CLOUD-1889 — the half this file never had. The three cases above prove the

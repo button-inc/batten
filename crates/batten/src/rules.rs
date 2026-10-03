@@ -10074,9 +10074,9 @@ fn policy_rule(
             // left the reader to find the file themselves. A `subjects` entry IS
             // a pointer, which is the whole reason the field is tagged rather
             // than free, so the first path-bearing one is what the finding
-            // carries. A class whose subjects are counts or artifacts still
-            // falls back to the bundle root, which is the honest pointer when
-            // the finding is about a set rather than a file.
+            // carries. A path-less list carries its first rendered subject
+            // (`first_pointer`); the bundle root is reached only for an empty
+            // list, where the finding has nothing narrower to point at.
             path: pointer.clone().unwrap_or_else(|| {
                 rule.bundle
                     .clone()
@@ -10181,6 +10181,14 @@ fn policy_remediation(
 /// [`crate::verdict::Subject::render`]'s, so a count says the same thing here as
 /// it does on the mediated path, and a reader cannot mistake `2 file(s)` for a
 /// file they could open.
+///
+/// # The tree pointer, deliberately not the mediated binding
+///
+/// This is the tree finding's pointer and its admission subject, anchored by
+/// fingerprint. A mediated refusal binds every pointer it prints instead
+/// (`refusal::admission_bindings`, CLOUD-1826): a tree finding has one `path`
+/// slot, and forcing the two to agree would widen tree output or drop pointers
+/// from the mediated binding.
 fn first_pointer(subjects: &[crate::verdict::Subject]) -> (Option<String>, Option<usize>) {
     for subject in subjects {
         match subject {

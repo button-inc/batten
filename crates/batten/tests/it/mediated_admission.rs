@@ -181,6 +181,39 @@ fn a_spent_admission_admits_the_write_it_was_taken_for() {
     );
 }
 
+/// The spelling a reader has is the LINE, so pasting its pointers must admit
+/// (CLOUD-1826). The line prints `batten.toml Write`; the binding used to be the
+/// bare path, so the paste bound `batten.toml,Write` and admitted nothing.
+#[test]
+fn a_subject_copied_from_the_refusal_line_admits_the_write() {
+    let dir = fixture("mediated-admission-pasted");
+    let refused = run_with_stdin(
+        &dir,
+        &["adjudicate", "--harness", "exit-code"],
+        &write_payload(GUARDED),
+    );
+    assert_eq!(refused.status.code(), Some(2), "the premise");
+    let said = format!(
+        "{}{}",
+        String::from_utf8_lossy(&refused.stdout),
+        String::from_utf8_lossy(&refused.stderr)
+    );
+    let pasted = common::printed_pointers(&said, CLASS, RULE);
+    assert!(
+        pasted.contains(' '),
+        "the line must print more than one pointer, or this case cannot tell the \
+         printed spelling from the bare path: {pasted:?}"
+    );
+
+    let admission = request(&dir, &pasted, "pasted straight off the refusal line");
+    assert!(spend(&dir, &admission, &pasted), "spend must consume it");
+    assert_eq!(
+        verdict(&dir, GUARDED),
+        Some(0),
+        "a subject copied off the refusal line must admit the write it refused"
+    );
+}
+
 /// An ISSUED admission does not admit — only a spent one does.
 ///
 /// `admission.rs` calls this "the whole economy": a mint that suppressed on its
