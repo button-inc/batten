@@ -222,6 +222,7 @@ mod hook_cost;
 mod hook_pin_check;
 mod hook_profile;
 mod hook_skip_local;
+mod hook_sources;
 mod hook_worktree_root;
 mod identity_churn;
 mod identity_precedence;

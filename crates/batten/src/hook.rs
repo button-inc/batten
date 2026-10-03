@@ -1931,6 +1931,209 @@ impl Harness {
     }
 }
 
+/// Where an adjudication event reaches batten (CLOUD-1728).
+///
+/// CLOUD-777's invariant — batten hooked exactly once on every available hook
+/// surface — was derived for the harness alone, because [`Event`] enumerates the
+/// harness and nothing enumerated the other three. A source with no declared
+/// vocabulary cannot be checked for completeness, so each was rediscovered from a
+/// symptom. This is the outer index: four sources, each with a vocabulary and a
+/// disposition per name.
+///
+/// Named `HookSource`, never bare `Source`: `resolve::Source` and `race::Source`
+/// exist, and `SessionStart`'s `source` field (startup/resume/clear/compact) is a
+/// different axis entirely.
+///
+/// **It ports nothing.** No runtime path calls [`HookSource::vocabulary`]; its
+/// value is the completeness test over it, and its first consumer is CLOUD-2075's
+/// emitter census, which iterates [`HookSource::ALL`] rather than keeping its own
+/// list of where batten's text reaches an agent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HookSource {
+    /// The engine invoked directly; registration is the install itself.
+    Cli,
+    /// A vendor's agent harness — [`Harness`] crossed with [`Event`].
+    Harness,
+    /// The git hook surface, runner-agnostic: hk today, but lefthook, husky or a
+    /// bare `core.hooksPath` are the same surface.
+    Git,
+    /// The forge, read by ETag-conditional polling. Not a process hook.
+    Ci,
+}
+
+/// What batten does about one name in a [`HookSource`]'s vocabulary.
+///
+/// Named `HookDisposition`, never bare `Disposition`:
+/// `findings::Disposition` and `selfwrite::Disposition` are public already.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HookDisposition {
+    /// Batten is registered for it; `check` is the declared verb that checks the
+    /// registration on a live checkout.
+    Registered {
+        /// A `surface::SURFACE` path.
+        check: &'static str,
+    },
+    /// Deliberately not registered; `reason` is a stable kebab id.
+    Unsupported {
+        /// Why, as a kebab id rather than prose.
+        reason: &'static str,
+    },
+}
+
+#[rustfmt::skip]
+const BY_GATE: HookDisposition = HookDisposition::Registered { check: "doctor gate" };
+const BY_HOOKS: HookDisposition = HookDisposition::Registered {
+    check: "doctor hooks",
+};
+const BY_MEDIATOR: HookDisposition = HookDisposition::Registered {
+    check: "doctor mediator",
+};
+const BY_FORGE: HookDisposition = HookDisposition::Registered {
+    check: "doctor forge",
+};
+
+const fn unsupported(reason: &'static str) -> HookDisposition {
+    HookDisposition::Unsupported { reason }
+}
+
+/// githooks(5) for git 2.43, one row per name, alphabetical.
+///
+/// **A SNAPSHOT**: a hook a later git adds is not caught automatically. The two
+/// registered rows must equal `doctor::COMMIT_HOOKS`, which stays the runtime
+/// authority for which git hooks batten links.
+///
+/// Every reason is a stable id: `after-the-fact` refuses nothing that has not
+/// already happened (the [`Event::PostTool`] argument), `server-side` runs on a
+/// remote, `adjudicated-elsewhere` is the push — decided at the mediated call and
+/// by `land` — and `no-predicate` is a hook nothing here has a rule for yet.
+/// `pre-merge-commit` stays `no-predicate`: fast-forward landing makes no merge
+/// commits. Registering a further hook is per-source work, not this table's.
+pub const GIT_HOOKS: &[(&str, HookDisposition)] = &[
+    ("applypatch-msg", unsupported("no-predicate")),
+    ("commit-msg", BY_GATE),
+    ("fsmonitor-watchman", unsupported("not-a-gate")),
+    ("p4-changelist", unsupported("no-predicate")),
+    ("p4-post-changelist", unsupported("after-the-fact")),
+    ("p4-pre-submit", unsupported("no-predicate")),
+    ("p4-prepare-changelist", unsupported("no-predicate")),
+    ("post-applypatch", unsupported("after-the-fact")),
+    ("post-checkout", unsupported("after-the-fact")),
+    ("post-commit", unsupported("after-the-fact")),
+    ("post-index-change", unsupported("after-the-fact")),
+    ("post-merge", unsupported("after-the-fact")),
+    ("post-receive", unsupported("server-side")),
+    ("post-rewrite", unsupported("after-the-fact")),
+    ("post-update", unsupported("server-side")),
+    ("pre-applypatch", unsupported("no-predicate")),
+    ("pre-auto-gc", unsupported("no-predicate")),
+    ("pre-commit", BY_GATE),
+    ("pre-merge-commit", unsupported("no-predicate")),
+    ("pre-push", unsupported("adjudicated-elsewhere")),
+    ("pre-rebase", unsupported("no-predicate")),
+    ("pre-receive", unsupported("server-side")),
+    ("prepare-commit-msg", unsupported("no-predicate")),
+    ("proc-receive", unsupported("server-side")),
+    ("push-to-checkout", unsupported("server-side")),
+    ("reference-transaction", unsupported("no-predicate")),
+    ("sendemail-validate", unsupported("no-predicate")),
+    ("update", unsupported("server-side")),
+];
+
+/// What batten reads from the forge, and the two ingress shapes it refuses to be
+/// (CLOUD-204: no server, and a webhook's silence is not success).
+const CI_READS: &[(&str, HookDisposition)] = &[
+    ("poll:pull-request", BY_FORGE),
+    ("poll:check-run", BY_FORGE),
+    ("poll:workflow-run", BY_FORGE),
+    ("webhook", unsupported("no-server")),
+    ("socket", unsupported("no-server")),
+];
+
+fn owned(table: &[(&str, HookDisposition)]) -> Vec<(String, HookDisposition)> {
+    table
+        .iter()
+        .map(|(name, d)| ((*name).to_owned(), *d))
+        .collect()
+}
+
+//MUTANT source-unenumerated|s@^        HookSource::Git,$@@|every_hook_source_is_enumerated_with_a_nonempty_vocabulary
+//MUTANT git-vocabulary-emptied|s@^            HookSource::Git => owned(GIT_HOOKS),$@            HookSource::Git => Vec::new(),@|the_git_vocabulary_is_githooks5_with_one_disposition_each
+//MUTANT check-verb-undeclared|s@^const BY_GATE: HookDisposition = HookDisposition::Registered { check: "doctor gate" };$@const BY_GATE: HookDisposition = HookDisposition::Registered { check: "doctor commit-gate" };@|every_registered_disposition_names_a_declared_verb
+//MUTANT harness-registration-ignored|s@^            } else if registered.contains(event) {$@            } else if false {@|the_harness_vocabulary_agrees_with_wiring_registrations
+//MUTANT commit-msg-demoted|s@^    ("commit-msg", BY_GATE),$@    ("commit-msg", unsupported("no-predicate")),@|the_git_vocabulary_registers_exactly_the_commit_hooks
+impl HookSource {
+    /// Every source. The `match` in [`HookSource::vocabulary`] is exhaustive, so
+    /// a fifth source does not compile until it declares a vocabulary.
+    pub const ALL: &'static [HookSource] = &[
+        HookSource::Cli,
+        HookSource::Harness,
+        HookSource::Git,
+        HookSource::Ci,
+    ];
+
+    /// The stable token.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            HookSource::Cli => "cli",
+            HookSource::Harness => "harness",
+            HookSource::Git => "git",
+            HookSource::Ci => "ci",
+        }
+    }
+
+    /// Every name this source defines, each with its one disposition.
+    ///
+    /// The harness half is DERIVED from [`Wiring::registrations`], never
+    /// restated; the CLI half is every `surface::SURFACE` path as declared.
+    #[must_use]
+    pub fn vocabulary(self) -> Vec<(String, HookDisposition)> {
+        match self {
+            HookSource::Cli => crate::surface::SURFACE
+                .iter()
+                .map(|row| (row.path.to_owned(), BY_MEDIATOR))
+                .collect(),
+            HookSource::Harness => harness_vocabulary(),
+            HookSource::Git => owned(GIT_HOOKS),
+            HookSource::Ci => owned(CI_READS),
+        }
+    }
+}
+
+/// `<harness>:<event>` for every harness and every event that is a moment.
+fn harness_vocabulary() -> Vec<(String, HookDisposition)> {
+    let mut entries = Vec::new();
+    for harness in Harness::ALL {
+        let wiring = harness.wiring();
+        let registered: Vec<Event> = wiring
+            .as_ref()
+            .map(|w| {
+                w.registrations(*harness)
+                    .into_iter()
+                    .map(|(event, _)| event)
+                    .collect()
+            })
+            .unwrap_or_default();
+        for event in Event::ALL
+            .iter()
+            .filter(|event| **event != Event::Unrecognized)
+        {
+            let disposition = if wiring.is_none() {
+                unsupported("no-wiring-surface")
+            } else if registered.contains(event) {
+                BY_HOOKS
+            } else {
+                unsupported("not-wired")
+            };
+            entries.push((
+                format!("{}:{}", harness.as_str(), event.as_str()),
+                disposition,
+            ));
+        }
+    }
+    entries
+}
+
 /// The lifecycle events the core normalizes, whatever a host spells them.
 ///
 /// A vocabulary enum with a `const ALL`, the shape [`Harness`],
