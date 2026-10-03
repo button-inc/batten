@@ -1631,10 +1631,16 @@ pub fn run_in_with_env(
 //
 // The mutations target the two decisions a naive lock loses, which are exactly
 // the two `tests/with-lock.bats` asserted and which acquire/release cannot tell
-// apart. The third targets the verdict, which is the whole product of a wrapper.
-//MUTANT exec-lock-empty-holder-read-as-free|s@Claim::Taken | task::Claim::Reclaimed(_)@Claim::Taken | task::Claim::Reclaimed(_) | task::Claim::Held { .. }@|an_empty_holder_file_is_held_not_free
-//MUTANT exec-lock-dead-holder-not-reclaimed|s@attempts@1@|a_dead_holder_is_reclaimed_rather_than_waited_out
-//MUTANT exec-lock-verdict-discarded|s@let _held =@let _unheld =@|the_wrapped_exit_code_survives_the_lock
+// apart. The third targets the verdict, which is the whole product of a wrapper;
+// its row sits on `run_exec` in `lib.rs`, the code that carries the verdict.
+//
+// REPAIRED, all three having never run (CLOUD-2059): the first's `|` alternation
+// split the row into six fields; the second rewrote every `attempts` in the file
+// and broke the build, so its suite never ran; and the third named a binding in
+// another file — a row only mutates the source that declares it — so it changed
+// its own line and nothing else.
+//MUTANT exec-lock-empty-holder-read-as-free|s@Claim::Taken \x7c task::Claim::Reclaimed(_)@Claim::Taken \x7c task::Claim::Reclaimed(_) \x7c task::Claim::Held { .. }@|an_empty_holder_file_is_held_not_free
+//MUTANT exec-lock-dead-holder-not-reclaimed|s@LOCK_POLL, want.attempts)@LOCK_POLL, 1)@|a_dead_holder_is_reclaimed_rather_than_waited_out
 //MUTANT-SUITE crates/batten/tests/it/exec_lock.rs
 
 /// How long the queue is when the caller does not say — the shell's own default
