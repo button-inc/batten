@@ -187,6 +187,18 @@ fn task_manifest() -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
+/// The revision `$MUTANT_CHANGED_SINCE` names, against which a sweep narrows the
+/// enforced set to the gates a change touched (CLOUD-2072). Unset or blank, the
+/// sweep covers the whole set, as it always has. Read from the environment for
+/// `task_manifest`'s reason: the sweep's scope is declared there.
+#[must_use]
+pub fn changed_since() -> Option<String> {
+    std::env::var("MUTANT_CHANGED_SINCE")
+        .ok()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+}
+
 /// The lines of one inline task's table, header included, or `None` where the
 /// manifest declares no such task (CLOUD-1909).
 ///

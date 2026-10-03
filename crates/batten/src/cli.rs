@@ -823,16 +823,12 @@ pub enum LandCommand {
 }
 
 /// Subcommands of `mutate`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum MutateCommand {
     /// Apply every declared mutation and report the ones its suite did not
     /// catch.
-    Sweep {
-        /// Narrow the enforced set to the gates a diff against this revision
-        /// touches (CLOUD-2072). `None` sweeps the whole set.
-        changed_since: Option<String>,
-    },
+    Sweep,
     /// Report every gate that is neither enforced nor carrying a filed
     /// exemption, in both directions.
     Census,
@@ -2540,9 +2536,7 @@ fn semver_of(matches: &ArgMatches) -> Option<SemverCommand> {
 
 fn mutate_of(matches: &ArgMatches) -> Option<MutateCommand> {
     match matches.subcommand()? {
-        ("sweep", matches) => Some(MutateCommand::Sweep {
-            changed_since: matches.get_one::<String>("changed_since").cloned(),
-        }),
+        ("sweep", _) => Some(MutateCommand::Sweep),
         ("census", _) => Some(MutateCommand::Census),
         _ => None,
     }

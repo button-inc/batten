@@ -1698,13 +1698,16 @@ description = "Gate: every enforced gate this branch touched since origin/main h
 # cannot have been weakened by it, so admission pays only for the gates whose
 # source or suite the diff names (`mutate::touched`).
 #
+# THE BASE RIDES `MUTANT_CHANGED_SINCE`, beside `MUTANT_GATES` in `[env]`.
+#
 # COULD-NOT-LOOK WIDENS. With no `origin/main` to diff against, the verb sweeps
 # every enforced gate and says so on stderr, as `ci suites` does: too wide shows
 # in the bill, too narrow has no symptom.
 #
 # `origin/main` IS A TIP DIFF, for `git::base_delta`'s stated reason: `verify`
 # asserts the branch is rebased on it, and CI's `ci` job fetches it first.
-run = "cargo run --quiet -p batten -- mutate sweep --changed-since origin/main"
+env = { MUTANT_CHANGED_SINCE = "origin/main" }
+run = "cargo run --quiet -p batten -- mutate sweep"
 
 [tasks."mutant-census"]
 description = "Gate: every gate in the tree is either mutation-enforced or carries a filed exemption (CLOUD-480)"

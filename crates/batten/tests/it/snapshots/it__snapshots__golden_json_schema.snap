@@ -2537,16 +2537,7 @@ expression: stdout_of(&output)
           "about": "Apply every declared mutation to its source and report the ones its declared suite did not catch",
           "effect": "write",
           "data_channel": false,
-          "flags": [
-            {
-              "name": "changed_since",
-              "short": null,
-              "long": "changed-since",
-              "takes_value": true,
-              "positional": false,
-              "help": "Sweep only the enforced gates a diff against this revision touches"
-            }
-          ],
+          "flags": [],
           "subcommands": []
         }
       ]
