@@ -3835,7 +3835,7 @@ pub(crate) fn patch_identities(
 /// `other` this clone has not fetched.
 #[must_use]
 //MUTANT-SUITE crates/batten/tests/it/land.rs
-//MUTANT identity-less-commit-contained|s@let Some(identity) = commit_identity(&repo, &id) else {@let Some(identity) = commit_identity(&repo, &id).or_else(|| ours.iter().next().cloned()) else {@|an_empty_sibling_commit_is_never_admitted_by_patch_identity
+//MUTANT identity-less-commit-contained|s@let Some(identity) = commit_identity(&repo, &id) else {@let Some(identity) = commit_identity(&repo, &id).or_else(\x7c\x7c ours.iter().next().cloned()) else {@|an_empty_sibling_commit_is_never_admitted_by_patch_identity
 pub fn patches_contained(dir: &Path, tip: &str, other: &str) -> bool {
     let Ok(repo) = open(dir) else {
         return false;
