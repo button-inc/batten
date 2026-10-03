@@ -2656,7 +2656,7 @@ fn drop_regrowable(
     // rather than fused because "do not descend into a match" is a per-name
     // property, and a single pass matching several names would have to answer
     // that question for a directory two rows disagree about.
-    for declared_root in declared {
+    for (position, declared_root) in declared.iter().enumerate() {
         // See the call site: one tier per pass, cheap first.
         if declared_root.cold != basis_moving {
             continue;
@@ -2664,7 +2664,19 @@ fn drop_regrowable(
         if removed > 0 && recovered() {
             return (removed, freed, basis_moved);
         }
-        for cache in directories_named(root, &declared_root.name) {
+        // A LATER ROW'S ROOT IS NOT AN EARLIER ROW'S TO TAKE PIECEMEAL (CLOUD-2104).
+        // The walk descends the whole tree, so `incremental`, declared first, used
+        // to match `perf/arms/perf-arm/incremental` and the `semver-*` trees' own
+        // `incremental` — the costliest part of the roots the consumer declared
+        // last BECAUSE they are dearest. Measured: the perf head arm's rebuild
+        // after a one-line edit is 13 CPU-s with that state and 380-423 without,
+        // and the escalation fired on most laps. So a directory a later row
+        // names is not descended: it goes whole on its own turn, or stays.
+        let later: Vec<&str> = declared[position + 1..]
+            .iter()
+            .map(|row| row.name.as_str())
+            .collect();
+        for cache in directories_named_outside(root, &declared_root.name, &later) {
             let Some(_building) = claim(root, &cache) else {
                 continue;
             };
@@ -2938,6 +2950,13 @@ fn name_matches(candidate: &std::ffi::OsStr, declared: &str) -> bool {
 /// of its instrument (`find -type d` does not follow without `-L`); the port made
 /// it a decision, and review caught the window between the two on #734.
 fn directories_named(root: &Path, name: &str) -> Vec<PathBuf> {
+    directories_named_outside(root, name, &[])
+}
+
+/// [`directories_named`], never descending into a directory that one of
+/// `shielded` names — a root a later `[[prune.regrowable]]` row owns whole.
+//MUTANT later-root-unshielded|s@^            if shielded.iter().any(\x7cother\x7c name_matches(\&entry_name, other)) {$@            if false {@|an_earlier_row_never_reaches_inside_a_later_rows_root
+fn directories_named_outside(root: &Path, name: &str, shielded: &[&str]) -> Vec<PathBuf> {
     let mut found = Vec::new();
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
@@ -2949,14 +2968,18 @@ fn directories_named(root: &Path, name: &str) -> Vec<PathBuf> {
                 continue;
             }
             let path = entry.path();
-            if path
-                .file_name()
-                .is_some_and(|found| name_matches(found, name))
-            {
+            let entry_name = entry.file_name();
+            if name_matches(&entry_name, name) {
                 found.push(path);
-            } else {
-                stack.push(path);
+                continue;
             }
+            if shielded
+                .iter()
+                .any(|other| name_matches(&entry_name, other))
+            {
+                continue;
+            }
+            stack.push(path);
         }
     }
     found
@@ -3260,6 +3283,45 @@ mod tests {
 
         let (removed, _, _) = drop_regrowable(&root, &declared, false, &mut || false);
         assert_eq!(removed, 1, "still short, the next row is taken");
+        assert!(!root.join("perf").exists());
+    }
+
+    #[test]
+    fn an_earlier_row_never_reaches_inside_a_later_rows_root() {
+        // CLOUD-2104: `incremental` is declared before `perf`, and the perf arm's
+        // own `incremental` is the part of `perf` that makes its next build cheap.
+        // The earlier row takes the host build's cache and leaves the later root
+        // whole; the later row, reached only while still short, takes all of it.
+        let root = build_root("shielded");
+        mkdir(&root.join("debug/incremental/batten-x"));
+        mkdir(&root.join("perf/arms/perf-arm/incremental/batten-y"));
+        let declared = [
+            Regrowable {
+                name: String::from("incremental"),
+                cold: false,
+            },
+            Regrowable {
+                name: String::from("perf"),
+                cold: false,
+            },
+        ];
+        let (removed, _, _) = drop_regrowable(&root, &declared, false, &mut || true);
+        assert_eq!(
+            removed, 1,
+            "the host build's cache, and nothing inside `perf`"
+        );
+        assert!(!root.join("debug/incremental").exists());
+        assert!(
+            root.join("perf/arms/perf-arm/incremental/batten-y")
+                .is_dir(),
+            "the later root's incremental state survives the earlier row"
+        );
+
+        let (removed, _, _) = drop_regrowable(&root, &declared, false, &mut || false);
+        assert_eq!(
+            removed, 1,
+            "still short: the later row takes its root whole"
+        );
         assert!(!root.join("perf").exists());
     }
 
