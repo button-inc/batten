@@ -1,0 +1,8 @@
+{
+  "hook_event_name": "PreToolUse",
+  "cwd": "/repo",
+  "tool_name": "bash",
+  "tool_input": {
+    "command": "gh pr merge 1"
+  }
+}
