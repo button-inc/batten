@@ -663,3 +663,19 @@ fn the_repair_write_reaches_a_config_that_fails_validation() {
         "the write to the faulting authority itself proceeds"
     );
 }
+
+#[test]
+fn a_search_still_answers_over_a_config_that_will_not_load() {
+    // CLOUD-2084: `Grep` and `Glob` classify as `Other`, so the floor refused
+    // them and a binary/config mismatch left the session unable to search for
+    // the line it had to repair. They cannot mutate anything, so they pass
+    // exactly as a classified `Read` does.
+    let dir = fixture("adjudicate-floor-grep", WILL_NOT_PARSE);
+    for tool in ["Grep", "Glob", "ToolSearch", "ExitPlanMode"] {
+        assert_eq!(
+            code_for(&dir, &envelope(tool, r#"{"pattern":"x"}"#)),
+            Some(0),
+            "{tool} cannot mutate, so nothing a rule could decide is lost"
+        );
+    }
+}

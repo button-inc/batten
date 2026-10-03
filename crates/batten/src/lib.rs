@@ -16264,6 +16264,7 @@ fn read_envelope(
 //MUTANT-SUITE crates/batten/tests/it/adjudicate_absent.rs
 //MUTANT floor-admits-everything|s@        _ => false,@        _ => true,@|a_command_is_still_refused_over_a_config_that_will_not_load
 //MUTANT floor-admits-an-unclassified-call|s@        (hook::Operation::Read, None) => true,@        (_, None) => true,@|a_mutating_mcp_call_is_still_refused_over_a_config_that_will_not_load
+//MUTANT floor-refuses-inert-tools|s@        (hook::Operation::Other(name), None) if hook::INERT_TOOLS.contains(\&name.as_str()) => true,@@|a_search_still_answers_over_a_config_that_will_not_load
 //MUTANT floor-admits-any-write|s@        (hook::Operation::Write, Some(path)) => names_the_config_authority(path),@        (hook::Operation::Write, Some(_)) => true,@|a_write_to_another_path_is_still_refused_over_a_config_that_will_not_load
 fn recoverable_without_rules(envelope: &hook::Envelope) -> bool {
     // NO `command.is_empty()` GUARD, AND ITS ABSENCE IS THE DECISION. A `Bash`
@@ -16277,6 +16278,11 @@ fn recoverable_without_rules(envelope: &hook::Envelope) -> bool {
         // A classified read with nothing written: no mutation for a rule to
         // have refused.
         (hook::Operation::Read, None) => true,
+        // A search, a tool-schema lookup or a plan-mode switch (CLOUD-2084):
+        // unclassified, but on a closed list of tools that mutate nothing.
+        // Refusing them left a session over a binary/config mismatch unable to
+        // find the line to repair or to leave plan mode at all.
+        (hook::Operation::Other(name), None) if hook::INERT_TOOLS.contains(&name.as_str()) => true,
         // The repair, and only onto the file that is faulting.
         (hook::Operation::Write, Some(path)) => names_the_config_authority(path),
         // EVERY OTHER SHAPE REFUSES, `Execute`, `Mcp`, `Subagent` and `Other`
