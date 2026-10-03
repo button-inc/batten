@@ -679,7 +679,7 @@ upward forever. Nothing is broken and no branch is at fault: re-derive the numbe
 new comment.",
                 routes: &[run(
                     "task run first",
-                    "run the writer the `drift-runs` and `drift-jobs` `[[record]]` rows name, \
+                    "the writer the `drift-runs` and `drift-jobs` `[[record]]` rows name, \
                      which re-takes the run window before it re-walks the jobs",
                 )],
                 applicability: crate::verdict::Applicability::Advice,
@@ -692,7 +692,7 @@ above the committed budget. Raise it before it starts failing healthy runs — t
 that turns into a red job nobody caused.",
                 routes: &[run(
                     "task run first",
-                    "run the writer the `drift-runs` and `drift-jobs` `[[record]]` rows name, \
+                    "the writer the `drift-runs` and `drift-jobs` `[[record]]` rows name, \
                      which re-takes the run window before it re-walks the jobs",
                 )],
                 applicability: crate::verdict::Applicability::Advice,
@@ -705,7 +705,7 @@ to defend is the one move a budget exists to forbid, so this reports that the de
 convertible and a deliberate commit does the converting.",
                 routes: &[run(
                     "task run first",
-                    "run the writer the `drift-runs` and `drift-jobs` `[[record]]` rows name, \
+                    "the writer the `drift-runs` and `drift-jobs` `[[record]]` rows name, \
                      which re-takes the run window before it re-walks the jobs",
                 )],
                 applicability: crate::verdict::Applicability::Advice,
@@ -721,7 +721,7 @@ release job on it. A family present without exactly one closing line was torn by
 than its producer, which writes whole or removes, and reads the same way.",
                 routes: &[run(
                     "task run first",
-                    "run the writer the `drift-runs` and `drift-jobs` `[[record]]` rows name, \
+                    "the writer the `drift-runs` and `drift-jobs` `[[record]]` rows name, \
                      which re-takes the run window before it re-walks the jobs",
                 )],
                 applicability: crate::verdict::Applicability::Advice,
@@ -1149,7 +1149,7 @@ invocation. The refusal names the task because the mapping it reads is task to a
 remedy is in the finding rather than a file the reader has to go and search.",
                 routes: &[run(
                     "task run first",
-                    "run the task the refusal names, through the task runner",
+                    "the task the refusal names, through the task runner",
                 )],
                 applicability: crate::verdict::Applicability::Advice,
             },
@@ -1229,10 +1229,7 @@ it runs a different version, or the same version without the variables the proje
 like a wrong invocation. Measured on one consumer: sixty runs of a test suite died on an \
 unset variable instead of on the assertion, and the report that followed was published \
 as three claims about the tree, all false.",
-                routes: &[run(
-                    "task run first",
-                    "run the declared task, or invoke the program through the pin",
-                )],
+                routes: &[run("task run first", "mise exec -- <program>")],
                 applicability: crate::verdict::Applicability::Advice,
             },
             // THE PROBE HALF, AND A SEPARATE CLASS ON PURPOSE (CLOUD-1256).
@@ -1945,6 +1942,29 @@ mod tests {
     use super::{MANIFESTS, names};
 
     use std::collections::BTreeSet;
+
+    /// No `command` route's target begins with the verb it renders under
+    /// (CLOUD-1470). `render_route` prefixes every command target with `run `,
+    /// so a target that already began `run ` rendered as `run run …` once the
+    /// advisory channel started printing routes.
+    #[test]
+    fn no_command_route_repeats_the_verb_it_renders_under() {
+        let doubled: Vec<&str> = MANIFESTS
+            .iter()
+            .flat_map(|manifest| manifest.verdicts.iter())
+            .filter(|entry| {
+                entry.routes.iter().any(|route| {
+                    route.kind == crate::verdict::RouteKind::Command
+                        && route.target.starts_with("run ")
+                })
+            })
+            .map(|entry| entry.id)
+            .collect();
+        assert!(
+            doubled.is_empty(),
+            "routes render as `run run …`: {doubled:?}"
+        );
+    }
 
     /// Every class a preset's modules raise is declared by its own manifest.
     ///

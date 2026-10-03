@@ -17009,16 +17009,18 @@ fn fill_turn_advice(
     // single tool call the agent is making right now: it is about the call in
     // hand rather than about the turn, and suppressing it because something else
     // already spoke would make the signal arrive at some calls and not others for
-    // reasons the reader cannot see. At `Stop` the two producers render the same
-    // violation through the same function, so the equality test is what keeps one
-    // finding from arriving twice rather than a second rule about which one wins.
-    if let Some(signal) = hook::policy_advice(policy, envelope, facts)
-        && !advice.iter().any(|entry| entry.text == signal)
-    {
-        advice.push(advisory::Advice::new(
-            severity::AdvisoryTier::Warning,
-            signal,
-        ));
+    // reasons the reader cannot see. `policy_advice` is empty at `Stop` (the
+    // block above owns that moment), and returns every non-blocking module's
+    // line on a call (CLOUD-1470); the equality test drops a line two bundles
+    // rendered identically.
+    for refusal in hook::policy_advice(policy, envelope, facts) {
+        let signal = hook::render_advice(&refusal);
+        if !advice.iter().any(|entry| entry.text == signal) {
+            advice.push(advisory::Advice::new(
+                severity::AdvisoryTier::Warning,
+                signal,
+            ));
+        }
     }
 }
 

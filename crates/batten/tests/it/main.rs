@@ -193,6 +193,7 @@ mod fixture_repos;
 mod forced_push;
 mod forge_facts;
 mod forge_query;
+mod forge_read_first;
 mod forge_window;
 mod frontmatter_gates;
 mod fuzz_corpus;

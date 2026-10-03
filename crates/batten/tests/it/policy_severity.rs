@@ -31,8 +31,8 @@
 //!
 //! Which events a host can be advised on. That is the capability table's answer
 //! (`Harness::capabilities`), it is evidence-backed per surface, and this file
-//! reads it rather than restating it: `PostToolBatch` is one Claude Code declares
-//! and has been probed on, `PreToolUse` is not one at all.
+//! reads it rather than restating it: Claude Code's `delivered_on` row carries
+//! both `PostToolBatch` and `PreToolUse`, each by measurement (CLOUD-1131).
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -199,11 +199,11 @@ fn a_warn_row_allows_the_same_call() {
 /// The demotion is not a discard: where the host declares an advisory channel,
 /// the same violation arrives as context.
 ///
-/// `PostToolBatch` is the event chosen because the capability table already
-/// carries it as probed for Claude Code. `PreToolUse` is not an advisory surface
-/// on this host at all, which is the finding CLOUD-1131 recorded rather than the
-/// gap this test papers over: a `warn` module has a reader at the batch boundary
-/// and none at the tool call.
+/// `PostToolBatch` is the event chosen because the capability table carries it
+/// as probed for Claude Code. `PreToolUse` is an advisory surface on this host
+/// too — the capability row records the measurement — and
+/// `a_warn_advisory_carries_its_document_route_on_an_allowed_pre_tool_call`
+/// covers that event.
 #[test]
 fn a_warn_violation_reaches_the_advisory_channel_where_the_host_has_one() {
     let dir = repo("policy-severity-advisory", "warn");
@@ -354,6 +354,141 @@ fn equal_force_leaves_declaration_order_as_the_tie_break() {
         !stdout.contains("fixture severity other"),
         "and only one finding travels, so the report does not double: {stdout}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// EVERY ROUTE, EVERY ADVISORY, AND `allow` IS OFF (CLOUD-1470).
+// ---------------------------------------------------------------------------
+
+/// The fixture class with ONLY a document route, the shape a memory pointer has.
+fn document_config(severity: &str) -> String {
+    format!(
+        r#"version = 1
+
+[[verdict]]
+id = "fixture severity probe"
+gloss = "the fixture predicate matched"
+class = """
+A fixture class whose one way out is a document to read.
+"""
+
+[[verdict.route]]
+id = "fixture probe probe"
+kind = "document"
+target = "notes/fixture.md"
+
+[[rule]]
+id = "fixture-severity"
+kind = "policy"
+scope = "mediated_call"
+module = "policy/fixture-severity.rego"
+severity = "{severity}"
+"#
+    )
+}
+
+/// A class with no command route carried no pointer on the advisory channel,
+/// because only the first command route rendered there.
+#[test]
+fn a_warn_advisory_carries_its_document_route_on_an_allowed_pre_tool_call() {
+    let dir = scratch_repo("policy-severity-document-route");
+    fs::write(dir.join("batten.toml"), document_config("warn")).expect("write config");
+    fs::create_dir_all(dir.join("policy")).expect("policy dir");
+    fs::write(dir.join("policy/fixture-severity.rego"), MODULE).expect("write module");
+    let output = hook(&dir, &command_payload("PreToolUse", CALL));
+    let stdout = stdout_of(&output);
+    assert_eq!(output.status.code(), Some(0), "{stdout}");
+    assert!(!stdout.contains("permissionDecision"), "{stdout}");
+    assert!(
+        stdout.contains("read notes/fixture.md"),
+        "the class's document route reaches the reader: {stdout}"
+    );
+}
+
+/// Two non-blocking modules over one call each deliver their own line; keeping
+/// only the first-declared shed the second silently.
+#[test]
+fn two_warn_advisories_on_one_call_both_arrive() {
+    let dir = pair_repo("policy-severity-two-advisories", "warn", "warn");
+    let output = hook(&dir, &command_payload("PreToolUse", CALL));
+    let stdout = stdout_of(&output);
+    for class in ["fixture severity probe", "fixture severity other"] {
+        assert!(stdout.contains(class), "{class} must arrive: {stdout}");
+    }
+}
+
+/// `allow` means the rule is off, so it says nothing on the call either.
+#[test]
+fn an_allow_row_advises_nothing() {
+    let dir = repo("policy-severity-allow", "allow");
+    let output = hook(&dir, &command_payload("PreToolUse", CALL));
+    let stdout = stdout_of(&output);
+    assert!(!stdout.contains("fixture severity probe"), "{stdout}");
+    assert!(!stdout.contains("additionalContext"), "{stdout}");
+}
+
+/// The two fixture modules, firing at `Stop` rather than on a command.
+const STOP_MODULE: &str = r#"package batten.fixture_severity
+
+import rego.v1
+
+rules contains "fixture-severity"
+
+violation contains {
+	"rule": "fixture-severity",
+	"verdict": "fixture severity probe",
+	"subjects": [{"path": "fixture"}],
+} if {
+	input.call.event == "stop"
+}
+"#;
+
+const STOP_OTHER_MODULE: &str = r#"package batten.fixture_severity_other
+
+import rego.v1
+
+rules contains "fixture-severity-other"
+
+violation contains {
+	"rule": "fixture-severity-other",
+	"verdict": "fixture severity other",
+	"subjects": [{"path": "fixture"}],
+} if {
+	input.call.event == "stop"
+}
+"#;
+
+fn stop_pair_repo(name: &str, first: &str, second: &str) -> PathBuf {
+    let dir = scratch_repo(name);
+    fs::write(dir.join("batten.toml"), pair_config(first, second)).expect("write config");
+    fs::create_dir_all(dir.join("policy")).expect("policy dir");
+    fs::write(dir.join("policy/fixture-severity.rego"), STOP_MODULE).expect("write module");
+    fs::write(
+        dir.join("policy/fixture-severity-other.rego"),
+        STOP_OTHER_MODULE,
+    )
+    .expect("write second module");
+    dir
+}
+
+const STOP: &str = r#"{"hook_event_name":"Stop","session_id":"s-1","stop_hook_active":false}"#;
+
+/// An `allow` row nudges nothing at the end of a turn either.
+#[test]
+fn an_allow_row_nudges_nothing_at_stop() {
+    let dir = stop_pair_repo("policy-severity-allow-stop", "allow", "allow");
+    let stdout = stdout_of(&hook(&dir, STOP));
+    assert!(!stdout.contains("fixture severity"), "{stdout}");
+}
+
+/// `Stop` keeps CLOUD-888's one-nudge bound however many modules warn: the new
+/// collector speaks on calls, never at the end of a turn.
+#[test]
+fn a_stop_carries_one_module_nudge_whatever_the_warn_count() {
+    let dir = stop_pair_repo("policy-severity-warn-stop", "warn", "warn");
+    let stdout = stdout_of(&hook(&dir, STOP));
+    assert!(stdout.contains("fixture severity probe"), "{stdout}");
+    assert!(!stdout.contains("fixture severity other"), "{stdout}");
 }
 
 /// And a `deny` row is NOT demoted at the same event: it is the decision, and
