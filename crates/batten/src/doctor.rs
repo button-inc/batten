@@ -2890,6 +2890,22 @@ mod tests {
 
     use super::*;
 
+    /// CLOUD-1728. `COMMIT_HOOKS` stays the runtime authority for which git
+    /// hooks batten links; the declared git vocabulary must register exactly
+    /// those, read through the public accessor every consumer reaches.
+    #[test]
+    fn the_git_vocabulary_registers_exactly_the_commit_hooks() {
+        let registered: std::collections::BTreeSet<String> = crate::hook::HookSource::Git
+            .vocabulary()
+            .into_iter()
+            .filter(|(_, d)| matches!(d, crate::hook::HookDisposition::Registered { .. }))
+            .map(|(name, _)| name)
+            .collect();
+        let authority: std::collections::BTreeSet<String> =
+            COMMIT_HOOKS.iter().map(|h| (*h).to_owned()).collect();
+        assert_eq!(registered, authority);
+    }
+
     /// CLOUD-1683. The declared table is read in every spelling it really uses —
     /// a plain string pin, an inline table, and a backend-prefixed quoted key —
     /// because the difference between them is entirely on the right-hand side.
