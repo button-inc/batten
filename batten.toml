@@ -11020,9 +11020,15 @@ measured = "2026-09-07"
 # since CLOUD-2018: the count is a trend counter, and the floor moves only from a
 # measurement. This lap closed at 11634MB free against main's measured 10935MB
 # warm floor. NO FLOOR MEASUREMENT IS CLAIMED BY THIS ENTRY.
+#
+# 2026-10-03, 370 -> 381: CLOUD-2062's `engine_update.rs` on a trunk that had
+# reached 380 with #1089, one outside the tolerance. `target-prune` reported
+# `declared 370, live 381`. The count moves and the floors do not, on the same
+# terms. This lap closed at 12317MB free against the 11688MB learned warm floor.
+# NO FLOOR MEASUREMENT IS CLAIMED BY THIS ENTRY.
 [prune.warm.basis]
 glob = "crates/batten/tests/**/*.rs"
-count = 370
+count = 381
 tolerance = 10
 
 # COLD'S BASIS MOVES AND COLD'S FLOOR DOES NOT, and that is the entry above
@@ -11045,7 +11051,7 @@ glob = "crates/batten/tests/**/*.rs"
 # 298, moved with warm's by the 2026-09-25 entry above and for the reason the
 # 2026-09-06 entry measured: a basis refreshed on one arm and not the other makes
 # the very next lap refuse on the arm that was left behind.
-count = 370
+count = 381
 tolerance = 10
 
 # THE REGROWABLE ROOTS THE ESCALATION MAY DROP (CLOUD-1157), in the order it drops
