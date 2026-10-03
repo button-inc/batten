@@ -273,7 +273,7 @@ impl Case {
     /// The pointer a failure is reported under — `path:line rule-id`, the same
     /// shape a finding takes, and never the matched bytes (rule 4).
     fn pointer(&self) -> String {
-        format!("{}:{} {}", self.path, self.line, self.rule)
+        format!("{}:{} rule '{}'", self.path, self.line, self.rule)
     }
 }
 

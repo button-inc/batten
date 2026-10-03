@@ -270,6 +270,8 @@ pub fn signal(stream: &Stream) -> Option<Signal> {
             // A cost, not a decision: CLOUD-417's counter is `hookcost`'s and this
             // predicate has nothing to say about it.
             | Event::HookOutput { .. }
+            // Machinery too (CLOUD-2075): a session start is a cycle boundary.
+            | Event::SessionBoundary
             | Event::AssistantText => {}
         }
     }

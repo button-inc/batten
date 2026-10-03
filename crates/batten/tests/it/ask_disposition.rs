@@ -92,9 +92,30 @@ fn asking(name: &str) -> PathBuf {
 fn payload(command: &str) -> String {
     let encoded = serde_json::to_string(command).expect("a command is encodable");
     format!(
-        "{{\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"Bash\",\
+        "{{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"s1\",\"tool_name\":\"Bash\",\
          \"tool_input\":{{\"command\":{encoded}}}}}"
     )
+}
+
+/// An ask carries the full arm on EVERY firing (CLOUD-2075 §7 case 13): its
+/// reader is a person, who has read no earlier firing and runs no lookup.
+#[test]
+fn an_ask_carries_the_full_arm_on_every_firing() {
+    let dir = asking("ask-full-every-firing");
+    for _ in 0..2 {
+        let (code, body, cause) = adjudicate(&dir, "claude-code", ASKED);
+        assert_eq!(code, Some(0), "{cause}");
+        let json: serde_json::Value =
+            serde_json::from_str(body.trim()).expect("the host's verdict envelope is JSON");
+        let rendered = json["hookSpecificOutput"]["permissionDecisionReason"]
+            .as_str()
+            .expect("an escalation carries what is being asked");
+        assert!(rendered.contains(" —"), "the full arm: {rendered}");
+        assert!(
+            rendered.contains(REASON),
+            "with the row's reason: {rendered}"
+        );
+    }
 }
 
 /// Adjudicate `command` in `dir` as `harness` sees it.

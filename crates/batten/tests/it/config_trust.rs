@@ -84,7 +84,7 @@ fn a_working_tree_that_deletes_a_rule_is_still_judged_by_base_policy() {
         "base policy must still fire: a violation is exit 2"
     );
     assert!(
-        stdout(&guarded).contains("lib.rs:2 no-todo"),
+        stdout(&guarded).contains("lib.rs:2 rule 'no-todo'"),
         "the base rule's finding must be reported, got: {}",
         stdout(&guarded)
     );
@@ -235,7 +235,7 @@ fn without_the_flag_stdout_is_exactly_the_findings() {
     );
     let output = run(&repo, &["check"]);
     assert_eq!(output.status.code(), Some(2));
-    assert_eq!(stdout(&output), "lib.rs:1 no-todo\n");
+    assert_eq!(stdout(&output), "lib.rs:1 rule 'no-todo'\n");
 }
 
 // --- a ref this binary cannot read is a usage error, never a verdict ---------
@@ -515,7 +515,7 @@ fn a_deleted_working_config_still_gets_the_base_rule_verdict() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(
-        stdout(&output).contains("a.rs:1 no-todo"),
+        stdout(&output).contains("a.rs:1 rule 'no-todo'"),
         "got: {}",
         stdout(&output)
     );

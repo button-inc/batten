@@ -5700,64 +5700,41 @@ files = [".serena/memories/*.md", ".serena/memories/**/*.md"]
 max_bytes_per_file = 40960
 max_tokens = 110000
 
-# What ONE emitted mediated refusal line may cost (CLOUD-1286).
+# What ONE emitted mediated refusal line may cost (CLOUD-1286, re-declared by
+# CLOUD-2075).
 #
-# The neighbouring budget above bounds what loads once per session. This bounds
-# what is emitted ~300 times in one, so it is the ceiling that actually
-# compounds: measured live on 2026-09-01, a `no-tool-substitution` refusal was 88
-# words / ~115 tokens, and ~300 firings of it is ~34,500 tokens against a ~175k
-# window — 20%, which is CLOUD-417's headline figure arrived at independently
-# from the other direction.
+# This bounds the POINTER arm — what every firing after the first in a context
+# emits. CLOUD-2075 put both labels, the subjects, every route (override routes
+# included, as the ready request that admits) and the `policy rule` hop on that
+# arm, because a pointer a ruling needs is never shed. So the number is the
+# measured widest pointer the tree emits, rounded up to a multiple of 16, and
+# nothing reads it at runtime: `refusal_ceiling.rs`'s corpus case REPORTS an
+# over-ceiling line rather than any renderer truncating one. Measured 2026-10-03
+# with `every_arm_the_corpus_emits_is_within_its_declared_ceiling` and the
+# routed-read and render-bench cases (estimated tokens, `budget.rs`'s len/4):
 #
-# 24 is chosen against the longest line the tree can actually emit rather than
-# against the shortest: a three-word class is ~3 tokens and the pointers are the
-# rest, so a deeply-nested `path:line` plus an artifact fits with room, while the
-# ~43-token rendered form this row retires does not. A ceiling only the shortest
-# class clears would fire on correct output, and the first person it fires on
-# switches it off (CLOUD-418).
+#   84  pointer  branch write unsafe  (render bench, two routes + override)
+#   78  pointer  path read routed     (longest committed memory name)
+#   49  pointer  the Bash corpus      (`tool run loose`)
 #
 # Declared here rather than as a constant in `crates/batten` for the reason
 # non-negotiable rule 1 gives: a consumer whose harness renders wider cannot move
 # a number compiled into the engine.
 [refusal]
-max_tokens = 24
-# What ONE FIRST SIGHTING may cost (CLOUD-1637).
+max_tokens = 96
+# What ONE FULL ARM may cost (CLOUD-1637, re-declared by CLOUD-2075).
 #
-# The key above prices prose a reader has already met. This prices the one firing
-# where they have not: the same line plus the class gloss and every non-override
-# route, which is what turns a three-word pointer into something actionable. Two
-# keys rather than one number doing both jobs, because the quantities differ by
-# design — and bounding the long arm by the short arm's 24 would be a ceiling no
-# line that arm can compose could ever meet, which `refusal::validate` now refuses
-# outright rather than leaving as an arm that silently never renders.
+# The full arm is the pointer arm plus ` — ` and the definition: the class gloss
+# (or an undeclared row's reason), the ROW'S OWN REMEDY, each override's
+# precondition and the `policy explain` hop. It is delivered once per context per
+# compaction cycle. Measured 2026-10-03 the same way as the key above:
 #
-# 64 IS READ OFF A MEASUREMENT PLUS THE DECLARED MAXIMA, not chosen. Fired in a
-# fixture whose sightings store started empty, 2026-09-08, one command per
-# distinct refusing row (estimated tokens, `budget.rs`'s len/4):
+#  159  full  tool run loose / tool select other (the row's reason is the bulk)
 #
-#   36  verdict read dropped  verdict-not-discarded  ... read rules/toolchain.md
-#   35  tool run loose        no-tool-substitution   ... read rules/scanning.md
-#   34  trunk push forced     no-force-push          ... run git push --force-with-lease
-#   28  call name refused     no-bare-cargo          ... read batten.toml
-#
-# So the tree emits 36 at its widest today. The headroom above that is not slack:
-# `GLOSS_MAX` admits a 120-character gloss, which is ~30 estimated tokens on its
-# own, and a class may declare several routes. 64 clears every line this tree can
-# spell while still catching a route list that has run away — the only thing this
-# ceiling sheds, since the gloss is undroppable and the first route is the floor.
-# A ceiling that fired on correct output would be switched off by the first person
-# it fired on (CLOUD-418), and `refusal_ceiling.rs` asserts the corpus stays under
-# it in the same direction the repeat arm's anti-vacuity case does.
-#
-# NOT AN `[epoch]` FLOOR BUMP, and that is a decision rather than an omission.
-# `min_batten_version` is compared against the RUNNING build, which in this
-# repository is the one built from this tree, so naming the next release makes the
-# repository refuse its own config for the whole life of the PR (measured
-# 2026-08-11: floor 0.0.62 against a 0.0.61 build, exit 1). The floor can only
-# name a version that already exists, so the raise belongs at the release. What
-# `[epoch]` actually wants — an older binary REFUSING this key rather than
-# ignoring it — `deny_unknown_fields` on `[refusal]` already delivers.
-first_sighting_max_tokens = 64
+# 176 is that rounded up to a multiple of 16. `refusal::validate` still refuses a
+# value at or below `max_tokens`. NOT AN `[epoch]` FLOOR BUMP, for the reason the
+# history of this key gives: the floor can only name a release that exists.
+first_sighting_max_tokens = 176
 
 # What the whole advisory CHANNEL may cost on one boundary (CLOUD-896).
 #
@@ -5850,6 +5827,13 @@ family = "unix"
 # once — is the shape being asked for. Any repository can recompute its own with
 # `mise run hook-cost`, which is why the figure ships as a command rather than as
 # a number in an issue body.
+#
+# READ PER COMPACTION CYCLE (CLOUD-2075). A finding's full arm is delivered once
+# per context per cycle, and a `SessionStart` opens the next cycle — so
+# `hookcost::measure` counts repeats per `SessionStart`-bounded segment, judges a
+# labelled finding by its key rather than by the bytes around it, and never counts
+# a pointer arm: pointing at the first copy is what a repeat is supposed to do.
+# Unlabelled output keeps the per-segment `(hook, digest)` reading.
 #
 # Declared here rather than in `crates/batten` for non-negotiable rule 1's
 # reason: how loud a repository's hooks may be is a property of that repository's

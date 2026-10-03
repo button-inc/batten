@@ -1086,7 +1086,7 @@ fn a_generic_read_of_a_memory_is_refused_and_names_the_tool_that_answers() {
         "not the shell-substitution class: {refusal}"
     );
     assert!(
-        refusal.contains(&format!("{GUARDED} read_memory ")),
+        refusal.contains(&format!("at {GUARDED} read_memory;")),
         "the declared read route is the subject after the path: {refusal}"
     );
     // The remedy is one hop away since CLOUD-1286, and it must reach the READ

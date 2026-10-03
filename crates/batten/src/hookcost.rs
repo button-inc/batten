@@ -211,19 +211,35 @@ pub const REPEAT_RULE: &str = "hook-repeat-pointer";
 ///
 /// **No I/O and no clock**, which is what lets the second test tier run this over
 /// a fixture transcript and get the same answer the live path would.
+///
+/// **Repeats are counted per compaction cycle** (CLOUD-2075): every
+/// [`Event::SessionBoundary`] opens a new segment, because the contract is a
+/// finding's full arm ONCE per cycle — so a full arm after a `SessionStart` is the
+/// one copy that cycle holds, not a repeat. An emission carrying labelled
+/// findings is judged per finding: a full arm counts per `(segment, key)`, and a
+/// pointer arm never counts, since pointing is what a repeat is meant to do.
+/// Unlabelled output keeps the `(segment, hook, digest)` key.
+//MUTANT-SUITE crates/batten/src/hookcost.rs
+//MUTANT segment-not-reset|s@^            segment += 1;$@            segment += 0;@|a_full_arm_after_a_session_start_is_not_a_repeat_and_a_pointer_arm_never_is
 #[must_use]
 pub fn measure(stream: &Stream) -> Reading {
     let mut per_hook: BTreeMap<String, Cost> = BTreeMap::new();
-    // Keyed on (producer, digest) so one hook saying two different things is two
-    // entries and two hooks saying one thing is two entries. Collapsing either
-    // way would report a repeat that nobody made.
-    let mut seen: BTreeMap<(String, String), (usize, usize)> = BTreeMap::new();
+    // Keyed on (segment, producer, digest) so one hook saying two different
+    // things is two entries and two hooks saying one thing is two entries.
+    // Collapsing either way would report a repeat that nobody made.
+    let mut seen: BTreeMap<(usize, String, String), (usize, usize)> = BTreeMap::new();
     let mut tokens = 0;
+    let mut segment: usize = 0;
     for record in &stream.records {
+        if record.event == Event::SessionBoundary {
+            segment += 1;
+            continue;
+        }
         let Event::HookOutput {
             hook,
             tokens: cost,
             digest,
+            findings,
         } = &record.event
         else {
             continue;
@@ -235,15 +251,30 @@ pub fn measure(stream: &Stream) -> Reading {
         });
         entry.tokens += cost;
         entry.emissions += 1;
-        let slot = seen
-            .entry((hook.clone(), digest.clone()))
-            .or_insert((0, record.line));
-        slot.0 += 1;
+        if findings.is_empty() {
+            let slot = seen
+                .entry((segment, hook.clone(), digest.clone()))
+                .or_insert((0, record.line));
+            slot.0 += 1;
+            continue;
+        }
+        for (key, arm) in findings {
+            if *arm == crate::refusal::Arm::Pointer {
+                continue;
+            }
+            // The key's last field is the definition's digest; the names before
+            // it are pointers, and the report carries only the digest prefix.
+            let digest = key.rsplit('\u{1f}').next().unwrap_or(key).to_owned();
+            let slot = seen
+                .entry((segment, hook.clone(), digest))
+                .or_insert((0, record.line));
+            slot.0 += 1;
+        }
     }
     let repeats = seen
         .into_iter()
         .filter(|(_, (count, _))| *count > 1)
-        .map(|((hook, digest), (count, first_line))| Repeat {
+        .map(|((_, hook, digest), (count, first_line))| Repeat {
             hook,
             // A PREFIX. Eight characters name the thing in a report; the whole
             // digest would let a reader who already holds a candidate text
@@ -334,8 +365,45 @@ mod tests {
                 hook: hook.to_owned(),
                 tokens,
                 digest: digest.to_owned(),
+                findings: Vec::new(),
             },
         }
+    }
+
+    /// One emission carrying one labelled finding of `key` on `arm`.
+    fn finding_at(line: usize, key: &str, arm: crate::refusal::Arm) -> Record {
+        Record {
+            line,
+            event: Event::HookOutput {
+                hook: "PreToolUse:Bash".to_owned(),
+                tokens: 10,
+                digest: format!("{line:012}"),
+                findings: vec![(key.to_owned(), arm)],
+            },
+        }
+    }
+
+    #[test]
+    fn a_full_arm_after_a_session_start_is_not_a_repeat_and_a_pointer_arm_never_is() {
+        use crate::refusal::Arm;
+        let key = "r\u{1f}c\u{1f}abcdef0123456789";
+        let boundary = |line| Record {
+            line,
+            event: Event::SessionBoundary,
+        };
+        let mut records = vec![finding_at(1, key, Arm::Full), boundary(2)];
+        records.push(finding_at(3, key, Arm::Full));
+        records.extend((4..9).map(|line| finding_at(line, key, Arm::Pointer)));
+        let clean = measure(&session(records, 4_000));
+        assert!(clean.repeats.is_empty(), "{:?}", clean.repeats);
+        assert!(judge(&clean, Some(&Ceiling::once())).is_empty());
+
+        let twice = measure(&session(
+            vec![finding_at(1, key, Arm::Full), finding_at(2, key, Arm::Full)],
+            4_000,
+        ));
+        assert_eq!(twice.repeats.len(), 1, "two full arms in one cycle repeat");
+        assert_eq!(judge(&twice, Some(&Ceiling::once())).len(), 1);
     }
 
     fn session(records: Vec<Record>, bytes: usize) -> Stream {

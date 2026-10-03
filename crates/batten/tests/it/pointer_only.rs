@@ -2260,7 +2260,11 @@ const CENSUS: &[Verb] = &[
         path: "adjudicate",
         args: &["--harness", "exit-code"],
         stdin: Stdin::MediatedCall,
-        disposition: Disposition::PointerOnly,
+        disposition: Disposition::Echoes(
+            "a finding's full arm carries the declaring row's own `reason`, the class gloss \
+             and each override's precondition — the caller's declaration, once per context \
+             per compaction cycle (CLOUD-2075)",
+        ),
     },
     // THE ONE VERB WHOSE ANSWER IS THE PAYLOAD, and `command` is deliberately the
     // field asked for: it is where `mediated_call` seeds its canary, so any other
@@ -3065,16 +3069,16 @@ fn the_corpus_is_live_subject_matter() {
     let checked = run_in(&corpus, &["check"], Stdin::Nothing);
     let stdout = String::from_utf8_lossy(&checked.stdout).into_owned();
     assert!(
-        stdout.contains("subject.txt:2 no-canary"),
+        stdout.contains("subject.txt:2 rule 'no-canary'"),
         "the forbid rule must fire on the seeded line, or `check` is judging nothing: {stdout}"
     );
     assert!(
-        stdout.contains("budget.loaded"),
+        stdout.contains("rule 'budget.loaded'"),
         "the budget must overflow, or its per-file rendering is never reached: {stdout}"
     );
     let stderr = String::from_utf8_lossy(&checked.stderr).into_owned();
     assert!(
-        stderr.contains("waived subject.txt:2 no-canary-waived"),
+        stderr.contains("waived subject.txt:2 rule 'no-canary-waived'"),
         "the waiver must apply, or its audit line is never rendered: {stderr}"
     );
 

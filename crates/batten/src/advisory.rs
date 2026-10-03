@@ -20,6 +20,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::refusal::Refusal;
 use crate::severity::AdvisoryTier;
 
 /// One producer's contribution, with the latency its content demands.
@@ -33,17 +34,49 @@ use crate::severity::AdvisoryTier;
 pub struct Advice {
     /// How soon this must be answered.
     pub tier: AdvisoryTier,
-    /// The pointer text, already composed by its producer.
+    /// The pointer text, already composed by its producer. Empty on a classed
+    /// entry until `sight_advice` renders its `finding` at emission.
     pub text: String,
+    /// The finding this entry projects, rendered only when it is emitted, so
+    /// advice dropped beside a verdict is never marked seen (CLOUD-2075).
+    pub finding: Option<Box<Refusal>>,
+    /// A classed entry carries a pointer the ruling needs, so no ceiling
+    /// suppresses it; only unclassed text is admitted by tier.
+    pub classed: bool,
 }
 
 impl Advice {
-    /// One entry.
+    /// One unclassed entry.
     #[must_use]
     pub fn new(tier: AdvisoryTier, text: impl Into<String>) -> Advice {
         Advice {
             tier,
             text: text.into(),
+            finding: None,
+            classed: false,
+        }
+    }
+
+    /// One classed entry, rendered through the finding projection at emission.
+    #[must_use]
+    pub fn finding(tier: AdvisoryTier, refusal: Refusal) -> Advice {
+        Advice {
+            tier,
+            text: String::new(),
+            finding: Some(Box::new(refusal)),
+            classed: true,
+        }
+    }
+
+    /// An already-rendered, already-marked classed entry: the eager re-delivery
+    /// a compaction's `SessionStart` carries.
+    #[must_use]
+    pub fn delivered(tier: AdvisoryTier, text: impl Into<String>) -> Advice {
+        Advice {
+            tier,
+            text: text.into(),
+            finding: None,
+            classed: true,
         }
     }
 }
@@ -129,6 +162,13 @@ pub fn suppressed_line(suppressed: usize, ceiling: usize) -> String {
 /// the only thing said — a report about a report. The overflow is still counted,
 /// so the reader learns the ceiling is too small for its own content rather than
 /// hearing silence.
+///
+/// # A classed entry is never suppressed
+///
+/// It carries a pointer the ruling needs (CLOUD-2075): the ceiling bounds only
+/// text that carries no class, and a classed entry over it is still emitted.
+//MUTANT-SUITE crates/batten/src/advisory.rs
+//MUTANT classed-advice-suppressed|s@^        if entry.classed {$@        if false {@|a_classed_entry_is_never_suppressed_at_the_ceiling
 #[must_use]
 pub fn admit(entries: Vec<Advice>, ceiling: Option<&Channel>) -> Emission {
     let Some(ceiling) = ceiling else {
@@ -145,6 +185,10 @@ pub fn admit(entries: Vec<Advice>, ceiling: Option<&Channel>) -> Emission {
     let mut admitted: Vec<Advice> = Vec::new();
     let mut suppressed = 0;
     for entry in ordered {
+        if entry.classed {
+            admitted.push(entry);
+            continue;
+        }
         let candidate = joined_with(&admitted, &entry);
         if admitted.is_empty() || crate::budget::estimate_tokens(&candidate) <= ceiling.max_tokens {
             admitted.push(entry);
@@ -284,5 +328,27 @@ mod tests {
             Some(&Channel { max_tokens: 500 }),
         );
         assert_eq!(emission.text, "alpha\n\nbeta");
+    }
+
+    #[test]
+    fn a_classed_entry_is_never_suppressed_at_the_ceiling() {
+        // CLOUD-2075: a classed entry carries a pointer the ruling needs, so the
+        // ceiling bounds only unclassed text — which is still counted.
+        let emission = admit(
+            vec![
+                Advice::delivered(AdvisoryTier::Warning, "w".repeat(80)),
+                Advice::delivered(AdvisoryTier::Advisory, "a".repeat(80)),
+                entry(AdvisoryTier::Caution, &"c".repeat(80)),
+            ],
+            Some(&Channel { max_tokens: 1 }),
+        );
+        assert!(emission.text.contains(&"w".repeat(80)), "{}", emission.text);
+        assert!(emission.text.contains(&"a".repeat(80)), "{}", emission.text);
+        assert!(
+            !emission.text.contains(&"c".repeat(80)),
+            "{}",
+            emission.text
+        );
+        assert_eq!(emission.suppressed, 1);
     }
 }

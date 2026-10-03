@@ -326,7 +326,11 @@ mod tests {
         assert_eq!(refusal.rule(), RULE);
         // One command, not a menu: the contract is one hop to right.
         assert_eq!(refusal.fix(), &Fix::Run("mise run check".to_owned()));
-        assert!(refusal.render().contains("denial: first"));
+        assert!(
+            refusal
+                .render_finding(crate::refusal::Arm::Full)
+                .contains("denial: first")
+        );
     }
 
     #[test]
@@ -338,8 +342,14 @@ mod tests {
             pending: Vec::new(),
         };
         let refusal = facts.refusal().expect("at-risk work blocks");
-        assert!(matches!(refusal.fix(), Fix::Run(_)));
-        assert!(refusal.render().contains("Fix:"));
+        let Fix::Run(fix) = refusal.fix() else {
+            panic!("at-risk work names a fix");
+        };
+        assert!(
+            refusal
+                .render_finding(crate::refusal::Arm::Full)
+                .contains(fix.as_str())
+        );
     }
 
     #[test]

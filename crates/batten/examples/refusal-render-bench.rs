@@ -35,12 +35,10 @@ fn main() -> anyhow::Result<()> {
     // baseline is the crate version plus these declared class ids.
     let config = batten::config::load(Path::new("batten.toml"))?;
     let registry = batten::policy::registry_for(&config.verdicts)?;
-    // The committed `[refusal]` ceiling travels too, because it is part of the
-    // shipped rendering contract: a first sighting whose routes would take the
-    // line over it falls back to the compact form, and a bench that passed `None`
-    // would report a rendering the harness never emits.
-    let records = refusal_render(&registry, config.refusal.as_ref())?;
-    let report = refusal_render_report(&records, config.refusal.as_ref());
+    // No ceiling travels: no renderer takes one (CLOUD-2075), so the shipped
+    // rendering is the whole arm.
+    let records = refusal_render(&registry)?;
+    let report = refusal_render_report(&records);
 
     let dir = Path::new("bench/refusal-render");
     std::fs::create_dir_all(dir)?;

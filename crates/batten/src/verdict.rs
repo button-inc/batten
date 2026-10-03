@@ -630,7 +630,7 @@ pub fn first_command_route<'a>(registry: &'a [DeclaredVerdict], token: &str) -> 
 //MUTANT-SUITE crates/batten/tests/it/refusal_ceiling.rs
 //MUTANT document-route-dropped|s@        RouteKind::Document => "read",@        RouteKind::Document => return None,@|a_first_sighting_carries_the_gloss_and_its_route_by_kind
 #[must_use]
-fn render_route(route: &Route) -> Option<String> {
+pub(crate) fn render_route(route: &Route) -> Option<String> {
     let verb = match route.kind {
         RouteKind::Command => "run",
         RouteKind::Document => "read",
@@ -1725,7 +1725,7 @@ pushed",
 
 /// CLOUD-1806's route: the recorded way through every plain `shape` row.
 //MUTANT shape-class-inadmissible|s@^const SHAPE_ADMIT_ROUTE: VendoredRoute = admit($@const SHAPE_ADMIT_ROUTE: VendoredRoute = run(@|a_shape_deny_is_admissible_through_its_class_override
-//MUTANT shape-route-circular|s@^            run("rule read first", "batten policy rule '<rule-id>'"),$@            read("config read first", "batten.toml"),@|a_shape_first_sighting_names_the_rows_remedy_verb
+//MUTANT shape-route-circular|s@^            run("rule read first", crate::refusal::RULE_HOP_PLACEHOLDER),$@            read("config read first", "batten.toml"),@|a_shape_first_sighting_names_the_rows_remedy_verb
 const SHAPE_ADMIT_ROUTE: VendoredRoute = admit(
     "articulate the call",
     "the remedy `batten policy rule` prints for this row cannot perform the change this call \
@@ -2155,7 +2155,7 @@ own text and could carry anything. What to run instead is the row's declared rem
 `batten policy rule` prints; where that remedy cannot perform the change, the class is \
 admissible through a recorded admission bound to the row id at the current commit.",
         routes: &[
-            run("rule read first", "batten policy rule '<rule-id>'"),
+            run("rule read first", crate::refusal::RULE_HOP_PLACEHOLDER),
             SHAPE_ADMIT_ROUTE,
         ],
         applicability: Applicability::Advice,

@@ -145,9 +145,8 @@ fn every_spelling_of_a_decided_verb_is_refused() {
             // The head rather than the whole line since CLOUD-1637: a first
             // sighting appends `— <gloss>; <routes>`, so the line ends with a
             // route target. On a repeat the head IS the line.
-            let head = text.split(" — ").next().unwrap_or(&text);
             assert!(
-                head.trim().ends_with(rule),
+                crate::common::refusing_rule(&text).as_deref() == Some(rule),
                 "{tool} must be refused by {rule}, got: {text}"
             );
         }
@@ -228,37 +227,11 @@ fn each_refusal_names_its_own_remedy() {
         assert_eq!(refusal.status.code(), Some(2), "{verb} is refused");
         let text = stderr(&refusal);
         // CLOUD-1286: the remedy is one hop from the rule id on the line, and
-        // this case still asserts it PER ROW — which is what caught the test
-        // being wrong before, when it demanded `mise run land` from a verb whose
-        // remedy is to background the command. A generic assertion, or one that
-        // only checked the hop resolved, would pass over the same mismatch.
-        // THE ROUTE IS NOT PART OF THE POINTER (CLOUD-1386). A first sighting
-        // appends the class's route after an em dash, so "the last word of the
-        // line" stopped being the rule id — it became the last word of a
-        // sentence. The pointer half is what this reads, and taking it
-        // explicitly says so rather than relying on the route's absence.
-        // AND THE NAME IS THREE WORDS (CLOUD-1638), so the last WORD is one
-        // third of it. `explain` answers about the CLASS, which is the head's
-        // first three words on both arms — a discriminating row appends its id
-        // after the pointers and a collapsed row's id IS the class, so reading
-        // the front is right in both cases and reading the back is right in
-        // neither.
-        let pointer = text.split(" — ").next().unwrap_or(&text);
-        let words: Vec<&str> = pointer.split_whitespace().collect();
-        assert!(
-            words.len() >= 3,
-            "{verb}: a deny names the class that fired: {text}"
-        );
-        // THE ROW'S remedy, not the class's: what this case asserts is that the
-        // refusal reaches the row's own `reason`, and `explain` answers about
-        // the class. The id is the head's last three words on a discriminating
-        // row; on a collapsed row it IS the class, so the first three resolve.
-        let tail = words[words.len() - 3..].join(" ");
-        let class = words[..3].join(" ");
-        let mut explained = run(&repo, &["policy", "rule", &tail]);
-        if explained.status.code() != Some(0) {
-            explained = run(&repo, &["policy", "rule", &class]);
-        }
+        // this case asserts it PER ROW. CLOUD-2075 labels the id, so it is read
+        // off the line rather than guessed from word positions.
+        let id = crate::common::refusing_rule(&text)
+            .unwrap_or_else(|| panic!("{verb}: a deny labels its rule: {text}"));
+        let explained = run(&repo, &["policy", "rule", &id]);
         assert_eq!(explained.status.code(), Some(0), "{verb}: the row resolves");
         let explained_text = String::from_utf8_lossy(&explained.stdout);
         assert!(

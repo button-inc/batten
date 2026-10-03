@@ -1,4 +1,4 @@
 argv: check
 exit: 2
 stdout:
-pins.toml:6 no-built-backend
+pins.toml:6 rule 'no-built-backend'

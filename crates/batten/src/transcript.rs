@@ -402,6 +402,12 @@ pub enum Event {
         /// match. A substring or prefix comparison would have to hold the text to
         /// make it, which is the payload this variant refuses to carry.
         digest: String,
+        /// The labelled findings the emission carried, one per line that
+        /// [`crate::refusal::parse_finding`] reads, as its key and arm
+        /// (CLOUD-2075). A key is a digest plus the two names, so the text still
+        /// dies inside [`collect`]; this is what lets the session measure judge a
+        /// finding per compaction cycle rather than per byte.
+        findings: Vec<(String, crate::refusal::Arm)>,
     },
     /// The assistant said something to the operator: a non-empty `text` block
     /// on an assistant turn.
@@ -412,6 +418,11 @@ pub enum Event {
     /// It exists so "a human spoke and the session answered only with tool
     /// calls" is a typed question rather than a reading of prose.
     AssistantText,
+    /// A `SessionStart` hook ran: the boundary of a compaction cycle
+    /// (CLOUD-2075), inside which a finding's full arm is delivered once.
+    ///
+    /// **APPENDED, for [`Event::MemoryInjection`]'s reason.**
+    SessionBoundary,
 }
 
 /// One event and where it was found.
@@ -690,7 +701,7 @@ impl Stream {
                 // breakdown. `hook_decisions` beside it is a different question
                 // — how many hooks DECIDED, not what they said — which is
                 // exactly the pair this variant exists to keep apart.
-                Event::HookOutput { .. } | Event::AssistantText => {}
+                Event::HookOutput { .. } | Event::SessionBoundary | Event::AssistantText => {}
             }
         }
         counts
@@ -707,9 +718,10 @@ impl Stream {
                 Event::ToolCall { .. } => kinds.insert(Kind::ToolCalls),
                 Event::ToolResult { .. } => kinds.insert(Kind::ToolResults),
                 Event::HookDecision { .. } => kinds.insert(Kind::HookDecisions),
-                Event::MemoryInjection { .. } | Event::HookOutput { .. } | Event::AssistantText => {
-                    false
-                }
+                Event::MemoryInjection { .. }
+                | Event::HookOutput { .. }
+                | Event::SessionBoundary
+                | Event::AssistantText => false,
             };
         }
         kinds
@@ -1020,11 +1032,20 @@ fn collect_attachment(attachment: &Attachment, line: usize, records: &mut Vec<Re
         });
     }
     if attachment.kind.as_deref().is_some_and(is_hook_tag) {
+        // THE CYCLE BOUNDARY FIRST, so an emission riding the same record — a
+        // compaction's re-delivery — is counted in the cycle it opens.
+        if attachment.hook_event.as_deref() == Some(SESSION_START) {
+            records.push(Record {
+                line,
+                event: Event::SessionBoundary,
+            });
+        }
         let text = attachment.emitted();
         if !text.is_empty() {
             records.push(Record {
                 line,
                 event: Event::HookOutput {
+                    findings: attachment.findings(),
                     // `hookName` where the host gave one, because two hooks
                     // on one event are two producers and grouping them would
                     // hide exactly the repeat this measures.
@@ -1499,6 +1520,33 @@ impl Attachment {
         text
     }
 
+    /// Every labelled finding this hook emitted, as `(key, arm)`: one per line
+    /// of `additionalContext` and `stderr`, and of the decision document's
+    /// reason or context strings when `stdout` is one (CLOUD-2075).
+    fn findings(&self) -> Vec<(String, crate::refusal::Arm)> {
+        let mut texts: Vec<String> = Vec::new();
+        texts.extend(self.additional_context.iter().cloned());
+        texts.extend(self.stderr.iter().cloned());
+        if let Some(document) = self
+            .stdout
+            .as_deref()
+            .and_then(|stdout| serde_json::from_str::<Value>(stdout).ok())
+        {
+            let specific = &document["hookSpecificOutput"];
+            for key in ["permissionDecisionReason", "additionalContext"] {
+                if let Some(text) = specific[key].as_str() {
+                    texts.push(text.to_owned());
+                }
+            }
+        }
+        texts
+            .iter()
+            .flat_map(|text| text.lines())
+            .filter_map(crate::refusal::parse_finding)
+            .map(|parsed| (parsed.key, parsed.arm))
+            .collect()
+    }
+
     /// Which producer this cost belongs to.
     ///
     /// `hookName` first, its `hookEvent` next, the tag last. Never a constant of
@@ -1544,6 +1592,10 @@ const QUEUED_COMMAND: &str = "queued_command";
 
 /// The host's `origin.kind` for a record the operator authored.
 const HUMAN_ORIGIN: &str = "human";
+
+/// The host's `hookEvent` for a session start, the compaction-cycle boundary
+/// (CLOUD-2075).
+const SESSION_START: &str = "SessionStart";
 
 /// The host's authorship record on a line or an attachment.
 #[derive(Debug, Deserialize)]

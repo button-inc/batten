@@ -467,7 +467,7 @@ fn a_list_that_cannot_be_derived_is_partial_never_complete() {
         // list from, while `release ship missing` carries only an artifact and
         // falls back to the module's own path.
         assert!(
-            text.contains(".github/workflows/release-artifacts.yml release grade other"),
+            text.contains(".github/workflows/release-artifacts.yml rule 'release grade other'"),
             "{name}: {text}"
         );
         assert!(

@@ -2825,39 +2825,24 @@ pub struct RenderRecord {
     /// `policy-budget` already gates instruction files with, rather than a new
     /// bytes-over-four approximation wearing a precise-looking unit.
     pub tokens: usize,
-    /// The rendered line itself, so the tier can compare it to
-    /// [`crate::refusal::Refusal::line`] rather than to a length.
+    /// The rendered line itself, so the tier can compare it to the pointer arm
+    /// rather than to a length. No renderer takes a ceiling (CLOUD-2075), so this
+    /// is the whole arm.
     pub line: String,
-    /// The same arm rendered with NO ceiling, and it is the column that makes the
-    /// shipped one legible.
-    ///
-    /// The committed `[refusal] max_tokens` bounds the carried line, and when a
-    /// class's routes take it over that bound `deny_text` falls back to the
-    /// compact form — so a table of the shipped rendering alone can report every
-    /// arm as equal and look like a broken measurement rather than like a budget
-    /// doing its job. This is what the first sighting WOULD cost if the ceiling
-    /// permitted it, which is both the explanation and the number a successor
-    /// weighing a residency protocol actually needs.
-    pub unbounded_characters: usize,
-    /// [`crate::budget::estimate_tokens`] over that same unbounded rendering.
-    pub unbounded_tokens: usize,
 }
 
 /// Render every strategy × residency × class arm through the shipped path.
 ///
-/// The registry and ceiling are the caller's, so the committed authority is what
-/// gets measured: a bench that vendored its own registry would price a class
-/// nobody is ever refused under.
+/// The registry is the caller's, so the committed authority is what gets
+/// measured: a bench that vendored its own registry would price a class nobody
+/// is ever refused under.
 ///
 /// # Errors
 ///
 /// A class this repository does not declare. That is a property of the
 /// configuration rather than a verdict about the cost, and reporting a
 /// zero-length rendering for an absent class would be a measurement of nothing.
-pub fn refusal_render(
-    registry: &[crate::verdict::DeclaredVerdict],
-    ceiling: Option<&crate::refusal::Ceiling>,
-) -> Result<Vec<RenderRecord>> {
+pub fn refusal_render(registry: &[crate::verdict::DeclaredVerdict]) -> Result<Vec<RenderRecord>> {
     let mut records = Vec::new();
     for (class, rule) in MEASURED_CLASSES {
         let refusal = crate::refusal::Refusal::from_class(
@@ -2876,8 +2861,12 @@ pub fn refusal_render(
         for strategy in Strategy::ALL {
             for residency in Residency::ALL {
                 let first = first_sighting(*strategy, *residency);
-                let line = crate::hook::deny_text(&refusal, first, ceiling);
-                let unbounded = crate::hook::deny_text(&refusal, first, None);
+                let arm = if first {
+                    crate::refusal::Arm::Full
+                } else {
+                    crate::refusal::Arm::Pointer
+                };
+                let line = refusal.render_finding(arm);
                 records.push(RenderRecord {
                     strategy: *strategy,
                     residency: *residency,
@@ -2886,8 +2875,6 @@ pub fn refusal_render(
                     characters: line.chars().count(),
                     tokens: crate::budget::estimate_tokens(&line),
                     line,
-                    unbounded_characters: unbounded.chars().count(),
-                    unbounded_tokens: crate::budget::estimate_tokens(&unbounded),
                 });
             }
         }
@@ -2982,58 +2969,6 @@ fn refusal_render_preamble() -> String {
     out
 }
 
-/// What the declared ceiling actually did to these records, as opposed to what
-/// it is declared to do.
-///
-/// **DERIVED, NEVER ASSERTED, and that distinction is why this function exists.**
-/// This paragraph used to state flatly that the ceiling withholds the carried
-/// routes, which was true when it was written and false one renderer change
-/// later — CLOUD-1637 landed, every emitted figure became its unbounded one, and
-/// the report went on explaining a suppression that was no longer happening. A
-/// sentence about a measurement has to be computed from it.
-fn refusal_render_ceiling_note(
-    records: &[RenderRecord],
-    ceiling: Option<&crate::refusal::Ceiling>,
-) -> String {
-    use std::fmt::Write as _;
-
-    let mut out = String::new();
-    let Some(declared) = ceiling else {
-        out.push_str(
-            "**No `[refusal]` ceiling is declared**, so the emitted and unbounded columns below \
-             are the same rendering.\n\n",
-        );
-        return out;
-    };
-    let withheld = records
-        .iter()
-        .filter(|record| record.characters < record.unbounded_characters)
-        .count();
-    if withheld == 0 {
-        let _ = writeln!(
-            out,
-            "**The declared `[refusal] max_tokens` is {}, and on this tree it withholds \
-             NOTHING**: every emitted figure below equals its unbounded one, so the ceiling is \
-             declared and inert over these classes rather than shaping the numbers. The \
-             `unbounded` columns are kept because that is a fact about today's registry, not a \
-             property of the bound.\n",
-            declared.max_tokens
-        );
-    } else {
-        let _ = writeln!(
-            out,
-            "**The declared `[refusal] max_tokens` is {}, and it is an input to {} of the {} \
-             arms below**, where the rendered line would exceed it and `deny_text` falls back to \
-             the compact form. The `unbounded` columns are those arms rendered with no ceiling — \
-             what the sighting would cost if the budget permitted it.\n",
-            declared.max_tokens,
-            withheld,
-            records.len()
-        );
-    }
-    out
-}
-
 /// Whether any measured class has nothing for a residency protocol to withhold.
 ///
 /// **THE SAME LESSON AS THE CEILING NOTE, one paragraph over.** This text used to
@@ -3078,10 +3013,7 @@ fn refusal_render_margin_note(records: &[RenderRecord]) -> String {
             out,
             "**A zero in the emitted column is a measurement, not a gap in the table**, and \
              {} of the measured classes reach it: {}. A class whose first sighting renders \
-             exactly what its repeat renders has nothing for a residency protocol to withhold, \
-             whether because the renderer appends nothing for it or because the declared ceiling \
-             withholds what it would have appended. The unbounded columns are what tell those \
-             two apart.\n",
+             exactly what its repeat renders has nothing for a residency protocol to withhold.\n",
             flat.len(),
             flat.join(", ")
         );
@@ -3168,17 +3100,18 @@ fn refusal_render_verdict(records: &[RenderRecord]) -> String {
 /// it is byte-stable under no commit — and the crate version is absent for the
 /// same reason one release later: release-plz bumps it in a commit that renders
 /// nothing differently, so a version in the body would redden the drift check on
-/// every release. The baseline is the declared class ids and the declared
-/// ceiling, which are what the rendering reads.
+/// every release. The baseline is the declared class ids, which are what the
+/// rendering reads; no renderer takes a ceiling (CLOUD-2075).
 #[must_use]
-pub fn refusal_render_report(
-    records: &[RenderRecord],
-    ceiling: Option<&crate::refusal::Ceiling>,
-) -> String {
+pub fn refusal_render_report(records: &[RenderRecord]) -> String {
     use std::fmt::Write as _;
 
     let mut out = refusal_render_preamble();
-    out.push_str(&refusal_render_ceiling_note(records, ceiling));
+    out.push_str(
+        "**Nothing is shed.** No renderer takes a ceiling: `[refusal]`'s keys are measured \
+         by the corpus case and report an over-ceiling line rather than truncating one, so \
+         every figure below is the whole arm.\n\n",
+    );
 
     for (class, rule) in MEASURED_CLASSES {
         let _ = writeln!(out, "## `{class}` (rule `{rule}`)\n");
@@ -3188,8 +3121,6 @@ pub fn refusal_render_report(
             "first sighting".to_owned(),
             "emitted characters".to_owned(),
             "emitted tokens".to_owned(),
-            "unbounded characters".to_owned(),
-            "unbounded tokens".to_owned(),
         ]];
         for record in records.iter().filter(|record| record.class == *class) {
             rows.push(vec![
@@ -3198,8 +3129,6 @@ pub fn refusal_render_report(
                 record.first_sighting.to_string(),
                 record.characters.to_string(),
                 record.tokens.to_string(),
-                record.unbounded_characters.to_string(),
-                record.unbounded_tokens.to_string(),
             ]);
         }
         out.push_str(&markdown_table(&rows));
@@ -3221,17 +3150,12 @@ pub fn refusal_render_report(
                 out,
                 "- **`{class}`** — a warm repeat emits {} characters ({} tokens) today against \
                  {} ({} tokens) delivered in full every time: **{} characters saved per repeat \
-                 firing**. Unbounded, the same comparison is {} against {}: **{} characters** — \
-                 what a residency protocol would have to deliver, and withhold, per firing.",
+                 firing**.",
                 compact.characters,
                 compact.tokens,
                 full.characters,
                 full.tokens,
                 full.characters.saturating_sub(compact.characters),
-                compact.unbounded_characters,
-                full.unbounded_characters,
-                full.unbounded_characters
-                    .saturating_sub(compact.unbounded_characters)
             );
         }
     }

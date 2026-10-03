@@ -415,15 +415,13 @@ impl Applied {
     /// who greps `check` output can grep this.
     #[must_use]
     pub fn line_text(&self) -> String {
+        let rule = crate::refusal::label(crate::refusal::Label::Rule, &self.rule);
         match self.line {
             Some(line) => format!(
-                "waived {}:{} {} (expires {})",
-                self.path, line, self.rule, self.expires
+                "waived {}:{} {rule} (expires {})",
+                self.path, line, self.expires
             ),
-            None => format!(
-                "waived {} {} (expires {})",
-                self.path, self.rule, self.expires
-            ),
+            None => format!("waived {} {rule} (expires {})", self.path, self.expires),
         }
     }
 }
@@ -511,7 +509,8 @@ impl Suppressed {
     /// too — which is the point of keeping one verdict word across both channels.
     #[must_use]
     pub fn line_text(&self) -> String {
-        format!("waived {} (expires {})", self.rule, self.expires)
+        let rule = crate::refusal::label(crate::refusal::Label::Rule, &self.rule);
+        format!("waived {rule} (expires {})", self.expires)
     }
 }
 
@@ -716,7 +715,7 @@ mod tests {
         assert_eq!(applied.len(), 1);
         assert_eq!(
             applied[0].line_text(),
-            "waived src/a.rs:3 r (expires 2099-01-01)"
+            "waived src/a.rs:3 rule 'r' (expires 2099-01-01)"
         );
         assert!(
             !applied[0].line_text().contains("deny"),
@@ -811,7 +810,7 @@ mod tests {
         let (_, applied) = apply(vec![scoped], &[waiver("r", "2099-01-01")], TODAY);
         assert_eq!(
             applied[0].line_text(),
-            "waived **/*.rs r (expires 2099-01-01)"
+            "waived **/*.rs rule 'r' (expires 2099-01-01)"
         );
     }
 
@@ -926,7 +925,7 @@ mod tests {
             expires: "2099-01-01".to_owned(),
         }
         .line_text();
-        assert_eq!(line, "waived no-merge (expires 2099-01-01)");
+        assert_eq!(line, "waived rule 'no-merge' (expires 2099-01-01)");
         // One verdict word across both channels, so a reader who greps `check`
         // output for a suppression finds a mediated one too.
         assert!(line.starts_with("waived "));
