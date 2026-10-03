@@ -10145,7 +10145,8 @@ fn run_land_laps(run: Laps<'_>, out: &mut dyn Write, err: &mut dyn Write) -> Res
                 land::Progress::Proceed => {}
                 // `None` is not merged, or nobody could say. Either way this is
                 // a lap rather than a retirement — see `landed_for_real`.
-                land::Progress::Landed => match landed_for_real(root, url, branch, out)? {
+                land::Progress::Landed => match landed_for_real(root, url, reference, branch, out)?
+                {
                     Landing::Retired(code) => return Ok(code),
                     // The forge says it did NOT merge, so this head is not trunk
                     // and the lap's own effects are still this lap's to undo.
@@ -11273,7 +11274,13 @@ enum Landing {
 /// # Errors
 ///
 /// Only for a stream that will not accept output.
-fn landed_for_real(root: &Path, url: &str, branch: &str, out: &mut dyn Write) -> Result<Landing> {
+fn landed_for_real(
+    root: &Path,
+    url: &str,
+    reference: &str,
+    branch: &str,
+    out: &mut dyn Write,
+) -> Result<Landing> {
     let repo = repo_or_placeholder(root);
     // ANY STATE, because a merged pull request is CLOSED and the open-only
     // lookup can therefore never confirm one — see `pull_request_in_any_state`.
@@ -11307,7 +11314,7 @@ fn landed_for_real(root: &Path, url: &str, branch: &str, out: &mut dyn Write) ->
             // survive, while a landed one left behind is how a short-lived branch
             // becomes a long-lived one — and reusing the name afterwards is the
             // stale-tracking-ref deadlock `land::stale_tracking` records.
-            retire_the_branch(root, url, branch, out)?;
+            retire_the_branch(root, url, reference, branch, out)?;
             Ok(Landing::Retired(ExitCode::Success))
         }
         fast_forward::Merged::No => {
@@ -12700,7 +12707,18 @@ fn hand_back_the_lease(root: &Path, branch: &str, out: &mut dyn Write) {
 /// Every failure is silent in the exit code and visible in the line, which is
 /// [`land::retire_branch`]'s posture and its reason: the landing already
 /// succeeded, so reporting cleanup as failure would make it look broken.
-fn retire_the_branch(root: &Path, url: &str, branch: &str, out: &mut dyn Write) -> Result<()> {
+fn retire_the_branch(
+    root: &Path,
+    url: &str,
+    reference: &str,
+    branch: &str,
+    out: &mut dyn Write,
+) -> Result<()> {
+    // THE TRACKING REF FOLLOWS THE LANDING (CLOUD-2085), and before the
+    // retirement because that deletes the branch whose tip it records. Fail-open:
+    // a ref that cannot be written leaves the reading as stale as it was, and the
+    // landing already succeeded.
+    let _ = land::record_landed_trunk(root, reference, branch);
     let retired = land::retire_branch(root, url, branch);
     // COUNTS AND BOOLEANS. `Retired` has nowhere to put a finding's text, which
     // is non-negotiable rule 4 held in the TYPE rather than in this call site.

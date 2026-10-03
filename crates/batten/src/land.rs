@@ -237,6 +237,31 @@ pub(crate) fn advance(
     Ok(fetched.head)
 }
 
+/// Point the trunk's tracking ref at `branch`'s tip, which an accepted
+/// fast-forward has just made the trunk (CLOUD-2085).
+///
+/// **No fetch, because none is needed.** A fast-forward moves the trunk to
+/// exactly the head that was pushed, and that head is this branch's tip, so the
+/// tracking ref can be written from local state. Before this the forge moved
+/// `main` and the local ref stayed where the last fetch left it, so
+/// `completion.unlanded` read the commits that had just landed as unlanded.
+///
+/// `Ok(false)` where the branch does not resolve: nothing landed from here to
+/// record, which is not an error for a step that runs after the landing.
+///
+/// # Errors
+///
+/// When the repository cannot be read or the ref cannot be written.
+//MUTANT-SUITE crates/batten/tests/it/land_tracking.rs
+//MUTANT landed-trunk-left-stale|s@^    gitwrite::set_ref(root, \&tracking_ref(reference), \&head)?;$@@|a_landed_branch_leaves_the_tracking_ref_at_the_landed_head
+pub fn record_landed_trunk(root: &Path, reference: &str, branch: &str) -> Result<bool> {
+    let Some(head) = crate::git::resolve_ref(root, &format!("refs/heads/{branch}"))? else {
+        return Ok(false);
+    };
+    gitwrite::set_ref(root, &tracking_ref(reference), &head)?;
+    Ok(true)
+}
+
 /// The tracking prefix this clone keeps the landing remote's refs under.
 ///
 /// One spelling, because [`tracking_ref`] writes into it and [`prune`] deletes
