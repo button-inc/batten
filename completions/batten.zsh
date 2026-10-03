@@ -2430,7 +2430,6 @@ trace\:"Add everything"))' \
         case $line[1] in
             (sweep)
 _arguments "${_arguments_options[@]}" : \
-'--changed-since=[Sweep only the enforced gates a diff against this revision touches]:changed_since:_default' \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \

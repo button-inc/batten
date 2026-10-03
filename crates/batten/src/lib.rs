@@ -14804,12 +14804,18 @@ fn run_mutate(
             )?;
             Ok(ExitCode::Violation)
         }
-        cli::MutateCommand::Sweep { changed_since } => {
+        cli::MutateCommand::Sweep => {
             // NARROWED TO A CHANGE (CLOUD-2072), with could-not-look WIDENING,
             // as `ci suites` does: a base that cannot be diffed sweeps the whole
             // set, because a sweep that is too wide shows up in the bill and one
             // that is too narrow has no symptom at all.
-            let names = match changed_since {
+            //
+            // THE BASE IS AN ENVIRONMENT VALUE, beside `$MUTANT_GATES` and
+            // `$MUTANT_TASKS`, rather than a flag: the sweep's whole scope is
+            // already declared that way, and a flag would change the public
+            // `MutateCommand` — measured, `cargo semver-checks` read it as three
+            // major breaks (a removed `Copy`, a unit variant changing kind).
+            let names = match mutate::changed_since() {
                 None => names,
                 Some(base) => match git::base_delta(root, &base, &[String::from("**")], false) {
                     Ok(Some(delta)) => {

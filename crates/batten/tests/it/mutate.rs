@@ -1082,9 +1082,10 @@ fn other_suite(tail: &str) -> String {
 #[cfg(unix)]
 fn sweep_since(root: &Path, gates: &str, base: &str) -> (i32, String, String) {
     let answer = common::batten()
-        .args(["mutate", "sweep", "--changed-since", base])
+        .args(["mutate", "sweep"])
         .current_dir(root)
         .env("MUTANT_GATES", gates)
+        .env("MUTANT_CHANGED_SINCE", base)
         .env("MUTANT_TASKS", "mise.toml")
         .output()
         .expect("run batten mutate");
