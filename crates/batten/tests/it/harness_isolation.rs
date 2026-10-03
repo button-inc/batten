@@ -23,8 +23,9 @@ use crate::common;
 /// change, and an expectation computed by it would move with the mutation and
 /// pass every one of them.
 fn falls_through(dir: &Path) -> bool {
-    let scratch = common::target_tmp();
-    let scratch = scratch.canonicalize().unwrap_or(scratch);
+    // The resolver's own spelling, never a bare `canonicalize`: on Windows that
+    // answers verbatim and no plain root starts with it (CLOUD-2059).
+    let scratch = batten::git::canonical(&common::target_tmp());
     batten::git::worktree_root(dir).is_ok_and(|owner| !owner.starts_with(&scratch))
 }
 

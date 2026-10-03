@@ -441,6 +441,21 @@ fn plain(path: PathBuf) -> PathBuf {
     PathBuf::from(rest)
 }
 
+/// `path` canonicalized and spelled [`plain`], or `path` unchanged where it does
+/// not resolve: THE spelling to compare against any root this module returns.
+///
+/// Every root here is spelled this way, and a bare `Path::canonicalize` on
+/// Windows answers in the verbatim spelling, which shares no prefix with any of
+/// them. Measured twice: once in `receipt::judgeable` (above), and once in
+/// `testing::falls_through`, which read every owned fixture as falling through
+/// and refused 2,614 cases on the Windows leg of #1089 while the Linux suite
+/// stayed green (CLOUD-2059). `tests/it/canonical_spelling.rs` holds every other
+/// bare call in the engine to its counted ceiling.
+#[must_use]
+pub fn canonical(path: &Path) -> PathBuf {
+    plain(path.canonicalize().unwrap_or_else(|_| path.to_path_buf()))
+}
+
 /// Resolve the root of THIS WORKING TREE — the checkout `start` is actually in.
 ///
 /// # THE SIBLING TO [`repo_root`], AND CHOOSING BETWEEN THEM IS THE WHOLE POINT
@@ -489,11 +504,7 @@ pub fn worktree_root(start: &Path) -> Result<PathBuf> {
             start.display()
         )));
     };
-    Ok(plain(
-        workdir
-            .canonicalize()
-            .unwrap_or_else(|_| workdir.to_path_buf()),
-    ))
+    Ok(canonical(workdir))
 }
 
 /// Resolve the root of the repository containing `start`: the working-tree
@@ -553,11 +564,7 @@ pub fn repo_root(start: &Path) -> Result<PathBuf> {
     // outright, so an ambient `GIT_CEILING_DIRECTORIES` cannot shape this answer
     // and no constant has to be maintained for that to stay true.
     let common_dir = repo.common_dir();
-    let common_dir = plain(
-        common_dir
-            .canonicalize()
-            .unwrap_or_else(|_| common_dir.to_path_buf()),
-    );
+    let common_dir = canonical(common_dir);
     // The parent is the root only when the common dir is a `<root>/.git`. A
     // submodule interior or a separate git dir would "derive" a directory that
     // is not a working tree at all — refuse loudly instead of mis-rooting.
@@ -602,11 +609,7 @@ pub fn common_dir(dir: &Path) -> Result<String> {
     // store metadata, and a relative one would be read against whatever
     // directory the reader happens to be in.
     let common = repo.common_dir();
-    let absolute = plain(
-        common
-            .canonicalize()
-            .unwrap_or_else(|_| common.to_path_buf()),
-    );
+    let absolute = canonical(common);
     Ok(absolute.to_string_lossy().into_owned())
 }
 
@@ -2299,11 +2302,7 @@ pub fn git_dir(dir: &Path) -> Result<PathBuf> {
     // the shared one, and a receipt keyed through the wrong one answers about a
     // different checkout than the one being judged.
     let git_dir = repo.git_dir();
-    Ok(plain(
-        git_dir
-            .canonicalize()
-            .unwrap_or_else(|_| git_dir.to_path_buf()),
-    ))
+    Ok(canonical(git_dir))
 }
 
 /// How many commits `range` selects.

@@ -97,17 +97,19 @@ pub fn home_pins(dir: &Path) -> [(&'static str, &Path); 2] {
 /// the system temp directory falls through to nothing. Only the scratch root sits
 /// inside the checkout, so only there is a missing `.git` an accident.
 //MUTANT spawn-falls-through|s@^    resolved.is_ok_and.*$@    false@|a_spawn_whose_cwd_falls_through_to_the_checkout_is_refused
+//MUTANT verbatim-scratch-root|s@^    let scratch = crate::git::canonical(scratch_root);$@    let scratch = scratch_root.canonicalize().unwrap_or_else(\x7c_\x7c scratch_root.to_path_buf());@|no_engine_file_adds_a_bare_canonicalize
 #[doc(hidden)]
 #[must_use]
 pub fn falls_through(cwd: &Path, scratch_root: &Path) -> bool {
     if !cwd.starts_with(scratch_root) {
         return false;
     }
-    // Both sides canonical, because the resolver answers canonically and a
-    // scratch root reached through a symlink would otherwise own nothing.
-    let scratch = scratch_root
-        .canonicalize()
-        .unwrap_or_else(|_| scratch_root.to_path_buf());
+    // Both sides in the RESOLVER'S spelling, because a scratch root reached
+    // through a symlink would otherwise own nothing — and `git::canonical`, not a
+    // bare `canonicalize`, whose verbatim Windows answer shares no prefix with the
+    // plain root `worktree_root` returns: that read every owned fixture as
+    // falling through and refused 2,614 cases on the Windows leg (CLOUD-2059).
+    let scratch = crate::git::canonical(scratch_root);
     let resolved = crate::git::worktree_root(cwd);
     resolved.is_ok_and(|owner| !owner.starts_with(&scratch))
 }

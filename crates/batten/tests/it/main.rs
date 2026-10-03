@@ -96,6 +96,7 @@ mod bypass_scrub;
 mod call_arguments;
 mod call_background_flag;
 mod call_ceiling;
+mod canonical_spelling;
 mod cap_drift;
 mod capture_fidelity;
 mod captured_facts;
