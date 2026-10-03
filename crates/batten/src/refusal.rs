@@ -362,10 +362,11 @@ const NO_DECLARED_FIX: &str =
 /// is what gets explained. That holds only where a class has one raiser, and it
 /// does not for the native-kind population: `[[rule]]` rows of kind `shape`,
 /// `receipt`, `forbid`, `pipeline`, `command`, `ratchet` and `secrets` declare no
-/// class of their own and raise the kind's native one, so fourteen `shape` rows
-/// all raise `call name refused` and ten `receipt` rows share four classes. Under
-/// a token key the first `shape` row to fire consumed the sighting for all
-/// fourteen, and the next row's FIRST firing rendered as a repeat with its
+/// class of their own and raise the kind's native one, so every plain `shape`
+/// row (eleven in this config when CLOUD-1806 counted) raises `call name
+/// refused` and ten `receipt` rows share four classes. Under a token key the
+/// first `shape` row to fire consumed the sighting for all of them, and the
+/// next row's FIRST firing rendered as a repeat with its
 /// rule-specific remedy never pointed at. CLOUD-1637's second amendment is where
 /// that was corrected, and it prescribed the rule id.
 ///
@@ -670,7 +671,8 @@ impl Refusal {
     /// is 66 of the 128 `[[rule]]` rows in this repository's own config. Rows of
     /// kind `shape`, `receipt`, `forbid`, `pipeline`, `command`, `ratchet` and
     /// `secrets` declare no class of their own and raise their kind's native one
-    /// — fourteen `shape` rows all raise `call name refused`, ten `receipt` rows
+    /// — every plain `shape` row (eleven in this config when CLOUD-1806 counted)
+    /// raises `call name refused`, ten `receipt` rows
     /// share four classes. So the id is not a tie-breaker for a rare collision,
     /// it is the only discriminator for half the population, and it renders on
     /// BOTH arms rather than on the first sighting alone.

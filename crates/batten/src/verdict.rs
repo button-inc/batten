@@ -1722,6 +1722,15 @@ re-running it cannot change its answer, and the work the receipt was taken about
 pushed",
 );
 
+/// CLOUD-1806's route: the recorded way through every plain `shape` row.
+//MUTANT shape-class-inadmissible|s@^const SHAPE_ADMIT_ROUTE: VendoredRoute = admit($@const SHAPE_ADMIT_ROUTE: VendoredRoute = run(@|a_shape_deny_is_admissible_through_its_class_override
+//MUTANT shape-route-circular|s@^            run("rule read first", "batten policy rule '<rule-id>'"),$@            read("config read first", "batten.toml"),@|a_shape_first_sighting_names_the_rows_remedy_verb
+const SHAPE_ADMIT_ROUTE: VendoredRoute = admit(
+    "articulate the call",
+    "the remedy `batten policy rule` prints for this row cannot perform the change this call \
+makes, and you can name what the call changes and where a reviewer will see its effect",
+);
+
 /// Every class the BINARY ships: the native ones and the vendored presets'.
 ///
 /// # Why the presets' vocabulary ships with the presets
@@ -2141,8 +2150,13 @@ non-negotiable rule 4 decided at the composer rather than at the report.",
         gloss: "the mediated call matches a command shape the config refuses",
         class: "A `shape` row declares a command spelling that is refused outright. The \
 refusal names the row rather than echoing the command, because the command is the caller's \
-own text and could carry anything. What to run instead is the row's declared remedy.",
-        routes: &[read("config read first", "batten.toml")],
+own text and could carry anything. What to run instead is the row's declared remedy, which \
+`batten policy rule` prints; where that remedy cannot perform the change, the class is \
+admissible through a recorded admission bound to the row id at the current commit.",
+        routes: &[
+            run("rule read first", "batten policy rule '<rule-id>'"),
+            SHAPE_ADMIT_ROUTE,
+        ],
         applicability: Applicability::Advice,
     },
     // ─── the repaired arms (CLOUD-1639) ──────────────────────────────────────

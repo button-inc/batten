@@ -601,7 +601,8 @@ sha256 = "b2c822742e8cbf355ba0cb4cc690c3cd8fdc9ec1916c8148f27bd9098cb7aee4"
 #
 # `reason` is required on a shape rule, unlike on a file rule: a mediated deny
 # reaches a model as the entire explanation, so a refusal that named only its id
-# would be un-actionable (CLOUD-122). The crate appends the bypass hatch.
+# would be un-actionable (CLOUD-122). It is the row's remedy, which the refusal
+# reaches through `batten policy rule '<id>'`.
 # THESE FOUR WOULD DECLARE `bypass_env = "BATTEN_GH_GUARD_BYPASS"` AND DO NOT YET
 # (CLOUD-437, deferred to CLOUD-1027). They are the ported `gh-guard`, so that
 # name is TRUE of them where it was a fossil everywhere else, and declaring it
@@ -616,12 +617,11 @@ sha256 = "b2c822742e8cbf355ba0cb4cc690c3cd8fdc9ec1916c8148f27bd9098cb7aee4"
 # one. Asserting it in the change that performs it is the exact shape §8 refuses.
 #
 # So until that row is groomed, these four declare no per-row hatch. That is a
-# statement about the column, NOT a remedy: the residual global hook hatch still
-# technically reaches them only because their class, `call name refused`,
-# declares no override route yet (CLOUD-1806), and CLOUD-1357 makes every class
-# that DOES declare one unsuppressible by it. A reader looking for the way past a
-# refusal reads the class's routes with `batten policy explain "<class>"` and,
-# where one is an override, walks `batten override request`/`spend`. This comment
+# statement about the column, NOT a remedy: their class, `call name refused`,
+# declares an override route (CLOUD-1806). A reader looking for the way past a
+# refusal reads the row's remedy with `batten policy rule '<id>'`, and where that
+# remedy cannot perform the change, walks `batten override request`/`spend` —
+# the recorded way through, bound to the row id at the current commit. This comment
 # used to say these rows "take the general" hatch "like every other row", which an
 # agent read as advice and proposed for a class it could not have suppressed.
 [[rule]]
