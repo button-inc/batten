@@ -1551,6 +1551,15 @@ expression: stdout_of(&output)
           "data_channel": false,
           "flags": [],
           "subcommands": []
+        },
+        {
+          "path": "engine update",
+          "id": "engine.update",
+          "about": "Install the engine this config pins over the running binary, from its release or from this tree",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [],
+          "subcommands": []
         }
       ]
     },
