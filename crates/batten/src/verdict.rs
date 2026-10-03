@@ -2674,10 +2674,10 @@ pub fn routed_only_into_protection(
     registry: &[DeclaredVerdict],
     protects: impl Fn(&str) -> bool,
 ) -> Vec<String> {
-    let blocker = Native::ProtectedMutation.id();
+    let gate = Native::ProtectedMutation.id();
     if registry
         .iter()
-        .any(|entry| entry.id == blocker && declares_override(entry))
+        .any(|entry| entry.id == gate && declares_override(entry))
     {
         return Vec::new();
     }

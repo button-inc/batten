@@ -3337,16 +3337,18 @@ pub fn decode(harness: Harness, raw: &str) -> Option<Envelope> {
             .filter(|mode| !mode.is_empty())
             .map(ToOwned::to_owned),
         // CLOUD-2075: the sightings context and the SessionStart source.
-        agent: value
-            .get("agent_id")
-            .and_then(Value::as_str)
-            .filter(|agent| !agent.is_empty())
-            .map(ToOwned::to_owned),
-        start_source: value
-            .get("source")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned),
+        agent: present_str(&value, "agent_id"),
+        start_source: present_str(&value, "source"),
     })
+}
+
+/// One non-empty string member of a decoded payload, owned.
+fn present_str(value: &Value, key: &str) -> Option<String> {
+    value
+        .get(key)
+        .and_then(Value::as_str)
+        .filter(|text| !text.is_empty())
+        .map(ToOwned::to_owned)
 }
 
 /// Normalize a host's event spelling, applying that host's rename table.
