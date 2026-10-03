@@ -293,7 +293,12 @@ mod tests {
             mode: 0o100_644,
             text: Some(body.as_bytes().to_vec()),
         };
-        let filler: String = (0..40).map(|n| format!("line {n}\n")).collect();
+        let filler = (0..40).fold(String::new(), |mut text, n| {
+            text.push_str("line ");
+            text.push_str(&n.to_string());
+            text.push('\n');
+            text
+        });
         let edit = |base: &str, oid: &str| {
             let mut before = text(&format!("a\n{filler}{base}\n"));
             before.oid = oid.repeat(64);
