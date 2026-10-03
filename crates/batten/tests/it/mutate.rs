@@ -848,6 +848,130 @@ fn an_uncommitted_case_is_still_covered_because_the_working_tree_is_the_subject(
     assert_eq!(code, 0, "{out}{err}");
 }
 
+// ---------------------------------------------------------------------------
+// Narrowed to a change (CLOUD-2072).
+// ---------------------------------------------------------------------------
+
+/// A row `other`'s suite cannot catch: dropping `pipefail` changes nothing the
+/// suite observes. So the sweep exits non-zero exactly when `other` is swept,
+/// which is what lets a case tell "narrowed" from "swept everything and passed".
+#[cfg(unix)]
+const OTHER_SURVIVES: &str = "#MUTANT pipefail-dropped|s/^set -uo pipefail$/set -u/|other_refuses";
+
+/// `toy_repo` plus a second gate, `other`, whose one row survives, committed as
+/// the base a change is measured against.
+#[cfg(unix)]
+fn two_gate_repo(name: &str) -> PathBuf {
+    let root = toy_repo(name, &[CAUGHT]);
+    let gate = TOY_GATE
+        .replace("the toy", "the other")
+        .replace("tests/toy.rs", "tests/other.rs");
+    write_program(
+        &root,
+        "mise-tasks/other.sh",
+        &format!("{gate}{OTHER_SURVIVES}\n"),
+    );
+    write(&root, "tests/other.rs", &other_suite(""));
+    track(&root);
+    common::git_in(&root, &["commit", "-m", "base"]);
+    root
+}
+
+/// `other`'s suite. Its case names share no substring with `toy`'s, because
+/// `cargo test -- <filter>` runs every target: `toy_suite`'s `other_` prefix
+/// would leave `toy`'s `over_the_limit` naming a case of each.
+#[cfg(unix)]
+fn other_suite(tail: &str) -> String {
+    format!(
+        "{}{}{}{tail}",
+        runs("other.sh"),
+        case(
+            "other_refuses_ninety_nine",
+            "assert_eq!(gate(\"99\"), Some(1));"
+        ),
+        case("other_passes_one", "assert_eq!(gate(\"1\"), Some(0));"),
+    )
+}
+
+/// Sweep `gates` narrowed to what changed since `base`.
+#[cfg(unix)]
+fn sweep_since(root: &Path, gates: &str, base: &str) -> (i32, String, String) {
+    let answer = common::batten()
+        .args(["mutate", "sweep", "--changed-since", base])
+        .current_dir(root)
+        .env("MUTANT_GATES", gates)
+        .env("MUTANT_TASKS", "mise.toml")
+        .output()
+        .expect("run batten mutate");
+    (
+        answer.status.code().unwrap_or(-1),
+        stdout(&answer),
+        stderr(&answer),
+    )
+}
+
+/// The control: unnarrowed, `other`'s survivor fails the sweep. Without it the
+/// narrowed cases below could pass on a fixture that never fails at all.
+#[cfg(unix)]
+#[test]
+fn anti_vacuity_the_whole_set_reaches_the_surviving_row() {
+    let root = two_gate_repo("since-control");
+    let (code, out, err) = sweep(&root, "toy,other");
+    assert_ne!(code, 0, "{out}{err}");
+    assert!(out.contains("other/pipefail-dropped SURVIVED"), "{out}");
+}
+
+/// **The discriminating case.** Only `toy`'s gate changed since the base, so only
+/// `toy` is swept and `other`'s survivor is never reached.
+#[cfg(unix)]
+#[test]
+fn a_change_to_one_gate_sweeps_only_that_gate() {
+    let root = two_gate_repo("since-one");
+    let gate = format!("{TOY_GATE}{CAUGHT}\n# edited\n");
+    write_program(&root, "mise-tasks/toy.sh", &gate);
+    let (code, out, err) = sweep_since(&root, "toy,other", "HEAD");
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(out.contains("every one caught"), "{out}");
+    assert!(!out.contains("SURVIVED"), "{out}");
+}
+
+/// A changed SUITE touches its gate: a weakened test is exactly the change a
+/// mutation sweep exists to catch.
+#[cfg(unix)]
+#[test]
+fn a_change_to_a_suite_sweeps_its_gate() {
+    let root = two_gate_repo("since-suite");
+    write(&root, "tests/other.rs", &other_suite("// edited\n"));
+    let (code, out, err) = sweep_since(&root, "toy,other", "HEAD");
+    assert_ne!(code, 0, "{out}{err}");
+    assert!(out.contains("other/pipefail-dropped SURVIVED"), "{out}");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_change_touching_no_gate_sweeps_nothing_and_says_so() {
+    let root = two_gate_repo("since-none");
+    write(&root, "README.md", "unrelated\n");
+    let (code, out, err) = sweep_since(&root, "toy,other", "HEAD");
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(
+        out.contains("no enforced gate's source or suite changed since HEAD"),
+        "{out}"
+    );
+}
+
+/// Could-not-look WIDENS: a base that does not resolve sweeps the whole set, so
+/// `other`'s survivor is reached and the sweep fails.
+#[cfg(unix)]
+#[test]
+fn an_unresolvable_base_sweeps_every_gate() {
+    let root = two_gate_repo("since-nobase");
+    let (code, out, err) = sweep_since(&root, "toy,other", "no-such-rev");
+    assert!(err.contains("sweeping every enforced gate"), "{err}");
+    assert_ne!(code, 0, "{out}{err}");
+    assert!(out.contains("other/pipefail-dropped SURVIVED"), "{out}");
+}
+
 #[cfg(unix)]
 #[test]
 fn anti_vacuity_a_case_that_is_red_before_the_mutation_is_not_evidence() {

@@ -14502,7 +14502,43 @@ fn run_mutate(
             )?;
             Ok(ExitCode::Violation)
         }
-        cli::MutateCommand::Sweep => {
+        cli::MutateCommand::Sweep { changed_since } => {
+            // NARROWED TO A CHANGE (CLOUD-2072), with could-not-look WIDENING,
+            // as `ci suites` does: a base that cannot be diffed sweeps the whole
+            // set, because a sweep that is too wide shows up in the bill and one
+            // that is too narrow has no symptom at all.
+            let names = match changed_since {
+                None => names,
+                Some(base) => match git::base_delta(root, &base, &[String::from("**")], false) {
+                    Ok(Some(delta)) => {
+                        let changed: std::collections::BTreeSet<String> = delta
+                            .added
+                            .iter()
+                            .chain(delta.edited.iter())
+                            .chain(delta.deleted.iter())
+                            .cloned()
+                            .collect();
+                        let narrowed = mutate::touched(root, &names, &changed);
+                        if narrowed.is_empty() {
+                            writeln!(
+                                out,
+                                "mutate sweep: no enforced gate's source or suite changed since \
+                                 {base}"
+                            )?;
+                            return Ok(ExitCode::Success);
+                        }
+                        narrowed
+                    }
+                    _ => {
+                        writeln!(
+                            err,
+                            "mutate sweep: sweeping every enforced gate — no {base} to compare \
+                             against, so the changed set is unknowable"
+                        )?;
+                        names
+                    }
+                },
+            };
             // The staged tree lives beside the build artefacts rather than in
             // the system temporary directory, and it PERSISTS between runs. Both
             // are the same economy: a declared suite can be a compiled tier, and

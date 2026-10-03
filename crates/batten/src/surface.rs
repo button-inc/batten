@@ -2321,6 +2321,23 @@ const BENCH_CHECK: FlagDecl = FlagDecl {
     value: ValueDecl::Bool,
 };
 
+/// `--changed-since <rev>` on `mutate sweep` (CLOUD-2072): sweep only the
+/// enforced gates a diff against `<rev>` touches, so the sweep can gate a pull
+/// request. Optional: without it the whole set is swept, as the census pairs.
+const MUTATE_CHANGED_SINCE: FlagDecl = FlagDecl {
+    id: "changed_since",
+    long: Some("changed-since"),
+    short: None,
+    help: "Sweep only the enforced gates a diff against this revision touches",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
 const SLOW_BASE: FlagDecl = FlagDecl {
     id: "base",
     long: Some("base"),
@@ -4849,7 +4866,7 @@ pub const SURFACE: &[CommandDecl] = &[
         data_channel: false,
         exits: EXITS_VERDICT,
         effect: Effect::Write,
-        flags: &[],
+        flags: &[MUTATE_CHANGED_SINCE],
     },
     // The complement, and it is `read` structurally: one pass over the
     // declaration lines the tree already carries. No spawn, no network, and the

@@ -1554,6 +1554,7 @@ complete -c batten -n "__fish_batten_using_subcommand mutate; and not __fish_see
 complete -c batten -n "__fish_batten_using_subcommand mutate; and not __fish_seen_subcommand_from sweep census help" -f -a "sweep" -d 'Apply every declared mutation to its source and report the ones its declared suite did not catch'
 complete -c batten -n "__fish_batten_using_subcommand mutate; and not __fish_seen_subcommand_from sweep census help" -f -a "census" -d 'Report every gate in the tree that is neither mutation-enforced nor carrying a filed exemption'
 complete -c batten -n "__fish_batten_using_subcommand mutate; and not __fish_seen_subcommand_from sweep census help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
+complete -c batten -n "__fish_batten_using_subcommand mutate; and __fish_seen_subcommand_from sweep" -l changed-since -d 'Sweep only the enforced gates a diff against this revision touches' -r
 complete -c batten -n "__fish_batten_using_subcommand mutate; and __fish_seen_subcommand_from sweep" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"

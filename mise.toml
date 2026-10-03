@@ -1682,11 +1682,29 @@ description = "Gate: every declared gate has a mutation its own suite is PROVEN 
 # `shell edit refused` refuses with one route and no override — so the coverage
 # mechanism could only be retired.
 #
-# STILL OFF THE LANDING PATH. This is a proof about the SUITES, not a property of
-# the commit, so it belongs neither in `verify` nor in the per-PR matrix — the
-# same split `lock-complete` and `lock-currency` were separated along. The census
-# is the half that runs in the gate.
+# THE WHOLE SWEEP STAYS OFF THE LANDING PATH. Over every gate it is a proof about
+# the SUITES, not a property of the commit — the same split `lock-complete` and
+# `lock-currency` were separated along. What a commit CAN move is the gates it
+# touched, and `mutant:changed` sweeps exactly those at admission (CLOUD-2072);
+# the census is the other half that runs in the gate.
 run = "cargo run --quiet -p batten -- mutate sweep"
+
+[tasks."mutant:changed"]
+description = "Gate: every enforced gate this branch touched since origin/main has a mutation its own suite is PROVEN to catch (CLOUD-2072)"
+# `mutant`'s sweep NARROWED TO THE CHANGE, which is what puts it on the landing
+# path that the whole sweep stays off. The owner's 2026-10-02 ruling: tests run
+# at admission, and a schedule is for drift. The whole sweep is a proof about
+# every suite and costs a cold build per gate; a gate this branch did not touch
+# cannot have been weakened by it, so admission pays only for the gates whose
+# source or suite the diff names (`mutate::touched`).
+#
+# COULD-NOT-LOOK WIDENS. With no `origin/main` to diff against, the verb sweeps
+# every enforced gate and says so on stderr, as `ci suites` does: too wide shows
+# in the bill, too narrow has no symptom.
+#
+# `origin/main` IS A TIP DIFF, for `git::base_delta`'s stated reason: `verify`
+# asserts the branch is rebased on it, and CI's `ci` job fetches it first.
+run = "cargo run --quiet -p batten -- mutate sweep --changed-since origin/main"
 
 [tasks."mutant-census"]
 description = "Gate: every gate in the tree is either mutation-enforced or carries a filed exemption (CLOUD-480)"
