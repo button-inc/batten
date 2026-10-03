@@ -1009,6 +1009,10 @@ fn a_replay_recorded_before_a_re_claim_still_admits_its_pre_rebase_head() {
     let before = commit_on(&repo, "ours, before the replay");
     reset_to(&repo, &base);
     let after = commit_on(&repo, "ours, replayed");
+    let receipts = repo.join(".git").join("batten-receipts");
+    std::fs::create_dir_all(&receipts).expect("receipts dir");
+    let claim = receipts.join(format!("claim.{}", branch.replace('/', "-")));
+    std::fs::write(&claim, "CLOUD-1\n").expect("write the first claim");
     land::record(
         &repo,
         &branch,
@@ -1019,13 +1023,7 @@ fn a_replay_recorded_before_a_re_claim_still_admits_its_pre_rebase_head() {
         },
     )
     .expect("record the replay");
-    let receipts = repo.join(".git").join("batten-receipts");
-    std::fs::create_dir_all(&receipts).expect("receipts dir");
-    std::fs::write(
-        receipts.join(format!("claim.{}", branch.replace('/', "-"))),
-        "CLOUD-1\n",
-    )
-    .expect("write the re-minted claim");
+    std::fs::write(&claim, "CLOUD-1 CLOUD-2\n").expect("write the re-minted claim");
     assert!(
         land::admitted(&repo, &branch, &before, &after),
         "a re-claim hides the replay from the lap, never from the lease"

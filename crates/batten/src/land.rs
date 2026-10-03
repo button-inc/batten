@@ -599,32 +599,17 @@ fn pre_replay_head(root: &Path, branch: &str) -> String {
         .unwrap_or_else(|| String::from("-"))
 }
 
-/// This branch's lap record, one line per entry, or nothing where none exists.
-///
-/// The SAME path [`append`] writes, derived the same way, so the reader and the
-/// writer cannot disagree about which file is the record.
-fn lap_lines(root: &Path, branch: &str) -> Vec<String> {
-    let Ok(git_dir) = crate::git::git_dir(root) else {
-        return Vec::new();
-    };
-    let claim = crate::claim::claimed_token(&git_dir.join("batten-receipts"), branch);
-    let path = crate::recorder::record_path(&git_dir, LAP_RECORD, branch, claim.as_deref());
-    std::fs::read_to_string(path)
-        .map(|text| text.lines().map(str::to_owned).collect())
-        .unwrap_or_default()
-}
-
 /// Every partition of this branch's lap record, oldest file first, as one list.
 ///
-/// **THE LEASE'S READER, AND ONLY ITS.** A claim re-minted mid-branch (a second
-/// row pulled onto it) moves [`lap_lines`] to a fresh partition, and the replays
-/// and pushes this clone recorded under the old claim vanish from it. For the
-/// lap's own bookkeeping that partition is the point (CLOUD-1300), but the lease
-/// asks a different question — did THIS CLONE produce what the remote holds —
-/// and a re-claim does not change the answer. Measured on #1073: claiming
-/// CLOUD-2082 hid three replays and `land push` refused the clone's own head.
-/// Whatever it reads, admission still requires containment or an exact sha this
-/// clone pushed, so an older partition can only admit this clone's own work.
+/// **NOT ONLY THE CURRENT CLAIM'S FILE**, which is what this read before. A claim
+/// re-minted mid-branch (a second row pulled onto it) moves [`append`] to a fresh
+/// partition (CLOUD-1300), and the replays and pushes this clone recorded under
+/// the old claim vanished with it. The lease asks whether THIS CLONE produced
+/// what the remote holds, and a re-claim does not change the answer. Measured on
+/// #1073: claiming CLOUD-2082 hid three replays and `land push` refused the
+/// clone's own head. Whatever it reads, admission still requires containment or
+/// an exact sha this clone pushed, so an older partition can only admit this
+/// clone's own work.
 fn branch_lap_lines(root: &Path, branch: &str) -> Vec<String> {
     let Ok(git_dir) = crate::git::git_dir(root) else {
         return Vec::new();
@@ -687,7 +672,7 @@ fn contains(root: &Path, tip: &str, ancestor: &str) -> bool {
 #[must_use]
 //MUTANT admits-ignored|s@^    if last_pushed.as_deref() == Some(remote) {$@    if true {@|a_sibling_commit_on_the_branch_is_never_admitted
 //MUTANT replay-chain-unfollowed|s@^    for line in lines.iter().rev() {$@    for line in lines.iter() {@|a_branch_replayed_twice_replaces_its_first_pre_rebase_head
-//MUTANT lease-reads-one-partition|s@^    let lines = branch_lap_lines(root, branch);$@    let lines = lap_lines(root, branch);@|a_replay_recorded_before_a_re_claim_still_admits_its_pre_rebase_head
+//MUTANT lease-reads-one-partition|s@^    let prefix = format!("{name}.");$@    let prefix = format!("{name}.unread.");@|a_replay_recorded_before_a_re_claim_still_admits_its_pre_rebase_head
 pub fn admitted(root: &Path, branch: &str, remote: &str, head: &str) -> bool {
     if remote == crate::lease::ZERO || contains(root, head, remote) {
         return true;
