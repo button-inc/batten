@@ -271,6 +271,7 @@ fn task_names(lines: &[String]) -> Vec<String> {
 //MUTANT suite-first-only|s@own_suites.get(&row.source)@own_suites.get(\&row.slug)@|each_preset_module_row_runs_under_its_own_declared_suite
 //MUTANT source-change-ignored|s@^                let by_source = .*;$@                let by_source = false;@|a_change_to_one_gate_sweeps_only_that_gate
 //MUTANT suite-change-ignored|s@^                let by_suite = .*;$@                let by_suite = false;@|a_change_to_a_suite_sweeps_its_gate
+//MUTANT deleted-module-ignored|s@^                let by_preset = .*;$@                let by_preset = false;@|a_deleted_preset_module_sweeps_its_gate
 //MUTANT every-gate-touched|s@^        \.filter(\x7cname\x7c {$@        .filter(\x7cname\x7c { true \x7c\x7c@|a_change_touching_no_gate_sweeps_nothing
 fn declaring_lines(root: &Path, name: &str, source: &str) -> Option<Vec<String>> {
     let lines = lines_of(root, source)?;
@@ -848,6 +849,11 @@ pub fn enforced_set() -> Result<Vec<String>> {
 /// [`Gate::suites`]: a weaker suite is the commonest way a gate stops
 /// discriminating, so a change to the suite alone must re-sweep its rows.
 ///
+/// A changed path inside a PRESET gate's directory touches that gate too, and
+/// that is what reaches a DELETED module: `resolve` reads the tree as it is now,
+/// so a module the change removed is no longer among the gate's sources, and a
+/// match on sources alone let the deletion pass unswept (review of #1099).
+///
 /// A name that resolves to nothing is KEPT. Narrowing it away would turn the
 /// sweep's `no-such-gate` report into silence; could-not-look widens here as it
 /// does in `ci suites`.
@@ -863,7 +869,9 @@ pub fn touched(
             resolve(root, name).is_none_or(|gate| {
                 let by_source = gate.sources.iter().any(|path| changed.contains(path));
                 let by_suite = gate.suites().iter().any(|s| changed.contains(s.path()));
-                by_source || by_suite
+                let dir = format!("{PRESETS}/{name}/");
+                let by_preset = changed.iter().any(|path| path.starts_with(&dir));
+                by_source || by_suite || by_preset
             })
         })
         .cloned()

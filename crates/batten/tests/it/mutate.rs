@@ -973,6 +973,41 @@ fn an_unresolvable_base_sweeps_every_gate() {
     assert!(out.contains("other/pipefail-dropped SURVIVED"), "{out}");
 }
 
+/// **A DELETED PRESET MODULE TOUCHES ITS GATE** (review of #1099). A preset gate
+/// is a directory of modules, and `resolve` reads the tree as it is now, so a
+/// module the change deleted is no longer among the gate's sources. Matched on
+/// sources alone, deleting `b.rego` touched nothing and the sweep passed without
+/// running the gate. `a.rego`'s row survives, so reaching the gate is a failure.
+#[cfg(unix)]
+#[test]
+fn a_deleted_preset_module_sweeps_its_gate() {
+    let root = toy_repo("since-preset-delete", &[CAUGHT]);
+    let dir = "crates/batten/src/policy/presets/demo";
+    write(
+        &root,
+        &format!("{dir}/a.rego"),
+        "#MUTANT-SUITE tests/preset.rs\n\
+         #MUTANT package-renamed|s/^package batten.demo$/package batten.demo2/|preset_passes\n\
+         package batten.demo\n",
+    );
+    write(&root, &format!("{dir}/b.rego"), "package batten.demo\n");
+    write(
+        &root,
+        "tests/preset.rs",
+        &format!(
+            "{}{}",
+            case("preset_passes_always", "assert!(true);"),
+            case("preset_other_case", "assert!(true);"),
+        ),
+    );
+    track(&root);
+    common::git_in(&root, &["commit", "-m", "base"]);
+    fs::remove_file(root.join(format!("{dir}/b.rego"))).expect("delete one module");
+    let (code, out, err) = sweep_since(&root, "toy,demo", "HEAD");
+    assert_ne!(code, 0, "{out}{err}");
+    assert!(out.contains("demo/package-renamed SURVIVED"), "{out}");
+}
+
 #[cfg(unix)]
 #[test]
 fn anti_vacuity_a_case_that_is_red_before_the_mutation_is_not_evidence() {
