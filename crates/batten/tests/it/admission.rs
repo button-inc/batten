@@ -167,6 +167,9 @@ fn a_subject_copied_from_the_refusal_line_binds_as_the_refusal_does() {
         admission::subject_as_bound("policy/agent-spawn.rego"),
         "policy/agent-spawn.rego"
     );
+    // The tree surface matches `finding.path` verbatim, so a path with a space
+    // must not be rejoined into a name no finding carries (CLOUD-1826).
+    assert_eq!(admission::subject_as_bound("docs/a b.md"), "docs/a b.md");
     let root = fixture("copied-subject");
     let issued = admission::issue(
         &root,
@@ -869,12 +872,19 @@ severity = "deny"
 # A SECOND ROW UNDER A SECOND SCOPE, and the subject deliberately names a file
 # the tree rule also refuses. That collision is what
 # `a_mint_for_a_mediated_rule_anchors_the_call_not_a_tree_finding` measures.
+#
+# KEYED, so it is not a PLAIN shape row: a plain one only ever raises `call name
+# refused`, and `override request` refuses a subject it could never bind under
+# any other class (CLOUD-1806). A keyed row's refusal is not listable from the
+# row, so this mint is still issued — which is all these cases need of it.
 [[rule]]
 id = "mediated-refuses"
 kind = "shape"
 scope = "mediated_call"
 severity = "deny"
 pattern = "never-matches-anything"
+requires_key = 'NEVER-[0-9]+'
+base = "origin/main"
 reason = "the fixture's mediated row; it exists to be minted against, never to fire"
 
 [[verdict]]

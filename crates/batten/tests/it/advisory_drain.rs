@@ -291,12 +291,15 @@ fn a_post_tool_event_drains_the_store_as_pointer_lines() {
     assert_eq!(first.status.code(), Some(0), "the drain never denies");
     let lines = payload(&first);
     assert_eq!(lines.len(), 1, "one finding, one line: {lines:?}");
-    let fields: Vec<&str> = lines[0].split(' ').collect();
-    assert_eq!(fields.len(), 4, "fingerprint, rule, path:line, count");
+    // CLOUD-2075's labelled grammar: `rule '<id>' at <fingerprint> <path:line> <count>`.
+    let rest = lines[0]
+        .strip_prefix("rule 'no-todo' at ")
+        .unwrap_or_else(|| panic!("the line labels its rule: {lines:?}"));
+    let fields: Vec<&str> = rest.split(' ').collect();
+    assert_eq!(fields.len(), 3, "fingerprint, path:line, count");
     assert_eq!(fields[0].len(), 64, "a fingerprint is 64 hex characters");
-    assert_eq!(fields[1], "no-todo");
-    assert_eq!(fields[2], "src/a.rs:2");
-    assert_eq!(fields[3], "1");
+    assert_eq!(fields[1], "src/a.rs:2");
+    assert_eq!(fields[2], "1");
     assert!(
         !lines[0].contains("TODO"),
         "a pointer, never the matched content"
@@ -587,6 +590,31 @@ fn an_unchanged_finding_set_answers_with_the_marker_rather_than_the_listing() {
     );
 }
 
+/// A `SessionStart` opens a new cycle, and the context no longer holds the
+/// payload `unchanged` would point at — so the next drain lists in full
+/// (CLOUD-2075 §7 case 22).
+#[test]
+fn a_session_start_relists_the_drain_payload() {
+    let (repo, home) = drained_fixture("drain-session-start", "\n[drain]\ninterval_ms = 0\n");
+    let first = payload(&hook(&repo, &home, &post_tool_batch("s1")));
+    assert_eq!(first.len(), 1, "{first:?}");
+    assert_eq!(
+        payload(&hook(&repo, &home, &post_tool_batch("s1"))),
+        vec!["unchanged".to_owned()]
+    );
+    let started = hook(
+        &repo,
+        &home,
+        r#"{"hook_event_name":"SessionStart","session_id":"s1","source":"startup","cwd":"/w"}"#,
+    );
+    assert_eq!(started.status.code(), Some(0));
+    assert_eq!(
+        payload(&hook(&repo, &home, &post_tool_batch("s1"))),
+        first,
+        "the first drain of a new cycle lists in full"
+    );
+}
+
 #[test]
 fn a_drain_with_nothing_to_say_stays_silent_rather_than_claiming_unchanged() {
     // The distinction the marker would lose if it were emitted unconditionally:
@@ -788,21 +816,20 @@ fn spread_fixture(name: &str, drain_table: &str, spans: usize) -> (PathBuf, Path
 }
 
 #[test]
-fn a_rule_over_the_cardinality_cap_emits_one_summary_line_and_the_cap_is_config() {
-    // CLOUD-82 (b) over the binary, and the half a renderer unit test cannot
-    // reach: the cap that decides is the one in `batten.toml`. Same fixture,
-    // same findings, two caps, two payloads — a hard-coded K could not produce
-    // both columns, and a key that parsed but did nothing would produce neither.
+fn a_rule_over_the_cardinality_cap_reports_it_beside_every_entry_and_the_cap_is_config() {
+    // CLOUD-82 (b) over the binary, reversed by CLOUD-2075: the cap REPORTS and
+    // withholds nothing. The cap that decides the report is the one in
+    // `batten.toml` — two caps, two payloads.
     let (capped, home_c) = spread_fixture(
         "drain-cap-on",
         "\n[drain]\ninterval_ms = 0\ncardinality_cap = 2\n",
         4,
     );
     let lines = payload(&hook(&capped, &home_c, &post_tool_batch("s1")));
+    assert_eq!(lines.len(), 5, "four entries and the cap report: {lines:?}");
     assert_eq!(
-        lines,
-        vec!["rule no-todo: 2+ findings".to_owned()],
-        "one pointer-only summary line, never the four entries"
+        lines[0], "rule 'no-todo': 4 findings, over the cardinality cap of 2",
+        "the report leads its rule's entries"
     );
 
     let (uncapped, home_u) = spread_fixture(
@@ -814,26 +841,15 @@ fn a_rule_over_the_cardinality_cap_emits_one_summary_line_and_the_cap_is_config(
     assert_eq!(
         lines.len(),
         4,
-        "under the cap every identity speaks: {lines:?}"
-    );
-
-    // The withheld identities are recorded under the reason that feeds
-    // rule-health telemetry — not as an ordinary drain suppression, which is
-    // what a transient bound would be.
-    let shown = state_cmd(&capped, &home_c, &["state", "list", "-J"]);
-    let document: serde_json::Value =
-        serde_json::from_slice(&shown.stdout).expect("state list -J is JSON");
-    assert_eq!(
-        document[0]["presentation"]["not-shown"], "over-cardinality-cap",
-        "the cap is journalled as itself: {document}"
+        "under the cap every identity speaks and nothing is reported: {lines:?}"
     );
 }
 
 #[test]
-fn the_emitted_payload_stays_under_the_configured_token_budget() {
-    // CLOUD-82 (a) over the binary. The budget is asserted against the bytes the
-    // host actually receives, with the same estimator `[budget]` gates
-    // instruction files with — a second estimator here could agree with nothing.
+fn an_emitted_payload_over_the_configured_token_budget_reports_it() {
+    // CLOUD-82 (a) over the binary, reversed by CLOUD-2075: the budget REPORTS,
+    // with the same estimator `[budget]` gates instruction files with, and
+    // withholds no pointer.
     const BUDGET: usize = 20;
     let (repo, home) = spread_fixture(
         "drain-budget",
@@ -841,15 +857,11 @@ fn the_emitted_payload_stays_under_the_configured_token_budget() {
         12,
     );
     let lines = payload(&hook(&repo, &home, &post_tool_batch("s1")));
+    assert_eq!(lines.len(), 13, "every pointer and the report: {lines:?}");
     assert!(
-        batten::budget::estimate_tokens(&lines.join("\n")) <= BUDGET,
-        "over the configured budget: {lines:?}"
-    );
-    assert!(
-        lines.last().is_some_and(
-            |line| line.starts_with("budget: ") && line.ends_with(" findings withheld")
-        ),
-        "and the payload says how much it did not say: {lines:?}"
+        lines.last().is_some_and(|line| line.starts_with("budget: ")
+            && line.ends_with(&format!(" tokens over the declared {BUDGET}"))),
+        "and the payload says how far over it is: {lines:?}"
     );
 }
 
@@ -883,8 +895,8 @@ fn a_re_raised_group_reports_the_delta_rather_than_the_instance_list() {
         "the count field carries the delta: {again:?}"
     );
     let fields: Vec<&str> = again[0].split(' ').collect();
-    assert_eq!(fields.len(), 4, "still a pointer, not an instance list");
-    assert_eq!(fields[2], "src/a.rs:2", "and one in-scope pointer");
+    assert_eq!(fields.len(), 6, "still a pointer, not an instance list");
+    assert_eq!(fields[4], "src/a.rs:2", "and one in-scope pointer");
 }
 
 #[test]
@@ -1011,16 +1023,17 @@ fn occurrences(record: &serde_json::Value) -> Option<u64> {
 
 // Acceptance (a), all four clauses over one alternating fixture.
 #[test]
-fn an_alternating_rule_tracks_state_truthfully_while_its_emissions_stop_at_the_cap() {
+fn an_alternating_rule_tracks_state_truthfully_and_is_reported_flapping_not_withheld() {
     // A window that a handful of evaluations fills, a threshold the alternation
-    // clears, and a cap of one so the second emission is the suppressed one.
+    // clears, and a cap of one that is accepted and no longer read.
     let (repo, home) = flapping_fixture(
         "drain-flap",
         "\n[drain]\ninterval_ms = 0\nflap_window = 6\nflap_percent = 50\nemit_cap = 1\n",
     );
 
+    // CLOUD-2075: a flapping identity is a pointer the ruling needs, so the
+    // signal policy REPORTS it (the per-rule count below) and withholds nothing.
     let mut emissions = 0;
-    let mut suppressed = false;
     for round in 0..6 {
         let raised = round % 2 == 0;
         evaluate(&repo, &home, raised);
@@ -1041,20 +1054,13 @@ fn an_alternating_rule_tracks_state_truthfully_while_its_emissions_stop_at_the_c
         if lines.iter().any(|line| line.contains("no-todo")) {
             emissions += 1;
         }
-        if stored(&repo, &home)["presentation"]["not-shown"] == "flap-suppressed" {
-            suppressed = true;
-        }
+        assert_ne!(
+            stored(&repo, &home)["presentation"]["not-shown"],
+            "flap-suppressed",
+            "round {round}: a flapping identity is shown, never withheld"
+        );
     }
-
-    assert!(
-        suppressed,
-        "the identity is annotated as withheld by the signal policy, journalled \
-         under its own reason so the false-positive rate excludes it"
-    );
-    assert!(
-        emissions <= 2,
-        "emissions stop at the cap; got {emissions} over six evaluations"
-    );
+    assert_eq!(emissions, 3, "every raised round shows its pointer");
 
     // The rule-health counter, on the operator's channel: a rule id and a count,
     // never a finding's content.
@@ -1074,149 +1080,6 @@ fn an_alternating_rule_tracks_state_truthfully_while_its_emissions_stop_at_the_c
     // cleared, and the finding cleared with it, cap or no cap.
     evaluate(&repo, &home, false);
     assert_eq!(occurrences(&stored(&repo, &home)), Some(0));
-}
-
-/// The drain shard's name in this store, discovered rather than hardcoded.
-///
-/// A store that has taken one evaluation and one drain boundary holds exactly two
-/// shards: the scan's, which is `journal::shard_id(worktree)`, and the drain's,
-/// which is neither derived from nor predictable off the worktree path. Reading
-/// it back is what keeps the cases below honest if that derivation ever changes;
-/// a literal `c0cc…` would pass for the wrong reason the day it did.
-fn drain_shard_of(repo: &Path, home: &Path) -> String {
-    let store = shards_dir(home);
-    let scan = batten::journal::shard_id(repo);
-    let mut names: Vec<String> = std::fs::read_dir(&store)
-        .unwrap_or_else(|why| panic!("read {}: {why}", store.display()))
-        .flatten()
-        .filter_map(|entry| {
-            let path = entry.path();
-            if path.extension().is_some_and(|ext| ext == "jsonl") {
-                path.file_stem()
-                    .map(|stem| stem.to_string_lossy().into_owned())
-            } else {
-                None
-            }
-        })
-        .filter(|name| *name != scan)
-        .collect();
-    names.sort();
-    assert_eq!(
-        names.len(),
-        1,
-        "one drain shard beside the scan's: {names:?}"
-    );
-    names.into_iter().next().expect("the drain shard")
-}
-
-/// The one bound store's shard directory under `home`.
-fn shards_dir(home: &Path) -> PathBuf {
-    let bound = home.join("data/batten");
-    let mut stores: Vec<PathBuf> = std::fs::read_dir(&bound)
-        .unwrap_or_else(|why| panic!("read {}: {why}", bound.display()))
-        .flatten()
-        .map(|entry| entry.path())
-        .filter(|path| path.is_dir())
-        .collect();
-    stores.sort();
-    assert_eq!(stores.len(), 1, "one bound store: {stores:?}");
-    stores
-        .into_iter()
-        .next()
-        .expect("the store")
-        .join("journal/shards")
-}
-
-/// Drive the alternating fixture under `repo_dir` and report whether the drain
-/// ever annotated the identity as withheld by the emission policy.
-///
-/// The six-round shape is acceptance (a)'s, deliberately: this is the SAME run
-/// that case makes, asked under a chosen shard order rather than the ambient one.
-fn suppression_fires_under(root: &Path, repo_dir: &str) -> bool {
-    let (repo, home) = flapping_fixture_under(
-        root,
-        repo_dir,
-        "\n[drain]\ninterval_ms = 0\nflap_window = 6\nflap_percent = 50\nemit_cap = 1\n",
-    );
-    let mut suppressed = false;
-    for round in 0..6 {
-        evaluate(&repo, &home, round % 2 == 0);
-        let woken = hook(&repo, &home, &post_tool_batch("flap-order"));
-        assert_eq!(woken.status.code(), Some(0), "the drain never denies");
-        if stored(&repo, &home)["presentation"]["not-shown"] == "flap-suppressed" {
-            suppressed = true;
-        }
-    }
-    suppressed
-}
-
-// CLOUD-1252. THE ORDER THE LOG IS READ IN IS NOT THE ORDER THE SHARDS ARE NAMED
-// IN, and until `journal::Entry` carried an append stamp it was exactly that.
-//
-// `emission::assess` scopes an identity's emission budget by POSITION in the
-// merged log — an emission counts when its index is at or above the window's
-// first evaluation — which is sound only if the log is chronological.
-// `read_shards` concatenates whole shards in path order, so the log was grouped
-// by WRITER and which writer led was decided by whether the checkout's path
-// fingerprint sorted above the drain shard's name. On the losing draw every
-// emission sat below the window, the count was always zero, and flap suppression
-// never fired AT ALL — for that checkout, permanently, with the engine reporting
-// a healthy drain the whole time. Measured at 1 store in 13, and drawn every time
-// by the musl target directory, which is how it surfaced.
-//
-// BOTH DRAWS, CONSTRUCTED RATHER THAN AWAITED, and that is the whole case. One
-// run proves only which side this machine sits on; acceptance (a) has been
-// passing for months on the winning one. The directory name is searched until its
-// shard id lands either side of the drain's, so each assertion names the order it
-// is making.
-//
-// SHOWN ABLE TO FAIL (CLOUD-418): revert `read_shards` to `paths.sort()` alone
-// and the `above` half reds while the `below` half stays green. A case that fires
-// in one order only is a case that cannot tell the fix from the draw.
-#[test]
-fn flap_suppression_fires_whichever_shard_sorts_first() {
-    let root = scratch("drain-flap-order");
-    // One boundary, purely to learn this store's drain shard. The probe's own
-    // verdict is not asserted — it is a read, and the cases below are the claim.
-    let (probe, probe_home) = flapping_fixture_under(
-        &root,
-        "probe",
-        "\n[drain]\ninterval_ms = 0\nflap_window = 6\nflap_percent = 50\nemit_cap = 1\n",
-    );
-    evaluate(&probe, &probe_home, true);
-    hook(&probe, &probe_home, &post_tool_batch("flap-probe"));
-    let drain = drain_shard_of(&probe, &probe_home);
-
-    // A directory name per side. The search is bounded and deterministic: the
-    // drain shard is a 64-char hex string, so roughly one name in two lands on
-    // each side and forty candidates is far past certainty.
-    let mut below = None;
-    let mut above = None;
-    for n in 0..40 {
-        let candidate = format!("repo{n}");
-        let shard = batten::journal::shard_id(&root.join(&candidate));
-        if shard < drain && below.is_none() {
-            below = Some(candidate);
-        } else if shard > drain && above.is_none() {
-            above = Some(candidate);
-        }
-        if below.is_some() && above.is_some() {
-            break;
-        }
-    }
-    let below = below.expect("a checkout whose scan shard sorts below the drain's");
-    let above = above.expect("a checkout whose scan shard sorts above the drain's");
-
-    assert!(
-        suppression_fires_under(&root, &below),
-        "scan shard below the drain's ({below}): this is the draw that always \
-         worked, so a failure here is the policy, not the order"
-    );
-    assert!(
-        suppression_fires_under(&root, &above),
-        "scan shard ABOVE the drain's ({above}): the losing draw. Flap \
-         suppression must not depend on a filename comparison — see CLOUD-1252"
-    );
 }
 
 // Acceptance (b). The load-bearing case for the (identity × context) key: two

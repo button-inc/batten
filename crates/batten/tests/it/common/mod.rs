@@ -149,6 +149,36 @@ fn scan_declared_patterns() -> String {
     rows
 }
 
+/// The pointers a refusal of `class` printed, between the class and the `rule`
+/// that refused, exactly as a reader would copy them — trimmed, NOT rejoined
+/// (CLOUD-1826).
+///
+/// `said` is a run's stdout followed by its stderr. The one place a binary case
+/// reads the refusal line's grammar, so a change to that grammar re-points this.
+///
+/// # Panics
+///
+/// When no line carries the class, naming what was said.
+pub(crate) fn printed_pointers(said: &str, class: &str, rule: &str) -> String {
+    // CLOUD-2075's grammar: `verdict '<class>' rule '<rule>' at <subjects>; …`.
+    let opener = format!("verdict '{class}' rule '{rule}' at ");
+    said.lines()
+        .find_map(|line| {
+            let rest = line.split(opener.as_str()).nth(1)?;
+            let pointers = rest.split("; ").next()?.split(" —").next()?;
+            Some(pointers.trim().to_owned())
+        })
+        .unwrap_or_else(|| panic!("no line refuses as `{class}`: {said}"))
+}
+
+/// The rule that refused, read off the labelled finding line through the
+/// engine's own reader (CLOUD-2075) — never guessed from word positions.
+pub(crate) fn refusing_rule(said: &str) -> Option<String> {
+    said.lines()
+        .find_map(batten::refusal::parse_finding)
+        .map(|parsed| parsed.rule)
+}
+
 pub(crate) fn at_root(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../..")

@@ -494,6 +494,24 @@ pub fn save_watermark(store_dir: &Path, root: &Root, watermark: &Watermark) -> R
     write_record(store_dir, &record)
 }
 
+/// Clear what the drain last told `root`'s lineage, keeping its cycle ordinal
+/// (CLOUD-2075): after a `SessionStart` the context no longer holds the payload
+/// the `unchanged` marker would point at, so the next drain lists in full.
+///
+/// # Errors
+///
+/// Returns an error when the record cannot be written or published.
+pub fn forget_result(store_dir: &Path, root: &Root) -> Result<()> {
+    let Some(mut record) = read_record(&record_path(store_dir, &root.key)) else {
+        return Ok(());
+    };
+    let Some(mark) = record.watermark.as_mut() else {
+        return Ok(());
+    };
+    mark.result_id.clear();
+    write_record(store_dir, &record)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {

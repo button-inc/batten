@@ -118,6 +118,8 @@ pub(crate) fn is_text(bytes: &[u8]) -> bool {
 /// Infallible: a digest absorbs bytes and cannot refuse them, so there is no
 /// error path to invent. The caller's fallibility is in READING the objects, not
 /// in hashing them.
+//MUTANT-SUITE crates/batten/src/patch.rs
+//MUTANT base-oid-hashed|s@^                if before.text.is_some() \&\& after.text.is_some() {$@                if false {@|an_edit_replayed_onto_a_moved_base_keeps_its_identity
 pub(crate) fn identity(changes: &mut [Change]) -> Option<String> {
     if changes.is_empty() {
         return None;
@@ -141,7 +143,17 @@ pub(crate) fn identity(changes: &mut [Change]) -> Option<String> {
             }
             Kind::Modified { before, after } => {
                 field(&mut hasher, b"~");
-                side(&mut hasher, before, None);
+                // THE BASE IS NOT THE CHANGE. Between two text sides the edit
+                // script below IS the change, so the before side contributes its
+                // mode alone: hashing its object id made the identity depend on
+                // the whole base file, and a rebase over any edit to that file
+                // elsewhere minted a new identity for the same change — so a
+                // replayed branch read as a sibling's work (CLOUD-2089's lease).
+                if before.text.is_some() && after.text.is_some() {
+                    field(&mut hasher, before.mode.to_le_bytes().as_slice());
+                } else {
+                    side(&mut hasher, before, None);
+                }
                 side(&mut hasher, after, Some(before));
             }
         }
@@ -269,6 +281,54 @@ mod tests {
                 "every shape a change can take must have an identity"
             );
         }
+    }
+
+    /// The same edit replayed onto a base that moved ELSEWHERE in the file is
+    /// the same change. The base differs only far from the hunk, so the edit
+    /// script is identical and only the base's object id is not.
+    #[test]
+    fn an_edit_replayed_onto_a_moved_base_keeps_its_identity() {
+        let text = |body: &str| Blob {
+            oid: format!("{:0>64}", body.len()),
+            mode: 0o100_644,
+            text: Some(body.as_bytes().to_vec()),
+        };
+        let filler = (0..40).fold(String::new(), |mut text, n| {
+            text.push_str("line ");
+            text.push_str(&n.to_string());
+            text.push('\n');
+            text
+        });
+        let edit = |base: &str, oid: &str| {
+            let mut before = text(&format!("a\n{filler}{base}\n"));
+            before.oid = oid.repeat(64);
+            Change {
+                path: b"src/lib.rs".to_vec(),
+                kind: Kind::Modified {
+                    after: text(&format!("a\nINSERTED\n{filler}{base}\n")),
+                    before,
+                },
+            }
+        };
+        let original = identity(&mut [edit("tail one", "1")]);
+        let replayed = identity(&mut [edit("tail two", "2")]);
+        assert!(original.is_some());
+        assert_eq!(
+            original, replayed,
+            "a base edited elsewhere is not a new change"
+        );
+        let other = Change {
+            path: b"src/lib.rs".to_vec(),
+            kind: Kind::Modified {
+                before: text("a\n"),
+                after: text("a\nDIFFERENT\n"),
+            },
+        };
+        assert_ne!(
+            original,
+            identity(&mut [other]),
+            "a different edit still differs"
+        );
     }
 
     /// An empty change set has no identity, which is what produces

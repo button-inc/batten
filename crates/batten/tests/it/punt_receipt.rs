@@ -227,14 +227,11 @@ fn the_refusal_names_the_row_and_its_remedy() {
         refusal.contains("verify"),
         "names the check it wants proved: {refusal}"
     );
-    // THE PROSE IS NOT ON THIS CHANNEL, and asserting it were would have been
-    // this case arguing against the posture its own row follows. `reason` is
-    // reached through `batten policy rule`, which is where a remedy belongs
-    // (house-style §6, non-negotiable rule 4): the channel carries a pointer and
-    // the document carries the payload.
+    // THE ROW'S REMEDY RIDES THE FULL ARM (CLOUD-2075), once per context per
+    // compaction cycle; this payload names no session, so every firing is full.
     assert!(
-        !refusal.contains("mise run land"),
-        "the remedy stays in the config the refusal points at: {refusal}"
+        refusal.contains("mise run land"),
+        "the full arm carries the row's remedy: {refusal}"
     );
     assert!(
         !refusal.contains("batten-receipts"),
@@ -398,14 +395,10 @@ fn override_as(dir: &Path, class: &str, verb: &[&str], stdin: &str) -> std::proc
         String::from_utf8_lossy(&refused.stdout),
         stderr(&refused)
     );
-    let subject = said
-        .lines()
-        .find_map(|line| {
-            let rest = line.split(&format!("{class} ")).nth(1)?;
-            let artifacts = rest.split(" turn mint ahead").next()?;
-            Some(artifacts.split_whitespace().collect::<Vec<_>>().join(","))
-        })
-        .unwrap_or_else(|| panic!("the write is refused as `{class}`: {said}"));
+    let subject = crate::common::printed_pointers(&said, class, "turn mint ahead")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(",");
     let mut args = vec!["override"];
     args.extend_from_slice(verb);
     args.extend_from_slice(&[
@@ -419,23 +412,55 @@ fn override_as(dir: &Path, class: &str, verb: &[&str], stdin: &str) -> std::proc
     run_with_stdin(dir, &args, stdin)
 }
 
-// CLOUD-1889's declared mutation, and why the row is in THIS file.
-//
-// `test name undefined` reads the declared file for a line carrying
-// `MUTANT <slug>|`, and its `line_sources` cover `crates/batten/tests/**` and not
-// `crates/batten/src/**` — so the row lives here although the expression it applies
-// belongs to `lib.rs`'s `admit_mediated`. It reinstates the early return on a
-// path-less refusal, which is the defect exactly.
-//
-// INERT UNDER THE SWEEP, as `rebase.rs` records for its own rows (CLOUD-1486):
-// `mutate::apply` seds the file that DECLARED the row, so this row rewrites this
-// file and never reaches the engine. The kill was demonstrated BY HAND at
-// implementation — the expression applied to `lib.rs`, the case below observed
-// red, the file restored — and this paragraph is the only record of it.
-/*
-#MUTANT-SUITE crates/batten/tests/it/punt_receipt.rs
-#MUTANT admission-not-honoured|s@    let subject = refusal.subject().unwrap_or(class);@    let Some(subject) = refusal.subject() else { return Ok(decision); };@|a_spent_admission_clears_a_superseded_receipt
-*/
+/// A subject no refusal of the row binds is refused at REQUEST, before an
+/// admission is issued that would be spent and honoured by nothing (CLOUD-1996).
+///
+/// The subjects are typed, not read off the line: `verify` and the class token
+/// are the two wrong spellings measured spent and refused on real PRs.
+#[test]
+fn an_override_request_naming_a_subject_no_refusal_binds_is_refused() {
+    let dir = superseded("punt-unbindable-subject");
+    for typed in ["verify", "receipt read other"] {
+        let requested = run_with_stdin(
+            &dir,
+            &[
+                "override",
+                "request",
+                "--rule",
+                "turn mint ahead",
+                "--verdict",
+                "receipt read other",
+                "--subject",
+                typed,
+            ],
+            ANSWERS,
+        );
+        let said = stderr(&requested);
+        assert_eq!(requested.status.code(), Some(1), "{typed}: {said}");
+        assert!(
+            requested.stdout.is_empty(),
+            "{typed}: no address may be issued: {}",
+            String::from_utf8_lossy(&requested.stdout)
+        );
+        for needle in [
+            "`turn mint ahead`",
+            "`receipt read other`",
+            "1 subject(s)",
+            "verify,commit",
+        ] {
+            assert!(
+                said.contains(needle),
+                "{typed}: {needle} missing from {said}"
+            );
+        }
+        if typed == "verify" {
+            assert!(
+                said.contains("`verify`"),
+                "the bound subject is named: {said}"
+            );
+        }
+    }
+}
 
 #[test]
 fn a_spent_admission_clears_a_superseded_receipt() {

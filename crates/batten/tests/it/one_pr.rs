@@ -95,9 +95,8 @@ fn a_second_pr_while_the_first_is_unlanded_is_refused() {
     let refusal = open_a_pr(&dir);
     assert_eq!(refusal.status.code(), Some(2), "{}", stderr(&refusal));
     let text = stderr(&refusal);
-    let head = text.split(" — ").next().unwrap_or(&text);
     assert!(
-        head.trim().ends_with("review open twice"),
+        crate::common::refusing_rule(&text).as_deref() == Some("review open twice"),
         "refused by the one-PR row: {text}"
     );
 }

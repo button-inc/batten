@@ -16,26 +16,13 @@
 //! that collapsed every arm to one value would satisfy them all.
 //!
 //! The two claims that are the renderer's own are that every compact warm repeat
-//! is EXACTLY `Refusal::line()`, and that the full warm rendering is longer by a
+//! is EXACTLY the pointer arm, and that the full warm rendering is longer by a
 //! measured margin. Those are what the report prices.
 //!
-//! **BOTH HALVES HAVE NOW BEEN MEASURED UNDER TWO RENDERERS, and the cases are
-//! written to survive the difference.** Before CLOUD-1637, a first sighting
-//! appended `command` routes ONLY: `tool run loose` declares none, so it
-//! rendered the identical line cold and warm, and `branch write unsafe` declared
-//! two whose carried line exceeded the committed `[refusal] max_tokens` of 24 —
-//! so `deny_text` dropped them and every emitted margin was ZERO. The margin was
-//! real in the renderer and withheld by the budget, which is why every arm
-//! carries an unbounded column beside its emitted one: a single `>` over the
-//! emitted column would have reported a budget decision as a renderer defect.
-//!
-//! Since CLOUD-1637 a first sighting carries the class's own definition, both
-//! margins are real in what is EMITTED, and the ceiling withholds nothing here.
-//! The cases therefore assert the relationships rather than the numbers, and the
-//! report's prose is derived from the records rather than stated — the paragraph
-//! that explained the zero margins had to be rewritten the moment they stopped
-//! being zero, which is the failure that generated prose about a measurement
-//! invites.
+//! **No renderer takes a ceiling (CLOUD-2075)**, so every figure is the whole
+//! arm and there is no unbounded column beside it. The cases assert the
+//! relationships rather than the numbers, and the report's prose is derived
+//! from the records rather than stated.
 //!
 //! # The drift check is here rather than in the task
 //!
@@ -47,8 +34,8 @@
 //! to say a number nobody measured against. That is the row's own argument
 //! against recording the commit SHA, one release later. Measured here twice
 //! while landing: 0.0.151 → 0.0.152 → 0.0.153, three regenerations, no numbers
-//! changed. The baseline is the declared classes and the declared ceiling, which
-//! are what the rendering reads.
+//! changed. The baseline is the declared classes, which are what the rendering
+//! reads.
 //!
 //! `refusal_render_report` is re-rendered in this process and diffed against the
 //! committed `bench/refusal-render/RESULTS.md`, so the report cannot go stale
@@ -75,7 +62,7 @@ fn records() -> Vec<RenderRecord> {
         .expect("this repository's committed config loads");
     let registry =
         batten::policy::registry_for(&config.verdicts).expect("the committed registry resolves");
-    refusal_render(&registry, config.refusal.as_ref()).expect("every measured class is declared")
+    refusal_render(&registry).expect("every measured class is declared")
 }
 
 fn arm(
@@ -94,12 +81,12 @@ fn arm(
 }
 
 /// The compact line the renderer produces for a class, taken from the authority
-/// rather than restated: `Refusal::line` is what a repeat sighting must equal.
+/// rather than restated: the pointer arm is what a repeat sighting must equal.
 fn compact_line(class: &str, rule: &str) -> String {
     let config = batten::config::load(&root().join("batten.toml")).expect("the config loads");
     let registry = batten::policy::registry_for(&config.verdicts).expect("the registry resolves");
     batten::refusal::Refusal::from_class(rule, &registry, class, &[], batten::refusal::Fix::None)
-        .line()
+        .render_finding(batten::refusal::Arm::Pointer)
 }
 
 #[test]
@@ -161,18 +148,9 @@ fn warm_current_equals_warm_first_full_then_compact() {
 fn a_compact_warm_repeat_is_exactly_the_refusal_line() {
     // The renderer's own claim, and the case the `current-warm-first-sighting`
     // mutation must redden: with warm `Current` projected to a first sighting,
-    // the command-route class renders its routes and stops equalling `line()`.
-    //
-    // **THE UNBOUNDED HALF IS WHAT MAKES THAT TRUE, and it was measured rather
-    // than assumed.** Asserted over the emitted line alone, this case SURVIVES
-    // the mutation — measured, `mutate sweep` reported exactly that — because
-    // the emitted line is `Refusal::line()` on BOTH sides of `first_sighting`
-    // here: the ceiling withholds the routes for `branch write unsafe` and the
-    // renderer appends none for `tool run loose`. So a projection defect is
-    // invisible in what this repository emits, which is a fact about the
-    // repository and not a reason to assert less. The unbounded rendering is
-    // where `first_sighting` is observable at all, and asserting the claim there
-    // is what makes the row's declared mutation catchable.
+    // the full arm carries its definition and stops equalling the pointer arm.
+    // No renderer takes a ceiling (CLOUD-2075), so the emitted line is where
+    // `first_sighting` is observable.
     let records = records();
     for (class, rule) in MEASURED_CLASSES {
         let expected = compact_line(class, rule);
@@ -181,15 +159,7 @@ fn a_compact_warm_repeat_is_exactly_the_refusal_line() {
             assert_eq!(
                 record.line,
                 expected,
-                "{class} under {} on a warm repeat is exactly Refusal::line()",
-                strategy.as_str()
-            );
-            assert_eq!(
-                record.unbounded_characters,
-                expected.chars().count(),
-                "{class} under {} on a warm repeat is the compact line with no ceiling to \
-                 thank for it — a repeat that carries routes when the budget permits them is \
-                 not a repeat",
+                "{class} under {} on a warm repeat is exactly the pointer arm",
                 strategy.as_str()
             );
         }
@@ -213,19 +183,9 @@ fn a_full_every_time_warm_rendering_is_never_shorter_than_the_compact_repeat() {
 }
 
 #[test]
-fn the_command_route_class_pays_a_measured_margin_when_the_budget_permits_it() {
-    // The half of the previous case that is a strict inequality, and it is stated
-    // over the UNBOUNDED rendering rather than the emitted one — which is what
-    // measuring, rather than assuming, changed about this case.
-    //
-    // The expectation CLOUD-1606 declared was that a full warm delivery is longer
-    // than a compact repeat. Over the emitted column that is FALSE in this
-    // repository, and not because the renderer is wrong: `branch write unsafe`
-    // declares two command routes, the carried line is ~37 estimated tokens, and
-    // the committed `[refusal] max_tokens` is 24 — so `deny_text` drops the
-    // routes and emits the compact line on both arms. The margin the row is about
-    // exists in the renderer and is withheld by the budget, and asserting it over
-    // the unbounded column is what says both of those things at once.
+fn the_command_route_class_pays_a_measured_margin() {
+    // The half of the previous case that is a strict inequality: a full warm
+    // delivery carries the definition a repeat does not (CLOUD-2075).
     let records = records();
     let full = arm(
         &records,
@@ -240,10 +200,10 @@ fn the_command_route_class_pays_a_measured_margin_when_the_budget_permits_it() {
         Residency::Warm,
     );
     assert!(
-        full.unbounded_characters > compact.unbounded_characters,
-        "a class with command routes pays for them on every full delivery ({} against {})",
-        full.unbounded_characters,
-        compact.unbounded_characters
+        full.characters > compact.characters,
+        "a full delivery pays for the definition on every firing ({} against {})",
+        full.characters,
+        compact.characters
     );
 }
 
@@ -279,10 +239,6 @@ fn the_declared_ceiling_bounds_the_repeat_rather_than_the_sighting() {
         assert!(
             sighting.characters >= repeat.characters,
             "{class}: a first sighting is never shorter than the repeat it precedes"
-        );
-        assert!(
-            repeat.characters <= repeat.unbounded_characters,
-            "{class}: an emitted line is never longer than the same arm rendered unbounded"
         );
     }
 }
@@ -392,8 +348,7 @@ fn the_committed_report_is_what_this_tree_renders() {
             Path::new("bench/refusal-render/RESULTS.md").display()
         )
     });
-    let config = batten::config::load(&root().join("batten.toml")).expect("the config loads");
-    let rendered = refusal_render_report(&records(), config.refusal.as_ref());
+    let rendered = refusal_render_report(&records());
     assert_eq!(
         committed, rendered,
         "bench/refusal-render/RESULTS.md is stale — run `mise run refusal-render-bench`"

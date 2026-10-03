@@ -291,6 +291,7 @@ pub fn scan(stream: &Stream) -> Vec<Detection> {
             // A cost, not a decision: CLOUD-417's counter is `hookcost`'s and this
             // predicate has nothing to say about it.
             | Event::HookOutput { .. }
+            | Event::SessionBoundary
             | Event::AssistantText => {}
         }
     }

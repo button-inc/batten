@@ -233,16 +233,29 @@ pub struct Refusal {
     /// The id that refused: a `[[rule]]` row's id, or a derived gate's declared
     /// constant. What a reviewer greps for in `batten.toml`.
     rule: String,
-    /// Every non-override route the class declares, rendered by kind, for the
-    /// once-per-session sighting (CLOUD-1386, CLOUD-1637).
+    /// Every route the class declares, override routes included, unrendered
+    /// (CLOUD-2075). [`finding_line`] renders them by kind on BOTH arms.
     ///
     /// **Skipped in serialization**, because it is a RENDERING input rather than
     /// part of the refusal payload: a consumer of `{rule, verdict, reason, fix}`
     /// asked for the remedy, and `fix` is still that. Resolved here because this
-    /// is where the registry is already in hand, which keeps `deny_text` pure and
-    /// the boundary free of a second registry lookup.
+    /// is where the registry is already in hand, which keeps the projection pure
+    /// and the boundary free of a second registry lookup.
     #[serde(skip)]
-    routes: Vec<String>,
+    routes: Vec<crate::verdict::Route>,
+    /// The rendered pointers, as [`crate::verdict::render_subjects`] spells them
+    /// (CLOUD-2075). The ` at <subjects>` clause of both arms.
+    #[serde(skip)]
+    subjects: String,
+    /// Which reader a document route's target is read through, where the
+    /// consumer declares one (`[[redirect]] read`), keyed by target
+    /// ([`Refusal::read_through`]).
+    #[serde(skip)]
+    readers: std::collections::BTreeMap<String, String>,
+    /// Whether `batten policy rule '<id>'` resolves this refusal's row: false
+    /// only where the config did not load ([`Refusal::unloaded`]).
+    #[serde(skip)]
+    dereferenceable: bool,
     /// The one-line gloss of the declared class, for the first-sighting arm
     /// (CLOUD-1637).
     ///
@@ -272,14 +285,11 @@ pub struct Refusal {
     reason: String,
     /// What to run instead, or an explicit none.
     fix: Fix,
-    /// The canonical subject an admission binds to, when this refusal names one.
+    /// Every spelling a MEDIATED admission binds to, in order
+    /// ([`admission_bindings`] carries which and why).
     ///
-    /// The first path-bearing subject where there is one, which is already the
-    /// finding's own pointer by `rules/policy-modules.md`'s rule — so that is the
-    /// same choice the tree surface makes, not a second one. Where there is no
-    /// path, every artifact joined; [`admission_subject`] carries why, and why a
-    /// path-only answer left two classes with an override route nobody could
-    /// reach (CLOUD-1871).
+    /// The tree surface binds `finding.path` instead and anchors by fingerprint,
+    /// so it never reads this; the two are different questions (CLOUD-1826).
     ///
     /// **Carried rather than re-derived at the boundary**, and that is the whole
     /// reason the field exists. [`crate::admission::admitted`] binds five fields,
@@ -289,92 +299,61 @@ pub struct Refusal {
     /// normalization cases that made CLOUD-1133 a defect.
     ///
     /// **Not serialized**, so `-J` output is byte-identical to before (house style
-    /// §6). It is an internal binding rather than news: the same pointer is
+    /// §6). It is an internal binding rather than news: the same pointers are
     /// already in `reason`, and a consumer gains nothing from a second copy under
     /// its own key.
     #[serde(skip_serializing)]
-    subject: Option<String>,
+    bindings: Vec<String>,
 }
 
-/// The subject an admission binds to, for a refusal naming `subjects`.
+/// Every spelling a mediated refusal of `token` naming `subjects` binds, in
+/// order (CLOUD-1826).
 ///
-/// A path first, and every artifact when there is no path (CLOUD-1871).
+/// - **(a) The printed spelling, always first** —
+///   [`crate::verdict::bound_subject`] of exactly the pointers
+///   [`crate::verdict::render_line`] prints, counts included. A reader pastes
+///   the line into `override request --subject`, which spells through the same
+///   function, so the pasted line binds as the refusal does.
+/// - **(b) The first path**, when it differs from (a): the `--subject <path>`
+///   spelling the protected-path route documents.
+/// - **(c) The class token in bound spelling**, only when there are no subjects:
+///   `call name refused` binds `call,name,refused`, which is exactly what a
+///   request for that subject stores. The raw token it replaces was a spelling no
+///   request could produce.
 ///
-/// # A path-only answer made two classes unadmittable
+/// Every entry is a fixed point of `bound_subject`, so any spelling the boundary
+/// asks about is one a request can store.
 ///
-/// This used to return the first path-bearing subject and `None` for anything
-/// else, on the reasoning that "an artifact is not a path, so an admission bound
-/// to it would name something the store cannot compare against the tree". That
-/// is true of a TREE finding, which is anchored by fingerprint and whose subject
-/// is compared against the tree — and it is the wrong question for a MEDIATED
-/// refusal, which [`crate::admission::Anchor::Call`] already anchors to a head.
-/// There the subject is simply what the refusal named, and a commit id or a
-/// check name is a perfectly comparable binding.
+/// # A count binds only inside the whole printed spelling
 ///
-/// The cost of the narrower answer was not theoretical. `admit_mediated` returns
-/// early with no subject, so `history drop unpushed` (a `Count` and one
-/// `Artifact` per commit) and `receipt read other` (artifacts, its subject
-/// deliberately unnamed to keep payload out of a refusal) could never be
-/// admitted — while both declare an `override` route, which makes
-/// leave their declared routes as the only way through.
-/// No hatch and no admission is the state that function's own doc calls "the
-/// wall in its worst form" and asserts cannot happen. It had happened, to two of
-/// the three classes that declare such a route; `path write refused` escaped
-/// only because it leads with a path.
+/// So an admission for `1 <sha>` cannot fit `2 <sha> <sha>` — the harvest hole
+/// CLOUD-1871 closed stays closed. A count-only class with no override route
+/// stays inert, because `override request` refuses such a class.
 ///
-/// # EVERY artifact, not the first
+/// # Why not `rules::first_pointer`
 ///
-/// The join is what keeps the binding honest. One artifact out of several would
-/// let an admission earned for commit A admit a later reset discarding A **and**
-/// B — the harvesting hole `an_admission_bound_to_another_subject_is_refused`
-/// exists to close, reopened one variant over. Rendered order, so the value is
-/// byte-stable for a given refusal.
+/// That is the TREE pointer: one path slot, anchored by fingerprint. Forcing it
+/// to equal this binding would either widen tree output or drop pointers here.
 ///
-/// # A count is not an identity
-///
-/// Counts stay out: they are derivable from what the refusal already names, and
-/// binding one would make an admission for "1 commit" fit a different single
-/// commit. A class whose subjects are ONLY counts therefore still has no
-/// binding — which is not silently tolerated: `every_admissible_class_can_be_
-/// bound` refuses a class that declares an override route and cannot produce one.
-///
-/// Rule 4 is untouched either way. This binds only what the refusal already
-/// renders; it puts no new byte on any channel, and `subject` is
-/// `skip_serializing`, so `-J` output and `schema/*.json` do not move.
+/// Rule 4 is untouched: this binds only what the refusal already renders, and
+/// `bindings` is `skip_serializing`, so `-J` output and `schema/*.json` do not
+/// move.
 //MUTANT-SUITE crates/batten/src/hook.rs
-//MUTANT artifact-binding-dropped|s@^    (!artifacts.is_empty()).then(\x7c\x7c artifacts.join(","))@    None@|every_class_declaring_an_override_route_can_be_bound
-fn admission_subject(subjects: &[crate::verdict::Subject]) -> Option<String> {
-    if let Some(path) = subjects.iter().find_map(|subject| match subject {
-        crate::verdict::Subject::Path { path } | crate::verdict::Subject::Line { path, .. } => {
-            Some(path.clone())
-        }
-        crate::verdict::Subject::Count { .. } | crate::verdict::Subject::Artifact { .. } => None,
-    }) {
-        return Some(path);
+//MUTANT printed-spelling-dropped|s@^    let mut spellings = vec!\[bound_subject(&render_subjects(subjects))\];$@    let mut spellings: Vec<String> = Vec::new();@|a_subject_copied_from_the_refusal_line_admits_the_write
+//MUTANT path-spelling-dropped|s@^    let path = subjects.iter().find_map(crate::verdict::Subject::path).map(bound_subject);$@    let path: Option<String> = None;@|a_spent_admission_admits_the_write_it_was_taken_for
+//MUTANT class-spelling-raw|s@^        return vec!\[bound_subject(token)\];$@        return vec![token.to_owned()];@|a_refusal_naming_nothing_binds_its_class_as_a_request_spells_it
+fn admission_bindings(token: &str, subjects: &[crate::verdict::Subject]) -> Vec<String> {
+    use crate::verdict::{bound_subject, render_subjects};
+    if subjects.is_empty() {
+        return vec![bound_subject(token)];
     }
-    let artifacts: Vec<&str> = subjects
-        .iter()
-        .filter_map(|subject| match subject {
-            crate::verdict::Subject::Artifact { artifact } => Some(artifact.as_str()),
-            crate::verdict::Subject::Count { .. }
-            | crate::verdict::Subject::Path { .. }
-            | crate::verdict::Subject::Line { .. } => None,
-        })
-        .collect();
-    // The restored defect, exactly: a path-only answer, which is what left two
-    // classes with an override route nobody could reach.
-    (!artifacts.is_empty()).then(|| artifacts.join(","))
+    let mut spellings = vec![bound_subject(&render_subjects(subjects))];
+    // One line, because `path-spelling-dropped` anchors on it whole.
+    #[rustfmt::skip]
+    let path = subjects.iter().find_map(crate::verdict::Subject::path).map(bound_subject);
+    spellings.extend(path.filter(|path| !spellings.contains(path)));
+    spellings
 }
-
-/// What [`Fix::None`] renders as: the gap, stated, plus the general recourse.
-///
-/// A refusal with no declared alternative still owes the caller *something* — the
-/// contract is that a block gets an agent to right in one hop — so the crate's own
-/// general answer stands in. It is deliberately generic: which surface owns a
-/// given path is the consumer's knowledge, and CLOUD-280 is where a path class
-/// gets to declare it.
-const NO_DECLARED_FIX: &str =
-    "none declared — change it through the surface that owns it, or restore it with git";
 
 /// Whether this RULE has already explained itself this session, marking it if
 /// not (CLOUD-1386, re-keyed by CLOUD-1637).
@@ -386,10 +365,11 @@ const NO_DECLARED_FIX: &str =
 /// is what gets explained. That holds only where a class has one raiser, and it
 /// does not for the native-kind population: `[[rule]]` rows of kind `shape`,
 /// `receipt`, `forbid`, `pipeline`, `command`, `ratchet` and `secrets` declare no
-/// class of their own and raise the kind's native one, so fourteen `shape` rows
-/// all raise `call name refused` and ten `receipt` rows share four classes. Under
-/// a token key the first `shape` row to fire consumed the sighting for all
-/// fourteen, and the next row's FIRST firing rendered as a repeat with its
+/// class of their own and raise the kind's native one, so every plain `shape`
+/// row (eleven in this config when CLOUD-1806 counted) raises `call name
+/// refused` and ten `receipt` rows share four classes. Under a token key the
+/// first `shape` row to fire consumed the sighting for all of them, and the
+/// next row's FIRST firing rendered as a repeat with its
 /// rule-specific remedy never pointed at. CLOUD-1637's second amendment is where
 /// that was corrected, and it prescribed the rule id.
 ///
@@ -422,22 +402,25 @@ const NO_DECLARED_FIX: &str =
 /// actionable, and reported a working gate as a design defect. Neither "always"
 /// nor "never" is right. "Once" is.
 ///
-/// SCOPED TO THE SESSION. The store lives under `$GIT_DIR`,
-/// so it dies with the container and is cleared at `SessionStart` beside the
-/// wiring record — which is the same identity `expire_wiring_record` uses, and
-/// for the reason stated there: the event IS the session.
+/// SCOPED TO THE CONTEXT, NOT THE CLONE (CLOUD-2075). The store lives under
+/// `$GIT_DIR/batten-sightings/<digest(context)>/<digest(key)>`, where the context
+/// is the session plus the agent id where a subagent is the reader — a
+/// subagent's first sighting used to come back compact because another context
+/// in the clone had already marked it. Each file holds the FULL arm's text, so a
+/// compaction can re-deliver it.
+///
+/// **Compaction is a `SessionStart` with `source: compact`**, and it is visible:
+/// the boundary re-delivers every full arm this context holds on that event and
+/// keeps the marks, so the context holds exactly one copy at every moment. Any
+/// other source forgets this context alone.
 ///
 /// **A failure to read or write answers TRUE**, which is the direction that
 /// matters: an unreadable store means the class explains itself again, costing a
 /// clause. The opposite default would silently withhold the remedy from a reader
 /// who has never seen it, which is the whole defect.
-///
-/// Compaction is invisible from here, so "per session" is the implementable
-/// approximation of "per reader" — and it errs toward repeating rather than
-/// assuming what a reader retained.
 #[must_use]
-pub fn first_sighting(root: &Path, key: &str) -> bool {
-    let Some(dir) = crate::git::git_dir(root).ok().map(|dir| dir.join(STORE)) else {
+pub fn first_sighting(root: &Path, context: &str, key: &str, full: &str) -> bool {
+    let Some(dir) = context_dir(root, context) else {
         return true;
     };
     // One file per key rather than a list: two refusals firing concurrently
@@ -451,20 +434,155 @@ pub fn first_sighting(root: &Path, key: &str) -> bool {
     let _ = std::fs::create_dir_all(&dir);
     // Discarded deliberately: an unwritable store means the next firing explains
     // itself again, which is the safe direction.
-    let _ = crate::durable::replace(&path, key);
+    let _ = crate::durable::replace(&path, full);
     true
 }
 
-/// Forget every class explained under the previous session (CLOUD-1386).
-///
-/// Called from the `SessionStart` arm beside the wiring record's own clear. A
-/// store that outlived its session would withhold a remedy from a reader who has
-/// not seen it, which is the failure this exists to prevent — so the clear is the
-/// load-bearing half, not the bookkeeping half.
-pub fn forget_sightings(root: &Path) {
-    if let Ok(dir) = crate::git::git_dir(root) {
-        let _ = std::fs::remove_dir_all(dir.join(STORE));
+/// The directory one context's sightings live in.
+//MUTANT sighting-context-ignored|s@^    Some(store.join(crate::provision::digest(context.as_bytes())))$@    Some(store.join(crate::provision::digest(b"")))@|two_contexts_in_one_clone_each_get_the_full_text
+fn context_dir(root: &Path, context: &str) -> Option<std::path::PathBuf> {
+    let store = crate::git::git_dir(root).ok()?.join(STORE);
+    Some(store.join(crate::provision::digest(context.as_bytes())))
+}
+
+/// Which arm this firing of `refusal` gets in `context`, marking it seen.
+//MUTANT sight-always-first|s@^    if !first_sighting(root, context, \&key, \&full) {$@    if false {@|a_warn_advisory_is_full_once_then_a_pointer
+#[must_use]
+pub fn sight(root: &Path, context: &str, refusal: &Refusal) -> Arm {
+    let full = refusal.render_finding(Arm::Full);
+    let key = refusal.sighting_key();
+    if !first_sighting(root, context, &key, &full) {
+        return Arm::Pointer;
     }
+    Arm::Full
+}
+
+/// Forget every item this ONE context has seen (CLOUD-2075). Other contexts in
+/// the clone are never touched.
+//MUTANT forget-sightings-noop|s@^        let _ = std::fs::remove_dir_all(dir);$@        let _ = dir;@|a_session_start_forgets_only_that_contexts_sightings
+pub fn forget_sightings(root: &Path, context: &str) {
+    if let Some(dir) = context_dir(root, context) {
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
+/// Every full arm this context has seen, sorted so re-delivery is byte-stable.
+#[must_use]
+pub fn sighted(root: &Path, context: &str) -> Vec<String> {
+    let Some(dir) = context_dir(root, context) else {
+        return Vec::new();
+    };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut texts: Vec<String> = entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| std::fs::read_to_string(entry.path()).ok())
+        .collect();
+    texts.sort_unstable();
+    texts
+}
+
+/// An item's identity: the rule, the class, and a digest of its DEFINITION, so
+/// an edit to a gloss, route, precondition or reason mid-cycle is a new item
+/// that renders in full again (CLOUD-1582, absorbed).
+//MUTANT sighting-key-ignores-definition|s@^    let digest = crate::provision::digest(definition.as_bytes());$@    let digest = crate::provision::digest(b"");@|an_edited_definition_is_a_new_item_mid_cycle
+fn key_of(rule: &str, class: Option<&str>, definition: &str) -> String {
+    let digest = crate::provision::digest(definition.as_bytes());
+    format!("{rule}\u{1f}{}\u{1f}{digest}", class.unwrap_or_default())
+}
+
+/// One finding line read back: its names, its arm and its key.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Parsed {
+    /// The class, where the line is labelled with one.
+    pub verdict: Option<String>,
+    /// The rule id.
+    pub rule: String,
+    /// `Full` iff the line carries the ` — ` definition clause.
+    pub arm: Arm,
+    /// [`key_of`] over the line's definition.
+    pub key: String,
+}
+
+/// Read one quoted name from the front of `text`, returning it and the rest.
+fn unquote(text: &str) -> Option<(String, &str)> {
+    let mut rest = text.strip_prefix('\'')?;
+    let mut name = String::new();
+    loop {
+        let index = rest.find(['\'', '\\'])?;
+        name.push_str(&rest[..index]);
+        if rest[index..].starts_with("\\'") {
+            name.push('\'');
+            rest = &rest[index + 2..];
+        } else if rest[index..].starts_with('\'') {
+            return Some((name, &rest[index + 1..]));
+        } else {
+            name.push('\\');
+            rest = &rest[index + 1..];
+        }
+    }
+}
+
+/// The ONE reader of the finding grammar
+/// `[verdict '<T>' ]rule '<R>'[ at <S>](; <route>)*[ — <tail>]`.
+///
+/// `None` for a line that does not open with a label, which is every line that
+/// is not a finding.
+#[must_use]
+pub fn parse_finding(line: &str) -> Option<Parsed> {
+    let mut rest = line;
+    let mut verdict = None;
+    if let Some(after) = rest.strip_prefix("verdict ") {
+        let (name, tail) = unquote(after)?;
+        verdict = Some(name);
+        rest = tail.strip_prefix(' ')?;
+    }
+    let (rule, _) = unquote(rest.strip_prefix("rule ")?)?;
+    let (head, tail) = match line.split_once(" —") {
+        Some((head, tail)) => (head, Some(tail)),
+        None => (line, None),
+    };
+    let arm = if tail.is_some() {
+        Arm::Full
+    } else {
+        Arm::Pointer
+    };
+    // THE DEFINITION IS THE LINE MINUS ITS PER-FIRING PARTS: the labels and
+    // subjects (the first `; `-segment) and every override request, whose
+    // `--subject` varies per firing.
+    let routes: Vec<&str> = head
+        .split("; ")
+        .skip(1)
+        .filter(|segment| !segment.starts_with(OVERRIDE_OPENER))
+        .collect();
+    let definition = format!("{} —{}", routes.join("; "), tail.unwrap_or_default());
+    let key = key_of(&rule, verdict.as_deref(), &definition);
+    Some(Parsed {
+        verdict,
+        rule,
+        arm,
+        key,
+    })
+}
+
+/// Cut every full arm `mark` reports already seen to its pointer prefix,
+/// leaving every other line byte-identical (CLOUD-2075 §D). `mark(key, full)`
+/// consults and marks the reader's store and answers whether this is the first
+/// sighting.
+//MUTANT boundary-collapse-skipped|s@^        let rewritten = if arm == Arm::Pointer { pointer } else { body };$@        let rewritten = body;@|collapse_cuts_a_marked_full_arm_to_its_pointer_prefix
+pub fn collapse(text: &str, mut mark: impl FnMut(&str, &str) -> bool) -> String {
+    let mut lines: Vec<&str> = Vec::new();
+    for body in text.split('\n') {
+        let arm = match parse_finding(body) {
+            Some(parsed) if parsed.arm == Arm::Full && !mark(&parsed.key, body) => Arm::Pointer,
+            Some(_) | None => Arm::Full,
+        };
+        let pointer = body.split(" —").next().unwrap_or(body);
+        let rewritten = if arm == Arm::Pointer { pointer } else { body };
+        lines.push(rewritten);
+    }
+    lines.join("\n")
 }
 
 /// Where the per-session sightings live, under `$GIT_DIR`.
@@ -473,6 +591,174 @@ pub fn forget_sightings(root: &Path) {
 /// was taken, it records that a sentence has been read. Filing it beside the
 /// receipts would put a note where every reader expects a claim.
 const STORE: &str = "batten-sightings";
+
+/// Which of a finding's two renderings a firing gets (CLOUD-2075).
+///
+/// The pointer arm is a byte PREFIX of the full arm and carries the same
+/// subjects and routes; the full arm adds the ` — <definition>` tail.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Arm {
+    /// Labels, subjects, every route and the definition — once per context per
+    /// compaction cycle.
+    Full,
+    /// Labels, subjects and every route, on every other firing.
+    Pointer,
+}
+
+/// The two names a finding line labels, so a reader can always tell a rule
+/// from a verdict (CLOUD-2075).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Label {
+    /// A declared class, dereferenced by `batten policy explain`.
+    Verdict,
+    /// A `[[rule]]` id, dereferenced by `batten policy rule`.
+    Rule,
+}
+
+impl Label {
+    /// The label's word.
+    #[must_use]
+    pub const fn word(self) -> &'static str {
+        match self {
+            Label::Verdict => "verdict",
+            Label::Rule => "rule",
+        }
+    }
+}
+
+/// The ONE spelling of `verdict '<token>'` and `rule '<id>'`. Every emitter
+/// that labels a name calls this; `emission_census` refuses a hand-spelled one.
+#[must_use]
+pub fn label(kind: Label, name: &str) -> String {
+    format!("{} {}", kind.word(), quoted(name))
+}
+
+/// A name in single quotes. A `'` inside it is written `\'`; [`parse_finding`]
+/// undoes exactly that.
+fn quoted(name: &str) -> String {
+    format!("'{}'", name.replace('\'', "\\'"))
+}
+
+/// Pointer text made safe for the grammar: it can never contain the tail
+/// opener or the clause separator.
+fn plain(text: &str) -> String {
+    text.replace(" — ", " - ").replace("; ", ", ")
+}
+
+/// How every rendered override route opens; [`parse_finding`] drops these
+/// segments from an item's definition because their subject varies per firing.
+const OVERRIDE_OPENER: &str = "admit with batten override request ";
+
+/// CLOUD-1806's class route. The hop [`finding_line`] appends names the same
+/// verb with the real id, so a route whose target is this placeholder is
+/// dropped at render rather than printed twice.
+pub(crate) const RULE_HOP_PLACEHOLDER: &str = "batten policy rule '<rule-id>'";
+
+/// The one projection every channel carries (CLOUD-2075):
+/// `[verdict '<T>' ]rule '<R>'[ at <S>](; <route>)*[; run batten policy rule '<R>'][ — <tail>]`.
+///
+/// Both labels are printed even where the id equals the token, so a reader can
+/// always tell a rule from a verdict. Every route — override routes included,
+/// each a ready `override request` with the subject the refusal binds — is on
+/// BOTH arms, so the pointer arm sheds no way out. The full arm adds the
+/// definition: the class gloss (or the undeclared refusal's reason), the row's
+/// own remedy, each override's precondition, and the `explain` hop.
+///
+/// Nothing is shed and no ceiling is consulted: `[refusal]`'s keys are
+/// measured by `refusal_ceiling`'s corpus case, which reports an over-ceiling
+/// line rather than truncating one.
+//MUTANT full-arm-reason-dropped|s@^    if let Some(remedy) = refusal.remedy() {$@    if let Some(remedy) = None::<\&str> {@|a_first_sighting_carries_the_rows_reason_and_both_labels
+//MUTANT pointer-arm-routes-dropped|s@^    for route in routes(refusal) {$@    for route in routes(refusal).into_iter().take(if arm == Arm::Full { usize::MAX } else { 0 }) {@|the_pointer_arm_carries_every_route_and_subject_the_full_arm_does
+//MUTANT collapsed-row-unlabelled|s@^    if let Some(token) = refusal.verdict() {$@    if let Some(token) = refusal.verdict() \&\& token != refusal.rule() {@|a_collapsed_row_still_labels_rule_and_verdict
+//MUTANT advice-routes-dropped|s@^    for route in routes(refusal) {$@    for route in routes(refusal).into_iter().take(0) {@|a_warn_advisory_carries_its_document_route_on_an_allowed_pre_tool_call
+//MUTANT rule-label-dropped|s@^    line.push_str(\&label(Label::Rule, refusal.rule()));$@    line.push_str(refusal.rule());@|every_hook_policy_table_deny_names_its_fix
+fn finding_line(refusal: &Refusal, arm: Arm) -> String {
+    let mut line = String::new();
+    if let Some(token) = refusal.verdict() {
+        line.push_str(&label(Label::Verdict, token));
+        line.push(' ');
+    }
+    line.push_str(&label(Label::Rule, refusal.rule()));
+    if !refusal.subjects.is_empty() {
+        line.push_str(" at ");
+        line.push_str(&plain(&refusal.subjects));
+    }
+    for route in routes(refusal) {
+        line.push_str("; ");
+        line.push_str(&route);
+    }
+    if refusal.dereferenceable {
+        line.push_str("; run batten policy rule ");
+        line.push_str(&quoted(refusal.rule()));
+    }
+    if arm == Arm::Pointer {
+        return line;
+    }
+    line.push_str(" —");
+    let definition = if refusal.verdict.is_some() {
+        &refusal.gloss
+    } else {
+        &refusal.reason
+    };
+    if !definition.is_empty() {
+        line.push(' ');
+        line.push_str(&sentence(definition));
+    }
+    if let Some(remedy) = refusal.remedy() {
+        line.push(' ');
+        line.push_str(&sentence(remedy));
+    }
+    for (id, precondition) in refusal.preconditions() {
+        line.push_str(" Admissible as ");
+        line.push_str(&quoted(id));
+        line.push_str(" when ");
+        line.push_str(&sentence(precondition));
+    }
+    if let Some(class) = refusal.verdict() {
+        line.push_str(" Run batten policy explain ");
+        line.push_str(&quoted(class));
+        line.push('.');
+    }
+    line
+}
+
+/// Every route rendered, de-duplicated, in declaration order.
+fn routes(refusal: &Refusal) -> Vec<String> {
+    let mut rendered: Vec<String> = Vec::new();
+    for route in &refusal.routes {
+        if let Some(text) = route_text(refusal, route)
+            && !rendered.contains(&text)
+        {
+            rendered.push(text);
+        }
+    }
+    rendered
+}
+
+/// One route's text, or `None` where it does not render.
+//MUTANT override-route-unrendered|s@^    if route.kind == RouteKind::Override {$@    if route.kind == RouteKind::Override \&\& false {@|the_override_route_on_the_line_is_the_request_that_admits
+//MUTANT route-reader-unnamed|s@^        Some(reader) => format!("{text} via {reader}"),$@        Some(_) => text,@|a_document_route_into_a_read_redirected_path_names_its_reader
+fn route_text(refusal: &Refusal, route: &crate::verdict::Route) -> Option<String> {
+    use crate::verdict::RouteKind;
+    if route.kind == RouteKind::Override {
+        let class = refusal.verdict()?;
+        let subject = refusal.bindings().first()?;
+        return Some(format!(
+            "{OVERRIDE_OPENER}--rule {} --verdict {} --subject {}",
+            quoted(refusal.rule()),
+            quoted(class),
+            quoted(subject),
+        ));
+    }
+    if route.target == RULE_HOP_PLACEHOLDER {
+        return None;
+    }
+    let text = plain(&crate::verdict::render_route(route)?);
+    Some(match refusal.readers.get(&route.target) {
+        Some(reader) => format!("{text} via {reader}"),
+        None => text,
+    })
+}
 
 impl Refusal {
     /// Build a refusal. The [`Fix`] is required, which is the contract.
@@ -484,17 +770,79 @@ impl Refusal {
             // rendering arm asks whether there is anything to say, not whether a
             // class exists.
             routes: Vec::new(),
+            subjects: String::new(),
+            readers: std::collections::BTreeMap::new(),
+            dereferenceable: true,
             // Likewise: no class, so no gloss. The undeclared arm's payload is
-            // the consumer's own `reason`, which `render` already carries.
+            // the consumer's own `reason`, which the full arm carries.
             gloss: String::new(),
             verdict: None,
             reason: reason.into(),
             fix,
             // A consumer-composed refusal carries no declared class, so there is
-            // no token an admission could bind (`rules.rs`'s own words) — and a
-            // subject with nothing to bind it to would read as admissible.
-            subject: None,
+            // nothing a request could name — and a binding with no class behind
+            // it would read as admissible.
+            bindings: Vec::new(),
         }
+    }
+
+    /// The pointers this firing names, for a refusal composed from prose
+    /// (CLOUD-2075). A declared refusal takes them from its subjects instead.
+    #[must_use]
+    pub fn at(mut self, subjects: impl Into<String>) -> Refusal {
+        self.subjects = subjects.into();
+        self
+    }
+
+    /// The refusal for a config that did not load: no `policy rule` hop
+    /// resolves, so the line names none (CLOUD-2075).
+    #[must_use]
+    pub fn unloaded(rule: impl Into<String>, reason: impl Into<String>, fix: Fix) -> Refusal {
+        Refusal {
+            dereferenceable: false,
+            ..Refusal::new(rule, reason, fix)
+        }
+    }
+
+    /// Name the reader each document route's target is read through, where the
+    /// consumer's `[[redirect]]` declares one (CLOUD-2075).
+    #[must_use]
+    pub fn read_through(mut self, redirects: &[crate::redirect::Redirect]) -> Refusal {
+        for route in &self.routes {
+            if route.kind == crate::verdict::RouteKind::Document
+                && let Some(reader) = crate::redirect::resolve_read(redirects, &route.target)
+            {
+                self.readers.insert(route.target.clone(), reader.to_owned());
+            }
+        }
+        self
+    }
+
+    /// The one projection (CLOUD-2075); see [`finding_line`].
+    #[must_use]
+    pub fn render_finding(&self, arm: Arm) -> String {
+        finding_line(self, arm)
+    }
+
+    /// The row's own remedy: the `Fix::Run` text, unless it is one of the
+    /// class's route targets already on the line.
+    #[must_use]
+    pub fn remedy(&self) -> Option<&str> {
+        let text = self.fix.declared_alternative()?;
+        if self.routes.iter().any(|route| route.target == text) {
+            return None;
+        }
+        Some(text)
+    }
+
+    /// `(id, precondition)` for each override route the class declares.
+    #[must_use]
+    pub fn preconditions(&self) -> Vec<(&str, &str)> {
+        self.routes
+            .iter()
+            .filter(|route| route.kind == crate::verdict::RouteKind::Override)
+            .filter_map(|route| Some((route.id.as_str(), route.precondition.as_deref()?)))
+            .collect()
     }
 
     /// Build one of Batten's OWN refusals, from a declared class (CLOUD-1050).
@@ -549,21 +897,27 @@ impl Refusal {
             // Resolved here rather than at the boundary because the registry is
             // already in hand — a second lookup downstream would be a second
             // authority over which routes the class declares.
-            routes: crate::verdict::sighting_routes(registry, token),
+            routes: crate::verdict::resolve(registry, token)
+                .map(|(entry, _)| entry.routes.clone())
+                .unwrap_or_default(),
+            subjects: crate::verdict::render_subjects(subjects),
+            readers: std::collections::BTreeMap::new(),
+            dereferenceable: true,
             gloss: crate::verdict::gloss_of(registry, token)
                 .unwrap_or_default()
                 .to_owned(),
             verdict: Some(token.to_owned()),
             reason: crate::verdict::render_line(registry, token, subjects),
             fix,
-            subject: admission_subject(subjects),
+            bindings: admission_bindings(token, subjects),
         }
     }
 
-    /// The canonical subject an admission binds to, when this refusal names one.
+    /// Every spelling a mediated admission binds to, printed spelling first
+    /// ([`admission_bindings`]). Empty only for a consumer-composed refusal.
     #[must_use]
-    pub fn subject(&self) -> Option<&str> {
-        self.subject.as_deref()
+    pub fn bindings(&self) -> &[String] {
+        &self.bindings
     }
 
     /// The declared class, or `None` for a refusal composed from consumer prose.
@@ -605,26 +959,24 @@ impl Refusal {
     /// rules/scanning.md` is what the reader of a refused `grep` needed.
     /// [`crate::verdict::sighting_routes`] carries the mapping and the exhaustive
     /// match that keeps a future kind from being dropped silently.
+    ///
+    /// Rendered exactly as the line carries them, override routes included
+    /// (CLOUD-2075).
     #[must_use]
-    pub fn routes(&self) -> &[String] {
-        &self.routes
+    pub fn routes(&self) -> Vec<String> {
+        routes(self)
     }
 
-    /// What the sightings store keys this refusal by: the rule and the class.
+    /// What the sightings store keys this refusal by: the rule, the class and
+    /// the definition (CLOUD-2075).
     ///
-    /// Composed here rather than at the boundary because it is a fact about the
-    /// refusal, and because the two halves are private. The separator is a unit
-    /// separator, which neither a rule id nor a three-word class can contain, so
-    /// no two distinct pairs can collide on one key.
-    ///
-    /// Degenerates to the rule id for an undeclared refusal, which has no class —
-    /// the honest key there, since the rule's own prose is the whole payload.
+    /// Read off the full arm through [`parse_finding`], so ONE authority keys
+    /// both a refusal the engine built and a line the boundary read back from
+    /// tool output.
     #[must_use]
     pub fn sighting_key(&self) -> String {
-        match self.verdict() {
-            Some(token) => format!("{}\u{1f}{token}", self.rule),
-            None => self.rule.clone(),
-        }
+        let full = self.render_finding(Arm::Full);
+        parse_finding(&full).map_or(full, |parsed| parsed.key)
     }
 
     /// The class's one-line gloss, or empty for a refusal with no class.
@@ -636,99 +988,6 @@ impl Refusal {
     #[must_use]
     pub fn gloss(&self) -> &str {
         &self.gloss
-    }
-
-    /// The text projection every channel carries.
-    ///
-    /// `Refused by <rule>: <reason> Fix: <fix>.` — one sentence of cause and one
-    /// of remedy, in that order, with the remedy clause **always present**. A
-    /// channel may append its own trailing note (the mediation hatch is
-    /// [`crate::hook`]'s, not a refusal's), but nothing may drop the fix clause,
-    /// because dropping it is exactly the bare "no" this contract exists to
-    /// prevent.
-    #[must_use]
-    pub fn render(&self) -> String {
-        let fix = match &self.fix {
-            Fix::Run(text) => text.as_str(),
-            Fix::None => NO_DECLARED_FIX,
-        };
-        format!(
-            "Refused by {}: {} Fix: {}",
-            self.rule,
-            sentence(&self.reason),
-            sentence(fix)
-        )
-    }
-
-    /// What the HOT PATH emits: the declared class and its pointers, and nothing
-    /// else (CLOUD-1286).
-    ///
-    /// [`Refusal::render`] is the projection for a surface with no budget
-    /// pressure — `check`'s findings, a report, anything a human reads once. This
-    /// is the projection for a surface that pays for every byte on every
-    /// subsequent turn, and the two are deliberately different rather than one
-    /// wrapper being shortened for everybody.
-    ///
-    /// **Three clauses go, and each is a copy of something already declared.**
-    /// `Refused by <rule>:` restates a token that names its own class; the
-    /// parenthetical gloss IS the class's definition inlined; `Fix:` is the
-    /// class's first `command` route, which `batten policy explain <token>`
-    /// prints along with every other route the class declares — the override
-    /// route included, which the `Fix:` clause could never reach by construction.
-    /// So the decision this row owed in writing is: **the token is the pointer to
-    /// the fix**, one hop, and the hop is the same command for all four clauses
-    /// rather than a different lookup for each.
-    ///
-    /// **The RULE ID stays, as a trailing pointer rather than as a prefix.** What
-    /// goes is `Refused by <rule>:` — five tokens of framing around one useful
-    /// word. The word itself is not framing: two rows can raise the same class,
-    /// and `explain` answers about the class and cannot say which row fired, so
-    /// dropping the id would leave a reader unable to find the config line that
-    /// refused them. It varies per firing, which is exactly the test this row
-    /// applies — the prose that repeats is what moves behind the dereference,
-    /// and the pointers that change stay inline.
-    ///
-    /// **CLOUD-1637 counted that argument and it holds for more rows than it
-    /// claimed.** "Two rows can raise the same class" reads as an edge case; it
-    /// is 66 of the 128 `[[rule]]` rows in this repository's own config. Rows of
-    /// kind `shape`, `receipt`, `forbid`, `pipeline`, `command`, `ratchet` and
-    /// `secrets` declare no class of their own and raise their kind's native one
-    /// — fourteen `shape` rows all raise `call name refused`, ten `receipt` rows
-    /// share four classes. So the id is not a tie-breaker for a rare collision,
-    /// it is the only discriminator for half the population, and it renders on
-    /// BOTH arms rather than on the first sighting alone.
-    ///
-    /// The second half of the argument is now true in a way it was not when it
-    /// was written: `explain` still cannot say which row fired, and
-    /// `batten policy rule <id>` is the verb that can. The id is a live pointer
-    /// rather than a string to grep for.
-    ///
-    /// **An UNDECLARED refusal keeps the long form**, and that is not a hole. A
-    /// refusal composed from consumer prose carries no token, so a bare line
-    /// would be a bare "no" — precisely the thing CLOUD-122 exists to forbid.
-    /// Concision is bought with a class a reader can look up; where there is no
-    /// class there is nothing to buy it with, and the long form is the honest
-    /// answer rather than a fallback.
-    /// **A COLLAPSED ROW RENDERS ONE TOKEN** (CLOUD-1638). Where the row IS its
-    /// class's sole raiser the two names are one, and `validate` refuses any
-    /// other spelling at load — so appending the id would print the same three
-    /// words twice. The 116 rows that are not collapsed still carry it, for the
-    /// reason above: it is their only discriminator.
-    ///
-    /// Decided from the strings rather than from a flag, because the load-time
-    /// predicate has already made them equal exactly when they name one thing,
-    /// and re-deriving the condition here would be a second authority over it.
-    #[must_use]
-    pub fn line(&self) -> String {
-        match self.verdict() {
-            // `reason` already IS `render_line`'s output for a declared refusal —
-            // token plus pointers — so this is a projection rather than a second
-            // renderer. Composing the line here from the token and the subject
-            // would be a second authority over a string the composer built.
-            Some(token) if token == self.rule => self.reason.clone(),
-            Some(_) => format!("{} {}", self.reason, self.rule),
-            None => self.render(),
-        }
     }
 
     /// The machine-readable payload: `{rule, reason, fix}`, byte-stable.
@@ -866,18 +1125,19 @@ mod tests {
     }
 
     #[test]
-    fn the_rendering_always_carries_a_fix_clause() {
+    fn every_line_names_its_rule_hop_whatever_the_fix() {
         // Both dispositions, because the one that matters is the one with nothing
-        // declared: that is where a bare "no" would come from.
+        // declared: the `policy rule` hop is the way out there (CLOUD-2075).
+        for fix in [Fix::None, Fix::Run("do this".to_owned())] {
+            let full = Refusal::new("g", "why", fix).render_finding(Arm::Full);
+            assert!(full.contains("; run batten policy rule 'g'"), "{full}");
+        }
         assert!(
-            Refusal::new("g", "why", Fix::None)
-                .render()
-                .contains("Fix: none declared")
-        );
-        assert!(
-            Refusal::new("g", "why", Fix::Run("do this".to_owned()))
-                .render()
-                .contains("Fix: do this.")
+            Refusal::unloaded("g", "why", Fix::None)
+                .render_finding(Arm::Full)
+                .find("policy rule")
+                .is_none(),
+            "a config that did not load resolves no rule hop"
         );
     }
 
@@ -888,13 +1148,62 @@ mod tests {
         // rather than doubled.
         let authored = Refusal::new("g", "Because it does.", Fix::Run("mise run x".to_owned()));
         assert_eq!(
-            authored.render(),
-            "Refused by g: Because it does. Fix: mise run x."
+            authored.render_finding(Arm::Full),
+            "rule 'g'; run batten policy rule 'g' — Because it does. mise run x."
         );
         let bare = Refusal::new("g", "because it does", Fix::Run("mise run x.".to_owned()));
         assert_eq!(
-            bare.render(),
-            "Refused by g: because it does. Fix: mise run x."
+            bare.render_finding(Arm::Full),
+            "rule 'g'; run batten policy rule 'g' — because it does. mise run x."
+        );
+    }
+
+    #[test]
+    fn the_pointer_arm_is_a_byte_prefix_of_the_full_arm() {
+        let refusal = Refusal::declared(
+            "protected-mutation",
+            crate::verdict::Native::ProtectedMutation,
+            &[crate::verdict::Subject::Path {
+                path: "docs/a.md".to_owned(),
+            }],
+            Fix::None,
+        );
+        let full = refusal.render_finding(Arm::Full);
+        let pointer = refusal.render_finding(Arm::Pointer);
+        assert!(full.starts_with(&pointer), "{pointer}\n{full}");
+        assert!(!pointer.contains(" —"), "{pointer}");
+        assert!(
+            pointer.starts_with("verdict 'path write refused' rule 'protected-mutation' at "),
+            "{pointer}"
+        );
+        let parsed = parse_finding(&full).expect("the full arm parses");
+        assert_eq!(parsed.arm, Arm::Full);
+        assert_eq!(parsed.rule, "protected-mutation");
+        assert_eq!(parsed.verdict.as_deref(), Some("path write refused"));
+        assert_eq!(
+            parse_finding(&pointer).expect("the pointer parses").arm,
+            Arm::Pointer
+        );
+        assert_eq!(parsed.key, refusal.sighting_key());
+    }
+
+    #[test]
+    fn a_quote_in_a_name_round_trips_through_the_grammar() {
+        let line = format!("{} — x.", label(Label::Rule, "it's"));
+        assert_eq!(parse_finding(&line).expect("parses").rule, "it's");
+        assert!(parse_finding("not a finding").is_none());
+    }
+
+    #[test]
+    fn collapse_cuts_a_marked_full_arm_to_its_pointer_prefix() {
+        let full = Refusal::new("g", "why", Fix::None).render_finding(Arm::Full);
+        let pointer = Refusal::new("g", "why", Fix::None).render_finding(Arm::Pointer);
+        let text = format!("{full}\ncanary\n{full}\n{pointer}\nrule 'unterminated");
+        let mut seen = std::collections::HashSet::new();
+        let cut = collapse(&text, |key, _| seen.insert(key.to_owned()));
+        assert_eq!(
+            cut,
+            format!("{full}\ncanary\n{pointer}\n{pointer}\nrule 'unterminated")
         );
     }
 
@@ -939,11 +1248,11 @@ mod sightings {
     fn a_class_explains_itself_once_and_then_stops() {
         let dir = repo("once");
         assert!(
-            first_sighting(&dir, "branch write unsafe"),
-            "a class this session has not raised explains itself"
+            first_sighting(&dir, "s", "branch write unsafe", "full"),
+            "a class this context has not raised explains itself"
         );
         assert!(
-            !first_sighting(&dir, "branch write unsafe"),
+            !first_sighting(&dir, "s", "branch write unsafe", "full"),
             "and does not explain itself a second time"
         );
     }
@@ -952,26 +1261,32 @@ mod sightings {
     #[test]
     fn each_class_is_counted_on_its_own() {
         let dir = repo("keyed");
-        assert!(first_sighting(&dir, "branch write unsafe"));
+        assert!(first_sighting(&dir, "s", "branch write unsafe", "a"));
         assert!(
-            first_sighting(&dir, "path write refused"),
+            first_sighting(&dir, "s", "path write refused", "b"),
             "a different class has still never been seen"
         );
     }
 
-    /// THE CLEAR IS THE LOAD-BEARING HALF. A store that outlived its session would
-    /// withhold the remedy from a reader who has never read it — the exact defect
-    /// the store exists to prevent, reintroduced by forgetting to forget.
+    /// THE CLEAR IS THE LOAD-BEARING HALF, and it is per context: forgetting one
+    /// context leaves another's sightings alone (CLOUD-2075).
     #[test]
     fn a_new_session_hears_it_again() {
         let dir = repo("cleared");
-        assert!(first_sighting(&dir, "branch write unsafe"));
-        assert!(!first_sighting(&dir, "branch write unsafe"));
+        assert!(first_sighting(&dir, "a", "branch write unsafe", "full"));
+        assert!(first_sighting(&dir, "b", "branch write unsafe", "full"));
+        assert!(!first_sighting(&dir, "a", "branch write unsafe", "full"));
 
-        forget_sightings(&dir);
+        assert_eq!(sighted(&dir, "a"), vec!["full".to_owned()]);
+        forget_sightings(&dir, "a");
+        assert!(sighted(&dir, "a").is_empty());
         assert!(
-            first_sighting(&dir, "branch write unsafe"),
+            first_sighting(&dir, "a", "branch write unsafe", "full"),
             "session start forgets, so the next reader is told"
+        );
+        assert!(
+            !first_sighting(&dir, "b", "branch write unsafe", "full"),
+            "and another context keeps what it saw"
         );
     }
 
@@ -983,9 +1298,9 @@ mod sightings {
         let dir = std::env::temp_dir().join(format!("batten-no-git-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("the fixture directory");
-        assert!(first_sighting(&dir, "branch write unsafe"));
+        assert!(first_sighting(&dir, "s", "branch write unsafe", "full"));
         assert!(
-            first_sighting(&dir, "branch write unsafe"),
+            first_sighting(&dir, "s", "branch write unsafe", "full"),
             "and keeps doing so, because nothing could record that it had"
         );
     }

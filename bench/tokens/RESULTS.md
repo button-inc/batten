@@ -43,8 +43,8 @@ count for the task is the step count above.
 | arm | steps | bytes | est. tokens | USD / 1k tasks (fresh) | USD / 1k tasks (cache read) | exit |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | baseline | 1 | 2705 | 677 | 1.3540 | 0.1354 | 0 |
-| batten | 1 | 805 | 202 | 0.4040 | 0.0404 | 2 |
-| **ratio** | | **3.36×** | **3.35×** | | | |
+| batten | 1 | 945 | 237 | 0.4740 | 0.0474 | 2 |
+| **ratio** | | **2.86×** | **2.86×** | | | |
 
 ### build-warning — exec output predicate
 

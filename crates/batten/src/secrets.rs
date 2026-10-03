@@ -1117,7 +1117,7 @@ fn resolve_scanner(provisions: &[Provision], root: &Path) -> Result<PathBuf> {
                 }],
                 Fix::Run(PROVISION_VERB.to_owned()),
             )
-            .render(),
+            .render_finding(crate::refusal::Arm::Full),
         ));
     };
     // The anchor is a RELATIVE path (`.`) whenever the config sits in the cwd,
@@ -1146,7 +1146,7 @@ fn resolve_scanner(provisions: &[Provision], root: &Path) -> Result<PathBuf> {
                 }],
                 Fix::Run(PROVISION_VERB.to_owned()),
             )
-            .render(),
+            .render_finding(crate::refusal::Arm::Full),
         ));
     }
     Ok(path)

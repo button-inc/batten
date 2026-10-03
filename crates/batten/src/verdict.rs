@@ -425,6 +425,15 @@ impl Subject {
         }
     }
 
+    /// The path this subject names, for a `Path` or a `Line`; `None` otherwise.
+    #[must_use]
+    pub fn path(&self) -> Option<&str> {
+        match self {
+            Subject::Path { path } | Subject::Line { path, .. } => Some(path),
+            Subject::Count { .. } | Subject::Artifact { .. } => None,
+        }
+    }
+
     /// Read one subject off a policy module's `subjects` array.
     ///
     /// `None` is could-not-look, never an empty subject: a member whose shape
@@ -474,6 +483,30 @@ pub fn render_subjects(subjects: &[Subject]) -> String {
         .map(Subject::render)
         .collect::<Vec<String>>()
         .join(" ")
+}
+
+/// The spelling an admission binds a subject in — the one function both sides
+/// of the mediated surface spell through (CLOUD-1826, CLOUD-1997).
+///
+/// A refusal PRINTS its pointers joined by a space ([`render_subjects`]); a
+/// reader copies that line into `override request --subject`. So whitespace is
+/// rejoined with `,`, and the binding side (`refusal::admission_bindings`) runs
+/// what it prints through this same function — which is what makes a pasted line
+/// bind as the refusal does.
+///
+/// **The `/` exception exists for the TREE surface**: a tree admission is matched
+/// against `finding.path` verbatim, and a path like `docs/a b.md` rejoined would
+/// name nothing any finding carries. Idempotent: a `/`-bearing text comes back
+/// trimmed, and any other text has no whitespace left after the join.
+//MUTANT rendered-subject-unmatched|s@^    trimmed.split_whitespace().collect::<Vec<_>>().join(",")$@    trimmed.to_owned()@|a_subject_copied_from_the_refusal_line_binds_as_the_refusal_does
+//MUTANT path-subject-split|s@^    if trimmed.contains('/') {$@    if false {@|a_subject_copied_from_the_refusal_line_binds_as_the_refusal_does
+#[must_use]
+pub fn bound_subject(text: &str) -> String {
+    let trimmed = text.trim();
+    if trimmed.contains('/') {
+        return trimmed.to_owned();
+    }
+    trimmed.split_whitespace().collect::<Vec<_>>().join(",")
 }
 
 /// What a refusal says on the hot path: the token and its pointers, and stops
@@ -597,7 +630,7 @@ pub fn first_command_route<'a>(registry: &'a [DeclaredVerdict], token: &str) -> 
 //MUTANT-SUITE crates/batten/tests/it/refusal_ceiling.rs
 //MUTANT document-route-dropped|s@        RouteKind::Document => "read",@        RouteKind::Document => return None,@|a_first_sighting_carries_the_gloss_and_its_route_by_kind
 #[must_use]
-fn render_route(route: &Route) -> Option<String> {
+pub(crate) fn render_route(route: &Route) -> Option<String> {
     let verb = match route.kind {
         RouteKind::Command => "run",
         RouteKind::Document => "read",
@@ -1613,9 +1646,9 @@ pub struct VendoredVerdict {
     /// What the boundary may do about it (CLOUD-1639).
     ///
     /// A plain field with no default, unlike the consumer table's: a `const`
-    /// initialiser cannot omit one, and spelling `Applicability::Advice` on each
-    /// vendored row is what makes any that is NOT advice visible
-    /// in a diff rather than inferred from an absence.
+    /// initialiser cannot omit one, and spelling `Applicability::Advice` on every
+    /// vendored row is what makes the ones that are NOT advice visible in a diff
+    /// rather than inferred from an absence.
     pub applicability: Applicability,
 }
 
@@ -1654,6 +1687,7 @@ pub const fn read(id: &'static str, target: &'static str) -> VendoredRoute {
     }
 }
 
+//MUTANT write-admission-dropped|s@^        kind: RouteKind::Override,$@        kind: RouteKind::Document,@|every_class_routed_only_into_a_protected_path_is_admissible
 /// An `override`-kind route, which is the only kind whose precondition is
 /// REQUIRED rather than optional.
 ///
@@ -1678,6 +1712,15 @@ const STALE_RECEIPT_ROUTE: VendoredRoute = admit(
     "the check this receipt names is red on this head for a reason only a write can repair, so \
 re-running it cannot change its answer, and the work the receipt was taken about is already \
 pushed",
+);
+
+/// CLOUD-1806's route: the recorded way through every plain `shape` row.
+//MUTANT shape-class-inadmissible|s@^const SHAPE_ADMIT_ROUTE: VendoredRoute = admit($@const SHAPE_ADMIT_ROUTE: VendoredRoute = run(@|a_shape_deny_is_admissible_through_its_class_override
+//MUTANT shape-route-circular|s@^            run("rule read first", crate::refusal::RULE_HOP_PLACEHOLDER),$@            read("config read first", "batten.toml"),@|a_shape_first_sighting_names_the_rows_remedy_verb
+const SHAPE_ADMIT_ROUTE: VendoredRoute = admit(
+    "articulate the call",
+    "the remedy `batten policy rule` prints for this row cannot perform the change this call \
+makes, and you can name what the call changes and where a reviewer will see its effect",
 );
 
 /// Every class the BINARY ships: the native ones and the vendored presets'.
@@ -2099,8 +2142,13 @@ non-negotiable rule 4 decided at the composer rather than at the report.",
         gloss: "the mediated call matches a command shape the config refuses",
         class: "A `shape` row declares a command spelling that is refused outright. The \
 refusal names the row rather than echoing the command, because the command is the caller's \
-own text and could carry anything. What to run instead is the row's declared remedy.",
-        routes: &[read("config read first", "batten.toml")],
+own text and could carry anything. What to run instead is the row's declared remedy, which \
+`batten policy rule` prints; where that remedy cannot perform the change, the class is \
+admissible through a recorded admission bound to the row id at the current commit.",
+        routes: &[
+            run("rule read first", crate::refusal::RULE_HOP_PLACEHOLDER),
+            SHAPE_ADMIT_ROUTE,
+        ],
         applicability: Applicability::Advice,
     },
     // ─── the repaired arms (CLOUD-1639) ──────────────────────────────────────
@@ -2590,6 +2638,65 @@ pub fn declared_from(entry: &VendoredVerdict) -> DeclaredVerdict {
         successor: None,
         withdrawn: None,
     }
+}
+
+//MUTANT protected-route-unread|s@protects(&route[.]target)@protects("")@|every_class_routed_only_into_a_protected_path_is_admissible
+//MUTANT own-override-ignored|s@ !declares_override(entry))$@ !entry.id.is_empty())@|every_class_routed_only_into_a_protected_path_is_admissible
+fn declares_override(entry: &DeclaredVerdict) -> bool {
+    entry
+        .routes
+        .iter()
+        .any(|route| route.kind == RouteKind::Override)
+}
+
+/// Every live class whose only ways out end in a path `protects` covers, and
+/// that has no admission of its own — empty whenever `path write refused`, the
+/// class blocking those paths, declares one (CLOUD-1893).
+///
+/// A refusal whose only way out is an action another refusal blocks is a
+/// deadlock with every gate green; CLOUD-1051/1357 shipped it once. This is the
+/// graph edge that names it, computed from the registry and a path set.
+///
+/// - A `document` route into a protected path is read as asking for a CHANGE,
+///   because the kind cannot tell a read from an edit. That reading is safe:
+///   this refuses nothing, and its only discharge is an admission that exists.
+/// - `command` and `issue` routes count as unblocked — whether running one
+///   clears the refusal is a model verdict (rule 3), which
+///   `policy/verdict-routes-resolve.rego` disclaims too.
+/// - There is no load-time arm. The blocker is vendored and a consumer cannot
+///   redeclare it, so the predicate over `consumer ∪ vendored()` is empty
+///   exactly when it is empty over `vendored()`; a consumer load refused over
+///   the binary's own table would be the wrongly-refusing gate.
+/// - One override per class is rejected: it would be one admission in many
+///   costumes, the shape CLOUD-680 measured.
+#[must_use]
+pub fn routed_only_into_protection(
+    registry: &[DeclaredVerdict],
+    protects: impl Fn(&str) -> bool,
+) -> Vec<String> {
+    let gate = Native::ProtectedMutation.id();
+    if registry
+        .iter()
+        .any(|entry| entry.id == gate && declares_override(entry))
+    {
+        return Vec::new();
+    }
+    #[rustfmt::skip]
+    let blocked = |route: &Route| route.kind == RouteKind::Document && protects(&route.target);
+    registry
+        .iter()
+        .filter(|entry| entry.successor.is_none() && entry.withdrawn.is_none())
+        .filter(|entry| !declares_override(entry))
+        .filter(|entry| {
+            let ways: Vec<&Route> = entry
+                .routes
+                .iter()
+                .filter(|route| route.kind != RouteKind::Override)
+                .collect();
+            !ways.is_empty() && ways.iter().all(|route| blocked(route))
+        })
+        .map(|entry| entry.id.clone())
+        .collect()
 }
 
 #[cfg(test)]

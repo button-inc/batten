@@ -20,6 +20,13 @@
 //! cases are about. Without it a fixture whose `protected` glob silently matched
 //! nothing would pass the admission case for the wrong reason — the gate never
 //! fired, so nothing needed admitting.
+//!
+//! # The shape fixture
+//!
+//! `shape_fixture` holds two plain deny `shape` rows, the population
+//! `call name refused` covers. Its cases pin that the class is admissible
+//! (CLOUD-1806), that the rule id keeps one row's admission off another's call,
+//! and that a request naming a subject the row cannot bind is refused.
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -78,7 +85,7 @@ fn fixture(name: &str) -> PathBuf {
 fn write_payload(path: &str) -> String {
     let escaped = serde_json::to_string(path).expect("a path is encodable");
     format!(
-        "{{\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"Write\",\
+        "{{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"s1\",\"tool_name\":\"Write\",\
          \"tool_input\":{{\"file_path\":{escaped},\"content\":\"x\"}}}}"
     )
 }
@@ -100,6 +107,11 @@ fn verdict(dir: &Path, path: &str) -> Option<i32> {
 /// and the request is NOT interactive: it reads `<id>=<text>` lines from stdin,
 /// which is what makes an override reachable from an autonomous session at all.
 fn request(dir: &Path, subject: &str, reason: &str) -> String {
+    request_as(dir, RULE, CLASS, subject, reason)
+}
+
+/// [`request`] for any rule and class.
+fn request_as(dir: &Path, rule: &str, class: &str, subject: &str, reason: &str) -> String {
     let answers = format!(
         "precondition=the owning surface is the file being refused, so it cannot express this\n\
          lost={reason}\n\
@@ -111,9 +123,9 @@ fn request(dir: &Path, subject: &str, reason: &str) -> String {
             "override",
             "request",
             "--rule",
-            RULE,
+            rule,
             "--verdict",
-            CLASS,
+            class,
             "--subject",
             subject,
         ],
@@ -133,6 +145,11 @@ fn request(dir: &Path, subject: &str, reason: &str) -> String {
 
 /// Spend an issued admission against the situation it was issued for.
 fn spend(dir: &Path, admission: &str, subject: &str) -> bool {
+    spend_as(dir, admission, RULE, CLASS, subject)
+}
+
+/// [`spend`] for any rule and class.
+fn spend_as(dir: &Path, admission: &str, rule: &str, class: &str, subject: &str) -> bool {
     run(
         dir,
         &[
@@ -141,15 +158,124 @@ fn spend(dir: &Path, admission: &str, subject: &str) -> bool {
             "--admission",
             admission,
             "--rule",
-            RULE,
+            rule,
             "--verdict",
-            CLASS,
+            class,
             "--subject",
             subject,
         ],
     )
     .status
     .success()
+}
+
+/// Two plain deny `shape` rows, the population `call name refused` covers
+/// (CLOUD-1806). A shape row alone makes the policy adjudicable, and the fixture
+/// is committed because `admit_mediated` binds to HEAD.
+const SHAPE_CONFIG: &str = "version = 1\n\n\
+     [[rule]]\nid = \"no-merge\"\nkind = \"shape\"\nscope = \"mediated_call\"\n\
+     pattern = \"gh pr merge\"\nreason = \"land by fast-forward\"\nseverity = \"deny\"\n\n\
+     [[rule]]\nid = \"no-rebase\"\nkind = \"shape\"\nscope = \"mediated_call\"\n\
+     pattern = \"git rebase\"\nreason = \"let land replay the branch\"\nseverity = \"deny\"\n";
+
+const SHAPE_CLASS: &str = "call name refused";
+
+fn shape_fixture(name: &str) -> PathBuf {
+    Fixture::new(name)
+        .config(SHAPE_CONFIG)
+        .git()
+        .base_commit()
+        .build()
+}
+
+/// Adjudicate one shell command, returning its exit code and stdout.
+fn shell(dir: &Path, command: &str) -> (Option<i32>, String) {
+    let escaped = serde_json::to_string(command).expect("a command is encodable");
+    let output = run_with_stdin(
+        dir,
+        &["adjudicate", "--harness", "exit-code"],
+        &format!(
+            "{{\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"Bash\",\
+             \"tool_input\":{{\"command\":{escaped}}}}}"
+        ),
+    );
+    (output.status.code(), stdout(&output))
+}
+
+/// A plain shape deny is admissible through its class's override (CLOUD-1806).
+#[test]
+fn a_shape_deny_is_admissible_through_its_class_override() {
+    let dir = shape_fixture("mediated-admission-shape");
+    assert_eq!(shell(&dir, "gh pr merge 5").0, Some(2), "the premise");
+    let admission = request_as(
+        &dir,
+        "no-merge",
+        SHAPE_CLASS,
+        SHAPE_CLASS,
+        "the remedy cannot perform this one merge",
+    );
+    assert!(
+        spend_as(&dir, &admission, "no-merge", SHAPE_CLASS, SHAPE_CLASS),
+        "spend must consume it"
+    );
+    let (code, said) = shell(&dir, "gh pr merge 5");
+    assert_eq!(code, Some(0), "a spent admission admits the call: {said}");
+    assert!(
+        said.contains("batten: call name refused admitted by"),
+        "and names the record that admitted it: {said}"
+    );
+}
+
+/// The rule id is the only thing separating two rows that share the class
+/// subject, so one row's admission must not admit another's call.
+#[test]
+fn a_shape_admission_does_not_admit_another_shape_row() {
+    let dir = shape_fixture("mediated-admission-shape-other");
+    let admission = request_as(
+        &dir,
+        "no-merge",
+        SHAPE_CLASS,
+        SHAPE_CLASS,
+        "taken for the merge row only",
+    );
+    assert!(spend_as(
+        &dir,
+        &admission,
+        "no-merge",
+        SHAPE_CLASS,
+        SHAPE_CLASS
+    ));
+    assert_eq!(
+        shell(&dir, "git rebase origin/main").0,
+        Some(2),
+        "an admission for one shape row must not reach another"
+    );
+}
+
+/// A shape row's subject is computable from the row, so a request naming one
+/// no refusal binds is refused before it is issued (CLOUD-1806).
+#[test]
+fn a_shape_admission_for_an_unbindable_subject_is_refused() {
+    let dir = shape_fixture("mediated-admission-shape-unbindable");
+    let requested = run(
+        &dir,
+        &[
+            "override",
+            "request",
+            "--rule",
+            "no-merge",
+            "--verdict",
+            SHAPE_CLASS,
+            "--subject",
+            "no-merge",
+        ],
+    );
+    let said = String::from_utf8_lossy(&requested.stderr);
+    assert_eq!(requested.status.code(), Some(1), "{said}");
+    assert!(requested.stdout.is_empty(), "no address may be issued");
+    for needle in ["1 subject(s)", "call,name,refused"] {
+        assert!(said.contains(needle), "{needle} missing from {said}");
+    }
 }
 
 /// THE PREMISE. Every case below is about admitting this refusal, so a fixture
@@ -178,6 +304,75 @@ fn a_spent_admission_admits_the_write_it_was_taken_for() {
         verdict(&dir, GUARDED),
         Some(0),
         "a spent admission must admit the write it was taken for"
+    );
+}
+
+/// The spelling a reader has is the LINE, so pasting its pointers must admit
+/// (CLOUD-1826). The line prints `batten.toml Write`; the binding used to be the
+/// bare path, so the paste bound `batten.toml,Write` and admitted nothing.
+#[test]
+fn a_subject_copied_from_the_refusal_line_admits_the_write() {
+    let dir = fixture("mediated-admission-pasted");
+    let refused = run_with_stdin(
+        &dir,
+        &["adjudicate", "--harness", "exit-code"],
+        &write_payload(GUARDED),
+    );
+    assert_eq!(refused.status.code(), Some(2), "the premise");
+    let said = format!(
+        "{}{}",
+        String::from_utf8_lossy(&refused.stdout),
+        String::from_utf8_lossy(&refused.stderr)
+    );
+    let pasted = common::printed_pointers(&said, CLASS, RULE);
+    assert!(
+        pasted.contains(' '),
+        "the line must print more than one pointer, or this case cannot tell the \
+         printed spelling from the bare path: {pasted:?}"
+    );
+
+    let admission = request(&dir, &pasted, "pasted straight off the refusal line");
+    assert!(spend(&dir, &admission, &pasted), "spend must consume it");
+    assert_eq!(
+        verdict(&dir, GUARDED),
+        Some(0),
+        "a subject copied off the refusal line must admit the write it refused"
+    );
+}
+
+/// The override route on the line IS the request that admits (CLOUD-2075 §7
+/// case 12): on both arms, ready to run, with the subject the refusal binds.
+#[test]
+fn the_override_route_on_the_line_is_the_request_that_admits() {
+    let dir = fixture("mediated-admission-route-on-line");
+    let opener = format!(
+        "admit with batten override request --rule '{RULE}' --verdict '{CLASS}' --subject '"
+    );
+    let mut subject = String::new();
+    for _ in 0..2 {
+        let refused = run_with_stdin(
+            &dir,
+            &["adjudicate", "--harness", "exit-code"],
+            &write_payload(GUARDED),
+        );
+        assert_eq!(refused.status.code(), Some(2), "the premise");
+        let said = String::from_utf8_lossy(&refused.stderr).into_owned();
+        let rest = said
+            .split(opener.as_str())
+            .nth(1)
+            .unwrap_or_else(|| panic!("no override route on the line: {said}"));
+        subject = rest
+            .split('\'')
+            .next()
+            .expect("a quoted subject")
+            .to_owned();
+    }
+    let admission = request(&dir, &subject, "read straight off the override route");
+    assert!(spend(&dir, &admission, &subject), "spend must consume it");
+    assert_eq!(
+        verdict(&dir, GUARDED),
+        Some(0),
+        "the route's request admits"
     );
 }
 

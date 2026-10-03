@@ -382,8 +382,11 @@ fn an_update_is_not_row_ones_business() {
     // lives behind `batten policy explain` with the rest of it, and the id on
     // the emitted line is the engine's own attribution and nothing else. The
     // negative assertion is what keeps that claim honest.
-    assert!(
-        !text.contains("issue list unread"),
+    // CLOUD-2075 puts the refusing row's reason on the full arm, and that prose
+    // names row 1 — so attribution is read off the RULE LABEL, never a substring.
+    assert_ne!(
+        crate::common::refusing_rule(&text).as_deref(),
+        Some("issue list unread"),
         "an update names an id, so the row that gates FILING must stay silent: {text}"
     );
     assert!(
@@ -714,9 +717,12 @@ fn the_same_instant_yields_the_same_verdict() {
     mint_read_receipt(&repo, "CLOUD-1", 5);
     let at = later(1000);
     let args = ["adjudicate", "--harness", "exit-code", "--instant", &at];
-    let sighting = run_with_stdin(&repo, &args, &payload("mcp__Linear__save_issue", update));
-    let first = run_with_stdin(&repo, &args, &payload("mcp__Linear__save_issue", update));
-    let second = run_with_stdin(&repo, &args, &payload("mcp__Linear__save_issue", update));
+    // In one session (CLOUD-2075): the lifecycle is per context.
+    let call =
+        payload("mcp__Linear__save_issue", update).replacen('{', "{\"session_id\":\"s1\",", 1);
+    let sighting = run_with_stdin(&repo, &args, &call);
+    let first = run_with_stdin(&repo, &args, &call);
+    let second = run_with_stdin(&repo, &args, &call);
     assert_eq!(
         first.status.code(),
         second.status.code(),

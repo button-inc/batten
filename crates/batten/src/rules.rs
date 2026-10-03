@@ -6232,11 +6232,16 @@ pub struct Finding {
 /// carries no line and prints its pointer without one rather than inventing a
 /// number it does not have — the `None` arm is a different pointer, not a
 /// degraded one.
+///
+/// The rule is LABELLED (CLOUD-2075), so a reader can always tell a rule from a
+/// verdict: `<path>[:<line>] rule '<id>'[ <reason>]`.
+//MUTANT check-rule-unlabelled|s@^        let rule = crate::refusal::label(crate::refusal::Label::Rule, \&self.rule);$@        let rule = self.rule.clone();@|a_check_finding_line_labels_its_rule
 impl crate::output::Line for Finding {
     fn line(&self) -> String {
+        let rule = crate::refusal::label(crate::refusal::Label::Rule, &self.rule);
         let at = match self.line {
-            Some(line) => format!("{}:{} {}", self.path, line, self.rule),
-            None => format!("{} {}", self.path, self.rule),
+            Some(line) => format!("{}:{} {rule}", self.path, line),
+            None => format!("{} {rule}", self.path),
         };
         // Appended rather than interpolated into the pointer, so a consumer
         // parsing `path:line rule` off the front still parses it.
@@ -6765,7 +6770,7 @@ fn run_static_inner(
                     }],
                     Fix::Run(SPAWNING_VERB.to_owned()),
                 )
-                .render(),
+                .render_finding(crate::refusal::Arm::Full),
             ));
         }
     }
@@ -10074,9 +10079,9 @@ fn policy_rule(
             // left the reader to find the file themselves. A `subjects` entry IS
             // a pointer, which is the whole reason the field is tagged rather
             // than free, so the first path-bearing one is what the finding
-            // carries. A class whose subjects are counts or artifacts still
-            // falls back to the bundle root, which is the honest pointer when
-            // the finding is about a set rather than a file.
+            // carries. A path-less list carries its first rendered subject
+            // (`first_pointer`); the bundle root is reached only for an empty
+            // list, where the finding has nothing narrower to point at.
             path: pointer.clone().unwrap_or_else(|| {
                 rule.bundle
                     .clone()
@@ -10181,6 +10186,14 @@ fn policy_remediation(
 /// [`crate::verdict::Subject::render`]'s, so a count says the same thing here as
 /// it does on the mediated path, and a reader cannot mistake `2 file(s)` for a
 /// file they could open.
+///
+/// # The tree pointer, deliberately not the mediated binding
+///
+/// This is the tree finding's pointer and its admission subject, anchored by
+/// fingerprint. A mediated refusal binds every pointer it prints instead
+/// (`refusal::admission_bindings`, CLOUD-1826): a tree finding has one `path`
+/// slot, and forcing the two to agree would widen tree output or drop pointers
+/// from the mediated binding.
 fn first_pointer(subjects: &[crate::verdict::Subject]) -> (Option<String>, Option<usize>) {
     for subject in subjects {
         match subject {
@@ -13148,6 +13161,27 @@ pub fn glob_match(pattern: &str, path: &str) -> bool {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::PathSet;
+
+    /// CLOUD-2075 §7 case 21: a `check` finding labels its rule.
+    #[test]
+    fn a_check_finding_line_labels_its_rule() {
+        use crate::output::Line as _;
+        let finding = super::Finding {
+            owner: None,
+            rule: "r".to_owned(),
+            severity: super::RuleSeverity::Deny,
+            path: "src/a.rs".to_owned(),
+            line: Some(3),
+            identity: crate::identity::StoredIdentity::new(
+                crate::identity::FindingKind::Scope,
+                crate::identity::scope_fingerprint("r", "src/a.rs"),
+            ),
+            check: crate::findings::Check::Reevaluate,
+            remediation: Some(crate::findings::Remediation::NoFix("fixture".to_owned())),
+            reason: None,
+        };
+        assert_eq!(finding.line(), "src/a.rs:3 rule 'r'");
+    }
 
     /// CLOUD-609's guard on the change itself: `contains` still means MEMBERSHIP.
     ///

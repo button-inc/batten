@@ -298,7 +298,7 @@ fn a_release_due_window_that_is_absent_or_torn_is_partial() {
     let decided = against(&dir, &forge, &["check", "--rule", "release grade early"]);
     assert_eq!(decided.status.code(), Some(2), "{}", said(&decided));
     assert!(
-        said(&decided).contains("release-due-latest release grade early"),
+        said(&decided).contains("release-due-latest rule 'release grade early'"),
         "partial, pointing at the window never recorded: {}",
         said(&decided)
     );
@@ -307,7 +307,7 @@ fn a_release_due_window_that_is_absent_or_torn_is_partial() {
     let (code, text) = verdict("empty-trunk", "[]", &latest(Some(3600)));
     assert_eq!(code, Some(2), "{text}");
     assert!(
-        text.contains("release-due-activity release grade early"),
+        text.contains("release-due-activity rule 'release grade early'"),
         "{text}"
     );
 
@@ -326,7 +326,7 @@ fn a_release_due_window_that_is_absent_or_torn_is_partial() {
     let decided = common::run(&torn, &["check", "--rule", "release grade early"]);
     assert_eq!(decided.status.code(), Some(2), "{}", said(&decided));
     assert!(
-        said(&decided).contains("release-due-activity release grade early"),
+        said(&decided).contains("release-due-activity rule 'release grade early'"),
         "torn, not a hold: {}",
         said(&decided)
     );
