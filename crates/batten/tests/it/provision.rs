@@ -1042,6 +1042,55 @@ fn a_launcher_hands_the_tool_an_environment_a_manifest_could_not() {
     );
 }
 
+/// A LAUNCHER REACHED THROUGH A SYMLINK HANDS THE TOOL THE SYMLINK'S NAME
+/// (CLOUD-2093). That is how every mise shim reaches mise, and mise dispatches on
+/// `argv[0]`: handed the cached binary's path instead, each shim ran as a bare
+/// `mise`. bash is the witness because, reading commands from stdin, its `$0` IS
+/// `argv[0]`.
+#[cfg(unix)]
+#[test]
+fn a_launcher_reached_through_a_symlink_hands_the_tool_that_name() {
+    let Some(bash) = ["/bin/bash", "/usr/bin/bash"]
+        .into_iter()
+        .map(PathBuf::from)
+        .find(|path| path.is_file())
+    else {
+        return;
+    };
+    let env = Env::new("provision-launcher-argv0");
+    let dest = env.repo.parent().unwrap().join("bin-argv0");
+    let bytes = fs::read(&bash).unwrap();
+    let (url, sha) = env.artifact("demo.bin", &bytes);
+    env.config(&linking_manifest(&url, &sha, &dest, ENV_ROWS));
+    assert_eq!(env.run(&["provision", "apply"]).status.code(), Some(0));
+
+    let shim = dest.join("named-shim");
+    std::os::unix::fs::symlink(dest.join("demo"), &shim).expect("link a shim to the launcher");
+    #[expect(
+        clippy::disallowed_types,
+        reason = "stays: as above, the launcher must be spawned to be exercised (CLOUD-320)"
+    )]
+    let mut child = std::process::Command::new(&shim)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("run the shim");
+    {
+        use std::io::Write as _;
+        let mut stdin = child.stdin.take().expect("the shim's stdin");
+        stdin
+            .write_all(b"echo \"$0\"\n")
+            .expect("hand bash its one command");
+    }
+    let ran = child.wait_with_output().expect("wait for the shim");
+    assert_eq!(ran.status.code(), Some(0), "{ran:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&ran.stdout).trim(),
+        "named-shim",
+        "the tool must see the name the launcher was called by"
+    );
+}
+
 /// Idempotent, which the launcher needs rather than merely benefits from: a tool
 /// that re-enters through the same `PATH` entry must not grow the value once per
 /// generation, and a host that already exempts one of the declared hosts must

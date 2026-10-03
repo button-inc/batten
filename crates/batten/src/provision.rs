@@ -1098,6 +1098,18 @@ pub fn exec_launcher(
         reason = "stays: this call IS the tool the operator asked for, and becoming it is the whole verb — there is no in-process form of somebody else's binary (CLOUD-320)"
     )]
     let mut command = std::process::Command::new(&launch.exec);
+    // THE NAME IT WAS CALLED BY, NOT THE CACHED FILE'S (CLOUD-2093). The kernel
+    // hands this process the path the launcher was invoked by, and a multicall
+    // tool picks its personality from `argv[0]`: mise's shims are symlinks to
+    // the launcher named `rustc`, `cargo` and the rest. Started as the cached
+    // binary's path, every shim ran as a bare `mise` — measured, `rustc
+    // --version` answered `2026.9.1 linux-x64`, and the semver gate took
+    // `linux-x64` for a toolchain. A launcher called by its own name is unchanged.
+    #[cfg(unix)]
+    if let Some(name) = script.file_name() {
+        use std::os::unix::process::CommandExt as _;
+        command.arg0(name);
+    }
     command.args(args);
     for (name, action) in resolved_env(&launch.env) {
         match action {
