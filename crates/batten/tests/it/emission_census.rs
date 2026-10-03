@@ -197,8 +197,11 @@ fn hand_spelled_labels(source: &str) -> Vec<(usize, String)> {
         }
         for label in LABELS {
             for (at, _) in line.match_indices(label) {
-                // Inside a literal when an odd number of quotes precede it.
-                if line[..at].matches('"').count() % 2 == 1 {
+                // Inside a literal when an odd number of quotes precede it. A
+                // `--verdict '…'` or `--rule '…'` is a route's command flag, not
+                // a label: the projection never spells one after `--`.
+                let flag = line[..at].ends_with("--");
+                if !flag && line[..at].matches('"').count() % 2 == 1 {
                     found.push((index + 1, line.trim().to_owned()));
                 }
             }
@@ -254,6 +257,13 @@ fn the_label_census_discriminates() {
     assert!(
         hand_spelled_labels("// rule 'x'\n").is_empty(),
         "a comment line is not an emission"
+    );
+    assert!(
+        hand_spelled_labels(
+            "const R: &str = \"batten override request --verdict 'x' --rule 'y'\";\n"
+        )
+        .is_empty(),
+        "a route's command flag is not a label"
     );
     let tail = "fn a() {}\n#[cfg(test)]\nmod tests { const X: &str = \"rule 'x'\"; }\n";
     assert!(
