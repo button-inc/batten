@@ -1887,6 +1887,22 @@ const MATRIX: &[Row] = &[
         expected: 0,
         channel: Channel::StdoutDenyJson,
     },
+    // OpenCode's plugin throws the engine's stderr on exit 2, so the engine
+    // answers it on the neutral channel.
+    Row {
+        harness: "opencode",
+        case: "allow",
+        command: "gh pr view 42",
+        expected: 0,
+        channel: Channel::Silent,
+    },
+    Row {
+        harness: "opencode",
+        case: "deny",
+        command: "gh pr merge 42",
+        expected: 2,
+        channel: Channel::StderrReason,
+    },
     Row {
         harness: "exit-code",
         case: "allow",
@@ -3992,6 +4008,7 @@ fn every_host_denies_the_same_call_through_its_own_channel() {
         ("copilot-cli", "copilot-cli"),
         ("gemini-cli", "gemini-cli"),
         ("codex-cli", "codex-cli"),
+        ("opencode", "opencode"),
     ] {
         let output = run_hook_in(&dir, harness, &host_fixture(stem));
         assert_eq!(
@@ -4107,6 +4124,7 @@ fn a_protected_write_is_refused_on_every_harness_in_its_own_vocabulary() {
         ("gemini-cli", "gemini-cli-write"),
         ("codex-cli", "codex-cli-write"),
         ("factory", "factory-write"),
+        ("opencode", "opencode-write"),
     ] {
         let output = run_hook_in(&dir, harness, &host_fixture(stem));
         assert!(
@@ -4166,6 +4184,7 @@ fn a_read_of_a_protected_path_is_not_refused_on_any_harness() {
         "gemini-cli",
         "codex-cli",
         "factory",
+        "opencode",
     ] {
         let output = run_hook_in(
             &dir,
@@ -4258,6 +4277,20 @@ fn an_event_a_host_does_not_declare_degrades_cleanly() {
             "{harness}: and names what stands in for it, got: {stderr}"
         );
     }
+
+    // OpenCode's plugin delivers pre-tool alone, so there is no Stop family to
+    // stand in: the degradation still allows, and says nothing fires.
+    let opencode = run_hook_in(&dir, "opencode", &payload);
+    assert_eq!(opencode.status.code(), Some(0), "never an error or a deny");
+    assert!(
+        opencode.stdout.is_empty(),
+        "nothing keyed on the event fired"
+    );
+    let stderr = common::stderr(&run_hook_verbose(&dir, "opencode", &payload));
+    assert!(
+        stderr.contains("does not emit task-completed") && stderr.contains("nothing keyed on it"),
+        "opencode: the degradation names no stand-in, got: {stderr}"
+    );
 }
 
 #[test]
@@ -4272,6 +4305,7 @@ fn a_payload_that_fits_no_host_fails_open_on_every_host() {
         "gemini-cli",
         "codex-cli",
         "factory",
+        "opencode",
         "exit-code",
     ] {
         let output = run_hook_in(&dir, harness, "not json at all");
@@ -10791,6 +10825,90 @@ fn generate_hooks_refuses_the_contract_only_harness() {
     );
 }
 
+/// Drives a generated OpenCode plugin the way its host does: import the module,
+/// build the hooks with a project directory, and call `tool.execute.before`.
+const OPENCODE_DRIVER: &str = r#"const [plugin, tool, args] = process.argv.slice(2);
+const { Batten } = await import(plugin);
+const hooks = await Batten({ directory: process.cwd() });
+try {
+  await hooks["tool.execute.before"]({ tool }, { args: JSON.parse(args) });
+  console.log("allowed");
+} catch (error) {
+  console.log(`thrown: ${error.message}`);
+}
+"#;
+
+/// A `batten` that answers like the engine: `2` with the reason for `bash`, `3`
+/// (could not decide) for `task`, and `0` for anything else.
+const OPENCODE_FAKE_ENGINE: &str = r#"#!/bin/sh
+envelope=$(cat)
+case "$envelope" in
+  *'"tool_name":"bash"'*) echo 'commit ship other' >&2; exit 2 ;;
+  *'"tool_name":"task"'*) exit 3 ;;
+esac
+exit 0
+"#;
+
+/// THE PLUGIN IS A GUARD ONLY IF EXIT 2 BECOMES A THROW (CLOUD-1942).
+///
+/// OpenCode's `tool.execute.before` blocks a tool by throwing and by nothing
+/// else, so a plugin that returned on a refusal would read as installed and
+/// allow every call. Run under the pinned Node against a fake engine on `PATH`:
+/// the refusal is thrown with the engine's reason, an allow passes, and an engine
+/// that could not decide lets the call through, as §7(c) asks of every adapter.
+#[cfg(unix)]
+#[test]
+fn a_generated_opencode_plugin_throws_the_engine_s_refusal() {
+    use std::os::unix::fs::PermissionsExt;
+    let generated = generated_wiring("opencode");
+    assert_eq!(
+        generated.status.code(),
+        Some(0),
+        "opencode's adapter is a plugin, so generate emits it: {}",
+        common::stderr(&generated)
+    );
+    let dir = common::scratch("opencode-plugin");
+    let plugin = dir.join("batten.mjs");
+    fs::write(&plugin, common::stdout(&generated)).expect("write the plugin");
+    let bin = dir.join("bin");
+    fs::create_dir_all(&bin).expect("bin dir");
+    let engine = bin.join("batten");
+    fs::write(&engine, OPENCODE_FAKE_ENGINE).expect("write the fake engine");
+    fs::set_permissions(&engine, fs::Permissions::from_mode(0o755)).expect("chmod");
+    let driver = dir.join("drive.mjs");
+    fs::write(&driver, OPENCODE_DRIVER).expect("write the driver");
+    let path = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    for (tool, args, expected) in [
+        (
+            "bash",
+            r#"{"command":"gh pr merge 1"}"#,
+            "thrown: commit ship other",
+        ),
+        ("read", r#"{"filePath":"notes.txt"}"#, "allowed"),
+        ("task", r#"{"prompt":"x"}"#, "allowed"),
+    ] {
+        let output = std::process::Command::new("node")
+            .arg(&driver)
+            .arg(&plugin)
+            .arg(tool)
+            .arg(args)
+            .env("PATH", &path)
+            .current_dir(&dir)
+            .output()
+            .expect("run the pinned node");
+        assert_eq!(
+            common::stdout(&output).trim(),
+            expected,
+            "{tool}: stderr: {}",
+            common::stderr(&output)
+        );
+    }
+}
+
 // --- per-host attribution adapters (CLOUD-276) -------------------------------
 //
 // The invariant these pin is an asymmetry, and it is the issue's whole point:
@@ -10804,7 +10922,7 @@ fn generate_hooks_refuses_the_contract_only_harness() {
 // judge the identity the sandbox's git happens to resolve, which is asserting a
 // premise the fixture never created (`rules/rust.md`, CLOUD-249).
 
-/// The seven harness tokens, as the binary accepts them.
+/// The eight harness tokens, as the binary accepts them.
 ///
 /// Spelled here rather than read off `Harness::ALL` at runtime **and** checked
 /// against it below, so a new host cannot join the enum without joining this
@@ -10816,6 +10934,7 @@ const ATTRIBUTION_HOSTS: &[&str] = &[
     "gemini-cli",
     "codex-cli",
     "factory",
+    "opencode",
     "exit-code",
 ];
 
