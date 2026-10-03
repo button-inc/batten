@@ -423,6 +423,80 @@ fn a_second_row_of_a_shared_class_still_gets_its_definition() {
     );
 }
 
+/// Every vendored class whose only ways out end in a protected path stays
+/// admissible, through its own override or through the blocker's (CLOUD-1893).
+///
+/// A starter consumer protects `batten.toml`, and dozens of vendored classes
+/// route only into it; one admission on `path write refused` is what keeps them
+/// from being a deadlock. The population is DERIVED, never counted, so a row
+/// moving a class in or out of the family touches neither side.
+#[test]
+fn every_class_routed_only_into_a_protected_path_is_admissible() {
+    use batten::verdict::{RouteKind, routed_only_into_protection, vendored};
+    let starter = batten::config::parse(batten::init::STARTER, batten::config::CONFIG_FILE)
+        .expect("the starter parses");
+    let sets = batten::rules::Sets::from_config(&starter).expect("the starter's sets compile");
+    let protects = |path: &str| sets.protected.contains(path);
+    assert!(
+        protects(batten::config::CONFIG_FILE),
+        "the starter no longer protects batten.toml, so this gate covers nothing — re-scope it"
+    );
+
+    let registry = vendored();
+    let stuck = routed_only_into_protection(&registry, protects);
+    assert!(
+        stuck.is_empty(),
+        "classes routed only into a protected path with no admission: {stuck:?}"
+    );
+
+    let blocker = batten::verdict::Native::ProtectedMutation.id();
+    let mut without = registry.clone();
+    let entry = without
+        .iter_mut()
+        .find(|entry| entry.id == blocker)
+        .expect("the blocker is vendored");
+    let before = entry.routes.len();
+    entry
+        .routes
+        .retain(|route| route.kind != RouteKind::Override);
+    assert!(
+        entry.routes.len() < before,
+        "the blocker declares an admission to remove"
+    );
+
+    let historical: Vec<String> = registry
+        .iter()
+        .filter(|entry| entry.successor.is_none() && entry.withdrawn.is_none())
+        .filter(|entry| {
+            entry.routes.len() == 1
+                && entry.routes[0].kind == RouteKind::Document
+                && entry.routes[0].target == batten::config::CONFIG_FILE
+        })
+        .map(|entry| entry.id.clone())
+        .collect();
+    let got = routed_only_into_protection(&without, protects);
+    assert!(!historical.is_empty(), "the CLOUD-1357 family is not empty");
+    for id in &historical {
+        assert!(
+            got.contains(id),
+            "{id} routes only into batten.toml: {got:?}"
+        );
+    }
+    for id in &got {
+        let entry = without
+            .iter()
+            .find(|entry| &entry.id == id)
+            .expect("a returned id names a class");
+        assert!(
+            entry.routes.iter().all(|route| !matches!(
+                route.kind,
+                RouteKind::Override | RouteKind::Command | RouteKind::Issue
+            )),
+            "{id} has a way out of its own and was returned anyway"
+        );
+    }
+}
+
 /// Every class this config declares can render a route on a first sighting.
 ///
 /// The completeness arm the row asks for, and the one that would have caught the
