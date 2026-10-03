@@ -457,6 +457,7 @@ mod verify_chain;
 mod verify_unprovisioned;
 mod waivers;
 mod walker;
+mod wall_clock;
 mod wiring_disarm;
 mod wiring_reclaim;
 mod workflow_shell_census;

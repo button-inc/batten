@@ -504,6 +504,44 @@ pub fn watch(
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
+    watch_with(
+        config,
+        roster,
+        &Pacing {
+            read: &read,
+            pause: &sleep,
+        },
+        out,
+        err,
+    )
+}
+
+/// The poll loop's two effects on the world: the conditional request, and the
+/// wait between two of them.
+///
+/// INJECTED SO A CASE READS THE WAIT INSTEAD OF TIMING IT (CLOUD-2059). The
+/// property worth proving is that the server's `X-Poll-Interval` floor reaches
+/// the pause, and a case that could only observe it as elapsed wall time had to
+/// assert a lower bound on a clock. Replayed answers and a recorded pause decide
+/// it exactly, and in no time. Production passes [`read`] and the one real sleep.
+pub(crate) struct Pacing<'a> {
+    /// Ask the forge once, conditionally on the validator held.
+    pub(crate) read: &'a dyn Fn(&Config, Option<&str>) -> Option<crate::rest::Answer>,
+    /// Wait this many seconds before asking again.
+    pub(crate) pause: &'a dyn Fn(f64),
+}
+
+/// [`watch`] over an explicit [`Pacing`].
+//MUTANT-SUITE crates/batten/src/pr_watch.rs
+//MUTANT floor-parsed-then-ignored|s@^        wait_for(configured, answer.poll_floor, self.backoff)$@        wait_for(configured, None, self.backoff)@|a_server_requested_floor_reaches_the_pause
+//MUTANT pause-not-the-folded-wait|s@^        (pacing.pause)(wait_for);$@        (pacing.pause)(0.0);@|a_server_requested_floor_reaches_the_pause
+pub(crate) fn watch_with(
+    config: &Config,
+    roster: &Roster,
+    pacing: &Pacing<'_>,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
     // BEFORE THE LOOP, not inside it. An unusable roster is a statement about
     // the invocation, and one polled forever would be a hang whose cause is a
     // typo.
@@ -530,7 +568,7 @@ pub fn watch(
 
     let mut poll = Poll::default();
     loop {
-        let raw = read(config, poll.etag.as_deref());
+        let raw = (pacing.read)(config, poll.etag.as_deref());
         let wait_for = poll.absorb(raw.as_ref(), config.interval);
         // EVERY poll pushes, including the ones that learned nothing: proving
         // the loop turned is the tick's whole job.
@@ -617,7 +655,7 @@ pub fn watch(
             }
         }
 
-        sleep(wait_for);
+        (pacing.pause)(wait_for);
     }
 }
 
@@ -1071,6 +1109,56 @@ mod tests {
     #[test]
     fn a_server_requested_floor_is_honoured_over_a_shorter_interval() {
         assert!(is(interval_for(1, Some(3.0)), 3.0));
+    }
+
+    /// THE SERVER'S FLOOR REACHES THE PAUSE, read rather than timed (CLOUD-2059).
+    ///
+    /// `interval_for` deciding the floor is half the property; the other half is
+    /// that the loop hands the folded wait to the pause it actually takes. The
+    /// integration case could only see that as elapsed wall time. Here the forge
+    /// is two replayed answers and the pause is a recording, so the wait between
+    /// the two polls is read exactly: the server's 1s, over a configured 0.
+    #[test]
+    fn a_server_requested_floor_reaches_the_pause() {
+        let pending = r#"{"check_runs":[{"status":"in_progress","conclusion":null,"name":"ci"}]}"#;
+        let green = r#"{"check_runs":[{"status":"completed","conclusion":"success","name":"ci"}]}"#;
+        let answers = std::cell::RefCell::new(
+            vec![
+                crate::rest::Answer {
+                    poll_floor: Some(1.0),
+                    ..answer(200, Some("W/\"a\""), pending)
+                },
+                answer(200, Some("W/\"b\""), green),
+            ]
+            .into_iter(),
+        );
+        let paused = std::cell::RefCell::new(Vec::new());
+        let read = |_: &Config, _: Option<&str>| answers.borrow_mut().next();
+        let pause = |seconds: f64| paused.borrow_mut().push(seconds);
+        let config = Config {
+            interval: 0,
+            repo: String::from("owner/repo"),
+            ..config()
+        };
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        let code = watch_with(
+            &config,
+            &roster(),
+            &Pacing {
+                read: &read,
+                pause: &pause,
+            },
+            &mut out,
+            &mut err,
+        )
+        .expect("the streams accept output");
+        assert_eq!(code, ExitCode::Success, "{}", String::from_utf8_lossy(&err));
+        let paused = paused.borrow();
+        assert_eq!(paused.len(), 1, "one wait between two polls: {paused:?}");
+        assert!(
+            paused.first().is_some_and(|seconds| is(*seconds, 1.0)),
+            "the wait is the server's floor, not the configured 0: {paused:?}"
+        );
     }
 
     /// **A FRACTIONAL FLOOR IS A FLOOR, and this is CLOUD-390 held at its own

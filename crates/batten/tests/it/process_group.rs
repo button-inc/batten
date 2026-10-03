@@ -157,6 +157,14 @@ fn await_death(pid: i32) -> bool {
 
 /// Spawn `batten exec -- <script>` in `dir`, with state under `home`.
 fn spawn_exec(dir: &Path, home: &Path, child: &Path, env: &[(&str, &str)]) -> Child {
+    exec_command(dir, home, child, env)
+        .spawn()
+        .expect("spawn batten exec")
+}
+
+/// The command [`spawn_exec`] spawns, for a case that configures it further —
+/// capturing the stderr a teardown's recorded reason lands on.
+fn exec_command(dir: &Path, home: &Path, child: &Path, env: &[(&str, &str)]) -> common::Batten {
     fs::create_dir_all(home).expect("create home");
     let mut command = common::batten();
     command
@@ -176,7 +184,8 @@ fn spawn_exec(dir: &Path, home: &Path, child: &Path, env: &[(&str, &str)]) -> Ch
     for (key, value) in env {
         command.env(key, value);
     }
-    command.state_home(home).spawn().expect("spawn batten exec")
+    command.state_home(home);
+    command
 }
 
 /// A child that leaves a grandchild running and then parks.
@@ -288,6 +297,14 @@ fn a_second_signal_escalates_instead_of_being_swallowed() {
     // The child IGNORES TERM, which is what makes the grace observable at all: a
     // child that dies on the first signal would reach the same end state either
     // way and this case would measure nothing.
+    //
+    // AND SO DOES THE GRANDCHILD, which this case once missed. A trapped TERM
+    // ends the child's `wait` early, and a `sleep` that dies on the forwarded
+    // TERM leaves nothing to wait for: the script ran off its end, the group
+    // emptied on its own, and a teardown timed against the grace passed with no
+    // escalation at all. Reading the recorded reason is what exposed it
+    // (CLOUD-2059). The grandchild inherits an IGNORED TERM through `exec`, and
+    // the child waits until killed, so only an escalation ends the group early.
     let dir = repo("pgroup-second", true);
     let home = scratch("pgroup-second-home");
     let note = dir.join("grandchild.pid");
@@ -298,16 +315,18 @@ fn a_second_signal_escalates_instead_of_being_swallowed() {
     let child = script(
         &dir,
         &format!(
-            "trap ': > {trapped}' TERM\nsleep 300 &\nprintf '%s' \"$!\" > {note}\nwait\n",
+            "trap ': > {trapped}' TERM\n(trap '' TERM; exec sleep 300) &\nprintf '%s' \"$!\" > {note}\nwhile :; do wait; done\n",
             trapped = trapped.display(),
             note = note.display()
         ),
     );
 
-    let mut batten = spawn_exec(&dir, &home, &child, &[]);
+    let batten = exec_command(&dir, &home, &child, &[])
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn batten exec");
     let grandchild: i32 = await_file(&note).parse().expect("a pid");
 
-    let started = Instant::now();
     signal(batten.id(), "TERM");
     // The second signal has to land INSIDE the grace window the first opened, or
     // this measures the ordinary escalation. Waiting for the trap marker is what
@@ -331,21 +350,20 @@ fn a_second_signal_escalates_instead_of_being_swallowed() {
     );
     signal(batten.id(), "TERM");
 
-    let _ = batten.wait().expect("batten exits");
-    let waited = started.elapsed();
+    let output = batten.wait_with_output().expect("batten exits");
     assert!(
         await_death(grandchild),
         "the tree must still die whole on the escalation"
     );
-    // GROUP_GRACE is 5s. A second signal that escalates immediately gets there
-    // well inside it; a swallowed one waits the whole grace out. The bound is
-    // generous rather than tight, because the claim is "promptly, not after the
-    // full grace" and a tight bound would flake on a loaded runner instead of
-    // discriminating.
+    // THE REASON IS RECORDED, SO THE CASE READS IT (CLOUD-2059). A second signal
+    // that escalates does so at once and says `second-signal`; a swallowed one
+    // queues in a stream nobody reads until `GROUP_GRACE` runs out, and the
+    // teardown then says `grace-expired`. This used to tell the two apart by
+    // timing the teardown against the grace, which a loaded runner can blur.
+    let said = String::from_utf8_lossy(&output.stderr);
     assert!(
-        waited < Duration::from_secs(4),
-        "a second signal must escalate rather than queue in a stream nobody \
-         reads — the teardown took {waited:?}, which is the full grace"
+        said.contains("group escalated to SIGKILL (second-signal)"),
+        "a second signal must escalate rather than queue in a stream nobody reads: {said}"
     );
 }
 
@@ -793,7 +811,7 @@ fn a_surviving_grandchild_cannot_hang_exec() {
     );
 
     fs::create_dir_all(&home).expect("create home");
-    let mut batten = common::batten()
+    let batten = common::batten()
         .args(["exec", "--", child.to_str().expect("utf-8")])
         .current_dir(&dir)
         .stdout(Stdio::piped())
@@ -803,32 +821,31 @@ fn a_surviving_grandchild_cannot_hang_exec() {
         .expect("spawn batten exec");
     let holder: i32 = await_file(&note).parse().expect("a pid");
 
-    let started = Instant::now();
-    let status = batten.wait().expect("batten exits rather than hanging");
-    let took = started.elapsed();
-
-    assert!(status.success(), "the wrapped command itself exited 0");
-    assert!(
-        took < Duration::from_mins(1),
-        "exec must be bounded by the drain deadline, not by the grandchild: {took:?}"
-    );
-    // ONE BUDGET, NOT TWO (CLOUD-1288). `sleep 300 &` inherits BOTH pipes, so
-    // this is already the both-leaked case — and the assertion above could not
-    // tell ten seconds from twenty, which is exactly what the defect cost: the
-    // two streams were collected with a fresh full `PIPE_DRAIN_TIMEOUT` each, so
-    // the constant that reads "at most ten seconds" shipped as twenty. Measured
-    // at 20.07s before the fix, the single slowest case in the suite by 2.5x.
-    //
-    // A NEW case was considered and rejected: it would have to leak both pipes
-    // to mean anything, which is another ten seconds of wall clock for coverage
-    // this fixture already has. Tightening the bound here is the same assertion
-    // for free. The generous slack is deliberate — the subject is 10 versus 20,
-    // and a bound tight enough to fire on a loaded container would be a flake
-    // asserting about scheduling rather than about the budget.
-    assert!(
-        took < Duration::from_secs(15),
-        "the two pipe drains share ONE deadline budget, so both being leaked costs \
-         one PIPE_DRAIN_TIMEOUT and not two: {took:?}"
-    );
+    // Returning at all is the first half: without the drain deadline this never
+    // does, because the grandchild holds both pipes for its 300s.
+    let output = batten
+        .wait_with_output()
+        .expect("batten exits rather than hanging");
     signal(u32::try_from(holder).expect("a positive pid"), "KILL");
+
+    assert!(
+        output.status.success(),
+        "the wrapped command itself exited 0"
+    );
+    // ONE BUDGET, NOT TWO (CLOUD-1288), read from what the drain REPORTS rather
+    // than from a clock (CLOUD-2059). `sleep 300 &` inherits both pipes, so both
+    // are leaked: stdout waits out what is left of the one budget, and stderr is
+    // then left exactly nothing — it reports `0ns`. Collected with a fresh full
+    // `PIPE_DRAIN_TIMEOUT` each, as the defect did, stderr would report the
+    // whole budget instead; that cost 20.07s where the constant reads ten.
+    let said = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        said.contains("stdout did not reach EOF"),
+        "the leaked stdout is reported, as a count: {said}"
+    );
+    assert!(
+        said.contains("stderr did not reach EOF within 0ns"),
+        "the two pipe drains share ONE deadline budget, so the second is left \
+         nothing by the first: {said}"
+    );
 }
