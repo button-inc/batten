@@ -96,6 +96,8 @@ pub const ANALYSER: &str = "cargo";
 /// the stream being parsed. `--force-warn` follows `--` so it reaches the lint
 /// driver rather than cargo, and it is what surfaces the `#[expect]`ed sites —
 /// see the module doc.
+//MUTANT-SUITE crates/batten/tests/it/symbols.rs
+//MUTANT force-warn-retargeted|s@^    "--force-warn",$@    "--warn",@|the_resolved_set_excludes_what_only_name_resolution_can_exclude
 pub const ANALYSER_FLAGS: &[&str] = &[
     "clippy",
     "--quiet",

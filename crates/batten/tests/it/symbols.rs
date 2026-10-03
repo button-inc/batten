@@ -9,14 +9,18 @@
 //! the filter is `binary(it) & test(/^symbols::/)`. Same defect class as
 //! CLOUD-1417: a header asserting a shape the tree contradicts.
 //!
-//! What the grouping costs here, measured rather than assumed: the three
-//! analyser-spawning cases share one target directory, so under parallelism one
-//! runs `cargo clippy` and the other two block on cargo's lock. All three are
+//! What the grouping cost here, measured rather than assumed: the three
+//! analyser-spawning cases shared one target directory, so under parallelism one
+//! ran `cargo clippy` and the other two blocked on cargo's lock. All three were
 //! then billed the build by nextest, which is what made them read as 21.8% of the
-//! suite in `bench/rust-suites/RESULTS.md`. The marginal wall is one build. Do
-//! not "fix" it by serialising them or by sharing a resolution — both were
-//! measured and both recover zero, because the build already overlaps the other
-//! 4,532 cases.
+//! suite in `bench/rust-suites/RESULTS.md`.
+//!
+//! THEY NOW ANALYSE A TOY CRATE, NOT THIS ONE (CLOUD-2059). The subject is the
+//! analyser's NAME RESOLUTION, and two files carry it whole: a shadowed
+//! `clap::Command` the byte tier counts and resolution excludes, and an
+//! `#[expect]`ed `std::process::Command` only `--force-warn` reports. Over this
+//! crate each case paid a clippy of the whole of it — 38-54s on Linux, 160-178s on
+//! Windows — to assert what the toy asserts in about a second.
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::expect_used)]
@@ -25,15 +29,6 @@ use std::path::{Path, PathBuf};
 
 use batten::facts::Look;
 use batten::symbols;
-
-/// The analyser the ENGINE would reach, not whichever build is first on the test
-/// runner's `PATH` (CLOUD-1324). A suite resolving it differently would assert
-/// this census against a tool `batten check` never runs — and measured here, the
-/// two are not the same: this container carries an older build ahead of the
-/// pinned one, and it refuses the crate's own `rust-version`.
-fn launcher(root: &Path) -> symbols::Launcher {
-    batten::rules::symbols_launcher(root)
-}
 
 /// THE ARGV A PINNED LAUNCHER PRODUCES, composed rather than assumed
 /// (CLOUD-1324).
@@ -58,12 +53,51 @@ fn a_launchers_prefix_precedes_the_analysers_own_flags() {
     );
 }
 
-fn repo() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("..")
-        .canonicalize()
-        .expect("the repository root resolves")
+/// The toy's disallowed-type table: the census entry and nothing else.
+const TOY_CLIPPY: &str = r#"disallowed-types = [
+  { path = "std::process::Command", reason = "a spawn is an inventory row" },
+]
+"#;
+
+/// A crate with no dependencies, carrying the discriminator `surface.rs` carries
+/// in this one: a `Command` that is not std's, beside an annotated one that is.
+fn toy(case: &str) -> PathBuf {
+    let dir = crate::common::scratch_outside_tree("batten-symbols", case);
+    std::fs::create_dir_all(dir.join("src")).expect("create the toy source dir");
+    for (path, text) in [
+        (
+            "Cargo.toml",
+            "[package]\nname = \"toy\"\nversion = \"0.0.0\"\nedition = \"2021\"\n",
+        ),
+        ("clippy.toml", TOY_CLIPPY),
+        (
+            "src/lib.rs",
+            "pub mod clap;\npub mod exec;\npub mod surface;\n",
+        ),
+        (
+            "src/clap.rs",
+            "pub struct Command;\nimpl Command {\n    pub fn new(_: &str) -> Self {\n        Command\n    }\n}\n",
+        ),
+        (
+            "src/surface.rs",
+            "pub fn build() -> crate::clap::Command {\n    crate::clap::Command::new(\"x\")\n}\n",
+        ),
+        (
+            "src/exec.rs",
+            "#[expect(clippy::disallowed_types, reason = \"the inventory row\")]\n\
+             pub fn spawn() {\n    let _ = std::process::Command::new(\"true\").status();\n}\n",
+        ),
+    ] {
+        std::fs::write(dir.join(path), text).expect("write the toy");
+    }
+    dir
+}
+
+/// The pinned analyser, reached by path: the toy lives outside this tree, where
+/// no pin is declared for the engine's ladder to read.
+fn toy_launcher() -> symbols::Launcher {
+    let cargo = crate::common::require_tool("cargo");
+    symbols::Launcher::new(cargo.to_str().expect("utf-8"), &[])
 }
 
 /// §7(a). THE CASE THE FACT EXISTS FOR — asserted over SETS, not counts.
@@ -88,8 +122,8 @@ fn repo() -> PathBuf {
 /// a set that excludes `surface.rs` could only have come from name resolution.
 #[test]
 fn the_resolved_set_excludes_what_only_name_resolution_can_exclude() {
-    let root = repo();
-    let Look::Is(resolved) = symbols::resolve(&root, &launcher(&root)) else {
+    let root = toy("resolved-set");
+    let Look::Is(resolved) = symbols::resolve(&root, &toy_launcher()) else {
         panic!("the analyser did not resolve; this suite needs a working `cargo clippy`");
     };
 
@@ -103,9 +137,15 @@ fn the_resolved_set_excludes_what_only_name_resolution_can_exclude() {
 
     // THE DISCRIMINATING PAIR, in both directions.
     assert!(
-        byte_files.contains("crates/batten/src/surface.rs"),
-        "the byte tier must still name surface.rs, or this tree no longer \
-         carries the `clap::Command` case and the discriminator is gone"
+        byte_files.contains("src/surface.rs"),
+        "the byte tier must name surface.rs, or the toy no longer carries the \
+         `clap::Command` case and the discriminator is gone"
+    );
+    // And the annotated spawn IS reported: `--force-warn` is what overrides the
+    // `#[expect]`, so a run without it reports a clean tree over a real spawn.
+    assert!(
+        resolved_files.contains("src/exec.rs"),
+        "the `#[expect]`ed spawn must be in the census: resolved={resolved_files:?}"
     );
     assert!(
         !resolved_files
@@ -131,7 +171,7 @@ fn the_resolved_set_excludes_what_only_name_resolution_can_exclude() {
 /// The byte tier, run here rather than quoted, so the comparison above is a
 /// MEASUREMENT and not a remembered number.
 fn byte_scan(root: &Path) -> std::collections::BTreeSet<&'static str> {
-    let dir = root.join("crates").join("batten").join("src");
+    let dir = root.join("src");
     let needle = ["Command", "::new"].concat();
     let mut found = std::collections::BTreeSet::new();
     for entry in std::fs::read_dir(&dir).expect("read the source directory") {
@@ -147,9 +187,7 @@ fn byte_scan(root: &Path) -> std::collections::BTreeSet<&'static str> {
                 .expect("a source file name");
             // Leaked deliberately and boundedly: the set is compared against
             // repo-relative paths and this suite runs once.
-            found.insert(&*Box::leak(
-                format!("crates/batten/src/{name}").into_boxed_str(),
-            ));
+            found.insert(&*Box::leak(format!("src/{name}").into_boxed_str()));
         }
     }
     found
@@ -165,10 +203,10 @@ fn byte_scan(root: &Path) -> std::collections::BTreeSet<&'static str> {
 /// than merely assumed to exist.
 #[test]
 fn two_runs_agree_and_the_analyser_that_produced_them_is_named() {
-    let root = repo();
+    let root = toy("two-runs");
     let (Look::Is(first), Look::Is(second)) = (
-        symbols::resolve(&root, &launcher(&root)),
-        symbols::resolve(&root, &launcher(&root)),
+        symbols::resolve(&root, &toy_launcher()),
+        symbols::resolve(&root, &toy_launcher()),
     ) else {
         panic!("the analyser did not resolve twice");
     };
@@ -203,10 +241,14 @@ fn two_runs_agree_and_the_analyser_that_produced_them_is_named() {
 /// the analyser said about the source.
 #[test]
 fn no_site_carries_a_byte_of_what_the_analyser_read() {
-    let root = repo();
-    let Look::Is(resolved) = symbols::resolve(&root, &launcher(&root)) else {
+    let root = toy("pointer-only");
+    let Look::Is(resolved) = symbols::resolve(&root, &toy_launcher()) else {
         panic!("the analyser did not resolve");
     };
+    assert!(
+        !resolved.sites.is_empty(),
+        "a census of nothing judges nothing"
+    );
     for site in &resolved.sites {
         assert!(
             !site.path.starts_with('/'),
