@@ -613,6 +613,20 @@ fn take_arm(shared: &Path, dest: &Path, what: &str) -> Result<()> {
     Ok(())
 }
 
+/// Whether identical arms mean a build handed back the wrong binary.
+///
+/// ONLY WHEN THE BASE WAS BUILT IN THIS RUN (CLOUD-2107). CLOUD-2060's mechanism
+/// is two builds into the shared directory in one run, the second inheriting the
+/// first's `batten` units through cargo's mtime fingerprint. A base answered from
+/// the cache — CLOUD-2097's kept head, or an earlier lap's build for the same key
+/// — lent nothing to this run's head build, and a head that is byte-identical to
+/// it is a change that did not touch the binary: measured on CLOUD-2106's
+/// test-only lap, which this guard refused before any measurement.
+//MUTANT identical-arms-always-suspect|s@^    !null \&\& base_built_now \&\& identical$@    !null \&\& identical@|identical_arms_are_suspect_only_when_the_base_was_built_this_run
+fn arms_suspect(null: bool, base_built_now: bool, identical: bool) -> bool {
+    !null && base_built_now && identical
+}
+
 /// Whether two files hold the same bytes; an unreadable side is never "same".
 fn same_bytes(left: &Path, right: &Path) -> bool {
     match (std::fs::read(left), std::fs::read(right)) {
@@ -1120,6 +1134,7 @@ fn measure(repo: &Path, options: Options, base_sha: &str) -> Result<Vec<Record>>
     let out = out_dir(repo)?;
     let shared = arms_target_dir(&perf_dir(repo));
 
+    let mut base_built_now = false;
     let (base_bin, base_tree) = if options.null {
         // The null experiment: the same bytes as both arms. COPIED rather than
         // aliased so hyperfine sees two distinct commands and cannot
@@ -1155,6 +1170,7 @@ fn measure(repo: &Path, options: Options, base_sha: &str) -> Result<Vec<Record>>
             seed_base_target_dir(&perf, &key)?;
         }
         if !base_arm_is_built(&perf, &key) {
+            base_built_now = true;
             build(&base_tree, Some(&shared), "base", PAIR_PROFILE)?;
             // A cargo that exits 0 without leaving the binary is could-not-look,
             // never a measurement: hyperfine would report the missing path as a
@@ -1189,11 +1205,13 @@ fn measure(repo: &Path, options: Options, base_sha: &str) -> Result<Vec<Record>>
         }
     }
     // THE GUARD THE MEASURED DEFECT LACKED (CLOUD-2060): a pair whose arms are
-    // the same bytes measures nothing, and its ratio of ~1 reads as a pass. A lap
-    // reaches here only when the crate changed, so identical arms mean a build
-    // handed back the wrong binary. The null experiment copies one arm on
-    // purpose, after this.
-    if !options.null && same_bytes(&base_bin, &head_bin) {
+    // the same bytes measures nothing, and its ratio of ~1 reads as a pass. The
+    // null experiment copies one arm on purpose, after this.
+    if arms_suspect(
+        options.null,
+        base_built_now,
+        same_bytes(&base_bin, &head_bin),
+    ) {
         bail!(
             "perf-pair: the head arm is byte-identical to the base arm, so a build handed back the wrong binary. No measurement."
         );
@@ -3360,6 +3378,22 @@ mod tests {
             "nothing recorded is not trusted"
         );
         assert!(!switches_arm(Some("head"), "head"));
+    }
+
+    /// CLOUD-2107: identical arms are a broken build only when this run built the
+    /// base into the shared directory; a cached base cannot have lent its units.
+    #[test]
+    fn identical_arms_are_suspect_only_when_the_base_was_built_this_run() {
+        assert!(arms_suspect(false, true, true), "CLOUD-2060's own case");
+        assert!(
+            !arms_suspect(false, false, true),
+            "a cached base equal to the head is an unchanged binary"
+        );
+        assert!(!arms_suspect(false, true, false));
+        assert!(
+            !arms_suspect(true, true, true),
+            "the null experiment is exempt"
+        );
     }
 
     /// CLOUD-2060: the guard that reads two identical arms as a broken build.
