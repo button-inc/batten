@@ -7,6 +7,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.202](https://github.com/button-inc/batten/compare/v0.0.201...v0.0.202) - 2026-10-04
+
+### Added
+
+- *(forge)* record forge's nothing-graded statuses are config, and widening them is a weakening
+- *(preset)* pre-approve every write batten allows in auto mode
+- *(engine)* [**breaking**] gate the engine pin on the landing path, and keep a source pin current
+
+### Fixed
+
+- *(perf)* suspect identical arms only when this run built the base
+- *(forge)* append the nothing-graded weakening rather than insert it
+- *(forge)* an absent nothing_graded is the documented default, so the key needs no release to land
+- *(engine)* the pin gate asks the pinned release to lint the config, not merely to load it
+- *(config)* collapse the schema walk's nested reference guard
+- *(commit)* route the commit-msg classes to commands the gate admits
+- *(config)* cap every config prose column at load and in both schemas
+- *(commit)* [**breaking**] lead every commit-msg refusal with a declared verdict class
+- *(git)* escape the pipes in the identity-less-commit mutation row
+- *(land)* admit a remote whose every commit the head already carries
+- *(policy)* a class the binary ships no longer bricks the mediated boundary
+- *(prune)* put the examples mutation row at column 0
+- *(hk)* run the root clippy once, not once per Cargo workspace
+- *(prune)* reclaim superseded example generations like deps
+- *(step)* tee a step's own output so a failing gate names its failure
+- *(gitwrite)* declare drop_set's mutant at column 0
+- keep the three gate fixes within clippy and the fixture template
+- *(gitwrite)* drop the lease holder's republished commits on a bet's unwind
+- *(land)* point the trunk's tracking ref at the landed head on retirement
+- *(hook)* the unloadable-config floor admits tools that mutate nothing
+- *(land)* retire the single-partition lap reader the lease replaced
+- *(land)* the push lease follows replays across a chain and a re-claim
+- *(policy)* dropping a PR subscription is granted in every mode
+- *(hook)* a newline after a verdict-bearing command replaces its status
+- *(engine)* never self-update a build of the checkout, and re-exec by the path read before the swap
+- *(engine)* cache a pinned release in the repository's state, never inside the checkout
+
+### Other
+
+- *(test)* read the bypass hatches without the validated config load
+- *(prune)* reclaim a live unit's superseded .dwo generations
+- *(prune)* keep an earlier row out of a later row's root
+- *(config)* parse one authority once per process
+- *(identity)* borrow already-canonical text instead of rewriting it
+- *(semver)* keep the lock route's rustdoc targets warm
+- *(pointer-only)* hold every echoed config column to a declared, capped leaf
+- *(perf)* keep the head arm as the next lap's base
+- *(config)* read only [forge] in the prologue, never the whole authority
+- *(preapprove)* grant cases write outside the checkout
+- *(preset)* judge write-is-preapproved over compound lines
+- *(engine)* regenerate completions, man pages, the hk contract and the schema snapshot for engine pin and gate
+
 ## [0.0.201](https://github.com/button-inc/batten/compare/v0.0.200...v0.0.201) - 2026-10-03
 
 ### Added
