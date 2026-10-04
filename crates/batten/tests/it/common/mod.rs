@@ -325,21 +325,47 @@ fn bypass_env_vars() -> Vec<String> {
     // list of hatch names. CLOUD-1227 is explicit about why: a list "stops
     // covering the next row somebody adds, silently, in the direction that
     // weakens the suite". The signature is unchanged so no caller has to know.
-    static NAMES: std::sync::LazyLock<Vec<String>> = std::sync::LazyLock::new(|| {
-        let mut names = Vec::new();
-        if let Ok(config) = batten::config::load(&at_root("batten.toml")) {
-            names.extend(
-                config
-                    .rules
-                    .iter()
-                    .filter_map(|rule| rule.bypass_env.clone()),
-            );
-        }
-        names.sort();
-        names.dedup();
-        names
-    });
+    //
+    // AND READ CHEAPLY, BECAUSE THE MEMO IS PER PROCESS (CLOUD-2106). nextest
+    // runs one process per case, so the `LazyLock` saves nothing across the suite
+    // and every spawning case paid the whole validated load at the test binary's
+    // opt-level 0: 242M of `cli::help_leads_with_the_crate_description`'s 251M
+    // instructions. The names are still read out of the committed file; only the
+    // `[[rule]]` rows' `bypass_env` is looked at, and
+    // `the_cheap_bypass_read_names_what_the_full_load_names` holds this read to
+    // the full load's answer.
+    static NAMES: std::sync::LazyLock<Vec<String>> =
+        std::sync::LazyLock::new(|| bypass_env_vars_in(&at_root("batten.toml")));
     NAMES.clone()
+}
+
+/// `[[rule]].bypass_env` out of the config at `path`, sorted and deduplicated,
+/// without the validated load. A file that will not read or parse yields nothing,
+/// as the full load's failure did.
+///
+/// A two-field serde view rather than a `toml::Value` tree: everything but the
+/// `[[rule]]` rows' one column is skipped by the deserializer instead of built.
+//MUTANT bypass-read-drops-rows|s@^        .filter_map(\x7crule\x7c rule.bypass_env)$@        .filter_map(\x7crule\x7c rule.bypass_env.filter(\x7c_\x7c false))@|the_cheap_bypass_read_names_what_the_full_load_names
+pub(crate) fn bypass_env_vars_in(path: &Path) -> Vec<String> {
+    #[derive(serde::Deserialize)]
+    struct Rows {
+        #[serde(default)]
+        rule: Vec<Row>,
+    }
+    #[derive(serde::Deserialize)]
+    struct Row {
+        bypass_env: Option<String>,
+    }
+    let mut names: Vec<String> = fs::read_to_string(path)
+        .ok()
+        .and_then(|text| toml::from_str::<Rows>(&text).ok())
+        .map_or_else(Vec::new, |rows| rows.rule)
+        .into_iter()
+        .filter_map(|rule| rule.bypass_env)
+        .collect();
+    names.sort();
+    names.dedup();
+    names
 }
 
 /// The compiled binary, with the ambient environment scrubbed.

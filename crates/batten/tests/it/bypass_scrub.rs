@@ -87,6 +87,44 @@ fn every_row_declared_hatch_is_scrubbed() {
     }
 }
 
+/// THE CHEAP READ IS HELD TO THE FULL LOAD (CLOUD-2106).
+///
+/// `common` reads the hatches through a lenient TOML view rather than the
+/// validated load, because the load was 96% of a spawning case's own CPU. A cheap
+/// read that missed a row would scrub less, silently, so both readers are compared
+/// on a config that DOES declare a hatch — the committed one declares none today,
+/// which would make the comparison vacuous — and on the committed file itself.
+#[test]
+fn the_cheap_bypass_read_names_what_the_full_load_names() {
+    let root = common::scratch_repo("bypass-cheap-read");
+    write(
+        &root,
+        "batten.toml",
+        "version = 1\n\n[[rule]]\nid = \"no-touching\"\nkind = \"shape\"\n\
+         scope = \"mediated_call\"\nseverity = \"deny\"\npattern = \"touch guarded.txt\"\n\
+         reason = \"the fixture declares a hatch\"\nbypass_env = \"BATTEN_FIXTURE_HATCH\"\n",
+    );
+    let full = |path: &std::path::Path| -> Vec<String> {
+        let mut names: Vec<String> = batten::config::load(path)
+            .expect("the config loads")
+            .rules
+            .iter()
+            .filter_map(|rule| rule.bypass_env.clone())
+            .collect();
+        names.sort();
+        names.dedup();
+        names
+    };
+    let fixture = root.join("batten.toml");
+    assert_eq!(
+        common::bypass_env_vars_in(&fixture),
+        vec![String::from("BATTEN_FIXTURE_HATCH")]
+    );
+    assert_eq!(common::bypass_env_vars_in(&fixture), full(&fixture));
+    let committed = at_root("batten.toml");
+    assert_eq!(common::bypass_env_vars_in(&committed), full(&committed));
+}
+
 /// THE REMOVED GLOBAL HATCH OPENS NOTHING, asserted on the compiled binary.
 ///
 /// `BATTEN_HOOK_BYPASS` used to turn this refusal into an allow; the engine no
