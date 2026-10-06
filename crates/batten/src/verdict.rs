@@ -2227,6 +2227,18 @@ discovering either at adjudication.",
         applicability: Applicability::Advice,
     },
     VendoredVerdict {
+        id: "register declare refused",
+        gloss: "the declared-key-set registry would not load",
+        class: "`[[register]]` is where a key set a `reference` row resolves against is \
+DECLARED -- which file, which column, which node -- so a consumer's vocabulary stays out of \
+the core and the engine owns the one table grammar. A malformed row here is a config fault: \
+a key column past the declared width, or a blank key node, would build a set that answers \
+about the wrong cells while loading clean. Refusing at load is what stops a gate discovering \
+it at adjudication.",
+        routes: &[read("config read first", "batten.toml")],
+        applicability: Applicability::Advice,
+    },
+    VendoredVerdict {
         id: "verdict declare refused",
         gloss: "the refusal vocabulary would not load",
         class: "`[[verdict]]` is the registry every other class in this table belongs to: a \
