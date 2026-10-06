@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.203](https://github.com/button-inc/batten/compare/v0.0.202...v0.0.203) - 2026-10-06
+
+### Added
+
+- *(register)* [**breaking**] append the register refusal last, and declare the API break
+- *(traversal)* walk each declared traversal once per run into input.tree.traversals
+- *(facts)* project traversals into the tree document (wip)
+- *(facts)* declare the traversals tree fact (wip)
+- *(traversal)* document edges, seeds, a register terminal and where a chain broke (wip)
+- *(register)* dispatch the reference kind and resolve citations (wip)
+- *(register)* the reference kind, the cites spec and per-column patterns (wip)
+- *(register)* carry registers and traversals to the runner, and the reference join
+- *(register)* declare [[register]] in config, trust and the verdict table
+- *(register)* a declared key set and the one GFM row grammar
+
+### Fixed
+
+- *(land)* ready and re-draft through the proxy's REST route when GraphQL is refused
+- *(land)* never pause after a race arm's final ask
+- *(register)* refuse the four review findings' cases
+- *(verdict)* declare the register refusal class in the vendored table
+- *(traversal)* labels are optional beside declared edges, and the graph is Debug
+- *(register)* a flattened source cannot sit under deny_unknown_fields
+
+### Other
+
+- register the reference kind, its refusal class and the traversals fact in every census
+- regenerate the schema, register its module and input key, and stay inside clippy's line budget
+- *(register)* a tracked citer deleted from the worktree is absent, not a finding
+- *(traversal)* close the cargo-mutants survivors; build each walk's registers once
+- keep consumer vocabulary out of crates/batten (rule 1)
+- *(traversal)* the 04 -> 02 -> 01 chain through the compiled binary, a break at each hop
+- *(facts)* classify traversals in the fact census
+- *(traversal)* the document graph breaks at each hop and closes at a registered capture
+- *(register)* close the cargo-mutants survivors over register.rs
+- *(register)* retire the //MUTANT rows; Rust mutation is cargo-mutants
+- *(register)* the four mutants the reference kind owes
+- *(register)* the reference kind through the compiled binary
+- *(register)* classify cites and the reference kind in the censuses
+- *(register)* widen the column census for cites
+- *(register)* cover the reference kind in the kind census and column list
+- name registers in the two remaining Vocabulary literals
+
 ## [0.0.202](https://github.com/button-inc/batten/compare/v0.0.201...v0.0.202) - 2026-10-04
 
 ### Added
