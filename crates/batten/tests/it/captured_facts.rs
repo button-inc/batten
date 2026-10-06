@@ -474,11 +474,10 @@ fn a_mentioning_document_does_not_answer_for_the_key() {
     // holds and the search is asserted, because a case that merely hoped for it
     // would pass under the old code whenever the coin landed the other way — and
     // a test that cannot discriminate is the thing CLOUD-418 is about.
-    let dir = scratch("captured-subject");
+    let dir = common::Fixture::new("captured-subject").git().build();
     let home = scratch("captured-subject-home");
     write(&dir, "batten.toml", &subject_config());
     write(&dir, "probe.rego", SUBJECT_PROBE);
-    git_in(&dir, &["init", "-q", "-b", "main", "."]);
 
     let store = home
         .join("data")
