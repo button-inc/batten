@@ -342,6 +342,7 @@ mod record_closes;
 mod record_families;
 mod record_verdicts;
 mod redirect_resolves;
+mod reference;
 mod reference_coverage;
 mod refusal_ceiling;
 mod refusal_render_bench;
