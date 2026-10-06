@@ -27,6 +27,16 @@
 //! config, and one reading it as "nothing to check" would pass a tree it never
 //! looked at — CLOUD-1793's class, from both sides.
 
+// THE FOUR MUTANTS CLOUD-2005 NAMES, each killed by one compiled-binary case.
+// The escaped-pipe arm without its `chars.next()` leaves the `|` it consumed to
+// close the cell, so `\|` widens a row again; the build reading only its first
+// input loses the union across `paths`; `inverse` and `refused_values`
+// switched off each let their own case pass silently.
+//MUTANT-SUITE crates/batten/tests/it/reference.rs
+//MUTANT escaped-pipe-arm-dropped|s@^                chars.next();$@@|an_unescaped_pipe_widens_the_row_and_an_escaped_one_is_quiet
+//MUTANT register-paths-union-dropped|s@^    for input in inputs {$@    for input in inputs.iter().take(1) {@|a_key_in_two_register_paths_is_refused
+//MUTANT inverse-dropped|s@^    if inverse {$@    if false {@|an_index_key_no_document_names_is_refused_under_inverse
+//MUTANT refused-values-dropped|s@^                if refused(node, refused_values) {$@                if false {@|a_document_witness_admits_unless_its_only_witness_is_refused
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
