@@ -1687,9 +1687,16 @@ pub fn run_in_with_env(
 // and broke the build, so its suite never ran; and the third named a binding in
 // another file — a row only mutates the source that declares it — so it changed
 // its own line and nothing else.
-//MUTANT exec-lock-empty-holder-read-as-free|s@Claim::Taken \x7c task::Claim::Reclaimed(_)@Claim::Taken \x7c task::Claim::Reclaimed(_) \x7c task::Claim::Held { .. }@|an_empty_holder_file_is_held_not_free
-//MUTANT exec-lock-dead-holder-not-reclaimed|s@LOCK_POLL, want.attempts)@LOCK_POLL, 1)@|a_dead_holder_is_reclaimed_rather_than_waited_out
-//MUTANT-SUITE crates/batten/tests/it/exec_lock.rs
+//
+// AND THEN WITHDRAWN, the first two being unprovable once they ran (CLOUD-2059).
+// The first mutated toward the pre-CLOUD-1895 reading (an empty holder is HELD)
+// and named a case that no longer exists. Re-aimed at this file's own decision —
+// a reclaim acquires — it was equivalent: the refused arm hands a `Reclaimed` to
+// `task::report_claim`, which answers it as success, so no exit code here can
+// tell the two apart. The second capped the asks at one, and a dead holder is
+// reclaimed inside one ask, so it was equivalent too. Both decisions live in
+// `task::singleton_acquire_at`, whose own row (`an-empty-pid-file-is-a-live-holder`)
+// is red; a row here could only restate it.
 
 /// How long the queue is when the caller does not say — the shell's own default
 /// (600s at one ask per 100ms), stated as the count it always was.
