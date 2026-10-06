@@ -10330,10 +10330,6 @@ expires = "2026-10-31"
 # The expiry is short on purpose. PR #842 carries CLOUD-1387's fix; this should
 # be removed by whoever lands it, and the date is what forces the question if
 # they do not.
-[[waiver]]
-rule = "claim mint absent"
-reason = "CLOUD-1387: `captured::reduce` selects the first capture whose bytes MENTION the key rather than the one it is the subject of, so a response quoting the row shadows its real payload and `present` answers false over a row that is on a project. Fix is open in PR #842; remove this waiver with it."
-expires = "2026-10-04"
 [ci]
 required_checks = ["final"]
 # PATHS PROVEN INERT TO THE hk SLOW TIER (CLOUD-398), ported out of
