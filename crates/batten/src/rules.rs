@@ -399,6 +399,20 @@ pub enum RuleKind {
     /// the authority is the opposite of both. Globbing a policy directory would
     /// be the thing §8 refuses.
     Policy,
+    /// **Every cited token resolves to a key of a declared `[[register]]`**
+    /// (CLOUD-2005): the predicate a consumer otherwise hand-writes per citation
+    /// shape, measured at 94.6 s for one policy row whose joins rescanned every
+    /// register row per row.
+    ///
+    /// The join is the engine's, in [`crate::register::resolve`]: a map probe per
+    /// citation, never a rescan, so the cost is linear in citations plus keys.
+    /// The row's [`Rule::cites`] names the register and the citer; the citer's
+    /// paths come from the row's `glob` unless it cites another register.
+    ///
+    /// Deny-only and pointer-only: rule id, citer `path:line` or path, and the
+    /// register id. A register that could not be built is could-not-look and is
+    /// reported as such, never as an empty set.
+    Reference,
 }
 
 /// What a rule kind may reach beyond the inputs the boundary handed it
@@ -2020,6 +2034,10 @@ pub struct Rule {
     /// reviewer should have to answer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub derives: Option<String>,
+    /// What a [`RuleKind::Reference`] row cites and the register it resolves
+    /// against (CLOUD-2005). Required by that kind, refused by every other.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cites: Option<crate::register::Cites>,
     /// The derived value this rule compares its node against — [`Rule::pattern`]'s
     /// **alternative**, never an addition to it. [`RuleKind::Document`] only.
     ///

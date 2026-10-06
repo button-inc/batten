@@ -54,6 +54,11 @@ pub enum Source {
         /// A `[[pattern]]` id every key must match in full.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         key_pattern: Option<String>,
+        /// Per-column `[[pattern]]` ids, keyed by 1-based column. Each
+        /// NON-EMPTY cell must match its column's pattern in full; an empty cell
+        /// is not a claim and is never checked.
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        patterns: BTreeMap<String, String>,
         /// Whether a key may appear on two rows, across every declared path.
         #[serde(default)]
         unique: bool,
@@ -85,6 +90,73 @@ pub struct DeclaredRegister {
     /// Where the keys come from.
     #[serde(flatten)]
     pub source: Source,
+}
+
+/// What a `kind = "reference"` row cites and resolves against (CLOUD-2005).
+///
+/// One nested table rather than seven more columns on [`crate::rules::Rule`],
+/// which already carries one per kind: every field here means something only to
+/// this kind, so they travel together and are refused together on any other.
+///
+/// The CITER is one of three shapes, chosen by which fields are set:
+/// `from_register` + `column` (another register's cells, optionally `split`);
+/// else the row's `glob` + `regex` (each capture-group-1 hit, else each whole
+/// hit, on each line); else the row's `glob` + `format` + `node` (a frontmatter
+/// scalar or list).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Cites {
+    /// The register every cited token must be a key of.
+    pub register: String,
+    /// Cite the cells of this register's `column` rather than lines or a node.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_register: Option<String>,
+    /// The 1-based column `from_register` cites.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub column: Option<usize>,
+    /// Split a cited cell on this separator; each trimmed member is a token.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub split: Option<String>,
+    /// Only tokens that are keys of this register are this rule's business.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub within: Option<String>,
+    /// A `[[pattern]]` id whose first capture group over a path names its
+    /// partition; the join is scoped to it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub partition: Option<String>,
+    /// `"citer"` joins each token to the citer's directory before resolving.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relative_to: Option<RelativeTo>,
+    /// Also refuse every key no citation names (set equality).
+    #[serde(default)]
+    pub inverse: bool,
+}
+
+/// What a cited token is joined to before it is resolved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum RelativeTo {
+    /// The directory of the file the token was cited in.
+    Citer,
+}
+
+/// `token` joined to the directory of `citer`, `.`/`..` folded lexically.
+#[must_use]
+pub fn joined(citer: &str, token: &str) -> String {
+    let mut parts: Vec<&str> = match citer.rsplit_once('/') {
+        Some((dir, _)) => dir.split('/').collect(),
+        None => Vec::new(),
+    };
+    for segment in token.split('/') {
+        match segment {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            other => parts.push(other),
+        }
+    }
+    parts.join("/")
 }
 
 /// Where a key was witnessed: a path and, for a table row, its line.
@@ -241,15 +313,21 @@ pub enum Input<'a> {
 
 /// Build `register` from its acquired inputs.
 ///
-/// `key_pattern` is the compiled `[[pattern]]` the row names (table) or its
-/// capture pattern (tree); the caller resolves the id so this stays pure.
-/// `inputs` empty is could-not-look (`at` is the first declared glob).
+/// `patterns` is the compiled `[[pattern]]` table ([`crate::pattern`]); every
+/// id the row names is resolved there, so this stays pure. An id it does not
+/// carry was refused at load. `inputs` empty is could-not-look (`at` is the
+/// first declared glob).
 #[must_use]
 pub fn build(
     register: &DeclaredRegister,
-    key_pattern: Option<&regex::Regex>,
+    patterns: &BTreeMap<String, regex::Regex>,
     inputs: &[Input<'_>],
 ) -> Built {
+    let key_pattern = match &register.source {
+        Source::Table { key_pattern, .. } => key_pattern.as_ref().and_then(|id| patterns.get(id)),
+        Source::Tree { pattern } => patterns.get(pattern),
+        Source::Documents { .. } => None,
+    };
     if inputs.is_empty() {
         return Built::CouldNotLook {
             at: register.paths.first().cloned().unwrap_or_default(),
@@ -266,6 +344,7 @@ pub fn build(
                     width,
                     row_prefix,
                     unique,
+                    patterns: columns,
                     ..
                 },
             ) => {
@@ -273,7 +352,10 @@ pub fn build(
                     let Some(cell) = row.get(key.saturating_sub(1)) else {
                         continue;
                     };
-                    if row_prefix.as_deref().is_some_and(|prefix| !cell.starts_with(prefix)) {
+                    if row_prefix
+                        .as_deref()
+                        .is_some_and(|prefix| !cell.starts_with(prefix))
+                    {
                         continue;
                     }
                     let witness = Witness {
@@ -283,7 +365,14 @@ pub fn build(
                     if row.len() != *width {
                         defects.push(Defect::Width(witness.clone()));
                     }
-                    if key_pattern.is_some_and(|re| !full_match(re, cell)) {
+                    let column_malformed = columns.iter().any(|(column, id)| {
+                        let at = column.parse::<usize>().unwrap_or(0).saturating_sub(1);
+                        row.get(at).is_some_and(|value| {
+                            !value.is_empty()
+                                && patterns.get(id).is_some_and(|re| !full_match(re, value))
+                        })
+                    });
+                    if column_malformed || key_pattern.is_some_and(|re| !full_match(re, cell)) {
                         defects.push(Defect::Malformed(witness.clone()));
                     }
                     let seen = keys.entry(cell.clone()).or_default();
@@ -370,10 +459,9 @@ pub fn scalars(node: &Node, path: &str) -> Vec<String> {
         return Vec::new();
     };
     match (at, tail) {
-        (Node::List(items), Some(tail)) => items
-            .iter()
-            .flat_map(|item| scalars(item, tail))
-            .collect(),
+        (Node::List(items), Some(tail)) => {
+            items.iter().flat_map(|item| scalars(item, tail)).collect()
+        }
         (Node::List(items), None) => items.iter().filter_map(Node::scalar).collect(),
         (other, None) => other.scalar().into_iter().collect(),
         (_, Some(_)) => Vec::new(),
@@ -550,6 +638,7 @@ mod tests {
                 width,
                 row_prefix: None,
                 key_pattern: None,
+                patterns: BTreeMap::new(),
                 unique,
             },
         }
@@ -578,9 +667,14 @@ mod tests {
     fn a_wide_row_is_a_width_defect_and_the_escaped_one_is_quiet() {
         let reg = table(2, false);
         let text = lines("| k | v |\n| - | - |\n| a|b | 1 |\n| a\\|b | 1 |");
-        let Built::Keys { defects, keys } =
-            build(&reg, None, &[Input::Lines { path: "a.md", lines: &text }])
-        else {
+        let Built::Keys { defects, keys } = build(
+            &reg,
+            &BTreeMap::new(),
+            &[Input::Lines {
+                path: "a.md",
+                lines: &text,
+            }],
+        ) else {
             panic!("built");
         };
         assert_eq!(
@@ -600,10 +694,16 @@ mod tests {
         let b = lines("| k1 | 2 |");
         let built = build(
             &reg,
-            None,
+            &BTreeMap::new(),
             &[
-                Input::Lines { path: "a.md", lines: &a },
-                Input::Lines { path: "b.md", lines: &b },
+                Input::Lines {
+                    path: "a.md",
+                    lines: &a,
+                },
+                Input::Lines {
+                    path: "b.md",
+                    lines: &b,
+                },
             ],
         );
         let Built::Keys { defects, .. } = built else {
@@ -621,7 +721,7 @@ mod tests {
     #[test]
     fn no_inputs_is_could_not_look_never_empty() {
         assert!(matches!(
-            build(&table(2, false), None, &[]),
+            build(&table(2, false), &BTreeMap::new(), &[]),
             Built::CouldNotLook { .. }
         ));
     }
@@ -658,10 +758,16 @@ mod tests {
         ]);
         let built = build(
             &reg,
-            None,
+            &BTreeMap::new(),
             &[
-                Input::Document { path: "att/1.md", node: Some(&good) },
-                Input::Document { path: "att/2.md", node: Some(&bad) },
+                Input::Document {
+                    path: "att/1.md",
+                    node: Some(&good),
+                },
+                Input::Document {
+                    path: "att/2.md",
+                    node: Some(&bad),
+                },
             ],
         );
         assert_eq!(built.contains("cap-a"), Some(true));
@@ -679,7 +785,15 @@ mod tests {
             },
         };
         assert_eq!(
-            build(&reg, None, &[Input::Document { path: "x.md", node: None }]).contains("k"),
+            build(
+                &reg,
+                &BTreeMap::new(),
+                &[Input::Document {
+                    path: "x.md",
+                    node: None
+                }]
+            )
+            .contains("k"),
             None
         );
     }
@@ -690,7 +804,10 @@ mod tests {
             ("one", Node::Text(String::from("a"))),
             (
                 "many",
-                Node::List(vec![Node::Text(String::from("b")), Node::Text(String::from("c"))]),
+                Node::List(vec![
+                    Node::Text(String::from("b")),
+                    Node::Text(String::from("c")),
+                ]),
             ),
             (
                 "consumes",
