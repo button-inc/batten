@@ -1808,6 +1808,7 @@ fn run_baseline(
             verdicts: &config.verdicts,
             words: (!config.vocabulary.is_empty()).then_some(&config.vocabulary),
             recorders: &config.recorders,
+            registers: &config.registers,
             records: &config.records,
         },
         &root,
@@ -8367,6 +8368,7 @@ fn admission_anchor(
             verdicts: &config.verdicts,
             words: (!config.vocabulary.is_empty()).then_some(&config.vocabulary),
             recorders: &config.recorders,
+            registers: &config.registers,
             records: &config.records,
         },
         root,
@@ -8661,6 +8663,7 @@ fn run_policy_test(json: bool, overrides: &Overrides, out: &mut dyn Write) -> Re
             verdicts: &config.verdicts,
             words: (!config.vocabulary.is_empty()).then_some(&config.vocabulary),
             recorders: &config.recorders,
+            registers: &config.registers,
             records: &config.records,
         },
         policy::ModuleChecks::Run,
@@ -18873,6 +18876,7 @@ fn filed_here_pointers(
         verdicts: &config.verdicts,
         words: (!config.vocabulary.is_empty()).then_some(&config.vocabulary),
         recorders: &config.recorders,
+        registers: &config.registers,
         records: &config.records,
     };
     // `run_static_over` WITH AN INSTANT, because the four-argument wrapper hands
@@ -22237,6 +22241,7 @@ fn run_rules(
         verdicts: &config.verdicts,
         words: (!config.vocabulary.is_empty()).then_some(&config.vocabulary),
         recorders: &config.recorders,
+        registers: &config.registers,
         records: &config.records,
     };
     let (selected, checks) = select_rules(&config.rules, only)?;

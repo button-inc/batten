@@ -380,6 +380,100 @@ pub fn scalars(node: &Node, path: &str) -> Vec<String> {
     }
 }
 
+/// One cited token, where it was cited, and the partition it was cited in.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Citation {
+    /// The token, as cited.
+    pub token: String,
+    /// Where: the citer's path and, for a line or a row, its line.
+    pub at: Witness,
+}
+
+/// Why a reference rule refused.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Refusal {
+    /// A cited token is not a key of the register (in its partition).
+    Unresolved(Citation),
+    /// A key no citer names — `inverse` only. Reported at the key's witness.
+    Uncited(Witness),
+    /// A defect in the register itself.
+    Register(Defect),
+    /// The register could not be looked at; nothing about the citations is known.
+    CouldNotLook(String),
+}
+
+/// Which partition `path` falls in: `partition`'s first capture group, or the
+/// root partition (`""`) when it does not match.
+///
+/// THE JOIN IS SCOPED, NOT GLOBAL. A witness under one workspace admitting a
+/// citer under another is a cross-tree claim nobody made.
+#[must_use]
+pub fn partition_of(partition: Option<&regex::Regex>, path: &str) -> String {
+    partition
+        .and_then(|re| re.captures(path))
+        .and_then(|caps| caps.get(1))
+        .map_or_else(String::new, |found| found.as_str().to_owned())
+}
+
+/// Resolve `citations` against `register`.
+///
+/// `within` narrows the citations to tokens that are keys of a second built set
+/// (a token outside it is not this rule's business). `partition` scopes each
+/// lookup to witnesses in the citer's own partition. `inverse` also refuses
+/// every key no citation names, which makes the rule set equality.
+///
+/// Linear in citations plus keys: every lookup is a map probe, never a rescan.
+#[must_use]
+pub fn resolve(
+    register: &Built,
+    citations: &[Citation],
+    within: Option<&Built>,
+    partition: Option<&regex::Regex>,
+    inverse: bool,
+) -> Vec<Refusal> {
+    let Built::Keys { keys, defects } = register else {
+        let Built::CouldNotLook { at } = register else {
+            return Vec::new();
+        };
+        return vec![Refusal::CouldNotLook(at.clone())];
+    };
+    if let Some(Built::CouldNotLook { at }) = within {
+        return vec![Refusal::CouldNotLook(at.clone())];
+    }
+    let mut out: Vec<Refusal> = defects.iter().cloned().map(Refusal::Register).collect();
+    let mut cited: BTreeSet<(&str, String)> = BTreeSet::new();
+    for citation in citations {
+        if within.is_some_and(|set| set.contains(&citation.token) == Some(false)) {
+            continue;
+        }
+        let here = partition_of(partition, &citation.at.path);
+        let admitted = keys.get(&citation.token).is_some_and(|witnesses| {
+            partition.is_none()
+                || witnesses
+                    .iter()
+                    .any(|witness| partition_of(partition, &witness.path) == here)
+        });
+        if admitted {
+            cited.insert((citation.token.as_str(), here));
+        } else {
+            out.push(Refusal::Unresolved(citation.clone()));
+        }
+    }
+    if inverse {
+        for (key, witnesses) in keys {
+            for witness in witnesses {
+                let there = partition_of(partition, &witness.path);
+                if !cited.contains(&(key.as_str(), there)) {
+                    out.push(Refusal::Uncited(witness.clone()));
+                }
+            }
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
 /// Refuse a malformed table at load (house style §8).
 ///
 /// # Errors

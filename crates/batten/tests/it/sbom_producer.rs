@@ -1088,6 +1088,7 @@ fn judged(name: &str, rows: &[&str]) -> Vec<(String, Option<usize>)> {
             verdicts: &verdicts,
             words: None,
             recorders: &[],
+            registers: &[],
             records: &[],
         },
         &root,

@@ -543,6 +543,14 @@ pub struct Resolved {
     /// carried for [`Resolved::verbs`]'s reason and layered the same way.
     #[serde(rename = "pattern")]
     pub patterns: Vec<crate::pattern::NamedPattern>,
+    /// The declared-walk table (CLOUD-1866), carried for
+    /// [`Resolved::patterns`]'s reason. Authority only: a local layer adding a
+    /// walk is not a weakening, but no consumer has asked for one.
+    #[serde(rename = "traversal", default, skip_serializing_if = "Vec::is_empty")]
+    pub traversals: Vec<crate::traversal::DeclaredTraversal>,
+    /// The declared-key-set table (CLOUD-2005), carried for the same reason.
+    #[serde(rename = "register", default, skip_serializing_if = "Vec::is_empty")]
+    pub registers: Vec<crate::register::DeclaredRegister>,
     /// The refusal vocabulary (CLOUD-1050), consumer data the authority
     /// supplies — carried for [`Resolved::patterns`]'s reason and layered the
     /// same way.
@@ -1746,6 +1754,8 @@ fn assemble(
         contract: repo.contract.clone(),
         verbs: repo.verbs.clone(),
         patterns: repo.patterns.clone(),
+        traversals: repo.traversals.clone(),
+        registers: repo.registers.clone(),
         verdicts: repo.verdicts.clone(),
         vocabulary: repo.vocabulary.clone(),
         redirects: tables.redirects,

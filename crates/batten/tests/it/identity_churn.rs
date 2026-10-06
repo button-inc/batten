@@ -85,6 +85,7 @@ impl Scan {
                 verdicts: &verdicts,
                 words: None,
                 recorders: &[],
+                registers: &[],
                 records: &[],
             },
             root,

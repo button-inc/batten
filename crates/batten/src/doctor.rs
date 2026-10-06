@@ -2605,6 +2605,7 @@ fn unminted_facts(dir: &Path) -> Vec<Unminted> {
             // An authoring property, and this is a diagnosis of the container.
             words: None,
             recorders: &resolved.recorders,
+            registers: &resolved.registers,
             records: &resolved.records,
         },
         crate::policy::ModuleChecks::SkipOnHotPath,

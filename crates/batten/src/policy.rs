@@ -706,6 +706,11 @@ pub struct Vocabulary<'a> {
     /// has the recorders too. The alternative was a fifth positional on four
     /// public entry points, which is the shape this parameter exists to prevent.
     pub recorders: &'a [crate::recorder::Declared],
+    /// The `[[register]]` table (CLOUD-2005), read by a `reference` rule.
+    ///
+    /// Here for `recorders`' reason: config the consumer declares, fixed for the
+    /// life of the load, and needed at the call sites that already hold this.
+    pub registers: &'a [crate::register::DeclaredRegister],
     /// The `[[record]]` table (CLOUD-1810).
     ///
     /// Here for the same reason `recorders` is, and it is the same question: a
@@ -727,6 +732,7 @@ impl Vocabulary<'_> {
         verdicts: &[],
         words: None,
         recorders: &[],
+        registers: &[],
         records: &[],
     };
 }
@@ -738,6 +744,7 @@ impl<'a> From<&'a crate::config::Config> for Vocabulary<'a> {
             verdicts: &config.verdicts,
             words: (!config.vocabulary.is_empty()).then_some(&config.vocabulary),
             recorders: &config.recorders,
+            registers: &config.registers,
             records: &config.records,
         }
     }
@@ -755,6 +762,7 @@ impl<'a> From<&'a crate::resolve::Resolved> for Vocabulary<'a> {
             verdicts: &resolved.verdicts,
             words: (!resolved.vocabulary.is_empty()).then_some(&resolved.vocabulary),
             recorders: &resolved.recorders,
+            registers: &resolved.registers,
             records: &resolved.records,
         }
     }
@@ -849,6 +857,7 @@ pub fn load(
         verdicts,
         words,
         recorders: _,
+        registers: _,
         records: _,
     } = vocabulary;
     // The table is validated at PARSE, beside `verbs` and `redirects` and for
