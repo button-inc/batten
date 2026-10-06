@@ -7524,6 +7524,7 @@ fn suite_input(
         // so every member here is empty for one reason: this call builds the
         // SHAPE, and the case chooses the values.
         &rules::Resolved {
+            traversals: &serde_json::Value::Null,
             review: &crate::facts::Look::IsNot,
             produced: &std::collections::BTreeMap::new(),
             records: &std::collections::BTreeMap::new(),

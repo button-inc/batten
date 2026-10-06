@@ -7214,6 +7214,7 @@ fn run(
     // anything narrower would answer for half the classes a module may raise.
     let registry = crate::policy::registry_for(vocabulary.verdicts)?;
     let patterns = crate::pattern::compiled(vocabulary.patterns);
+    let traversals = walk_traversals(vocabulary, root, &files, &patterns)?;
 
     let inputs = RunInputs {
         provisions,
@@ -7239,6 +7240,7 @@ fn run(
         verdicts: &registry,
         registers: vocabulary.registers,
         patterns: &patterns,
+        traversals: &traversals,
     };
 
     let mut scan = Scan::default();
@@ -12629,6 +12631,10 @@ fn reference_rule(
     let Some(cites) = rule.cites.as_ref() else {
         return Ok(Some(NotObserved::RuleSkipped));
     };
+    let register_inputs = RegisterInputs {
+        files: inputs.files,
+        patterns: inputs.patterns,
+    };
     let build = |id: &str| -> anyhow::Result<Built> {
         let declared = inputs
             .registers
@@ -12640,7 +12646,7 @@ fn reference_rule(
                     rule.id
                 ))
             })?;
-        build_register(declared, root, inputs)
+        build_register(declared, root, &register_inputs)
     };
     let target = build(&cites.register)?;
     let within = cites.within.as_deref().map(build).transpose()?;
@@ -12664,7 +12670,7 @@ fn reference_rule(
                 ))
             })?;
         let column = cites.column.unwrap_or(1).saturating_sub(1);
-        for path in register_paths(declared, inputs)? {
+        for path in register_paths(declared, &register_inputs)? {
             let Acquired::Lines(lines) = acquire(root, &path, Some(Want::Lines)) else {
                 continue;
             };
@@ -12796,10 +12802,18 @@ fn push_tokens(
     }
 }
 
+/// What building a register reads: the tracked paths and the compiled
+/// `[[pattern]]` table. Its own type because the traversal walk builds
+/// registers before a run's [`RunInputs`] exists.
+struct RegisterInputs<'a> {
+    files: &'a [String],
+    patterns: &'a BTreeMap<String, regex::Regex>,
+}
+
 /// Every tracked path one of `declared`'s globs selects, unioned, in order.
 fn register_paths(
     declared: &crate::register::DeclaredRegister,
-    inputs: &RunInputs<'_>,
+    inputs: &RegisterInputs<'_>,
 ) -> anyhow::Result<Vec<String>> {
     let mut sets = Vec::new();
     for glob in &declared.paths {
@@ -12817,7 +12831,7 @@ fn register_paths(
 fn build_register(
     declared: &crate::register::DeclaredRegister,
     root: &Path,
-    inputs: &RunInputs<'_>,
+    inputs: &RegisterInputs<'_>,
 ) -> anyhow::Result<crate::register::Built> {
     use crate::register::{Input, Source};
     let paths = register_paths(declared, inputs)?;
@@ -12864,6 +12878,92 @@ fn build_register(
         inputs.patterns,
         &inputs_view,
     ))
+}
+
+/// Walk every declared `[[traversal]]` once for the run (CLOUD-1868), and
+/// return `input.tree.traversals`: id -> seed -> [`crate::traversal::answer`].
+///
+/// `null` when nothing is declared, so a run that asks for no walk reads no
+/// document for one. Each walk reads frontmatter through [`acquire`], the one
+/// acquisition, and only for the nodes it visits.
+fn walk_traversals(
+    vocabulary: crate::policy::Vocabulary<'_>,
+    root: &Path,
+    files: &[String],
+    patterns: &BTreeMap<String, regex::Regex>,
+) -> anyhow::Result<serde_json::Value> {
+    if vocabulary.traversals.is_empty() {
+        return Ok(serde_json::Value::Null);
+    }
+    let inputs_for_registers = RegisterInputs { files, patterns };
+    let mut registers: BTreeMap<String, crate::register::Built> = BTreeMap::new();
+    for row in vocabulary.traversals {
+        if let Some(id) = row.until_register.as_ref() {
+            if !registers.contains_key(id) {
+                let declared = vocabulary
+                    .registers
+                    .iter()
+                    .find(|register| &register.id == id)
+                    .ok_or_else(|| {
+                        crate::error::UsageError::raise(format!(
+                            "traversal `{}`: register `{id}` is not declared in [[register]]",
+                            row.id
+                        ))
+                    })?;
+                registers.insert(
+                    id.clone(),
+                    build_register(declared, root, &inputs_for_registers)?,
+                );
+            }
+        }
+        for edge in &row.edges {
+            if let crate::traversal::EdgeTarget::Register(id) = &edge.to {
+                if !registers.contains_key(id) {
+                    if let Some(declared) = vocabulary.registers.iter().find(|r| &r.id == id) {
+                        registers.insert(
+                            id.clone(),
+                            build_register(declared, root, &inputs_for_registers)?,
+                        );
+                    }
+                }
+            }
+        }
+    }
+    let read = |path: &str| -> crate::facts::Look<crate::facts::Node> {
+        match acquire(
+            root,
+            path,
+            Some(Want::Parsed(crate::facts::Format::Markdown)),
+        ) {
+            Acquired::Parsed(node) => crate::facts::Look::Is(node),
+            Acquired::No(NotAcquired::Absent | NotAcquired::NoDocument) => {
+                crate::facts::Look::IsNot
+            }
+            _ => crate::facts::Look::CouldNotLook,
+        }
+    };
+    let mut out = serde_json::Map::new();
+    for row in vocabulary.traversals {
+        let graph = crate::traversal::DocumentGraph::new(row, files, &registers, &read)?;
+        let seeds: Vec<String> = match row.seeds.as_deref() {
+            Some(glob) => {
+                let set = PathSet::selecting(&row.id, glob, &[])?;
+                files
+                    .iter()
+                    .filter(|path| set.contains(path))
+                    .cloned()
+                    .collect()
+            }
+            None => vec![row.seed.clone()],
+        };
+        let mut answers = serde_json::Map::new();
+        for seed in seeds {
+            let outcome = row.compiled_from(&seed).run(&graph);
+            answers.insert(seed, crate::traversal::answer(&outcome));
+        }
+        out.insert(row.id.clone(), serde_json::Value::Object(answers));
+    }
+    Ok(serde_json::Value::Object(out))
 }
 
 fn unreadable_document(rule: &Rule, rel_path: &str, node_path: &str) -> anyhow::Result<Finding> {
@@ -13939,6 +14039,7 @@ mod tests {
             },
             &[],
             &super::Resolved {
+                traversals: &serde_json::Value::Null,
                 review: &crate::facts::Look::IsNot,
                 produced: &BTreeMap::new(),
                 records: &BTreeMap::new(),
@@ -14518,6 +14619,7 @@ mod tests {
             },
             &files,
             &super::Resolved {
+                traversals: &serde_json::Value::Null,
                 review: &crate::facts::Look::IsNot,
                 produced: &BTreeMap::new(),
                 records: &BTreeMap::new(),
@@ -14689,7 +14791,7 @@ mod tests {
                 // drive a module is the compiled-binary one.
                 verdicts: &[],
                 registers: &[],
-                traversals: &[],
+                traversals: &serde_json::Value::Null,
                 patterns: &NO_PATTERNS,
             }
         }
