@@ -69,7 +69,7 @@ declared_modules := {
 	"invocation", "journal", "judge", "landed", "lib", "lint", "markers", "mint", "minted", "outputs",
 	"output", "pattern", "policy", "provision", "receipt", "redirect", "refusal",
 	"render", "repair", "resolve", "rules", "secret", "secrets", "session", "severity", "sink",
-	"spec", "state", "stop", "store", "surface", "transcript", "traversal", "trust", "uses",
+	"register", "spec", "state", "stop", "store", "surface", "transcript", "traversal", "trust", "uses",
 	"verbs", "verdict", "waiver", "worktree",
 	# `brief`, `main` and `selfwrite` were absent from the first draft of this
 	# table, and the coverage rule caught all three on its first run against the
@@ -1076,6 +1076,16 @@ forbidden[from] contains to if {
 		# is the class `rules/policy-modules.md` records for parsers. The source is
 		# injected so that edge is unwritable rather than merely unwise.
 		"graph": {"rules", "hook", "facts"},
+		# `register -> {rules, hook}` (CLOUD-2005): the key-set module JOINS and
+		# never acquires. `rules` reads each declared path through `acquire`
+		# and hands over lines or parsed frontmatter, so an edge back would make
+		# it a second acquirer, `graph`'s argument one module over.
+		"register": {"rules", "hook"},
+		# `traversal -> {rules, hook, facts, register}` (CLOUD-1868): the
+		# document graph takes its frontmatter reads, glob selection and
+		# register membership as caller-supplied closures, which is what keeps
+		# it plumbing. Each edge here is one it must never grow.
+		"traversal": {"rules", "hook", "facts", "register"},
 		# `arm -> {rules, hook, perf, mutate}`, and the last two are what make this
 		# row different from its neighbours. The first pair is `prune`'s and
 		# `mutate`'s for their reason: a harness that runs declared commands must
