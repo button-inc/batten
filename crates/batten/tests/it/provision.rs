@@ -1050,13 +1050,11 @@ fn a_launcher_hands_the_tool_an_environment_a_manifest_could_not() {
 #[cfg(unix)]
 #[test]
 fn a_launcher_reached_through_a_symlink_hands_the_tool_that_name() {
-    let Some(bash) = ["/bin/bash", "/usr/bin/bash"]
+    let bash = ["/bin/bash", "/usr/bin/bash"]
         .into_iter()
         .map(PathBuf::from)
         .find(|path| path.is_file())
-    else {
-        return;
-    };
+        .expect("bash: every unix leg this suite runs on carries it");
     let env = Env::new("provision-launcher-argv0");
     let dest = env.repo.parent().unwrap().join("bin-argv0");
     let bytes = fs::read(&bash).unwrap();
