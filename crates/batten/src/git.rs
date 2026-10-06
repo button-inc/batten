@@ -1570,6 +1570,22 @@ pub fn messages_reachable_from(dir: &Path, tip: &str) -> Option<String> {
     Some(messages)
 }
 
+/// `rev` resolved and peeled to the commit it names.
+///
+/// **An annotated tag is a TAG object, not a commit**, and a walk started from
+/// one fails: every release tag here is annotated, so `refs/tags/v0.0.204`
+/// handed straight to `rev_walk` refused every release (`record derive released`
+/// "could not walk the commit history" from v0.0.200 on).
+fn peeled(repo: &gix::Repository, rev: &str) -> Option<gix::ObjectId> {
+    repo.rev_parse_single(rev)
+        .ok()?
+        .object()
+        .ok()?
+        .peel_to_commit()
+        .ok()
+        .map(|commit| commit.id)
+}
+
 /// Every commit message reachable from any of `tips` and from none of `hidden`,
 /// newline-joined (CLOUD-843).
 ///
@@ -1592,22 +1608,14 @@ pub fn messages_reachable(dir: &Path, tips: &[String], hidden: &[String]) -> Res
     let refused = || UsageError::raise("could not walk the commit history".to_owned());
     let mut from = Vec::new();
     for tip in tips {
-        from.push(
-            repo.rev_parse_single(tip.as_str())
-                .map_err(|_| refused())?
-                .detach(),
-        );
+        from.push(peeled(&repo, tip).ok_or_else(refused)?);
     }
     if from.is_empty() {
         return Ok(String::new());
     }
     let mut excluded = Vec::new();
     for rev in hidden {
-        excluded.push(
-            repo.rev_parse_single(rev.as_str())
-                .map_err(|_| refused())?
-                .detach(),
-        );
+        excluded.push(peeled(&repo, rev).ok_or_else(refused)?);
     }
     let walk = repo
         .rev_walk(from)
@@ -1643,11 +1651,7 @@ pub fn commits_reachable(
 ) -> Result<BTreeSet<String>> {
     let repo = open(dir)?;
     let refused = || UsageError::raise("could not walk the commit history".to_owned());
-    let resolve = |rev: &String| {
-        repo.rev_parse_single(rev.as_str())
-            .map(gix::Id::detach)
-            .map_err(|_| refused())
-    };
+    let resolve = |rev: &String| peeled(&repo, rev).ok_or_else(refused);
     let from = tips.iter().map(resolve).collect::<Result<Vec<_>>>()?;
     if from.is_empty() {
         return Ok(BTreeSet::new());
