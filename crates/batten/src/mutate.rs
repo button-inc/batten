@@ -272,6 +272,7 @@ fn task_names(lines: &[String]) -> Vec<String> {
 //MUTANT source-change-ignored|s@^                let by_source = .*;$@                let by_source = false;@|a_change_to_one_gate_sweeps_only_that_gate
 //MUTANT suite-change-ignored|s@^                let by_suite = .*;$@                let by_suite = false;@|a_change_to_a_suite_sweeps_its_gate
 //MUTANT deleted-module-ignored|s@^                let by_preset = .*;$@                let by_preset = false;@|a_deleted_preset_module_sweeps_its_gate
+//MUTANT rust-rows-swept-by-hand|s@^                if gate.rows.iter().all(cargo_mutants_owns) .*$@                if false {@|a_change_to_a_rust_gate_is_left_to_cargo_mutants
 //MUTANT every-gate-touched|s@^        \.filter(\x7cname\x7c {$@        .filter(\x7cname\x7c { true \x7c\x7c@|a_change_touching_no_gate_sweeps_nothing
 fn declaring_lines(root: &Path, name: &str, source: &str) -> Option<Vec<String>> {
     let lines = lines_of(root, source)?;
@@ -842,6 +843,16 @@ pub fn enforced_set() -> Result<Vec<String>> {
 // Narrowing the set to a change (CLOUD-2072).
 // ---------------------------------------------------------------------------
 
+/// Whether `row` mutates Rust, which at admission is cargo-mutants' to decide
+/// rather than this runner's (CLOUD-1746). Decided by the row's own source, not
+/// the gate's suite: a Rego gate whose suite is a Rust test still mutates Rego.
+#[must_use]
+pub fn cargo_mutants_owns(row: &Row) -> bool {
+    Path::new(&row.source)
+        .extension()
+        .is_some_and(|ext| ext == "rs")
+}
+
 /// The enforced gates a change can move, so a sweep can run at admission over
 /// the gates a pull request touched rather than on a schedule over all of them.
 ///
@@ -853,6 +864,11 @@ pub fn enforced_set() -> Result<Vec<String>> {
 /// that is what reaches a DELETED module: `resolve` reads the tree as it is now,
 /// so a module the change removed is no longer among the gate's sources, and a
 /// match on sources alone let the deletion pass unswept (review of #1099).
+///
+/// A gate whose every row mutates Rust is NOT touched, whatever changed: Rust
+/// mutation at admission is `cargo mutants --in-diff` (CLOUD-1746), and sweeping those rows by hand here too would be the second,
+/// hand-rolled Rust mutation system the owner refused. They stay in the whole
+/// sweep until cargo-mutants gates, and are retired then.
 ///
 /// A name that resolves to nothing is KEPT. Narrowing it away would turn the
 /// sweep's `no-such-gate` report into silence; could-not-look widens here as it
@@ -867,6 +883,9 @@ pub fn touched(
         .iter()
         .filter(|name| {
             resolve(root, name).is_none_or(|gate| {
+                if gate.rows.iter().all(cargo_mutants_owns) && !gate.rows.is_empty() {
+                    return false;
+                }
                 let by_source = gate.sources.iter().any(|path| changed.contains(path));
                 let by_suite = gate.suites().iter().any(|s| changed.contains(s.path()));
                 let dir = format!("{PRESETS}/{name}/");

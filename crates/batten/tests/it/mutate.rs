@@ -1133,6 +1133,30 @@ fn a_change_to_a_suite_sweeps_its_gate() {
     assert!(out.contains("other/pipefail-dropped SURVIVED"), "{out}");
 }
 
+/// A change to a gate whose rows mutate Rust sweeps nothing here: Rust mutation
+/// at admission is `cargo mutants --in-diff` (CLOUD-1746). Its one row could
+/// never be caught, so a sweep that reached it would fail.
+#[cfg(unix)]
+#[test]
+fn a_change_to_a_rust_gate_is_left_to_cargo_mutants() {
+    let root = two_gate_repo("since-rust");
+    let rusty = "//MUTANT-SUITE tests/other.rs\n//MUTANT never-applies|s@^absent$@gone@|no_case\n";
+    write(&root, "crates/batten/src/rusty.rs", rusty);
+    track(&root);
+    common::git_in(&root, &["commit", "-m", "rust gate"]);
+    write(
+        &root,
+        "crates/batten/src/rusty.rs",
+        &format!("{rusty}// edited\n"),
+    );
+    let (code, out, err) = sweep_since(&root, "toy,other,engine-rusty", "HEAD");
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(
+        out.contains("no enforced gate's source or suite changed since HEAD"),
+        "{out}"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn a_change_touching_no_gate_sweeps_nothing_and_says_so() {

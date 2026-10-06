@@ -1702,6 +1702,11 @@ description = "Gate: every enforced gate this branch touched since origin/main h
 # cannot have been weakened by it, so admission pays only for the gates whose
 # source or suite the diff names (`mutate::touched`).
 #
+# NO RUST ROW IS SWEPT HERE. A gate whose rows mutate `.rs` is left to `cargo
+# mutants --in-diff` (CLOUD-1746), the publisher's own admission recipe; sweeping
+# it by hand as well would stand a second Rust mutation system at admission. Those
+# rows stay in the whole sweep until cargo-mutants gates, then retire.
+#
 # THE BASE RIDES `MUTANT_CHANGED_SINCE`, beside `MUTANT_GATES` in `[env]`.
 #
 # COULD-NOT-LOOK WIDENS. With no `origin/main` to diff against, the verb sweeps
