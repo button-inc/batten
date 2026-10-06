@@ -484,6 +484,24 @@ pub enum Command {
         /// The sub-verb selected.
         command: EngineCommand,
     },
+    /// Tests judged against their base revision (CLOUD-2090).
+    ///
+    /// APPENDED LAST, for the reason above.
+    Test {
+        /// The sub-verb selected.
+        command: TestCommand,
+    },
+}
+
+/// Subcommands of `test` (CLOUD-2090).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum TestCommand {
+    /// Run each modified test's base form against HEAD.
+    Replay {
+        /// The revision the branch is judged against.
+        base: String,
+    },
 }
 
 /// Subcommands of `engine` (CLOUD-2061).
@@ -3767,6 +3785,16 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
         "census" => census_of(matches).map(|command| Command::Census { command }),
         "artifacts" => artifacts_of(matches).map(|command| Command::Artifacts { command }),
         "engine" => engine_of(matches).map(|command| Command::Engine { command }),
+        "test" => test_of(matches).map(|command| Command::Test { command }),
+        _ => None,
+    }
+}
+
+fn test_of(matches: &ArgMatches) -> Option<TestCommand> {
+    match matches.subcommand()? {
+        ("replay", matches) => Some(TestCommand::Replay {
+            base: matches.get_one::<String>("base")?.clone(),
+        }),
         _ => None,
     }
 }

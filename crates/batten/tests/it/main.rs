@@ -431,6 +431,7 @@ mod task_prose;
 mod task_receipt;
 mod task_registry;
 mod test_cargo_path;
+mod test_replay;
 mod test_targets;
 mod timeout_budget;
 mod timeout_drift;

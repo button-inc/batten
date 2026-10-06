@@ -2171,6 +2171,14 @@ const CENSUS: &[Verb] = &[
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
+    // CLOUD-2090: against its own HEAD nothing is modified, so it builds nothing
+    // and prints nothing; a finding is `<path>:<line> <token> <key> (<admission>)`.
+    Verb {
+        path: "test replay",
+        args: &["--base", "HEAD"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
     // The derivations' writer (CLOUD-1991). Driven with `--schema` alone, into a
     // directory of the corpus's own: the verb writes files and says where, one
     // `<kind>=<path>` line, and reads nothing of the caller's tree to do it — the

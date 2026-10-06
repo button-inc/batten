@@ -732,6 +732,13 @@ declared_modules := {
 	# calls its pre-parse check, so it reaches `config` only for `VERSION` and
 	# `error` for its refusal, and decides nothing beyond "this pin, this engine".
 	"engine",
+	# `replay` arrived with CLOUD-2090, a PRODUCER in `step`'s class: it
+	# materialises HEAD under state (`git`, `durable`, `state`), splices each
+	# modified test's base body in, and runs it through `exec`. Its verdict is the
+	# base test's own pass or fail, admitted through `lint`'s `asked` reading, so
+	# it reaches `lint`, `asked` and `source` and decides nothing itself. Its
+	# edges into the engine that decides are forbidden below.
+	"replay",
 	# `ci_signal` arrived with CLOUD-843's `p2-divergence` package, in
 	# `forge_query`'s class: a PRODUCER that walks `forge`'s window over `rest`'s
 	# transport and writes through `record`'s named-family store. It measures the
@@ -1162,6 +1169,10 @@ forbidden[from] contains to if {
 		# payload set and the whole tracked tree, and must not reach the module
 		# that adjudicates a mediated call.
 		"board_check": {"hook"},
+		# `replay -> {rules, hook}`, `step`'s pair for its reason (CLOUD-2090): a
+		# producer that runs a consumer's tests must not reach the engine that
+		# decides over a tree or a mediated call.
+		"replay": {"rules", "hook"},
 	}
 	some to in targets
 }

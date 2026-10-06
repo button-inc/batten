@@ -7622,6 +7622,28 @@ pub const SURFACE: &[CommandDecl] = &[
         effect: Effect::Write,
         flags: &[ENGINE_LANE],
     },
+    // `write`, for the materialised tree and the build cache it keeps under the
+    // repository's state directory (CLOUD-2090). The verdict is the base tests'
+    // own pass or fail; a changed expectation is admitted only by the asked
+    // ledger.
+    CommandDecl {
+        path: "test",
+        id: "test",
+        about: "Judge this branch's tests against their base revision",
+        data_channel: false,
+        exits: EXITS_DISPATCHES,
+        effect: Effect::Unclassified,
+        flags: &[],
+    },
+    CommandDecl {
+        path: "test replay",
+        id: "test.replay",
+        about: "Run each modified test's base form against HEAD; a changed expectation is admitted only by a recorded answer",
+        data_channel: true,
+        exits: EXITS_STANDARD,
+        effect: Effect::Write,
+        flags: &[SLOW_BASE],
+    },
     CommandDecl {
         path: "artifacts",
         id: "artifacts",

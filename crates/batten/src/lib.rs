@@ -141,6 +141,7 @@ pub mod released;
 pub mod remedy;
 pub mod render;
 pub mod repair;
+pub mod replay;
 pub mod resolve;
 pub mod rest;
 pub mod review;
@@ -583,6 +584,14 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         },
         Some(Command::Artifacts { command }) => run_artifacts(&command, out),
         Some(Command::Engine { command }) => run_engine(command, out),
+        // The WORKTREE's tree, `census`' reasoning: the tests a branch changed
+        // are the ones its checkout carries (CLOUD-2090).
+        Some(Command::Test { command }) => match command {
+            cli::TestCommand::Replay { base } => {
+                let root = git::worktree_root(Path::new("."))?;
+                replay::run(&root, &base, out)
+            }
+        },
     }
 }
 

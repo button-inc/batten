@@ -1333,6 +1333,10 @@ mod tests {
             "task sig".to_owned(),
             "task tick".to_owned(),
             "task unregister".to_owned(),
+            // CLOUD-2090: the base-test replay. `write` for the materialised tree
+            // and build cache under state; the noun is `Unclassified`.
+            "test".to_owned(),
+            "test replay".to_owned(),
             // CLOUD-1718's fold, and a LEAF verb rather than a subtree because
             // it decides one thing: given a count of findings and a count of
             // blind spots, which of §7's four codes is the honest answer. It is
