@@ -210,15 +210,6 @@ impl Built {
             Built::CouldNotLook { .. } => None,
         }
     }
-
-    /// The witnesses of `key` — empty where absent or could-not-look.
-    #[must_use]
-    pub fn witnesses(&self, key: &str) -> &[Witness] {
-        match self {
-            Built::Keys { keys, .. } => keys.get(key).map_or(&[], Vec::as_slice),
-            Built::CouldNotLook { .. } => &[],
-        }
-    }
 }
 
 /// The cells of one GFM table row, or `None` where the line is not a data row.
@@ -236,7 +227,6 @@ pub fn cells(line: &str) -> Option<Vec<String>> {
     let mut out = Vec::new();
     let mut cell = String::new();
     let mut chars = body.chars().peekable();
-    let mut closed = false;
     while let Some(ch) = chars.next() {
         match ch {
             '\\' if chars.peek() == Some(&'|') => {
@@ -246,16 +236,15 @@ pub fn cells(line: &str) -> Option<Vec<String>> {
             '|' => {
                 out.push(cell.trim().to_owned());
                 cell.clear();
-                closed = chars.peek().is_none();
             }
-            other => {
-                cell.push(other);
-                closed = false;
-            }
+            other => cell.push(other),
         }
     }
     // A row without a trailing pipe still ends its last cell at end of line.
-    if !closed && !cell.trim().is_empty() {
+    // No `closed` flag: a pipe clears the cell, so a row that ended on one
+    // leaves it empty, and the emptiness test alone decides (cargo-mutants
+    // found the flag's `&&` was an equivalent mutant).
+    if !cell.trim().is_empty() {
         out.push(cell.trim().to_owned());
     }
     Some(out)
@@ -822,5 +811,229 @@ mod tests {
         assert_eq!(scalars(&node, "one"), vec!["a"]);
         assert_eq!(scalars(&node, "many"), vec!["b", "c"]);
         assert_eq!(scalars(&node, "consumes[].id"), vec!["d"]);
+    }
+
+    // ---- Cases added for cargo-mutants' survivors over this file. ----
+
+    #[test]
+    fn a_backslash_not_before_a_pipe_stays_in_its_cell() {
+        assert_eq!(
+            cells(r"| a\b | c |"),
+            Some(vec![String::from(r"a\b"), String::from("c")])
+        );
+    }
+
+    #[test]
+    fn a_row_without_a_trailing_pipe_keeps_its_last_cell() {
+        assert_eq!(
+            cells("| a | b"),
+            Some(vec![String::from("a"), String::from("b")])
+        );
+    }
+
+    fn compiled(pairs: &[(&str, &str)]) -> BTreeMap<String, regex::Regex> {
+        pairs
+            .iter()
+            .map(|(id, re)| ((*id).to_owned(), regex::Regex::new(re).expect("test regex")))
+            .collect()
+    }
+
+    fn table_with(
+        row_prefix: Option<&str>,
+        key_pattern: Option<&str>,
+        patterns: &[(&str, &str)],
+    ) -> DeclaredRegister {
+        DeclaredRegister {
+            id: String::from("caps"),
+            paths: vec![String::from("a.md")],
+            source: Source::Table {
+                key: 1,
+                width: 2,
+                row_prefix: row_prefix.map(ToOwned::to_owned),
+                key_pattern: key_pattern.map(ToOwned::to_owned),
+                patterns: patterns
+                    .iter()
+                    .map(|(column, id)| ((*column).to_owned(), (*id).to_owned()))
+                    .collect(),
+                unique: false,
+            },
+        }
+    }
+
+    fn defects_of(built: Built) -> Vec<Defect> {
+        match built {
+            Built::Keys { defects, .. } => defects,
+            Built::CouldNotLook { .. } => vec![],
+        }
+    }
+
+    #[test]
+    fn row_prefix_keeps_only_the_rows_it_names() {
+        let reg = table_with(Some("cap-"), None, &[]);
+        let text = lines("| cap-a | 1 |\n| other | 2 |");
+        let built = build(
+            &reg,
+            &BTreeMap::new(),
+            &[Input::Lines {
+                path: "a.md",
+                lines: &text,
+            }],
+        );
+        assert_eq!(built.contains("cap-a"), Some(true));
+        assert_eq!(built.contains("other"), Some(false));
+    }
+
+    #[test]
+    fn a_key_outside_key_pattern_is_malformed_and_one_inside_is_not() {
+        let patterns = compiled(&[("cap", "cap-[a-z]+")]);
+        let reg = table_with(None, Some("cap"), &[]);
+        let text = lines("| cap-a | 1 |\n| cap-a9x | 2 |\n| xcap-a | 3 |");
+        let defects = defects_of(build(
+            &reg,
+            &patterns,
+            &[Input::Lines {
+                path: "a.md",
+                lines: &text,
+            }],
+        ));
+        // A full match, not a find: `cap-a9x` and `xcap-a` each contain a hit.
+        assert_eq!(
+            defects,
+            vec![
+                Defect::Malformed(Witness {
+                    path: String::from("a.md"),
+                    line: Some(2)
+                }),
+                Defect::Malformed(Witness {
+                    path: String::from("a.md"),
+                    line: Some(3)
+                }),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_patterned_column_checks_non_empty_cells_only() {
+        let patterns = compiled(&[("hash", "blake3:[0-9a-f]+")]);
+        let reg = table_with(None, None, &[("2", "hash")]);
+        let text = lines("| k1 | blake3:ab |\n| k2 |  |\n| k3 | deadbeef |");
+        let defects = defects_of(build(
+            &reg,
+            &patterns,
+            &[Input::Lines {
+                path: "a.md",
+                lines: &text,
+            }],
+        ));
+        assert_eq!(
+            defects,
+            vec![Defect::Malformed(Witness {
+                path: String::from("a.md"),
+                line: Some(3)
+            })]
+        );
+    }
+
+    fn citation(token: &str, path: &str) -> Citation {
+        Citation {
+            token: token.to_owned(),
+            at: Witness {
+                path: path.to_owned(),
+                line: Some(1),
+            },
+        }
+    }
+
+    fn keys_at(pairs: &[(&str, &str)]) -> Built {
+        let mut keys: BTreeMap<String, Vec<Witness>> = BTreeMap::new();
+        for (key, path) in pairs {
+            keys.entry((*key).to_owned()).or_default().push(Witness {
+                path: (*path).to_owned(),
+                line: None,
+            });
+        }
+        Built::Keys {
+            keys,
+            defects: vec![],
+        }
+    }
+
+    #[test]
+    fn within_skips_tokens_outside_the_narrowing_set_only() {
+        let target = keys_at(&[("cap-a", "r.md")]);
+        let within = keys_at(&[("cap-a", "w.md"), ("cap-b", "w.md")]);
+        let refusals = resolve(
+            &target,
+            &[
+                citation("cap-a", "n.md"),
+                citation("cap-b", "n.md"),
+                citation("other", "n.md"),
+            ],
+            Some(&within),
+            None,
+            false,
+        );
+        // `cap-b` is in scope and unresolved; `other` is out of scope.
+        assert_eq!(
+            refusals,
+            vec![Refusal::Unresolved(citation("cap-b", "n.md"))]
+        );
+    }
+
+    #[test]
+    fn a_partition_admits_a_witness_in_the_same_partition() {
+        let partition = regex::Regex::new("^ws/([^/]+)/").expect("test regex");
+        let target = keys_at(&[("cap-a", "ws/a/att.md")]);
+        let refusals = resolve(
+            &target,
+            &[citation("cap-a", "ws/a/n.md")],
+            None,
+            Some(&partition),
+            false,
+        );
+        assert_eq!(refusals, vec![]);
+    }
+
+    #[test]
+    fn validate_refuses_each_malformed_row() {
+        let ok = table(2, false);
+        assert!(validate(std::slice::from_ref(&ok)).is_ok());
+        let mut blank = ok.clone();
+        blank.id = String::from(" ");
+        assert!(validate(&[blank]).is_err());
+        assert!(validate(&[ok.clone(), ok.clone()]).is_err());
+        let mut no_paths = ok.clone();
+        no_paths.paths = vec![];
+        assert!(validate(&[no_paths]).is_err());
+        let mut blank_path = ok.clone();
+        blank_path.paths = vec![String::from("a.md"), String::from(" ")];
+        assert!(validate(&[blank_path]).is_err());
+        for (key, width) in [(0, 2), (1, 0), (3, 2)] {
+            let row = DeclaredRegister {
+                source: Source::Table {
+                    key,
+                    width,
+                    row_prefix: None,
+                    key_pattern: None,
+                    patterns: BTreeMap::new(),
+                    unique: false,
+                },
+                ..ok.clone()
+            };
+            assert!(validate(&[row]).is_err(), "key {key} width {width}");
+        }
+        // `key == width` is the last column, and admissible.
+        let last = DeclaredRegister {
+            source: Source::Table {
+                key: 2,
+                width: 2,
+                row_prefix: None,
+                key_pattern: None,
+                patterns: BTreeMap::new(),
+                unique: false,
+            },
+            ..ok
+        };
+        assert!(validate(&[last]).is_ok());
     }
 }
