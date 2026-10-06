@@ -89,7 +89,7 @@ pub struct DeclaredTraversal {
     #[serde(default, rename = "edge", skip_serializing_if = "Vec::is_empty")]
     pub edges: Vec<Edge>,
     /// Stop at a node that is a key of this `[[register]]` (CLOUD-1868):
-    /// "terminating at a node registered in `SOURCES.md`".
+    /// "terminating at a node registered in a declared register".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub until_register: Option<String>,
     /// The edge labels the walk follows, tried in the order given.
@@ -576,15 +576,15 @@ mod tests {
                 Edge {
                     label: "slug".to_owned(),
                     field: "slug".to_owned(),
-                    to: EdgeTarget::SameStem("extract/*.md".to_owned()),
+                    to: EdgeTarget::SameStem("middle/*.md".to_owned()),
                 },
                 Edge {
-                    label: "capture".to_owned(),
-                    field: "capture".to_owned(),
-                    to: EdgeTarget::Register("caps".to_owned()),
+                    label: "leaf".to_owned(),
+                    field: "leaf".to_owned(),
+                    to: EdgeTarget::Register("keyset".to_owned()),
                 },
             ],
-            until_register: Some("caps".to_owned()),
+            until_register: Some("keyset".to_owned()),
             labels: Vec::new(),
             until_key: None,
             until_value: None,
@@ -607,10 +607,10 @@ mod tests {
         Node::Text(value.to_owned())
     }
 
-    fn caps(keys: &[&str]) -> BTreeMap<String, crate::register::Built> {
+    fn keyset(keys: &[&str]) -> BTreeMap<String, crate::register::Built> {
         let keys = keys.iter().map(|key| ((*key).to_owned(), vec![])).collect();
         BTreeMap::from([(
-            "caps".to_owned(),
+            "keyset".to_owned(),
             crate::register::Built::Keys {
                 keys,
                 defects: vec![],
@@ -622,7 +622,7 @@ mod tests {
     fn walk(docs: &[(&str, Node)], registered: &[&str]) -> serde_json::Value {
         let row = chain_row();
         let tracked: Vec<String> = docs.iter().map(|(path, _)| (*path).to_owned()).collect();
-        let registers = caps(registered);
+        let registers = keyset(registered);
         let store: BTreeMap<String, Node> = docs
             .iter()
             .map(|(path, node)| ((*path).to_owned(), node.clone()))
@@ -642,22 +642,22 @@ mod tests {
             &[
                 ("db/e.md", doc(&[("slug", text("e"))])),
                 (
-                    "extract/e.md",
-                    doc(&[("capture", Node::List(vec![text("cap-a")]))]),
+                    "middle/e.md",
+                    doc(&[("leaf", Node::List(vec![text("key-a")]))]),
                 ),
             ],
-            &["cap-a"],
+            &["key-a"],
         );
         assert_eq!(out["outcome"], "reached");
         assert_eq!(
             out["path"],
-            serde_json::json!(["db/e.md", "extract/e.md", "register:caps:cap-a"])
+            serde_json::json!(["db/e.md", "middle/e.md", "register:keyset:key-a"])
         );
     }
 
     #[test]
     fn no_record_for_the_slug_breaks_at_the_entry() {
-        let out = walk(&[("db/e.md", doc(&[("slug", text("e"))]))], &["cap-a"]);
+        let out = walk(&[("db/e.md", doc(&[("slug", text("e"))]))], &["key-a"]);
         assert_eq!(out["outcome"], "exhausted");
         assert_eq!(out["broke_at"], "db/e.md");
     }
@@ -667,12 +667,12 @@ mod tests {
         let out = walk(
             &[
                 ("db/e.md", doc(&[("slug", text("e"))])),
-                ("extract/e.md", doc(&[("other", text("x"))])),
+                ("middle/e.md", doc(&[("other", text("x"))])),
             ],
-            &["cap-a"],
+            &["key-a"],
         );
         assert_eq!(out["outcome"], "exhausted");
-        assert_eq!(out["broke_at"], "extract/e.md");
+        assert_eq!(out["broke_at"], "middle/e.md");
     }
 
     #[test]
@@ -680,12 +680,12 @@ mod tests {
         let out = walk(
             &[
                 ("db/e.md", doc(&[("slug", text("e"))])),
-                ("extract/e.md", doc(&[("capture", text("cap-z"))])),
+                ("middle/e.md", doc(&[("leaf", text("key-z"))])),
             ],
-            &["cap-a"],
+            &["key-a"],
         );
         assert_eq!(out["outcome"], "exhausted");
-        assert_eq!(out["broke_at"], "register:caps:cap-z");
+        assert_eq!(out["broke_at"], "register:keyset:key-z");
     }
 
     #[test]
@@ -693,12 +693,12 @@ mod tests {
         let out = walk(
             &[
                 ("db/e.md", doc(&[("slug", text("e"))])),
-                ("extract/e.md", Node::Null),
+                ("middle/e.md", Node::Null),
             ],
-            &["cap-a"],
+            &["key-a"],
         );
         assert_eq!(out["outcome"], "could-not-look");
-        assert_eq!(out["at"], "extract/e.md");
+        assert_eq!(out["at"], "middle/e.md");
     }
 
     #[test]

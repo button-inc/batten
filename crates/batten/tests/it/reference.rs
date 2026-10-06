@@ -10,30 +10,30 @@ use crate::common;
 
 use common::{Fixture, run, stdout};
 
-/// A table register over `SOURCES.md`'s first column, width 2, unique.
-const CAPS: &str = r#"[[register]]
-id = "caps"
-paths = ["SOURCES.md"]
+/// A table register over `REGISTER.md`'s first column, width 2, unique.
+const KEYS: &str = r#"[[register]]
+id = "keyset"
+paths = ["REGISTER.md"]
 source = "table"
 key = 1
 width = 2
 unique = true
 "#;
 
-/// A rule citing `cap-*` tokens in `notes/*.md` against `caps`.
+/// A rule citing `key-*` tokens in `notes/*.md` against `keyset`.
 const DANGLING: &str = r#"[[rule]]
 id = "dangling"
 kind = "reference"
 scope = "tree"
 glob = "notes/*.md"
-regex = '\b(cap-[a-z0-9-]+)\b'
+regex = '\b(key-[a-z0-9-]+)\b'
 severity = "deny"
 
 [rule.cites]
-register = "caps"
+register = "keyset"
 "#;
 
-const SOURCES: &str = "| id | file |\n| --- | --- |\n| cap-a | a.md |\n";
+const SOURCES: &str = "| id | file |\n| --- | --- |\n| key-a | a.md |\n";
 
 fn config(rows: &[&str]) -> String {
     format!("version = 1\n\n{}", rows.join("\n"))
@@ -56,8 +56,8 @@ fn a_closing_corpus_exits_zero_and_the_rule_ran() {
     // missing (the next case), so this zero is the rule deciding, not skipping.
     let (code, out) = check(
         "reference-closes",
-        &[CAPS, DANGLING],
-        &[("SOURCES.md", SOURCES), ("notes/n.md", "cites cap-a\n")],
+        &[KEYS, DANGLING],
+        &[("REGISTER.md", SOURCES), ("notes/n.md", "cites key-a\n")],
     );
     assert_eq!(code, Some(0), "{out}");
 }
@@ -66,16 +66,16 @@ fn a_closing_corpus_exits_zero_and_the_rule_ran() {
 fn an_absent_key_is_refused_at_its_line() {
     let (code, out) = check(
         "reference-absent",
-        &[CAPS, DANGLING],
+        &[KEYS, DANGLING],
         &[
-            ("SOURCES.md", SOURCES),
-            ("notes/n.md", "fine\ncites cap-a and cap-missing\n"),
+            ("REGISTER.md", SOURCES),
+            ("notes/n.md", "fine\ncites key-a and key-missing\n"),
         ],
     );
     assert_eq!(code, Some(2), "{out}");
     assert!(out.contains("notes/n.md:2 dangling unresolved"), "{out}");
     assert!(
-        !out.contains("cap-missing"),
+        !out.contains("key-missing"),
         "pointer-only, never the token: {out}"
     );
 }
@@ -83,17 +83,17 @@ fn an_absent_key_is_refused_at_its_line() {
 #[test]
 fn a_key_in_two_register_paths_is_refused() {
     // The union across `paths` is what makes this a duplicate at all.
-    let caps = CAPS.replace(
-        r#"paths = ["SOURCES.md"]"#,
-        r#"paths = ["SOURCES.md", "ws/SOURCES.md"]"#,
+    let keys = KEYS.replace(
+        r#"paths = ["REGISTER.md"]"#,
+        r#"paths = ["REGISTER.md", "ws/REGISTER.md"]"#,
     );
     let (code, out) = check(
         "reference-duplicate",
-        &[&caps, DANGLING],
+        &[&keys, DANGLING],
         &[
-            ("SOURCES.md", SOURCES),
-            ("ws/SOURCES.md", "| cap-a | b.md |\n"),
-            ("notes/n.md", "cites cap-a\n"),
+            ("REGISTER.md", SOURCES),
+            ("ws/REGISTER.md", "| key-a | b.md |\n"),
+            ("notes/n.md", "cites key-a\n"),
         ],
     );
     assert_eq!(code, Some(2), "{out}");
@@ -104,30 +104,30 @@ fn a_key_in_two_register_paths_is_refused() {
 fn an_unescaped_pipe_widens_the_row_and_an_escaped_one_is_quiet() {
     let (code, out) = check(
         "reference-pipe-wide",
-        &[CAPS, DANGLING],
+        &[KEYS, DANGLING],
         &[
             (
-                "SOURCES.md",
-                "| id | file |\n| - | - |\n| cap-a | a|b.md |\n",
+                "REGISTER.md",
+                "| id | file |\n| - | - |\n| key-a | a|b.md |\n",
             ),
-            ("notes/n.md", "cites cap-a\n"),
+            ("notes/n.md", "cites key-a\n"),
         ],
     );
     assert_eq!(code, Some(2), "{out}");
     assert!(
-        out.contains("SOURCES.md:3 dangling register-row-width"),
+        out.contains("REGISTER.md:3 dangling register-row-width"),
         "{out}"
     );
 
     let (code, out) = check(
         "reference-pipe-escaped",
-        &[CAPS, DANGLING],
+        &[KEYS, DANGLING],
         &[
             (
-                "SOURCES.md",
-                "| id | file |\n| - | - |\n| cap-a | a\\|b.md |\n",
+                "REGISTER.md",
+                "| id | file |\n| - | - |\n| key-a | a\\|b.md |\n",
             ),
-            ("notes/n.md", "cites cap-a\n"),
+            ("notes/n.md", "cites key-a\n"),
         ],
     );
     assert_eq!(code, Some(0), "{out}");
@@ -145,16 +145,16 @@ node = "groups"
 severity = "deny"
 
 [rule.cites]
-register = "caps"
+register = "keyset"
 "#;
     let (code, out) = check(
         "reference-frontmatter",
-        &[CAPS, rule],
+        &[KEYS, rule],
         &[
-            ("SOURCES.md", SOURCES),
+            ("REGISTER.md", SOURCES),
             (
                 "entries/e.md",
-                "---\ngroups: [cap-a, cap-nope]\n---\nbody\n",
+                "---\ngroups: [key-a, key-nope]\n---\nbody\n",
             ),
         ],
     );
@@ -181,19 +181,19 @@ scope = "tree"
 severity = "deny"
 
 [rule.cites]
-register = "caps"
+register = "keyset"
 from_register = "groups"
 column = 2
 split = ";"
 "#;
     let (code, out) = check(
         "reference-split",
-        &[CAPS, groups, rule],
+        &[KEYS, groups, rule],
         &[
-            ("SOURCES.md", SOURCES),
+            ("REGISTER.md", SOURCES),
             (
                 "groups.md",
-                "| g | members |\n| - | - |\n| g1 | cap-a; cap-b |\n",
+                "| g | members |\n| - | - |\n| g1 | key-a; key-b |\n",
             ),
         ],
     );
@@ -224,34 +224,37 @@ severity = "deny"
 
 [rule.cites]
 register = "tracked"
-from_register = "caps"
+from_register = "keyset"
 column = 2
 relative_to = "citer"
 "#;
     // The register lives in `out/`, so its file cells resolve against `out/`.
-    let caps = CAPS.replace(r#"paths = ["SOURCES.md"]"#, r#"paths = ["out/SOURCES.md"]"#);
+    let keys = KEYS.replace(
+        r#"paths = ["REGISTER.md"]"#,
+        r#"paths = ["out/REGISTER.md"]"#,
+    );
     let (code, out) = check(
         "reference-file-out",
-        &[&caps, tracked, rule],
+        &[&keys, tracked, rule],
         &[
             (
-                "out/SOURCES.md",
-                "| id | file |\n| - | - |\n| cap-a | a.md |\n| cap-b |  |\n| cap-c | gone.md |\n",
+                "out/REGISTER.md",
+                "| id | file |\n| - | - |\n| key-a | a.md |\n| key-b |  |\n| key-c | gone.md |\n",
             ),
             ("out/a.md", "captured\n"),
         ],
     );
     assert_eq!(code, Some(2), "{out}");
     assert!(
-        out.contains("out/SOURCES.md:5 file-missing unresolved"),
+        out.contains("out/REGISTER.md:5 file-missing unresolved"),
         "{out}"
     );
     assert!(
-        !out.contains("out/SOURCES.md:4"),
+        !out.contains("out/REGISTER.md:4"),
         "an empty cell is not a citation: {out}"
     );
     assert!(
-        !out.contains("out/SOURCES.md:3"),
+        !out.contains("out/REGISTER.md:3"),
         "a tracked file resolves: {out}"
     );
 }
@@ -263,48 +266,51 @@ id = "roster-phantom"
 kind = "reference"
 scope = "tree"
 glob = "notes/*.md"
-regex = '\b(cap-[a-z0-9-]+)\b'
+regex = '\b(key-[a-z0-9-]+)\b'
 severity = "deny"
 
 [rule.cites]
-register = "caps"
+register = "keyset"
 inverse = true
 "#;
     let (code, out) = check(
         "reference-inverse",
-        &[CAPS, rule],
+        &[KEYS, rule],
         &[
             (
-                "SOURCES.md",
-                "| id | file |\n| - | - |\n| cap-a | a.md |\n| cap-b | b.md |\n",
+                "REGISTER.md",
+                "| id | file |\n| - | - |\n| key-a | a.md |\n| key-b | b.md |\n",
             ),
-            ("notes/n.md", "cites cap-a\n"),
+            ("notes/n.md", "cites key-a\n"),
         ],
     );
     assert_eq!(code, Some(2), "{out}");
-    assert!(out.contains("SOURCES.md:4 roster-phantom uncited"), "{out}");
+    assert!(
+        out.contains("REGISTER.md:4 roster-phantom uncited"),
+        "{out}"
+    );
 }
 
 const ATTESTED: &str = r#"[[register]]
-id = "attested"
-paths = ["attested/*.md"]
+id = "witness"
+paths = ["witness/*.md"]
 source = "documents"
-key_node = "attests"
+key_node = "names"
 
 [register.refused_values]
 stability = ["unstable"]
 "#;
 
 const UNATTESTED: &str = r#"[[rule]]
-id = "unattested"
+id = "unwitness"
 kind = "reference"
 scope = "tree"
-glob = "**/extract/*.md"
-regex = '\b(cap-[a-z0-9-]+)\b'
+glob = "**/middle/*.md"
+regex = '\b(key-[a-z0-9-]+)\b'
 severity = "deny"
 
 [rule.cites]
-register = "attested"
+register = "witness"
 "#;
 
 #[test]
@@ -314,14 +320,14 @@ fn a_document_witness_admits_unless_its_only_witness_is_refused() {
         &[ATTESTED, UNATTESTED],
         &[
             (
-                "attested/1.md",
-                "---\nattests: cap-a\nstability: unstable\n---\n",
+                "witness/1.md",
+                "---\nnames: key-a\nstability: unstable\n---\n",
             ),
             (
-                "attested/2.md",
-                "---\nattests: cap-a\nstability: stable\n---\n",
+                "witness/2.md",
+                "---\nnames: key-a\nstability: stable\n---\n",
             ),
-            ("extract/r.md", "cites cap-a\n"),
+            ("middle/r.md", "cites key-a\n"),
         ],
     );
     assert_eq!(code, Some(0), "one admissible witness admits: {out}");
@@ -331,17 +337,14 @@ fn a_document_witness_admits_unless_its_only_witness_is_refused() {
         &[ATTESTED, UNATTESTED],
         &[
             (
-                "attested/1.md",
-                "---\nattests: cap-a\nstability: unstable\n---\n",
+                "witness/1.md",
+                "---\nnames: key-a\nstability: unstable\n---\n",
             ),
-            ("extract/r.md", "cites cap-a\n"),
+            ("middle/r.md", "cites key-a\n"),
         ],
     );
     assert_eq!(code, Some(2), "{out}");
-    assert!(
-        out.contains("extract/r.md:1 unattested unresolved"),
-        "{out}"
-    );
+    assert!(out.contains("middle/r.md:1 unwitness unresolved"), "{out}");
 }
 
 #[test]
@@ -351,24 +354,24 @@ id = "workspace"
 regex = '^workspaces/([^/]+)/'
 "#;
     let rule = UNATTESTED.replace(
-        "register = \"attested\"\n",
-        "register = \"attested\"\npartition = \"workspace\"\n",
+        "register = \"witness\"\n",
+        "register = \"witness\"\npartition = \"workspace\"\n",
     );
-    let attested = ATTESTED.replace(
-        r#"paths = ["attested/*.md"]"#,
-        r#"paths = ["**/attested/*.md"]"#,
+    let witness = ATTESTED.replace(
+        r#"paths = ["witness/*.md"]"#,
+        r#"paths = ["**/witness/*.md"]"#,
     );
     let (code, out) = check(
         "reference-partition",
-        &[partition, &attested, &rule],
+        &[partition, &witness, &rule],
         &[
-            ("workspaces/b/attested/1.md", "---\nattests: cap-a\n---\n"),
-            ("workspaces/a/extract/r.md", "cites cap-a\n"),
+            ("workspaces/b/witness/1.md", "---\nnames: key-a\n---\n"),
+            ("workspaces/a/middle/r.md", "cites key-a\n"),
         ],
     );
     assert_eq!(code, Some(2), "{out}");
     assert!(
-        out.contains("workspaces/a/extract/r.md:1 unattested unresolved"),
+        out.contains("workspaces/a/middle/r.md:1 unwitness unresolved"),
         "{out}"
     );
 }
@@ -379,13 +382,13 @@ fn an_unparseable_witness_is_could_not_look() {
         "reference-unparseable",
         &[ATTESTED, UNATTESTED],
         &[
-            ("attested/1.md", "---\nattests: [unclosed\n---\n"),
-            ("extract/r.md", "cites cap-a\n"),
+            ("witness/1.md", "---\nnames: [unclosed\n---\n"),
+            ("middle/r.md", "cites key-a\n"),
         ],
     );
     assert_eq!(code, Some(2), "{out}");
     assert!(
-        out.contains("attested/1.md:1 unattested could-not-look"),
+        out.contains("witness/1.md:1 unwitness could-not-look"),
         "{out}"
     );
 }
@@ -394,8 +397,8 @@ fn an_unparseable_witness_is_could_not_look() {
 fn a_register_path_matching_nothing_is_could_not_look_never_empty() {
     let (code, out) = check(
         "reference-no-register",
-        &[CAPS, DANGLING],
-        &[("notes/n.md", "cites cap-a\n")],
+        &[KEYS, DANGLING],
+        &[("notes/n.md", "cites key-a\n")],
     );
     assert_eq!(code, Some(2), "{out}");
     assert!(out.contains("could-not-look"), "{out}");

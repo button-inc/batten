@@ -2,7 +2,7 @@
 //! `input.tree.traversals`, through the compiled binary (CLOUD-1868).
 //!
 //! The chain is 04 entry --slug--> 02 record --capture--> 01 capture file
-//! --id--> the `caps` register. ANTI-VACUITY IS THE POINT: the closing case
+//! --id--> the `keyset` register. ANTI-VACUITY IS THE POINT: the closing case
 //! exits 0, and the same rule refuses a break at EACH of the four hops, with a
 //! rule id per hop so the case asserts WHERE it broke, not merely that it did.
 
@@ -13,8 +13,8 @@ use common::{Fixture, run, stdout};
 const CONFIG: &str = r#"version = 1
 
 [[register]]
-id = "caps"
-paths = ["SOURCES.md"]
+id = "keyset"
+paths = ["REGISTER.md"]
 source = "table"
 key = 1
 width = 2
@@ -22,7 +22,7 @@ width = 2
 [[traversal]]
 id = "warrant"
 seeds = "db/*.md"
-until_register = "caps"
+until_register = "keyset"
 max_visits = 32
 max_depth = MAX_DEPTH
 reduce = "path"
@@ -30,17 +30,17 @@ reduce = "path"
 [[traversal.edge]]
 label = "slug"
 field = "slug"
-to = { same-stem = "extract/*.md" }
+to = { same-stem = "middle/*.md" }
 
 [[traversal.edge]]
-label = "capture"
-field = "capture"
-to = { template = "captures/{value}.md" }
+label = "leaf"
+field = "leaf"
+to = { template = "leaves/{value}.md" }
 
 [[traversal.edge]]
 label = "id"
 field = "id"
-to = { register = "caps" }
+to = { register = "keyset" }
 
 [[rule]]
 id = "chain"
@@ -63,7 +63,7 @@ target = "policy/chain.rego"
 /// One rule id per place a chain can break, so a case names the hop.
 const MODULE: &str = r#"package batten.chain
 import rego.v1
-rules contains id if some id in {"broke-at-entry", "broke-at-record", "broke-at-capture", "broke-at-register", "chain-bound", "chain-unread"}
+rules contains id if some id in {"broke-at-entry", "broke-at-record", "broke-at-leaf", "broke-at-register", "chain-bound", "chain-unread"}
 
 violation contains {"rule": rule, "verdict": "chain open", "subjects": [{"path": seed}]} if {
 	some seed, answer in input.tree.traversals.warrant
@@ -82,17 +82,17 @@ violation contains {"rule": "chain-unread", "verdict": "chain open", "subjects":
 }
 
 hop(seed, at) := "broke-at-entry" if at == seed
-hop(_, at) := "broke-at-record" if startswith(at, "extract/")
-hop(_, at) := "broke-at-capture" if startswith(at, "captures/")
+hop(_, at) := "broke-at-record" if startswith(at, "middle/")
+hop(_, at) := "broke-at-leaf" if startswith(at, "leaves/")
 hop(_, at) := "broke-at-register" if startswith(at, "register:")
 "#;
 
-const SOURCES: &str = "| id | file |\n| - | - |\n| cap-a | a.md |\n";
+const SOURCES: &str = "| id | file |\n| - | - |\n| key-a | a.md |\n";
 
 /// Build, commit and `check` a chain fixture; return the exit code and stdout.
 fn check(name: &str, max_depth: usize, files: &[(&str, &str)]) -> (Option<i32>, String) {
     let config = CONFIG.replace("MAX_DEPTH", &max_depth.to_string());
-    let mut all: Vec<(&str, &str)> = vec![("policy/chain.rego", MODULE), ("SOURCES.md", SOURCES)];
+    let mut all: Vec<(&str, &str)> = vec![("policy/chain.rego", MODULE), ("REGISTER.md", SOURCES)];
     all.extend_from_slice(files);
     let dir = Fixture::new(name)
         .config(&config)
@@ -104,8 +104,8 @@ fn check(name: &str, max_depth: usize, files: &[(&str, &str)]) -> (Option<i32>, 
 }
 
 const ENTRY: &str = "---\nslug: e\n---\n";
-const RECORD: &str = "---\ncapture: [a]\n---\n";
-const CAPTURE: &str = "---\nid: cap-a\n---\n";
+const RECORD: &str = "---\nleaf: [a]\n---\n";
+const CAPTURE: &str = "---\nid: key-a\n---\n";
 
 #[test]
 fn a_closing_chain_exits_zero() {
@@ -114,8 +114,8 @@ fn a_closing_chain_exits_zero() {
         8,
         &[
             ("db/e.md", ENTRY),
-            ("extract/e.md", RECORD),
-            ("captures/a.md", CAPTURE),
+            ("middle/e.md", RECORD),
+            ("leaves/a.md", CAPTURE),
         ],
     );
     assert_eq!(code, Some(0), "{out}");
@@ -133,7 +133,7 @@ fn a_record_citing_no_capture_breaks_at_the_record() {
     let (code, out) = check(
         "chain-no-capture",
         8,
-        &[("db/e.md", ENTRY), ("extract/e.md", "---\nother: x\n---\n")],
+        &[("db/e.md", ENTRY), ("middle/e.md", "---\nother: x\n---\n")],
     );
     assert_eq!(code, Some(2), "{out}");
     assert!(out.contains("db/e.md broke-at-record"), "{out}");
@@ -144,10 +144,10 @@ fn a_missing_capture_file_breaks_at_the_capture() {
     let (code, out) = check(
         "chain-capture-missing",
         8,
-        &[("db/e.md", ENTRY), ("extract/e.md", RECORD)],
+        &[("db/e.md", ENTRY), ("middle/e.md", RECORD)],
     );
     assert_eq!(code, Some(2), "{out}");
-    assert!(out.contains("db/e.md broke-at-capture"), "{out}");
+    assert!(out.contains("db/e.md broke-at-leaf"), "{out}");
 }
 
 #[test]
@@ -157,8 +157,8 @@ fn a_capture_present_but_unregistered_breaks_at_the_register() {
         8,
         &[
             ("db/e.md", ENTRY),
-            ("extract/e.md", RECORD),
-            ("captures/a.md", "---\nid: cap-z\n---\n"),
+            ("middle/e.md", RECORD),
+            ("leaves/a.md", "---\nid: key-z\n---\n"),
         ],
     );
     assert_eq!(code, Some(2), "{out}");
@@ -168,14 +168,14 @@ fn a_capture_present_but_unregistered_breaks_at_the_register() {
 #[test]
 fn a_cycle_terminates() {
     // The capture file names the record's own slug back, so the walk revisits
-    // `extract/e.md`. The visited set ends it; the answer is a break, not a hang.
+    // `middle/e.md`. The visited set ends it; the answer is a break, not a hang.
     let (code, out) = check(
         "chain-cycle",
         8,
         &[
             ("db/e.md", ENTRY),
-            ("extract/e.md", RECORD),
-            ("captures/a.md", "---\nslug: e\n---\n"),
+            ("middle/e.md", RECORD),
+            ("leaves/a.md", "---\nslug: e\n---\n"),
         ],
     );
     assert_eq!(code, Some(2), "{out}");
@@ -190,8 +190,8 @@ fn a_bound_is_reported_as_bound_exceeded_never_as_a_break() {
         1,
         &[
             ("db/e.md", ENTRY),
-            ("extract/e.md", RECORD),
-            ("captures/a.md", CAPTURE),
+            ("middle/e.md", RECORD),
+            ("leaves/a.md", CAPTURE),
         ],
     );
     assert_eq!(code, Some(2), "{out}");

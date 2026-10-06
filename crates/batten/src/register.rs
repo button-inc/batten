@@ -625,7 +625,7 @@ mod tests {
 
     fn table(width: usize, unique: bool) -> DeclaredRegister {
         DeclaredRegister {
-            id: String::from("caps"),
+            id: String::from("keyset"),
             paths: vec![String::from("a.md"), String::from("b.md")],
             source: Source::Table {
                 key: 1,
@@ -735,7 +735,7 @@ mod tests {
             id: String::from("attested"),
             paths: vec![String::from("att/*.md")],
             source: Source::Documents {
-                key_node: String::from("attests"),
+                key_node: String::from("names"),
                 refused_values: BTreeMap::from([(
                     String::from("stability"),
                     vec![String::from("unstable")],
@@ -743,11 +743,11 @@ mod tests {
             },
         };
         let good = doc(&[
-            ("attests", Node::Text(String::from("cap-a"))),
+            ("names", Node::Text(String::from("key-a"))),
             ("stability", Node::Text(String::from("stable"))),
         ]);
         let bad = doc(&[
-            ("attests", Node::Text(String::from("cap-b"))),
+            ("names", Node::Text(String::from("key-b"))),
             ("stability", Node::Text(String::from("unstable"))),
         ]);
         let built = build(
@@ -764,8 +764,8 @@ mod tests {
                 },
             ],
         );
-        assert_eq!(built.contains("cap-a"), Some(true));
-        assert_eq!(built.contains("cap-b"), Some(false));
+        assert_eq!(built.contains("key-a"), Some(true));
+        assert_eq!(built.contains("key-b"), Some(false));
     }
 
     #[test]
@@ -844,7 +844,7 @@ mod tests {
         patterns: &[(&str, &str)],
     ) -> DeclaredRegister {
         DeclaredRegister {
-            id: String::from("caps"),
+            id: String::from("keyset"),
             paths: vec![String::from("a.md")],
             source: Source::Table {
                 key: 1,
@@ -869,8 +869,8 @@ mod tests {
 
     #[test]
     fn row_prefix_keeps_only_the_rows_it_names() {
-        let reg = table_with(Some("cap-"), None, &[]);
-        let text = lines("| cap-a | 1 |\n| other | 2 |");
+        let reg = table_with(Some("key-"), None, &[]);
+        let text = lines("| key-a | 1 |\n| other | 2 |");
         let built = build(
             &reg,
             &BTreeMap::new(),
@@ -879,15 +879,15 @@ mod tests {
                 lines: &text,
             }],
         );
-        assert_eq!(built.contains("cap-a"), Some(true));
+        assert_eq!(built.contains("key-a"), Some(true));
         assert_eq!(built.contains("other"), Some(false));
     }
 
     #[test]
     fn a_key_outside_key_pattern_is_malformed_and_one_inside_is_not() {
-        let patterns = compiled(&[("cap", "cap-[a-z]+")]);
+        let patterns = compiled(&[("cap", "key-[a-z]+")]);
         let reg = table_with(None, Some("cap"), &[]);
-        let text = lines("| cap-a | 1 |\n| cap-a9x | 2 |\n| xcap-a | 3 |");
+        let text = lines("| key-a | 1 |\n| key-a9x | 2 |\n| xkey-a | 3 |");
         let defects = defects_of(build(
             &reg,
             &patterns,
@@ -896,7 +896,7 @@ mod tests {
                 lines: &text,
             }],
         ));
-        // A full match, not a find: `cap-a9x` and `xcap-a` each contain a hit.
+        // A full match, not a find: `key-a9x` and `xkey-a` each contain a hit.
         assert_eq!(
             defects,
             vec![
@@ -960,33 +960,33 @@ mod tests {
 
     #[test]
     fn within_skips_tokens_outside_the_narrowing_set_only() {
-        let target = keys_at(&[("cap-a", "r.md")]);
-        let within = keys_at(&[("cap-a", "w.md"), ("cap-b", "w.md")]);
+        let target = keys_at(&[("key-a", "r.md")]);
+        let within = keys_at(&[("key-a", "w.md"), ("key-b", "w.md")]);
         let refusals = resolve(
             &target,
             &[
-                citation("cap-a", "n.md"),
-                citation("cap-b", "n.md"),
+                citation("key-a", "n.md"),
+                citation("key-b", "n.md"),
                 citation("other", "n.md"),
             ],
             Some(&within),
             None,
             false,
         );
-        // `cap-b` is in scope and unresolved; `other` is out of scope.
+        // `key-b` is in scope and unresolved; `other` is out of scope.
         assert_eq!(
             refusals,
-            vec![Refusal::Unresolved(citation("cap-b", "n.md"))]
+            vec![Refusal::Unresolved(citation("key-b", "n.md"))]
         );
     }
 
     #[test]
     fn a_partition_admits_a_witness_in_the_same_partition() {
         let partition = regex::Regex::new("^ws/([^/]+)/").expect("test regex");
-        let target = keys_at(&[("cap-a", "ws/a/att.md")]);
+        let target = keys_at(&[("key-a", "ws/a/att.md")]);
         let refusals = resolve(
             &target,
-            &[citation("cap-a", "ws/a/n.md")],
+            &[citation("key-a", "ws/a/n.md")],
             None,
             Some(&partition),
             false,
