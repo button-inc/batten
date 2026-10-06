@@ -432,6 +432,10 @@ pub enum Fact {
     /// it unstated is how a module author writes a predicate about the index and
     /// gets an answer about the checkout.
     Tracked,
+    /// Each declared `[[traversal]]`'s answer per seed (CLOUD-1868), keyed
+    /// `input.tree.traversals["<id>"]["<seed>"]`: a reduction of the walk,
+    /// never the documents it read. `null` where nothing is declared.
+    Traversals,
     /// A declared file's lines, unparsed.
     Lines,
     /// A **declared** file that lives OUTSIDE the repository root, parsed
@@ -838,6 +842,10 @@ pub const DOCUMENT: Class = Class::new(Cost::Read, Surface::Check);
 /// exist*. Rule 4 is structural here: there is no byte of any file to leak,
 /// because none is read.
 pub const TRACKED: Class = Class::new(Cost::Read, Surface::Check);
+
+/// [`Fact::Traversals`]: a bounded walk over tracked documents' frontmatter,
+/// read through the one document cache. The tree surface, like `tracked`.
+pub const TRAVERSALS: Class = Class::new(Cost::Read, Surface::Check);
 
 /// [`Fact::Lines`] — a declared file's lines, unparsed (CLOUD-846).
 ///
@@ -1535,6 +1543,7 @@ impl Fact {
         Fact::Waived,
         Fact::Document,
         Fact::Tracked,
+        Fact::Traversals,
         Fact::Lines,
         Fact::External,
         Fact::AgentSourced,
@@ -1956,6 +1965,11 @@ impl Fact {
                 "type": "object",
                 "description": "Fact::Document. Path -> the parsed node. Contents are arbitrary consumer TOML/YAML/JSON, so values are deliberately unconstrained; the schema's job here is the key set one level up, not the shape of somebody else's config.",
                 "additionalProperties": true,
+            }),
+            Fact::Traversals => serde_json::json!({
+                "type": ["object", "null"],
+                "description": "Fact::Traversals. Traversal id -> seed path -> {outcome, path|broke_at|bound|at, visited}. Pointers only: every node is a path or a register node name.",
+                "additionalProperties": {"type": "object", "additionalProperties": {"type": "object"}},
             }),
             Fact::Tracked => serde_json::json!({
                 "type": "array",
