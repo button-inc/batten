@@ -194,6 +194,20 @@ fn with_no_stdin_it_reports_what_the_tag_shipped() {
     assert!(text.contains("census\tissues=0\n"), "{text}");
 }
 
+/// EVERY RELEASE TAG HERE IS ANNOTATED, and the walk once started from the tag
+/// object itself: every release since v0.0.200 failed "could not walk the commit
+/// history" and turned the release job red after the release had shipped.
+#[test]
+fn an_annotated_tag_reports_what_it_shipped() {
+    let dir = repo("annotated");
+    commit(&dir, "fix: the fourth thing", "Refs: CLOUD-4");
+    git(&dir, &["tag", "-a", "v0.0.3", "-m", "v0.0.3"]);
+    let (code, text) = released(&dir, "v0.0.3", "");
+    assert_eq!(code, Some(0), "{text}");
+    assert!(text.contains("range\tv0.0.2..v0.0.3\n"), "{text}");
+    assert!(text.contains("shipped\tCLOUD-4\n"), "{text}");
+}
+
 #[test]
 fn an_in_review_issue_the_tag_shipped_is_movable_and_others_are_left_alone() {
     let dir = repo("movable");
