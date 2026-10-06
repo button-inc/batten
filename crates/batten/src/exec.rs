@@ -1505,6 +1505,13 @@ impl Forwarding {
 /// Every platform names the type so `run_one` reads one shape; only unix ever
 /// produces a value, because only unix forwards.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(
+    not(unix),
+    expect(
+        dead_code,
+        reason = "only unix forwards a signal, so only unix constructs an `Escalation`"
+    )
+)]
 pub(crate) enum Escalation {
     /// A second signal arrived inside the grace, and the operator asked twice.
     SecondSignal,
