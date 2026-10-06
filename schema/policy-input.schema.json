@@ -786,6 +786,19 @@
           },
           "type": "array"
         },
+        "traversals": {
+          "additionalProperties": {
+            "additionalProperties": {
+              "type": "object"
+            },
+            "type": "object"
+          },
+          "description": "Fact::Traversals. Traversal id -> seed path -> {outcome, path|broke_at|bound|at, visited}. Pointers only: every node is a path or a register node name.",
+          "type": [
+            "object",
+            "null"
+          ]
+        },
         "uses": {
           "additionalProperties": {
             "items": {

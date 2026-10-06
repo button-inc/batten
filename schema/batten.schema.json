@@ -446,6 +446,13 @@
         }
       ]
     },
+    "register": {
+      "description": "The declared-key-set table (CLOUD-2005): every set a `reference` rule may\nresolve a cited token against, declared once and referenced by id.\n\nConsumer-specific for [`Config::traversals`]'s reason: which file holds a\nregister, which column is its key, which frontmatter node names it, are a\nconsumer's vocabulary (non-negotiable rule 1). The type, the one GFM row\ngrammar and the validation are [`crate::register`].",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/DeclaredRegister"
+      }
+    },
     "rule": {
       "description": "The declarative rules run against the repository. Absent or empty means\n\"no rules configured\" and nothing is reported. Which of these a given\nverb admits is the §5 effect split: `check` runs only non-spawning kinds\nand refuses the rest, `enforce` runs all of them (CLOUD-170).\n\nEvery rule pins its `severity` explicitly — the key is required, with no\nimplicit fallback — and carries a separate `scope` key whose vocabulary\nnever conflates with severity's (CLOUD-61). Both disciplines are\nenforced at parse time: omission or conflation is a usage error here,\nnever a value quietly assumed.",
       "type": "array",
@@ -1224,6 +1231,78 @@
         "required_checks"
       ]
     },
+    "Cites": {
+      "description": "What a `kind = \"reference\"` row cites and resolves against (CLOUD-2005).\n\nOne nested table rather than seven more columns on [`crate::rules::Rule`],\nwhich already carries one per kind: every field here means something only to\nthis kind, so they travel together and are refused together on any other.\n\nThe CITER is one of three shapes, chosen by which fields are set:\n`from_register` + `column` (another register's cells, optionally `split`);\nelse the row's `glob` + `regex` (each capture-group-1 hit, else each whole\nhit, on each line); else the row's `glob` + `format` + `node` (a frontmatter\nscalar or list).",
+      "type": "object",
+      "properties": {
+        "column": {
+          "description": "The 1-based column `from_register` cites.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0
+        },
+        "from_register": {
+          "description": "Cite the cells of this register's `column` rather than lines or a node.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 1536
+        },
+        "inverse": {
+          "description": "Also refuse every key no citation names (set equality).",
+          "type": "boolean",
+          "default": false
+        },
+        "partition": {
+          "description": "A `[[pattern]]` id whose first capture group over a path names its\npartition; the join is scoped to it.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 1536
+        },
+        "register": {
+          "description": "The register every cited token must be a key of.",
+          "type": "string",
+          "maxLength": 1536
+        },
+        "relative_to": {
+          "description": "`\"citer\"` joins each token to the citer's directory before resolving.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RelativeTo"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "split": {
+          "description": "Split a cited cell on this separator; each trimmed member is a token.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 1536
+        },
+        "within": {
+          "description": "Only tokens that are keys of this register are this rule's business.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 1536
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "register"
+      ]
+    },
     "Claims": {
       "description": "The `[commit.claims]` table: every commit names the row it serves (CLOUD-843).\n\n# The server-side half of a claim\n\nA claim receipt lives in the clone's own git directory and never leaves it,\nso no reviewer and no workflow can see it. What a server CAN see is whether\neach commit names the issue it serves — the half of the claim that survives a\nfresh checkout (CLOUD-431). This repository's `commit-lint` task asked that in\nshell, one `claim keys` spawn per commit; the question is this table's now,\nasked in process over the range `commit check` already walks.\n\n\"Names a row\" is `claim keys`' own reading of the WHOLE message — a closing\nkeyword first, then the first key of each `Refs:` trailer — through the\nconsumer's `[[pattern]]` grammar, never a key shape spelled here (rule 1).\nClaiming is stricter than mentioning: a commit citing a row as evidence has\nnot thereby become work on it (CLOUD-338/CLOUD-378).",
       "type": "object",
@@ -1715,10 +1794,147 @@
         "writer"
       ]
     },
+    "DeclaredRegister": {
+      "description": "One declared key set, keyed by an id a `reference` rule names.\n\nNO `deny_unknown_fields` HERE, and that is not a relaxation: serde does not\nsupport it beside `#[serde(flatten)]`, and with both every `[[register]]` row\nfailed to parse and was pruned as unresolved. Every key that is not `id` or\n`paths` reaches the flattened [`Source`], which does deny unknown fields, so\na misspelt key is still refused.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "The name a `reference` rule resolves against.",
+          "type": "string",
+          "maxLength": 1536
+        },
+        "paths": {
+          "description": "Globs over tracked paths, unioned.",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 1536
+          }
+        }
+      },
+      "oneOf": [
+        {
+          "description": "GFM table rows: the key is one column of every data row.",
+          "type": "object",
+          "properties": {
+            "key": {
+              "description": "The 1-based column holding the key.",
+              "type": "integer",
+              "format": "uint",
+              "minimum": 0
+            },
+            "key_pattern": {
+              "description": "A `[[pattern]]` id every key must match in full.",
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 1536
+            },
+            "patterns": {
+              "description": "Per-column `[[pattern]]` ids, keyed by 1-based column. Each\nNON-EMPTY cell must match its column's pattern in full; an empty cell\nis not a claim and is never checked.",
+              "type": "object",
+              "additionalProperties": {
+                "type": "string",
+                "maxLength": 1536
+              }
+            },
+            "row_prefix": {
+              "description": "Only rows whose key cell starts with this prefix are rows of the\nregister. A file mixing a register table with prose tables declares\nit; absent, every data row of every table in the file counts.",
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 1536
+            },
+            "source": {
+              "type": "string",
+              "const": "table"
+            },
+            "unique": {
+              "description": "Whether a key may appear on two rows, across every declared path.",
+              "type": "boolean",
+              "default": false
+            },
+            "width": {
+              "description": "How many cells every data row carries. DECLARED, never read from the\nheader: a header is content, and a register whose width is whatever\nits first line says cannot refuse its first line.",
+              "type": "integer",
+              "format": "uint",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "source",
+            "key",
+            "width"
+          ]
+        },
+        {
+          "description": "Documents whose frontmatter `key_node` names the key (a scalar or a list).",
+          "type": "object",
+          "properties": {
+            "key_node": {
+              "description": "The dotted node holding the key.",
+              "type": "string",
+              "maxLength": 1536
+            },
+            "refused_values": {
+              "description": "A document carrying one of these values at the named node is not a\nwitness — it contributes no key.",
+              "type": "object",
+              "additionalProperties": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "maxLength": 1536
+                }
+              }
+            },
+            "source": {
+              "type": "string",
+              "const": "documents"
+            }
+          },
+          "required": [
+            "source",
+            "key_node"
+          ]
+        },
+        {
+          "description": "Tracked paths: the key is a `[[pattern]]`'s one capture group over the path.",
+          "type": "object",
+          "properties": {
+            "pattern": {
+              "description": "The `[[pattern]]` id; it must carry exactly one capture group.",
+              "type": "string",
+              "maxLength": 1536
+            },
+            "source": {
+              "type": "string",
+              "const": "tree"
+            }
+          },
+          "required": [
+            "source",
+            "pattern"
+          ]
+        }
+      ],
+      "required": [
+        "id",
+        "paths"
+      ]
+    },
     "DeclaredTraversal": {
       "description": "One declared walk, keyed by an id a module reads the answer under.\n\nMirrors [`crate::pattern::NamedPattern`]'s shape deliberately: a\nconsumer-owned table in the one committed authority, keyed by an id the\nconfig author picks.",
       "type": "object",
       "properties": {
+        "edge": {
+          "description": "The document edges the walk may follow, by label (CLOUD-1868). Declared\nhere because which frontmatter field is an edge, and what its value\nresolves to, is the consumer's vocabulary (rule 1). When declared, the\nwalk follows these labels and `labels` may be left empty.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Edge"
+          }
+        },
         "id": {
           "description": "The name a module reads it by — the key under `input.tree.traversals`.\n\nUnique across the table, for [`crate::pattern::NamedPattern`]'s reason: a\nrepeated id makes the lookup ambiguous, and *which declaration answered\nme* is not a question a reviewer should have to resolve.",
           "type": "string",
@@ -1749,12 +1965,28 @@
           "$ref": "#/$defs/Reduce"
         },
         "seed": {
-          "description": "Where the walk starts.\n\nA node name as the source spells it. For a document source that is a\ntracked path; the source owns the vocabulary, not this table.",
+          "description": "Where the walk starts.\n\nA node name as the source spells it. For a document source that is a\ntracked path; the source owns the vocabulary, not this table.\n\nExactly one of `seed` and [`DeclaredTraversal::seeds`] (CLOUD-1868).",
           "type": "string",
+          "maxLength": 1536
+        },
+        "seeds": {
+          "description": "A glob over tracked paths: one walk per matched file, answered per seed\n(CLOUD-1868). The shape a chain-completeness rule over a whole stage\nwants, where `seed` names one node.",
+          "type": [
+            "string",
+            "null"
+          ],
           "maxLength": 1536
         },
         "until_key": {
           "description": "The field a node must carry for the walk to stop, with `until_value`.\n\nOptional: a walk with no stop condition runs to exhaustion or to a bound,\nwhich is what a [`Reduce::Count`] over a reachable set wants.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 1536
+        },
+        "until_register": {
+          "description": "Stop at a node that is a key of this `[[register]]` (CLOUD-1868):\n\"terminating at a node registered in a declared register\".",
           "type": [
             "string",
             "null"
@@ -1773,8 +2005,6 @@
       "additionalProperties": false,
       "required": [
         "id",
-        "seed",
-        "labels",
         "max_visits",
         "max_depth",
         "reduce"
@@ -2023,6 +2253,79 @@
         "query",
         "field",
         "input"
+      ]
+    },
+    "Edge": {
+      "description": "One declared document edge (CLOUD-1868): a frontmatter field whose values\nlead somewhere, and how a value resolves to the node it names.",
+      "type": "object",
+      "properties": {
+        "field": {
+          "description": "The dotted frontmatter node carrying the edge. A scalar or a list, and\n`name[].sub` reads `sub` from each list item — a field written as a\nstring in one document and a list in the next is one field.",
+          "type": "string",
+          "maxLength": 1536
+        },
+        "label": {
+          "description": "The label a walk follows.",
+          "type": "string",
+          "maxLength": 1536
+        },
+        "to": {
+          "description": "How a value becomes a node.",
+          "$ref": "#/$defs/EdgeTarget"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "label",
+        "field",
+        "to"
+      ]
+    },
+    "EdgeTarget": {
+      "description": "How an edge value resolves (CLOUD-1868).",
+      "oneOf": [
+        {
+          "description": "The tracked files under this glob whose stem equals the value — the\njoin key a corpus spells as the same filename across stages.",
+          "type": "object",
+          "properties": {
+            "same-stem": {
+              "type": "string",
+              "maxLength": 1536
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "same-stem"
+          ]
+        },
+        {
+          "description": "This path with `{value}` replaced. A path the tree does not carry is\nstill a node; it is the dead end a finding points at.",
+          "type": "object",
+          "properties": {
+            "template": {
+              "type": "string",
+              "maxLength": 1536
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "template"
+          ]
+        },
+        {
+          "description": "The value is a key in this `[[register]]`; the node is\n[`register_node`]`(register, value)`.",
+          "type": "object",
+          "properties": {
+            "register": {
+              "type": "string",
+              "maxLength": 1536
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "register"
+          ]
+        }
       ]
     },
     "Effect": {
@@ -3970,6 +4273,16 @@
         "cold"
       ]
     },
+    "RelativeTo": {
+      "description": "What a cited token is joined to before it is resolved.",
+      "oneOf": [
+        {
+          "description": "The directory of the file the token was cited in.",
+          "type": "string",
+          "const": "citer"
+        }
+      ]
+    },
     "RequireVia": {
       "description": "The mediator a [`Rule::require_via`] row requires (CLOUD-271).\n\nOne variant, deliberately, and it is a variant rather than a string because\nthe set is the set of mediators the matcher knows how to look for. A free\nstring would let a typo load as a row that never finds its mediator and\ntherefore refuses every call — a gate that reads as narrow and denies wide.",
       "oneOf": [
@@ -4282,6 +4595,17 @@
             "type": "string",
             "maxLength": 1536
           }
+        },
+        "cites": {
+          "description": "What a [`RuleKind::Reference`] row cites and the register it resolves\nagainst (CLOUD-2005). Required by that kind, refused by every other.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Cites"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "commits": {
           "description": "The commit ranges this policy row reads the IDENTITY FIELDS of,\n**declared** (CLOUD-1187).\n\nEach becomes an entry of `input.tree[\"commit-meta\"]` carrying, per commit,\nits sha, author, committer and trailers — and **no message body and no\ndiff**. That omission is structural rather than careful:\n[`crate::git::CommitMeta`] has no body field, so rule 4 is decided by the\ntype and not by a projection remembering to drop something.\n\n**Its own column rather than a widening of [`Rule::ranges`]**, and the\nreason is cost. `ranges` reads a subject per commit; this peels a commit\nOBJECT per commit, and range length is unbounded per declaration —\n`origin/main..HEAD` is one declaration and an unknown number of commits.\nFolding the two would make every row that wants subjects pay for a peel it\nnever asked for.\n\nA range whose endpoints do not resolve is **absent**, never an empty list,\nexactly as `ranges` is.",
@@ -5099,6 +5423,11 @@
           "description": "A **registered policy module** evaluated over the resolved fact set\n(CLOUD-647, CLOUD-689): the module contributes denials, and decides\nnothing else.\n\nThe kind exists because the rule table is a flat loop — no row consumes\nanother's verdict — so a predicate over *relationships* between facts is\nnot expressible as a row at all. The layer this engine is absorbing shows\nwhat that costs: 57 of 126 tasks compose over a sibling's exit code, a\nthree-state channel that forces every consumer to re-derive the\nproducer's structure.\n\n**Admitted to [`RuleScope::MediatedCall`], which is the whole point**, and\nadmitted on [`Authority::Supplied`] rather than by exception. A\n[`RuleKind::Command`] row spawns a process that can read any file and\nreach the network; a module evaluated over `Facts` sees the fields the\nboundary resolved and acquires nothing. The fact set *is* the bound, which\nis why it had to exist before this kind could (CLOUD-763).\n\n**Deny-only, and that is structural.** Only the module's `deny` set is\nread; there is no spelling for an allow that overrides a TOML deny. That\npreserves §8's raise-only invariant *and* removes the allow/deny\ncontradiction class by construction, leaving nothing for a consumer to\nget wrong in the direction that weakens a gate.\n\nThe module is **registered**, never discovered: `module` names it in the\none committed authority. §8 forbids the upward directory walk and the\n`conf.d` merge — that is, implicit discovery — and naming each module in\nthe authority is the opposite of both. Globbing a policy directory would\nbe the thing §8 refuses.",
           "type": "string",
           "const": "policy"
+        },
+        {
+          "description": "**Every cited token resolves to a key of a declared `[[register]]`**\n(CLOUD-2005): the predicate a consumer otherwise hand-writes per citation\nshape, measured at 94.6 s for one policy row whose joins rescanned every\nregister row per row.\n\nThe join is the engine's, in [`crate::register::resolve`]: a map probe per\ncitation, never a rescan, so the cost is linear in citations plus keys.\nThe row's [`Rule::cites`] names the register and the citer; the citer's\npaths come from the row's `glob` unless it cites another register.\n\nDeny-only and pointer-only: rule id, citer `path:line` or path, and the\nregister id. A register that could not be built is could-not-look and is\nreported as such, never as an empty set.",
+          "type": "string",
+          "const": "reference"
         }
       ]
     },

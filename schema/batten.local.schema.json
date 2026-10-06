@@ -172,6 +172,78 @@
         }
       ]
     },
+    "Cites": {
+      "description": "What a `kind = \"reference\"` row cites and resolves against (CLOUD-2005).\n\nOne nested table rather than seven more columns on [`crate::rules::Rule`],\nwhich already carries one per kind: every field here means something only to\nthis kind, so they travel together and are refused together on any other.\n\nThe CITER is one of three shapes, chosen by which fields are set:\n`from_register` + `column` (another register's cells, optionally `split`);\nelse the row's `glob` + `regex` (each capture-group-1 hit, else each whole\nhit, on each line); else the row's `glob` + `format` + `node` (a frontmatter\nscalar or list).",
+      "type": "object",
+      "properties": {
+        "column": {
+          "description": "The 1-based column `from_register` cites.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0
+        },
+        "from_register": {
+          "description": "Cite the cells of this register's `column` rather than lines or a node.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 1536
+        },
+        "inverse": {
+          "description": "Also refuse every key no citation names (set equality).",
+          "type": "boolean",
+          "default": false
+        },
+        "partition": {
+          "description": "A `[[pattern]]` id whose first capture group over a path names its\npartition; the join is scoped to it.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 1536
+        },
+        "register": {
+          "description": "The register every cited token must be a key of.",
+          "type": "string",
+          "maxLength": 1536
+        },
+        "relative_to": {
+          "description": "`\"citer\"` joins each token to the citer's directory before resolving.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RelativeTo"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "split": {
+          "description": "Split a cited cell on this separator; each trimmed member is a token.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 1536
+        },
+        "within": {
+          "description": "Only tokens that are keys of this register are this rule's business.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 1536
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "register"
+      ]
+    },
     "Conserves": {
       "description": "How a deletion proves it conserved LOGIC and not merely files (CLOUD-908).\n\n[`Rule::retires_with`] admits a decrease when the deleted file's declared\nsubject died. That conserves **files**: it asks *is the subject gone* and never\n*did the cases move*, so a migration can delete a suite and land green with\nnothing asserting what replaced it. Measured on the one retirement that has\nhappened — 22 named cases deleted, 18 successors, six identifiable from\nnothing in the tree, and one whose behaviour changed deliberately with no\nmark on it.\n\nThis column closes that. Every named case in a file whose count fell must be\nclaimed, in the HEAD tree, by **exactly one** arm. Three shipped with\nCLOUD-908 and the two optional ones arrived with the classes they are for —\nwhich is why the count is not restated in prose: it went stale the moment\n`withdrawn` landed, and this table is the authority instead.\n\n| arm | means | obliges |\n| --- | --- | --- |\n| `carried` | the same assertion, in a new home | a target that resolves; feeds the differential replay |\n| `subsumed` | a general property elsewhere now covers it | a target that resolves |\n| `changed` | it diverges deliberately | a target that resolves **and** a reason |\n| `ported` | it moved, and the subject STAYED | a target that resolves **and** the surviving subject |\n\nAn unclaimed case, an arm naming a target this tree does not have, or one case\nclaimed twice, all refuse the deletion.\n\n**Declared, never inferred.** The same argument [`Rule::retires_with`] makes\nfor `# subject:`: a name heuristic over case titles would be worse than\nnothing, because titles are prose. The engine knows the RELATIONSHIP — a\ndeleted named thing is claimed by exactly one arm naming something that\nexists — and every token spelling it is the consumer's (non-negotiable rule 1).\n\n**The arms live on their targets, and the walk that finds them is bounded by\ndeclaration.** `declared_in` is the glob the head tree is read over, never an\nambient sweep: the same posture the git facts take, and the reason a mapping\nis greppable rather than filed in a second register nothing keeps current.",
       "type": "object",
@@ -760,6 +832,16 @@
         }
       ]
     },
+    "RelativeTo": {
+      "description": "What a cited token is joined to before it is resolved.",
+      "oneOf": [
+        {
+          "description": "The directory of the file the token was cited in.",
+          "type": "string",
+          "const": "citer"
+        }
+      ]
+    },
     "RequireVia": {
       "description": "The mediator a [`Rule::require_via`] row requires (CLOUD-271).\n\nOne variant, deliberately, and it is a variant rather than a string because\nthe set is the set of mediators the matcher knows how to look for. A free\nstring would let a typo load as a row that never finds its mediator and\ntherefore refuses every call — a gate that reads as narrow and denies wide.",
       "oneOf": [
@@ -957,6 +1039,17 @@
             "type": "string",
             "maxLength": 1536
           }
+        },
+        "cites": {
+          "description": "What a [`RuleKind::Reference`] row cites and the register it resolves\nagainst (CLOUD-2005). Required by that kind, refused by every other.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Cites"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "commits": {
           "description": "The commit ranges this policy row reads the IDENTITY FIELDS of,\n**declared** (CLOUD-1187).\n\nEach becomes an entry of `input.tree[\"commit-meta\"]` carrying, per commit,\nits sha, author, committer and trailers — and **no message body and no\ndiff**. That omission is structural rather than careful:\n[`crate::git::CommitMeta`] has no body field, so rule 4 is decided by the\ntype and not by a projection remembering to drop something.\n\n**Its own column rather than a widening of [`Rule::ranges`]**, and the\nreason is cost. `ranges` reads a subject per commit; this peels a commit\nOBJECT per commit, and range length is unbounded per declaration —\n`origin/main..HEAD` is one declaration and an unknown number of commits.\nFolding the two would make every row that wants subjects pay for a peel it\nnever asked for.\n\nA range whose endpoints do not resolve is **absent**, never an empty list,\nexactly as `ranges` is.",
@@ -1774,6 +1867,11 @@
           "description": "A **registered policy module** evaluated over the resolved fact set\n(CLOUD-647, CLOUD-689): the module contributes denials, and decides\nnothing else.\n\nThe kind exists because the rule table is a flat loop — no row consumes\nanother's verdict — so a predicate over *relationships* between facts is\nnot expressible as a row at all. The layer this engine is absorbing shows\nwhat that costs: 57 of 126 tasks compose over a sibling's exit code, a\nthree-state channel that forces every consumer to re-derive the\nproducer's structure.\n\n**Admitted to [`RuleScope::MediatedCall`], which is the whole point**, and\nadmitted on [`Authority::Supplied`] rather than by exception. A\n[`RuleKind::Command`] row spawns a process that can read any file and\nreach the network; a module evaluated over `Facts` sees the fields the\nboundary resolved and acquires nothing. The fact set *is* the bound, which\nis why it had to exist before this kind could (CLOUD-763).\n\n**Deny-only, and that is structural.** Only the module's `deny` set is\nread; there is no spelling for an allow that overrides a TOML deny. That\npreserves §8's raise-only invariant *and* removes the allow/deny\ncontradiction class by construction, leaving nothing for a consumer to\nget wrong in the direction that weakens a gate.\n\nThe module is **registered**, never discovered: `module` names it in the\none committed authority. §8 forbids the upward directory walk and the\n`conf.d` merge — that is, implicit discovery — and naming each module in\nthe authority is the opposite of both. Globbing a policy directory would\nbe the thing §8 refuses.",
           "type": "string",
           "const": "policy"
+        },
+        {
+          "description": "**Every cited token resolves to a key of a declared `[[register]]`**\n(CLOUD-2005): the predicate a consumer otherwise hand-writes per citation\nshape, measured at 94.6 s for one policy row whose joins rescanned every\nregister row per row.\n\nThe join is the engine's, in [`crate::register::resolve`]: a map probe per\ncitation, never a rescan, so the cost is linear in citations plus keys.\nThe row's [`Rule::cites`] names the register and the citer; the citer's\npaths come from the row's `glob` unless it cites another register.\n\nDeny-only and pointer-only: rule id, citer `path:line` or path, and the\nregister id. A register that could not be built is could-not-look and is\nreported as such, never as an empty set.",
+          "type": "string",
+          "const": "reference"
         }
       ]
     },
