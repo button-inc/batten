@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.205](https://github.com/button-inc/batten/compare/v0.0.204...v0.0.205) - 2026-10-06
+
+### Fixed
+
+- *(released)* peel each revision to its commit before walking history
+
+### Other
+
+- *(released)* an annotated tag reports what it shipped
+
 ## [0.0.204](https://github.com/button-inc/batten/compare/v0.0.203...v0.0.204) - 2026-10-06
 
 ### Fixed
