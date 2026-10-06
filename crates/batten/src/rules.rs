@@ -12781,7 +12781,7 @@ fn gather_citations(
             let Acquired::Lines(lines) = acquire(root, &path, Some(Want::Lines)) else {
                 continue;
             };
-            for (line, row) in register::data_rows(&lines) {
+            for (line, row) in register::keyed_rows(&declared.source, &lines) {
                 let Some(cell) = row.get(column) else {
                     continue;
                 };

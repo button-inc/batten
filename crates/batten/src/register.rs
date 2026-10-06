@@ -403,7 +403,6 @@ fn table_rows(
     let Source::Table {
         key,
         width,
-        row_prefix,
         unique,
         patterns: columns,
         ..
@@ -411,16 +410,10 @@ fn table_rows(
     else {
         return;
     };
-    for (line, row) in data_rows(lines) {
+    for (line, row) in keyed_rows(source, lines) {
         let Some(cell) = row.get(key.saturating_sub(1)) else {
             continue;
         };
-        if row_prefix
-            .as_deref()
-            .is_some_and(|prefix| !cell.starts_with(prefix))
-        {
-            continue;
-        }
         let witness = Witness {
             path: path.to_owned(),
             line: Some(line),
@@ -450,6 +443,31 @@ fn table_rows(
         }
         seen.push(witness);
     }
+}
+
+/// The data rows a table register keys, as `(line, cells)`: [`data_rows`]
+/// narrowed by the register's `row_prefix` on its key cell.
+///
+/// **One filter for both readers.** A rule citing a register's column reads
+/// the same rows the register keys, so a header or prose row the register
+/// skips is never a citation either. Every other source yields nothing.
+#[must_use]
+pub fn keyed_rows(source: &Source, lines: &[String]) -> Vec<(usize, Vec<String>)> {
+    let Source::Table {
+        key, row_prefix, ..
+    } = source
+    else {
+        return Vec::new();
+    };
+    data_rows(lines)
+        .into_iter()
+        .filter(|(_, row)| {
+            row_prefix.as_deref().is_none_or(|prefix| {
+                row.get(key.saturating_sub(1))
+                    .is_some_and(|cell| cell.starts_with(prefix))
+            })
+        })
+        .collect()
 }
 
 /// Whether `re` matches the whole of `text`.
@@ -679,6 +697,24 @@ mod tests {
     #[test]
     fn an_unescaped_pipe_widens_the_row() {
         assert_eq!(cells("| a|b | c |").map(|row| row.len()), Some(3));
+    }
+
+    #[test]
+    fn keyed_rows_skip_a_row_whose_key_lacks_the_prefix() {
+        let source = Source::Table {
+            key: 1,
+            width: 2,
+            row_prefix: Some(String::from("cap-")),
+            key_pattern: None,
+            patterns: BTreeMap::new(),
+            unique: false,
+        };
+        let text = lines("| id | file |\n| --- | --- |\n| cap-a | a.md |\n| note | x |");
+        let rows = keyed_rows(&source, &text);
+        assert_eq!(
+            rows,
+            vec![(3, vec![String::from("cap-a"), String::from("a.md")])]
+        );
     }
 
     #[test]
