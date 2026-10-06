@@ -1256,8 +1256,6 @@ pub enum Native {
     PatternTableRefused,
     /// The `[[traversal]]` table would not load.
     TraversalTableRefused,
-    /// The `[[register]]` table would not load.
-    RegisterTableRefused,
     /// The `[[verdict]]` table would not load.
     VerdictTableRefused,
     /// The `[[redirect]]` table would not load.
@@ -1413,6 +1411,12 @@ pub enum Native {
     /// fault, raised by the loader after every table validator, so it is in
     /// [`Native::CONFIG_FAULTS`].
     ProseColumnRefused,
+    /// The `[[register]]` table would not load (CLOUD-2005).
+    ///
+    /// **APPENDED LAST**, for [`Native::ProseColumnRefused`]'s reason: a
+    /// variant inserted mid-enum moves every later discriminant, which
+    /// `semver` refuses. A config fault, so it is in [`Native::CONFIG_FAULTS`].
+    RegisterTableRefused,
 }
 
 impl Native {
@@ -1450,7 +1454,6 @@ impl Native {
         Native::VerbTableRefused,
         Native::PatternTableRefused,
         Native::TraversalTableRefused,
-        Native::RegisterTableRefused,
         Native::VerdictTableRefused,
         Native::RedirectTableRefused,
         Native::DeferralTableRefused,
@@ -1482,6 +1485,7 @@ impl Native {
         Native::TaggerUnaccountable,
         Native::TaggerUnannotated,
         Native::ProseColumnRefused,
+        Native::RegisterTableRefused,
     ];
 
     /// The classes the CONFIG LOADER raises, in `parse_ungated` order.
@@ -1501,7 +1505,6 @@ impl Native {
         Native::OutcomeTableRefused,
         Native::PatternTableRefused,
         Native::TraversalTableRefused,
-        Native::RegisterTableRefused,
         Native::VerdictTableRefused,
         Native::RedirectTableRefused,
         Native::DeferralTableRefused,
@@ -1519,6 +1522,7 @@ impl Native {
         Native::StartupTableRefused,
         Native::StepTableRefused,
         Native::ProseColumnRefused,
+        Native::RegisterTableRefused,
     ];
 
     /// The token this class is declared and rendered under.
