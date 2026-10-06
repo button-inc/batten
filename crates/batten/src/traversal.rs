@@ -439,6 +439,9 @@ mod tests {
         DeclaredTraversal {
             id: id.to_owned(),
             seed: "entry.md".to_owned(),
+            seeds: None,
+            edges: Vec::new(),
+            until_register: None,
             labels: vec!["warrant".to_owned()],
             until_key: Some("registered".to_owned()),
             until_value: Some("true".to_owned()),
@@ -545,5 +548,156 @@ mod tests {
         open.until_key = None;
         open.until_value = None;
         assert!(open.compiled().until.is_none());
+    }
+
+    // ---- The document graph (CLOUD-1868): the 04 -> 02 -> 01 chain. ----
+
+    use super::{DocumentGraph, Edge, EdgeTarget, answer};
+    use crate::facts::{Look, Node};
+    use std::collections::BTreeMap;
+
+    fn chain_row() -> DeclaredTraversal {
+        DeclaredTraversal {
+            id: "warrant".to_owned(),
+            seed: String::new(),
+            seeds: Some("db/*.md".to_owned()),
+            edges: vec![
+                Edge {
+                    label: "slug".to_owned(),
+                    field: "slug".to_owned(),
+                    to: EdgeTarget::SameStem("extract/*.md".to_owned()),
+                },
+                Edge {
+                    label: "capture".to_owned(),
+                    field: "capture".to_owned(),
+                    to: EdgeTarget::Register("caps".to_owned()),
+                },
+            ],
+            until_register: Some("caps".to_owned()),
+            labels: Vec::new(),
+            until_key: None,
+            until_value: None,
+            max_visits: 16,
+            max_depth: 4,
+            reduce: Reduce::Path,
+        }
+    }
+
+    fn doc(pairs: &[(&str, Node)]) -> Node {
+        Node::Map(
+            pairs
+                .iter()
+                .map(|(k, v)| ((*k).to_owned(), v.clone()))
+                .collect(),
+        )
+    }
+
+    fn text(value: &str) -> Node {
+        Node::Text(value.to_owned())
+    }
+
+    fn caps(keys: &[&str]) -> BTreeMap<String, crate::register::Built> {
+        let keys = keys.iter().map(|key| ((*key).to_owned(), vec![])).collect();
+        BTreeMap::from([(
+            "caps".to_owned(),
+            crate::register::Built::Keys {
+                keys,
+                defects: vec![],
+            },
+        )])
+    }
+
+    /// Walk `db/e.md` over `docs` with `registered` keys; return the answer.
+    fn walk(docs: &[(&str, Node)], registered: &[&str]) -> serde_json::Value {
+        let row = chain_row();
+        let tracked: Vec<String> = docs.iter().map(|(path, _)| (*path).to_owned()).collect();
+        let registers = caps(registered);
+        let store: BTreeMap<String, Node> = docs
+            .iter()
+            .map(|(path, node)| ((*path).to_owned(), node.clone()))
+            .collect();
+        let read = move |path: &str| match store.get(path) {
+            Some(Node::Null) => Look::CouldNotLook,
+            Some(node) => Look::Is(node.clone()),
+            None => Look::IsNot,
+        };
+        let graph = DocumentGraph::new(&row, &tracked, &registers, &read).expect("graph");
+        answer(&row.compiled_from("db/e.md").run(&graph))
+    }
+
+    #[test]
+    fn a_closing_chain_reaches_a_registered_capture() {
+        let out = walk(
+            &[
+                ("db/e.md", doc(&[("slug", text("e"))])),
+                (
+                    "extract/e.md",
+                    doc(&[("capture", Node::List(vec![text("cap-a")]))]),
+                ),
+            ],
+            &["cap-a"],
+        );
+        assert_eq!(out["outcome"], "reached");
+        assert_eq!(
+            out["path"],
+            serde_json::json!(["db/e.md", "extract/e.md", "register:caps:cap-a"])
+        );
+    }
+
+    #[test]
+    fn no_record_for_the_slug_breaks_at_the_entry() {
+        let out = walk(&[("db/e.md", doc(&[("slug", text("e"))]))], &["cap-a"]);
+        assert_eq!(out["outcome"], "exhausted");
+        assert_eq!(out["broke_at"], "db/e.md");
+    }
+
+    #[test]
+    fn a_record_citing_no_capture_breaks_at_the_record() {
+        let out = walk(
+            &[
+                ("db/e.md", doc(&[("slug", text("e"))])),
+                ("extract/e.md", doc(&[("other", text("x"))])),
+            ],
+            &["cap-a"],
+        );
+        assert_eq!(out["outcome"], "exhausted");
+        assert_eq!(out["broke_at"], "extract/e.md");
+    }
+
+    #[test]
+    fn a_capture_present_but_unregistered_breaks_at_the_register_node() {
+        let out = walk(
+            &[
+                ("db/e.md", doc(&[("slug", text("e"))])),
+                ("extract/e.md", doc(&[("capture", text("cap-z"))])),
+            ],
+            &["cap-a"],
+        );
+        assert_eq!(out["outcome"], "exhausted");
+        assert_eq!(out["broke_at"], "register:caps:cap-z");
+    }
+
+    #[test]
+    fn an_unreadable_record_is_could_not_look_never_a_break() {
+        let out = walk(
+            &[
+                ("db/e.md", doc(&[("slug", text("e"))])),
+                ("extract/e.md", Node::Null),
+            ],
+            &["cap-a"],
+        );
+        assert_eq!(out["outcome"], "could-not-look");
+        assert_eq!(out["at"], "extract/e.md");
+    }
+
+    #[test]
+    fn exactly_one_of_seed_and_seeds_is_required() {
+        let mut both = chain_row();
+        both.seed = "db/e.md".to_owned();
+        assert!(validate(&[both]).is_err());
+        let mut neither = chain_row();
+        neither.seeds = None;
+        assert!(validate(&[neither]).is_err());
+        assert!(validate(&[chain_row()]).is_ok());
     }
 }
