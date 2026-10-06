@@ -4910,6 +4910,7 @@ impl Rule {
             ("format", self.format.is_some()),
             ("node", self.node.is_some()),
             ("derives", self.derives.is_some()),
+            ("cites", self.cites.is_some()),
             ("reads", self.reads.is_some()),
             ("module", self.module.is_some()),
             ("checks", self.checks.is_some()),
@@ -16555,7 +16556,8 @@ mod tests {
                 | RuleKind::Judge
                 | RuleKind::Secrets
                 | RuleKind::Document
-                | RuleKind::Policy => {}
+                | RuleKind::Policy
+                | RuleKind::Reference => {}
             }
         }
         assert_eq!(
