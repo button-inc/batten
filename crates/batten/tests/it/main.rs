@@ -440,6 +440,7 @@ mod tracker_hygiene;
 mod transcript_corpus;
 mod transcript_stop_reason;
 mod transcript_tool_result;
+mod traversal_chain;
 mod truncate_handle;
 mod trunk_watch;
 mod turn_cross_check;
