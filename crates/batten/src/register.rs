@@ -80,8 +80,13 @@ pub enum Source {
 }
 
 /// One declared key set, keyed by an id a `reference` rule names.
+///
+/// NO `deny_unknown_fields` HERE, and that is not a relaxation: serde does not
+/// support it beside `#[serde(flatten)]`, and with both every `[[register]]` row
+/// failed to parse and was pruned as unresolved. Every key that is not `id` or
+/// `paths` reaches the flattened [`Source`], which does deny unknown fields, so
+/// a misspelt key is still refused.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub struct DeclaredRegister {
     /// The name a `reference` rule resolves against.
     pub id: String,
