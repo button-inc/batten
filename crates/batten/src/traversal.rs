@@ -27,7 +27,7 @@
 //! `records-blocked`'s rule: a predicate reading an absence as *the chain is
 //! broken* would refuse a tree it never looked at.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -73,7 +73,25 @@ pub struct DeclaredTraversal {
     ///
     /// A node name as the source spells it. For a document source that is a
     /// tracked path; the source owns the vocabulary, not this table.
+    ///
+    /// Exactly one of `seed` and [`DeclaredTraversal::seeds`] (CLOUD-1868).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub seed: String,
+    /// A glob over tracked paths: one walk per matched file, answered per seed
+    /// (CLOUD-1868). The shape a chain-completeness rule over a whole stage
+    /// wants, where `seed` names one node.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seeds: Option<String>,
+    /// The document edges the walk may follow, by label (CLOUD-1868). Declared
+    /// here because which frontmatter field is an edge, and what its value
+    /// resolves to, is the consumer's vocabulary (rule 1). When declared, the
+    /// walk follows these labels and `labels` may be left empty.
+    #[serde(default, rename = "edge", skip_serializing_if = "Vec::is_empty")]
+    pub edges: Vec<Edge>,
+    /// Stop at a node that is a key of this `[[register]]` (CLOUD-1868):
+    /// "terminating at a node registered in `SOURCES.md`".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub until_register: Option<String>,
     /// The edge labels the walk follows, tried in the order given.
     ///
     /// Non-empty: a walk with no labels cannot leave its seed, so its answer
@@ -103,14 +121,28 @@ pub struct DeclaredTraversal {
 }
 
 impl DeclaredTraversal {
-    /// The engine-side walk this row declares.
+    /// The engine-side walk this row declares, from `seed`.
     #[must_use]
     pub fn compiled(&self) -> Traversal {
+        self.compiled_from(&self.seed)
+    }
+
+    /// The engine-side walk this row declares, from one `seed`.
+    #[must_use]
+    pub fn compiled_from(&self, seed: &str) -> Traversal {
+        let labels = if self.edges.is_empty() {
+            self.labels.clone()
+        } else {
+            self.edges.iter().map(|edge| edge.label.clone()).collect()
+        };
         Traversal {
-            seed: self.seed.clone(),
-            labels: self.labels.clone(),
-            until: match (&self.until_key, &self.until_value) {
-                (Some(key), Some(value)) => Some(Until::Has {
+            seed: seed.to_owned(),
+            labels,
+            until: match (&self.until_key, &self.until_value, &self.until_register) {
+                (_, _, Some(register)) => Some(Until::Registered {
+                    register: register.clone(),
+                }),
+                (Some(key), Some(value), None) => Some(Until::Has {
                     key: key.clone(),
                     value: value.clone(),
                 }),
@@ -125,6 +157,189 @@ impl DeclaredTraversal {
                 max_depth: self.max_depth,
             },
         }
+    }
+}
+
+/// One declared document edge (CLOUD-1868): a frontmatter field whose values
+/// lead somewhere, and how a value resolves to the node it names.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Edge {
+    /// The label a walk follows.
+    pub label: String,
+    /// The dotted frontmatter node carrying the edge. A scalar or a list, and
+    /// `name[].sub` reads `sub` from each list item — a field written as a
+    /// string in one document and a list in the next is one field.
+    pub field: String,
+    /// How a value becomes a node.
+    pub to: EdgeTarget,
+}
+
+/// How an edge value resolves (CLOUD-1868).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub enum EdgeTarget {
+    /// The tracked files under this glob whose stem equals the value — the
+    /// join key a corpus spells as the same filename across stages.
+    SameStem(String),
+    /// This path with `{value}` replaced. A path the tree does not carry is
+    /// still a node; it is the dead end a finding points at.
+    Template(String),
+    /// The value is a key in this `[[register]]`; the node is
+    /// [`register_node`]`(register, value)`.
+    Register(String),
+}
+
+/// The node name a register-key edge resolves to. Never a tracked path, so a
+/// register node and a document node cannot collide.
+#[must_use]
+pub fn register_node(register: &str, key: &str) -> String {
+    format!("register:{register}:{key}")
+}
+
+/// What the walk may ask of a document: its parsed frontmatter.
+///
+/// `Is` a node, `IsNot` where the path carries no document (absent, or no
+/// frontmatter), `CouldNotLook` where it could not be read or parsed — the
+/// three answers `crate::facts::Look` already keeps apart.
+pub type Frontmatter<'a> = dyn Fn(&str) -> crate::facts::Look<crate::facts::Node> + 'a;
+
+/// A [`crate::graph::GraphSource`] over tracked markdown documents and declared
+/// registers (CLOUD-1868).
+///
+/// **Pure over what it is handed**, `graph.rs`'s posture one layer up: the
+/// caller supplies the frontmatter reader, so this opens no file and the
+/// document cache stays the one acquirer. Frontmatter is read per VISITED node,
+/// so a walk costs what it touches, never the tree (CLOUD-1866).
+pub struct DocumentGraph<'a> {
+    edges: BTreeMap<&'a str, &'a Edge>,
+    stems: BTreeMap<&'a str, BTreeMap<String, Vec<String>>>,
+    registers: &'a BTreeMap<String, crate::register::Built>,
+    read: &'a Frontmatter<'a>,
+}
+
+impl<'a> DocumentGraph<'a> {
+    /// A graph over `row`'s edges, with `tracked` resolving same-stem joins.
+    ///
+    /// # Errors
+    ///
+    /// A [`UsageError`] for a malformed same-stem glob.
+    pub fn new(
+        row: &'a DeclaredTraversal,
+        tracked: &[String],
+        registers: &'a BTreeMap<String, crate::register::Built>,
+        read: &'a Frontmatter<'a>,
+    ) -> anyhow::Result<Self> {
+        let mut stems = BTreeMap::new();
+        for edge in &row.edges {
+            if let EdgeTarget::SameStem(glob) = &edge.to {
+                let set = crate::rules::PathSet::selecting(&row.id, glob, &[])?;
+                let mut by_stem: BTreeMap<String, Vec<String>> = BTreeMap::new();
+                for path in tracked.iter().filter(|path| set.contains(path)) {
+                    by_stem
+                        .entry(stem(path).to_owned())
+                        .or_default()
+                        .push(path.clone());
+                }
+                stems.insert(glob.as_str(), by_stem);
+            }
+        }
+        Ok(Self {
+            edges: row
+                .edges
+                .iter()
+                .map(|edge| (edge.label.as_str(), edge))
+                .collect(),
+            stems,
+            registers,
+            read,
+        })
+    }
+}
+
+/// A path's file name without its last extension.
+fn stem(path: &str) -> &str {
+    let name = path.rsplit('/').next().unwrap_or(path);
+    name.rsplit_once('.').map_or(name, |(stem, _)| stem)
+}
+
+impl crate::graph::GraphSource for DocumentGraph<'_> {
+    fn out(&self, from: &str, label: &str) -> Option<Vec<crate::graph::NodeId>> {
+        // A register node is a terminal by construction: it leads nowhere.
+        if from.starts_with("register:") {
+            return Some(Vec::new());
+        }
+        let Some(edge) = self.edges.get(label) else {
+            return Some(Vec::new());
+        };
+        let node = match (self.read)(from) {
+            crate::facts::Look::Is(node) => node,
+            // Absent, or no frontmatter: looked, and it points nowhere — the
+            // dead end a broken chain reports.
+            crate::facts::Look::IsNot => return Some(Vec::new()),
+            crate::facts::Look::CouldNotLook => return None,
+        };
+        let mut next = Vec::new();
+        for value in crate::register::scalars(&node, &edge.field) {
+            match &edge.to {
+                EdgeTarget::SameStem(glob) => {
+                    if let Some(paths) = self
+                        .stems
+                        .get(glob.as_str())
+                        .and_then(|map| map.get(&value))
+                    {
+                        next.extend(paths.iter().filter(|path| path.as_str() != from).cloned());
+                    }
+                }
+                EdgeTarget::Template(template) => next.push(template.replace("{value}", &value)),
+                EdgeTarget::Register(register) => next.push(register_node(register, &value)),
+            }
+        }
+        next.sort();
+        next.dedup();
+        Some(next)
+    }
+
+    fn has(&self, _node: &str, _key: &str, _value: &str) -> Option<bool> {
+        // A document source answers `until_register`, not a field equality.
+        None
+    }
+
+    fn registered(&self, node: &str, register: &str) -> Option<bool> {
+        let Some(key) = node.strip_prefix(&format!("register:{register}:")) else {
+            return Some(false);
+        };
+        self.registers.get(register)?.contains(key)
+    }
+}
+
+/// One seed's answer, as a module reads it under
+/// `input.tree.traversals["<id>"]["<seed>"]` (CLOUD-1868).
+///
+/// A reduction, never the walk: an outcome token, the path when it closed, and
+/// the node where it broke when it did not. Every node is a path or a register
+/// node name, so all of it is pointers (rule 4).
+#[must_use]
+pub fn answer(outcome: &crate::graph::Outcome) -> serde_json::Value {
+    use crate::graph::Outcome;
+    match outcome {
+        Outcome::Reached { at, path } => serde_json::json!({
+            "outcome": "reached", "at": at, "path": path,
+        }),
+        Outcome::Exhausted { visited, dead_end } => serde_json::json!({
+            "outcome": "exhausted", "visited": visited, "broke_at": dead_end,
+        }),
+        Outcome::BoundExceeded { bound, visited } => serde_json::json!({
+            "outcome": "bound-exceeded",
+            "bound": match bound {
+                crate::graph::Bound::Visits => "visits",
+                crate::graph::Bound::Depth => "depth",
+            },
+            "visited": visited,
+        }),
+        Outcome::CouldNotLook { at } => serde_json::json!({
+            "outcome": "could-not-look", "at": at,
+        }),
     }
 }
 
@@ -151,14 +366,15 @@ pub fn validate(traversals: &[DeclaredTraversal]) -> anyhow::Result<()> {
                 row.id, row.id
             )));
         }
-        if row.seed.trim().is_empty() {
+        if row.seed.trim().is_empty() == row.seeds.as_deref().is_none_or(|g| g.trim().is_empty()) {
             return Err(UsageError::raise(format!(
-                "traversal `{}`: `seed` cannot be blank — a walk with no start \
-                 has nowhere to go",
+                "traversal `{}`: declare exactly one of `seed` (one node) or \
+                 `seeds` (a glob) — a walk with no start has nowhere to go, and \
+                 one with two cannot say which it answered for",
                 row.id
             )));
         }
-        if row.labels.is_empty() {
+        if row.labels.is_empty() && row.edges.is_empty() {
             return Err(UsageError::raise(format!(
                 "traversal `{}`: `labels` cannot be empty — a walk with no edge \
                  labels cannot leave its seed, so its answer would be about the \

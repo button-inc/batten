@@ -73,6 +73,15 @@ pub trait GraphSource {
     /// read, so a stop condition over an unreadable node abstains rather than
     /// deciding either way.
     fn has(&self, node: &str, key: &str, value: &str) -> Option<bool>;
+
+    /// Whether `node` is a key of the declared register `register`
+    /// (CLOUD-1868's terminal: "a REGISTERED capture").
+    ///
+    /// Defaulted to could-not-look, so a source that carries no registers
+    /// abstains rather than answering `false` for a terminal it never read.
+    fn registered(&self, _node: &str, _register: &str) -> Option<bool> {
+        None
+    }
 }
 
 /// How far a walk may go before it reports that it could not finish.
@@ -120,6 +129,10 @@ pub enum Outcome {
     Exhausted {
         /// How many nodes were visited before the frontier emptied.
         visited: usize,
+        /// The deepest node the walk reached that led nowhere new: where the
+        /// chain BROKE, which is the pointer a finding owes (CLOUD-1868). The
+        /// first such node at the greatest depth, so it is byte-stable.
+        dead_end: Option<NodeId>,
     },
     /// A bound stopped the walk. Says nothing about the chain.
     BoundExceeded {
@@ -149,6 +162,11 @@ pub enum Until {
         key: String,
         /// The value it must carry.
         value: String,
+    },
+    /// Stop at a node that is a key of the declared register (CLOUD-1868).
+    Registered {
+        /// The register id.
+        register: String,
     },
 }
 
@@ -183,6 +201,7 @@ impl Traversal {
         let mut parent: BTreeMap<NodeId, NodeId> = BTreeMap::new();
         let mut queue: VecDeque<(NodeId, usize)> = VecDeque::new();
         let mut visited = 0usize;
+        let mut dead_end: Option<(usize, NodeId)> = None;
 
         queue.push_back((self.seed.clone(), 0));
         seen.insert(self.seed.clone());
@@ -221,20 +240,28 @@ impl Traversal {
                 continue;
             }
 
+            let mut led_anywhere = false;
             for label in &self.labels {
                 let Some(next) = source.out(&node, label) else {
                     return Outcome::CouldNotLook { at: node };
                 };
                 for target in next {
                     if seen.insert(target.clone()) {
+                        led_anywhere = true;
                         parent.insert(target.clone(), node.clone());
                         queue.push_back((target, depth + 1));
                     }
                 }
             }
+            if !led_anywhere && dead_end.as_ref().is_none_or(|(at, _)| depth > *at) {
+                dead_end = Some((depth, node));
+            }
         }
 
-        Outcome::Exhausted { visited }
+        Outcome::Exhausted {
+            visited,
+            dead_end: dead_end.map(|(_, node)| node),
+        }
     }
 
     /// Whether the stop condition holds at `node`. `None` is could-not-look.
@@ -245,6 +272,7 @@ impl Traversal {
             // rather than a degenerate case.
             None => Some(false),
             Some(Until::Has { key, value }) => source.has(node, key, value),
+            Some(Until::Registered { register }) => source.registered(node, register),
         }
     }
 
@@ -413,7 +441,7 @@ mod tests {
             .edge("b", "warrant", &["a"]);
         assert!(matches!(
             walk("a", Some(registered()), ROOMY).run(&graph),
-            Outcome::Exhausted { visited: 2 }
+            Outcome::Exhausted { visited: 2, .. }
         ));
     }
 
