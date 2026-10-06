@@ -407,3 +407,31 @@ fn a_register_path_matching_nothing_is_could_not_look_never_empty() {
         "an absent register is not an empty one: {out}"
     );
 }
+
+#[test]
+fn a_tracked_citer_deleted_from_the_worktree_is_neither_a_finding_nor_could_not_look() {
+    let rule = r#"[[rule]]
+id = "group-unknown"
+kind = "reference"
+scope = "tree"
+glob = "entries/*.md"
+format = "markdown"
+node = "groups"
+severity = "deny"
+
+[rule.cites]
+register = "keyset"
+"#;
+    let dir = Fixture::new("reference-citer-deleted")
+        .config(&config(&[KEYS, rule]))
+        .files(&[
+            ("REGISTER.md", SOURCES),
+            ("entries/e.md", "---\ngroups: [key-nope]\n---\n"),
+        ])
+        .base_commit()
+        .build();
+    // Tracked, then gone: the walk lists it and the read finds nothing.
+    std::fs::remove_file(dir.join("entries/e.md")).expect("delete the citer");
+    let out = run(&dir, &["check"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stdout(&out));
+}
