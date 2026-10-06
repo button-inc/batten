@@ -331,50 +331,16 @@ pub fn build(
     let mut defects = Vec::new();
     for input in inputs {
         match (input, &register.source) {
-            (
-                Input::Lines { path, lines },
-                Source::Table {
-                    key,
-                    width,
-                    row_prefix,
-                    unique,
-                    patterns: columns,
-                    ..
-                },
-            ) => {
-                for (line, row) in data_rows(lines) {
-                    let Some(cell) = row.get(key.saturating_sub(1)) else {
-                        continue;
-                    };
-                    if row_prefix
-                        .as_deref()
-                        .is_some_and(|prefix| !cell.starts_with(prefix))
-                    {
-                        continue;
-                    }
-                    let witness = Witness {
-                        path: (*path).to_owned(),
-                        line: Some(line),
-                    };
-                    if row.len() != *width {
-                        defects.push(Defect::Width(witness.clone()));
-                    }
-                    let column_malformed = columns.iter().any(|(column, id)| {
-                        let at = column.parse::<usize>().unwrap_or(0).saturating_sub(1);
-                        row.get(at).is_some_and(|value| {
-                            !value.is_empty()
-                                && patterns.get(id).is_some_and(|re| !full_match(re, value))
-                        })
-                    });
-                    if column_malformed || key_pattern.is_some_and(|re| !full_match(re, cell)) {
-                        defects.push(Defect::Malformed(witness.clone()));
-                    }
-                    let seen = keys.entry(cell.clone()).or_default();
-                    if *unique && !seen.is_empty() {
-                        defects.push(Defect::Duplicated(witness.clone()));
-                    }
-                    seen.push(witness);
-                }
+            (Input::Lines { path, lines }, Source::Table { .. }) => {
+                table_rows(
+                    &register.source,
+                    patterns,
+                    key_pattern,
+                    path,
+                    lines,
+                    &mut keys,
+                    &mut defects,
+                );
             }
             (
                 Input::Document { path, node },
@@ -421,6 +387,62 @@ pub fn build(
     }
     defects.sort();
     Built::Keys { keys, defects }
+}
+
+/// Read one table file's data rows into `keys`, recording width, malformed and
+/// duplicate defects. [`build`]'s table arm, separate for clippy's line budget.
+fn table_rows(
+    source: &Source,
+    patterns: &BTreeMap<String, regex::Regex>,
+    key_pattern: Option<&regex::Regex>,
+    path: &str,
+    lines: &[String],
+    keys: &mut BTreeMap<String, Vec<Witness>>,
+    defects: &mut Vec<Defect>,
+) {
+    let Source::Table {
+        key,
+        width,
+        row_prefix,
+        unique,
+        patterns: columns,
+        ..
+    } = source
+    else {
+        return;
+    };
+    for (line, row) in data_rows(lines) {
+        let Some(cell) = row.get(key.saturating_sub(1)) else {
+            continue;
+        };
+        if row_prefix
+            .as_deref()
+            .is_some_and(|prefix| !cell.starts_with(prefix))
+        {
+            continue;
+        }
+        let witness = Witness {
+            path: path.to_owned(),
+            line: Some(line),
+        };
+        if row.len() != *width {
+            defects.push(Defect::Width(witness.clone()));
+        }
+        let column_malformed = columns.iter().any(|(column, id)| {
+            let at = column.parse::<usize>().unwrap_or(0).saturating_sub(1);
+            row.get(at).is_some_and(|value| {
+                !value.is_empty() && patterns.get(id).is_some_and(|re| !full_match(re, value))
+            })
+        });
+        if column_malformed || key_pattern.is_some_and(|re| !full_match(re, cell)) {
+            defects.push(Defect::Malformed(witness.clone()));
+        }
+        let seen = keys.entry(cell.clone()).or_default();
+        if *unique && !seen.is_empty() {
+            defects.push(Defect::Duplicated(witness.clone()));
+        }
+        seen.push(witness);
+    }
 }
 
 /// Whether `re` matches the whole of `text`.
@@ -616,6 +638,7 @@ pub fn validate(registers: &[DeclaredRegister]) -> anyhow::Result<()> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

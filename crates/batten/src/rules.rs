@@ -415,6 +415,23 @@ pub enum RuleKind {
     Reference,
 }
 
+/// The columns a [`RuleKind::Reference`] row accepts (CLOUD-2005): its `cites`
+/// table, the citer's `glob` with one of `regex` or `format` + `node`, and the
+/// columns every reporting kind shares. A const of its own so
+/// [`RuleKind::permits`] stays one arm per kind.
+const REFERENCE_COLUMNS: &[&str] = &[
+    "cites",
+    "glob",
+    "regex",
+    "format",
+    "node",
+    "exclude_paths",
+    "reason",
+    "policy_url",
+    "no_fix_reason",
+    "severity",
+];
+
 /// What a rule kind may reach beyond the inputs the boundary handed it
 /// (CLOUD-763).
 ///
@@ -958,18 +975,7 @@ impl RuleKind {
             // No `pattern` and no `regex`: the predicate is the module, and a
             // second shape column beside it would be a rule with two authorities
             // over one decision.
-            RuleKind::Reference => &[
-                "cites",
-                "glob",
-                "regex",
-                "format",
-                "node",
-                "exclude_paths",
-                "reason",
-                "policy_url",
-                "no_fix_reason",
-                "severity",
-            ],
+            RuleKind::Reference => REFERENCE_COLUMNS,
             RuleKind::Policy => &[
                 // CLOUD-1639, and this is the ONE kind that may carry `fix` at
                 // the mediated boundary: a repair is admissible only where the
@@ -7213,8 +7219,7 @@ fn run(
     // consumer row of the same token, so resolving a module's token against
     // anything narrower would answer for half the classes a module may raise.
     let registry = crate::policy::registry_for(vocabulary.verdicts)?;
-    let patterns = crate::pattern::compiled(vocabulary.patterns);
-    let traversals = walk_traversals(vocabulary, root, &files, &patterns)?;
+    let tables = RunTables::new(vocabulary, root, &files)?;
 
     let inputs = RunInputs {
         provisions,
@@ -7238,9 +7243,7 @@ fn run(
         captured: captured.as_ref(),
         bundles,
         verdicts: &registry,
-        registers: vocabulary.registers,
-        patterns: &patterns,
-        traversals: &traversals,
+        tables: &tables,
     };
 
     let mut scan = Scan::default();
@@ -7766,12 +7769,40 @@ struct RunInputs<'a> {
     /// life of the run, and this is the shape `Vocabulary` already threads for
     /// exactly that reason.
     verdicts: &'a [crate::verdict::DeclaredVerdict],
-    /// The `[[register]]` table a `reference` row resolves against (CLOUD-2005).
+    /// The declared tables a `reference` row and a traversal read, resolved
+    /// once for the run (CLOUD-2005, CLOUD-1868).
+    tables: &'a RunTables<'a>,
+}
+
+/// The per-run tables the reference kind and the traversal fact read.
+///
+/// One value rather than three `RunInputs` fields because `run` sits on
+/// clippy's line ceiling, and these three are built together and read
+/// together.
+pub(crate) struct RunTables<'a> {
+    /// The `[[register]]` table a `reference` row resolves against.
     registers: &'a [crate::register::DeclaredRegister],
     /// The `[[pattern]]` table, compiled once for the run.
-    patterns: &'a BTreeMap<String, regex::Regex>,
-    /// Each declared traversal's answer (CLOUD-1868), computed once.
-    traversals: &'a serde_json::Value,
+    patterns: BTreeMap<String, regex::Regex>,
+    /// Each declared traversal's answer, keyed id -> seed.
+    traversals: serde_json::Value,
+}
+
+impl<'a> RunTables<'a> {
+    /// Compile the patterns and walk every declared traversal.
+    fn new(
+        vocabulary: crate::policy::Vocabulary<'a>,
+        root: &Path,
+        files: &[String],
+    ) -> anyhow::Result<Self> {
+        let patterns = crate::pattern::compiled(vocabulary.patterns);
+        let traversals = walk_traversals(vocabulary, root, files, &patterns)?;
+        Ok(Self {
+            registers: vocabulary.registers,
+            patterns,
+            traversals,
+        })
+    }
 }
 
 fn run_rule(
@@ -9963,7 +9994,7 @@ fn resolved_of<'a>(inputs: &RunInputs<'a>) -> Resolved<'a> {
     Resolved {
         review: inputs.review,
         produced: inputs.produced,
-        traversals: inputs.traversals,
+        traversals: &inputs.tables.traversals,
         records: inputs.records,
         records_blocked: inputs.records_blocked,
         git: inputs.git,
@@ -12627,16 +12658,17 @@ fn reference_rule(
     inputs: &RunInputs<'_>,
     findings: &mut Vec<Finding>,
 ) -> anyhow::Result<Option<NotObserved>> {
-    use crate::register::{self, Built, Citation, Refusal, Witness};
+    use crate::register::{self, Built, Refusal, Witness};
     let Some(cites) = rule.cites.as_ref() else {
         return Ok(Some(NotObserved::RuleSkipped));
     };
     let register_inputs = RegisterInputs {
         files: inputs.files,
-        patterns: inputs.patterns,
+        patterns: &inputs.tables.patterns,
     };
     let build = |id: &str| -> anyhow::Result<Built> {
         let declared = inputs
+            .tables
             .registers
             .iter()
             .find(|row| row.id == id)
@@ -12653,73 +12685,12 @@ fn reference_rule(
     let partition = cites
         .partition
         .as_ref()
-        .and_then(|id| inputs.patterns.get(id));
+        .and_then(|id| inputs.tables.patterns.get(id));
 
-    let mut citations: Vec<Citation> = Vec::new();
-    if let Some(source_id) = cites.from_register.as_deref() {
-        // A register's own column is the citer: read its rows with the same
-        // grammar the register was built with, so a cell means one thing.
-        let declared = inputs
-            .registers
-            .iter()
-            .find(|row| row.id == source_id)
-            .ok_or_else(|| {
-                crate::error::UsageError::raise(format!(
-                    "rule `{}`: register `{source_id}` is not declared in [[register]]",
-                    rule.id
-                ))
-            })?;
-        let column = cites.column.unwrap_or(1).saturating_sub(1);
-        for path in register_paths(declared, &register_inputs)? {
-            let Acquired::Lines(lines) = acquire(root, &path, Some(Want::Lines)) else {
-                continue;
-            };
-            for (line, row) in register::data_rows(&lines) {
-                let Some(cell) = row.get(column) else {
-                    continue;
-                };
-                push_tokens(&mut citations, cites, &path, Some(line), cell);
-            }
-        }
-    } else {
-        let Some(glob) = rule.glob.as_deref() else {
-            return Ok(Some(NotObserved::RuleSkipped));
-        };
-        let selection = PathSet::selecting(&rule.id, glob, &rule.exclude_paths)?;
-        let matched: Vec<&String> = inputs
-            .scoped
-            .iter()
-            .filter(|path| selection.contains(path))
-            .collect();
-        if let Some(pattern) = rule.regex.as_deref() {
-            let re = regex::Regex::new(pattern)?;
-            for path in matched {
-                let Acquired::Lines(lines) = acquire(root, path, Some(Want::Lines)) else {
-                    continue;
-                };
-                for (index, text) in lines.iter().enumerate() {
-                    for caps in re.captures_iter(text) {
-                        let hit = caps.get(1).or_else(|| caps.get(0));
-                        if let Some(hit) = hit {
-                            push_tokens(&mut citations, cites, path, Some(index + 1), hit.as_str());
-                        }
-                    }
-                }
-            }
-        } else if let (Some(format), Some(node)) = (rule.format, rule.node.as_deref()) {
-            for path in matched {
-                match acquire(root, path, Some(Want::Parsed(format))) {
-                    Acquired::Parsed(doc) => {
-                        for value in register::scalars(&doc, node) {
-                            push_tokens(&mut citations, cites, path, None, &value);
-                        }
-                    }
-                    Acquired::No(NotAcquired::Absent) => {}
-                    _ => findings.push(unreadable_document(rule, path, node)?),
-                }
-            }
-        }
-    }
+    let Some(citations) = gather_citations(rule, cites, root, inputs, &register_inputs, findings)?
+    else {
+        return Ok(Some(NotObserved::RuleSkipped));
+    };
 
     for refusal in register::resolve(
         &target,
@@ -12766,6 +12737,91 @@ fn reference_rule(
         });
     }
     Ok(None)
+}
+
+/// Every token a [`RuleKind::Reference`] row's citer cites (CLOUD-2005).
+///
+/// `None` where the row names no citer it can read (no `glob` and no
+/// `from_register`): the rule is skipped, never read as citing nothing. A
+/// document the frontmatter citer cannot parse is a could-not-look finding
+/// pushed onto `findings`, beside whatever else resolves.
+fn gather_citations(
+    rule: &Rule,
+    cites: &crate::register::Cites,
+    root: &Path,
+    inputs: &RunInputs<'_>,
+    register_inputs: &RegisterInputs<'_>,
+    findings: &mut Vec<Finding>,
+) -> anyhow::Result<Option<Vec<crate::register::Citation>>> {
+    use crate::register;
+    let mut citations: Vec<register::Citation> = Vec::new();
+    if let Some(source_id) = cites.from_register.as_deref() {
+        // A register's own column is the citer: read its rows with the same
+        // grammar the register was built with, so a cell means one thing.
+        let declared = inputs
+            .tables
+            .registers
+            .iter()
+            .find(|row| row.id == source_id)
+            .ok_or_else(|| {
+                crate::error::UsageError::raise(format!(
+                    "rule `{}`: register `{source_id}` is not declared in [[register]]",
+                    rule.id
+                ))
+            })?;
+        let column = cites.column.unwrap_or(1).saturating_sub(1);
+        for path in register_paths(declared, register_inputs)? {
+            let Acquired::Lines(lines) = acquire(root, &path, Some(Want::Lines)) else {
+                continue;
+            };
+            for (line, row) in register::data_rows(&lines) {
+                let Some(cell) = row.get(column) else {
+                    continue;
+                };
+                push_tokens(&mut citations, cites, &path, Some(line), cell);
+            }
+        }
+    } else {
+        let Some(glob) = rule.glob.as_deref() else {
+            return Ok(None);
+        };
+        let selection = PathSet::selecting(&rule.id, glob, &rule.exclude_paths)?;
+        let matched: Vec<&String> = inputs
+            .scoped
+            .iter()
+            .filter(|path| selection.contains(path))
+            .collect();
+        if let Some(pattern) = rule.regex.as_deref() {
+            let re = regex::Regex::new(pattern)?;
+            for path in matched {
+                let Acquired::Lines(lines) = acquire(root, path, Some(Want::Lines)) else {
+                    continue;
+                };
+                for (index, text) in lines.iter().enumerate() {
+                    for caps in re.captures_iter(text) {
+                        let hit = caps.get(1).or_else(|| caps.get(0));
+                        if let Some(hit) = hit {
+                            push_tokens(&mut citations, cites, path, Some(index + 1), hit.as_str());
+                        }
+                    }
+                }
+            }
+        } else if let (Some(format), Some(node)) = (rule.format, rule.node.as_deref()) {
+            for path in matched {
+                match acquire(root, path, Some(Want::Parsed(format))) {
+                    Acquired::Parsed(doc) => {
+                        for value in register::scalars(&doc, node) {
+                            push_tokens(&mut citations, cites, path, None, &value);
+                        }
+                    }
+                    Acquired::No(NotAcquired::Absent) => {}
+                    _ => findings.push(unreadable_document(rule, path, node)?),
+                }
+            }
+        }
+    }
+
+    Ok(Some(citations))
 }
 
 /// Add each token `cell` cites, honouring `split` and `relative_to`.
@@ -14786,14 +14842,16 @@ mod tests {
                 // (`rules/policy-modules.md`), and the tier that DOES
                 // drive a module is the compiled-binary one.
                 verdicts: &[],
-                registers: &[],
-                traversals: &serde_json::Value::Null,
-                patterns: &NO_PATTERNS,
+                tables: &NO_TABLES,
             }
         }
     }
 
-    static NO_PATTERNS: BTreeMap<String, regex::Regex> = BTreeMap::new();
+    static NO_TABLES: super::RunTables<'static> = super::RunTables {
+        registers: &[],
+        patterns: BTreeMap::new(),
+        traversals: serde_json::Value::Null,
+    };
 
     // One line per `Rule` column, and `Rule` has no `Default` on purpose — a
     // fixture that spreads one would stop naming the columns it leaves empty,

@@ -1803,15 +1803,7 @@ fn run_baseline(
     let scan = rules::run_static_over(
         &config.rules,
         &config.provisions,
-        policy::Vocabulary {
-            patterns: &config.patterns,
-            verdicts: &config.verdicts,
-            words: (!config.vocabulary.is_empty()).then_some(&config.vocabulary),
-            recorders: &config.recorders,
-            registers: &config.registers,
-            traversals: &config.traversals,
-            records: &config.records,
-        },
+        policy::Vocabulary::from(&config),
         &root,
         rules::RunOptions {
             checks: policy::ModuleChecks::Run,
