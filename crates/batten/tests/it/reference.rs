@@ -377,6 +377,38 @@ regex = '^workspaces/([^/]+)/'
 }
 
 #[test]
+fn an_undeclared_partition_is_refused_rather_than_read_as_none() {
+    let rule = UNATTESTED.replace(
+        "register = \"witness\"\n",
+        "register = \"witness\"\npartition = \"workspace\"\n",
+    );
+    let witness = ATTESTED.replace(
+        r#"paths = ["witness/*.md"]"#,
+        r#"paths = ["**/witness/*.md"]"#,
+    );
+    let (code, out) = check(
+        "reference-partition-undeclared",
+        &[&witness, &rule],
+        &[
+            ("workspaces/b/witness/1.md", "---\nnames: key-a\n---\n"),
+            ("workspaces/a/middle/r.md", "cites key-a\n"),
+        ],
+    );
+    assert_eq!(code, Some(1), "{out}");
+}
+
+#[test]
+fn config_show_attributes_a_declared_register() {
+    let dir = Fixture::new("reference-config-show")
+        .config(&config(&[KEYS, DANGLING]))
+        .files(&[("REGISTER.md", SOURCES)])
+        .base_commit()
+        .build();
+    let out = run(&dir, &["config", "show"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stdout(&out));
+}
+
+#[test]
 fn an_unparseable_witness_is_could_not_look() {
     let (code, out) = check(
         "reference-unparseable",

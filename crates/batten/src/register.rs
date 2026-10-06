@@ -425,7 +425,10 @@ fn table_rows(
             path: path.to_owned(),
             line: Some(line),
         };
-        if row.len() != *width {
+        // A defective row is reported and never keyed: a shifted cell is text
+        // the register never declared, and a citation of it must not resolve.
+        let wide = row.len() != *width;
+        if wide {
             defects.push(Defect::Width(witness.clone()));
         }
         let column_malformed = columns.iter().any(|(column, id)| {
@@ -434,8 +437,12 @@ fn table_rows(
                 !value.is_empty() && patterns.get(id).is_some_and(|re| !full_match(re, value))
             })
         });
-        if column_malformed || key_pattern.is_some_and(|re| !full_match(re, cell)) {
+        let key_malformed = key_pattern.is_some_and(|re| !full_match(re, cell));
+        if column_malformed || key_malformed {
             defects.push(Defect::Malformed(witness.clone()));
+        }
+        if wide || key_malformed {
+            continue;
         }
         let seen = keys.entry(cell.clone()).or_default();
         if *unique && !seen.is_empty() {
@@ -702,6 +709,10 @@ mod tests {
             })]
         );
         assert!(keys.contains_key("a|b"));
+        assert!(
+            !keys.contains_key("a"),
+            "a wide row's shifted cell is not a key"
+        );
     }
 
     #[test]

@@ -12682,10 +12682,17 @@ fn reference_rule(
     };
     let target = build(&cites.register)?;
     let within = cites.within.as_deref().map(build).transpose()?;
-    let partition = cites
-        .partition
-        .as_ref()
-        .and_then(|id| inputs.tables.patterns.get(id));
+    // An undeclared partition is refused, never read as "no partition": that
+    // would widen the join to every partition and admit a cross-partition key.
+    let partition = match cites.partition.as_deref() {
+        None => None,
+        Some(id) => Some(inputs.tables.patterns.get(id).ok_or_else(|| {
+            UsageError::raise(format!(
+                "rule `{}`: partition `{id}` is not a declared [[pattern]]",
+                rule.id
+            ))
+        })?),
+    };
 
     let Some(citations) = gather_citations(rule, cites, root, inputs, &register_inputs, findings)?
     else {

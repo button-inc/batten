@@ -1862,6 +1862,8 @@ fn attribution(
         ("contract", authority_set(repo.contract.is_some())),
         ("verb", authority_set(!repo.verbs.is_empty())),
         ("pattern", authority_set(!repo.patterns.is_empty())),
+        ("traversal", authority_set(!repo.traversals.is_empty())),
+        ("register", authority_set(!repo.registers.is_empty())),
         // Authority-only, like `fact` below and for a related reason (CLOUD-1050):
         // a local row here would not point a gate at chosen output, it would
         // supply the WORDS a committed gate refuses in — the token stays the same

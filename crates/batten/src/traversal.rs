@@ -406,6 +406,13 @@ pub fn validate(traversals: &[DeclaredTraversal]) -> anyhow::Result<()> {
                 row.id
             )));
         }
+        if row.until_register.is_some() && (row.until_key.is_some() || row.until_value.is_some()) {
+            return Err(UsageError::raise(format!(
+                "traversal `{}`: declare `until_register` or `until_key`/`until_value`, \
+                 not both — one walk answers one stop condition",
+                row.id
+            )));
+        }
         if row.labels.is_empty() && row.edges.is_empty() {
             return Err(UsageError::raise(format!(
                 "traversal `{}`: `labels` cannot be empty — a walk with no edge \
@@ -492,6 +499,13 @@ mod tests {
     #[test]
     fn a_repeated_id_is_refused_because_the_lookup_would_be_ambiguous() {
         assert!(validate(&[row("chain"), row("chain")]).is_err());
+    }
+
+    #[test]
+    fn until_register_beside_until_key_is_refused() {
+        let mut bad = row("chain");
+        bad.until_register = Some("captures".to_owned());
+        assert!(validate(&[bad]).is_err());
     }
 
     #[test]
