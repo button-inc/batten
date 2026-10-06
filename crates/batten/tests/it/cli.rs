@@ -10827,6 +10827,7 @@ fn generate_hooks_refuses_the_contract_only_harness() {
 
 /// Drives a generated OpenCode plugin the way its host does: import the module,
 /// build the hooks with a project directory, and call `tool.execute.before`.
+#[cfg(unix)]
 const OPENCODE_DRIVER: &str = r#"const [plugin, tool, args] = process.argv.slice(2);
 const { Batten } = await import(plugin);
 const hooks = await Batten({ directory: process.cwd() });
@@ -10840,6 +10841,7 @@ try {
 
 /// A `batten` that answers like the engine: `2` with the reason for `bash`, `3`
 /// (could not decide) for `task`, and `0` for anything else.
+#[cfg(unix)]
 const OPENCODE_FAKE_ENGINE: &str = r#"#!/bin/sh
 envelope=$(cat)
 case "$envelope" in
