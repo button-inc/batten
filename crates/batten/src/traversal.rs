@@ -96,6 +96,7 @@ pub struct DeclaredTraversal {
     ///
     /// Non-empty: a walk with no labels cannot leave its seed, so its answer
     /// would be about the seed alone while reading as a chain result.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub labels: Vec<String>,
     /// The field a node must carry for the walk to stop, with `until_value`.
     ///
@@ -216,6 +217,16 @@ pub struct DocumentGraph<'a> {
     stems: BTreeMap<&'a str, BTreeMap<String, Vec<String>>>,
     registers: &'a BTreeMap<String, crate::register::Built>,
     read: &'a Frontmatter<'a>,
+}
+
+impl std::fmt::Debug for DocumentGraph<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // The reader is a closure and the registers are built sets; the edge
+        // labels are what identifies this graph.
+        f.debug_struct("DocumentGraph")
+            .field("edges", &self.edges.keys().collect::<Vec<_>>())
+            .finish_non_exhaustive()
+    }
 }
 
 impl<'a> DocumentGraph<'a> {
