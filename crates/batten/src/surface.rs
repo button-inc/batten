@@ -7642,7 +7642,7 @@ pub const SURFACE: &[CommandDecl] = &[
         data_channel: true,
         exits: EXITS_STANDARD,
         effect: Effect::Write,
-        flags: &[SLOW_BASE],
+        flags: &[JSON, SLOW_BASE],
     },
     CommandDecl {
         path: "artifacts",

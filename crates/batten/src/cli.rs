@@ -501,6 +501,8 @@ pub enum TestCommand {
     Replay {
         /// The revision the branch is judged against.
         base: String,
+        /// Emit the findings as one JSON document.
+        json: bool,
     },
 }
 
@@ -3794,6 +3796,7 @@ fn test_of(matches: &ArgMatches) -> Option<TestCommand> {
     match matches.subcommand()? {
         ("replay", matches) => Some(TestCommand::Replay {
             base: matches.get_one::<String>("base")?.clone(),
+            json: matches.get_flag("json"),
         }),
         _ => None,
     }

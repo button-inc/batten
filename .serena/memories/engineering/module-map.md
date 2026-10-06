@@ -155,6 +155,7 @@ row here, so a new module lands with its line.
 - `preflight.rs` — `batten doctor forge`: the forge claims this repository's tasks need, probed before any GitHub result is trusted.
 - `probe.rs` — a producer's probe command, run and reduced to what a reading takes from it (CLOUD-843).
 - `reclaim.rs` — the reclaim census (CLOUD-451): whether a landing was in flight when this container was reclaimed.
+- `replay.rs` — `batten test replay` (CLOUD-2090): each `#[test]` a diff modified is run in its BASE form against HEAD, in a tree materialised under state; a failing base test or a removed one is admitted only through the `asked` ledger.
 - `release.rs` — a published release's own assets, hashed into a manifest and recorded for `release-hygiene` (CLOUD-843).
 - `released.rs` — `batten record derive released`: which tracker rows a release tag shipped, and the board gate's verdict on them.
 - `sbom.rs` — `batten sbom`: the SPDX and CycloneDX inventories of a tree or a built binary (CLOUD-262/263, CLOUD-843).

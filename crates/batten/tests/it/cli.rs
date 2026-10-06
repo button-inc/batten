@@ -5784,6 +5784,10 @@ const CENSUS_FLAGS: &[(&str, &[&str])] = &[
         "checks green",
         &["--required", "ci", "--answered", "success"],
     ),
+    // The base the replay compares against. Required rather than defaulted for
+    // the same reason: there is no ref every consumer's trunk is called. `HEAD`
+    // against itself modifies nothing, so the census reads the empty document.
+    ("test replay", &["--base", "HEAD"]),
     // `--bypass-sequence` because the census is about the OUTPUT CONTRACT, not
     // about the refinement-sequence predicate: those rules read this clone's own
     // receipt store, which a scratch fixture has no honest way to populate — a

@@ -217,6 +217,7 @@ fn rust_files(root: &Path, rev: &str) -> Result<BTreeMap<String, String>> {
 }
 
 /// One finding: the test's `<path>::<inner>` key, its line, and the token.
+#[derive(serde::Serialize)]
 struct Finding {
     key: String,
     path: String,
@@ -224,16 +225,25 @@ struct Finding {
     id: &'static str,
 }
 
+/// One rendered finding: the finding and how the `asked` ledger answered it.
+#[derive(serde::Serialize)]
+struct Row<'a> {
+    #[serde(flatten)]
+    finding: &'a Finding,
+    admission: &'static str,
+}
+
 /// `batten test replay --base <ref>`: run each modified test's base form against
 /// HEAD, and admit what changed only through the `asked` ledger.
 ///
 /// Exit 0 when every finding is admitted (or there is none), 2 when one is not.
+/// With `json`, the findings are one document, emitted even when it is empty.
 ///
 /// # Errors
 ///
 /// A base that does not resolve, a tree that cannot be materialised, or a
 /// ledger that cannot be read — each could-not-look rather than a pass.
-pub fn run(root: &Path, base: &str, out: &mut dyn Write) -> Result<ExitCode> {
+pub fn run(root: &Path, base: &str, json: bool, out: &mut dyn Write) -> Result<ExitCode> {
     let fork = crate::git::merge_base(root, base)?.unwrap_or_else(|| base.to_owned());
     let before = rust_files(root, &fork)?;
     let after = rust_files(root, "HEAD")?;
@@ -275,21 +285,31 @@ pub fn run(root: &Path, base: &str, out: &mut dyn Write) -> Result<ExitCode> {
         .collect();
     let ledger = crate::asked::added_since(root, base)?;
     let admitted = crate::lint::admissions(&smells, &ledger);
-    let mut refused = 0_usize;
-    for (finding, (_, admission)) in findings.iter().zip(&admitted) {
-        writeln!(
-            out,
-            "{}:{} {} {} ({})",
-            finding.path,
-            finding.line,
-            finding.id,
-            finding.key,
-            admission.as_str()
-        )?;
-        if *admission == crate::lint::Admission::Refused {
-            refused += 1;
+    let rows: Vec<Row<'_>> = findings
+        .iter()
+        .zip(&admitted)
+        .map(|(finding, (_, admission))| Row {
+            finding,
+            admission: admission.as_str(),
+        })
+        .collect();
+    if json {
+        writeln!(out, "{}", serde_json::to_string_pretty(&rows)?)?;
+    } else {
+        for row in &rows {
+            let Finding {
+                path,
+                line,
+                id,
+                key,
+            } = row.finding;
+            writeln!(out, "{path}:{line} {id} {key} ({})", row.admission)?;
         }
     }
+    let refused = admitted
+        .iter()
+        .filter(|(_, admission)| *admission == crate::lint::Admission::Refused)
+        .count();
     Ok(if refused == 0 {
         ExitCode::Success
     } else {

@@ -4,10 +4,13 @@
 .SH NAME
 batten\-test\-replay \- Run each modified test\*(Aqs base form against HEAD; a changed expectation is admitted only by a recorded answer
 .SH SYNOPSIS
-\fBbatten test replay\fR [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-base\fR> 
+\fBbatten test replay\fR [\fB\-J\fR|\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-base\fR> 
 .SH DESCRIPTION
 Run each modified test\*(Aqs base form against HEAD; a changed expectation is admitted only by a recorded answer
 .SH OPTIONS
+.TP
+\fB\-J\fR, \fB\-\-json\fR
+Emit byte\-stable JSON instead of pointer lines
 .TP
 \fB\-\-base\fR \fI<base>\fR
 The revision this checkout is diffed against

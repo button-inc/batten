@@ -587,9 +587,9 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         // The WORKTREE's tree, `census`' reasoning: the tests a branch changed
         // are the ones its checkout carries (CLOUD-2090).
         Some(Command::Test { command }) => match command {
-            cli::TestCommand::Replay { base } => {
+            cli::TestCommand::Replay { base, json } => {
                 let root = git::worktree_root(Path::new("."))?;
-                replay::run(&root, &base, out)
+                replay::run(&root, &base, json, out)
             }
         },
     }
