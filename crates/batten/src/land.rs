@@ -982,7 +982,7 @@ pub fn wait(
             // The runs already on the head when a fresh ready's wait first read
             // it; see `registered_since`. `None` until that first reading.
             let mut before_ready: Option<std::collections::BTreeSet<u64>> = None;
-            for _ in 0..asks {
+            for ask in 1..=asks {
                 if stop.load(std::sync::atomic::Ordering::Relaxed) {
                     return;
                 }
@@ -1073,14 +1073,19 @@ pub fn wait(
                 // finished landing for a whole interval — survivable at the
                 // poll's one second, and not once `wait_for` began honouring a
                 // rate-limit backoff measured in minutes (review of #848).
-                crate::pr_watch::pause_until(interval, stop);
+                // NO PAUSE AFTER THE LAST ASK: there is nothing left to wait
+                // for, and a rate-limit backoff measured in minutes would hold
+                // an unanswered race that long (CLOUD-2113's test hang).
+                if ask < asks {
+                    crate::pr_watch::pause_until(interval, stop);
+                }
             }
         }));
 
         let stale = tx.clone();
         drop(scope.spawn(move || {
             let mut poll = crate::main_watch::Poll::default();
-            for _ in 0..asks {
+            for ask in 1..=asks {
                 if stop.load(std::sync::atomic::Ordering::Relaxed) {
                     return;
                 }
@@ -1101,7 +1106,12 @@ pub fn wait(
                 // loses the race most of the time, and holding the scope open
                 // through its last interval delays every verdict the other one
                 // reaches.
-                crate::pr_watch::pause_until(interval, stop);
+                // NO PAUSE AFTER THE LAST ASK: there is nothing left to wait
+                // for, and a rate-limit backoff measured in minutes would hold
+                // an unanswered race that long (CLOUD-2113's test hang).
+                if ask < asks {
+                    crate::pr_watch::pause_until(interval, stop);
+                }
             }
         }));
 
