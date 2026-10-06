@@ -12896,38 +12896,34 @@ fn walk_traversals(
         return Ok(serde_json::Value::Null);
     }
     let inputs_for_registers = RegisterInputs { files, patterns };
-    let mut registers: BTreeMap<String, crate::register::Built> = BTreeMap::new();
+    // Every register a walk names, as a terminal or as an edge target, built
+    // ONCE. One set rather than two branches: cargo-mutants showed each
+    // branch could be broken while the other covered for it.
+    let mut needed: BTreeMap<&str, &str> = BTreeMap::new();
     for row in vocabulary.traversals {
-        if let Some(id) = row.until_register.as_ref() {
-            if !registers.contains_key(id) {
-                let declared = vocabulary
-                    .registers
-                    .iter()
-                    .find(|register| &register.id == id)
-                    .ok_or_else(|| {
-                        crate::error::UsageError::raise(format!(
-                            "traversal `{}`: register `{id}` is not declared in [[register]]",
-                            row.id
-                        ))
-                    })?;
-                registers.insert(
-                    id.clone(),
-                    build_register(declared, root, &inputs_for_registers)?,
-                );
-            }
+        let targets = row.edges.iter().filter_map(|edge| match &edge.to {
+            crate::traversal::EdgeTarget::Register(id) => Some(id.as_str()),
+            _ => None,
+        });
+        for id in row.until_register.as_deref().into_iter().chain(targets) {
+            needed.entry(id).or_insert(row.id.as_str());
         }
-        for edge in &row.edges {
-            if let crate::traversal::EdgeTarget::Register(id) = &edge.to {
-                if !registers.contains_key(id) {
-                    if let Some(declared) = vocabulary.registers.iter().find(|r| &r.id == id) {
-                        registers.insert(
-                            id.clone(),
-                            build_register(declared, root, &inputs_for_registers)?,
-                        );
-                    }
-                }
-            }
-        }
+    }
+    let mut registers: BTreeMap<String, crate::register::Built> = BTreeMap::new();
+    for (id, traversal) in needed {
+        let declared = vocabulary
+            .registers
+            .iter()
+            .find(|register| register.id == id)
+            .ok_or_else(|| {
+                crate::error::UsageError::raise(format!(
+                    "traversal `{traversal}`: register `{id}` is not declared in [[register]]"
+                ))
+            })?;
+        registers.insert(
+            id.to_owned(),
+            build_register(declared, root, &inputs_for_registers)?,
+        );
     }
     let read = |path: &str| -> crate::facts::Look<crate::facts::Node> {
         match acquire(

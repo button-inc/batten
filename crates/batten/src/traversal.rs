@@ -711,4 +711,24 @@ mod tests {
         assert!(validate(&[neither]).is_err());
         assert!(validate(&[chain_row()]).is_ok());
     }
+
+    #[test]
+    fn the_graph_answers_registers_and_abstains_on_field_equality() {
+        use crate::graph::GraphSource;
+        let row = chain_row();
+        let registers = keyset(&["key-a"]);
+        let read = |_: &str| Look::IsNot;
+        let graph = DocumentGraph::new(&row, &[], &registers, &read).expect("graph");
+        assert_eq!(graph.has("db/e.md", "k", "v"), None);
+        assert_eq!(
+            graph.registered("register:keyset:key-a", "keyset"),
+            Some(true)
+        );
+        assert_eq!(
+            graph.registered("register:keyset:key-z", "keyset"),
+            Some(false)
+        );
+        assert_eq!(graph.registered("db/e.md", "keyset"), Some(false));
+        assert!(format!("{graph:?}").contains("slug"), "{graph:?}");
+    }
 }

@@ -585,4 +585,75 @@ mod tests {
             other => panic!("expected Reached, got {other:?}"),
         }
     }
+
+    // ---- Cases added for cargo-mutants' survivors (CLOUD-1868). ----
+
+    #[test]
+    fn a_source_without_registers_abstains_on_a_register_terminal() {
+        let source = Fixture::new().edge("seed", "warrant", &["a"]);
+        let until = Until::Registered {
+            register: "keyset".to_owned(),
+        };
+        let outcome = walk(
+            "seed",
+            Some(until),
+            Bounds {
+                max_visits: 8,
+                max_depth: 8,
+            },
+        )
+        .run(&source);
+        assert_eq!(
+            outcome,
+            Outcome::CouldNotLook {
+                at: "seed".to_owned()
+            }
+        );
+    }
+
+    #[test]
+    fn visiting_exactly_max_visits_nodes_is_exhaustion_not_a_bound() {
+        let source = Fixture::new()
+            .edge("seed", "warrant", &["a"])
+            .edge("a", "warrant", &["b"]);
+        let outcome = walk(
+            "seed",
+            None,
+            Bounds {
+                max_visits: 3,
+                max_depth: 8,
+            },
+        )
+        .run(&source);
+        assert!(
+            matches!(outcome, Outcome::Exhausted { visited: 3, .. }),
+            "{outcome:?}"
+        );
+    }
+
+    #[test]
+    fn the_dead_end_is_the_first_node_at_the_greatest_depth() {
+        // seed -> {a, b}; b -> {c, d}. `a` dies at depth 1; `c` and `d` tie at
+        // depth 2, and the first of them is the stable pointer.
+        let source =
+            Fixture::new()
+                .edge("seed", "warrant", &["a", "b"])
+                .edge("b", "warrant", &["c", "d"]);
+        let outcome = walk(
+            "seed",
+            Some(registered()),
+            Bounds {
+                max_visits: 16,
+                max_depth: 8,
+            },
+        )
+        .run(&source);
+        assert_eq!(
+            outcome,
+            Outcome::Exhausted {
+                visited: 5,
+                dead_end: Some("c".to_owned()),
+            }
+        );
+    }
 }
