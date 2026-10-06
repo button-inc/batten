@@ -17932,7 +17932,15 @@ id = "toolchain-is-provisioned"
 gloss = "every tool this repository pins is installed, so a gate does not install one inside its own timeout"
 check = ["mise", "ls", "--current", "--missing"]
 decided_by = "silent-exit"
-repair = ["mise", "install", "--yes"]
+# INSTALL FROM THE LOCK, NEVER THROUGH THE API (measured 2026-10-06). With
+# `[settings] lockfile = false` mise does not READ `mise.lock` either, so a bare
+# `mise install` resolved every `github:` tool through api.github.com and 401'd
+# (`cargo-auditable`, then `nextest`) — this repair failed, and with it the two
+# rows below whose repairs auto-install. `mise.lock` already pins each platform's
+# release-download URL and checksum; locked mode fetches exactly those, needs no
+# API and no credential, and left `mise.lock` byte-identical. `env` because a
+# repair is an argv, the shape `host-dependencies-present` already uses.
+repair = ["env", "MISE_LOCKFILE=true", "MISE_LOCKED=1", "mise", "install", "--yes"]
 
 # AND THIS ROW ASKED THE RUNNER A QUESTION ABOUT BATTEN (CLOUD-1454, same report).
 #
