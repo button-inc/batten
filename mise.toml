@@ -671,7 +671,7 @@ MUTANT_TASKS = "mise.toml"
 #   * ONLY WHEN A REAL TOKEN EXISTS (CLOUD-2113). With none (ambient is the
 #     `proxy-` placeholder, no PAT) the direct route carries nothing that
 #     authenticates and a call hangs rather than refuses (land's race test hung
-#     1200 s in `verify`); the proxy stays the route and the placeholder the token.
+#     1200 s in `verify`); the proxy stays the route, and the tokens stay empty as below.
 # See AGENTS.md, "GitHub is reachable — never report the toolchain as unrunnable".
 # `gh` and zizmor read GH_TOKEN. In the sandbox the ambient GH_TOKEN is a proxy
 # placeholder that 401s when sent direct (NO_PROXY, above), so set it to our PAT;
@@ -687,7 +687,7 @@ MUTANT_TASKS = "mise.toml"
 # reported 401, and not a repository-scope verdict. Measure with `mise cache
 # clear` before EACH arm: without it the first arm that succeeds makes every
 # later arm pass from cache, which is how this was misread three times.
-GH_TOKEN = "{% set ours = get_env(name='GITHUB_PERSONAL_ACCESS_TOKEN', default=get_env(name='BATTEN_GITHUB_TOKEN', default=get_env(name='MISE_GITHUB_TOKEN', default=''))) %}{% set ambient = get_env(name='GITHUB_TOKEN', default='') %}{% if ours %}{{ ours }}{% elif not (ours or (ambient and ambient | truncate(length=6, end='') != 'proxy-')) %}{{ get_env(name='GH_TOKEN', default='') }}{% endif %}"
+GH_TOKEN = "{{ get_env(name='GITHUB_PERSONAL_ACCESS_TOKEN', default=get_env(name='BATTEN_GITHUB_TOKEN', default=get_env(name='MISE_GITHUB_TOKEN', default=''))) }}"
 # THE OTHER HALF OF THE SAME REPAIR, and its absence is why the paragraph above
 # describes a 401 the paragraph above did not fix. `GH_TOKEN` is what `gh` and
 # zizmor read; `GITHUB_TOKEN` is what MISE'S OWN backends read — aqua, the
@@ -714,7 +714,7 @@ GH_TOKEN = "{% set ours = get_env(name='GITHUB_PERSONAL_ACCESS_TOKEN', default=g
 # unauthenticated beats a 401). So ambient wins WHEN IT IS REAL, and `ours` is
 # the fallback for the sandbox, where ambient is the placeholder and the PAT
 # variables carry the only usable credential.
-GITHUB_TOKEN = "{% set ours = get_env(name='GITHUB_PERSONAL_ACCESS_TOKEN', default=get_env(name='BATTEN_GITHUB_TOKEN', default=get_env(name='MISE_GITHUB_TOKEN', default=''))) %}{% set ambient = get_env(name='GITHUB_TOKEN', default='') %}{% if ambient and ambient | truncate(length=6, end='') != 'proxy-' %}{{ ambient }}{% elif ours %}{{ ours }}{% else %}{{ ambient }}{% endif %}"
+GITHUB_TOKEN = "{% set ours = get_env(name='GITHUB_PERSONAL_ACCESS_TOKEN', default=get_env(name='BATTEN_GITHUB_TOKEN', default=get_env(name='MISE_GITHUB_TOKEN', default=''))) %}{% set ambient = get_env(name='GITHUB_TOKEN', default='') %}{% if ambient and ambient | truncate(length=6, end='') != 'proxy-' %}{{ ambient }}{% elif ours %}{{ ours }}{% endif %}"
 NO_PROXY = "{% set ours = get_env(name='GITHUB_PERSONAL_ACCESS_TOKEN', default=get_env(name='BATTEN_GITHUB_TOKEN', default=get_env(name='MISE_GITHUB_TOKEN', default=''))) %}{% set ambient = get_env(name='GITHUB_TOKEN', default='') %}{% set cur = get_env(name='NO_PROXY', default='') %}{% if 'api.github.com' in cur or not (ours or (ambient and ambient | truncate(length=6, end='') != 'proxy-')) %}{{ cur }}{% else %}api.github.com,objects.githubusercontent.com,codeload.github.com,uploads.github.com{% if cur %},{{ cur }}{% endif %}{% endif %}"
 no_proxy = "{% set ours = get_env(name='GITHUB_PERSONAL_ACCESS_TOKEN', default=get_env(name='BATTEN_GITHUB_TOKEN', default=get_env(name='MISE_GITHUB_TOKEN', default=''))) %}{% set ambient = get_env(name='GITHUB_TOKEN', default='') %}{% set cur = get_env(name='no_proxy', default=get_env(name='NO_PROXY', default='')) %}{% if 'api.github.com' in cur or not (ours or (ambient and ambient | truncate(length=6, end='') != 'proxy-')) %}{{ cur }}{% else %}api.github.com,objects.githubusercontent.com,codeload.github.com,uploads.github.com{% if cur %},{{ cur }}{% endif %}{% endif %}"
 
