@@ -135,6 +135,7 @@ pub mod record;
 pub mod recorder;
 pub mod redirect;
 pub mod refusal;
+pub mod register;
 pub mod release;
 pub mod released;
 pub mod remedy;
