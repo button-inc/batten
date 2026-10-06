@@ -12981,22 +12981,34 @@ fn walk_traversals(
             build_register(declared, root, &inputs_for_registers)?,
         );
     }
-    let read = |path: &str| -> crate::facts::Look<crate::facts::Node> {
+    let read = |path: &str, field: &str| -> crate::traversal::Read {
         match acquire(
             root,
             path,
             Some(Want::Parsed(crate::facts::Format::Markdown)),
         ) {
-            Acquired::Parsed(node) => crate::facts::Look::Is(node),
-            Acquired::No(NotAcquired::Absent | NotAcquired::NoDocument) => {
-                crate::facts::Look::IsNot
+            Acquired::Parsed(node) => {
+                crate::traversal::Read::Values(crate::register::scalars(&node, field))
             }
-            _ => crate::facts::Look::CouldNotLook,
+            Acquired::No(NotAcquired::Absent | NotAcquired::NoDocument) => {
+                crate::traversal::Read::Absent
+            }
+            _ => crate::traversal::Read::CouldNotLook,
         }
     };
+    let is_key =
+        |register: &str, key: &str| -> Option<bool> { registers.get(register)?.contains(key) };
     let mut out = serde_json::Map::new();
     for row in vocabulary.traversals {
-        let graph = crate::traversal::DocumentGraph::new(row, files, &registers, &read)?;
+        let select = |glob: &str| -> anyhow::Result<Vec<String>> {
+            let set = PathSet::selecting(&row.id, glob, &[])?;
+            Ok(files
+                .iter()
+                .filter(|path| set.contains(path))
+                .cloned()
+                .collect())
+        };
+        let graph = crate::traversal::DocumentGraph::new(row, &select, &is_key, &read)?;
         let seeds: Vec<String> = match row.seeds.as_deref() {
             Some(glob) => {
                 let set = PathSet::selecting(&row.id, glob, &[])?;

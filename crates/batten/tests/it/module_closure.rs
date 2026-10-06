@@ -186,7 +186,13 @@ const PLUMBING: &[&str] = &[
 /// Twenty-eight since CLOUD-843: `board_check` evaluates the tracker-hygiene
 /// preset through `policy`, so it sits one layer above the whole core. Raised by
 /// a recorded answer, and the direction of travel is unchanged — down.
-const DEEPEST_CLOSURE: usize = 28;
+///
+/// Twenty-nine since CLOUD-2005: `rules` gained `register`, the pure key-set
+/// module the `reference` kind joins through, and `board_check` reaches the
+/// rule engine. One genuinely new module, not an edge between old ones —
+/// `register` itself is plumbing, and `traversal` was kept plumbing by
+/// injecting its reads rather than letting it reach the fact model.
+const DEEPEST_CLOSURE: usize = 29;
 
 /// Every top-level module of the library, mapped to the modules it reaches.
 ///

@@ -1,0 +1,19 @@
+version = 1
+
+[[register]]
+id = "keyset"
+paths = ["REGISTER.md"]
+source = "table"
+key = 1
+width = 2
+
+[[rule]]
+id = "dangling"
+kind = "reference"
+scope = "tree"
+glob = "n.md"
+regex = '\b(key-[a-z0-9-]+)\b'
+severity = "deny"
+
+[rule.cites]
+register = "keyset"

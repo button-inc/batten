@@ -77,6 +77,14 @@ const FAULTS: &[(&str, &str, &str)] = &[
          max_visits = 8\nmax_depth = 4\nreduce = \"present\"\n",
     ),
     (
+        // A key column past the declared width would build a set answering
+        // about the wrong cells while loading clean (CLOUD-2005).
+        "register declare refused",
+        "register",
+        "version = 1\n[[register]]\nid = \"keys\"\npaths = [\"a.md\"]\n\
+         source = \"table\"\nkey = 3\nwidth = 2\n",
+    ),
+    (
         "verdict declare refused",
         "verdict",
         "version = 1\n\

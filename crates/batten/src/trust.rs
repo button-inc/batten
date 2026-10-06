@@ -5439,6 +5439,24 @@ mod tests {
         assert!(weakenings(&config(""), &config(row)).is_empty());
     }
 
+    /// A dropped `[[register]]` row is a weakening; an added one is not
+    /// (CLOUD-2005), `traversal`'s shape exactly.
+    #[test]
+    fn a_dropped_register_is_a_weakening_and_an_added_one_is_not() {
+        let row = "\n[[register]]\nid = \"keys\"\npaths = [\"a.md\"]\n\
+                   source = \"table\"\nkey = 1\nwidth = 2\n";
+        assert_eq!(
+            only(&config(row), &config("")),
+            Weakening::new(
+                WeakeningKind::RegisterRemoved,
+                "register[keys]",
+                "present",
+                "absent",
+            )
+        );
+        assert!(weakenings(&config(""), &config(row)).is_empty());
+    }
+
     fn dated_waiver(rule: &str, expires: &str) -> String {
         format!("\n[[waiver]]\nrule = \"{rule}\"\nreason = \"tracked\"\nexpires = \"{expires}\"\n")
     }

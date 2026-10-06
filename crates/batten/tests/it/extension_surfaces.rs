@@ -29,7 +29,7 @@ use std::path::PathBuf;
 use common::{Fixture, StateHome, at_root, batten, scratch};
 
 /// The README section these examples are drawn from.
-const SECTION: &str = "## Extending Batten: ten rule kinds, and which to reach for";
+const SECTION: &str = "## Extending Batten: eleven rule kinds, and which to reach for";
 
 fn readme() -> String {
     fs::read_to_string(at_root("README.md")).expect("read README.md")

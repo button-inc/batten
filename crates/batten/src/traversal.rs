@@ -202,8 +202,26 @@ pub fn register_node(register: &str, key: &str) -> String {
 ///
 /// `Is` a node, `IsNot` where the path carries no document (absent, or no
 /// frontmatter), `CouldNotLook` where it could not be read or parsed — the
-/// three answers `crate::facts::Look` already keeps apart.
-pub type Frontmatter<'a> = dyn Fn(&str) -> crate::facts::Look<crate::facts::Node> + 'a;
+/// three answers the fact model's `Look` already keeps apart.
+pub type Frontmatter<'a> = dyn Fn(&str, &str) -> Read + 'a;
+
+/// What reading one field of one document answered.
+///
+/// This module's own three-valued answer rather than the fact model's `Look`, so
+/// it reaches no fact model and stays plumbing (`module_closure`'s ceiling).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Read {
+    /// The field's scalar values: one for a scalar, each item for a list.
+    Values(Vec<String>),
+    /// Looked, and the document is absent or carries no frontmatter.
+    Absent,
+    /// The document could not be read or parsed.
+    CouldNotLook,
+}
+
+/// Whether `key` is a key of the declared register `register`; `None` is
+/// could-not-look. Supplied by the caller for [`Frontmatter`]'s reason.
+pub type IsKey<'a> = dyn Fn(&str, &str) -> Option<bool> + 'a;
 
 /// A [`crate::graph::GraphSource`] over tracked markdown documents and declared
 /// registers (CLOUD-1868).
@@ -215,7 +233,7 @@ pub type Frontmatter<'a> = dyn Fn(&str) -> crate::facts::Look<crate::facts::Node
 pub struct DocumentGraph<'a> {
     edges: BTreeMap<&'a str, &'a Edge>,
     stems: BTreeMap<&'a str, BTreeMap<String, Vec<String>>>,
-    registers: &'a BTreeMap<String, crate::register::Built>,
+    is_key: &'a IsKey<'a>,
     read: &'a Frontmatter<'a>,
 }
 
@@ -230,27 +248,30 @@ impl std::fmt::Debug for DocumentGraph<'_> {
 }
 
 impl<'a> DocumentGraph<'a> {
-    /// A graph over `row`'s edges, with `tracked` resolving same-stem joins.
+    /// A graph over `row`'s edges, with `select` resolving same-stem joins.
+    ///
+    /// `select` is the caller's: the tracked paths a glob matches. Supplied
+    /// rather than computed here so this module reaches no glob engine and
+    /// stays plumbing, the posture [`Frontmatter`] already takes.
     ///
     /// # Errors
     ///
-    /// A [`UsageError`] for a malformed same-stem glob.
+    /// Whatever `select` raises for a malformed glob.
     pub fn new(
         row: &'a DeclaredTraversal,
-        tracked: &[String],
-        registers: &'a BTreeMap<String, crate::register::Built>,
+        select: &dyn Fn(&str) -> anyhow::Result<Vec<String>>,
+        is_key: &'a IsKey<'a>,
         read: &'a Frontmatter<'a>,
     ) -> anyhow::Result<Self> {
         let mut stems = BTreeMap::new();
         for edge in &row.edges {
             if let EdgeTarget::SameStem(glob) = &edge.to {
-                let set = crate::rules::PathSet::selecting(&row.id, glob, &[])?;
                 let mut by_stem: BTreeMap<String, Vec<String>> = BTreeMap::new();
-                for path in tracked.iter().filter(|path| set.contains(path)) {
+                for path in select(glob)? {
                     by_stem
-                        .entry(stem(path).to_owned())
+                        .entry(stem(&path).to_owned())
                         .or_default()
-                        .push(path.clone());
+                        .push(path);
                 }
                 stems.insert(glob.as_str(), by_stem);
             }
@@ -262,7 +283,7 @@ impl<'a> DocumentGraph<'a> {
                 .map(|edge| (edge.label.as_str(), edge))
                 .collect(),
             stems,
-            registers,
+            is_key,
             read,
         })
     }
@@ -283,15 +304,15 @@ impl crate::graph::GraphSource for DocumentGraph<'_> {
         let Some(edge) = self.edges.get(label) else {
             return Some(Vec::new());
         };
-        let node = match (self.read)(from) {
-            crate::facts::Look::Is(node) => node,
+        let values = match (self.read)(from, &edge.field) {
+            Read::Values(values) => values,
             // Absent, or no frontmatter: looked, and it points nowhere — the
             // dead end a broken chain reports.
-            crate::facts::Look::IsNot => return Some(Vec::new()),
-            crate::facts::Look::CouldNotLook => return None,
+            Read::Absent => return Some(Vec::new()),
+            Read::CouldNotLook => return None,
         };
         let mut next = Vec::new();
-        for value in crate::register::scalars(&node, &edge.field) {
+        for value in values {
             match &edge.to {
                 EdgeTarget::SameStem(glob) => {
                     if let Some(paths) = self
@@ -320,7 +341,7 @@ impl crate::graph::GraphSource for DocumentGraph<'_> {
         let Some(key) = node.strip_prefix(&format!("register:{register}:")) else {
             return Some(false);
         };
-        self.registers.get(register)?.contains(key)
+        (self.is_key)(register, key)
     }
 }
 
@@ -564,9 +585,26 @@ mod tests {
 
     // ---- The document graph (CLOUD-1868): the 04 -> 02 -> 01 chain. ----
 
-    use super::{DocumentGraph, Edge, EdgeTarget, answer};
-    use crate::facts::{Look, Node};
-    use std::collections::BTreeMap;
+    use super::{DocumentGraph, Edge, EdgeTarget, Read, answer};
+    use std::collections::{BTreeMap, BTreeSet};
+
+    /// A test-local document shape, so these cases reach no fact model and the
+    /// module stays plumbing. `Null` stands for a document that will not parse.
+    #[derive(Clone)]
+    enum Node {
+        Text(String),
+        List(Vec<Node>),
+        Map(Vec<(String, Node)>),
+        Null,
+    }
+
+    fn values(node: &Node) -> Vec<String> {
+        match node {
+            Node::Text(text) => vec![text.clone()],
+            Node::List(items) => items.iter().flat_map(values).collect(),
+            Node::Map(_) | Node::Null => Vec::new(),
+        }
+    }
 
     fn chain_row() -> DeclaredTraversal {
         DeclaredTraversal {
@@ -608,15 +646,8 @@ mod tests {
         Node::Text(value.to_owned())
     }
 
-    fn keyset(keys: &[&str]) -> BTreeMap<String, crate::register::Built> {
-        let keys = keys.iter().map(|key| ((*key).to_owned(), vec![])).collect();
-        BTreeMap::from([(
-            "keyset".to_owned(),
-            crate::register::Built::Keys {
-                keys,
-                defects: vec![],
-            },
-        )])
+    fn keyset(keys: &[&str]) -> BTreeSet<String> {
+        keys.iter().map(|key| (*key).to_owned()).collect()
     }
 
     /// Walk `db/e.md` over `docs` with `registered` keys; return the answer.
@@ -628,12 +659,28 @@ mod tests {
             .iter()
             .map(|(path, node)| ((*path).to_owned(), node.clone()))
             .collect();
-        let read = move |path: &str| match store.get(path) {
-            Some(Node::Null) => Look::CouldNotLook,
-            Some(node) => Look::Is(node.clone()),
-            None => Look::IsNot,
+        let read = move |path: &str, field: &str| match store.get(path) {
+            Some(Node::Null) => Read::CouldNotLook,
+            Some(Node::Map(fields)) => Read::Values(
+                fields
+                    .iter()
+                    .filter(|(name, _)| name == field)
+                    .flat_map(|(_, value)| values(value))
+                    .collect(),
+            ),
+            Some(_) | None => Read::Absent,
         };
-        let graph = DocumentGraph::new(&row, &tracked, &registers, &read).expect("graph");
+        let is_key =
+            |register: &str, key: &str| (register == "keyset").then(|| registers.contains(key));
+        let select = |glob: &str| -> anyhow::Result<Vec<String>> {
+            let prefix = glob.trim_end_matches("*.md");
+            Ok(tracked
+                .iter()
+                .filter(|p| p.starts_with(prefix))
+                .cloned()
+                .collect())
+        };
+        let graph = DocumentGraph::new(&row, &select, &is_key, &read).expect("graph");
         answer(&row.compiled_from("db/e.md").run(&graph))
     }
 
@@ -718,8 +765,11 @@ mod tests {
         use crate::graph::GraphSource;
         let row = chain_row();
         let registers = keyset(&["key-a"]);
-        let read = |_: &str| Look::IsNot;
-        let graph = DocumentGraph::new(&row, &[], &registers, &read).expect("graph");
+        let read = |_: &str, _: &str| Read::Absent;
+        let is_key =
+            |register: &str, key: &str| (register == "keyset").then(|| registers.contains(key));
+        let none = |_: &str| -> anyhow::Result<Vec<String>> { Ok(Vec::new()) };
+        let graph = DocumentGraph::new(&row, &none, &is_key, &read).expect("graph");
         assert_eq!(graph.has("db/e.md", "k", "v"), None);
         assert_eq!(
             graph.registered("register:keyset:key-a", "keyset"),
