@@ -560,7 +560,9 @@ pub const fn reaches(kind: RuleKind) -> bool {
         // it denies, so a waiver over it suppresses something real. Nothing about
         // the predicate being authored in another language changes what a
         // suppression means.
-        | RuleKind::Policy => true,
+        | RuleKind::Policy
+        // A reference row denies too, so a waiver over it suppresses a real finding.
+        | RuleKind::Reference => true,
         RuleKind::Judge => false,
     }
 }

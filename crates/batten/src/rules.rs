@@ -502,6 +502,7 @@ impl RuleKind {
         RuleKind::Secrets,
         RuleKind::Document,
         RuleKind::Policy,
+        RuleKind::Reference,
     ];
 
     /// The stable lowercase token used in config and machine output (§6).
@@ -518,6 +519,7 @@ impl RuleKind {
             RuleKind::Secrets => "secrets",
             RuleKind::Document => "document",
             RuleKind::Policy => "policy",
+            RuleKind::Reference => "reference",
         }
     }
 
@@ -576,7 +578,10 @@ impl RuleKind {
             // file, start a process or reach the network, and the feature set
             // that keeps that true is pinned in the workspace manifest. Authorship
             // was only ever a proxy for authority, and this kind separates them.
-            | RuleKind::Policy => Authority::Supplied,
+            | RuleKind::Policy
+            // Reads the declared register paths and the citer paths, both
+            // through the one document acquisition; it names no program.
+            | RuleKind::Reference => Authority::Supplied,
             // All three run a program a `batten.toml` named. That a judge's
             // consults a model, a command's decides a gate and a secrets rule's
             // scans for credentials makes no difference to the axis: each starts
@@ -727,6 +732,10 @@ impl RuleKind {
             // and a row naming NEITHER is still refused there, so nothing got
             // looser.
             RuleKind::Policy => &["severity"],
+            // `glob` is absent for `Policy`'s reason: a row citing another
+            // register's column has no glob. `validate` carries which citer
+            // shape needs which column.
+            RuleKind::Reference => &["cites", "severity"],
         }
     }
 
@@ -781,7 +790,10 @@ impl RuleKind {
             | RuleKind::Pipeline
             | RuleKind::Secrets
             | RuleKind::Document
-            | RuleKind::Policy => Decidability::Deciding,
+            | RuleKind::Policy
+            // Is this token a key of that set: a membership test over a set the
+            // row declared, which is decided exactly.
+            | RuleKind::Reference => Decidability::Deciding,
         }
     }
 
@@ -833,7 +845,8 @@ impl RuleKind {
             | RuleKind::Ratchet
             | RuleKind::Judge
             | RuleKind::Secrets
-            | RuleKind::Document => false,
+            | RuleKind::Document
+            | RuleKind::Reference => false,
         }
     }
 
@@ -945,6 +958,18 @@ impl RuleKind {
             // No `pattern` and no `regex`: the predicate is the module, and a
             // second shape column beside it would be a rule with two authorities
             // over one decision.
+            RuleKind::Reference => &[
+                "cites",
+                "glob",
+                "regex",
+                "format",
+                "node",
+                "exclude_paths",
+                "reason",
+                "policy_url",
+                "no_fix_reason",
+                "severity",
+            ],
             RuleKind::Policy => &[
                 // CLOUD-1639, and this is the ONE kind that may carry `fix` at
                 // the mediated boundary: a repair is admissible only where the
@@ -1043,7 +1068,8 @@ impl RuleKind {
             | RuleKind::Ratchet
             | RuleKind::Judge
             | RuleKind::Secrets
-            | RuleKind::Document => &[RuleScope::Tree],
+            | RuleKind::Document
+            | RuleKind::Reference => &[RuleScope::Tree],
             RuleKind::Shape | RuleKind::Receipt | RuleKind::Pipeline => &[RuleScope::MediatedCall],
             // `Policy` is the only kind that takes BOTH, and CLOUD-833 is why.
             //
@@ -1087,7 +1113,7 @@ impl RuleKind {
         match self {
             // Reads matched files, on the tree surface. `Ratchet` adds fixed git
             // plumbing, which is the same bounded read.
-            RuleKind::Forbid | RuleKind::Ratchet | RuleKind::Document => {
+            RuleKind::Forbid | RuleKind::Ratchet | RuleKind::Document | RuleKind::Reference => {
                 Class::new(Cost::Read, Surface::Check)
             }
             // All three run a program a config named, which is `Cost::Effect` by
@@ -5656,9 +5682,11 @@ impl Rule {
             // nothing carrying a matched byte leaves the adapter. It is also the
             // honest answer — unlike a judge's verdict, the engine can re-decide
             // a secret finding by scanning again.
-            RuleKind::Forbid | RuleKind::Ratchet | RuleKind::Secrets | RuleKind::Document => {
-                Some(Check::Reevaluate)
-            }
+            RuleKind::Forbid
+            | RuleKind::Ratchet
+            | RuleKind::Secrets
+            | RuleKind::Document
+            | RuleKind::Reference => Some(Check::Reevaluate),
             // None of the four reaches the store: each is adjudicated per
             // mediated call and produces a decision, not a finding. `Policy`
             // belongs here rather than beside `Judge` — its verdict is a real
@@ -7177,6 +7205,7 @@ fn run(
     // consumer row of the same token, so resolving a module's token against
     // anything narrower would answer for half the classes a module may raise.
     let registry = crate::policy::registry_for(vocabulary.verdicts)?;
+    let patterns = crate::pattern::compiled(vocabulary.patterns);
 
     let inputs = RunInputs {
         provisions,
@@ -7200,6 +7229,8 @@ fn run(
         captured: captured.as_ref(),
         bundles,
         verdicts: &registry,
+        registers: vocabulary.registers,
+        patterns: &patterns,
     };
 
     let mut scan = Scan::default();
@@ -7725,6 +7756,10 @@ struct RunInputs<'a> {
     /// life of the run, and this is the shape `Vocabulary` already threads for
     /// exactly that reason.
     verdicts: &'a [crate::verdict::DeclaredVerdict],
+    /// The `[[register]]` table a `reference` row resolves against (CLOUD-2005).
+    registers: &'a [crate::register::DeclaredRegister],
+    /// The `[[pattern]]` table, compiled once for the run.
+    patterns: &'a BTreeMap<String, regex::Regex>,
 }
 
 fn run_rule(
@@ -7758,6 +7793,16 @@ fn run_rule(
     // nobody aimed at them.
     if rule.kind == RuleKind::Policy {
         return Ok(policy_rule(rule, inputs, findings, classes));
+    }
+    // Before the glob gate for `Policy`'s reason: a row citing another
+    // register's column has no glob, and its registers are declared paths, not
+    // the files the glob selects (CLOUD-2005). And before the `allow` check
+    // below would matter, a reference row being deny-only by construction.
+    if rule.kind == RuleKind::Reference {
+        if rule.severity() == RuleSeverity::Allow {
+            return Ok(Some(NotObserved::RuleSkipped));
+        }
+        return reference_rule(rule, root, inputs, findings);
     }
     let Some(glob) = rule.glob.as_deref() else {
         // Unreachable for a tree-scoped kind, whose census requires `glob`.
@@ -7844,6 +7889,7 @@ fn run_rule(
         | RuleKind::Receipt
         | RuleKind::Pipeline
         | RuleKind::Policy
+        | RuleKind::Reference
         | RuleKind::Judge => {} // `Policy` is unreachable here for a THIRD reason as of CLOUD-833: it
                                 // returns above, before the glob gate, because it has no glob to be
                                 // selected by. Left in the list rather than removed so adding a scope to
@@ -12537,6 +12583,274 @@ fn document_in_file(
 /// The finding a row raises when it could not look — factored out because two
 /// call sites reach it now: the document itself was unreadable, or the derived
 /// value it compares against was.
+/// A cited token is not a key of the register (CLOUD-2005).
+const REFERENCE_UNRESOLVED: &str = "unresolved";
+/// A key no citer names, under `inverse`.
+const REFERENCE_UNCITED: &str = "uncited";
+/// A key on a second row of a `unique` table register.
+const REGISTER_DUPLICATED: &str = "register-key-duplicated";
+/// A data row whose cell count is not the declared width.
+const REGISTER_WIDTH: &str = "register-row-width";
+/// A key or a patterned cell that does not match its `[[pattern]]`.
+const REGISTER_MALFORMED: &str = "register-cell-malformed";
+
+/// Evaluate a [`RuleKind::Reference`] row (CLOUD-2005).
+///
+/// Builds each register the row names ONCE, gathers every citation in one pass
+/// over the citer files, and hands both to [`crate::register::resolve`], whose
+/// join is a map probe per citation. That is the whole performance argument:
+/// the consumer this replaces rescanned every register row per row.
+///
+/// Could-not-look is reported, never read as an empty set: a register whose
+/// declared paths match nothing, or whose witness will not parse, is one
+/// finding under [`DOCUMENT_UNREADABLE`] at the path that could not be read.
+fn reference_rule(
+    rule: &Rule,
+    root: &Path,
+    inputs: &RunInputs<'_>,
+    findings: &mut Vec<Finding>,
+) -> anyhow::Result<Option<NotObserved>> {
+    use crate::register::{self, Built, Citation, Refusal, Witness};
+    let Some(cites) = rule.cites.as_ref() else {
+        return Ok(Some(NotObserved::RuleSkipped));
+    };
+    let build = |id: &str| -> anyhow::Result<Built> {
+        let declared = inputs
+            .registers
+            .iter()
+            .find(|row| row.id == id)
+            .ok_or_else(|| {
+                crate::error::UsageError::raise(format!(
+                    "rule `{}`: register `{id}` is not declared in [[register]]",
+                    rule.id
+                ))
+            })?;
+        build_register(declared, root, inputs)
+    };
+    let target = build(&cites.register)?;
+    let within = cites.within.as_deref().map(build).transpose()?;
+    let partition = cites
+        .partition
+        .as_ref()
+        .and_then(|id| inputs.patterns.get(id));
+
+    let mut citations: Vec<Citation> = Vec::new();
+    if let Some(source_id) = cites.from_register.as_deref() {
+        // A register's own column is the citer: read its rows with the same
+        // grammar the register was built with, so a cell means one thing.
+        let declared = inputs
+            .registers
+            .iter()
+            .find(|row| row.id == source_id)
+            .ok_or_else(|| {
+                crate::error::UsageError::raise(format!(
+                    "rule `{}`: register `{source_id}` is not declared in [[register]]",
+                    rule.id
+                ))
+            })?;
+        let column = cites.column.unwrap_or(1).saturating_sub(1);
+        for path in register_paths(declared, inputs)? {
+            let Acquired::Lines(lines) = acquire(root, &path, Some(Want::Lines)) else {
+                continue;
+            };
+            for (line, row) in register::data_rows(&lines) {
+                let Some(cell) = row.get(column) else {
+                    continue;
+                };
+                push_tokens(&mut citations, cites, &path, Some(line), cell);
+            }
+        }
+    } else {
+        let Some(glob) = rule.glob.as_deref() else {
+            return Ok(Some(NotObserved::RuleSkipped));
+        };
+        let selection = PathSet::selecting(&rule.id, glob, &rule.exclude_paths)?;
+        let matched: Vec<&String> = inputs
+            .scoped
+            .iter()
+            .filter(|path| selection.contains(path))
+            .collect();
+        if let Some(pattern) = rule.regex.as_deref() {
+            let re = regex::Regex::new(pattern)?;
+            for path in matched {
+                let Acquired::Lines(lines) = acquire(root, path, Some(Want::Lines)) else {
+                    continue;
+                };
+                for (index, text) in lines.iter().enumerate() {
+                    for caps in re.captures_iter(text) {
+                        let hit = caps.get(1).or_else(|| caps.get(0));
+                        if let Some(hit) = hit {
+                            push_tokens(&mut citations, cites, path, Some(index + 1), hit.as_str());
+                        }
+                    }
+                }
+            }
+        } else if let (Some(format), Some(node)) = (rule.format, rule.node.as_deref()) {
+            for path in matched {
+                match acquire(root, path, Some(Want::Parsed(format))) {
+                    Acquired::Parsed(doc) => {
+                        for value in register::scalars(&doc, node) {
+                            push_tokens(&mut citations, cites, path, None, &value);
+                        }
+                    }
+                    Acquired::No(NotAcquired::Absent) => {}
+                    _ => findings.push(unreadable_document(rule, path, node)?),
+                }
+            }
+        }
+    }
+
+    for refusal in register::resolve(
+        &target,
+        &citations,
+        within.as_ref(),
+        partition,
+        cites.inverse,
+    ) {
+        let (at, span, reason): (Witness, String, &'static str) = match refusal {
+            Refusal::Unresolved(citation) => (citation.at, citation.token, REFERENCE_UNRESOLVED),
+            Refusal::Uncited(witness) => (witness, String::new(), REFERENCE_UNCITED),
+            Refusal::Register(defect) => match defect {
+                register::Defect::Duplicated(w) => (w, String::new(), REGISTER_DUPLICATED),
+                register::Defect::Width(w) => (w, String::new(), REGISTER_WIDTH),
+                register::Defect::Malformed(w) => (w, String::new(), REGISTER_MALFORMED),
+            },
+            Refusal::CouldNotLook(at) => (
+                Witness {
+                    path: at,
+                    line: None,
+                },
+                String::new(),
+                DOCUMENT_UNREADABLE,
+            ),
+        };
+        // POINTER-ONLY: the token is hashed into the identity and never
+        // printed; the finding carries the rule, the path and the line.
+        let default = identity::code_fingerprint(
+            &rule.id,
+            &at.path,
+            &format!("{} {reason} {span}", cites.register),
+            identity::SpanNormalization::Verbatim,
+        )?;
+        findings.push(Finding {
+            owner: None,
+            rule: rule.id.clone(),
+            severity: rule.severity(),
+            path: at.path,
+            line: Some(at.line.unwrap_or(1)),
+            identity: identity_of(rule, identity::FindingKind::Code, default),
+            check: rule.settling_check().unwrap_or(Check::Reevaluate),
+            remediation: rule.remediation(),
+            reason: Some(reason),
+        });
+    }
+    Ok(None)
+}
+
+/// Add each token `cell` cites, honouring `split` and `relative_to`.
+///
+/// An EMPTY token is never a citation: an empty cell is a claim of absence
+/// (a by-reference capture, say), not a reference to a key named "".
+fn push_tokens(
+    out: &mut Vec<crate::register::Citation>,
+    cites: &crate::register::Cites,
+    path: &str,
+    line: Option<usize>,
+    cell: &str,
+) {
+    let members: Vec<&str> = match cites.split.as_deref() {
+        Some(sep) => cell.split(sep).collect(),
+        None => vec![cell],
+    };
+    for member in members {
+        let token = member.trim();
+        if token.is_empty() {
+            continue;
+        }
+        let token = match cites.relative_to {
+            Some(crate::register::RelativeTo::Citer) => crate::register::joined(path, token),
+            None => token.to_owned(),
+        };
+        out.push(crate::register::Citation {
+            token,
+            at: crate::register::Witness {
+                path: path.to_owned(),
+                line,
+            },
+        });
+    }
+}
+
+/// Every tracked path one of `declared`'s globs selects, unioned, in order.
+fn register_paths(
+    declared: &crate::register::DeclaredRegister,
+    inputs: &RunInputs<'_>,
+) -> anyhow::Result<Vec<String>> {
+    let mut sets = Vec::new();
+    for glob in &declared.paths {
+        sets.push(PathSet::selecting(&declared.id, glob, &[])?);
+    }
+    Ok(inputs
+        .files
+        .iter()
+        .filter(|path| sets.iter().any(|set| set.contains(path)))
+        .cloned()
+        .collect())
+}
+
+/// Build one declared register from the tracked tree.
+fn build_register(
+    declared: &crate::register::DeclaredRegister,
+    root: &Path,
+    inputs: &RunInputs<'_>,
+) -> anyhow::Result<crate::register::Built> {
+    use crate::register::{Input, Source};
+    let paths = register_paths(declared, inputs)?;
+    let mut lines: Vec<(String, Vec<String>)> = Vec::new();
+    let mut docs: Vec<(String, Option<crate::facts::Node>)> = Vec::new();
+    for path in &paths {
+        match &declared.source {
+            Source::Table { .. } => match acquire(root, path, Some(Want::Lines)) {
+                Acquired::Lines(text) => lines.push((path.clone(), text)),
+                _ => {
+                    return Ok(crate::register::Built::CouldNotLook { at: path.clone() });
+                }
+            },
+            Source::Documents { .. } => {
+                let parsed = match acquire(
+                    root,
+                    path,
+                    Some(Want::Parsed(crate::facts::Format::Markdown)),
+                ) {
+                    Acquired::Parsed(node) => Some(node),
+                    _ => None,
+                };
+                docs.push((path.clone(), parsed));
+            }
+            Source::Tree { .. } => {}
+        }
+    }
+    let inputs_view: Vec<Input<'_>> = match &declared.source {
+        Source::Table { .. } => lines
+            .iter()
+            .map(|(path, text)| Input::Lines { path, lines: text })
+            .collect(),
+        Source::Documents { .. } => docs
+            .iter()
+            .map(|(path, node)| Input::Document {
+                path,
+                node: node.as_ref(),
+            })
+            .collect(),
+        Source::Tree { .. } => paths.iter().map(|path| Input::Path(path)).collect(),
+    };
+    Ok(crate::register::build(
+        declared,
+        inputs.patterns,
+        &inputs_view,
+    ))
+}
+
 fn unreadable_document(rule: &Rule, rel_path: &str, node_path: &str) -> anyhow::Result<Finding> {
     let default = identity::code_fingerprint(
         &rule.id,
@@ -14359,9 +14673,13 @@ mod tests {
                 // (`rules/policy-modules.md`), and the tier that DOES
                 // drive a module is the compiled-binary one.
                 verdicts: &[],
+                registers: &[],
+                patterns: &NO_PATTERNS,
             }
         }
     }
+
+    static NO_PATTERNS: BTreeMap<String, regex::Regex> = BTreeMap::new();
 
     // One line per `Rule` column, and `Rule` has no `Default` on purpose — a
     // fixture that spreads one would stop naming the columns it leaves empty,
@@ -14419,6 +14737,7 @@ mod tests {
             format: None,
             node: None,
             derives: None,
+            cites: None,
             reads: None,
             module: None,
             bundle: None,

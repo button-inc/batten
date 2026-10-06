@@ -10779,6 +10779,7 @@ mod tests {
             format: None,
             node: None,
             derives: None,
+            cites: None,
             reads: None,
             module: None,
             bundle: None,
