@@ -3383,56 +3383,61 @@ pub struct Readiness {
 /// on an exit path, and a tap that could not close must not replace the real
 /// diagnosis with its own.
 #[must_use]
-pub fn redraft(node: &str) -> bool {
-    let body = serde_json::json!({
-        "query": "mutation($id:ID!){convertPullRequestToDraft(input:{pullRequestId:$id}){clientMutationId}}",
-        "variables": { "id": node },
-    });
-    let Some(answer) = crate::rest::post_json("graphql", &body) else {
-        return false;
-    };
-    if !(200..300).contains(&answer.status) {
-        return false;
-    }
-    // A GRAPHQL ERROR IS A 200, which is the whole reason the status alone is
-    // not the answer here: the endpoint reports a refused mutation in an
-    // `errors` array with an OK status, so a caller reading the code would
-    // report a tap it never closed.
-    let Ok(document) = serde_json::from_str::<serde_json::Value>(&answer.body) else {
-        return false;
-    };
-    document.get("errors").is_none()
+pub fn redraft(repo: &str, pr: &str, node: &str) -> bool {
+    mutate(
+        repo,
+        pr,
+        node,
+        "mutation($id:ID!){convertPullRequestToDraft(input:{pullRequestId:$id}){clientMutationId}}",
+        "convert_to_draft",
+    )
 }
 
-/// Mark a pull request ready for review — the event that buys the matrix.
-///
-/// The exact mirror of [`redraft`], and it is the same endpoint for the same
-/// reason: `markPullRequestReadyForReview` is the only mutation that moves a
-/// draft, so this is one POST through [`crate::rest`] rather than a second
-/// client.
-///
-/// `false` where it did not happen. Unlike the tap's, this failure is NOT
-/// swallowed by its caller: a ready that did not fire buys no run, so pushing
-/// afterwards would wait out the whole ask count on a matrix nobody started —
-/// `tests/land.bats`'s *"a ready that fails stops before the push rather than
-/// pushing into silence"* is the case, and the successor conserves it.
 #[must_use]
-pub fn mark_ready(node: &str) -> bool {
-    let body = serde_json::json!({
-        "query": "mutation($id:ID!){markPullRequestReadyForReview(input:{pullRequestId:$id}){clientMutationId}}",
-        "variables": { "id": node },
-    });
-    let Some(answer) = crate::rest::post_json("graphql", &body) else {
+pub fn mark_ready(repo: &str, pr: &str, node: &str) -> bool {
+    mutate(
+        repo,
+        pr,
+        node,
+        "mutation($id:ID!){markPullRequestReadyForReview(input:{pullRequestId:$id}){clientMutationId}}",
+        "ready_for_review",
+    )
+}
+
+/// One draft-state mutation: the GraphQL mutation, then the agent proxy's REST
+/// route when GraphQL did not take (CLOUD-2114).
+///
+/// **THE FALLBACK IS CHOSEN BY THE ANSWER, NEVER BY SNIFFING THE ENVIRONMENT.**
+/// A Claude Code session's proxy refuses every `POST /graphql` and names
+/// `pulls/{n}/ccr/{route}` instead, so a lap there could never ready or
+/// re-draft. Off that proxy the route does not exist and answers non-2xx, so
+/// the fallback costs one refused call and changes no verdict.
+fn mutate(repo: &str, pr: &str, node: &str, query: &str, route: &str) -> bool {
+    let body = serde_json::json!({ "query": query, "variables": { "id": node } });
+    if graphql_took(crate::rest::post_json("graphql", &body).as_ref()) {
+        return true;
+    }
+    crate::rest::post_json(
+        &format!("repos/{repo}/pulls/{pr}/ccr/{route}"),
+        &serde_json::json!({}),
+    )
+    .is_some_and(|answer| (200..300).contains(&answer.status))
+}
+
+/// Did a GraphQL mutation take? A 2xx whose document carries no `errors`.
+///
+/// A GRAPHQL ERROR IS A 200, which is the whole reason the status alone is not
+/// the answer: the endpoint reports a refused mutation in an `errors` array with
+/// an OK status, so a caller reading the code would report a change it never made.
+fn graphql_took(answer: Option<&crate::rest::Answer>) -> bool {
+    let Some(answer) = answer else {
         return false;
     };
     if !(200..300).contains(&answer.status) {
         return false;
     }
-    // A GRAPHQL ERROR IS A 200 here too, for the reason `redraft` states.
-    let Ok(document) = serde_json::from_str::<serde_json::Value>(&answer.body) else {
-        return false;
-    };
-    document.get("errors").is_none()
+    serde_json::from_str::<serde_json::Value>(&answer.body)
+        .is_ok_and(|document| document.get("errors").is_none())
 }
 
 /// What readying this head would buy.
@@ -3504,6 +3509,40 @@ pub fn buys_a_matrix(
         // certainty (CLOUD-497): this IS the masked terminal set that arm was
         // guessing at, so a re-fire is the one thing that can move it.
         Some(crate::checks_green::Verdict::DeadEnd(_)) => Spend::Refire,
+    }
+}
+
+#[cfg(test)]
+mod mutate_tests {
+    use super::graphql_took;
+    use crate::rest::Answer;
+
+    fn answer(status: u16, body: &str) -> Answer {
+        Answer {
+            status,
+            etag: None,
+            poll_floor: None,
+            backoff: None,
+            body: body.to_owned(),
+            headers: std::collections::BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn a_clean_mutation_took() {
+        assert!(graphql_took(Some(&answer(200, r#"{"data":{}}"#))));
+    }
+
+    #[test]
+    fn an_errors_array_under_200_did_not_take() {
+        assert!(!graphql_took(Some(&answer(200, r#"{"errors":[{}]}"#))));
+    }
+
+    #[test]
+    fn the_proxy_refusal_did_not_take_so_the_route_is_tried() {
+        let refusal = r#"{"message":"GitHub GraphQL is not available from Claude Code sessions"}"#;
+        assert!(!graphql_took(Some(&answer(403, refusal))));
+        assert!(!graphql_took(None));
     }
 }
 

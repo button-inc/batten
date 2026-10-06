@@ -10436,7 +10436,7 @@ fn unwind_lap(
                 let Some(land::Readiness { node, .. }) = read else {
                     continue;
                 };
-                if land::redraft(&node) {
+                if land::redraft(&repo, &pr, &node) {
                     writeln!(
                         out,
                         "land: undo — the pull request is a draft again; the next push buys no runner"
@@ -12531,12 +12531,12 @@ fn spend_the_matrix(
             )?;
             Ok(ExitCode::Success)
         }
-        land::Spend::Ready => fired(land::mark_ready(&node), ledger, out, err),
+        land::Spend::Ready => fired(land::mark_ready(&repo, &pr, &node), ledger, out, err),
         land::Spend::Refire => {
             // DRAFT FIRST, and a draft that will not happen is a stop: readying an
             // already-ready pull request is a no-op the forge reports as success,
             // so proceeding would report a matrix it never bought.
-            if !land::redraft(&node) {
+            if !land::redraft(&repo, &pr, &node) {
                 writeln!(
                     err,
                     "::error:: land: {branch} is ready over a head that can never grade, and it \
@@ -12548,7 +12548,7 @@ fn spend_the_matrix(
                 out,
                 "land: {branch} carried no answer and no run in flight; re-firing its ready"
             )?;
-            fired(land::mark_ready(&node), ledger, out, err)
+            fired(land::mark_ready(&repo, &pr, &node), ledger, out, err)
         }
     }
 }
