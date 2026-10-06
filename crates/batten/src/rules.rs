@@ -7768,6 +7768,8 @@ struct RunInputs<'a> {
     registers: &'a [crate::register::DeclaredRegister],
     /// The `[[pattern]]` table, compiled once for the run.
     patterns: &'a BTreeMap<String, regex::Regex>,
+    /// Each declared traversal's answer (CLOUD-1868), computed once.
+    traversals: &'a serde_json::Value,
 }
 
 fn run_rule(
@@ -8876,6 +8878,9 @@ pub(crate) struct Resolved<'a> {
     /// What earlier runs produced, for the keys this rule set declares
     /// (CLOUD-851).
     pub produced: &'a BTreeMap<String, String>,
+    /// Each declared traversal's answer per seed (CLOUD-1868), computed once
+    /// for the run. `null` where none is declared.
+    pub traversals: &'a serde_json::Value,
     /// The recorder records this branch accumulated (CLOUD-1051).
     pub records: &'a BTreeMap<String, Vec<String>>,
     /// [`crate::facts::Fact::RecordsBlocked`] — recorder id -> reason class.
@@ -9728,6 +9733,7 @@ pub(crate) fn tree_document(
         let value = match *fact {
             crate::facts::Fact::Document => serde_json::Value::Object(std::mem::take(&mut projected.parsed)),
             crate::facts::Fact::Tracked => serde_json::json!(tracked),
+            crate::facts::Fact::Traversals => resolved.traversals.clone(),
             crate::facts::Fact::Lines => serde_json::Value::Object(std::mem::take(&mut projected.read_lines)),
             // A path the parser refused is in `missing` rather than here,
             // carrying `unparsed` as its cause — so a module reads could-not-look
@@ -9955,6 +9961,7 @@ fn resolved_of<'a>(inputs: &RunInputs<'a>) -> Resolved<'a> {
     Resolved {
         review: inputs.review,
         produced: inputs.produced,
+        traversals: inputs.traversals,
         records: inputs.records,
         records_blocked: inputs.records_blocked,
         git: inputs.git,
@@ -14682,6 +14689,7 @@ mod tests {
                 // drive a module is the compiled-binary one.
                 verdicts: &[],
                 registers: &[],
+                traversals: &[],
                 patterns: &NO_PATTERNS,
             }
         }

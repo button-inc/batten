@@ -95,6 +95,7 @@ fn findings(root: &Path) -> Vec<(String, Option<usize>)> {
             words: None,
             recorders: &[],
             registers: &[],
+            traversals: &[],
             records: &[],
         },
         root,

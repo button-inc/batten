@@ -86,6 +86,7 @@ impl Scan {
                 words: None,
                 recorders: &[],
                 registers: &[],
+                traversals: &[],
                 records: &[],
             },
             root,

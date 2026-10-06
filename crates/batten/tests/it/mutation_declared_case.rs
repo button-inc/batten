@@ -90,6 +90,7 @@ fn verdicts(root: &Path) -> Vec<String> {
             words: None,
             recorders: &[],
             registers: &[],
+            traversals: &[],
             records: &[],
         },
         root,

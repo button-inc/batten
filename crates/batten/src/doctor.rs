@@ -2606,6 +2606,7 @@ fn unminted_facts(dir: &Path) -> Vec<Unminted> {
             words: None,
             recorders: &resolved.recorders,
             registers: &resolved.registers,
+            traversals: &resolved.traversals,
             records: &resolved.records,
         },
         crate::policy::ModuleChecks::SkipOnHotPath,

@@ -3420,6 +3420,7 @@ impl Policy {
                     words: None,
                     recorders: &resolved.recorders,
                     registers: &resolved.registers,
+                    traversals: &resolved.traversals,
                     records: &resolved.records,
                 },
                 crate::policy::ModuleChecks::SkipOnHotPath,
@@ -7085,6 +7086,8 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
             // landed, which is the property working: a new fact cannot join the
             // model and go silently unprojected here.
             crate::facts::Fact::Tracked => None,
+            // A tree-surface walk over documents; the mediated call has none.
+            crate::facts::Fact::Traversals => None,
             // Not resolvable on the mediated call, and stated rather than
             // wildcarded so a reclassification must come through here: reading a
             // file of unbounded size is unbounded in the input exactly as
@@ -12532,6 +12535,7 @@ mod tests {
                     words: None,
                     recorders: &[],
                     registers: &[],
+                    traversals: &[],
                     records: &[],
                 },
                 crate::policy::ModuleChecks::Run,

@@ -1592,6 +1592,7 @@ impl Fact {
             Fact::Waived => "waived",
             Fact::Document => "document",
             Fact::Tracked => "tracked",
+            Fact::Traversals => "traversals",
             Fact::Lines => "lines",
             Fact::External => "external",
             Fact::AgentSourced => "agent-sourced",
@@ -1648,6 +1649,7 @@ impl Fact {
             Fact::Waived => WAIVED,
             Fact::Document => DOCUMENT,
             Fact::Tracked => TRACKED,
+            Fact::Traversals => TRAVERSALS,
             Fact::Lines => LINES,
             Fact::External => EXTERNAL,
             Fact::AgentSourced => AGENT_SOURCED,
@@ -1737,6 +1739,7 @@ impl Fact {
             | Fact::Waived
             | Fact::Document
             | Fact::Tracked
+            | Fact::Traversals
             | Fact::Lines
             | Fact::External
             | Fact::AgentSourced
@@ -1799,6 +1802,7 @@ impl Fact {
         match self {
             Fact::Document => Some("documents"),
             Fact::Tracked => Some("tracked"),
+            Fact::Traversals => Some("traversals"),
             Fact::Lines => Some("lines"),
             // CLOUD-1167. Tree-only, like the three above and for their
             // reason: opening and parsing a file is a `check`-surface cost.
@@ -2309,6 +2313,7 @@ impl Fact {
             | Fact::Waived
             | Fact::Document
             | Fact::Tracked
+            | Fact::Traversals
             | Fact::Lines
             | Fact::External
             | Fact::AgentSourced
@@ -2401,6 +2406,7 @@ impl Fact {
             // classify itself here instead of failing to compile.
             Fact::Document
             | Fact::Tracked
+            | Fact::Traversals
             | Fact::Lines
             | Fact::External
             | Fact::Invocations
@@ -2562,6 +2568,7 @@ impl Fact {
             | Fact::Waived
             | Fact::Document
             | Fact::Tracked
+            | Fact::Traversals
             | Fact::Lines
             | Fact::External
             | Fact::AgentSourced
@@ -2784,6 +2791,7 @@ impl Fact {
             | Fact::Waived
             | Fact::Document
             | Fact::Tracked
+            | Fact::Traversals
             | Fact::Lines
             | Fact::External
             | Fact::AgentSourced
@@ -2840,6 +2848,7 @@ impl Fact {
             | Fact::Waived
             | Fact::Document
             | Fact::Tracked
+            | Fact::Traversals
             | Fact::Lines
             | Fact::External
             | Fact::AgentSourced

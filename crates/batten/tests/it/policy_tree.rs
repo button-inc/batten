@@ -50,6 +50,7 @@ fn fixtures(root: &Path) -> batten::policy::Vocabulary<'static> {
         words: None,
         recorders: &[],
         registers: &[],
+        traversals: &[],
         records: &[],
     }
 }

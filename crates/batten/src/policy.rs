@@ -711,6 +711,9 @@ pub struct Vocabulary<'a> {
     /// Here for `recorders`' reason: config the consumer declares, fixed for the
     /// life of the load, and needed at the call sites that already hold this.
     pub registers: &'a [crate::register::DeclaredRegister],
+    /// The `[[traversal]]` table (CLOUD-1868), walked once per run for
+    /// `input.tree.traversals`.
+    pub traversals: &'a [crate::traversal::DeclaredTraversal],
     /// The `[[record]]` table (CLOUD-1810).
     ///
     /// Here for the same reason `recorders` is, and it is the same question: a
@@ -733,6 +736,7 @@ impl Vocabulary<'_> {
         words: None,
         recorders: &[],
         registers: &[],
+        traversals: &[],
         records: &[],
     };
 }
@@ -745,6 +749,7 @@ impl<'a> From<&'a crate::config::Config> for Vocabulary<'a> {
             words: (!config.vocabulary.is_empty()).then_some(&config.vocabulary),
             recorders: &config.recorders,
             registers: &config.registers,
+            traversals: &config.traversals,
             records: &config.records,
         }
     }
@@ -763,6 +768,7 @@ impl<'a> From<&'a crate::resolve::Resolved> for Vocabulary<'a> {
             words: (!resolved.vocabulary.is_empty()).then_some(&resolved.vocabulary),
             recorders: &resolved.recorders,
             registers: &resolved.registers,
+            traversals: &resolved.traversals,
             records: &resolved.records,
         }
     }
@@ -858,6 +864,7 @@ pub fn load(
         words,
         recorders: _,
         registers: _,
+        traversals: _,
         records: _,
     } = vocabulary;
     // The table is validated at PARSE, beside `verbs` and `redirects` and for

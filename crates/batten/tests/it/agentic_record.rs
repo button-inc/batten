@@ -437,6 +437,7 @@ fn replayed_findings(
             words: None,
             recorders: &[],
             registers: &[],
+            traversals: &[],
             records: &[],
         },
         dir,

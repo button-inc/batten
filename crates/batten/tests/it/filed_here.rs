@@ -249,6 +249,7 @@ fn scan(root: &Path) -> rules::Scan {
             words: None,
             recorders: &declared,
             registers: &[],
+            traversals: &[],
             records: &[],
         },
         root,

@@ -100,6 +100,7 @@ fn fixtures(root: &Path) -> policy::Vocabulary<'static> {
         words: None,
         recorders: &[],
         registers: &[],
+        traversals: &[],
         records: &[],
     }
 }
@@ -115,6 +116,7 @@ fn fixtures_with(
         words: None,
         recorders: &[],
         registers: &[],
+        traversals: &[],
         records: &[],
     }
 }

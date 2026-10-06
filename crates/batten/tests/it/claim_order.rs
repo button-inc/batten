@@ -122,6 +122,7 @@ fn findings_declared_by(root: &Path, vocabulary_root: &Path) -> Vec<String> {
             words: None,
             recorders: &[],
             registers: &[],
+            traversals: &[],
             records: &[],
         },
         root,

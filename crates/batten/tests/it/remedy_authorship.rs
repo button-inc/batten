@@ -96,6 +96,7 @@ fn scan(root: &Path, rule: Rule) -> rules::Scan {
             words: None,
             recorders: &[],
             registers: &[],
+            traversals: &[],
             records: &[],
         },
         root,

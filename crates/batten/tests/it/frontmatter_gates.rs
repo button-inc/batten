@@ -96,6 +96,7 @@ fn findings_for(root: &Path, row: Rule, vocabulary_root: &Path) -> Vec<String> {
             words: None,
             recorders: &[],
             registers: &[],
+            traversals: &[],
             records: &[],
         },
         root,

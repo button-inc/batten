@@ -133,6 +133,7 @@ fn scan(root: &Path) -> rules::Scan {
             words: None,
             recorders: &[],
             registers: &[],
+            traversals: &[],
             records: &[],
         },
         root,
