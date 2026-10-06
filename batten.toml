@@ -10296,6 +10296,11 @@ reason = "the relink case asserts over `std::os::unix::fs::MetadataExt::ino`, a 
 expires = "2026-10-31"
 [[waiver]]
 rule = "test cover unseen"
+path = "crates/batten/tests/it/provision.rs"
+reason = "the argv[0] case reaches the launcher through `std::os::unix::fs::symlink`, a symbol absent on the Windows target, and its subject is unix argv[0] dispatch, which Windows process creation does not have, so the `cfg!` arm this rule prefers would not type-check and the attribute is required rather than chosen to silence a leg (CLOUD-2093). `base = \"origin/main\"` makes this floor itself on landing, so the row is expected to lapse unused."
+expires = "2026-10-31"
+[[waiver]]
+rule = "test cover unseen"
 path = "crates/batten/tests/it/attestation.rs"
 reason = "every gated case drives `batten record attestation` against a stub verifier the fixture writes as a `#!/bin/sh` program and marks executable through `std::os::unix::fs::PermissionsExt`, a symbol absent on the Windows target, so the `cfg!` arm this rule prefers would not type-check and the attribute is required rather than chosen to silence a leg (CLOUD-843). `base = \"origin/main\"` makes this floor itself on landing, so the row is expected to lapse unused."
 expires = "2026-10-31"
