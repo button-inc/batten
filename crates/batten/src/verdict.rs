@@ -1256,6 +1256,8 @@ pub enum Native {
     PatternTableRefused,
     /// The `[[traversal]]` table would not load.
     TraversalTableRefused,
+    /// The `[[register]]` table would not load.
+    RegisterTableRefused,
     /// The `[[verdict]]` table would not load.
     VerdictTableRefused,
     /// The `[[redirect]]` table would not load.
@@ -1448,6 +1450,7 @@ impl Native {
         Native::VerbTableRefused,
         Native::PatternTableRefused,
         Native::TraversalTableRefused,
+        Native::RegisterTableRefused,
         Native::VerdictTableRefused,
         Native::RedirectTableRefused,
         Native::DeferralTableRefused,
@@ -1498,6 +1501,7 @@ impl Native {
         Native::OutcomeTableRefused,
         Native::PatternTableRefused,
         Native::TraversalTableRefused,
+        Native::RegisterTableRefused,
         Native::VerdictTableRefused,
         Native::RedirectTableRefused,
         Native::DeferralTableRefused,
@@ -1553,6 +1557,7 @@ impl Native {
             Native::VerbTableRefused => "verb declare refused",
             Native::PatternTableRefused => "pattern declare refused",
             Native::TraversalTableRefused => "traversal declare refused",
+            Native::RegisterTableRefused => "register declare refused",
             Native::VerdictTableRefused => "verdict declare refused",
             Native::RedirectTableRefused => "redirect declare refused",
             Native::DeferralTableRefused => "deferral declare refused",
@@ -2925,6 +2930,7 @@ mod tests {
                 | Native::VerbTableRefused
                 | Native::PatternTableRefused
                 | Native::TraversalTableRefused
+                | Native::RegisterTableRefused
                 | Native::VerdictTableRefused
                 | Native::RedirectTableRefused
                 | Native::DeferralTableRefused

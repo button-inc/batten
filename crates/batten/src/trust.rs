@@ -721,6 +721,10 @@ pub enum WeakeningKind {
     /// design. Only the REMOVED direction weakens — adding a walk arms a
     /// predicate that was not deciding before.
     TraversalRemoved,
+    /// A `[[register]]` row is gone, so every `reference` rule resolving
+    /// against it is refused at load — and the rule is usually removed with it,
+    /// which is the quiet half (CLOUD-2005). `TraversalRemoved`'s shape.
+    RegisterRemoved,
     /// A `[[provision]]` row is gone, so a pinned tool stops being verified.
     ProvisionRemoved,
     /// A required check is gone from the `[ci]` projection (CLOUD-54).
@@ -1114,6 +1118,7 @@ impl WeakeningKind {
         WeakeningKind::MarkerRemoved,
         WeakeningKind::ExecPatternRemoved,
         WeakeningKind::TraversalRemoved,
+        WeakeningKind::RegisterRemoved,
         WeakeningKind::ProvisionRemoved,
         WeakeningKind::DeferralUnwatched,
         WeakeningKind::HostSettingUnprojected,
@@ -1210,6 +1215,7 @@ impl WeakeningKind {
             WeakeningKind::MarkerRemoved => "marker-removed",
             WeakeningKind::ExecPatternRemoved => "exec-pattern-removed",
             WeakeningKind::TraversalRemoved => "traversal-removed",
+            WeakeningKind::RegisterRemoved => "register-removed",
             WeakeningKind::ProvisionRemoved => "provision-removed",
             WeakeningKind::HostSettingUnprojected => "host-setting-unprojected",
             WeakeningKind::DeferralUnwatched => "deferral-unwatched",
@@ -1418,6 +1424,10 @@ pub const CENSUS: &[FieldCoverage] = &[
     FieldCoverage {
         field: "traversals",
         coverage: Coverage::Compared(&[WeakeningKind::TraversalRemoved]),
+    },
+    FieldCoverage {
+        field: "registers",
+        coverage: Coverage::Compared(&[WeakeningKind::RegisterRemoved]),
     },
     FieldCoverage {
         field: "verdicts",
@@ -2376,6 +2386,19 @@ fn traversal_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
     )
 }
 
+/// The declared-key-set table (CLOUD-2005), `traversal`'s shape one table over.
+///
+/// Only the REMOVED direction weakens: adding a register arms nothing until a
+/// `reference` rule names it.
+fn register_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
+    removed_entries(
+        WeakeningKind::RegisterRemoved,
+        &ids(base.registers.iter().map(|row| row.id.clone())),
+        &ids(working.registers.iter().map(|row| row.id.clone())),
+        "register",
+    )
+}
+
 /// A declared record family removed (review of #962): removing one un-projects
 /// it, and a module reading `input.tree.records.<family>` reads absent as
 /// silent. Only the removed direction weakens — declaring a family arms a gate.
@@ -2581,6 +2604,7 @@ fn entry_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
         "marker",
     ));
     found.extend(traversal_weakenings(base, working));
+    found.extend(register_weakenings(base, working));
     found.extend(record_weakenings(base, working));
     found.extend(removed_entries(
         WeakeningKind::ExecPatternRemoved,

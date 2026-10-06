@@ -293,6 +293,15 @@ pub struct Config {
     /// [`crate::traversal`].
     #[serde(default, rename = "traversal", skip_serializing_if = "Vec::is_empty")]
     pub traversals: Vec<crate::traversal::DeclaredTraversal>,
+    /// The declared-key-set table (CLOUD-2005): every set a `reference` rule may
+    /// resolve a cited token against, declared once and referenced by id.
+    ///
+    /// Consumer-specific for [`Config::traversals`]'s reason: which file holds a
+    /// register, which column is its key, which frontmatter node names it, are a
+    /// consumer's vocabulary (non-negotiable rule 1). The type, the one GFM row
+    /// grammar and the validation are [`crate::register`].
+    #[serde(default, rename = "register", skip_serializing_if = "Vec::is_empty")]
+    pub registers: Vec<crate::register::DeclaredRegister>,
     /// The refusal vocabulary (CLOUD-1050): every verdict a gate may reach for,
     /// its one-line gloss, its class definition and its closed route list.
     ///
@@ -2566,6 +2575,10 @@ fn validate_module_vocabulary(config: &Config) -> Result<()> {
     under(
         Native::TraversalTableRefused,
         crate::traversal::validate(&config.traversals),
+    )?;
+    under(
+        Native::RegisterTableRefused,
+        crate::register::validate(&config.registers),
     )
 }
 
@@ -4499,6 +4512,7 @@ impl Config {
             rules: Vec::new(),
             patterns: Vec::new(),
             traversals: Vec::new(),
+            registers: Vec::new(),
             verdicts: Vec::new(),
             vocabulary: crate::verdict::Vocabulary::default(),
             scope: Vec::new(),
@@ -5027,6 +5041,11 @@ mod tests {
             "traversals",
             "crate::traversal::validate(",
             Native::TraversalTableRefused,
+        ),
+        (
+            "registers",
+            "crate::register::validate(",
+            Native::RegisterTableRefused,
         ),
         (
             "verdicts",
