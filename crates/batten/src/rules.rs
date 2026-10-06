@@ -3644,6 +3644,13 @@ pub const COLUMN_CENSUS: &[ColumnCensus] = &[
         ),
     },
     ColumnCensus {
+        field: "cites",
+        declares: Declares::NotFactBearing(
+            "which declared register a reference row resolves against, and how it cites; the \
+             files read are the register's own declared paths, never a fact",
+        ),
+    },
+    ColumnCensus {
         field: "reads",
         declares: Declares::NotFactBearing("addresses inside a fact another column declared"),
     },
@@ -15912,6 +15919,18 @@ mod tests {
                         // pairings, and `policy::load` is what decides whether
                         // the file behind it compiles.
                         "module" => rule.module = Some("policy/x.rego".to_owned()),
+                        "cites" => {
+                            rule.cites = Some(crate::register::Cites {
+                                register: "r".to_owned(),
+                                from_register: Some("r".to_owned()),
+                                column: Some(1),
+                                split: None,
+                                within: None,
+                                partition: None,
+                                relative_to: None,
+                                inverse: false,
+                            });
+                        }
                         other => panic!("unclassified required column `{other}`"),
                     }
                 }
@@ -16562,7 +16581,7 @@ mod tests {
         }
         assert_eq!(
             RuleKind::ALL.len(),
-            10,
+            11,
             "a new RuleKind must be added to RuleKind::ALL"
         );
     }
