@@ -1,0 +1,20 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-test 1  batten 
+.SH NAME
+batten\-test \- Judge this branch\*(Aqs tests against their base revision
+.SH SYNOPSIS
+\fBbatten test\fR [\fB\-h\fR|\fB\-\-help\fR] <\fIsubcommands\fR>
+.SH DESCRIPTION
+Judge this branch\*(Aqs tests against their base revision
+.SH OPTIONS
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.SH SUBCOMMANDS
+.TP
+batten\-test\-replay(1)
+Run each modified test\*(Aqs base form against HEAD; a changed expectation is admitted only by a recorded answer
+.TP
+batten\-test\-help(1)
+Print this message or the help of the given subcommand(s)

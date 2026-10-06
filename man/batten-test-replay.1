@@ -1,0 +1,16 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-test-replay 1  batten 
+.SH NAME
+batten\-test\-replay \- Run each modified test\*(Aqs base form against HEAD; a changed expectation is admitted only by a recorded answer
+.SH SYNOPSIS
+\fBbatten test replay\fR [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-base\fR> 
+.SH DESCRIPTION
+Run each modified test\*(Aqs base form against HEAD; a changed expectation is admitted only by a recorded answer
+.SH OPTIONS
+.TP
+\fB\-\-base\fR \fI<base>\fR
+The revision this checkout is diffed against
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
