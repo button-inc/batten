@@ -1555,12 +1555,16 @@ fn run_provision_apply(
     let config = resolve::resolve(Path::new("."), overrides)?;
     let repo = git::repo_root(Path::new("."))?;
     let cache = provision::cache_root(&repo)?;
+    // ONLY AN INSTALLED ENGINE PROVISIONS THE HOST (CLOUD-2124): a build of
+    // this checkout fills the repository's cache and leaves the host's links
+    // to the binary that owns them.
+    let links_host = std::env::current_exe().map_or(true, |exe| provision::links_host(&exe, &repo));
 
     for entry in &config.provisions {
         // A checksum mismatch propagates as a `Denial` (exit 2) from here, so
         // the loop stops at the first bad artifact rather than going on to
         // install the rest under a verdict that already failed.
-        let applied = provision::apply(entry, &cache, dry_run)?;
+        let applied = provision::apply(entry, &cache, dry_run, links_host)?;
         let verb = match applied {
             provision::Applied::Installed => "installed",
             provision::Applied::AlreadyFresh => continue,

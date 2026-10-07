@@ -624,13 +624,32 @@ pub fn status(entries: &[Provision], cache_root: &Path) -> Result<Report> {
         report.push(EntryStatus {
             name: entry.name.clone(),
             version: entry.version.clone(),
-            freshness: freshness_of(entry, cache_root)?,
+            freshness: freshness_of(entry, cache_root, true)?,
         });
     }
     Ok(Report { entries: report })
 }
 
-fn freshness_of(entry: &Provision, cache_root: &Path) -> Result<Freshness> {
+/// Whether an engine at `exe` may write the HOST's links for `repo_root`
+/// (CLOUD-2124).
+///
+/// **A build of the checkout it provisions never does.** Such a binary is
+/// `cargo`'s output, not an installed engine — the line `engine update` already
+/// draws for the same reason (CLOUD-2063). A launcher names its interpreter by
+/// absolute path, so a gate running `provision apply` through `cargo run`
+/// rewrote `~/.local/bin/mise` to run a debug build: measured 2026-10-07, a
+/// scratch clone's `target/debug/batten` became every `mise` call's
+/// interpreter for the whole host. The binary installs the binary; once one is
+/// installed, it alone provisions the host. The cache is the repository's own,
+/// so a build of it still fills it — the scanner a gate needs stays reachable.
+#[must_use]
+//MUTANT-SUITE crates/batten/src/provision.rs
+//MUTANT checkout-build-links-host|s@^    !exe.starts_with(repo_root)$@    true@|a_build_of_the_checkout_never_links_the_host
+pub fn links_host(exe: &Path, repo_root: &Path) -> bool {
+    !exe.starts_with(repo_root)
+}
+
+fn freshness_of(entry: &Provision, cache_root: &Path, links_host: bool) -> Result<Freshness> {
     let dir = entry_dir(cache_root, entry);
     let binary = dir.join(BIN_DIR).join(&entry.binary);
     if !binary.is_file() {
@@ -652,7 +671,7 @@ fn freshness_of(entry: &Provision, cache_root: &Path) -> Result<Freshness> {
     // `Missing` rather than a fourth verdict: what is missing is the binary at
     // the place this entry declares it must be, which is the same class as
     // nothing cached and takes the same repair.
-    if let Some(dest) = entry.link.as_deref() {
+    if let Some(dest) = entry.link.as_deref().filter(|_| links_host) {
         let linked = expand_home(dest)?.join(&entry.binary);
         if !linked.is_file() {
             return Ok(Freshness::Missing);
@@ -728,8 +747,16 @@ pub enum Applied {
 /// did make. An
 /// unsupported URL scheme is a [`UsageError`] (→ exit `1`), since the manifest
 /// asked for something this build does not do.
-pub fn apply(entry: &Provision, cache_root: &Path, dry_run: bool) -> Result<Applied> {
-    if freshness_of(entry, cache_root)? == Freshness::Fresh {
+///
+/// `links_host` is [`links_host`]'s answer: `false` leaves the declared link —
+/// the host's, not the repository's — unjudged and unwritten.
+pub fn apply(
+    entry: &Provision,
+    cache_root: &Path,
+    dry_run: bool,
+    links_host: bool,
+) -> Result<Applied> {
+    if freshness_of(entry, cache_root, links_host)? == Freshness::Fresh {
         return Ok(Applied::AlreadyFresh);
     }
     if dry_run {
@@ -747,7 +774,7 @@ pub fn apply(entry: &Provision, cache_root: &Path, dry_run: bool) -> Result<Appl
     // checksum.
     let artifact = entry.artifact()?;
     if let Some(bytes) = cached_artifact_matching_pin(entry, cache_root, &artifact.sha256) {
-        install(entry, cache_root, &bytes)?;
+        install(entry, cache_root, &bytes, links_host)?;
         return Ok(Applied::Installed);
     }
     let bytes = fetch(&artifact.url)?;
@@ -762,14 +789,14 @@ pub fn apply(entry: &Provision, cache_root: &Path, dry_run: bool) -> Result<Appl
         )));
     }
 
-    install(entry, cache_root, &bytes)?;
+    install(entry, cache_root, &bytes, links_host)?;
     Ok(Applied::Installed)
 }
 
 /// Write the verified artifact and its binary into the cache.
 ///
 /// Called only after the checksum matched.
-fn install(entry: &Provision, cache_root: &Path, bytes: &[u8]) -> Result<()> {
+fn install(entry: &Provision, cache_root: &Path, bytes: &[u8], links_host: bool) -> Result<()> {
     let dir = entry_dir(cache_root, entry);
     let bin_dir = dir.join(BIN_DIR);
     fs::create_dir_all(&bin_dir).context("create the provision cache directory")?;
@@ -814,7 +841,7 @@ fn install(entry: &Provision, cache_root: &Path, bytes: &[u8]) -> Result<()> {
     // reading `missing` also leaves the link unmade. A fresh entry whose link
     // never landed would be the silent half-install this ordering exists to
     // rule out.
-    if let Some(dest) = entry.link.as_deref() {
+    if let Some(dest) = entry.link.as_deref().filter(|_| links_host) {
         link_onto_path(entry, dest, &cached, &binary)?;
     }
     // The artifact is written last, so a crash between the two leaves the entry
@@ -2131,6 +2158,26 @@ pub fn binary_path(repo_root: &Path, entry: &Provision) -> Result<PathBuf> {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// CLOUD-2124: the measured case, a scratch clone's debug build provisioning
+    /// the host from inside its own checkout, is refused; an installed engine,
+    /// and a build of ANOTHER tree provisioning a fixture, still link.
+    #[test]
+    fn a_build_of_the_checkout_never_links_the_host() {
+        let repo = Path::new("/scratch/ciclone");
+        assert!(
+            !links_host(Path::new("/scratch/ciclone/target/debug/batten"), repo),
+            "cargo's output inside the provisioned checkout is not an installed engine"
+        );
+        assert!(
+            links_host(Path::new("/root/.local/bin/batten"), repo),
+            "the installed engine provisions the host"
+        );
+        assert!(
+            links_host(Path::new("/home/user/batten/target/debug/batten"), repo),
+            "a build of another tree is not a build of this one"
+        );
+    }
 
     // -----------------------------------------------------------------------
     // The control credential is DERIVED, never a forge's literal (CLOUD-1615).
