@@ -14,7 +14,8 @@
 //! - A `#[test]` fn present at both revisions whose body changed (whitespace
 //!   aside) is **modified**; its base body is spliced into HEAD's tree and run.
 //!   A base body that fails, or a spliced tree that will not build, is
-//!   `test-expectation-changed`.
+//!   `test-expectation-changed`. A replay that could not run at all is
+//!   could-not-look, never a finding.
 //! - A `#[test]` fn present at base and gone at HEAD is `test-removed`, with no
 //!   replay: there is nothing at HEAD to run it beside.
 //! - An ADDED test is never replayed — it has no base expectation to hold HEAD to.
@@ -31,7 +32,7 @@ use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 
 use crate::exit::ExitCode;
 
@@ -343,6 +344,25 @@ fn replay(
         String::from("CARGO_TARGET_DIR"),
         Some(state.join("target").to_string_lossy().into_owned()),
     )];
+    // THE TOOL IS PROBED BEFORE ANY ANSWER IS READ. `cargo` exits 101 both for a
+    // build that failed and for a subcommand it cannot find, so without this a
+    // missing `nextest` reads as every base expectation broken — measured on the
+    // musl lane, where the refusing cases passed while running nothing.
+    let probe = ["cargo", "nextest", "--version"].map(String::from);
+    match crate::exec::piped_argv(
+        &tree,
+        &probe,
+        "",
+        crate::exec::Diagnostics::Keep,
+        &published,
+    ) {
+        Some((0, _)) => {}
+        outcome => bail!(
+            "test replay: could not run `cargo nextest` in {}: {}",
+            tree.display(),
+            said(outcome.as_ref())
+        ),
+    }
     let mut findings = Vec::new();
     for (path, (_, modified)) in splices {
         for test in modified {
@@ -366,10 +386,10 @@ fn replay(
                 &tree,
                 &argv,
                 "",
-                crate::exec::Diagnostics::Drop,
+                crate::exec::Diagnostics::Keep,
                 &published,
             );
-            if !passes(outcome.as_ref()) {
+            if !passes(outcome.as_ref(), &test.inner)? {
                 findings.push(Finding {
                     key: format!("{path}::{}", test.inner),
                     path: path.clone(),
@@ -382,12 +402,38 @@ fn replay(
     Ok(findings)
 }
 
-/// Whether a replay passed: the child ran and exited 0. A non-zero exit, and a
-/// child that could not be run at all, are a base expectation HEAD did not meet.
+/// `nextest`'s exit when a test it ran failed.
+const TEST_RUN_FAILED: i32 = 100;
+/// `nextest`'s exit when the build failed. `cargo` uses it for its own setup
+/// failures too, so it is a finding only beside [`COMPILE_FAILED`].
+const BUILD_FAILED: i32 = 101;
+/// What `cargo` prints when rustc refused the crate: a base body HEAD's code
+/// cannot compile, as opposed to a build that never reached rustc.
+const COMPILE_FAILED: &str = "could not compile";
+
+/// Whether a replay passed. Exit 0 passes. A failed test, or a base body rustc
+/// refused, is a base expectation HEAD did not meet. Anything else is
+/// could-not-look, never a finding: a refusal the replay never measured would
+/// read as one it did.
 //MUTANT-SUITE crates/batten/tests/it/test_replay.rs
-//MUTANT expectation-unchecked|s@^    matches!(outcome, Some((0, _)))$@    true@|a_narrowed_expectation_is_refused_by_name
-fn passes(outcome: Option<&(i32, String)>) -> bool {
-    matches!(outcome, Some((0, _)))
+//MUTANT expectation-unchecked|s@^        Some((0, _)) => Ok(true),$@        Some(_) => Ok(true),@|a_narrowed_expectation_is_refused_by_name
+fn passes(outcome: Option<&(i32, String)>, test: &str) -> Result<bool> {
+    match outcome {
+        Some((0, _)) => Ok(true),
+        Some((TEST_RUN_FAILED, _)) => Ok(false),
+        Some((BUILD_FAILED, said)) if said.contains(COMPILE_FAILED) => Ok(false),
+        outcome => bail!("test replay: could not replay {test}: {}", said(outcome)),
+    }
+}
+
+/// What a child said, for a could-not-look error: its exit and its last lines.
+fn said(outcome: Option<&(i32, String)>) -> String {
+    let Some((code, output)) = outcome else {
+        return String::from("it could not be spawned");
+    };
+    let lines: Vec<&str> = output.lines().collect();
+    let tail = lines[lines.len().saturating_sub(8)..].join("\n");
+    format!("exit {code}\n{tail}")
 }
 
 #[cfg(test)]
@@ -467,5 +513,24 @@ mod tests {
         );
         let changed = compare(BASE, &head);
         assert_eq!(splice(&head, &changed.modified), BASE);
+    }
+
+    #[test]
+    fn only_a_measured_failure_is_a_finding() {
+        let said = |code: i32, text: &str| Some((code, text.to_owned()));
+        assert!(passes(said(0, "").as_ref(), "t").unwrap());
+        assert!(!passes(said(100, "").as_ref(), "t").unwrap());
+        assert!(
+            !passes(
+                said(101, "error: could not compile `replayed`").as_ref(),
+                "t"
+            )
+            .unwrap()
+        );
+        // A build that never reached rustc, a refused filter, and a child that
+        // never ran each measured nothing, so none of them is a refusal.
+        assert!(passes(said(101, "error: no such command: `nextest`").as_ref(), "t").is_err());
+        assert!(passes(said(4, "").as_ref(), "t").is_err());
+        assert!(passes(None, "t").is_err());
     }
 }
