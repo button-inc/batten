@@ -133,10 +133,13 @@ asset_name() {
 	esac
 }
 
-# musl on Linux rather than gnu, deliberately. The statically linked binary is
-# the one that runs on any Linux whatever its glibc version, which is the whole
-# content of "a single downloadable binary". A host that wants the gnu build
-# asks for it with BATTEN_TARGET.
+# gnu on Linux FIRST, musl only as the fallback (CLOUD-1861). The musl build
+# runs on any Linux, but musl's allocator returns memory to the OS on every free:
+# measured on 0.0.205, one rule over a real tree was 622ms warm and 5905ms cold
+# on musl against 279ms on gnu. So the glibc build is installed, run once with
+# `--version` before it replaces anything, and a host it cannot run on — no
+# glibc, or one older than the build's floor — gets the musl build of the SAME
+# release instead. A host that wants either outright sets BATTEN_TARGET.
 detect_target() {
 	dt_os=$(uname -s 2>/dev/null || echo unknown)
 	dt_arch=$(uname -m 2>/dev/null || echo unknown)
@@ -146,7 +149,7 @@ detect_target() {
 	*) return 1 ;;
 	esac
 	case "$dt_os" in
-	Linux) printf '%s-unknown-linux-musl\n' "$dt_arch" ;;
+	Linux) printf '%s-unknown-linux-gnu\n' "$dt_arch" ;;
 	Darwin) printf '%s-apple-darwin\n' "$dt_arch" ;;
 	*) return 1 ;;
 	esac
@@ -520,7 +523,9 @@ main() {
 	[ "$TOKEN_DIRECT" = "$TOKEN" ] && TOKEN_DIRECT=
 
 	target="${BATTEN_TARGET:-}"
+	auto_target=
 	if [ -z "$target" ]; then
+		auto_target=yes
 		target=$(detect_target) ||
 			die 1 "no release target for $(uname -s)/$(uname -m). Set BATTEN_TARGET to one of: $(supported_targets | tr '\n' ' ')"
 	fi
@@ -633,6 +638,21 @@ main() {
 	mkdir -p "$dest" ||
 		die 1 "cannot create $dest. Set BATTEN_INSTALL_DIR to a writable directory."
 	chmod +x "$tmp/$BIN"
+
+	# THE GLIBC BUILD IS PROVEN BEFORE IT REPLACES ANYTHING. A host below its
+	# glibc floor gets an exec failure, which would be a binary that does not
+	# start where musl would have; so a detected gnu target that cannot run
+	# `--version` here re-resolves to musl at the same tag. Never for a target
+	# the caller named: they asked for that build or an error.
+	case "$target" in
+	*-linux-gnu)
+		if [ -n "$auto_target" ] && ! "$tmp/$BIN" --version >/dev/null 2>&1; then
+			echo "install.sh: the glibc build does not run on this host; installing musl instead" >&2
+			BATTEN_TARGET="${target%-gnu}-musl" BATTEN_VERSION="$tag" main "$@"
+			exit $?
+		fi
+		;;
+	esac
 
 	# ATOMIC REPLACE, BECAUSE THE TARGET MAY BE THE RUNNING BINARY (CLOUD-1620).
 	#
