@@ -4732,6 +4732,42 @@ expression: stdout_of(&output)
       ]
     },
     {
+      "path": "test",
+      "id": "test",
+      "about": "Judge this branch's tests against their base revision",
+      "effect": "unclassified",
+      "data_channel": false,
+      "flags": [],
+      "subcommands": [
+        {
+          "path": "test replay",
+          "id": "test.replay",
+          "about": "Run each modified test's base form against HEAD; a changed expectation is admitted only by a recorded answer",
+          "effect": "write",
+          "data_channel": true,
+          "flags": [
+            {
+              "name": "base",
+              "short": null,
+              "long": "base",
+              "takes_value": true,
+              "positional": false,
+              "help": "The revision this checkout is diffed against"
+            },
+            {
+              "name": "json",
+              "short": "J",
+              "long": "json",
+              "takes_value": false,
+              "positional": false,
+              "help": "Emit byte-stable JSON instead of pointer lines"
+            }
+          ],
+          "subcommands": []
+        }
+      ]
+    },
+    {
       "path": "verdict",
       "id": "verdict",
       "about": "Fold a run's findings and blind spots into this tool's exit code",
