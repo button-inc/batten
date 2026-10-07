@@ -3379,6 +3379,15 @@ quiet = true
 silent = "stdout"
 run = "batten wiring reclaim -y"
 
+# CLOUD-2111. A session rooted ABOVE this clone loads none of its committed hooks,
+# so `[[startup]] hooks-load-from-any-session-root` registers batten on that
+# root's project surface. This is the same verb by name, for a session that
+# wants the repair without the whole startup ladder.
+[tasks."session:wiring-register"]
+description = "Register batten on the session root when a session is rooted above this clone"
+quiet = true
+run = "batten wiring register"
+
 # CLOUD-843. The successor to `mise-tasks/lock-complete.sh`, and the same wrapper
 # shape `rules-drift` above takes: the step name and the rule id are one object,
 # so hk's step, this task and `batten.toml`'s row cannot drift apart.
