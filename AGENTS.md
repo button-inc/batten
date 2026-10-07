@@ -45,15 +45,14 @@ decision; the change is outside the scope you were asked — the gates authorize
 STEPS of agreed work, never whether it is agreed (CLOUD-431, bypass
 `BATTEN_CLAIM_CHECK_BYPASS`); or an action is destructive and _not_ gated
 (force-pushing `main`, deleting history, an out-of-band release); a lease-push or
-harness denial never is. **Each stops the
-fix, never the record**: what you decline to fix, you file. **A WRONGLY refusing
-gate is a defect, not an answer** — repair it and carry on this session; ticketing
-one is a punt in gate's clothing (CLOUD-597/615). **A punt is any deferral you
-could have closed**, a predicate not a list: a block reported as a decision (a
-block is a bug); "that's your call" on what your evidence settles; an authorized
-action offered, or handed to a human to run — **the container is yours alone,
-no human can run a command in it** (CLOUD-2117); an unbuilt mechanism awaited over
-the instance in hand; your own landed work spared. Can do it, do it; can't, file it.
+harness denial never is. **Each stops the fix, never the record**: what you
+decline to fix, you file. **A WRONGLY refusing gate is a defect, not an answer** —
+repair it this session; ticketing one is a punt in gate's clothing
+(CLOUD-597/615). **A punt is any deferral you could have closed**, a predicate not
+a list: a block reported as a decision (a block is a bug); "your call" on what your
+evidence settles; an action offered, or handed to a human — **no human can run a
+command in your container** (CLOUD-2117); a mechanism awaited over the instance in
+hand; your landed work spared. Can do it, do it; can't, file it.
 
 **An override ask is ONE yes/no on the override, never a menu of routes**
 (CLOUD-680). It carries the refusing gate and its verdict string, what the gate
