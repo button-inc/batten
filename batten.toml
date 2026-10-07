@@ -4846,6 +4846,8 @@ no_fix_reason = "class 3 (a port behind `batten`): the installer installs the bi
 # string — a `run` value or an argv entry; prose names it in backticks, which
 # this does not read. CI runners start with no binary, so the workflows' installs
 # are genuine bootstraps and sit outside this glob.
+#MUTANT-SUITE crates/batten/tests/it/program_run_loose.rs
+#MUTANT argv-call-unread|s@^regex = '"\[^"`.*$@regex = 'run\\s*=\\s*"\\./install\\.sh'@|a_task_calling_the_installer_is_refused_and_prose_is_not
 [[rule]]
 id = "program run loose"
 kind = "forbid"
