@@ -2985,7 +2985,15 @@ description = "Provision the host dependencies mise does not: the released `batt
 # and what mise does to an array: the entries run in order and the first failure
 # ends the task with its own exit code, so `install.sh`'s `1`/`2` still reach the
 # caller unreworded.
-run = ["./install.sh", "batten wiring reclaim -y"]
+#
+# THE INSTALLER BOOTSTRAPS AND NOTHING ELSE (CLOUD-2123): it runs only where no
+# `batten` resolves. A host that has one converges through the binary, because
+# reinstalling the latest release over it is how an engine came to disagree
+# with its pin. `program run loose` refuses an unconditional installer call.
+run = [
+  "if command -v batten >/dev/null 2>&1; then batten engine update; else ./install.sh; fi",
+  "batten wiring reclaim -y",
+]
 
 # The report half of the same seam, and the setup script calls this one too.
 #
@@ -3231,10 +3239,13 @@ description = "Session start: install the latest RELEASE over whatever `deps-ins
 # own rather than a flattened `1`.
 quiet = true
 silent = "stdout"
-# THEN THE PIN (CLOUD-2062): `install.sh` provisions a release so a binary
-# exists at all; `batten engine update` then converges it on the engine the
-# committed `batten.toml` pins. An unpinned checkout pays nothing for it.
-run = ["./install.sh", "batten engine update"]
+# THE BINARY INSTALLS THE BINARY (CLOUD-2123). `deps-install` has already put a
+# `batten` on PATH by the time this runs, so the installer has no job left here:
+# it fetched the LATEST release over that binary every session, and a pin naming
+# any other build then refused every call until something rebuilt it, measured
+# twice on PR #1102. `batten engine update` converges on the committed pin, and
+# an unpinned checkout pays nothing for it. `program run loose` holds the line.
+run = "batten engine update"
 
 [tasks."session:git-hooks"]
 description = "Session start: install the repo-owned git hooks, the per-clone step nothing performed for 24 commits (CLOUD-476)"

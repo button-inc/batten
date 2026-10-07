@@ -4832,6 +4832,28 @@ severity = "deny"
 scope = "tree"
 no_fix_reason = "class 3 (a port behind `batten`): the installer installs the binary and nothing else; a toolchain, a package manager or a shell profile belongs behind `batten` once it is on PATH — a `[[provision]]` row or a `[[startup]]` row, both of which a gate can read"
 
+# AND WHO MAY CALL IT, the half the row above never held (CLOUD-2123). The
+# installer's ONE job is putting a `batten` on a host that has none; once one
+# exists, every install, update and repair goes through the binary
+# (`batten engine update`) or a tool it provisioned. `session:batten` called
+# `./install.sh` on every session start over a binary already on PATH, fetching
+# the LATEST release, and a pin naming any other build then refused every call —
+# measured twice on PR #1102 (2026-10-05, 2026-10-07).
+#
+# THE PREDICATE IS AN UNCONDITIONAL CALL: the installer as a task's whole `run`
+# string or as an argv entry of its own. The bootstrap guard (`else ./install.sh`
+# under `command -v batten`) is the one admitted spelling, and prose quoting the
+# installer in backticks is not a call. CI runners start with no binary, so the
+# workflows' installs are genuine bootstraps and sit outside this glob.
+[[rule]]
+id = "program run loose"
+kind = "forbid"
+glob = "mise.toml"
+regex = '"\./install\.sh"|run\s*=\s*"\./install\.sh'
+severity = "deny"
+scope = "tree"
+no_fix_reason = "class 3 (a port behind `batten`): which bootstrap guard a task needs is a judgement about the host it runs on; once a binary exists the route is `batten engine update`"
+
 # A GRANT THAT MATCHES NOTHING IS THE DEAD-GATE CLASS, ONE SURFACE OVER, AND ITS
 # ONLY SYMPTOM IS A PERSON BEING ASKED (CLOUD-1455).
 #
