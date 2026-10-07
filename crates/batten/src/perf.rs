@@ -269,7 +269,7 @@ pub fn wiring_paths() -> Vec<String> {
             continue;
         };
         match wiring.file {
-            WiringFile::Key { path, .. } | WiringFile::Whole(path) => {
+            WiringFile::Key { path, .. } | WiringFile::Whole(path) | WiringFile::Root(path) => {
                 paths.insert(path.to_owned());
                 // The directory beside the settings file: a host that routes
                 // through a launcher script keeps it there, and CLOUD-697 is the
@@ -1035,7 +1035,7 @@ fn wired_command(tree: &Path, bin: &Path) -> Result<Vec<String>> {
     };
     let (path, key) = match wiring.file {
         WiringFile::Key { path, key } => (path, Some(key)),
-        WiringFile::Whole(path) => (path, None),
+        WiringFile::Whole(path) | WiringFile::Root(path) => (path, None),
     };
     let settings = tree.join(path);
     let text = std::fs::read_to_string(&settings).with_context(|| {

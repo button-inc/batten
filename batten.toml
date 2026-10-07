@@ -9291,6 +9291,7 @@ documents = [
   ".github/hooks/batten.json",
   ".gemini/settings.json",
   ".codex/hooks.json",
+  ".factory/hooks.json",
 ]
 module = "policy/harness-wiring.rego"
 severity = "deny"
@@ -9325,6 +9326,10 @@ path = ".claude/launcher-settings.json"
 id = "harness-gemini-settings"
 root = "HOME"
 path = ".gemini/settings.json"
+[[rule.external]]
+id = "harness-factory-hooks"
+root = "HOME"
+path = ".factory/hooks.json"
 
 # CLOUD-1247, and the SIBLING of the row above rather than a duplicate of it.
 # `harness-wiring` reads the MERGED settings under `$HOME` and decides which
