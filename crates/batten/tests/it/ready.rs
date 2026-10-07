@@ -1943,6 +1943,31 @@ fn the_section_six_declaration_is_emitted_as_one_token() {
     );
 }
 
+// A COMMIT TYPE NAMED AFTER THE ANSWER IS PROSE, not the declaration
+// (CLOUD-2128). Two live rows (CLOUD-1055, CLOUD-368) answer `none` and then
+// explain a correction "from `docs`"; reading that later token as the type made
+// a row that lands nothing read as one landing a `docs` commit, and the board
+// check refused it at In Review for carrying no PR.
+#[test]
+fn a_type_named_after_a_none_answer_does_not_make_the_row_land_a_commit() {
+    let dir = pre_release("ready-none-then-prose");
+    let output = lint(
+        &dir,
+        &payload(
+            &block(
+                "* **Commit / bump (§6).** `none` — **no bump**. No commit lands \
+                 (corrected from `docs`: a type is a claim about a commit).",
+            ),
+            &[],
+        ),
+    );
+    assert!(
+        stdout(&output).lines().any(|line| line == "bump none"),
+        "a type after the answer is prose: {}",
+        stdout(&output)
+    );
+}
+
 #[test]
 fn every_non_releasing_type_lands_a_commit_and_says_so() {
     // THE PAIR IS THE DISCRIMINATOR, never either half alone (CLOUD-1092). A

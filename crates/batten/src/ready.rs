@@ -1112,6 +1112,7 @@ pub fn lint(grammar: &Grammar, payload: &Payload, root: &Path) -> Result<Report>
 // failure CLOUD-842 reversed: the five landed rows were silent, not warned.
 //MUTANT break-read-off-the-whole-line|s@^    let breaking = type_token.contains('!')@    let breaking = bump_line.contains('!')@|the_break_marker_is_read_off_the_type_token_and_never_off_the_line
 //MUTANT break-claim-refusal-dropped|s@^    if grammar.break_denial.is_match(bump_line) .*{$@    if false {@|a_negative_break_claim_must_name_the_surface_it_denies_about
+//MUTANT type-read-after-answer|s@^        .find(\x7cm\x7c m.start() < answer_at)$@        .next()@|a_type_named_after_a_none_answer_does_not_make_the_row_land_a_commit
 /// §6: the commit type and the bump must agree, and a break denial must name a
 /// surface.
 fn check_bump(
@@ -1129,9 +1130,18 @@ fn check_bump(
     // demanding one would break linting a payload from outside a checkout.
     let version = workspace_version(root)?;
 
+    // THE TYPE IS WHAT PRECEDES THE ANSWER (CLOUD-2128). A type token after the
+    // bump token is the row's prose about it: CLOUD-1055 and CLOUD-368 answer
+    // `none` and then explain a correction "from `docs`", and reading that later
+    // token made a row that lands nothing read as one landing a `docs` commit.
+    let answer_at = grammar
+        .bump_token
+        .find(bump_line)
+        .map_or(bump_line.len(), |m| m.start());
     let type_token = grammar
         .commit_type
-        .find(bump_line)
+        .find_iter(bump_line)
+        .find(|m| m.start() < answer_at)
         .map(|m| m.as_str().to_owned())
         .unwrap_or_default();
     let scope = compiled(SCOPE_SUFFIX);

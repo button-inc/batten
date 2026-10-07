@@ -1031,6 +1031,20 @@ mod graph_check {
         assert!(!all.contains("CLOUD-1 status-claim-unjudgeable"), "{all}");
     }
 
+    // AN EMPTY ALPHABET SCANS NO CLAIM (CLOUD-2128). A set whose every status is
+    // empty composes its column alternation from nothing, which matches the empty
+    // string, so a bare key mention read as a claim naming the column "" and a
+    // key outside the set was refused as unjudgeable with no claim behind it.
+    #[test]
+    fn a_set_with_no_status_scans_a_bare_mention_as_no_claim() {
+        let (dir, config) = repo("empty-alphabet");
+        let mut board = Board::default();
+        board.issue("CLOUD-1", "", "", "", &[]);
+        board.describe("CLOUD-1", "Splits the representation CLOUD-99 introduced.");
+        let output = check(&dir, &config, &board);
+        assert!(!text(&output).contains("status-claim"), "{}", text(&output));
+    }
+
     #[test]
     fn a_quoted_or_backticked_citation_of_a_claim_is_not_a_claim() {
         let (dir, config) = repo("quoted");

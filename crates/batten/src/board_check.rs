@@ -824,6 +824,7 @@ pub fn read_graph(
 /// column nobody occupies, is the preset's to decide. A scan whose expressions
 /// will not compose extracted nothing, which is not the same as finding nothing,
 /// so it says `scan broken`.
+//MUTANT empty-column-claims|s@^                if !cited.is_empty() \&\& !claimed.is_empty() {$@                if !cited.is_empty() {@|a_set_with_no_status_scans_a_bare_mention_as_no_claim
 fn read_claims(
     rows: &[Row<'_>],
     grammar: &Grammar,
@@ -843,7 +844,10 @@ fn read_claims(
             for found in scan.claim.captures_iter(line) {
                 let cited = found.name("key").map_or("", |m| m.as_str());
                 let claimed = found.name("column").map_or("", |m| m.as_str());
-                if !cited.is_empty() {
+                // AN EMPTY COLUMN IS NO CLAIM (CLOUD-2128). A set with no status
+                // composes an empty alternation, which matches the empty string,
+                // so every bare key mention would read as a claim naming "".
+                if !cited.is_empty() && !claimed.is_empty() {
                     lines.push(format!(
                         "claim\t{}\t{}\t{}",
                         field(&row.id),
