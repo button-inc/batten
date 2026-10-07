@@ -1,4 +1,4 @@
 argv: check
 exit: 2
 stdout:
-n.md:1 dangling unresolved
+n.md:1 rule 'dangling' unresolved

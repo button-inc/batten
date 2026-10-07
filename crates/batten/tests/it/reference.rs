@@ -73,7 +73,10 @@ fn an_absent_key_is_refused_at_its_line() {
         ],
     );
     assert_eq!(code, Some(2), "{out}");
-    assert!(out.contains("notes/n.md:2 dangling unresolved"), "{out}");
+    assert!(
+        out.contains("notes/n.md:2 rule 'dangling' unresolved"),
+        "{out}"
+    );
     assert!(
         !out.contains("key-missing"),
         "pointer-only, never the token: {out}"
@@ -115,7 +118,7 @@ fn an_unescaped_pipe_widens_the_row_and_an_escaped_one_is_quiet() {
     );
     assert_eq!(code, Some(2), "{out}");
     assert!(
-        out.contains("REGISTER.md:3 dangling register-row-width"),
+        out.contains("REGISTER.md:3 rule 'dangling' register-row-width"),
         "{out}"
     );
 
@@ -160,7 +163,7 @@ register = "keyset"
     );
     assert_eq!(code, Some(2), "{out}");
     assert!(
-        out.contains("entries/e.md:1 group-unknown unresolved"),
+        out.contains("entries/e.md:1 rule 'group-unknown' unresolved"),
         "{out}"
     );
 }
@@ -199,7 +202,7 @@ split = ";"
     );
     assert_eq!(code, Some(2), "{out}");
     assert!(
-        out.contains("groups.md:3 member-unknown unresolved"),
+        out.contains("groups.md:3 rule 'member-unknown' unresolved"),
         "{out}"
     );
 }
@@ -246,7 +249,7 @@ relative_to = "citer"
     );
     assert_eq!(code, Some(2), "{out}");
     assert!(
-        out.contains("out/REGISTER.md:5 file-missing unresolved"),
+        out.contains("out/REGISTER.md:5 rule 'file-missing' unresolved"),
         "{out}"
     );
     assert!(
@@ -286,7 +289,7 @@ inverse = true
     );
     assert_eq!(code, Some(2), "{out}");
     assert!(
-        out.contains("REGISTER.md:4 roster-phantom uncited"),
+        out.contains("REGISTER.md:4 rule 'roster-phantom' uncited"),
         "{out}"
     );
 }
@@ -344,7 +347,10 @@ fn a_document_witness_admits_unless_its_only_witness_is_refused() {
         ],
     );
     assert_eq!(code, Some(2), "{out}");
-    assert!(out.contains("middle/r.md:1 unwitness unresolved"), "{out}");
+    assert!(
+        out.contains("middle/r.md:1 rule 'unwitness' unresolved"),
+        "{out}"
+    );
 }
 
 #[test]
@@ -371,7 +377,7 @@ regex = '^workspaces/([^/]+)/'
     );
     assert_eq!(code, Some(2), "{out}");
     assert!(
-        out.contains("workspaces/a/middle/r.md:1 unwitness unresolved"),
+        out.contains("workspaces/a/middle/r.md:1 rule 'unwitness' unresolved"),
         "{out}"
     );
 }
@@ -420,7 +426,7 @@ fn an_unparseable_witness_is_could_not_look() {
     );
     assert_eq!(code, Some(2), "{out}");
     assert!(
-        out.contains("witness/1.md:1 unwitness could-not-look"),
+        out.contains("witness/1.md:1 rule 'unwitness' could-not-look"),
         "{out}"
     );
 }
