@@ -9734,8 +9734,21 @@ fn lease_wait_bound() -> u32 {
         .ok()
         .and_then(|raw| raw.trim().parse::<u32>().ok())
         .filter(|waits| *waits > 0)
-        .unwrap_or(60)
+        .unwrap_or(LEASE_WAIT_DEFAULT)
 }
+
+/// The lease waits a landing absorbs when `LAND_MAX_LEASE_WAITS` is unset
+/// (CLOUD-2132).
+///
+/// **BOUNDED BY THE HOST, NOT ONLY BY PATIENCE.** Each wait is one lease TTL
+/// (`lease_wait_pause`), so this count times the shipped TTL is the free
+/// waiting one run may do. Sixty waits at 120s was 7200s, which is a hosted
+/// harness's whole background lifetime: measured on #1128, a contended trunk
+/// had the run killed mid-wait, with no lap record and no "run this again"
+/// line, which is worse than the stop the refund replaced. Twenty keeps the
+/// waits under an hour, leaving the rest of a lifetime to the paid laps.
+//MUTANT lease-wait-default-spans-two-hours|s@^const LEASE_WAIT_DEFAULT: u32 = 20;$@const LEASE_WAIT_DEFAULT: u32 = 60;@|the_default_lease_waits_fit_inside_an_hour
+const LEASE_WAIT_DEFAULT: u32 = 20;
 
 /// Pause a pass lost to the landing lease before the next one (CLOUD-1700).
 ///
@@ -10219,7 +10232,8 @@ fn run_land_laps(run: Laps<'_>, out: &mut dyn Write, err: &mut dyn Write) -> Res
     // What a refund still must not become is a busy-poll of the lease, so a pass
     // lost to the lease waits one lease TTL before the next (`lease_wait_pause`):
     // the holder renews every beat, so a TTL is the longest a re-observation can
-    // usefully wait, and the default sixty waits then span about two hours.
+    // usefully wait, and the default twenty waits then span about forty minutes
+    // (`LEASE_WAIT_DEFAULT`), inside one background lifetime (CLOUD-2132).
     // `LAND_MAX_LEASE_WAITS`, `LAND_MAX_GATE_RECLAIMS` and
     // `LAND_MAX_SPECULATIVE_REFUSALS` bound the refunded passes; `budget` bounds
     // the charged ones.
@@ -24163,6 +24177,14 @@ fn run_generate(command: &GenerateCommand, out: &mut dyn Write) -> Result<ExitCo
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// The default lease waits, at the shipped TTL, fit inside an hour, so the
+    /// free waiting cannot outlast a hosted background lifetime (CLOUD-2132).
+    #[test]
+    fn the_default_lease_waits_fit_inside_an_hour() {
+        let waited = i64::from(LEASE_WAIT_DEFAULT) * lease::Terms::default().ttl;
+        assert!(waited <= 3600, "{waited}s of free lease waiting by default");
+    }
 
     /// CLOUD-311 §2(3): a lost key reaches the EXIT CODE, not just a log line.
     ///
