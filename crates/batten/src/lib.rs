@@ -8237,6 +8237,9 @@ fn run_override_spend(
     }
 }
 
+//MUTANT-SUITE crates/batten/tests/it/admission.rs
+//MUTANT fingerprint-unaddressed|s@path == subject || fingerprint == subject@path == subject@|twin_findings_on_one_path_are_each_admitted_by_fingerprint
+//MUTANT fingerprint-binds|s@Ok((admission::Anchor::Finding(fingerprint), path))@Ok((admission::Anchor::Finding(fingerprint), subject.to_owned()))@|twin_findings_on_one_path_are_each_admitted_by_fingerprint
 /// The [`admission::Anchor`] a `(rule, subject)` pair is answered about
 /// (CLOUD-1125).
 ///
@@ -8290,15 +8293,18 @@ fn admission_anchor(
     config: &resolve::Resolved,
     rule: &str,
     subject: &str,
-) -> Result<admission::Anchor> {
+) -> Result<(admission::Anchor, String)> {
     // The HEAD is READ, never defaulted. `unwrap_or_default()` here would bind
     // `call:` on a repository this cannot resolve, so two different
     // could-not-look states would share one address and an admission minted in
     // either would spend against the other.
-    let head = || -> Result<admission::Anchor> {
-        Ok(admission::Anchor::Call {
-            head: git::head_commit(root)?,
-        })
+    let head = || -> Result<(admission::Anchor, String)> {
+        Ok((
+            admission::Anchor::Call {
+                head: git::head_commit(root)?,
+            },
+            subject.to_owned(),
+        ))
     };
     // `RunOverSelection`, never `Run`: this is a NARROWED read — one rule, one
     // subject — and registry equality's exhausted half is a property of the whole
@@ -8448,16 +8454,31 @@ fn admission_anchor(
     ) else {
         return head();
     };
-    let mut matched: Vec<String> = scan
+    // THE PATH OR THE FINDING'S OWN FINGERPRINT (CLOUD-2126). A pointer is the
+    // first path-bearing subject, so two findings of one rule over one path —
+    // `issue file same` for two rows naming the same file — print the same
+    // pointer and differ only in identity. Matching the path alone left that
+    // pair with no admission route at all; the fingerprint is the pointer that
+    // tells them apart, and the refusal below names each one.
+    //
+    // THE FINGERPRINT SELECTS, THE PATH BINDS. `apply_admissions` looks an
+    // admission up by the finding's PATH, so a binding whose subject were the
+    // fingerprint would be answered, spent and queried by nothing — the defect
+    // the ambiguity arm exists to refuse. The path returned is what binds.
+    let mut matched: Vec<(String, String)> = scan
         .findings
         .iter()
-        .filter(|finding| finding.rule == rule && finding.path == subject)
-        .map(|finding| finding.identity.fingerprint.to_hex())
+        .filter(|finding| finding.rule == rule)
+        .map(|finding| (finding.path.clone(), finding.identity.fingerprint.to_hex()))
+        .filter(|(path, fingerprint)| path == subject || fingerprint == subject)
         .collect();
     matched.sort_unstable();
     matched.dedup();
     match matched.len() {
-        1 => Ok(admission::Anchor::Finding(matched.remove(0))),
+        1 => {
+            let (path, fingerprint) = matched.remove(0);
+            Ok((admission::Anchor::Finding(fingerprint), path))
+        }
         // ZERO SPLITS IN TWO, AND THE SPLIT IS CLOUD-1551 (with CLOUD-1374 and
         // CLOUD-1378 folded into it). One arm is the honest fallback this
         // always was; the other is the ambiguity arm's defect wearing a smaller
@@ -8516,9 +8537,17 @@ fn admission_anchor(
         // `apply_admissions` looks up a `Finding` anchor, so a `Call` one stored
         // for a tree finding is queried by nothing. A refusal that says why beats
         // an override that appears to work.
+        // AND IT NAMES THE WAY THROUGH (CLOUD-2126): each candidate's fingerprint,
+        // which `--subject` accepts, so the refusal is a route rather than a wall.
         count => Err(UsageError::raise(format!(
             "{count} findings for rule `{rule}` name subject `{subject}`, so the pair does not \
-             address one finding and an admission bound to it would suppress none of them"
+             address one finding and an admission bound to it would suppress none of them; \
+             name one by its fingerprint as the subject: {}",
+            matched
+                .iter()
+                .map(|(_, fingerprint)| fingerprint.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
         ))),
     }
 }
@@ -8616,7 +8645,9 @@ fn run_override_request(
     //
     // The scan this pays for is the narrowed one (CLOUD-1571), so the
     // questions-only path costs one rule over one subject rather than the tree.
-    let anchor = admission_anchor(root, &config, rule, subject)?;
+    // A fingerprint subject selects one finding; its PATH is what binds.
+    let (anchor, bound) = admission_anchor(root, &config, rule, subject)?;
+    let subject = bound.as_str();
 
     let mut raw = String::new();
     if std::io::stdin().read_to_string(&mut raw).is_err() {

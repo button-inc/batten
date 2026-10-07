@@ -1422,6 +1422,114 @@ fn a_mint_addressing_no_finding_of_a_rule_that_fired_refuses_rather_than_binding
     );
 }
 
+/// Two findings over ONE path, told apart only by a second subject — the shape
+/// `filed-here` raises when two rows name the same file (CLOUD-2126).
+const TWINS: &str = r#"
+package batten.admits
+
+import rego.v1
+
+rules contains "always-refuses"
+
+violation contains {
+	"rule": "always-refuses",
+	"verdict": "always probe probe",
+	"subjects": [{"path": "a.rs"}, {"artifact": row}],
+} if {
+	some row in ["ROW-1", "ROW-2"]
+}
+"#;
+
+/// Request an admission for `subject`; return the run.
+fn request_for(root: &Path, subject: &str) -> std::process::Output {
+    common::run_with_stdin(
+        root,
+        &[
+            "override",
+            "request",
+            "--rule",
+            "always-refuses",
+            "--verdict",
+            "always probe probe",
+            "--subject",
+            subject,
+        ],
+        "precondition=the refusal is the fixture's point\nlost=one twin of two\n\
+         rejected-route=admits fix probe has nothing to change\n",
+    )
+}
+
+#[test]
+fn twin_findings_on_one_path_are_each_admitted_by_fingerprint() {
+    // CLOUD-2126. Matching the path alone refused both twins as ambiguous and
+    // left no route at all; the refusal now names each fingerprint, a
+    // fingerprint selects one finding, and the PATH binds — `apply_admissions`
+    // looks an admission up by the finding's path, so binding the fingerprint
+    // would be spent and queried by nothing.
+    //
+    // Fails by: bind the fingerprint as the subject and the spend below refuses
+    // `mismatch`; drop the fingerprint arm and the second request refuses.
+    let root = admits_fixture_of("twins", TWINS, &["a.rs"]);
+    let refused = request_for(&root, "a.rs");
+    assert_eq!(
+        refused.status.code(),
+        Some(batten::exit::ExitCode::Usage.code()),
+        "the path alone addresses two findings: {}",
+        common::stderr(&refused)
+    );
+    let said = common::stderr(&refused);
+    let fingerprints: Vec<&str> = said
+        .rsplit_once(": ")
+        .map(|(_, listed)| listed.trim().split(", ").collect())
+        .unwrap_or_default();
+    assert_eq!(fingerprints.len(), 2, "the refusal names both: {said}");
+
+    for (spent, fingerprint) in fingerprints.iter().enumerate() {
+        let issued = request_for(&root, fingerprint);
+        let address = String::from_utf8_lossy(&issued.stdout).trim().to_owned();
+        assert_eq!(
+            address.len(),
+            64,
+            "a fingerprint addresses one: {}",
+            common::stderr(&issued)
+        );
+        let spend = common::run(
+            &root,
+            &[
+                "override",
+                "spend",
+                "--admission",
+                &address,
+                "--rule",
+                "always-refuses",
+                "--verdict",
+                "always probe probe",
+                "--subject",
+                "a.rs",
+            ],
+        );
+        assert_eq!(
+            spend.status.code(),
+            Some(batten::exit::ExitCode::Success.code()),
+            "the path is what the admission bound: {}",
+            common::stderr(&spend)
+        );
+        let after = common::run(&root, &["check"]);
+        let expected = if spent == 0 {
+            batten::exit::ExitCode::Violation
+        } else {
+            batten::exit::ExitCode::Success
+        };
+        assert_eq!(
+            after.status.code(),
+            Some(expected.code()),
+            "admission {} of 2 clears exactly its twin: {}",
+            spent + 1,
+            common::stderr(&after)
+        );
+    }
+}
+
 #[test]
 fn a_mint_for_a_rule_that_produced_no_finding_still_falls_back_to_the_call() {
     // THE FAIL-OPEN HALF, and the conjunct the case above does not reach
