@@ -1204,9 +1204,15 @@ fn spawn(
     let waited = wait_bounded(child, bound);
     // A signal outranks the row: the sweep was asked to stop, so it stops, with
     // the signal's own status rather than a verdict on a suite it interrupted.
-    if let Some(signal) = forwarding.finish() {
+    let forwarded = forwarding.finish();
+    // Only unix forwards, so only unix has a signal to re-raise; elsewhere
+    // `finish` answers `None` and there is nothing to do.
+    #[cfg(unix)]
+    if let Some(signal) = forwarded {
         reraise(signal)?;
     }
+    #[cfg(not(unix))]
+    let _ = forwarded;
     let (status, timed_out) =
         waited.with_context(|| format!("mutate: could not wait for {program}"))?;
     // The ONE place a `Ran` may say `timed_out`: `finish` describes a child that
@@ -1323,16 +1329,6 @@ fn reraise(signal: i32) -> Result<()> {
     // return.
     signal_hook::low_level::emulate_default_handler(signal)
         .context("mutate: re-raise the signal the sweep was sent")
-}
-
-/// [`reraise`] where there is no POSIX signal to re-raise.
-#[cfg(not(unix))]
-#[expect(
-    clippy::unnecessary_wraps,
-    reason = "one signature across both platforms; the unix half genuinely fails"
-)]
-const fn reraise(_signal: i32) -> Result<()> {
-    Ok(())
 }
 
 /// Read back what the child wrote and drop the capture.
