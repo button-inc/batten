@@ -64,9 +64,14 @@ fn data_dir(dir: &Path) -> PathBuf {
     dir.with_file_name(name)
 }
 
+/// Run the replay. The outer run's `NEXTEST_PROFILE` is removed: CI names `ci`,
+/// a profile this scratch crate does not declare, so nextest would refuse the
+/// replay before running it. In a real repository the tree carries its own
+/// profiles, which is why the verb passes the variable through and this does not.
 fn replay(dir: &Path, base: &str) -> Output {
     common::batten()
         .state_dir(&data_dir(dir))
+        .env_remove("NEXTEST_PROFILE")
         .args(["test", "replay", "--base", base])
         .current_dir(dir)
         .output()
