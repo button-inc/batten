@@ -1447,17 +1447,17 @@ pub enum WiringCommand {
         /// Decide whether a repair is owed, and remove nothing.
         check: bool,
     },
-    /// Register batten on the session root when a session is rooted above this
-    /// repository (CLOUD-2111).
-    Register {
-        /// Decide whether a registration is owed, and write nothing.
-        check: bool,
-    },
     /// Link this clone's two commit hooks to a hook body the repository checks
     /// in (CLOUD-1991, retiring `[tasks."session:git-hooks"]`).
     Gate {
         /// The hook body, relative to the repository root.
         body: String,
+    },
+    /// Register batten on the session root when a session is rooted above this
+    /// repository (CLOUD-2111). Last, so no existing variant's discriminant moves.
+    Register {
+        /// Decide whether a registration is owed, and write nothing.
+        check: bool,
     },
 }
 
