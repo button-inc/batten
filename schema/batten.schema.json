@@ -3174,6 +3174,11 @@
           "description": "Append a line. The record is a journal of what was seen.",
           "type": "string",
           "const": "append"
+        },
+        {
+          "description": "Remove the record (CLOUD-2083). The call this row selects ENDS what a\nsibling row of the same name recorded: a marker minted when a pull request\nopened is gone once it is closed unmerged, where only the landed path used\nto sweep it. Nothing is written, so the body is rendered only to prove the\nrow's `requires` held.",
+          "type": "string",
+          "const": "clear"
         }
       ]
     },

@@ -2157,20 +2157,32 @@ fn mint_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
         });
         armed && !read
     };
+    // A CLEAR ROW IS ITS OWN KEY, AND NEVER ARMS-ONLY (CLOUD-2083). It shares its
+    // writer's name, so keyed by name alone it would read as the writer — added
+    // never, changed never — and a branch could disarm a refusal unseen. And its
+    // direction is the writer's inverted: removing a marker a deny row reads is
+    // exactly what lowers that bar, so the exemption above cannot apply to it.
+    let key = |mint: &crate::mint::Declared| {
+        if mint.mode == crate::mint::MintMode::Clear {
+            format!("mint[{}:clear]", mint.name)
+        } else {
+            format!("mint[{}]", mint.name)
+        }
+    };
     found.extend(added_entries(
         WeakeningKind::MintAdded,
-        &ids(base.mints.iter().map(|mint| format!("mint[{}]", mint.name))),
+        &ids(base.mints.iter().map(key)),
         &ids(working
             .mints
             .iter()
-            .filter(|mint| !arms_only(&mint.name))
-            .map(|mint| format!("mint[{}]", mint.name))),
+            .filter(|mint| mint.mode == crate::mint::MintMode::Clear || !arms_only(&mint.name))
+            .map(key)),
     ));
     for base_mint in &base.mints {
         if let Some(working_mint) = working
             .mints
             .iter()
-            .find(|candidate| candidate.name == base_mint.name)
+            .find(|candidate| key(candidate) == key(base_mint))
             && working_mint != base_mint
         {
             // Pointer-only (rule 4): the mint's name and two digests, never the
@@ -2178,7 +2190,7 @@ fn mint_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
             // and one side of the comparison is whatever a branch wrote.
             found.push(Weakening {
                 kind: WeakeningKind::MintChanged,
-                key: format!("mint[{}]", base_mint.name),
+                key: key(base_mint),
                 base: column_token(
                     &serde_json::to_value(base_mint).unwrap_or(serde_json::Value::Null),
                 ),

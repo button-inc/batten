@@ -20,9 +20,24 @@ const BRANCH: &str = "claude/one-pr-probe";
 
 const TOOL: &str = "mcp__github__create_pull_request";
 
+/// The `clear` row that frees a branch whose PR closed unmerged (CLOUD-2083).
+///
+/// Carried HERE rather than in the committed config until a released engine
+/// knows `mode = "clear"`: `engine gate` refuses a config the pinned release
+/// cannot load, so the row lands in `batten.toml` only after that release.
+const CLEAR_ROW: &str = "\n[[mint]]\nname = \"pr-open\"\ntool = \"update_pull_request\"\n\
+                         key = \"branch\"\nselects_at = \"state\"\nselects = \"closed\"\n\
+                         requires = [\"url\"]\nmode = \"clear\"\nbody = \"{now} {url}\"\n";
+
 /// This repository's own rows and modules, on [`BRANCH`].
 fn repo(name: &str) -> PathBuf {
-    let staged = Fixture::new(name).config(include_str!("../../../../batten.toml"));
+    repo_with(name, "")
+}
+
+/// [`repo`], with `extra` appended to the committed config.
+fn repo_with(name: &str, extra: &str) -> PathBuf {
+    let config = format!("{}{extra}", include_str!("../../../../batten.toml"));
+    let staged = Fixture::new(name).config(&config);
     let modules = staged.path().join("policy");
     std::fs::create_dir_all(&modules).expect("the fixture's policy directory is creatable");
     let committed = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -100,6 +115,69 @@ fn a_second_pr_while_the_first_is_unlanded_is_refused() {
         head.trim().ends_with("review open twice"),
         "refused by the one-PR row: {text}"
     );
+}
+
+/// The `PostToolUse` of an `update_pull_request` setting `state`, answered.
+fn update_a_pr(dir: &Path, state: &str) {
+    let _ = run_with_stdin(
+        dir,
+        &["adjudicate", "--harness", "exit-code"],
+        &format!(
+            "{{\"hook_event_name\":\"PostToolUse\",\
+             \"tool_name\":\"mcp__github__update_pull_request\",\
+             \"tool_input\":{{\"owner\":\"o\",\"repo\":\"r\",\"pullNumber\":1,\
+             \"state\":\"{state}\"}},\
+             \"tool_response\":{{\"id\":\"1\",\"url\":\"https://github.com/o/r/pull/1\"}}}}"
+        ),
+    );
+}
+
+/// Plant the marker the way an opened PR does.
+fn plant(dir: &Path) {
+    let _ = run_with_stdin(
+        dir,
+        &["adjudicate", "--harness", "exit-code"],
+        &envelope(
+            "PostToolUse",
+            ",\"tool_response\":{\"id\":\"1\",\"url\":\"https://github.com/o/r/pull/1\"}",
+        ),
+    );
+    assert!(marker(dir).exists(), "an opened PR mints the branch marker");
+}
+
+/// A PR CLOSED UNMERGED FREES ITS BRANCH (CLOUD-2083). Before the `clear` row
+/// only landing swept the marker, so a superseded PR left its branch name refused
+/// forever and the marker was deleted by hand.
+///
+/// MUTANT: `clear-writes-nothing` turns the removal into a no-op, and the marker
+/// survives the close.
+#[test]
+fn a_pull_request_closed_unmerged_frees_its_branch_for_the_next_one() {
+    let dir = repo_with("one-pr-closed", CLEAR_ROW);
+    plant(&dir);
+    update_a_pr(&dir, "closed");
+    assert!(!marker(&dir).exists(), "a close clears the marker");
+    let decided = open_a_pr(&dir);
+    assert!(
+        !stderr(&decided).contains("review open twice"),
+        "the branch may open another PR: {}",
+        stderr(&decided)
+    );
+}
+
+/// ANTI-VACUITY for the case above: an update that does not close leaves the
+/// refusal standing, so the `clear` row is not a sweep on every update.
+#[test]
+fn an_update_that_does_not_close_leaves_the_marker() {
+    let dir = repo_with("one-pr-reopened", CLEAR_ROW);
+    plant(&dir);
+    update_a_pr(&dir, "open");
+    assert!(
+        marker(&dir).exists(),
+        "a non-closing update keeps the marker"
+    );
+    let refusal = open_a_pr(&dir);
+    assert_eq!(refusal.status.code(), Some(2), "{}", stderr(&refusal));
 }
 
 /// ANTI-VACUITY: a branch with no open PR is not refused, so the row is not a

@@ -19395,8 +19395,19 @@ fn mint_receipts(
         let written = match mint.mode {
             crate::mint::MintMode::Replace => crate::durable::replace(&path, &record),
             crate::mint::MintMode::Append => crate::durable::append(&path, &record),
+            crate::mint::MintMode::Clear => clear_minted(&path),
         };
         let _ = written;
+    }
+}
+
+/// Remove a minted record (CLOUD-2083). A record already gone is the state the
+/// row asks for, so it is not an error.
+//MUTANT clear-writes-nothing|s@^    match std::fs::remove_file(path) {$@    match Ok::<(), std::io::Error>(()) {@|a_pull_request_closed_unmerged_frees_its_branch_for_the_next_one
+fn clear_minted(path: &Path) -> std::io::Result<()> {
+    match std::fs::remove_file(path) {
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error),
+        _ => Ok(()),
     }
 }
 

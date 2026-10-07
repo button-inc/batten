@@ -102,6 +102,12 @@ pub enum MintMode {
     Replace,
     /// Append a line. The record is a journal of what was seen.
     Append,
+    /// Remove the record (CLOUD-2083). The call this row selects ENDS what a
+    /// sibling row of the same name recorded: a marker minted when a pull request
+    /// opened is gone once it is closed unmerged, where only the landed path used
+    /// to sweep it. Nothing is written, so the body is rendered only to prove the
+    /// row's `requires` held.
+    Clear,
 }
 
 /// One receipt this repository mints from a tool result.
@@ -604,7 +610,7 @@ pub fn render(
 /// Returns a [`crate::error::UsageError`] (-> exit `1`) naming the offending row.
 /// Pointer-only: the mint's NAME and the malformed placeholder, never a value.
 pub fn validate(mints: &[Declared]) -> anyhow::Result<()> {
-    let mut seen: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+    let mut seen: std::collections::BTreeSet<(&str, bool)> = std::collections::BTreeSet::new();
     for mint in mints {
         if mint.name.trim().is_empty() {
             return Err(crate::error::UsageError::raise(
@@ -710,13 +716,31 @@ pub fn validate(mints: &[Declared]) -> anyhow::Result<()> {
                 mint.name
             )));
         }
-        if !seen.insert(mint.name.as_str()) {
+        // ONE WRITER AND AT MOST ONE CLEAR PER NAME (CLOUD-2083). A `clear` row
+        // shares its writer's name because it is the same record's other end, so
+        // the uniqueness is per mode class: two writers would still let the
+        // sorted-later one silently decide the record.
+        if !seen.insert((mint.name.as_str(), mint.mode == MintMode::Clear)) {
             return Err(crate::error::UsageError::raise(format!(
                 "`[[mint]]` `{}` is declared twice; two rows writing one receipt name would let \
                  the sorted-later one silently decide the record",
                 mint.name
             )));
         }
+    }
+    // A CLEAR WITH NO WRITER removes a record nothing makes, so it loads clean and
+    // does nothing: the inert-coverage shape this function exists to refuse.
+    if let Some(orphan) = mints.iter().find(|clear| {
+        clear.mode == MintMode::Clear
+            && !mints
+                .iter()
+                .any(|writer| writer.mode != MintMode::Clear && writer.name == clear.name)
+    }) {
+        return Err(crate::error::UsageError::raise(format!(
+            "`[[mint]]` `{}` is `mode = \"clear\"` and no row of that name writes the record, \
+             so it would clear nothing",
+            orphan.name
+        )));
     }
     Ok(())
 }
@@ -802,6 +826,29 @@ mod tests {
         .expect("a landed row's shape loads");
         assert!(selects(&row, &serde_json::json!({"anything": 1})));
         assert!(selects(&row, &serde_json::Value::Null));
+    }
+
+    /// A `clear` row shares its writer's name and loads; a second writer, a second
+    /// clear, and a clear with no writer are each refused (CLOUD-2083).
+    #[test]
+    fn a_clear_row_loads_only_beside_the_one_writer_it_ends() {
+        let row = |mode: &str| -> Declared {
+            serde_json::from_value(serde_json::json!({
+                "name": "pr-open", "tool": "T", "key": "branch",
+                "mode": mode, "body": "{now}",
+            }))
+            .expect("shape loads")
+        };
+        assert!(validate(&[row("replace"), row("clear")]).is_ok());
+        assert!(
+            validate(&[row("replace"), row("replace")]).is_err(),
+            "two writers"
+        );
+        assert!(
+            validate(&[row("replace"), row("clear"), row("clear")]).is_err(),
+            "two clears"
+        );
+        assert!(validate(&[row("clear")]).is_err(), "a clear with no writer");
     }
 
     /// Each new load-time refusal fires, and a well-formed row still loads.
