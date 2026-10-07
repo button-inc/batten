@@ -533,9 +533,7 @@ pub fn register(root: &Path, repo: &Path, check: bool) -> Result<Registered> {
         authoritative: crate::environment::disposable(),
         ..Registered::default()
     };
-    let (Ok(root), Ok(repo)) = (root.canonicalize(), repo.canonicalize()) else {
-        return Ok(out);
-    };
+    let (root, repo) = (git::canonical(root), git::canonical(repo));
     out.above = repo != root && repo.starts_with(&root);
     let harness = hook::Harness::ClaudeCode;
     let (true, Some(wiring)) = (out.above, harness.wiring()) else {

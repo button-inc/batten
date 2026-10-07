@@ -1357,6 +1357,7 @@ mod tests {
             // the repository's `[[startup]]` row already authorises it to repair.
             "wiring gate".to_owned(),
             "wiring reclaim".to_owned(),
+            "wiring register".to_owned(),
             "worktree".to_owned(),
             "worktree status".to_owned(),
         ]

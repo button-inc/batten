@@ -2210,6 +2210,14 @@ const CENSUS: &[Verb] = &[
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
+    // The session-root registration (CLOUD-2111). Driven with `--check`, which
+    // writes nothing; what it prints is a harness and an event name per line.
+    Verb {
+        path: "wiring register",
+        args: &["--check"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
     // The clone's commit hooks (CLOUD-1991). Driven with a body the corpus does
     // not carry, which is the invocation that writes nothing: linking one would
     // rewrite the fixture's own hooks. The refusal names the caller's operand

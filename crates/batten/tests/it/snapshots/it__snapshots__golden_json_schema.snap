@@ -4808,6 +4808,24 @@ expression: stdout_of(&output)
             }
           ],
           "subcommands": []
+        },
+        {
+          "path": "wiring register",
+          "id": "wiring.register",
+          "about": "Register batten on the session root when a session is rooted above this repository",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "check",
+              "short": null,
+              "long": "check",
+              "takes_value": false,
+              "positional": false,
+              "help": "Exit non-zero if a registration is owed, and write nothing"
+            }
+          ],
+          "subcommands": []
         }
       ]
     },
