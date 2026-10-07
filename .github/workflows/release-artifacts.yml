@@ -58,8 +58,12 @@ name: release-artifacts
 # below to recover, and see the same note in release-plz.yml.
 
 on:
+  # `created`, not `published` (CLOUD-2121): release-plz creates the release as a
+  # DRAFT, and a draft fires `created` and never `published`. Publishing is this
+  # workflow's last job, once every asset is uploaded, so a release is never
+  # visible without its binaries.
   release:
-    types: [published]
+    types: [created]
   # Recovery: re-run against an existing tag (a dropped trigger, a failed matrix
   # leg). Uploading is idempotent — `gh release upload --clobber` replaces.
   workflow_dispatch:
@@ -88,6 +92,7 @@ env:
 jobs:
   dist:
     name: dist (${{ matrix.target }})
+    if: github.event_name != 'release' || github.event.release.draft
     runs-on: ubuntu-latest
     timeout-minutes: 30 # budget: grandfathered measured=2026-08-10
     permissions:
@@ -320,6 +325,7 @@ jobs:
   # even if that gate were bypassed.
   schema:
     name: schema
+    if: github.event_name != 'release' || github.event.release.draft
     runs-on: ubuntu-latest
     timeout-minutes: 15 # budget: grandfathered measured=2026-08-10
     permissions:
@@ -440,3 +446,26 @@ jobs:
           TAG: ${{ inputs.tag || github.event.release.tag_name }}
           SUMS: ${{ steps.checksums.outputs.sums }}
         run: mise run batten -- ci step --arg-env TAG --arg-env SUMS -- gh release upload --clobber
+
+  # PUBLISH LAST (CLOUD-2121). release-plz creates the release as a draft, so it
+  # is invisible to installers until this runs, and this runs only once every
+  # artifact and the checksum manifest are uploaded. A workflow_dispatch re-run
+  # over an already-published tag makes this a no-op.
+  publish:
+    name: publish
+    needs: [checksums]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5 # budget: measured=2026-10-07
+    permissions:
+      contents: write # take the release out of draft
+    steps:
+      - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5 (CLOUD-404 retry fix, now a release)
+        with:
+          version: 2026.9.1
+          cache: false
+          install_args: aqua:cli/cli
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag || github.event.release.tag_name }}
+        run: mise exec -- gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false

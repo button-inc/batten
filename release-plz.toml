@@ -8,6 +8,13 @@
 [workspace]
 publish = false           # do not publish to any cargo registry
 git_release_enable = true # create a GitHub release when the version changes
+# A DRAFT UNTIL ITS ARTIFACTS EXIST (CLOUD-2121). Published here, v0.0.205 was a
+# public release with no binaries from 21:45:29 to 22:01:28Z while `main` already
+# pinned it, so every install and pin check in that window failed.
+# `release-artifacts.yml` builds on the draft's `created` event and publishes it as
+# its last job; an installer reading a draft-only tag falls back to the latest
+# published release.
+git_release_draft = true
 git_tag_enable = true
 # THE BASELINE IS THE LATEST RELEASE TAG, read by release-plz itself (CLOUD-1991).
 # With no registry to download the last release from, release-plz reports "next
