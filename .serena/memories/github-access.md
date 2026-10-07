@@ -229,25 +229,23 @@ read `GITHUB_PERSONAL_ACCESS_TOKEN`/`MISE_GITHUB_TOKEN`, the container injects
 `NO_PROXY` half was correct all along. `BATTEN_GITHUB_TOKEN` is now in all three
 chains, and an explicit `MISE_GITHUB_TOKEN` (CI's) is still left alone.
 
-**The chain only helps if the environment injects the name.** Measured
-2026-10-07: the wrapper read `BATTEN_GITHUB_TOKEN`, but the container had
-neither it nor `MISE_GITHUB_TOKEN` set (`${VAR:+SET}` empty for both), so mise
-fell through to the `proxy-` placeholder and 401'd (`cargo-llvm-cov` install,
-then `toolchain-is-provisioned failed`). A PAT is NOT required to get
-past it. With the placeholder removed (`env -u GITHUB_TOKEN`), mise goes
-anonymous, which authenticates fine but shares 60/hr per egress IP. That
-container's IP was already at 0/60 (403 `rate limit exceeded`, `github auth:
-no`). Release ASSETS (`github.com/<o>/<r>/releases/download/<tag>/…`) are not
-API calls and downloaded fine with no token. So a missing PAT costs only the
-API's version resolution, never the binary. Check presence FIRST, before
-diagnosing the chain.
+**NO PAT IS A SUPPORTED STATE, AND THE PROXY IS ITS ROUTE (CLOUD-2122).**
+Measured 2026-10-07 with neither `BATTEN_GITHUB_TOKEN` nor any PAT injected:
+from the unfenced shell, `batten doctor forge` passed every probe as
+`wenzowski` — the proxy's own credential — and `record forge` exited 0; inside
+the provisioned wrapper the same calls 403'd and mise 401'd. The fence
+(`NO_PROXY` rows) was applied unconditionally while `mise.toml [env]`'s copy
+already fenced only when a real credential existed. The fix makes a
+`when_trust_names` list row a REMOVAL that owes a live credential, like
+`unset`. So: PAT present → fence + PAT; none → stay proxied, keep the marker.
+Before diagnosing anything: `${BATTEN_GITHUB_TOKEN:+SET}`, then
+`batten doctor forge` from the plain shell.
 
 **NOTHING VERSION-SHAPED NEEDS A TOKEN OR THE REST API.** Latest release /
 outdated-dep questions answer over routes with no auth and no API limit:
 `git ls-remote --tags https://github.com/<o>/<r>` (every tag),
 `https://github.com/<o>/<r>/releases/latest` (302 to the newest tag), and
-`releases/download/<tag>/<asset>` for the binary. Reach for these before
-concluding a PAT is "needed". The defect is the wrapper forwarding a `proxy-`
+`releases/download/<tag>/<asset>` for the binary. The defect is the wrapper forwarding a `proxy-`
 placeholder instead of dropping it.
 
 **A `[[provision.env]]` EDIT IS INERT ON A WARM CONTAINER** (CLOUD-1502).

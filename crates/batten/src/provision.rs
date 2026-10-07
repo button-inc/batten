@@ -1585,7 +1585,7 @@ fn resolved_env(rules: &[ProvisionEnv]) -> Vec<(String, EnvAction)> {
     // removal, which is exactly the state a rule set with no removals is in.
     let credential = if rules
         .iter()
-        .any(|rule| rule.unset || rule.reject_prefix.is_some())
+        .any(|rule| rule.unset || rule.reject_prefix.is_some() || bypasses(rule))
     {
         credential_health()
     } else {
@@ -1595,9 +1595,16 @@ fn resolved_env(rules: &[ProvisionEnv]) -> Vec<(String, EnvAction)> {
     // credentials, so the type starts at the boundary rather than being put on
     // afterwards — a value that is a `String` for three lines is a value three
     // lines can print.
-    resolved_env_from(rules, credential, &|name| {
+    resolved_env_from(rules, credential, &trust_names, &|name| {
         std::env::var(name).ok().map(Secret::new)
     })
+}
+
+/// Whether `rule` routes traffic around the host's proxy: a list row scoped to
+/// an interception authority (`when_trust_names` is what marks a bypass, per
+/// its own doc). Such a row is a removal and owes a proven credential.
+fn bypasses(rule: &ProvisionEnv) -> bool {
+    !rule.prepend_list.is_empty() && rule.when_trust_names.is_some()
 }
 
 /// [`resolved_env`] over a supplied lookup.
@@ -1610,6 +1617,7 @@ fn resolved_env(rules: &[ProvisionEnv]) -> Vec<(String, EnvAction)> {
 fn resolved_env_from(
     rules: &[ProvisionEnv],
     credential: Credential,
+    trusted: &dyn Fn(&str) -> bool,
     lookup: &dyn Fn(&str) -> Option<Secret>,
 ) -> Vec<(String, EnvAction)> {
     // EVERY REMOVAL IS CONDITIONAL ON A PROVEN REPLACEMENT. With an unusable
@@ -1620,7 +1628,7 @@ fn resolved_env_from(
     let removals_allowed = credential == Credential::Live;
     rules
         .iter()
-        .filter(|rule| rule.when_trust_names.as_deref().is_none_or(trust_names))
+        .filter(|rule| rule.when_trust_names.as_deref().is_none_or(trusted))
         .filter_map(|rule| {
             if rule.unset {
                 // Skipped rather than inverted when the credential is unusable:
@@ -1630,14 +1638,16 @@ fn resolved_env_from(
                 return removals_allowed.then(|| (rule.name.clone(), EnvAction::Unset));
             }
             let value = if rule.prepend_list.is_empty() {
-                // `reject_prefix` applies WHATEVER the credential's health
-                // (CLOUD-2122). Gating it on `removals_allowed` kept the marker
-                // when no PAT was injected, on the theory that the proxy
-                // substitutes it — but the fence rows send this traffic
-                // DIRECT, where a marker is only ever `Bad credentials`, while
-                // anonymous resolves. A row scoped by `when_trust_names` to the
-                // fence's own condition leaves a genuinely proxied host alone.
-                let reject = rule.reject_prefix.as_deref();
+                // `reject_prefix` is ignored outright when the credential is
+                // unusable, which is what makes the placeholder WIN there. It
+                // is a marker rather than a credential, and proxied it is
+                // substituted for one that works — so it beats an empty
+                // variable, and this is the arm that keeps it. That premise
+                // holds only because a bypass row is ALSO withheld then
+                // (CLOUD-2122): unfenced, the marker never goes direct.
+                let reject = removals_allowed
+                    .then_some(rule.reject_prefix.as_deref())
+                    .flatten();
                 // FIRST SET, AND SELECTION NEVER PROBES. Written first as
                 // "first USABLE" — a per-candidate probe here — and that was
                 // wrong twice over. It is a SECOND AUTHORITY over the question
@@ -1671,6 +1681,16 @@ fn resolved_env_from(
                     return carries_marker.then(|| (rule.name.clone(), EnvAction::Unset));
                 };
                 value
+            } else if bypasses(rule) && !removals_allowed {
+                // A BYPASS IS A REMOVAL, ONE HOST AT A TIME (CLOUD-2122). A
+                // `NO_PROXY` entry scoped to the interceptor takes those hosts
+                // off the proxy exactly as the `unset` arm takes all of them,
+                // so it owes the same proven replacement. Fenced with none, the
+                // forge sees an anonymous or placeholder call and refuses it;
+                // proxied, the host's own credential answers. Measured
+                // 2026-10-07 with no PAT injected: `record forge` 403 and
+                // `land` 403 inside the wrapper, both 200 from the shell.
+                return None;
             } else {
                 // A prepend row is a LIST row — `NO_PROXY` and `PATH` — and its
                 // current value has to be read to be extended. `expose` here is
@@ -2226,6 +2246,7 @@ mod tests {
         let got = resolved_env_from(
             &[credential_row("PROBE_TOKEN")],
             Credential::Live,
+            &|_| true,
             &env_of(&[("BATTEN_TEST_PAT", "ghp_real")]),
         );
         assert_eq!(
@@ -2242,6 +2263,7 @@ mod tests {
         let got = resolved_env_from(
             &[credential_row("PROBE_TOKEN")],
             Credential::Live,
+            &|_| true,
             &env_of(&[
                 ("BATTEN_TEST_PAT", "ghp_real"),
                 ("PROBE_TOKEN", "proxy-injected"),
@@ -2265,6 +2287,7 @@ mod tests {
         let got = resolved_env_from(
             &[credential_row("PROBE_TOKEN")],
             Credential::Live,
+            &|_| true,
             &env_of(&[("PROBE_TOKEN", "proxy-injected")]),
         );
         assert_eq!(got, vec![("PROBE_TOKEN".to_owned(), EnvAction::Unset)]);
@@ -2277,6 +2300,7 @@ mod tests {
         let got = resolved_env_from(
             &[credential_row("PROBE_TOKEN")],
             Credential::Live,
+            &|_| true,
             &env_of(&[("PROBE_TOKEN", "ghp_somebody_elses")]),
         );
         assert_eq!(
@@ -2288,19 +2312,72 @@ mod tests {
         );
     }
 
-    /// NO PAT IS NOT A REASON TO KEEP THE MARKER (CLOUD-2122). Fenced, the
-    /// marker is sent direct and refused; cleared, the tool goes anonymous.
+    /// EVEN A PLACEHOLDER BEATS NOTHING. With no usable credential the marker is
+    /// preferred: proxied it is substituted for one that works, so clearing it
+    /// strands the session where keeping it merely scopes it.
     #[test]
-    fn an_unusable_credential_still_drops_the_placeholder() {
+    fn an_unusable_credential_keeps_the_placeholder() {
         let got = resolved_env_from(
             &[credential_row("PROBE_TOKEN")],
             Credential::Unusable,
+            &|_| true,
             &env_of(&[("PROBE_TOKEN", "proxy-injected")]),
         );
         assert_eq!(
             got,
-            vec![("PROBE_TOKEN".to_owned(), EnvAction::Unset)],
-            "a marker is never a credential on the fenced route"
+            vec![(
+                "PROBE_TOKEN".to_owned(),
+                EnvAction::Set(Secret::new("proxy-injected".to_owned()))
+            )],
+            "a marker beats an empty variable when nothing replaces it"
+        );
+    }
+
+    /// A row that prepends `hosts` to `name`, scoped to an interceptor.
+    fn bypass_row(name: &str) -> ProvisionEnv {
+        ProvisionEnv {
+            name: name.to_owned(),
+            prepend_list: vec!["forge.example".to_owned()],
+            from_first_set: Vec::new(),
+            when_trust_names: Some("Interceptor".to_owned()),
+            reject_prefix: None,
+            unset: false,
+        }
+    }
+
+    /// THE FENCE OWES A CREDENTIAL (CLOUD-2122). With none proven, the hosts
+    /// stay on the proxy, whose own credential answers; with one, they go
+    /// direct and ours is respected. The trust scope is held satisfied so the
+    /// case decides the credential arm, not this machine's CA bundle.
+    #[test]
+    fn a_bypass_waits_for_a_live_credential() {
+        let env = env_of(&[("NO_PROXY", "localhost")]);
+        let row = bypass_row("NO_PROXY");
+        assert_eq!(
+            resolved_env_from(&[row.clone()], Credential::Unusable, &|_| true, &env),
+            Vec::new(),
+            "no credential, no fence"
+        );
+        assert_eq!(
+            resolved_env_from(&[row], Credential::Live, &|_| true, &env),
+            vec![(
+                "NO_PROXY".to_owned(),
+                EnvAction::Set(Secret::new("forge.example,localhost".to_owned()))
+            )]
+        );
+    }
+
+    /// An UNSCOPED list row (`PATH`) is not a bypass and needs no credential.
+    #[test]
+    fn an_unscoped_list_row_is_not_a_bypass() {
+        let mut row = bypass_row("PATH");
+        row.when_trust_names = None;
+        assert_eq!(
+            resolved_env_from(&[row], Credential::Unusable, &|_| true, &env_of(&[])),
+            vec![(
+                "PATH".to_owned(),
+                EnvAction::Set(Secret::new("forge.example".to_owned()))
+            )]
         );
     }
 
@@ -2310,12 +2387,22 @@ mod tests {
     fn an_unusable_credential_keeps_the_proxy() {
         let env = env_of(&[("HTTPS_PROXY", "http://127.0.0.1:1")]);
         assert_eq!(
-            resolved_env_from(&[unset_row("HTTPS_PROXY")], Credential::Unusable, &env,),
+            resolved_env_from(
+                &[unset_row("HTTPS_PROXY")],
+                Credential::Unusable,
+                &|_| true,
+                &env,
+            ),
             Vec::new(),
             "a removal with no replacement proven must be skipped"
         );
         assert_eq!(
-            resolved_env_from(&[unset_row("HTTPS_PROXY")], Credential::Live, &env,),
+            resolved_env_from(
+                &[unset_row("HTTPS_PROXY")],
+                Credential::Live,
+                &|_| true,
+                &env,
+            ),
             vec![("HTTPS_PROXY".to_owned(), EnvAction::Unset)]
         );
     }
