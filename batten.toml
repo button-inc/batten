@@ -4840,16 +4840,17 @@ no_fix_reason = "class 3 (a port behind `batten`): the installer installs the bi
 # the LATEST release, and a pin naming any other build then refused every call —
 # measured twice on PR #1102 (2026-10-05, 2026-10-07).
 #
-# THE PREDICATE IS AN UNCONDITIONAL CALL: the installer as a task's whole `run`
-# string or as an argv entry of its own. The bootstrap guard (`else ./install.sh`
-# under `command -v batten`) is the one admitted spelling, and prose quoting the
-# installer in backticks is not a call. CI runners start with no binary, so the
-# workflows' installs are genuine bootstraps and sit outside this glob.
+# THE PREDICATE IS ANY CALL FROM A TASK, because no task can be the bootstrap:
+# `mise` is itself a `[[provision]]` row batten installs, so a host running a
+# `mise` task already has a binary. A call is the installer inside a quoted
+# string — a `run` value or an argv entry; prose names it in backticks, which
+# this does not read. CI runners start with no binary, so the workflows' installs
+# are genuine bootstraps and sit outside this glob.
 [[rule]]
 id = "program run loose"
 kind = "forbid"
 glob = "mise.toml"
-regex = '"\./install\.sh"|run\s*=\s*"\./install\.sh'
+regex = '"[^"`\n]*\./install\.sh'
 severity = "deny"
 scope = "tree"
 no_fix_reason = "class 3 (a port behind `batten`): which bootstrap guard a task needs is a judgement about the host it runs on; once a binary exists the route is `batten engine update`"

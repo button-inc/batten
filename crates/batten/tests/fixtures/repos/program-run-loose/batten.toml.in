@@ -1,0 +1,11 @@
+version = 1
+
+# `program run loose` as `batten.toml` declares it (CLOUD-2123), copied so this
+# fixture proves the committed regex rather than a paraphrase of it.
+[[rule]]
+id = "program run loose"
+kind = "forbid"
+glob = "mise.toml"
+regex = '"[^"`\n]*\./install\.sh'
+severity = "deny"
+scope = "tree"

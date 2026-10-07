@@ -1,0 +1,5 @@
+argv: check
+exit: 2
+stdout:
+mise.toml:3 rule 'program run loose'
+mise.toml:6 rule 'program run loose'
