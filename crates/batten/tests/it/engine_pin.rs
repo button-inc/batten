@@ -82,9 +82,16 @@ fn a_release_pin_naming_another_build_is_refused_with_its_install() {
         !output.status.success(),
         "a stale engine must not load: {said}"
     );
+    // THE ENGINE'S OWN VERB, never a consumer installer (CLOUD-2116): it is the one
+    // command the hook's floor admits over this same skew, so it is the only
+    // remedy a refused session can actually run.
     assert!(
-        said.contains("BATTEN_VERSION=v0.0.1"),
-        "the refusal names the install: {said}"
+        said.contains("v0.0.1") && said.contains("`batten engine update`"),
+        "the refusal names the pin and the install: {said}"
+    );
+    assert!(
+        !said.contains("install.sh"),
+        "an installer the floor refuses is not a remedy: {said}"
     );
 }
 
@@ -122,7 +129,7 @@ fn a_source_pin_without_a_stamp_is_refused() {
         "an unstamped engine must not load: {said}"
     );
     assert!(
-        said.contains("install:local"),
+        said.contains("`batten engine update`"),
         "the refusal names the build: {said}"
     );
 }

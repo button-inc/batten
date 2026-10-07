@@ -161,7 +161,7 @@ fn a_build_inside_the_checkout_is_never_replaced() {
     );
     assert_eq!(std::fs::read(&binary).unwrap(), before, "nothing replaced");
     assert!(
-        text(&output).contains("install:local"),
+        text(&output).contains("batten engine update"),
         "the stale build is refused and the update named: {}",
         text(&output)
     );
@@ -186,7 +186,7 @@ fn the_hook_path_never_updates() {
         text(&output)
     );
     assert!(
-        text(&output).contains("install:local"),
+        text(&output).contains("batten engine update"),
         "the stale engine refuses and names the update: {}",
         text(&output)
     );

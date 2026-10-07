@@ -338,6 +338,53 @@ fn a_command_is_still_refused_over_a_config_that_will_not_load() {
     );
 }
 
+/// A config pinning a release no build of this test carries, so the load refuses
+/// on the skew alone: the config is NEWER than the binary, and no edit repairs it.
+const PINS_ANOTHER_RELEASE: &str = "version = 1\nengine = { release = \"v9.9.9\" }\n";
+
+/// A `Bash` envelope carrying `command`.
+fn command_envelope(command: &str) -> String {
+    envelope(
+        "Bash",
+        &format!(
+            "{{\"command\":{}}}",
+            serde_json::to_string(command).expect("a command serializes")
+        ),
+    )
+}
+
+#[test]
+fn the_engine_repair_verb_reaches_a_skewed_pin() {
+    // THE MEASURED BRICK (CLOUD-2116). `main` moved the pin past the installed
+    // binary; the refusal named an installer the floor refused, and so did every
+    // other command, `git push` included. The engine's own verb is the repair a
+    // read-and-edit floor cannot perform, so it is the one command admitted.
+    let dir = fixture("adjudicate-floor-engine-repair", PINS_ANOTHER_RELEASE);
+    assert_eq!(
+        code_for(&dir, &command_envelope("batten engine update")),
+        Some(0),
+        "the repair for a newer pin must reach the shell"
+    );
+}
+
+#[test]
+fn a_command_carrying_the_repair_verb_is_still_refused() {
+    // THE MIRROR. Admitting by containment would let any command ride the
+    // repair's spelling past a build that judges nothing.
+    let dir = fixture("adjudicate-floor-engine-carried", PINS_ANOTHER_RELEASE);
+    for command in [
+        "batten engine update && rm -rf notes.md",
+        "echo x; batten engine update",
+        "git push",
+    ] {
+        assert_eq!(
+            code_for(&dir, &command_envelope(command)),
+            Some(2),
+            "only the verb spelled whole is the repair: {command}"
+        );
+    }
+}
+
 #[test]
 fn a_mutating_mcp_call_is_still_refused_over_a_config_that_will_not_load() {
     // THE DEFECT THE FIRST DRAFT SHIPPED, pinned so it cannot return.

@@ -133,6 +133,14 @@ pub fn declared(text: &str) -> Option<Pin> {
     table.get("engine")?.clone().try_into().ok()
 }
 
+/// The engine's own repair for a pin this build does not satisfy (CLOUD-2116).
+///
+/// One spelling for both halves: [`check`]'s refusal names it, and the hook's
+/// floor over an unloadable config admits exactly it. A remedy naming a
+/// consumer's installer was one the floor refused, so a skewed container could
+/// run nothing at all, including the line its own refusal printed.
+pub const REPAIR: &str = "batten engine update";
+
 //MUTANT-SUITE crates/batten/tests/it/engine_pin.rs
 //MUTANT pin-unread|s@^    let Some(pin) = declared(text) else {$@    let Some(pin) = None::<Pin> else {@|a_release_pin_naming_another_build_is_refused_with_its_install
 //MUTANT stamp-trusted-when-absent|s@^            if stamp.as_deref() != Some(digest) {$@            if stamp.is_some() \&\& stamp.as_deref() != Some(digest) {@|a_source_pin_without_a_stamp_is_refused
@@ -158,7 +166,7 @@ pub fn check(text: &str, source: &str, stamp: impl FnOnce() -> Option<String>) -
             if tag != running {
                 return Err(UsageError::raise(format!(
                     "{source} pins batten {tag} and this engine is {running}: install the pin \
-                     with `BATTEN_VERSION={tag} ./install.sh`"
+                     with `{REPAIR}`"
                 )));
             }
             Ok(())
@@ -169,7 +177,7 @@ pub fn check(text: &str, source: &str, stamp: impl FnOnce() -> Option<String>) -
                 let running = stamp.as_deref().unwrap_or("unstamped");
                 return Err(UsageError::raise(format!(
                     "{source} pins the engine built from source {digest} and this engine is \
-                     {running}: build and stamp it with `mise run install:local`"
+                     {running}: build and stamp it with `{REPAIR}`"
                 )));
             }
             Ok(())
