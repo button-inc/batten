@@ -487,6 +487,155 @@ fn prune_siblings(
     removed
 }
 
+// --- the register half: batten's own wiring, where a session ROOT can load it ---
+//
+// A host loads its project-level wiring from the directory a session is ROOTED
+// at, and nowhere below it (CLOUD-2111). A session opened over a parent of one
+// or more batten repositories therefore loads none of their committed
+// registrations: no `SessionStart` provisioning, no `PreToolUse` adjudication,
+// no `PostToolUse` mint. Measured: a consumer's landing script refused for want
+// of a receipt a `Skill` call should have minted, because nothing observed it.
+//
+// The one surface every session loads wherever it is rooted is the user-level
+// one, so that is where this writes, and only batten's own registration, only
+// where it is missing, and only where the environment is declared disposable —
+// `reclaim`'s posture, for `reclaim`'s reason: a real home directory is its
+// owner's, and adding to it unasked is not this verb's call.
+
+/// What one [`register`] did, or would do.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+#[non_exhaustive]
+pub struct Registered {
+    /// `(harness, event)` pairs whose user-level surface lacked batten.
+    pub rows: Vec<(String, String)>,
+    /// How many surfaces were rewritten. Zero under a check.
+    pub surfaces_written: usize,
+    /// Whether the environment is declared disposable, so a write was allowed.
+    pub authoritative: bool,
+}
+
+/// Register batten on every event a harness's user-level surface lacks it.
+///
+/// Ranged over [`hook::Harness::ALL`], and a harness is in scope only when the
+/// directory holding its user-level surface already exists: a host that was
+/// never installed here has no session to wire, and creating its directory
+/// would be inventing one.
+///
+/// # Errors
+///
+/// When a surface that parsed cannot be written back. A surface that will not
+/// parse is left alone, as [`reclaim`] leaves one: a file this verb cannot read
+/// is one it must not rewrite.
+pub fn register(home: &Path, check: bool) -> Result<Registered> {
+    let mut out = Registered {
+        authoritative: crate::environment::disposable(),
+        ..Registered::default()
+    };
+    let write = !check && out.authoritative;
+    for harness in hook::Harness::ALL {
+        let Some(wiring) = harness.wiring() else {
+            continue;
+        };
+        // The first merged surface is the user-level settings file.
+        let Some(surface) = harness.merge_surfaces().first() else {
+            continue;
+        };
+        let path = home.join(surface);
+        if !path.parent().is_some_and(Path::is_dir) {
+            continue;
+        }
+        let mut document = match std::fs::read_to_string(&path) {
+            Ok(raw) => match serde_json::from_str::<serde_json::Value>(&raw) {
+                Ok(document) if document.is_object() => document,
+                _ => continue,
+            },
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                serde_json::Value::Object(serde_json::Map::new())
+            }
+            Err(_) => continue,
+        };
+        let spellings: Vec<&str> = wiring
+            .registrations(*harness)
+            .into_iter()
+            .map(|(_, spelling)| spelling)
+            .collect();
+        let added = add_missing(
+            &mut document,
+            wiring.file,
+            &spellings,
+            &hook::wiring_command(*harness),
+        );
+        if added.is_empty() {
+            continue;
+        }
+        out.rows.extend(
+            added
+                .into_iter()
+                .map(|event| (harness.as_str().to_owned(), event)),
+        );
+        if write {
+            // Write-then-rename for `reclaim`'s reason: the document carries keys
+            // this verb never read, and a truncating write could lose them.
+            let staged = path.with_extension("json.batten-tmp");
+            crate::durable::replace(
+                &staged,
+                format!("{}\n", serde_json::to_string_pretty(&document)?),
+            )?;
+            std::fs::rename(&staged, &path)?;
+            out.surfaces_written += 1;
+        }
+    }
+    Ok(out)
+}
+
+/// Add batten's registration under every event in `spellings` that carries
+/// none, and return those events in the order given.
+///
+/// An event already registering a batten command is left exactly as it is, so
+/// a second run adds nothing — the property the `[[startup]]` check relies on.
+fn add_missing(
+    document: &mut serde_json::Value,
+    file: hook::WiringFile,
+    spellings: &[&str],
+    command: &str,
+) -> Vec<String> {
+    let Some(root) = document.as_object_mut() else {
+        return Vec::new();
+    };
+    let events = root
+        .entry(event_key(file))
+        .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+    let Some(events) = events.as_object_mut() else {
+        return Vec::new();
+    };
+    let mut added = Vec::new();
+    for spelling in spellings {
+        let present = events.get(*spelling).is_some_and(|value| {
+            entries_under(value)
+                .iter()
+                .any(|(_, registered)| is_batten(registered, command))
+        });
+        if present {
+            continue;
+        }
+        let entry = serde_json::json!({"hooks": [{"type": "command", "command": command}]});
+        match events
+            .get_mut(*spelling)
+            .and_then(serde_json::Value::as_array_mut)
+        {
+            Some(entries) => entries.push(entry),
+            None => {
+                events.insert(
+                    (*spelling).to_owned(),
+                    serde_json::Value::Array(vec![entry]),
+                );
+            }
+        }
+        added.push((*spelling).to_owned());
+    }
+    added
+}
+
 // --- the disarm half: the SCRIPT, because the registration is unread ----------
 //
 // Everything above this line edits hook REGISTRATIONS, and against one measured
@@ -942,5 +1091,49 @@ mod tests {
     #[test]
     fn a_record_with_no_rows_carries_no_siblings() {
         assert_eq!(AtLoad::default().siblings(), 0);
+    }
+
+    #[test]
+    fn a_missing_event_gains_batten_and_a_present_one_is_left_alone() {
+        let mut document = surface(&["batten adjudicate --harness claude-code"]);
+        let added = add_missing(
+            &mut document,
+            claude(),
+            &["SessionStart", "PreToolUse"],
+            "batten adjudicate --harness claude-code",
+        );
+        assert_eq!(added, vec!["PreToolUse".to_owned()]);
+        assert_eq!(entries_under(&document["hooks"]["SessionStart"]).len(), 1);
+        assert_eq!(
+            entries_under(&document["hooks"]["PreToolUse"]),
+            vec![(None, "batten adjudicate --harness claude-code")]
+        );
+    }
+
+    #[test]
+    fn a_second_run_adds_nothing() {
+        let mut document = serde_json::json!({"permissions": {"allow": []}});
+        let spellings = ["SessionStart", "Stop"];
+        let command = "batten adjudicate --harness claude-code";
+        assert_eq!(
+            add_missing(&mut document, claude(), &spellings, command).len(),
+            2
+        );
+        assert!(add_missing(&mut document, claude(), &spellings, command).is_empty());
+        // A key this verb never read survives the edit.
+        assert!(document["permissions"]["allow"].is_array());
+    }
+
+    #[test]
+    fn a_sibling_on_the_event_does_not_count_as_batten() {
+        let mut document = surface(&["somebody-else"]);
+        let added = add_missing(
+            &mut document,
+            claude(),
+            &["SessionStart"],
+            "batten adjudicate --harness claude-code",
+        );
+        assert_eq!(added, vec!["SessionStart".to_owned()]);
+        assert_eq!(entries_under(&document["hooks"]["SessionStart"]).len(), 2);
     }
 }

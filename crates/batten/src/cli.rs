@@ -1447,6 +1447,12 @@ pub enum WiringCommand {
         /// Decide whether a repair is owed, and remove nothing.
         check: bool,
     },
+    /// Register batten on a host's user-level surface wherever it is missing
+    /// (CLOUD-2111).
+    Register {
+        /// Decide whether a registration is owed, and write nothing.
+        check: bool,
+    },
     /// Link this clone's two commit hooks to a hook body the repository checks
     /// in (CLOUD-1991, retiring `[tasks."session:git-hooks"]`).
     Gate {
@@ -2575,6 +2581,9 @@ fn wiring_of(matches: &ArgMatches) -> Option<WiringCommand> {
         ("reclaim", matches) => Some(WiringCommand::Reclaim {
             yes: flag(matches, "yes"),
             dry_run: flag(matches, "dry_run"),
+            check: flag(matches, "check"),
+        }),
+        ("register", matches) => Some(WiringCommand::Register {
             check: flag(matches, "check"),
         }),
         ("gate", matches) => Some(WiringCommand::Gate {

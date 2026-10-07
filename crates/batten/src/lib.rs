@@ -6980,6 +6980,7 @@ fn run_wiring(
             dry_run,
             check,
         } => run_wiring_reclaim(*yes, *dry_run, *check, mode, overrides, err),
+        cli::WiringCommand::Register { check } => run_wiring_register(*check, mode, err),
         cli::WiringCommand::Gate { body } => {
             let linked = wiring::link_commit_gate(Path::new("."), body)?;
             output::message(
@@ -6991,6 +6992,56 @@ fn run_wiring(
             Ok(ExitCode::Success)
         }
     }
+}
+
+/// Register batten on each host's user-level surface wherever it is missing
+/// (CLOUD-2111).
+///
+/// `--check` exits `1` when a registration is owed, so a `[[startup]]` row can
+/// decide on it; the repair exits `0` having written, or having been refused
+/// the write by a home directory that is not declared disposable — which it
+/// says, because a repair that silently wrote nothing is a false green.
+///
+/// # Errors
+///
+/// A [`UsageError`] when no home directory resolves, and whatever
+/// [`wiring::register`] could not write.
+fn run_wiring_register(check: bool, mode: Mode, err: &mut dyn Write) -> Result<ExitCode> {
+    use etcetera::BaseStrategy as _;
+
+    let strategy = etcetera::choose_base_strategy().map_err(|_| {
+        UsageError::raise(
+            "wiring register: no home directory resolves, so there is no user-level surface",
+        )
+    })?;
+    let done = wiring::register(strategy.home_dir(), check)?;
+    let verb = if check || !done.authoritative {
+        "owed"
+    } else {
+        "registered"
+    };
+    for (harness, event) in &done.rows {
+        output::message(
+            mode,
+            output::Verbosity::Normal,
+            err,
+            &format!("wiring register: {harness}:{event} {verb}"),
+        )?;
+    }
+    if !check && !done.authoritative && !done.rows.is_empty() {
+        output::message(
+            mode,
+            output::Verbosity::Normal,
+            err,
+            "wiring register: this environment is not declared disposable, so nothing was \
+             written. Set BATTEN_ENVIRONMENT=disposable where the home directory is \
+             provisioned per session and may be taken.",
+        )?;
+    }
+    if check && !done.rows.is_empty() {
+        return Ok(ExitCode::Violation);
+    }
+    Ok(ExitCode::Success)
 }
 
 /// Remove every non-batten hook registration from this host's merged surfaces.

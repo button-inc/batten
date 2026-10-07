@@ -1990,6 +1990,18 @@ const PRUNE: FlagDecl = FlagDecl {
 ///
 /// It reuses `--dry-run`'s whole computation and differs only in the exit code,
 /// which is what keeps the two answers from being able to disagree.
+/// `--check` on `wiring register` (CLOUD-2111): decide whether a registration
+/// is owed, for the `[[startup]]` row that names the verb as its repair.
+const REGISTER_CHECK: FlagDecl = FlagDecl {
+    id: "check",
+    long: Some("check"),
+    short: None,
+    help: "Exit non-zero if a registration is owed, and write nothing",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+};
+
 const CHECK: FlagDecl = FlagDecl {
     id: "check",
     long: Some("check"),
@@ -6824,6 +6836,23 @@ pub const SURFACE: &[CommandDecl] = &[
         // must not learn that a destructive verb is sometimes safe.
         effect: Effect::Destructive,
         flags: &[DRY_RUN, CHECK],
+    },
+    // BATTEN'S OWN REGISTRATION WHERE A SESSION ROOT LOADS IT (CLOUD-2111). A
+    // host loads project wiring only from the directory a session is rooted at,
+    // so a session over a parent of the repository loads none of it; the
+    // user-level surface is the one loaded wherever it is rooted.
+    //
+    // `write`, not `destructive`: it only ADDS batten's own registration, never
+    // removes or rewrites anybody's, and writes only where the environment is
+    // declared disposable — `reclaim`'s posture without `reclaim`'s subject.
+    CommandDecl {
+        path: "wiring register",
+        id: "wiring.register",
+        about: "Register batten on a host's user-level surface wherever it is missing",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Write,
+        flags: &[REGISTER_CHECK],
     },
     // THE CLONE'S OWN COMMIT HOOKS (CLOUD-476), retiring the `mkdir -p` and two
     // `ln -sfn` that were `[tasks."session:git-hooks"]` (CLOUD-1991). Under
