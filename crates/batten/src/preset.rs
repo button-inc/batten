@@ -808,17 +808,19 @@ than its producer, which writes whole or removes, and reads the same way.",
             PresetModule {
                 scope: RuleScope::MediatedCall,
                 provider: None,
-                pointer: "<preset:claude-code-cloud>/auto-mode-is-preapproved.rego",
-                source: include_str!(
-                    "policy/presets/claude-code-cloud/auto-mode-is-preapproved.rego"
-                ),
-            },
-            PresetModule {
-                scope: RuleScope::MediatedCall,
-                provider: None,
                 pointer: "<preset:claude-code-cloud>/read-only-is-preapproved.rego",
                 source: include_str!(
                     "policy/presets/claude-code-cloud/read-only-is-preapproved.rego"
+                ),
+            },
+            // LAST, so a call a narrower module also grants is named by that
+            // module: the first grant found is the one the host is told.
+            PresetModule {
+                scope: RuleScope::MediatedCall,
+                provider: None,
+                pointer: "<preset:claude-code-cloud>/auto-mode-is-preapproved.rego",
+                source: include_str!(
+                    "policy/presets/claude-code-cloud/auto-mode-is-preapproved.rego"
                 ),
             },
         ],

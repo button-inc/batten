@@ -2354,7 +2354,12 @@ mod tests {
         let env = env_of(&[("NO_PROXY", "localhost")]);
         let row = bypass_row("NO_PROXY");
         assert_eq!(
-            resolved_env_from(&[row.clone()], Credential::Unusable, &|_| true, &env),
+            resolved_env_from(
+                std::slice::from_ref(&row),
+                Credential::Unusable,
+                &|_| true,
+                &env
+            ),
             Vec::new(),
             "no credential, no fence"
         );

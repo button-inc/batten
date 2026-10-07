@@ -143,9 +143,10 @@ fn an_unsubscribe_is_preapproved_in_every_mode() {
             assert_granted_by(&envelope(mode, tool, &drop), "watch drop now");
         }
     }
-    // The subscribe is the one call the grant must never reach.
+    // The subscribe is the one call the grant must never reach. Asked in default
+    // mode: in auto every allowed call is granted (CLOUD-2125).
     assert_not_granted(&envelope(
-        "auto",
+        "default",
         "mcp__Claude_Code_Remote__subscribe_pr_activity",
         &drop,
     ));
@@ -253,7 +254,9 @@ fn a_linted_and_approved_dispatch_is_preapproved_in_auto() {
 fn a_dispatch_without_approval_is_not_preapproved() {
     let fixture = Dispatch::new("unapproved");
     fixture.linted();
-    assert_not_granted(&Dispatch::call("auto", &fixture.prompt));
+    // Default mode, where the dispatch grant is the only route to an allow; in
+    // auto every call batten allows is granted (CLOUD-2125).
+    assert_not_granted(&Dispatch::call("default", &fixture.prompt));
 }
 
 /// The grant is bound to the bytes the owner saw: an edited prompt clears
@@ -263,7 +266,11 @@ fn an_edited_prompt_or_another_mode_is_not_preapproved() {
     let fixture = Dispatch::new("edited");
     fixture.linted().approved();
     let edited = format!("{} and one more thing", fixture.prompt);
-    assert_not_granted(&Dispatch::call("auto", &edited));
+    let (_, reason) = verdict(&Dispatch::call("auto", &edited)).unwrap_or_default();
+    assert!(
+        !reason.contains("dispatch"),
+        "an edited prompt is not the dispatch grant's: {reason}"
+    );
     assert_not_granted(&Dispatch::call("default", &fixture.prompt));
 }
 
@@ -396,7 +403,24 @@ fn an_edit_is_not_preapproved_in_default_mode() {
 /// host's to ask about, even in auto mode.
 #[test]
 fn a_destructive_shell_write_is_left_to_the_host_in_auto() {
-    assert_not_granted(&shell("auto", "python3 tools/x.py && rm -rf build"));
+    // Outside auto mode, the narrow write grant still withholds it.
+    assert_not_granted(&shell("default", "python3 tools/x.py && rm -rf build"));
+}
+
+/// THE OWNER'S RULE (CLOUD-2125): in auto mode, a call no gate refuses is
+/// granted, whatever narrower grant missed it.
+#[test]
+fn an_auto_mode_call_is_preapproved() {
+    assert_granted_by(
+        &shell("auto", "python3 tools/x.py && rm -rf build"),
+        "mode grant now",
+    );
+}
+
+/// ...and a gate's refusal still wins: the grant is asked only after Allow.
+#[test]
+fn an_auto_mode_grant_never_spends_a_refusal() {
+    assert_not_granted(&shell("auto", "git rebase origin/main"));
 }
 
 #[test]

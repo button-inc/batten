@@ -1217,10 +1217,12 @@ const ABSENT_ORG: &str = "No Such Certificate Authority Organisation";
 /// An `[[provision.env]]` row conditioned on that, otherwise identical to the
 /// shipped shape.
 #[cfg(unix)]
+/// A SET row, not a `NO_PROXY` bypass: a bypass also owes a live credential
+/// (CLOUD-2122), and these cases decide the trust condition alone.
 fn conditioned_rows(org: &str) -> String {
     format!(
-        "\n[[provision.env]]\nname = \"NO_PROXY\"\nwhen_trust_names = \"{org}\"\n\
-         prepend_list = [\"api.example.invalid\"]\n"
+        "\n[[provision.env]]\nname = \"PROBE_SCOPED\"\nwhen_trust_names = \"{org}\"\n\
+         from_first_set = [\"PROBE_SOURCE\"]\n"
     )
 }
 
@@ -1286,7 +1288,8 @@ fn a_conditioned_row_applies_only_where_the_trust_bundle_names_that_authority() 
             .env("SSL_CERT_FILE", &bundle)
             .env_remove("CURL_CA_BUNDLE")
             .env_remove("REQUESTS_CA_BUNDLE")
-            .env("NO_PROXY", "localhost")
+            .env("PROBE_SOURCE", "scoped")
+            .env_remove("PROBE_SCOPED")
             .output()
             .expect("run the launcher");
         String::from_utf8_lossy(&ran.stdout).into_owned()
@@ -1294,15 +1297,15 @@ fn a_conditioned_row_applies_only_where_the_trust_bundle_names_that_authority() 
 
     let matched = run(&present_org, &env.repo.parent().unwrap().join("bin-yes"));
     assert!(
-        matched
-            .lines()
-            .any(|line| line == "NO_PROXY=api.example.invalid,localhost"),
+        matched.lines().any(|line| line == "PROBE_SCOPED=scoped"),
         "the row must apply where the bundle names {present_org}: {matched}"
     );
 
     let unmatched = run(ABSENT_ORG, &env.repo.parent().unwrap().join("bin-no"));
     assert!(
-        unmatched.lines().any(|line| line == "NO_PROXY=localhost"),
+        !unmatched
+            .lines()
+            .any(|line| line.starts_with("PROBE_SCOPED=")),
         "the row must NOT apply where no authority names {ABSENT_ORG} — an \
          operator's own proxy stays honoured: {unmatched}"
     );
@@ -1340,12 +1343,13 @@ fn an_unreadable_trust_bundle_does_not_apply_the_bypass() {
         )
         .env_remove("CURL_CA_BUNDLE")
         .env_remove("REQUESTS_CA_BUNDLE")
-        .env("NO_PROXY", "localhost")
+        .env("PROBE_SOURCE", "scoped")
+        .env_remove("PROBE_SCOPED")
         .output()
         .expect("run the launcher");
     let seen = String::from_utf8_lossy(&ran.stdout);
     assert!(
-        seen.lines().any(|line| line == "NO_PROXY=localhost"),
+        !seen.lines().any(|line| line.starts_with("PROBE_SCOPED=")),
         "a bundle that cannot be read is not evidence of an interceptor: {seen}"
     );
 }

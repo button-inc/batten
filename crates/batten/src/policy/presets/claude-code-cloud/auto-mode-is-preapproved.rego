@@ -16,7 +16,10 @@
 # only after its own decision came back Allow (`compose` in `lib.rs`, deny
 # first), so this grants nothing any rule refused. It adds no judgement; it stops
 # discarding the one batten already made.
-package batten.claude_code_cloud
+# Its own package: `preapprove` is a package-wide set, so sharing
+# `batten.claude_code_cloud` would put this grant into every sibling module's
+# own `test_` cases, which state what THAT module grants.
+package batten.claude_code_cloud.auto_mode
 
 import rego.v1
 

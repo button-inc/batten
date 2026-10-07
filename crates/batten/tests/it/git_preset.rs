@@ -225,7 +225,12 @@ fn a_destructive_git_call_is_left_to_the_host() {
             denied("auto", call).is_none(),
             "must not be refused: {call}"
         );
-        assert!(!granted("auto", call), "must be left to the host: {call}");
+        // Default mode: in auto every allowed call is granted (CLOUD-2125), and
+        // the git grant's own destructive carve-out is what this case is about.
+        assert!(
+            !granted("default", call),
+            "must be left to the host: {call}"
+        );
     }
 }
 
