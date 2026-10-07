@@ -4650,9 +4650,8 @@ run = "mise run config-lint"
 # expectation HEAD no longer meets is admitted only by a recorded answer.
 [tasks."verify:test-replay"]
 description = "Gate: every modified test's base form passes against HEAD, or a recorded answer admits it — invoked through `verify`"
-run = [
-  "{{vars.batten}} test replay --base {{ get_env(name='BATTEN_SPEC_BASE', default='origin/main') }}",
-]
+env = { TEST_REPLAY_BASE = "{{ get_env(name='BATTEN_SPEC_BASE', default='origin/main') }}" }
+run = "{{vars.batten}} test replay --base {{env.TEST_REPLAY_BASE}}"
 
 [tasks.commit-msg]
 description = "Gate: one pending commit message's subject follows the convention (policy: [commit] in batten.toml)"
