@@ -76,7 +76,7 @@ violation contains {
 # silent — measured, the first cut of these tests passed their silent half for
 # exactly that reason.
 
-punt_regex := "Your call, |(?i:waiting on your call|both your call|a checkpoint with you)"
+punt_regex := "Your call, |(?i:waiting on your call|both your call|a checkpoint with you|once you run|restart the session)"
 
 offered(text) := v if {
 	v := violation with input as {"call": {"final-message": text}}
@@ -89,6 +89,21 @@ test_an_offer_back_is_named if {
 
 test_waiting_on_the_human_is_named if {
 	count(offered("Stopping. Waiting on your call about the downgrade.")) == 1
+}
+
+# CLOUD-2117: the container's own step handed to the human, both witnessed on
+# PR #1102. Nobody but the agent can run a command in its container.
+test_a_command_handed_to_the_human_is_named if {
+	count(offered("Once you run `BATTEN_VERSION=v0.0.202 ./install.sh` in `/home/user/batten`, I'll push.")) == 1
+}
+
+test_a_session_restart_handed_to_the_human_is_named if {
+	count(offered("To unblock, either:\n- run `./install.sh`, or\n- restart the session, since start rebuilds it.")) == 1
+}
+
+test_the_agent_running_it_is_not_a_punt if {
+	# THE NARROWNESS BOUNDARY: the agent reporting its own run is the work, not an offer.
+	count(offered("I ran `batten engine update`, then pushed. Once it ran, the hook loaded.")) == 0
 }
 
 test_a_decision_already_made_is_not_a_punt if {

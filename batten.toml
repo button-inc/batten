@@ -2047,9 +2047,18 @@ regex = "(?i)worth (noting|flagging|mentioning|naming)|one thing (I would|I['’
 # and `would you like me to` fired 0 times and stay OUT — an unwitnessed
 # literal is the invention CLOUD-323 forbids. CASE-SENSITIVE `Your call,` on
 # purpose: sentence-initial is the offer; mid-sentence was the report.
+#
+# THE CONTAINER'S OWN STEP, HANDED OVER (CLOUD-2117). The container is the
+# agent's alone and no human can run a command in it, so a turn telling the
+# human to run one or to restart the session hands back the one kind of step
+# nobody else can take. Witnessed twice on PR #1102, 2026-10-05, both silent
+# here: "Once you run `…` or restart the session, I'll push" and "To unblock,
+# either: run `…`, or restart the session". Both literals are those sentences'
+# own words; `restart the session` cannot be the agent's own act, which is why
+# it needs no pronoun.
 [[pattern]]
 id = "deferral-offered"
-regex = "Your call, |(?i:waiting on your call|both your call|a checkpoint with you)"
+regex = "Your call, |(?i:waiting on your call|both your call|a checkpoint with you|once you run|restart the session)"
 
 # CLOUD-323's two measured deferral shapes in a PR body, which `record derive
 # deferral --input shape=deferral-shape` matches per paragraph outside code

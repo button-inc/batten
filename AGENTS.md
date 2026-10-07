@@ -51,7 +51,8 @@ gate is a defect, not an answer** — repair it and carry on this session; ticke
 one is a punt in gate's clothing (CLOUD-597/615). **A punt is any deferral you
 could have closed**, a predicate not a list: a block reported as a decision (a
 block is a bug); "that's your call" on what your evidence settles; an authorized
-action offered, or handed to a human to run; an unbuilt mechanism awaited over
+action offered, or handed to a human to run — **the container is yours alone,
+no human can run a command in it** (CLOUD-2117); an unbuilt mechanism awaited over
 the instance in hand; your own landed work spared. Can do it, do it; can't, file it.
 
 **An override ask is ONE yes/no on the override, never a menu of routes**
