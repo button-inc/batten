@@ -660,7 +660,22 @@ fn follow_pin(may_build: bool) -> Result<Option<ExitCode>> {
     let mut argv: Vec<String> = vec![engine.to_string_lossy().into_owned()];
     argv.extend(std::env::args().skip(1));
     let published = [(String::from(ENGINE_UPDATED), String::from("1"))];
-    exec::run_in_env(&root, &argv, &published).map(Some)
+    // TEED, because the pinned engine's output IS this invocation's output. The
+    // default captures it, which on the hook path drops the decision itself:
+    // measured, the followed engine ran and the caller read an empty stdout.
+    let passthrough = exec::ExecConfig {
+        tee: true,
+        ..exec::ExecConfig::DEFAULT
+    };
+    exec::run_in_with_env(
+        &root,
+        &argv,
+        &[],
+        &passthrough,
+        &published,
+        &mut std::io::sink(),
+    )
+    .map(Some)
 }
 
 /// `batten engine update` (CLOUD-2062): install the pinned engine over the
