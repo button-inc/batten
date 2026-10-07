@@ -8454,6 +8454,17 @@ fn admission_anchor(
     ) else {
         return head();
     };
+    anchor_among(&scan.findings, rule, subject, head)
+}
+
+/// Which one of `findings` a `(rule, subject)` pair addresses, and the subject
+/// that binds it — [`admission_anchor`]'s decision over the scan it ran.
+fn anchor_among(
+    findings: &[rules::Finding],
+    rule: &str,
+    subject: &str,
+    head: impl FnOnce() -> Result<(admission::Anchor, String)>,
+) -> Result<(admission::Anchor, String)> {
     // THE PATH OR THE FINDING'S OWN FINGERPRINT (CLOUD-2126). A pointer is the
     // first path-bearing subject, so two findings of one rule over one path —
     // `issue file same` for two rows naming the same file — print the same
@@ -8465,8 +8476,7 @@ fn admission_anchor(
     // admission up by the finding's PATH, so a binding whose subject were the
     // fingerprint would be answered, spent and queried by nothing — the defect
     // the ambiguity arm exists to refuse. The path returned is what binds.
-    let mut matched: Vec<(String, String)> = scan
-        .findings
+    let mut matched: Vec<(String, String)> = findings
         .iter()
         .filter(|finding| finding.rule == rule)
         .map(|finding| (finding.path.clone(), finding.identity.fingerprint.to_hex()))
@@ -8494,8 +8504,7 @@ fn admission_anchor(
         // What the two arms differ on is whether there was a finding to
         // address, and this scan already holds that fact.
         0 => {
-            let mut named: Vec<&str> = scan
-                .findings
+            let mut named: Vec<&str> = findings
                 .iter()
                 .filter(|finding| finding.rule == rule)
                 .map(|finding| finding.path.as_str())
