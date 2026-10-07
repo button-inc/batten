@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.206](https://github.com/button-inc/batten/compare/v0.0.205...v0.0.206) - 2026-10-07
+
+### Added
+
+- *(refusal)* [**breaking**] one projection, labelled, every pointer on every firing, full once per context per compaction cycle (CLOUD-2075)
+- *(hook)* [**breaking**] carry every route and every non-blocking advisory on an allowed call (CLOUD-1470)
+- *(verdict)* admit a shape deny through a recorded override (CLOUD-1806)
+- *(hook)* enumerate the four hook sources and their event vocabularies (CLOUD-1728)
+- *(mint)* [**breaking**] a clear mode, so a pull request closed unmerged can free its branch
+- *(wiring)* register batten where any session root loads it
+
+### Fixed
+
+- *(admission)* a fingerprint selects one of twin findings on a path (CLOUD-2126)
+- *(provision)* no task calls the installer; a fixture holds the rule (CLOUD-2123)
+- *(provision)* only an installed engine links the host (CLOUD-2124)
+- *(hook)* admit the engine's own repair verb over a pin skew (CLOUD-2116)
+- *(refusal)* declare the adjudicate echo columns and read a route flag as no label (CLOUD-2075)
+- *(patch)* build the identity test's filler without format-collect (CLOUD-2098)
+- *(patch)* a replayed edit keeps its identity when the base moved elsewhere (CLOUD-2098)
+- *(refusal)* satisfy clippy over the projection and record the ceiling admission (CLOUD-2075)
+- *(override)* refuse a request whose subject no refusal of the rule binds (CLOUD-1996)
+- *(refusal)* [**breaking**] bind the pointers a mediated refusal prints (CLOUD-1826)
+- *(provision)* fence GitHub off the proxy only with a live credential
+- *(provision)* drop the proxy- placeholder on the fenced route even with no PAT
+- *(land)* lift the lease-loss mutation row to column 0
+- *(land)* a lap lost to the lease no longer spends the lap budget
+- *(wiring)* declare and render the register verb everywhere
+- *(wiring)* append the register variant after gate
+- *(wiring)* register on the session root, not the user surface
+- *(wiring)* complete the register check flag declaration
+
+### Other
+
+- *(admission)* decide the anchor in its own function (CLOUD-2126)
+- *(provision)* redden the committed installer row, not a fixture copy (CLOUD-2123)
+- *(refusal)* read the reference and traversal verbs' findings in the labelled grammar (CLOUD-2075)
+- *(verdict)* pin the admission that keeps classes routed into protected paths reachable (CLOUD-1893)
+- carry the auto-mode grant and the credential-gated fence into the suites
+
 ## [0.0.205](https://github.com/button-inc/batten/compare/v0.0.204...v0.0.205) - 2026-10-06
 
 ### Fixed
