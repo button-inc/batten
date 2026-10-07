@@ -6843,8 +6843,9 @@ pub const SURFACE: &[CommandDecl] = &[
     },
     // BATTEN'S OWN REGISTRATION WHERE A SESSION ROOT LOADS IT (CLOUD-2111). A
     // host loads project wiring only from the directory a session is rooted at,
-    // so a session over a parent of the repository loads none of it; the
-    // user-level surface is the one loaded wherever it is rooted.
+    // so a session over a parent of the repository loads none of it. This
+    // writes the ROOT's project surface, never the user-level one, which would
+    // double-fire in a session rooted at the repository (CLOUD-525).
     //
     // `write`, not `destructive`: it only ADDS batten's own registration, never
     // removes or rewrites anybody's, and writes only where the environment is
@@ -6852,7 +6853,7 @@ pub const SURFACE: &[CommandDecl] = &[
     CommandDecl {
         path: "wiring register",
         id: "wiring.register",
-        about: "Register batten on a host's user-level surface wherever it is missing",
+        about: "Register batten on the session root when a session is rooted above this repository",
         data_channel: false,
         exits: EXITS_STANDARD,
         effect: Effect::Write,

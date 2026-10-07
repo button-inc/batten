@@ -1447,8 +1447,8 @@ pub enum WiringCommand {
         /// Decide whether a repair is owed, and remove nothing.
         check: bool,
     },
-    /// Register batten on a host's user-level surface wherever it is missing
-    /// (CLOUD-2111).
+    /// Register batten on the session root when a session is rooted above this
+    /// repository (CLOUD-2111).
     Register {
         /// Decide whether a registration is owed, and write nothing.
         check: bool,

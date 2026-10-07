@@ -17845,11 +17845,11 @@ repair = ["mise", "run", "deps-install"]
 # A SESSION ROOTED ABOVE THIS REPOSITORY LOADS NONE OF ITS WIRING (CLOUD-2111).
 # A host reads project hooks only from the directory the session is rooted at, so
 # a multi-repository session opened over a parent ran with no provisioning, no
-# adjudication and no mint. The user-level surface loads wherever the session is
-# rooted; this row keeps batten registered there in a disposable environment.
+# adjudication and no mint. This row registers batten on that ROOT's project
+# surface, never the user-level one, which would double-fire (CLOUD-525).
 [[startup]]
 id = "hooks-load-from-any-session-root"
-gloss = "batten is registered on the user-level hook surface, so a session rooted above this repository still runs its gates"
+gloss = "a session rooted above this repository loads batten from the root, so its gates still run"
 check = ["batten", "wiring", "register", "--check"]
 repair = ["batten", "wiring", "register"]
 

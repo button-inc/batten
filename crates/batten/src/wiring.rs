@@ -496,95 +496,91 @@ fn prune_siblings(
 // no `PostToolUse` mint. Measured: a consumer's landing script refused for want
 // of a receipt a `Skill` call should have minted, because nothing observed it.
 //
-// The one surface every session loads wherever it is rooted is the user-level
-// one, so that is where this writes, and only batten's own registration, only
-// where it is missing, and only where the environment is declared disposable —
-// `reclaim`'s posture, for `reclaim`'s reason: a real home directory is its
-// owner's, and adding to it unasked is not this verb's call.
+// NOT THE USER-LEVEL SURFACE. That one loads for every session, including one
+// rooted AT the repository, where batten would then fire twice — the second
+// authority `doctor`'s merged census refuses (CLOUD-525). The session root's
+// OWN project surface loads only for sessions rooted there, so it is the one
+// place a registration reaches the parent session and nothing else.
 
 /// What one [`register`] did, or would do.
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
 #[non_exhaustive]
 pub struct Registered {
-    /// `(harness, event)` pairs whose user-level surface lacked batten.
-    pub rows: Vec<(String, String)>,
-    /// How many surfaces were rewritten. Zero under a check.
-    pub surfaces_written: usize,
+    /// The events the session root's surface lacked batten on.
+    pub events: Vec<String>,
+    /// Whether the surface was rewritten. Never under a check.
+    pub written: bool,
     /// Whether the environment is declared disposable, so a write was allowed.
     pub authoritative: bool,
+    /// Whether `root` is a strict ancestor of `repo`. When it is not, the
+    /// session loads the repository's own committed wiring and nothing is owed.
+    pub above: bool,
 }
 
-/// Register batten on every event a harness's user-level surface lacks it.
+/// Register batten on the project surface of the session root `root`, for a
+/// session rooted above the repository `repo`.
 ///
-/// Ranged over [`hook::Harness::ALL`], and a harness is in scope only when the
-/// directory holding its user-level surface already exists: a host that was
-/// never installed here has no session to wire, and creating its directory
-/// would be inventing one.
+/// Claude Code only: it is the host whose session root this can name, and the
+/// committed surface's own path is reused, so the file is the one that host
+/// reads at a root.
 ///
 /// # Errors
 ///
-/// When a surface that parsed cannot be written back. A surface that will not
-/// parse is left alone, as [`reclaim`] leaves one: a file this verb cannot read
-/// is one it must not rewrite.
-pub fn register(home: &Path, check: bool) -> Result<Registered> {
+/// When the surface parsed and cannot be written back. A surface that will not
+/// parse is left alone, as [`reclaim`] leaves one.
+pub fn register(root: &Path, repo: &Path, check: bool) -> Result<Registered> {
     let mut out = Registered {
         authoritative: crate::environment::disposable(),
         ..Registered::default()
     };
-    let write = !check && out.authoritative;
-    for harness in hook::Harness::ALL {
-        let Some(wiring) = harness.wiring() else {
-            continue;
-        };
-        // The first merged surface is the user-level settings file.
-        let Some(surface) = harness.merge_surfaces().first() else {
-            continue;
-        };
-        let path = home.join(surface);
-        if !path.parent().is_some_and(Path::is_dir) {
-            continue;
+    let (Ok(root), Ok(repo)) = (root.canonicalize(), repo.canonicalize()) else {
+        return Ok(out);
+    };
+    out.above = repo != root && repo.starts_with(&root);
+    let harness = hook::Harness::ClaudeCode;
+    let (true, Some(wiring)) = (out.above, harness.wiring()) else {
+        return Ok(out);
+    };
+    let surface = match wiring.file {
+        hook::WiringFile::Key { path, .. } | hook::WiringFile::Whole(path) => path,
+    };
+    let path = root.join(surface);
+    let mut document = match std::fs::read_to_string(&path) {
+        Ok(raw) => match serde_json::from_str::<serde_json::Value>(&raw) {
+            Ok(document) if document.is_object() => document,
+            _ => return Ok(out),
+        },
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            serde_json::Value::Object(serde_json::Map::new())
         }
-        let mut document = match std::fs::read_to_string(&path) {
-            Ok(raw) => match serde_json::from_str::<serde_json::Value>(&raw) {
-                Ok(document) if document.is_object() => document,
-                _ => continue,
-            },
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                serde_json::Value::Object(serde_json::Map::new())
-            }
-            Err(_) => continue,
-        };
-        let spellings: Vec<&str> = wiring
-            .registrations(*harness)
-            .into_iter()
-            .map(|(_, spelling)| spelling)
-            .collect();
-        let added = add_missing(
-            &mut document,
-            wiring.file,
-            &spellings,
-            &hook::wiring_command(*harness),
-        );
-        if added.is_empty() {
-            continue;
-        }
-        out.rows.extend(
-            added
-                .into_iter()
-                .map(|event| (harness.as_str().to_owned(), event)),
-        );
-        if write {
-            // Write-then-rename for `reclaim`'s reason: the document carries keys
-            // this verb never read, and a truncating write could lose them.
-            let staged = path.with_extension("json.batten-tmp");
-            crate::durable::replace(
-                &staged,
-                format!("{}\n", serde_json::to_string_pretty(&document)?),
-            )?;
-            std::fs::rename(&staged, &path)?;
-            out.surfaces_written += 1;
-        }
+        Err(_) => return Ok(out),
+    };
+    let spellings: Vec<&str> = wiring
+        .registrations(harness)
+        .into_iter()
+        .map(|(_, spelling)| spelling)
+        .collect();
+    out.events = add_missing(
+        &mut document,
+        wiring.file,
+        &spellings,
+        &hook::wiring_command(harness),
+    );
+    if out.events.is_empty() || check || !out.authoritative {
+        return Ok(out);
     }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    // Write-then-rename for `reclaim`'s reason: the document carries keys this
+    // verb never read, and a truncating write could lose them.
+    let staged = path.with_extension("json.batten-tmp");
+    crate::durable::replace(
+        &staged,
+        format!("{}\n", serde_json::to_string_pretty(&document)?),
+    )?;
+    std::fs::rename(&staged, &path)?;
+    out.written = true;
     Ok(out)
 }
 
@@ -1135,5 +1131,46 @@ mod tests {
         );
         assert_eq!(added, vec!["SessionStart".to_owned()]);
         assert_eq!(entries_under(&document["hooks"]["SessionStart"]).len(), 2);
+    }
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join("batten-wiring-tests").join(name);
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn a_session_rooted_at_the_repository_owes_nothing() {
+        let repo = scratch("register-at");
+        let done = register(&repo, &repo, true).unwrap();
+        assert!(!done.above);
+        assert!(done.events.is_empty());
+    }
+
+    #[test]
+    fn a_session_rooted_above_owes_every_event_and_a_check_writes_nothing() {
+        let root = scratch("register-above");
+        let repo = root.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let done = register(&root, &repo, true).unwrap();
+        assert!(done.above);
+        let expected = hook::Harness::ClaudeCode
+            .wiring()
+            .unwrap()
+            .registrations(hook::Harness::ClaudeCode)
+            .len();
+        assert_eq!(done.events.len(), expected);
+        assert!(!done.written);
+        assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn a_sibling_directory_is_not_a_session_root_above() {
+        let parent = scratch("register-sibling");
+        let (one, two) = (parent.join("one"), parent.join("two"));
+        std::fs::create_dir_all(&one).unwrap();
+        std::fs::create_dir_all(&two).unwrap();
+        assert!(!register(&one, &two, true).unwrap().above);
     }
 }

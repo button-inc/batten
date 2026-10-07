@@ -6994,41 +6994,45 @@ fn run_wiring(
     }
 }
 
-/// Register batten on each host's user-level surface wherever it is missing
-/// (CLOUD-2111).
+/// Register batten on the session root's project surface when the session is
+/// rooted above this repository (CLOUD-2111).
+///
+/// The root is the harness process's working directory, which is the one fact
+/// that names it: nothing in a tool call's environment does. Outside a Claude
+/// Code session there is no root to read and nothing is owed.
 ///
 /// `--check` exits `1` when a registration is owed, so a `[[startup]]` row can
-/// decide on it; the repair exits `0` having written, or having been refused
-/// the write by a home directory that is not declared disposable — which it
-/// says, because a repair that silently wrote nothing is a false green.
+/// decide on it. The repair says when a home that is not declared disposable
+/// refused the write, because a repair that silently wrote nothing is a false
+/// green.
 ///
 /// # Errors
 ///
-/// A [`UsageError`] when no home directory resolves, and whatever
-/// [`wiring::register`] could not write.
+/// Whatever [`wiring::register`] could not write.
 fn run_wiring_register(check: bool, mode: Mode, err: &mut dyn Write) -> Result<ExitCode> {
-    use etcetera::BaseStrategy as _;
-
-    let strategy = etcetera::choose_base_strategy().map_err(|_| {
-        UsageError::raise(
-            "wiring register: no home directory resolves, so there is no user-level surface",
-        )
-    })?;
-    let done = wiring::register(strategy.home_dir(), check)?;
-    let verb = if check || !done.authoritative {
-        "owed"
-    } else {
-        "registered"
-    };
-    for (harness, event) in &done.rows {
+    let Some(root) = std::env::var("CLAUDE_PID")
+        .ok()
+        .and_then(|pid| std::fs::read_link(format!("/proc/{pid}/cwd")).ok())
+    else {
         output::message(
             mode,
             output::Verbosity::Normal,
             err,
-            &format!("wiring register: {harness}:{event} {verb}"),
+            "wiring register: no session root resolves, so no registration is owed",
+        )?;
+        return Ok(ExitCode::Success);
+    };
+    let done = wiring::register(&root, hook_authority_root(), check)?;
+    let verb = if done.written { "registered" } else { "owed" };
+    for event in &done.events {
+        output::message(
+            mode,
+            output::Verbosity::Normal,
+            err,
+            &format!("wiring register: claude-code:{event} {verb}"),
         )?;
     }
-    if !check && !done.authoritative && !done.rows.is_empty() {
+    if !check && !done.authoritative && !done.events.is_empty() {
         output::message(
             mode,
             output::Verbosity::Normal,
@@ -7038,7 +7042,7 @@ fn run_wiring_register(check: bool, mode: Mode, err: &mut dyn Write) -> Result<E
              provisioned per session and may be taken.",
         )?;
     }
-    if check && !done.rows.is_empty() {
+    if check && !done.events.is_empty() {
         return Ok(ExitCode::Violation);
     }
     Ok(ExitCode::Success)
