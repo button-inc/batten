@@ -31,6 +31,9 @@ Read on demand, never all of them.
 - `mem:workflow/sonar-scope` — Sonar refuses your branch; reading or changing
   `sonar-gate`; a Sonar verdict looks wrong on a SHA; before treating a `final`
   failure as trunk's, or a check-run's annotations as the whole finding list.
+- `mem:workflow/container-is-yours` — **every call is refused** (an engine/pin
+  skew, `engine-cannot-adjudicate`), or about to tell the human to run, install
+  or restart anything: no human can reach this container, and the exits are yours.
 - `mem:session-transcript-access` — asked to read chat history or another
   session; before probing a session API or credential.
 - `mem:github-access` — any GitHub op; before claiming the toolchain or CI
