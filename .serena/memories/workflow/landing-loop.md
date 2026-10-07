@@ -376,6 +376,25 @@ provably reach the value the code reads, the run measured nothing.
   unanchored pattern then matches only its own declaration and "survives" while
   testing nothing.
 
+## Measured 2026-10-07 (CLOUD-2090)
+
+- **The harness subscribes every PR it creates to PR events. Never unsubscribe.**
+  `unsubscribe_pr_activity` requires approval, so calling it stops the whole
+  session on a step with no part in the work. This happened twice in one session.
+  Leave the subscription in place and ignore its events. Act only on a real CI or
+  review finding. A CodeRabbit rate-limit notice, or a third-party suite finishing
+  on a draft, needs nothing. `land` is what drives the PR.
+- **A reclaim can leave a stale `target/release/batten` ahead of the release.**
+  mise puts `target/release` ahead of `~/.local/bin` on `PATH`, so hk's hooks run
+  that build. When the pin moves, the commit hooks refuse with
+  `pins vX and this engine is vY` even though `batten --version` in the shell
+  reports the pin. Delete the stale binary and the download is used. Never
+  rebuild a release you can download.
+- **A `mise.toml` task with arguments runs from a single-string `run`, with any
+  `get_env(...)` in `env`.** The shell census reads parentheses and quotes as
+  shell. So an inline template call makes the task count as shell, and
+  `shell_banned::this_repositorys_own_tree_passes` refuses the rise.
+
 ## Rollout posture
 
 Every mechanism here fails open on a clone that predates it, so none of them
