@@ -233,10 +233,15 @@ chains, and an explicit `MISE_GITHUB_TOKEN` (CI's) is still left alone.
 2026-10-07: the wrapper read `BATTEN_GITHUB_TOKEN`, but the container had
 neither it nor `MISE_GITHUB_TOKEN` set (`${VAR:+SET}` empty for both), so mise
 fell through to the `proxy-` placeholder and 401'd (`cargo-llvm-cov` install,
-then `toolchain-is-provisioned failed`). That is not a wiring bug and
-`startup --repair` cannot fix it: the remedy is the operator adding the PAT as
-`BATTEN_GITHUB_TOKEN` in the environment's settings, then a new session. Check
-presence FIRST, before diagnosing the chain.
+then `toolchain-is-provisioned failed`). A PAT is NOT required to get
+past it. With the placeholder removed (`env -u GITHUB_TOKEN`), mise goes
+anonymous, which authenticates fine but shares 60/hr per egress IP. That
+container's IP was already at 0/60 (403 `rate limit exceeded`, `github auth:
+no`). Release ASSETS (`github.com/<o>/<r>/releases/download/<tag>/…`) are not
+API calls and downloaded fine with no token. So a missing PAT costs only the
+API's version resolution, never the binary. Check presence FIRST, before
+diagnosing the chain. The defect is the wrapper forwarding a `proxy-`
+placeholder instead of dropping it.
 
 **A `[[provision.env]]` EDIT IS INERT ON A WARM CONTAINER** (CLOUD-1502).
 `batten provision status` compares the exec path and the pinned version, not the
