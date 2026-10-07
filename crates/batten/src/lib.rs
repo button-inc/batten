@@ -259,10 +259,12 @@ pub use severity::{AdvisoryTier, Mapping, ReportLevel, RuleSeverity};
 // self-cleaning in both directions, so if the table ever shrinks back under the
 // ceiling this annotation goes red rather than quietly outliving its cause.
 //
-// The startup update's hook-path skip (CLOUD-2062): dropping it lets a hook
-// build or download inline, which the hook-path case catches.
+// The hook path's one exclusion (CLOUD-2062, narrowed under CLOUD-2059): it
+// follows a release pin but never BUILDS a source pin inline. Dropping the
+// `hook_path` term lets a hook run a cargo build, which the hook-path case
+// catches.
 //MUTANT-SUITE crates/batten/tests/it/engine_update.rs
-//MUTANT hook-path-updates|s@^    let may_update = !hook_path \&\& !own_surface \&\& std::env::var_os(ENGINE_UPDATED).is_none();$@    let may_update = !own_surface \&\& std::env::var_os(ENGINE_UPDATED).is_none();@|the_hook_path_never_updates
+//MUTANT hook-path-builds|s@^    let may_build = !hook_path;$@    let may_build = true;@|the_hook_path_never_builds_a_source_pin
 #[expect(
     clippy::too_many_lines,
     reason = "a dispatch table's length is its verb count; splitting it scatters the surface"
@@ -294,14 +296,19 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
     if let Ok(here) = std::env::current_dir() {
         config::declare_for_process(&here);
     }
-    // A STALE ENGINE UPDATES ITSELF BEFORE IT DECIDES ANYTHING (CLOUD-2062), off
-    // the hook path only: a hook never downloads or builds inline, and there the
-    // pre-parse refusal (CLOUD-2061) stands. The `engine` verbs are the update's
-    // own surface, and the guard bounds a session to one update per invocation.
+    // A STALE ENGINE FOLLOWS ITS PIN BEFORE IT DECIDES ANYTHING (CLOUD-2062),
+    // the way a lockfile's runner execs the version the lockfile names. The hook
+    // path included: refusing there locked every tool call out of the session
+    // whenever a release moved under the installed binary, measured three times
+    // on CLOUD-2059's branch, while the pinned release sat one cached fetch away.
+    // What the hook never does is BUILD — a source pin there is still the
+    // pre-parse refusal's (CLOUD-2061). The `engine` verbs are the update's own
+    // surface, and the guard bounds a session to one hop per invocation.
     let hook_path = matches!(command, Some(Command::Hook { .. }));
     let own_surface = matches!(command, Some(Command::Engine { .. }));
-    let may_update = !hook_path && !own_surface && std::env::var_os(ENGINE_UPDATED).is_none();
-    if may_update && let Some(code) = update_then_reexec()? {
+    let may_build = !hook_path;
+    let may_follow = !own_surface && std::env::var_os(ENGINE_UPDATED).is_none();
+    if may_follow && let Some(code) = follow_pin(may_build)? {
         return Ok(code);
     }
     match command {
@@ -599,25 +606,33 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
 /// again in the same invocation (CLOUD-2062).
 const ENGINE_UPDATED: &str = "BATTEN_ENGINE_UPDATED";
 
-/// When this checkout pins an engine this binary is not, install it and re-run
-/// this invocation under it; `None` when nothing was stale.
+/// When this checkout pins an engine this binary is not, re-run this invocation
+/// under the pinned one; `None` when nothing was stale.
+///
+/// **A RELEASE PIN IS FOLLOWED, NEVER INSTALLED OVER THIS BINARY.** The pinned
+/// release is fetched and verified once into the per-tag cache
+/// ([`engine::pinned_release`]) and exec'd from there, so two checkouts pinning
+/// two releases each run their own and neither rewrites the other's — the
+/// installed binary flipping between branches was this function's old shape.
+/// A source pin is built over the running binary as before, and only where
+/// `may_build`: never on the hook path.
 ///
 /// Best-effort on the READ: outside a repository, or with no readable
 /// `batten.toml`, there is no pin to honour and the verb runs as it is. The
-/// UPDATE is not best-effort — a pin that cannot be installed is reported, since
+/// FETCH is not best-effort — a pin that cannot be fetched is reported, since
 /// running anyway would decide under the very engine the pin refuses.
 //MUTANT-SUITE crates/batten/tests/it/engine_update.rs
 //MUTANT checkout-build-replaced|s@^    if exe.starts_with(\&root) {$@    if false {@|a_build_inside_the_checkout_is_never_replaced
-fn update_then_reexec() -> Result<Option<ExitCode>> {
+fn follow_pin(may_build: bool) -> Result<Option<ExitCode>> {
     let Ok(root) = git::worktree_root(Path::new(".")) else {
         return Ok(None);
     };
     let Ok(text) = std::fs::read_to_string(root.join(config::CONFIG_FILE)) else {
         return Ok(None);
     };
-    if engine::stale(&text, engine::running_stamp).is_none() {
+    let Some(pin) = engine::stale(&text, engine::running_stamp) else {
         return Ok(None);
-    }
+    };
     // READ BEFORE THE SWAP. After the rename Linux reports the running image as
     // `<path> (deleted)`, which is not a program — measured: the re-exec failed
     // with "cannot run `…/target/debug/batten (deleted)`".
@@ -629,8 +644,20 @@ fn update_then_reexec() -> Result<Option<ExitCode>> {
     if exe.starts_with(&root) {
         return Ok(None);
     }
-    engine_update(&root, &mut std::io::sink())?;
-    let mut argv: Vec<String> = vec![exe.to_string_lossy().into_owned()];
+    let engine = match (pin.release.as_deref(), pin.source.as_deref()) {
+        (Some(tag), None) => {
+            let cache = state::repo_state_dir(&root)?;
+            engine::pinned_release(&cache, env!("CARGO_PKG_REPOSITORY"), tag)?
+        }
+        (None, Some(_)) if may_build => {
+            engine_update(&root, &mut std::io::sink())?;
+            exe
+        }
+        // A source pin on the hook path, or a malformed pin: the pre-parse
+        // refusal names it.
+        _ => return Ok(None),
+    };
+    let mut argv: Vec<String> = vec![engine.to_string_lossy().into_owned()];
     argv.extend(std::env::args().skip(1));
     let published = [(String::from(ENGINE_UPDATED), String::from("1"))];
     exec::run_in_env(&root, &argv, &published).map(Some)

@@ -6049,18 +6049,18 @@ declared_in = "crates/batten/tests/**/*.rs"
 # a mention does not. (`budget.rs` anchors its HTML-comment scan for the same
 # reason.)
 #
-# WIDENED TO AN EXPRESSION (CLOUD-2059), because the literal saw one spelling of
-# four. Every `ignore` this tree actually carried was a form it could not count:
-# `#[cfg_attr(not(unix), ignore = "…")]`, so the row guarded nothing that
-# existed. Nor could it count `#[ignore = "…"]`, the form a new skip is most
-# likely to take, or an indented `#[ignore]` inside a test module. The anchor is
-# the same as before, with indentation allowed: an attribute begins its line and
-# a mention does not.
+# THE LITERAL SEES ONE SPELLING OF FOUR, and the expression that sees all four
+# waits on a release (CLOUD-2059). Every `ignore` this tree carries is a form the
+# literal cannot count — `#[cfg_attr(not(unix), ignore = "…")]` — nor can it count
+# `#[ignore = "…"]` or an indented `#[ignore]`. The ratchet's `regex` column that
+# counts them landed in the engine with this branch, and this row may not use it
+# until the pinned release carries it: a row the pin cannot read refuses every
+# load, which is what the pin is for. Moving it is one line after that release.
 [[rule]]
 id = "test skip refused"
 kind = "ratchet"
 glob = "crates/**/*.rs"
-regex = '(?m)^[ \t]*#\[(?:ignore\b|cfg_attr\(.*\bignore\b)'
+pattern = "\n#[ignore]"
 direction = "non_increasing"
 base = "origin/main"
 severity = "deny"

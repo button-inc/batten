@@ -1,4 +1,5 @@
-//! The engine updates itself to its pin, off the hook path only (CLOUD-2062).
+//! The engine follows its pin (CLOUD-2062): a release from the per-tag cache on
+//! every path, a source pin built only off the hook path.
 //!
 //! Driven through a private COPY of the compiled binary, because the update
 //! replaces the running binary and stamps it — doing that to the shared test
@@ -167,8 +168,64 @@ fn a_build_inside_the_checkout_is_never_replaced() {
     );
 }
 
+/// The pinned release, as its per-tag cache holds it: a stand-in that names
+/// itself and its arguments, so a case can see which engine decided.
+fn seed_release(dir: &Path, tag: &str) {
+    let root = dir.canonicalize().unwrap();
+    let cache = dir
+        .join("state")
+        .join("batten")
+        .join(batten::state::derive_repo_name(&root).unwrap())
+        .join("engine")
+        .join(tag);
+    std::fs::create_dir_all(&cache).unwrap();
+    common::write(
+        &cache,
+        "batten",
+        &format!("#!/bin/sh\necho \"pinned {tag} ran $*\"\n"),
+    );
+    make_executable(&cache.join("batten"));
+}
+
+/// A RELEASE PIN IS FOLLOWED, ON THE HOOK PATH TOO (CLOUD-2059). The hook used
+/// to refuse here, which locked every tool call out of the session each time a
+/// release moved under the installed binary, while the pinned engine sat in the
+/// cache. It is exec'd from the cache, and the installed binary is left alone:
+/// a lockfile's runner execs the pinned version, it does not reinstall itself.
 #[test]
-fn the_hook_path_never_updates() {
+fn a_release_pin_is_followed_from_the_cache_on_the_hook_path() {
+    let dir = repo("engine-update-follow-release");
+    stub_cargo(&dir);
+    let binary = private_binary(&dir);
+    let before = std::fs::read(&binary).unwrap();
+    common::write(
+        &dir,
+        "batten.toml",
+        "version = 1\nengine = { release = \"v9.9.9\" }\n",
+    );
+    seed_release(&dir, "v9.9.9");
+    let envelope = r#"{"hook_event_name":"PreToolUse","permission_mode":"default","tool_name":"Bash","tool_input":{"command":"ls"}}"#;
+    let output = run(
+        &binary,
+        &dir,
+        &["adjudicate", "--harness", "claude-code"],
+        envelope,
+    );
+    assert!(
+        text(&output).contains("pinned v9.9.9 ran adjudicate --harness claude-code"),
+        "the hook must run the pinned release, not refuse: {}",
+        text(&output)
+    );
+    assert_eq!(
+        std::fs::read(&binary).unwrap(),
+        before,
+        "following a pin never rewrites the installed binary"
+    );
+    assert!(!dir.join("cargo-ran").exists(), "nothing built");
+}
+
+#[test]
+fn the_hook_path_never_builds_a_source_pin() {
     let dir = repo("engine-update-hook");
     stub_cargo(&dir);
     let binary = private_binary(&dir);
