@@ -196,7 +196,10 @@ fn seed_release(dir: &Path, tag: &str) {
 fn a_release_pin_is_followed_from_the_cache_on_the_hook_path() {
     let dir = repo("engine-update-follow-release");
     stub_cargo(&dir);
-    let binary = private_binary(&dir);
+    // OUTSIDE the checkout: a binary inside it is that tree's own build, which
+    // `a_build_inside_the_checkout_is_never_replaced` keeps out of reach.
+    let installed = common::scratch("engine-update-follow-release-installed");
+    let binary = private_binary(&installed);
     let before = std::fs::read(&binary).unwrap();
     common::write(
         &dir,
