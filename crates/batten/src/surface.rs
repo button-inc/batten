@@ -2000,6 +2000,10 @@ const REGISTER_CHECK: FlagDecl = FlagDecl {
     env: EnvDecl::None,
     global: false,
     positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Bool,
 };
 
 const CHECK: FlagDecl = FlagDecl {
