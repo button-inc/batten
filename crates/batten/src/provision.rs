@@ -1630,14 +1630,14 @@ fn resolved_env_from(
                 return removals_allowed.then(|| (rule.name.clone(), EnvAction::Unset));
             }
             let value = if rule.prepend_list.is_empty() {
-                // `reject_prefix` is ignored outright when the credential is
-                // unusable, which is what makes the placeholder WIN there. It
-                // is a marker rather than a credential, and proxied it is
-                // substituted for one that works — so it beats an empty
-                // variable, and this is the arm that keeps it.
-                let reject = removals_allowed
-                    .then_some(rule.reject_prefix.as_deref())
-                    .flatten();
+                // `reject_prefix` applies WHATEVER the credential's health
+                // (CLOUD-2122). Gating it on `removals_allowed` kept the marker
+                // when no PAT was injected, on the theory that the proxy
+                // substitutes it — but the fence rows send this traffic
+                // DIRECT, where a marker is only ever `Bad credentials`, while
+                // anonymous resolves. A row scoped by `when_trust_names` to the
+                // fence's own condition leaves a genuinely proxied host alone.
+                let reject = rule.reject_prefix.as_deref();
                 // FIRST SET, AND SELECTION NEVER PROBES. Written first as
                 // "first USABLE" — a per-candidate probe here — and that was
                 // wrong twice over. It is a SECOND AUTHORITY over the question
@@ -2288,11 +2288,10 @@ mod tests {
         );
     }
 
-    /// EVEN A PLACEHOLDER BEATS NOTHING. With no usable credential the marker is
-    /// preferred: proxied it is substituted for one that works, so clearing it
-    /// strands the session where keeping it merely scopes it.
+    /// NO PAT IS NOT A REASON TO KEEP THE MARKER (CLOUD-2122). Fenced, the
+    /// marker is sent direct and refused; cleared, the tool goes anonymous.
     #[test]
-    fn an_unusable_credential_keeps_the_placeholder() {
+    fn an_unusable_credential_still_drops_the_placeholder() {
         let got = resolved_env_from(
             &[credential_row("PROBE_TOKEN")],
             Credential::Unusable,
@@ -2300,11 +2299,8 @@ mod tests {
         );
         assert_eq!(
             got,
-            vec![(
-                "PROBE_TOKEN".to_owned(),
-                EnvAction::Set(Secret::new("proxy-injected".to_owned()))
-            )],
-            "a marker beats an empty variable when nothing replaces it"
+            vec![("PROBE_TOKEN".to_owned(), EnvAction::Unset)],
+            "a marker is never a credential on the fenced route"
         );
     }
 

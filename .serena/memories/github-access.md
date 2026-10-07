@@ -240,7 +240,14 @@ container's IP was already at 0/60 (403 `rate limit exceeded`, `github auth:
 no`). Release ASSETS (`github.com/<o>/<r>/releases/download/<tag>/…`) are not
 API calls and downloaded fine with no token. So a missing PAT costs only the
 API's version resolution, never the binary. Check presence FIRST, before
-diagnosing the chain. The defect is the wrapper forwarding a `proxy-`
+diagnosing the chain.
+
+**NOTHING VERSION-SHAPED NEEDS A TOKEN OR THE REST API.** Latest release /
+outdated-dep questions answer over routes with no auth and no API limit:
+`git ls-remote --tags https://github.com/<o>/<r>` (every tag),
+`https://github.com/<o>/<r>/releases/latest` (302 to the newest tag), and
+`releases/download/<tag>/<asset>` for the binary. Reach for these before
+concluding a PAT is "needed". The defect is the wrapper forwarding a `proxy-`
 placeholder instead of dropping it.
 
 **A `[[provision.env]]` EDIT IS INERT ON A WARM CONTAINER** (CLOUD-1502).
