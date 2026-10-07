@@ -229,6 +229,15 @@ read `GITHUB_PERSONAL_ACCESS_TOKEN`/`MISE_GITHUB_TOKEN`, the container injects
 `NO_PROXY` half was correct all along. `BATTEN_GITHUB_TOKEN` is now in all three
 chains, and an explicit `MISE_GITHUB_TOKEN` (CI's) is still left alone.
 
+**The chain only helps if the environment injects the name.** Measured
+2026-10-07: the wrapper read `BATTEN_GITHUB_TOKEN`, but the container had
+neither it nor `MISE_GITHUB_TOKEN` set (`${VAR:+SET}` empty for both), so mise
+fell through to the `proxy-` placeholder and 401'd (`cargo-llvm-cov` install,
+then `toolchain-is-provisioned failed`). That is not a wiring bug and
+`startup --repair` cannot fix it: the remedy is the operator adding the PAT as
+`BATTEN_GITHUB_TOKEN` in the environment's settings, then a new session. Check
+presence FIRST, before diagnosing the chain.
+
 **A `[[provision.env]]` EDIT IS INERT ON A WARM CONTAINER** (CLOUD-1502).
 `batten provision status` compares the exec path and the pinned version, not the
 `env` rows, so it reports no drift over a wrapper whose chain disagrees with the
