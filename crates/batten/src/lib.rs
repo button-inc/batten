@@ -764,7 +764,7 @@ fn engine_pin(
 /// `None` once the tag is no longer a draft, published or absent alike: the
 /// fetch that follows decides either. `Some(waits)` when the bound ran out with
 /// the draft still a draft — could-not-look, never a verdict about the tree.
-//MUTANT draft-pin-not-awaited|s@^    if !release::is_draft(slug, tag, \&get) {$@    if true {@|a_pin_naming_an_unpublished_draft_is_waited_on_never_refused
+//MUTANT draft-pin-not-awaited|s@^        if !release::is_draft(slug, tag, \&get) {$@        if true {@|a_pin_naming_an_unpublished_draft_is_waited_on_never_refused
 fn await_published(tag: &str) -> Option<u32> {
     // The forge's owner/name: the repository URL's last two segments, the same
     // URL `engine::release_url` downloads the release from.
