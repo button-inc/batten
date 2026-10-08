@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.207](https://github.com/button-inc/batten/compare/v0.0.206...v0.0.207) - 2026-10-08
+
+### Added
+
+- *(test)* replay each modified test's base form against HEAD
+
+### Fixed
+
+- *(engine)* aim the draft-wait mutation row at the line inside its loop
+- *(engine)* wait out a pinned release that is still a draft, never refuse it
+- *(release)* dispatch the artifacts of a draft release, and read a draft by list
+- *(land)* keep the default lease waits inside one background lifetime
+- *(ready)* read the §6 type before the answer, and an empty column as no claim
+- *(test)* a replay that could not run is could-not-look, never a finding
+- *(test)* `test replay` emits its findings as one JSON document under -J
+
+### Other
+
+- *(hookcost)* measure distinct gates per window and what follows a deny
+- *(replay)* the scratch crate runs under nextest's default profile
+- *(snapshots)* the golden JSON schema carries `test replay`
+
 ## [0.0.206](https://github.com/button-inc/batten/compare/v0.0.205...v0.0.206) - 2026-10-07
 
 ### Added
