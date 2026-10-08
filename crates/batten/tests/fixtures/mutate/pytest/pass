@@ -1,0 +1,2 @@
+pytest 9.1.1
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="0" skipped="0" tests="1" time="0.034" timestamp="2026-10-08T17:44:07.924135+00:00" hostname="vm"><testcase classname="test_limit" name="test_limit_is_ten" time="0.005" /></testsuite></testsuites>

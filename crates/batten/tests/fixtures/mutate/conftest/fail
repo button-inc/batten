@@ -1,0 +1,18 @@
+conftest 0.71.1
+[
+	{
+		"filename": "policy/limit_test.rego",
+		"namespace": "",
+		"successes": 1
+	},
+	{
+		"filename": "policy/limit_test.rego",
+		"namespace": "",
+		"successes": 0,
+		"failures": [
+			{
+				"msg": "data.main.test_limit_is_ten"
+			}
+		]
+	}
+]

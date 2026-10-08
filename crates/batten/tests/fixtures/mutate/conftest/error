@@ -1,0 +1,8 @@
+conftest 0.71.1
+Error: running verification: load: loading policies: load: 2 errors occurred during loading:
+policy/limit.rego:5: rego_parse_error: unexpected assign token
+	limit := := 10
+	         ^
+policy/limit.rego:5: rego_parse_error: unexpected assign token: expected rule value term (e.g., limit := <VALUE> { ... })
+	limit := := 10
+	         ^

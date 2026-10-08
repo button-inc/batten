@@ -1,0 +1,26 @@
+kyverno 1.19.1
+Loading test  ( policies/kyverno-test.yaml ) ...
+  Loading values/variables ...
+  Loading policies ...
+  ERROR: policies/policy.yaml: failed to parse document (failed to parse yaml: error converting YAML to JSON: yaml: line 19: did not find expected ',' or ']')
+  Loading resources ...
+  Loading exceptions ...
+  Applying 0 policies to 2 resources with 0 exceptions ...
+  Checking results ...
+
+[
+  {
+    "ID": 1,
+    "Message": "Not found",
+    "POLICY": "require-team",
+    "REASON": "Not found",
+    "RESOURCE": "v1/Pod/default/labelled",
+    "RESULT": "Fail",
+    "RULE": "check-team"
+  }
+]
+
+
+Test Summary: 0 tests passed and 1 tests failed
+
+Error: 1 tests failed

@@ -19,7 +19,7 @@
 //!
 //! Its predecessor was `mise-tasks/mutant.sh`, and the predecessor could not
 //! reach a single policy module: it resolved a gate's SOURCE with a Rego
-//! fallback and its SUITE as `tests/$gate.bats` unconditionally, so a mutation
+//! fallback and its SUITE as a bats file named after the gate, unconditionally, so a mutation
 //! applied to a `.rego` module had no suite that could turn red. Measured at the
 //! time of the port: 32 modules, 32 `#MUTANT-EXEMPT` rows, 29 of them citing
 //! that exact hole, 0 with a bats suite, and 141 compiled-binary tiers the
@@ -42,7 +42,9 @@
 //! # The one behavioural change, and everything conserved around it
 //!
 //! **A gate's suite comes from a DECLARED mapping**: `#MUTANT-SUITE <path>`
-//! beside the `#MUTANT` rows, defaulting to `tests/<gate>.bats` when absent. A
+//! beside the `#MUTANT` rows, and nothing else (CLOUD-2160). A source declaring
+//! none, or naming a path no runner here recognizes, reports `no-suite` and runs
+//! nothing — a guessed suite is a guessed verdict. A
 //! `.rego` module can therefore name `crates/batten/tests/<x>.rs` — the tier
 //! that actually drives the engine — as the suite a mutation must redden. The
 //! declaration is read PER SOURCE: a preset gate is a directory of modules, and
@@ -106,8 +108,8 @@ use anyhow::{Context as _, Result, bail};
 /// file — bash or Rego. `#MUTANT` is not valid Rust, so no predicate in
 /// `crates/batten/src/**` could carry one, while `obligations-bound` demands the
 /// declared obligation file carry exactly that row. The pair was unsatisfiable
-/// for every Rust change, and `.bats` is no escape because `V-SHELL-RULE-ADDED`
-/// refuses adding one.
+/// for every Rust change, and a shell suite was no escape because
+/// `V-SHELL-RULE-ADDED` refuses adding one.
 ///
 /// The measured cost was not the gap itself: CLOUD-1349's "shown able to fail"
 /// was performed BY HAND — predicate edited to a constant, suite re-run, result
@@ -296,8 +298,8 @@ fn strip_marker(line: &str, marker: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
-/// The vendored bats runner, relative to the repository root.
-const BATS: &str = "tests/bats/bin/bats";
+/// What `no-suite` names for a gate none of whose sources declares a suite.
+const UNDECLARED: &str = "undeclared";
 
 /// Where a preset's modules live, relative to the repository root.
 const PRESETS: &str = "crates/batten/src/policy/presets";
@@ -326,28 +328,62 @@ pub struct Row {
 
 /// How a gate's suite is run.
 ///
-/// Two shapes rather than one, and the declared mapping is what chooses between
-/// them: the predecessor hardcoded the first and could not express the second,
+/// One variant per harness, and the declared mapping is what chooses between
+/// them: the predecessor hardcoded one runner and could not express a second,
 /// which is the whole of CLOUD-1267.
+///
+/// **THE NATIVE HARNESSES ARE CLOUD-2160's**, and they are here because the
+/// consumers this verb serves are `tofu`, `kyverno`, `conftest` and Python, and no
+/// mutation tool exists for Rego or Kyverno. The `#MUTANT` rows, their `sed`
+/// scripts and the file arm already work on `.tf`, YAML, `.rego` and `.py`; only
+/// the runner set was missing. Each arm reads the HARNESS'S OWN case verdict,
+/// never its exit code alone (`probe_verdict.rs`'s rule): a failing case and a
+/// run that could not load both exit non-zero, and only the first is evidence.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Suite {
-    /// `tests/<name>.bats`, run through the vendored runner.
-    Bats(String),
     /// A Rust suite, run as `cargo test -- <case>`. The path is carried to be
     /// READ — for the existence check and the case census — and never to be
     /// turned into a target name.
     Cargo { path: String },
+    /// `*.tftest.hcl`, run as `tofu test -json -filter=<file>`. The case is the
+    /// `run` block's name, matched exactly against the `test_run` lines.
+    Tofu { path: String },
+    /// `kyverno-test.yaml`, run as `kyverno test <dir> -t <selector>`. The case
+    /// is the `policy=…,rule=…,resource=…` selector, matched exactly.
+    Kyverno { path: String },
+    /// `*.rego`, run as `conftest verify -p <dir>`. The case is the `test_`
+    /// rule's name, matched exactly. conftest has no case filter.
+    Conftest { path: String },
+    /// `test_*.py` or `*_test.py`, run as `pytest <file> -k <case>`. The case
+    /// is a `-k` substring filter, as libtest's is for `Cargo`.
+    Pytest { path: String },
 }
 
 impl Suite {
     /// The suite a declared path names, or `None` for a path this runner has no
     /// runner for — which is reported rather than guessed at.
     #[must_use]
+    //MUTANT-SUITE crates/batten/tests/it/mutate.rs
+    //MUTANT unrecognized-suite-guessed|s@^            return None;$@            return Some(Suite::Pytest { path: path.to_owned() });@|an_unrecognized_suite_is_reported_not_run
     pub fn declared(path: &str) -> Option<Self> {
-        if has_extension(path, "bats") {
-            return Some(Suite::Bats(path.to_owned()));
+        let file = Path::new(path)
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let path = path.to_owned();
+        if file.ends_with(".tftest.hcl") {
+            return Some(Suite::Tofu { path });
         }
-        if !has_extension(path, "rs") {
+        if file == "kyverno-test.yaml" {
+            return Some(Suite::Kyverno { path });
+        }
+        if has_extension(&path, "rego") {
+            return Some(Suite::Conftest { path });
+        }
+        if has_extension(&path, "py") && (file.starts_with("test_") || file.ends_with("_test.py")) {
+            return Some(Suite::Pytest { path });
+        }
+        if !has_extension(&path, "rs") {
             return None;
         }
         // THE EXTENSION DECIDES AND NO PART OF THE PATH NAMES A TARGET.
@@ -368,16 +404,18 @@ impl Suite {
         // So the runner asks for no target. `want` is a libtest substring
         // filter, which selects the case wherever it was compiled to, and that
         // is layout-agnostic in a way no path rule can be.
-        Some(Suite::Cargo {
-            path: path.to_owned(),
-        })
+        Some(Suite::Cargo { path })
     }
 
     /// The repo-relative path of the file the suite lives in.
     #[must_use]
     pub fn path(&self) -> &str {
         match self {
-            Suite::Bats(path) | Suite::Cargo { path, .. } => path,
+            Suite::Cargo { path }
+            | Suite::Tofu { path }
+            | Suite::Kyverno { path }
+            | Suite::Conftest { path }
+            | Suite::Pytest { path } => path,
         }
     }
 }
@@ -391,9 +429,18 @@ pub struct Gate {
     pub name: String,
     /// The sources this gate's rows are read from, repo-relative.
     pub sources: Vec<String>,
-    /// The declared suite, or the default: the first source's declaration.
-    /// A row whose own source declares none runs under it.
-    pub suite: Suite,
+    /// The first source's declared suite, which a row whose own source declares
+    /// none runs under — or `None` where no source declares one, which the
+    /// sweep reports as `no-suite (undeclared)` and runs nothing for.
+    ///
+    /// **NO DEFAULT, AND THERE USED TO BE ONE** (CLOUD-2160). An undeclared
+    /// source fell back to a bats file named after the gate, run through a
+    /// runner this repository no longer carries — so the code still read as a
+    /// supported route, and a consumer plan built on it before review caught it.
+    pub suite: Option<Suite>,
+    /// The first declared suite path no runner here recognizes, reported as
+    /// `no-suite (<path>)` rather than guessed at.
+    pub unrunnable: Option<String>,
     /// Each source's OWN `#MUTANT-SUITE`, keyed by that source.
     ///
     /// **ONE DECLARATION PER SOURCE, NOT ONE PER GATE.** A preset gate is a
@@ -412,16 +459,16 @@ pub struct Gate {
 
 impl Gate {
     /// The suite a row is judged under: its own source's declaration, else
-    /// the gate's.
+    /// the gate's, else none.
     #[must_use]
-    pub fn suite_for(&self, row: &Row) -> &Suite {
-        self.own_suites.get(&row.source).unwrap_or(&self.suite)
+    pub fn suite_for(&self, row: &Row) -> Option<&Suite> {
+        self.own_suites.get(&row.source).or(self.suite.as_ref())
     }
 
     /// Every suite this gate's rows run under, the gate's own first, each once.
     #[must_use]
     pub fn suites(&self) -> Vec<&Suite> {
-        let mut all = vec![&self.suite];
+        let mut all: Vec<&Suite> = self.suite.iter().collect();
         for suite in self.own_suites.values() {
             if !all.contains(&suite) {
                 all.push(suite);
@@ -467,6 +514,15 @@ pub enum Verdict {
     /// failed or was contended (CLOUD-1910). Not the row's fault, and reported
     /// apart from [`Verdict::NamesNoCase`] so nobody fixes the wrong thing.
     SuiteDidNotRun { want: String },
+    /// The harness ran and reported the named case ERRORED rather than failed —
+    /// a run that could not load what it was asked to judge (CLOUD-2160).
+    ///
+    /// **ITS OWN VARIANT, AND A COULD-NOT-LOOK, because the exit code cannot
+    /// tell the two apart.** A parse-broken `.tf`, a policy conftest cannot
+    /// load and a pytest collection error all exit non-zero exactly as a failing
+    /// case does, so a sweep reading the code would call every mutation that
+    /// breaks the parse `caught`. Only the case's own failure kills a mutant.
+    CaseErrored { want: String },
     /// The case was already red before the mutation, so its redness afterwards
     /// is not evidence.
     CaseAlreadyRed { want: String },
@@ -506,6 +562,7 @@ impl Verdict {
                 | Verdict::NamesNoCase { .. }
                 | Verdict::SuiteTimedOut { .. }
                 | Verdict::SuiteDidNotRun { .. }
+                | Verdict::CaseErrored { .. }
                 | Verdict::CaseAlreadyRed { .. }
                 | Verdict::UnappliableMutation
         )
@@ -528,6 +585,7 @@ impl fmt::Display for Verdict {
                 write!(out, "suite-timed-out ({seconds}s)")
             }
             Verdict::SuiteDidNotRun { want } => write!(out, "suite-did-not-run ({want})"),
+            Verdict::CaseErrored { want } => write!(out, "case-errored ({want})"),
             Verdict::CaseAlreadyRed { want } => write!(out, "case-already-red ({want})"),
             Verdict::FilterNamesEveryCase { want } => {
                 write!(out, "filter-names-every-case ({want})")
@@ -635,8 +693,8 @@ fn lines_of(root: &Path, path: &str) -> Option<Vec<String>> {
 /// of CLOUD-1369 a compiler cannot catch: dropping the `#` from the marker
 /// constants left this function matching a BARE `MUTANT-SUITE ` at column zero,
 /// which no file in the tree carries. It compiled clean and would have silently
-/// stopped resolving every landed `.rego` declaration — a suite falling back to
-/// `tests/<gate>.bats`, an owner and an exemption reading as absent. Compile-clean
+/// stopped resolving every landed `.rego` declaration — a suite reading as
+/// undeclared, an owner and an exemption reading as absent. Compile-clean
 /// and gate-dead is the same shape `rules/policy-modules.md` opens with.
 fn declared(lines: &[String], marker: &str) -> Option<String> {
     lines.iter().find_map(|line| strip_marker(line, marker))
@@ -765,6 +823,7 @@ pub fn resolve(root: &Path, name: &str) -> Option<Gate> {
     let mut rows = Vec::new();
     let mut malformed = Vec::new();
     let mut suite = None;
+    let mut unrunnable = None;
     let mut own_suites = BTreeMap::new();
     let mut owner = None;
     for source in &sources {
@@ -772,13 +831,15 @@ pub fn resolve(root: &Path, name: &str) -> Option<Gate> {
             continue;
         };
         if let Some(own) = declared(&lines, SUITE) {
-            // The same fallback the gate's own suite takes below, so a source
-            // naming a path this runner cannot run is reported as `no-suite`
-            // under its own name rather than silently judged under another's.
-            let resolved = Suite::declared(&own).unwrap_or_else(|| Suite::Bats(own.clone()));
-            own_suites.insert(source.clone(), resolved);
-            if suite.is_none() {
-                suite = Some(own);
+            // A source naming a path no runner here recognizes is reported as
+            // `no-suite` under that path, never judged under another source's
+            // suite and never handed to a runner chosen by guesswork.
+            match Suite::declared(&own) {
+                Some(resolved) => {
+                    own_suites.insert(source.clone(), resolved.clone());
+                    suite = suite.or(Some(resolved));
+                }
+                None => unrunnable = unrunnable.or(Some(own)),
             }
         }
         owner = owner.or_else(|| declared(&lines, OWNER));
@@ -801,12 +862,11 @@ pub fn resolve(root: &Path, name: &str) -> Option<Gate> {
             source: sources[0].clone(),
         });
     }
-    let declared_suite = suite.unwrap_or_else(|| format!("tests/{name}.bats"));
     Some(Gate {
         name: name.to_owned(),
         sources,
-        suite: Suite::declared(&declared_suite)
-            .unwrap_or_else(|| Suite::Bats(declared_suite.clone())),
+        suite,
+        unrunnable,
         own_suites,
         rows,
         owner,
@@ -953,32 +1013,6 @@ impl Staged {
             }
             std::fs::copy(&from, &to).with_context(|| format!("mutate: could not stage {path}"))?;
         }
-        // The submodule's contents are not tracked here; the runner is the same
-        // binary either way, so a symlink is honest rather than a second
-        // checkout.
-        let bats = dir.join("tests/bats");
-        // `symlink_metadata`, never `exists`: the staged tree persists between
-        // runs, so what is there is usually the symlink this made last time —
-        // and `remove_dir_all` refuses a symlink because it is not a directory,
-        // which is a could-not-look on the second sweep and a green first one.
-        match std::fs::symlink_metadata(&bats) {
-            Ok(meta) if meta.is_symlink() => {
-                std::fs::remove_file(&bats).context("mutate: could not provide the bats runner")?;
-            }
-            Ok(_) => {
-                std::fs::remove_dir_all(&bats)
-                    .context("mutate: could not provide the bats runner")?;
-            }
-            Err(_) => {}
-        }
-        if root.join(BATS).is_file() {
-            if let Some(parent) = bats.parent() {
-                std::fs::create_dir_all(parent)
-                    .context("mutate: could not provide the bats runner")?;
-            }
-            symlink(&root.join("tests/bats"), &bats)
-                .context("mutate: could not provide the bats runner")?;
-        }
         let staged = Staged { dir, dirty: None };
         let tracked: Vec<String> = tracked.into_iter().collect();
         staged.make_a_repository(&tracked)?;
@@ -1105,16 +1139,6 @@ fn reconcile(dir: &Path, tracked: &std::collections::BTreeSet<String>) -> Result
     Ok(())
 }
 
-#[cfg(unix)]
-fn symlink(from: &Path, to: &Path) -> std::io::Result<()> {
-    std::os::unix::fs::symlink(from, to)
-}
-
-#[cfg(not(unix))]
-fn symlink(from: &Path, to: &Path) -> std::io::Result<()> {
-    std::os::windows::fs::symlink_dir(from, to)
-}
-
 // ---------------------------------------------------------------------------
 // Spawning.
 // ---------------------------------------------------------------------------
@@ -1225,19 +1249,7 @@ fn spawn(
     //
     // ITS OWN GROUP, ENDED WHOLE — see `wait_bounded`, which records why the
     // direct child alone left every hung suite's test binary alive under init.
-    // UNSET, NOT SET SMALL, AND THE DIFFERENCE IS THE WHOLE DEFECT. `bats-exec-test`
-    // implements `BATS_TEST_TIMEOUT` as a literal `sleep N` child that it does not
-    // reap on a FAILING case — observed directly, `sleep 300` still running under a
-    // `bats-exec-test` reparented to init while `bats` itself waited on it. A caught
-    // mutation is a failing case, so every row this sweep gets right waited out the
-    // whole bound.
     //
-    // The 300 is the CONSUMER's, exported from their task runner's environment block
-    // for their own suite, and an exported variable reaches every descendant — so it
-    // arrived here uninvited. Removing this entry from `suite_env` is therefore not
-    // enough: absent an explicit removal the child inherits the ambient value, which
-    // is how a "no bound" reading still cost 300s. It has to be unset on the command.
-    command.env_remove("BATS_TEST_TIMEOUT");
     // FILES RATHER THAN PIPES, because nothing reads them until the child is
     // gone. A pipe holds 64 KiB and then blocks its writer, so a chatty failure
     // would deadlock against a reader that is waiting for the exit — the one
@@ -1447,11 +1459,9 @@ static CAPTURE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new
 /// Measured: 109 of 341 declared mutations, the whole Rust half of CLOUD-418's
 /// mechanism, reading as enforced coverage while looking at nothing.
 ///
-/// * **Bats keeps 30s**, and keeping it is deliberate rather than incidental.
-///   CLOUD-1726's measurement is a bats-only property — its runner does not
-///   cancel a failing case's countdown, so the bound is paid in full by every
-///   mutation the sweep gets RIGHT. A large number there costs real minutes per
-///   caught row.
+/// * **The native harnesses get 120s** (CLOUD-2160): each runs one file's cases
+///   and has no build step, so the bound covers interpreter or plugin start-up
+///   and the cases, never a compile.
 /// * **Cargo gets a bound that admits a build**, because it cannot avoid one. The
 ///   sweep's `CARGO_TARGET_DIR` is isolated by construction (CLOUD-1315), so the
 ///   first row pays a cold workspace build — measured at 414s here and at 21
@@ -1461,7 +1471,7 @@ static CAPTURE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new
 ///
 /// Overridable by one env var for both, because a consumer whose suite is
 /// genuinely slower needs a way up that is not editing the engine; the name is
-/// batten's own so it cannot collide with the `BATS_*` namespace the runner owns.
+/// batten's own so it cannot collide with a namespace any runner owns.
 /// An explicit override applies to whichever kind is running — a reader setting
 /// it is answering for their own tree, not for this split.
 /// The bound for the sweep's own housekeeping — staging a git repository,
@@ -1477,8 +1487,11 @@ const HOUSEKEEPING_BOUND: std::time::Duration = std::time::Duration::from_secs(6
 
 fn suite_bound(suite: &Suite) -> std::time::Duration {
     let declared = match suite {
-        Suite::Bats(_) => 30,
         Suite::Cargo { .. } => 900,
+        Suite::Tofu { .. }
+        | Suite::Kyverno { .. }
+        | Suite::Conftest { .. }
+        | Suite::Pytest { .. } => 120,
     };
     std::time::Duration::from_secs(
         std::env::var("BATTEN_MUTATE_SUITE_TIMEOUT")
@@ -1577,26 +1590,47 @@ fn suite_env(root: &Path) -> Vec<(String, String)> {
             String::from("BATTEN_TEST_SCRATCH_LANE"),
             String::from("mutate"),
         ),
-        // NO `BATS_TEST_TIMEOUT`, AND THAT IS THE POINT OF CLOUD-1726'S FIX.
-        // The runner's watchdog is not cancelled on a FAILING case, and a caught
-        // mutation is a failing case — so the consumer's bound was paid in full
-        // by every row this sweep gets right. The bound now lives in `spawn`,
-        // where it fires on a hang and costs nothing on a verdict; the evidence
-        // is the table there.
     ]
 }
 
-/// How many cases the run selected, and whether it passed.
+/// How far a run got, in the order `judge_row` must read it — every state but
+/// `Reported` is a could-not-look, and each names a different cause.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+enum Reach {
+    /// The runner printed no summary, so it never ran the suite (CLOUD-1910).
+    #[default]
+    Silent,
+    /// The runner reported its cases; `selected` and `ok` are readable.
+    Reported,
+    /// The harness reported the named case ERRORED, or emitted an error and no
+    /// line for any case at all (CLOUD-2160). Above `Silent` and `Reported`: a
+    /// run that could not load its subject selects nothing and may print no
+    /// summary, so read later it would be blamed on the filter or the runner —
+    /// and read as a status, it would be a kill.
+    Errored,
+    /// Killed at its bound rather than reaching an exit (CLOUD-1860). Above all
+    /// of them, because a killed run selects nothing and that is a fact about
+    /// the clock, never about the filter.
+    TimedOut,
+}
+
+impl Reach {
+    /// The reach a reader's two observations give: errored outranks ran.
+    const fn of(ran: bool, errored: bool) -> Self {
+        match (errored, ran) {
+            (true, _) => Reach::Errored,
+            (false, true) => Reach::Reported,
+            (false, false) => Reach::Silent,
+        }
+    }
+}
+
+/// How many cases the run selected, whether it passed, and how far it got.
+#[derive(Debug, Default, PartialEq, Eq)]
 struct Selection {
     selected: usize,
     ok: bool,
-    /// Whether the run was killed at its bound rather than reaching an exit
-    /// (CLOUD-1860). Read by `judge` BEFORE `selected`, because a killed run
-    /// selects nothing and that is a fact about the clock, never about the
-    /// filter.
-    timed_out: bool,
-    /// Whether the runner reached its summary at all (CLOUD-1910).
-    ran: bool,
+    reach: Reach,
 }
 
 /// Run a gate's suite filtered to `want`, inside the staged tree.
@@ -1632,80 +1666,156 @@ fn spawn_arm(
     spawn(&arm.cwd, Program::Suite(program), args, env, bound)
 }
 
-fn run_suite(staged: &Staged, root: &Path, suite: &Suite, want: &str) -> Result<Selection> {
+/// Run a gate's suite against the staged tree, filtered to `want` where its
+/// harness can filter, and read the named case's own verdict back.
+///
+/// **A RUNNER THAT WILL NOT SPAWN IS THIS ROW'S `suite-did-not-run`, NOT THE
+/// SWEEP'S ABORT** (CLOUD-2160). The native harnesses come from the `PATH` the
+/// invoking task provides, exactly as `sed` and `cargo` do, so one missing
+/// program used to end the whole sweep with an error naming nothing about the
+/// gates it never reached.
+fn run_suite(staged: &Staged, root: &Path, suite: &Suite, want: &str) -> Selection {
     let env = suite_env(root);
-    let bound = suite_bound(suite);
-    match suite {
-        Suite::Bats(path) => {
-            // DECLARED AS AN ARM (CLOUD-1714), which is what makes this module
-            // an INSTANCE of the harness rather than a second copy of it. The
-            // arm carries what it takes to run the thing once — where, what,
-            // and under which environment — and `arm::Outcome` carries the
-            // distinction the `selected == 0` reading below already draws: a
-            // suite that selected no case has not passed, it has not been
-            // looked at.
-            let arm = crate::arm::Arm {
-                id: format!("bats:{want}"),
-                cwd: staged.dir().to_path_buf(),
-                argv: std::iter::once(root.join(BATS).to_string_lossy().into_owned())
-                    .chain([String::from("--filter"), want.to_owned(), path.to_owned()])
-                    .collect(),
-                stdin: None,
-                env: env.iter().cloned().collect(),
-            };
-            let ran = spawn_arm(&arm, &env, bound)?;
-            Ok(Selection {
-                selected: tap_lines(&ran.output),
-                ok: ran.ok,
-                timed_out: ran.timed_out,
-                ran: tap_ran(&ran.output),
-            })
+    let dir = staged.dir();
+    // Where a `JUnit` report lands for the one arm whose verdict is a file
+    // rather than a stream. Beside the captures, never inside the tree under
+    // judgement.
+    let junit = std::env::temp_dir().join(format!(
+        "batten-mutate-junit-{}-{}.xml",
+        std::process::id(),
+        CAPTURE.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+    let _ = fs::remove_file(&junit);
+    if matches!(suite, Suite::Cargo { .. }) {
+        // BUILT UNDER THE BUILD BOUND FIRST, THEN TIMED (review of #962). A
+        // mutated source must be recompiled, and paying that inside the
+        // per-case bound is how a slow compile reads as `suite-did-not-run`.
+        // A build that fails here is left for the timed run to report.
+        let build = vec![String::from("test"), String::from("--no-run")];
+        let _ = spawn(dir, Program::Cargo, &build, &env, build_bound());
+    }
+    let (cwd, argv) = invocation(dir, suite, want, &junit);
+    // DECLARED AS AN ARM (CLOUD-1714), which is what makes this module an
+    // INSTANCE of the harness rather than a second copy of it. The arm carries
+    // what it takes to run the thing once — where, what, and under which
+    // environment — and `arm::Outcome` carries the distinction the
+    // `selected == 0` reading already draws: a suite that selected no case has
+    // not passed, it has not been looked at.
+    let arm = crate::arm::Arm {
+        id: format!("{}:{want}", argv.first().map_or("", String::as_str)),
+        cwd,
+        argv,
+        stdin: None,
+        env: env.iter().cloned().collect(),
+    };
+    let Ok(ran) = spawn_arm(&arm, &env, suite_bound(suite)) else {
+        return Selection::default();
+    };
+    let selection = match suite {
+        Suite::Cargo { .. } => Selection {
+            selected: libtest_lines(&ran.output),
+            ok: ran.ok && !ran.output.contains("error: could not compile"),
+            reach: Reach::of(libtest_ran(&ran.output), false),
+        },
+        Suite::Tofu { .. } => tofu_verdict(&ran.output, want),
+        Suite::Kyverno { .. } => kyverno_verdict(&ran.output, want),
+        Suite::Conftest { path } => {
+            conftest_verdict(&ran.output, want, &lines_of(dir, path).unwrap_or_default())
         }
-        Suite::Cargo { .. } => {
-            // BUILT UNDER THE BUILD BOUND FIRST, THEN TIMED (review of #962). A
-            // mutated source must be recompiled, and paying that inside the
-            // per-case bound is how a slow compile reads as `suite-did-not-run`.
-            // A build that fails here is left for the timed run to report.
-            let build = vec![String::from("test"), String::from("--no-run")];
-            let _ = spawn(staged.dir(), Program::Cargo, &build, &env, build_bound());
-            // NO `--test`, for `Suite::declared`'s reason: nothing in the
-            // declared path names a cargo target. Every test target is built
-            // and each filters `want` for itself, so the case runs wherever it
-            // was compiled to and a layout change cannot silently deselect it.
-            //
-            // The compile is shared across targets, so the cost of the ones
-            // that match nothing is their startup. A target selecting no case
-            // is not a pass either: `selected` stays 0 and the caller reports
-            // `names-no-case`, which is a could-not-look.
-            let arm = crate::arm::Arm {
-                id: format!("cargo:{want}"),
-                cwd: staged.dir().to_path_buf(),
-                argv: vec![
-                    String::from("cargo"),
-                    String::from("test"),
-                    String::from("--"),
-                    want.to_owned(),
-                ],
-                stdin: None,
-                env: env.iter().cloned().collect(),
-            };
-            let ran = spawn_arm(&arm, &env, bound)?;
-            Ok(Selection {
-                selected: libtest_lines(&ran.output),
-                ok: ran.ok && !ran.output.contains("error: could not compile"),
-                timed_out: ran.timed_out,
-                ran: libtest_ran(&ran.output),
-            })
+        Suite::Pytest { .. } => pytest_verdict(&fs::read_to_string(&junit).unwrap_or_default()),
+    };
+    let _ = fs::remove_file(&junit);
+    if ran.timed_out {
+        return Selection {
+            reach: Reach::TimedOut,
+            ..selection
+        };
+    }
+    selection
+}
+
+/// Where each harness runs and what it is handed: the working directory and
+/// the argv, program first.
+fn invocation(dir: &Path, suite: &Suite, want: &str, junit: &Path) -> (PathBuf, Vec<String>) {
+    let argv = |words: &[&str]| words.iter().map(|word| (*word).to_owned()).collect();
+    match suite {
+        // NO `--test`, for `Suite::declared`'s reason: nothing in the declared
+        // path names a cargo target. Every test target is built and each
+        // filters `want` for itself, so the case runs wherever it was compiled
+        // to and a layout change cannot silently deselect it.
+        //
+        // The compile is shared across targets, so the cost of the ones that
+        // match nothing is their startup. A target selecting no case is not a
+        // pass either: `selected` stays 0 and the caller reports
+        // `names-no-case`, which is a could-not-look.
+        Suite::Cargo { .. } => (dir.to_path_buf(), argv(&["cargo", "test", "--", want])),
+        // `tofu test` runs in the module's root, and a test file lives there or
+        // in its `tests/` directory — so the root is read off the path and
+        // `-filter` names the file relative to it. `-filter` selects a FILE,
+        // never a run, so the run is picked out of the output.
+        Suite::Tofu { path } => {
+            let (module, file) = tofu_module(path);
+            let filter = format!("-filter={file}");
+            (dir.join(module), argv(&["tofu", "test", "-json", &filter]))
+        }
+        Suite::Kyverno { path } => (
+            dir.to_path_buf(),
+            argv(&[
+                "kyverno",
+                "test",
+                &parent_of(path),
+                "-o",
+                "json",
+                "--detailed-results",
+                "-t",
+                want,
+            ]),
+        ),
+        Suite::Conftest { path } => (
+            dir.to_path_buf(),
+            argv(&["conftest", "verify", "-p", &parent_of(path), "-o", "json"]),
+        ),
+        Suite::Pytest { path } => {
+            let report = format!("--junitxml={}", junit.display());
+            (
+                dir.to_path_buf(),
+                argv(&["pytest", path, "-k", want, &report]),
+            )
         }
     }
 }
 
-/// TAP result lines in a bats run.
-fn tap_lines(output: &str) -> usize {
-    output
-        .lines()
-        .filter(|line| line.starts_with("ok ") || line.starts_with("not ok "))
-        .count()
+/// The directory a suite file sits in, as a repo-relative argument: `.` for a
+/// file at the root.
+fn parent_of(path: &str) -> String {
+    Path::new(path)
+        .parent()
+        .map(|parent| parent.to_string_lossy().into_owned())
+        .filter(|parent| !parent.is_empty())
+        .unwrap_or_else(|| String::from("."))
+}
+
+/// A `*.tftest.hcl` path split into the module root `tofu test` runs in and the
+/// file as `-filter` names it from there. A file under a directory called
+/// `tests` belongs to that directory's parent — `tofu test`'s own default test
+/// directory — and any other file to the directory it sits in.
+fn tofu_module(path: &str) -> (PathBuf, String) {
+    let file = Path::new(path);
+    let name = file
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let Some(parent) = file
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    else {
+        return (PathBuf::new(), name);
+    };
+    if parent.file_name().is_some_and(|dir| dir == "tests") {
+        let module = parent.parent().map(Path::to_path_buf).unwrap_or_default();
+        return (module, format!("tests/{name}"));
+    }
+    (parent.to_path_buf(), name)
 }
 
 /// Case result lines in a libtest run.
@@ -1720,38 +1830,200 @@ fn libtest_lines(output: &str) -> usize {
         .count()
 }
 
-/// Whether a bats run reached its TAP plan line (`1..N`).
-fn tap_ran(output: &str) -> bool {
-    output.lines().any(|line| line.starts_with("1.."))
-}
-
 /// Whether a libtest run printed a summary. Every test target prints one, even
 /// one that filters out every case, so its absence means nothing ran.
 fn libtest_ran(output: &str) -> bool {
     output.lines().any(|line| line.contains("test result: "))
 }
 
-/// How many cases a suite declares in total.
+/// The named `run`'s verdict out of `tofu test -json`'s machine-readable lines.
 ///
-/// **Both bats spellings**, because a suite is not always observed in the form
-/// it was written in: bats PREPROCESSES a file it runs, rewriting each `@test`
-/// line into a `bats_test_function` call, and counting only `@test` returned 0
-/// over such a file — which made the total zero and switched the too-wide-filter
-/// term off silently, the shape of false green it exists to catch.
+/// Measured against `tofu` 1.13.1 (the recorded fixtures): each run reports a
+/// `test_run` line carrying `pass`, `fail` or `error`, and a module that does not
+/// parse prints an error `diagnostic` and NO `test_run` line at all — so that
+/// shape is the errored one, and reading it as a failure would call every
+/// parse-breaking mutation caught. The `version` line opens every run, so it is
+/// what says the harness started.
+//MUTANT errored-case-read-as-killed|s@^        _ => (0, false, diagnosed && !any_run),$@        _ => (usize::from(diagnosed), false, false),@|an_errored_tofu_run_is_could_not_look
+fn tofu_verdict(output: &str, want: &str) -> Selection {
+    let mut status = None;
+    let mut any_run = false;
+    let mut diagnosed = false;
+    let mut ran = false;
+    for line in output.lines() {
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        match value.get("type").and_then(serde_json::Value::as_str) {
+            Some("version" | "test_summary") => ran = true,
+            Some("test_run") => {
+                ran = true;
+                any_run = true;
+                let run = &value["test_run"];
+                if run["run"].as_str() == Some(want)
+                    && let Some(found) = run["status"].as_str()
+                {
+                    status = Some(found.to_owned());
+                }
+            }
+            Some("diagnostic") => {
+                diagnosed |= value["diagnostic"]["severity"].as_str() == Some("error");
+            }
+            _ => {}
+        }
+    }
+    let (selected, ok, errored) = match status.as_deref() {
+        Some("pass") => (1, true, false),
+        Some("fail") => (1, false, false),
+        Some("error") => (0, false, true),
+        _ => (0, false, diagnosed && !any_run),
+    };
+    Selection {
+        selected,
+        ok,
+        reach: Reach::of(ran, errored),
+    }
+}
+
+/// The first JSON array in a harness's output, which both `kyverno test` and
+/// `conftest verify` print among lines of prose.
+fn json_array(output: &str) -> Option<Vec<serde_json::Value>> {
+    let start = output
+        .match_indices('\n')
+        .map(|(at, _)| at + 1)
+        .chain(std::iter::once(0))
+        .filter(|at| output[*at..].starts_with('['))
+        .min()?;
+    serde_json::Deserializer::from_str(&output[start..])
+        .into_iter::<Vec<serde_json::Value>>()
+        .next()?
+        .ok()
+}
+
+/// The named test case's verdict out of `kyverno test -o json --detailed-results`.
+///
+/// `want` is the `-t` selector, `policy=…,rule=…,resource=…`, matched exactly
+/// against the result's `POLICY`, `RULE` and resource name. Measured against
+/// kyverno 1.19.1: `RESULT` is the TEST's verdict (`Pass` where the policy did
+/// what the test wants), and a policy that will not load prints an `ERROR:` line
+/// and then reports the case `Fail` with reason `Not found` — so a load error is
+/// the errored shape whatever the case line says.
+fn kyverno_verdict(output: &str, want: &str) -> Selection {
+    let field = |key: &str| {
+        want.split(',')
+            .filter_map(|part| part.split_once('='))
+            .find(|(name, _)| name.trim() == key)
+            .map(|(_, value)| value.trim().to_owned())
+    };
+    let (policy, rule, resource) = (field("policy"), field("rule"), field("resource"));
+    let load_error = output
+        .lines()
+        .any(|line| line.trim_start().starts_with("ERROR:"));
+    let results = json_array(output);
+    let status = results.as_ref().and_then(|results| {
+        results
+            .iter()
+            .find(|result| {
+                let named = |key: &str| result[key].as_str().map(str::to_owned);
+                named("POLICY") == policy
+                    && named("RULE") == rule
+                    && resource.as_ref().is_some_and(|want| {
+                        named("RESOURCE")
+                            .is_some_and(|got| got == *want || got.ends_with(&format!("/{want}")))
+                    })
+            })
+            .and_then(|result| result["RESULT"].as_str().map(str::to_ascii_lowercase))
+    });
+    let errored = load_error || status.as_deref() == Some("error");
+    let selected = usize::from(matches!(status.as_deref(), Some("pass" | "fail")));
+    Selection {
+        selected,
+        ok: status.as_deref() == Some("pass"),
+        reach: Reach::of(
+            results.is_some() || output.contains("Test Summary:"),
+            errored,
+        ),
+    }
+}
+
+/// The named `test_` rule's verdict out of `conftest verify -o json`.
+///
+/// **A FAIL IS READ FROM THE OUTPUT, AND A PASS CANNOT BE.** Measured against
+/// conftest 0.71.1: a failing test is a `failures` entry whose `msg` names it
+/// (`data.<package>.<rule>`), and a passing one is an anonymous `"successes": 1`
+/// in every output format conftest offers — JSON, TAP, `JUnit` and table alike. So
+/// the case's EXISTENCE is read from the declared suite file, a rule defined at
+/// column zero under exactly that name, and its verdict from whether the output
+/// names it failed. A run that cannot load a policy prints no results at all,
+/// only an `Error:` line, and that is the errored shape.
+fn conftest_verdict(output: &str, want: &str, suite: &[String]) -> Selection {
+    let Some(results) = json_array(output) else {
+        return Selection {
+            reach: Reach::of(false, output.contains("Error:")),
+            ..Selection::default()
+        };
+    };
+    let failed = results.iter().any(|result| {
+        result["failures"].as_array().is_some_and(|failures| {
+            failures.iter().any(|failure| {
+                failure["msg"]
+                    .as_str()
+                    .is_some_and(|msg| msg.rsplit('.').next() == Some(want))
+            })
+        })
+    });
+    let defined = suite.iter().any(|line| {
+        line.strip_prefix(want)
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with([' ', '{', '(', '[']))
+    });
+    Selection {
+        selected: usize::from(defined || failed),
+        ok: defined && !failed,
+        reach: Reach::Reported,
+    }
+}
+
+/// The selected cases' verdict out of pytest's `JUnit` report.
+///
+/// `-k` already narrowed the run to `want`, so every `<testcase>` is a selected
+/// case, except one pytest skipped. Measured against pytest 9.1.1: a failing case
+/// carries `<failure>`, and a collection or fixture error carries `<error>` —
+/// for a module that will not import, on a `<testcase>` named after the module
+/// rather than any test in it — so any `<error>` is the errored shape.
+fn pytest_verdict(report: &str) -> Selection {
+    let cases: Vec<&str> = report
+        .split("<testcase")
+        .skip(1)
+        .map(|case| case.split("</testcase>").next().unwrap_or(case))
+        .collect();
+    let errored = cases.iter().any(|case| case.contains("<error"));
+    let run: Vec<&&str> = cases
+        .iter()
+        .filter(|case| !case.contains("<skipped") && !case.contains("<error"))
+        .collect();
+    Selection {
+        selected: run.len(),
+        ok: !run.iter().any(|case| case.contains("<failure")),
+        reach: Reach::of(report.contains("<testsuite"), errored),
+    }
+}
+
+/// How many cases a suite declares in total — for the two arms whose `want` is
+/// a substring filter. The others match `want` exactly, select at most one case,
+/// and so cannot select every case of a suite holding more than one.
 fn total_cases(root: &Path, suite: &Suite) -> usize {
     let Some(lines) = lines_of(root, suite.path()) else {
         return 0;
     };
-    match suite {
-        Suite::Bats(_) => lines
-            .iter()
-            .filter(|line| line.starts_with("@test ") || line.starts_with("bats_test_function "))
-            .count(),
-        Suite::Cargo { .. } => lines
-            .iter()
-            .filter(|line| line.trim_start().starts_with("#[test]"))
-            .count(),
-    }
+    let marker = match suite {
+        Suite::Cargo { .. } => "#[test]",
+        Suite::Pytest { .. } => "def test_",
+        Suite::Tofu { .. } | Suite::Kyverno { .. } | Suite::Conftest { .. } => return 0,
+    };
+    lines
+        .iter()
+        .filter(|line| line.trim_start().starts_with(marker))
+        .count()
 }
 
 // ---------------------------------------------------------------------------
@@ -1837,28 +2109,26 @@ fn judge_row(root: &Path, staged: &mut Staged, gate: &Gate, row: &Row) -> Result
     staged.stage_subject(root, &row.source)?;
     // The row's OWN source's suite, never merely the gate's first: a preset
     // gate is several modules, each naming where its cases live.
-    let suite = gate.suite_for(row);
+    let Some(suite) = gate.suite_for(row) else {
+        return Ok(Verdict::NoSuite {
+            suite: String::from(UNDECLARED),
+        });
+    };
 
     // THE CASE MUST BE GREEN BEFORE IT IS MUTATED. "Red under mutation" is only
     // evidence if the row was green without it: a case that CANNOT pass — an
     // assertion that never holds, a fixture that never builds — is red either
     // way, and every mutation aimed at it reads as caught. Costs one extra
     // filtered run per row, which is what an anti-vacuity term is worth.
-    let clean = run_suite(staged, root, suite, &row.want)?;
-    // AND THE BOUND IS READ BEFORE EITHER (CLOUD-1860), for the same reason one
-    // rung up: a killed run selects no case and exits non-zero, so it satisfies
-    // both tests below while meaning neither. Reported as `names-no-case` it sent
-    // the reader to repair a declaration that was already correct, and that is
-    // how the whole Rust half of this mechanism read as coverage.
-    if clean.timed_out {
-        return Ok(Verdict::SuiteTimedOut {
-            seconds: suite_bound(suite).as_secs(),
-        });
-    }
-    if !clean.ran {
-        return Ok(Verdict::SuiteDidNotRun {
-            want: row.want.clone(),
-        });
+    let clean = run_suite(staged, root, suite, &row.want);
+    // AND HOW FAR THE RUN GOT IS READ BEFORE EITHER (CLOUD-1860, CLOUD-2160),
+    // for the same reason one rung up: a killed or errored run selects no case
+    // and exits non-zero, so it satisfies both tests below while meaning
+    // neither. Reported as `names-no-case` it sent the reader to repair a
+    // declaration that was already correct, and that is how the whole Rust half
+    // of this mechanism read as coverage.
+    if let Some(unlooked) = unreported(&clean, suite, row) {
+        return Ok(unlooked);
     }
     // "Named no case" is read BEFORE the status, because a filter matching
     // nothing is itself a non-zero exit on both runners — and reporting that as
@@ -1894,22 +2164,17 @@ fn judge_row(root: &Path, staged: &mut Staged, gate: &Gate, row: &Row) -> Result
         return Ok(Verdict::SelfMutatingRow);
     }
 
-    let mutated = run_suite(staged, root, suite, &row.want)?;
+    let mutated = run_suite(staged, root, suite, &row.want);
     // THE SAME GUARD, AND HERE IT IS THE DANGEROUS DIRECTION. The clean run's
     // timeout costs a could-not-look reported under the wrong name; this one
     // would be read as evidence. A killed run exits non-zero, so without this
     // test `mutated.ok` is false and the row reports `Caught` — the sweep
-    // asserting a mutation was caught by a suite that never ran a case.
-    // Fail-closed is not enough when the failure mode is a forged pass.
-    if mutated.timed_out {
-        return Ok(Verdict::SuiteTimedOut {
-            seconds: suite_bound(suite).as_secs(),
-        });
-    }
-    if !mutated.ran {
-        return Ok(Verdict::SuiteDidNotRun {
-            want: row.want.clone(),
-        });
+    // asserting a mutation was caught by a suite that never ran a case. A
+    // mutation that breaks the parse is the same forged pass (CLOUD-2160): only
+    // the named case's own failure kills a mutant. Fail-closed is not enough
+    // when the failure mode is a forged pass.
+    if let Some(unlooked) = unreported(&mutated, suite, row) {
+        return Ok(unlooked);
     }
     if mutated.selected == 0 {
         return Ok(Verdict::NamesNoCase {
@@ -1922,6 +2187,19 @@ fn judge_row(root: &Path, staged: &mut Staged, gate: &Gate, row: &Row) -> Result
         });
     }
     Ok(Verdict::Caught)
+}
+
+/// The could-not-look a run's reach names, or `None` where it reported cases.
+fn unreported(run: &Selection, suite: &Suite, row: &Row) -> Option<Verdict> {
+    let want = row.want.clone();
+    match run.reach {
+        Reach::TimedOut => Some(Verdict::SuiteTimedOut {
+            seconds: suite_bound(suite).as_secs(),
+        }),
+        Reach::Errored => Some(Verdict::CaseErrored { want }),
+        Reach::Silent => Some(Verdict::SuiteDidNotRun { want }),
+        Reach::Reported => None,
+    }
 }
 
 /// Sweep the enforced set.
@@ -1964,20 +2242,25 @@ pub fn sweep(root: &Path, names: &[String], work: PathBuf) -> Result<Sweep> {
             });
             continue;
         };
-        // EVERY suite the gate's rows run under must exist, not only the first:
-        // a later module's declaration naming a missing file is as much a
-        // could-not-look as the first one's.
-        if let Some(missing) = gate
-            .suites()
-            .into_iter()
-            .find(|suite| !root.join(suite.path()).is_file())
-        {
+        // EVERY suite the gate's rows run under must be declared, runnable and
+        // present, not only the first: a later module's declaration naming a
+        // missing file is as much a could-not-look as the first one's. Checked
+        // before any row, so a gate that fails here invokes no runner at all.
+        let unrunnable = gate
+            .unrunnable
+            .clone()
+            .or_else(|| gate.suite.is_none().then(|| String::from(UNDECLARED)))
+            .or_else(|| {
+                gate.suites()
+                    .into_iter()
+                    .find(|suite| !root.join(suite.path()).is_file())
+                    .map(|missing| missing.path().to_owned())
+            });
+        if let Some(suite) = unrunnable {
             findings.push(Finding {
                 gate: name.clone(),
                 slug: None,
-                verdict: Verdict::NoSuite {
-                    suite: missing.path().to_owned(),
-                },
+                verdict: Verdict::NoSuite { suite },
                 owner: gate.owner.clone(),
             });
             continue;
@@ -2456,7 +2739,10 @@ mod tests {
             let Some(row) = gate.rows.iter().find(|row| row.slug == slug) else {
                 panic!("row {slug} is declared");
             };
-            gate.suite_for(row).path().to_owned()
+            gate.suite_for(row)
+                .map(Suite::path)
+                .unwrap_or_default()
+                .to_owned()
         };
         assert_eq!(suite_of("one"), "tests/it/a.rs");
         assert_eq!(suite_of("two"), "tests/it/b.rs");
@@ -2465,18 +2751,142 @@ mod tests {
         assert_eq!(every, vec!["tests/it/a.rs", "tests/it/b.rs"]);
     }
 
+    /// Each native harness is chosen by the declared path's NAME, and nothing
+    /// else resolves to one (CLOUD-2160).
+    ///
+    /// Fails by: a catch-all arm, which would hand a path no runner understands
+    /// to whichever harness it named — and a guessed suite is a guessed verdict.
     #[test]
-    fn a_bats_suite_still_resolves() {
+    fn each_native_harness_is_chosen_by_the_declared_name() {
+        let declared = |path: &str| Suite::declared(path);
+        let owned = String::from;
         assert_eq!(
-            Suite::declared("tests/land.bats"),
-            Some(Suite::Bats(String::from("tests/land.bats")))
+            declared("infra/tests/limit.tftest.hcl"),
+            Some(Suite::Tofu {
+                path: owned("infra/tests/limit.tftest.hcl")
+            })
+        );
+        assert_eq!(
+            declared("policies/kyverno-test.yaml"),
+            Some(Suite::Kyverno {
+                path: owned("policies/kyverno-test.yaml")
+            })
+        );
+        assert_eq!(
+            declared("policy/limit_test.rego"),
+            Some(Suite::Conftest {
+                path: owned("policy/limit_test.rego")
+            })
+        );
+        assert_eq!(
+            declared("tests/test_limit.py"),
+            Some(Suite::Pytest {
+                path: owned("tests/test_limit.py")
+            })
+        );
+        assert_eq!(
+            declared("tests/limit_test.py"),
+            Some(Suite::Pytest {
+                path: owned("tests/limit_test.py")
+            })
         );
     }
 
     #[test]
     fn a_suite_this_runner_cannot_run_is_refused_rather_than_guessed() {
-        assert_eq!(Suite::declared("policy/shell-retirement.rego"), None);
         assert_eq!(Suite::declared("mise-tasks/land.sh"), None);
+        assert_eq!(Suite::declared("policies/other.yaml"), None);
+        assert_eq!(Suite::declared("scripts/helper.py"), None);
+        assert_eq!(Suite::declared("infra/main.tf"), None);
+    }
+
+    /// The recorded output of one harness, its version line dropped.
+    fn recorded(arm: &str, state: &str) -> String {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/mutate")
+            .join(arm)
+            .join(state);
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+        text.split_once('\n')
+            .map(|(_, rest)| rest.to_owned())
+            .unwrap_or_default()
+    }
+
+    /// The three states each reader must tell apart, over the real tools'
+    /// recorded output (CLOUD-2160): a pass, a failure of the named case, and a
+    /// run that could not load its subject.
+    ///
+    /// Fails by: any reader taking the errored shape for a failure — the one
+    /// confusion that turns every parse-breaking mutation into `caught`.
+    #[test]
+    fn each_reader_tells_a_pass_a_failure_and_an_errored_run_apart() {
+        let conftest_suite: Vec<String> = [
+            "package main",
+            "test_limit_is_ten if {",
+            "\tlimit == 10",
+            "}",
+        ]
+        .map(String::from)
+        .to_vec();
+        let kyverno = "policy=require-team,rule=check-team,resource=labelled";
+        let read = |arm: &str, state: &str| {
+            let output = recorded(arm, state);
+            match arm {
+                "tofu" => tofu_verdict(&output, "limit_is_ten"),
+                "kyverno" => kyverno_verdict(&output, kyverno),
+                "conftest" => conftest_verdict(&output, "test_limit_is_ten", &conftest_suite),
+                _ => pytest_verdict(&output),
+            }
+        };
+        for arm in ["tofu", "kyverno", "conftest", "pytest"] {
+            let pass = read(arm, "pass");
+            assert!(
+                pass.reach == Reach::Reported && pass.ok && pass.selected == 1,
+                "{arm} pass: {pass:?}"
+            );
+            let fail = read(arm, "fail");
+            assert!(
+                fail.reach == Reach::Reported && !fail.ok && fail.selected == 1,
+                "{arm} fail: {fail:?}"
+            );
+            let error = read(arm, "error");
+            assert_eq!(error.reach, Reach::Errored, "{arm} error: {error:?}");
+        }
+    }
+
+    /// The exactly-matched arms name ONE case, so a sibling's verdict is never
+    /// read as the named one's.
+    ///
+    /// Fails by: a substring match, under which `name_is_set` — which passed in
+    /// the recording — would be read for a want it merely contains.
+    #[test]
+    fn an_exact_arm_reads_only_the_case_it_names() {
+        let output = recorded("tofu", "fail");
+        assert!(tofu_verdict(&output, "name_is_set").ok);
+        assert_eq!(tofu_verdict(&output, "name").selected, 0);
+        let none: Vec<String> = Vec::new();
+        let conftest = recorded("conftest", "fail");
+        assert_eq!(conftest_verdict(&conftest, "test_limit", &none).selected, 0);
+    }
+
+    #[test]
+    fn a_tofu_suite_runs_in_its_modules_root() {
+        assert_eq!(
+            tofu_module("infra/tests/limit.tftest.hcl"),
+            (
+                PathBuf::from("infra"),
+                String::from("tests/limit.tftest.hcl")
+            )
+        );
+        assert_eq!(
+            tofu_module("infra/limit.tftest.hcl"),
+            (PathBuf::from("infra"), String::from("limit.tftest.hcl"))
+        );
+        assert_eq!(
+            tofu_module("limit.tftest.hcl"),
+            (PathBuf::new(), String::from("limit.tftest.hcl"))
+        );
     }
 
     #[test]
@@ -2510,8 +2920,6 @@ mod tests {
         assert!(libtest_ran(
             "running 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out\n"
         ));
-        assert!(!tap_ran("bats: command not found\n"));
-        assert!(tap_ran("1..0\n"));
         assert!(
             Verdict::SuiteDidNotRun {
                 want: String::new()
@@ -2539,6 +2947,12 @@ mod tests {
         );
         assert!(
             !Verdict::Survived {
+                want: String::new()
+            }
+            .could_not_look()
+        );
+        assert!(
+            Verdict::CaseErrored {
                 want: String::new()
             }
             .could_not_look()

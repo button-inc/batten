@@ -1,0 +1,25 @@
+kyverno 1.19.1
+Loading test  ( policies/kyverno-test.yaml ) ...
+  Loading values/variables ...
+  Loading policies ...
+  Warning: policies/policy.yaml: kyverno.io/v1 ClusterPolicy is deprecated and will be removed in a future release; migrate to ValidatingPolicy, MutatingPolicy, GeneratingPolicy or ImageValidatingPolicy (policies.kyverno.io), see https://kyverno.io/docs/guides/migration-to-cel/
+  Loading resources ...
+  Loading exceptions ...
+  Applying 1 policy to 2 resources with 0 exceptions ...
+  Checking results ...
+
+[
+  {
+    "ID": 1,
+    "Message": "validation rule 'check-team' passed.",
+    "POLICY": "require-team",
+    "REASON": "Ok",
+    "RESOURCE": "v1/Pod/default/labelled",
+    "RESULT": "Pass",
+    "RULE": "check-team"
+  }
+]
+
+
+Test Summary: 1 tests passed and 0 tests failed
+

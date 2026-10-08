@@ -29,15 +29,26 @@
 //! stub. Every fixture is a single package with no dependencies, so its `cargo
 //! test` compiles in seconds against a target directory of its own.
 //!
-//! # Why no case reaches the bats arm any more (CLOUD-843)
+//! # Why the decision table runs over Rust tiers (CLOUD-843, CLOUD-2160)
 //!
-//! The toy suites were bats files run through this repository's vendored
-//! `tests/bats` runner, lent into each scratch tree. CLOUD-843 retired that
-//! runner with the last shell suite, so the decision table now runs over Rust
-//! tiers: it is decided in `judge_row` over a `Selection`, which both arms
-//! produce, so every verdict below is carried. What is NOT carried is the bats
-//! arm's own spawn and TAP reading at this tier — `Suite::Bats` stays in the
-//! engine for a consumer that vendors a runner, covered by its unit cases only.
+//! The toy suites were shell suites run through a runner this repository
+//! vendored. CLOUD-843 retired that runner with the last shell suite and
+//! CLOUD-2160 retired its arm from the engine, so the decision table runs over
+//! Rust tiers: it is decided in `judge_row` over a `Selection`, which every arm
+//! produces, so every verdict below is carried.
+//!
+//! # Why the native harnesses are stubs replaying recorded output
+//!
+//! `tofu`, `kyverno`, `conftest` and `pytest` are a consumer's tools, not this
+//! repository's, so pinning them here would add four toolchains to test four
+//! readers. Each arm's harness is instead a shebang stub on the case's `PATH`
+//! that replays one of three outputs recorded ONCE from the real tool —
+//! `crates/batten/tests/fixtures/mutate/<arm>/{pass,fail,error}`, the version on
+//! each file's first line. The stub picks by reading the staged subject: a row
+//! rewrites its sentinel to `KILL` (replays `fail`) or `BREAK` (replays
+//! `error`), or changes an unread line (replays `pass`). So the readers are held
+//! to the real tools' bytes, and real-tool conformance is the first consumer's
+//! own sweep.
 
 // THE FILE-GRANULARITY RETIREMENT ARMS (CLOUD-1059). Their grammar is disjoint
 // from CLOUD-908's case arms below by construction: a case arm's first field
@@ -113,12 +124,10 @@ use common::{stderr, stdout};
 /// A toy gate with one real decision. `LIMIT` is what a mutation moves.
 ///
 /// **IT DECLARES ITS SUITE, AND THE SUITE IS A RUST TIER (CLOUD-843).** A gate
-/// with no `#MUTANT-SUITE` falls back to `tests/<gate>.bats`, run through a
-/// runner the repository vendors at `tests/bats` — and this repository retired
-/// its runner with its last shell suite, so there is nothing left to lend. The
-/// harness is suite-agnostic above `run_suite`: every verdict this file's
-/// decision table asserts is decided by `judge_row` over a `Selection`, which
-/// the Cargo arm produces exactly as the bats arm did.
+/// with no `#MUTANT-SUITE` reports `no-suite (undeclared)` and runs nothing
+/// (CLOUD-2160). The harness is suite-agnostic above `run_suite`: every verdict
+/// this file's decision table asserts is decided by `judge_row` over a
+/// `Selection`, which every arm produces.
 // Unix only, with `toy_repo`: the gate is a bash program the tier executes, and
 // off unix nothing reaches it (`-D warnings` refuses a const nothing reads).
 #[cfg(unix)]
@@ -1332,6 +1341,351 @@ fn an_owner_is_echoed_on_a_survivor_and_clears_nothing() {
     assert_eq!(code, 2, "{out}");
     assert!(out.contains("SURVIVED"), "{out}");
     assert!(out.contains("CLOUD-1265"), "{out}");
+}
+
+// ---------------------------------------------------------------------------
+// The native harnesses (CLOUD-2160).
+// ---------------------------------------------------------------------------
+
+/// One native harness's fixture: the program the arm runs, the subject a row
+/// mutates, the declared suite, and the case the recorded output names.
+#[cfg(unix)]
+struct Native {
+    /// The recorded fixture directory and the stub's program name.
+    arm: &'static str,
+    /// The subject, repo-relative — also the gate's name (the file arm).
+    subject: &'static str,
+    /// What the subject holds above its sentinel lines.
+    body: &'static str,
+    /// The declared suite, repo-relative.
+    suite: &'static str,
+    /// What the suite holds. Only conftest's and pytest's are read: conftest's
+    /// for whether the case is defined, pytest's for how many cases it has.
+    suite_body: &'static str,
+    /// The case, as the recorded output names it.
+    want: &'static str,
+}
+
+#[cfg(unix)]
+const TOFU: Native = Native {
+    arm: "tofu",
+    subject: "main.tf",
+    body: "locals {\n  limit = 10\n}\n",
+    suite: "main.tftest.hcl",
+    suite_body: "run \"limit_is_ten\" {\n  command = plan\n}\n",
+    want: "limit_is_ten",
+};
+
+#[cfg(unix)]
+const KYVERNO: Native = Native {
+    arm: "kyverno",
+    subject: "policies/policy.yaml",
+    body: "apiVersion: kyverno.io/v1\nkind: ClusterPolicy\n",
+    suite: "policies/kyverno-test.yaml",
+    suite_body: "apiVersion: cli.kyverno.io/v1alpha1\nkind: Test\n",
+    want: "policy=require-team,rule=check-team,resource=labelled",
+};
+
+#[cfg(unix)]
+const CONFTEST: Native = Native {
+    arm: "conftest",
+    subject: "checks/limit.rego",
+    body: "package main\n\nlimit := 10\n",
+    suite: "checks/limit_test.rego",
+    suite_body: "package main\n\ntest_limit_is_ten if {\n\tlimit == 10\n}\n\ntest_small_input_passes if {\n\tcount(deny) == 0\n}\n",
+    want: "test_limit_is_ten",
+};
+
+#[cfg(unix)]
+const PYTEST: Native = Native {
+    arm: "pytest",
+    subject: "limit.py",
+    body: "LIMIT = 10\n",
+    suite: "test_limit.py",
+    suite_body: "from limit import LIMIT\n\n\ndef test_limit_is_ten():\n    assert LIMIT == 10\n\n\ndef test_name_is_set():\n    assert True\n",
+    want: "test_limit_is_ten",
+};
+
+/// What a row does to the subject's sentinel, and so which recording the stub
+/// replays.
+#[cfg(unix)]
+#[derive(Clone, Copy)]
+enum Mutant {
+    /// The sentinel becomes `KILL`: the stub replays the recorded failure.
+    Kill,
+    /// An unread line changes: the stub replays the recorded pass.
+    Unread,
+    /// The sentinel becomes `BREAK`: the stub replays the recorded errored run.
+    Break,
+}
+
+/// The stub standing in for one harness. It replays the recorded output the
+/// staged subject's sentinel selects, minus the version line; for pytest the
+/// report is the `--junitxml` file rather than the stream.
+#[cfg(unix)]
+fn native_stub(native: &Native) -> String {
+    let fixtures = common::at_root("crates/batten/tests/fixtures/mutate").join(native.arm);
+    format!(
+        "#!/bin/sh\n\
+         state=pass\n\
+         if grep -q '^# KILL$' '{subject}'; then state=fail; fi\n\
+         if grep -q '^# BREAK$' '{subject}'; then state=error; fi\n\
+         report=''\n\
+         for arg in \"$@\"; do\n\
+         \x20 case $arg in --junitxml=*) report=${{arg#--junitxml=}} ;; esac\n\
+         done\n\
+         if [ -n \"$report\" ]; then\n\
+         \x20 tail -n +2 '{fixtures}'/\"$state\" > \"$report\"\n\
+         else\n\
+         \x20 tail -n +2 '{fixtures}'/\"$state\"\n\
+         fi\n\
+         [ \"$state\" = pass ]\n",
+        subject = native.subject,
+        fixtures = fixtures.display(),
+    )
+}
+
+/// A repository whose gate is `native`'s subject, declaring one row, with the
+/// harness stub in an untracked `bin/` of its own. Returns the root and that
+/// directory.
+///
+/// **THE STUB IS PER CASE, NEVER SHARED.** The cases run in parallel, and
+/// rewriting an executable another case is running fails with `ETXTBSY`.
+#[cfg(unix)]
+fn native_repo(native: &Native, mutant: Mutant, case: &str) -> (PathBuf, PathBuf) {
+    let root = toy(&format!("native-{}-{case}", native.arm));
+    let row = match mutant {
+        Mutant::Kill => format!("#MUTANT kill|s@^# sentinel$@# KILL@|{}", native.want),
+        Mutant::Unread => format!("#MUTANT unread|s@^# unread$@# moved@|{}", native.want),
+        Mutant::Break => format!("#MUTANT break|s@^# sentinel$@# BREAK@|{}", native.want),
+    };
+    write(
+        &root,
+        native.subject,
+        &format!(
+            "#MUTANT-SUITE {}\n{row}\n{}# sentinel\n# unread\n",
+            native.suite, native.body
+        ),
+    );
+    write(&root, native.suite, native.suite_body);
+    track(&root);
+    let bin = root.join(".stub-bin");
+    write_program(&bin, native.arm, &native_stub(native));
+    (root, bin)
+}
+
+/// Sweep `root` with the stubs in `bin` ahead of the ambient `PATH`.
+#[cfg(unix)]
+fn sweep_with(root: &Path, gate: &str, bin: &Path) -> (i32, String, String) {
+    let mut entries = vec![bin.as_os_str().to_owned()];
+    entries.extend(std::env::split_paths(&common::ambient_path()).map(PathBuf::into_os_string));
+    let answer = common::batten()
+        .args(["mutate", "sweep"])
+        .current_dir(root)
+        .env("MUTANT_GATES", gate)
+        .env("MUTANT_TASKS", "mise.toml")
+        .env(
+            "PATH",
+            std::env::join_paths(entries).expect("join the stub onto PATH"),
+        )
+        .output()
+        .expect("run batten mutate");
+    (
+        answer.status.code().unwrap_or(-1),
+        stdout(&answer),
+        stderr(&answer),
+    )
+}
+
+/// The verdict one arm's sweep gives one mutant.
+#[cfg(unix)]
+fn native_sweep(native: &Native, mutant: Mutant, case: &str) -> (i32, String, String) {
+    let (root, bin) = native_repo(native, mutant, case);
+    sweep_with(&root, native.subject, &bin)
+}
+
+#[cfg(unix)]
+fn assert_caught(native: &Native) {
+    let (code, out, err) = native_sweep(native, Mutant::Kill, "caught");
+    assert_eq!(code, 0, "{}: {out}{err}", native.arm);
+    assert!(out.contains("every one caught"), "{}: {out}", native.arm);
+}
+
+#[cfg(unix)]
+fn assert_survives(native: &Native) {
+    let (code, out, err) = native_sweep(native, Mutant::Unread, "survives");
+    assert_eq!(code, 2, "{}: {out}{err}", native.arm);
+    assert!(out.contains("SURVIVED"), "{}: {out}", native.arm);
+}
+
+/// The errored run is a could-not-look, and the one reading it must never get
+/// is `caught`: the run exits non-zero exactly as a failing case does.
+#[cfg(unix)]
+fn assert_errored(native: &Native) {
+    let (code, out, err) = native_sweep(native, Mutant::Break, "errored");
+    assert_eq!(code, 3, "{}: {out}{err}", native.arm);
+    assert!(out.contains("case-errored"), "{}: {out}", native.arm);
+    assert!(!out.contains("every one caught"), "{}: {out}", native.arm);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_tofu_mutant_its_run_fails_on_is_caught() {
+    assert_caught(&TOFU);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_tofu_mutant_its_run_cannot_see_survives() {
+    assert_survives(&TOFU);
+}
+
+#[cfg(unix)]
+#[test]
+fn an_errored_tofu_run_is_could_not_look() {
+    assert_errored(&TOFU);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_kyverno_mutant_its_test_case_fails_on_is_caught() {
+    assert_caught(&KYVERNO);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_kyverno_mutant_its_test_case_cannot_see_survives() {
+    assert_survives(&KYVERNO);
+}
+
+#[cfg(unix)]
+#[test]
+fn an_errored_kyverno_run_is_could_not_look() {
+    assert_errored(&KYVERNO);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_conftest_mutant_its_rule_fails_on_is_caught() {
+    assert_caught(&CONFTEST);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_conftest_mutant_its_rule_cannot_see_survives() {
+    assert_survives(&CONFTEST);
+}
+
+#[cfg(unix)]
+#[test]
+fn an_errored_conftest_run_is_could_not_look() {
+    assert_errored(&CONFTEST);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_pytest_mutant_its_case_fails_on_is_caught() {
+    assert_caught(&PYTEST);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_pytest_mutant_its_case_cannot_see_survives() {
+    assert_survives(&PYTEST);
+}
+
+#[cfg(unix)]
+#[test]
+fn an_errored_pytest_run_is_could_not_look() {
+    assert_errored(&PYTEST);
+}
+
+/// A stub that records it was invoked, for the cases asserting no runner ran.
+#[cfg(unix)]
+fn tripwire(bin: &Path, program: &str, marker: &Path) {
+    write_program(
+        bin,
+        program,
+        &format!("#!/bin/sh\n: > '{}'\nexit 0\n", marker.display()),
+    );
+}
+
+/// **A declared suite no runner recognizes is reported, and nothing is run for
+/// it** (CLOUD-2160). The path exists and is runnable-looking, so the only
+/// thing between it and a guessed harness is `Suite::declared`'s refusal.
+///
+/// Fails by: that refusal answering with any runner arm, which hands the path
+/// to a harness that was never declared — here the tripwire `pytest` fires.
+#[cfg(unix)]
+#[test]
+fn an_unrecognized_suite_is_reported_not_run() {
+    let root = toy("native-unrecognized");
+    write(
+        &root,
+        "checks/limit.rego",
+        "#MUTANT-SUITE checks/limit.sh\n#MUTANT kill|s@^# sentinel$@# KILL@|limit_is_ten\n# sentinel\n",
+    );
+    write(&root, "checks/limit.sh", "exit 0\n");
+    track(&root);
+    let bin = root.join(".stub-bin");
+    let marker = root.join(".invoked");
+    for program in ["pytest", "tofu", "kyverno", "conftest", "cargo"] {
+        tripwire(&bin, program, &marker);
+    }
+    let (code, out, err) = sweep_with(&root, "checks/limit.rego", &bin);
+    assert_eq!(code, 3, "{out}{err}");
+    assert!(out.contains("no-suite (checks/limit.sh)"), "{out}");
+    assert!(
+        !marker.exists(),
+        "a runner was invoked for an unrecognized suite: {out}"
+    );
+}
+
+/// The other half: a source declaring no suite at all is `no-suite
+/// (undeclared)`, where it used to be handed a default path under a runner this
+/// repository no longer carries.
+#[cfg(unix)]
+#[test]
+fn a_source_declaring_no_suite_is_reported_not_run() {
+    let root = toy("native-undeclared");
+    write(
+        &root,
+        "checks/limit.rego",
+        "#MUTANT kill|s@^# sentinel$@# KILL@|limit_is_ten\n# sentinel\n",
+    );
+    track(&root);
+    let bin = root.join(".stub-bin");
+    let marker = root.join(".invoked");
+    for program in ["pytest", "tofu", "kyverno", "conftest", "cargo"] {
+        tripwire(&bin, program, &marker);
+    }
+    let (code, out, err) = sweep_with(&root, "checks/limit.rego", &bin);
+    assert_eq!(code, 3, "{out}{err}");
+    assert!(out.contains("no-suite (undeclared)"), "{out}");
+    assert!(
+        !marker.exists(),
+        "a runner was invoked for an undeclared suite: {out}"
+    );
+}
+
+/// A harness that is not on `PATH` costs its own row, not the sweep (CLOUD-2160):
+/// the row reads `suite-did-not-run` and the sweep still reports.
+#[cfg(unix)]
+#[test]
+fn a_harness_missing_from_path_did_not_run_and_the_sweep_still_reports() {
+    let (root, _) = native_repo(&TOFU, Mutant::Kill, "missing");
+    let empty = root.join(".empty-bin");
+    fs::create_dir_all(&empty).expect("make an empty bin");
+    let answer = common::batten()
+        .args(["mutate", "sweep"])
+        .current_dir(&root)
+        .env("MUTANT_GATES", TOFU.subject)
+        .env("PATH", &empty)
+        .output()
+        .expect("run batten mutate");
+    let out = stdout(&answer);
+    assert_eq!(answer.status.code(), Some(3), "{out}{}", stderr(&answer));
+    assert!(out.contains("suite-did-not-run"), "{out}");
 }
 
 // ---------------------------------------------------------------------------
