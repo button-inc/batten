@@ -876,9 +876,7 @@ fn canned(raw: &str, now: u64) -> Answer {
         status,
         headers,
         etag: header("etag"),
-        poll_floor: header("x-poll-interval")
-            .and_then(|raw| raw.trim().parse::<f64>().ok())
-            .filter(|seconds| seconds.is_finite() && *seconds > 0.0),
+        poll_floor: poll_floor_of(header("x-poll-interval").as_deref()),
         backoff: backoff_of(header, now),
         body: body.to_owned(),
     }
@@ -935,13 +933,25 @@ fn exchange(path: &str, etag: Option<&str>, body: Option<&[u8]>, patching: bool)
         // Matching `X-Poll-Interval` here would find nothing and read as *the
         // server asked for no floor* — the exact three-valued mistake CLOUD-390
         // records, arriving by a different route.
-        poll_floor: response
-            .header("x-poll-interval")
-            .and_then(|raw| raw.trim().parse::<f64>().ok())
-            .filter(|seconds| seconds.is_finite() && *seconds > 0.0),
+        poll_floor: poll_floor_of(response.header("x-poll-interval")),
         backoff: backoff_from(&response, now),
         body: String::from_utf8_lossy(&response.body).into_owned(),
     })
+}
+
+/// The cadence an `X-Poll-Interval` value asks for: positive finite seconds, or
+/// none.
+///
+/// ONE READING FOR THE FIXTURE AND THE WIRE (CLOUD-2059). It was spelled twice,
+/// and the only case proving either reached the poll loop asserted a lower bound
+/// on elapsed wall time, which the clock census now refuses. The loop's half is
+/// `pr_watch::tests::a_server_requested_floor_reaches_the_pause`; this is the
+/// header's half.
+//MUTANT-SUITE crates/batten/src/rest.rs
+//MUTANT poll-floor-unread|s@^    raw.and_then(\x7cvalue\x7c value.trim().parse::<f64>().ok())$@    None::<\&str>.and_then(\x7cvalue\x7c value.trim().parse::<f64>().ok())@|a_poll_interval_header_is_the_floor
+fn poll_floor_of(raw: Option<&str>) -> Option<f64> {
+    raw.and_then(|value| value.trim().parse::<f64>().ok())
+        .filter(|seconds| seconds.is_finite() && *seconds > 0.0)
 }
 
 /// The longest backoff this tier will honour, in seconds.
@@ -1221,6 +1231,25 @@ mod tests {
     /// Non-negotiable rule 4 lands here as a TYPE property rather than as a habit
     /// at each call site: [`Answer`] has no credential field, so no `Debug` of
     /// anything this module returns can carry one.
+    #[test]
+    fn a_poll_interval_header_is_the_floor() {
+        // Off a whole canned response, as a fixture answers the loop, and over
+        // the shared reading the wire path uses.
+        let answer = canned(
+            "HTTP/2.0 200 OK\r\nETag: W/\"a\"\r\nX-Poll-Interval: 1\r\n\r\n{}\n",
+            0,
+        );
+        assert_eq!(answer.poll_floor, Some(1.0));
+        assert_eq!(poll_floor_of(Some(" 2.5 ")), Some(2.5));
+        for refused in [None, Some("0"), Some("-1"), Some("NaN"), Some("soon")] {
+            assert_eq!(
+                poll_floor_of(refused),
+                None,
+                "{refused:?} asks for no floor"
+            );
+        }
+    }
+
     #[test]
     fn no_value_this_module_returns_can_carry_the_credential() {
         let answer = Answer {

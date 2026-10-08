@@ -53,6 +53,34 @@ fn a_launchers_prefix_precedes_the_analysers_own_flags() {
     );
 }
 
+/// THE ENGINE'S OWN DOOR TO THE ANALYSER, which the toy cases cannot reach
+/// (comparison of the CLOUD-2059 rewrite). They run the analyser by path, so
+/// `rules::symbols_launcher` — the choice between the pinned mediator and the
+/// bare program — lost its only exercise when the whole-crate cases moved to
+/// the toy. Asserted on the composition, which costs no clippy run: a tree that
+/// pins its toolchain is reached through the mediator, and one that does not is
+/// reached bare.
+#[test]
+fn the_engine_launcher_mediates_a_pinned_tree_and_runs_bare_elsewhere() {
+    let checkout = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .expect("the checkout");
+    let pinned = batten::rules::symbols_launcher(&checkout).argv(&["clippy"]);
+    assert!(
+        pinned.len() > 1 && pinned.last().map(String::as_str) == Some("clippy"),
+        "this checkout pins its toolchain, so the analyser is reached through \
+         the mediator's prefix: {pinned:?}"
+    );
+
+    let bare = toy("launcher-unpinned");
+    assert_eq!(
+        batten::rules::symbols_launcher(&bare).argv(&["clippy"]),
+        ["clippy"],
+        "a tree with no pin reaches the analyser bare"
+    );
+}
+
 /// The toy's disallowed-type table: the census entry and nothing else.
 const TOY_CLIPPY: &str = r#"disallowed-types = [
   { path = "std::process::Command", reason = "a spawn is an inventory row" },
