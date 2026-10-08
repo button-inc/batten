@@ -57,9 +57,9 @@
 //!
 // carried: "a well-formed block passes" crates/batten/tests/it/ready.rs
 // carried: "omitted clauses are not a violation" crates/batten/tests/it/ready.rs
-// carried: "a blocker cited in §8 with no relation is reported" crates/batten/tests/it/ready.rs
+// changed: "a blocker cited in §8 with no relation is reported" crates/batten/tests/it/ready.rs CLOUD-1771 stopped reading the §8 sentence, so a prose blocker claim is no longer refused; the claims object's `blockers` key still is, which `a_claimed_blocker_is_cross_checked_exactly_as_the_prose_clause_is` pins, and `a_section_eight_sentence_is_never_read_as_a_claim` pins the sentence going unread
 // carried: "the same citation passes when the relation actually exists" crates/batten/tests/it/ready.rs
-// carried: "a blocker noted as closed still needs its relation" crates/batten/tests/it/ready.rs
+// changed: "a blocker noted as closed still needs its relation" crates/batten/tests/it/ready.rs CLOUD-1771 stopped reading the §8 sentence, so a prose blocker claim is no longer refused; the claims object's `blockers` key still is, which `a_claimed_blocker_is_cross_checked_exactly_as_the_prose_clause_is` pins, and `a_section_eight_sentence_is_never_read_as_a_claim` pins the sentence going unread
 // carried: "a blocker noted as closed passes when the relation is there, which it is" crates/batten/tests/it/ready.rs
 // carried: "the body's cited keys are emitted before any verdict" crates/batten/tests/it/ready.rs
 // carried: "THE §6 DECLARATION IS EMITTED, and none reaches the consumer as one token" crates/batten/tests/it/ready.rs
@@ -67,13 +67,13 @@
 // carried: "a body with no §6 clause emits no bump line at all — did not say is not none" crates/batten/tests/it/ready.rs
 // carried: "an unrefined body still emits its cited keys" crates/batten/tests/it/ready.rs
 // carried: "a body citing nothing emits the line and no keys" crates/batten/tests/it/ready.rs
-// carried: "the §8 span's keys are emitted as their own set" crates/batten/tests/it/ready.rs
+// changed: "the §8 span's keys are emitted as their own set" crates/batten/tests/it/ready.rs CLOUD-1771: `cites-blockers` names the board's `blockedBy` edges rather than the §8 sentence's keys, still as its own line, which `the_section_eight_span_emits_its_keys_as_their_own_set` pins
 // carried: "§8 None is an explicit, valid answer" crates/batten/tests/it/ready.rs
 // carried: "a relatedTo mention on the §8 line is not a claim" crates/batten/tests/it/ready.rs
 // carried: "a house-style (§6) cross-reference is not the commit clause" crates/batten/tests/it/ready.rs
 // carried: "§6 none is an explicit, valid no-commit declaration" crates/batten/tests/it/ready.rs
-// carried: "a closed blocker in Linear's rendered-mention form is judged like any other" crates/batten/tests/it/ready.rs
-// carried: "a rendered-mention blockedBy claim without a relation is still flagged" crates/batten/tests/it/ready.rs
+// changed: "a closed blocker in Linear's rendered-mention form is judged like any other" crates/batten/tests/it/ready.rs CLOUD-1771 stopped reading the §8 sentence, so a prose blocker claim is no longer refused; the claims object's `blockers` key still is, which `a_claimed_blocker_is_cross_checked_exactly_as_the_prose_clause_is` pins, and `a_section_eight_sentence_is_never_read_as_a_claim` pins the sentence going unread
+// changed: "a rendered-mention blockedBy claim without a relation is still flagged" crates/batten/tests/it/ready.rs CLOUD-1771 stopped reading the §8 sentence, so a prose blocker claim is no longer refused; the claims object's `blockers` key still is, which `a_claimed_blocker_is_cross_checked_exactly_as_the_prose_clause_is` pins, and `a_section_eight_sentence_is_never_read_as_a_claim` pins the sentence going unread
 // carried: "a cross-reference after the claim sentence is not a claim" crates/batten/tests/it/ready.rs
 // carried: "feat to patch agrees below 0.1.0" crates/batten/tests/it/ready.rs
 // carried: "a bump promising the retired arrow is reported below 0.1.0" crates/batten/tests/it/ready.rs
@@ -105,11 +105,11 @@
 // carried: "a parent's refinement-gate heading is a Ready block" crates/batten/tests/it/ready.rs
 // carried: "a deeper refinement-gate heading is a Ready block too" crates/batten/tests/it/ready.rs
 // carried: "clauses inside a parent block are still checked" crates/batten/tests/it/ready.rs
-// carried: "a parent's §8 claim is held to the board like a leaf's" crates/batten/tests/it/ready.rs
+// changed: "a parent's §8 claim is held to the board like a leaf's" crates/batten/tests/it/ready.rs CLOUD-1771 stopped reading the §8 sentence, so a prose blocker claim is no longer refused; the claims object's `blockers` key still is, which `a_claimed_blocker_is_cross_checked_exactly_as_the_prose_clause_is` pins, and `a_section_eight_sentence_is_never_read_as_a_claim` pins the sentence going unread
 // carried: "prose merely discussing refinement is not a Ready block" crates/batten/tests/it/ready.rs
 // carried: "ready-lint.bats::unparseable stdin exits 2, not 1" crates/batten/tests/it/ready.rs
 // carried: "output is pointer-only — no issue prose echoed" crates/batten/tests/it/ready.rs
-// carried: "a blocker claimed under a §8 HEADING with no relation is reported" crates/batten/tests/it/ready.rs
+// changed: "a blocker claimed under a §8 HEADING with no relation is reported" crates/batten/tests/it/ready.rs CLOUD-1771 stopped reading the §8 sentence, so a prose blocker claim is no longer refused; the claims object's `blockers` key still is, which `a_claimed_blocker_is_cross_checked_exactly_as_the_prose_clause_is` pins, and `a_section_eight_sentence_is_never_read_as_a_claim` pins the sentence going unread
 // carried: "the same claim with the relation present passes" crates/batten/tests/it/ready.rs
 // carried: "a §8 heading claiming nothing is not a violation" crates/batten/tests/it/ready.rs
 // carried: "the span stops at the next heading, so a later section is not §8 text" crates/batten/tests/it/ready.rs
@@ -1012,239 +1012,43 @@ fn a_clause_free_parent_block_is_exempt_from_the_floor() {
 }
 
 // ---------------------------------------------------------------------------
-// §8: blockers linked, not assumed — the only rule prose cannot fake.
+// §8: the board's edge is the authority, and the sentence is unread.
 // ---------------------------------------------------------------------------
 
 #[test]
-fn a_blocker_cited_in_section_eight_needs_a_matching_relation() {
-    let dir = pre_release("ready-blockers");
-    let body = block("* **Blockers (§8).** `blockedBy` CLOUD-29 (the loader this validates).");
-
-    let missing = lint(&dir, &payload(&body, &[]));
-    assert_eq!(code(&missing), 2);
-    assert!(
-        stderr(&missing).contains("blocker-cited-without-relation (CLOUD-29)"),
-        "{}",
-        stderr(&missing)
-    );
-
-    let present = lint(&dir, &payload(&body, &["CLOUD-29"]));
-    assert_eq!(code(&present), 0, "{}", stderr(&present));
-}
-
-#[test]
-fn a_blocker_noted_as_closed_is_held_to_the_board_like_any_other() {
-    // THE `(closed)` EXEMPTION IS GONE, and it was dead code resting on a
-    // premise this tracker does not have (CLOUD-678). It stripped `CLOUD-N
-    // (closed)` before scanning, on the stated reason that the tracker drops the
-    // relation when the dependency resolves. Measured, it is the opposite: the
-    // relation SURVIVES — CLOUD-661 has been Done since 2026-08-18 and both of
-    // its dependents still carry the edge.
-    let dir = pre_release("ready-closed-blocker");
-    let body = block("* **Blockers (§8).** `blockedBy` CLOUD-29 (closed).");
-    let missing = lint(&dir, &payload(&body, &[]));
-    assert_eq!(code(&missing), 2);
-    assert!(stderr(&missing).contains("blocker-cited-without-relation (CLOUD-29)"));
-    let present = lint(&dir, &payload(&body, &["CLOUD-29"]));
-    assert_eq!(code(&present), 0, "{}", stderr(&present));
-}
-
-#[test]
-fn only_a_blocked_by_claim_is_a_claim() {
-    // CLAIMS, NOT MENTIONS. A well-formed §8 bullet also cross-references the
-    // other relation directions — "`relatedTo` CLOUD-37 — the two share a
-    // representation but neither strictly blocks the other" is CORRECT prose
-    // whose board relation is relatedTo, and flagging it would punish precision.
-    let dir = pre_release("ready-claims");
-    for clause in [
-        "* **Blockers (§8).** None.",
-        "* **Blockers (§8).** `relatedTo` CLOUD-37 — neither strictly blocks the other.",
-        "* **Blockers (§8).** `blockedBy` CLOUD-29. Grows in coverage as the tree fills (CLOUD-88).",
-    ] {
-        let output = lint(&dir, &payload(&block(clause), &["CLOUD-29"]));
-        assert_eq!(code(&output), 0, "{clause}\n{}", stderr(&output));
-    }
-}
-
-#[test]
-fn the_english_spelling_of_a_blocker_claim_is_cross_checked_like_the_code_span() {
-    // CLOUD-1113, and the measured row is the fixture: CLOUD-438 wrote "blocked
-    // by CLOUD-435 phase 2" against `blockedBy: []` and exited 0. The anchor was
-    // space-SENSITIVE, so the claim never parsed, the id loop never ran, and the
-    // clause passed VACUOUSLY — which is the failure §8 exists to catch arriving
-    // through §8's own anchor. Its claim was not merely unchecked but FALSE: the
-    // blocker had been Done for some time while the row sat in Backlog behind it.
-    //
-    // RED BEFORE THE CHANGE (CLOUD-418): with the old `(?i)blockedBy` anchor this
-    // case exits 0 on both arms, so it discriminates the widening rather than
-    // restating a property that already held.
-    let dir = pre_release("ready-english-blocker");
-    let body = block(
-        "* **Blockers (§8).** blocked by CLOUD-435 phase 2, which builds the invocation path \
-         this must use.",
-    );
-
-    let missing = lint(&dir, &payload(&body, &[]));
-    assert_eq!(code(&missing), 2, "{}", stderr(&missing));
-    assert!(
-        stderr(&missing).contains("blocker-cited-without-relation (CLOUD-435)"),
-        "{}",
-        stderr(&missing)
-    );
-
-    let present = lint(&dir, &payload(&body, &["CLOUD-435"]));
-    assert_eq!(code(&present), 0, "{}", stderr(&present));
-}
-
-#[test]
-fn every_spelling_of_one_claim_reaches_the_same_cross_check() {
-    // ONE CONCEPT, THREE SPELLINGS, and the constant carries all three rather
-    // than each call site re-spelling it. Capitalisation is the tracker's own —
-    // its UI displays the relation as "Blocked by", which is exactly the form the
-    // author copies and exactly the one that was invisible.
-    let dir = pre_release("ready-blocker-spellings");
-    for claim in [
-        "`blockedBy` CLOUD-29",
-        "blockedBy CLOUD-29",
-        "blocked by CLOUD-29",
-        "Blocked By CLOUD-29",
-        "BLOCKED BY CLOUD-29",
-    ] {
-        let body = block(&format!("* **Blockers (§8).** {claim}."));
-        let missing = lint(&dir, &payload(&body, &[]));
-        assert_eq!(code(&missing), 2, "{claim}\n{}", stderr(&missing));
-        assert!(
-            stderr(&missing).contains("blocker-cited-without-relation (CLOUD-29)"),
-            "{claim}\n{}",
-            stderr(&missing)
-        );
-        let present = lint(&dir, &payload(&body, &["CLOUD-29"]));
-        assert_eq!(code(&present), 0, "{claim}\n{}", stderr(&present));
-    }
-}
-
-#[test]
-fn the_transitive_blocker_named_in_the_same_sentence_is_a_claim_too() {
-    // The second measured row (CLOUD-1089): "blocked by CLOUD-1008, which is
-    // itself blocked by CLOUD-1009" while the board carried only the first edge.
-    // Written with a space, BOTH ids were invisible; the span rules are untouched,
-    // so with the anchor widened the second one is reported — which is the gate
-    // working rather than a new strictness this row invents.
-    let dir = pre_release("ready-transitive-blocker");
-    let body =
-        block("* **Blockers (§8).** blocked by CLOUD-1008, which is itself blocked by CLOUD-1009.");
-    let partial = lint(&dir, &payload(&body, &["CLOUD-1008"]));
-    assert_eq!(code(&partial), 2, "{}", stderr(&partial));
-    let text = stderr(&partial);
-    assert!(
-        text.contains("blocker-cited-without-relation (CLOUD-1009)"),
-        "{text}"
-    );
-    assert!(
-        !text.contains("(CLOUD-1008)"),
-        "the edge the board carries must not be reported: {text}"
-    );
-
-    let both = lint(&dir, &payload(&body, &["CLOUD-1008", "CLOUD-1009"]));
-    assert_eq!(code(&both), 0, "{}", stderr(&both));
-}
-
-#[test]
-fn widening_the_anchor_makes_nothing_else_a_claim() {
-    // THE DISCRIMINATORS A CARELESS WIDENING BREAKS, asserted in the direction
-    // that would go quiet rather than loud. Each of these must still exit 0 with
-    // NO relation on the board at all: if any became a claim, the gate would be
-    // refusing prose that asserts nothing about blocking, which is the
-    // false-positive rate that gets a gate switched off rather than satisfied.
-    let dir = pre_release("ready-anchor-not-wider");
-    for clause in [
-        // The other relation directions are still scrubbed, not claimed.
-        "* **Blockers (§8).** `relatedTo` CLOUD-37 — neither strictly blocks the other.",
-        "* **Blockers (§8).** `blocks` CLOUD-37, which waits on this.",
-        // A discharged blocker named without a claim opener, which is how a row
-        // records provenance: CLOUD-892's §8 relies on exactly this.
-        "* **Blockers (§8).** None; the two it once waited on have landed.",
-        // Intent-bearing verbs are CLOUD-454's question and are deliberately not
-        // this anchor's. Reading them here would silently annex that row's scope.
-        "* **Blockers (§8).** None. This depends on CLOUD-37 landing first.",
-        "* **Blockers (§8).** None. It needs CLOUD-37 and waits for CLOUD-38.",
-        // "blocker" is not "blocked by": a substring widening would match it.
-        "* **Blockers (§8).** None. The blocker CLOUD-37 named was discharged.",
-    ] {
-        let output = lint(&dir, &payload(&block(clause), &[]));
-        assert_eq!(code(&output), 0, "{clause}\n{}", stderr(&output));
-    }
-}
-
-#[test]
-fn the_sentence_boundary_still_ends_an_english_claim() {
-    // The span rules are untouched by the widening, and this is the one that
-    // would be easiest to lose: a trailing cross-reference after the claim
-    // sentence asserts nothing about blocking. Asserted on the ENGLISH spelling,
-    // because the code-span form already had a case and a widening that carried
-    // the anchor but not the span would pass it.
-    let dir = pre_release("ready-english-span");
-    let body = block(
-        "* **Blockers (§8).** blocked by CLOUD-29. Grows in coverage as the tree fills (CLOUD-88).",
-    );
-    let output = lint(&dir, &payload(&body, &["CLOUD-29"]));
+fn a_section_eight_sentence_is_never_read_as_a_claim() {
+    // CLOUD-1771. A `blockedBy` relation is live on both sides of the ref, and a
+    // §8 sentence restating it is a copy that goes stale while the edge stays
+    // true — CLOUD-1306's named a blocker Done for a day. So a sentence naming a
+    // key the board does not carry is not refused, and `cites-blockers` names
+    // the EDGES, never the sentence's keys.
+    let dir = pre_release("ready-blockers-unread");
+    let body = block("* **Blockers (§8).** `blockedBy` CLOUD-3, which must land first.");
+    let output = lint(&dir, &payload(&body, &["CLOUD-2"]));
     assert_eq!(code(&output), 0, "{}", stderr(&output));
-}
-
-#[test]
-fn the_rendered_and_stored_mention_forms_are_one_case() {
-    // The tracker serialises a mention as `<issue …>CLOUD-N</issue>`, so patterns
-    // written against the RENDERED form never match the stored one — and an
-    // exemption tested only on plain-text fixtures is dead code in production.
-    let dir = pre_release("ready-mentions");
-    let body = block(
-        "* **Blockers (§8).** `blockedBy` <issue id=\"x\" href=\"y\">CLOUD-29</issue> (closed).",
+    assert!(
+        !stderr(&output).contains("blocker-cited-without-relation"),
+        "{}",
+        stderr(&output)
     );
-    let missing = lint(&dir, &payload(&body, &[]));
-    assert_eq!(code(&missing), 2);
-    assert!(stderr(&missing).contains("blocker-cited-without-relation (CLOUD-29)"));
-    let present = lint(&dir, &payload(&body, &["CLOUD-29"]));
-    assert_eq!(code(&present), 0, "{}", stderr(&present));
-}
+    assert!(
+        stdout(&output)
+            .lines()
+            .any(|line| line == "cites-blockers CLOUD-2"),
+        "{}",
+        stdout(&output)
+    );
 
-#[test]
-fn the_claim_span_is_a_heading_plus_its_first_paragraph_and_stops_there() {
-    // Reading only the LABEL LINE made every heading-form issue pass VACUOUSLY —
-    // observed: an issue claiming `blockedBy CLOUD-95` under a heading, with no
-    // relation, passed clean. The span is bounded on purpose: a greedier one
-    // would swallow later sections and flag ids that assert nothing about
-    // blocking.
-    let dir = pre_release("ready-span");
-
-    let under_heading = "**Refinement — Ready**\n\n\
-                         ### Blockers (§8)\n\n\
-                         `blockedBy` CLOUD-95, which must land first.\n";
-    let reported = lint(&dir, &payload(under_heading, &[]));
-    assert_eq!(code(&reported), 2);
-    assert!(stderr(&reported).contains("blocker-cited-without-relation (CLOUD-95)"));
-    let linked = lint(&dir, &payload(under_heading, &["CLOUD-95"]));
-    assert_eq!(code(&linked), 0, "{}", stderr(&linked));
-
-    let empty_heading = "**Refinement — Ready**\n\n### Blockers (§8)\n\nNone.\n";
-    let quiet = lint(&dir, &payload(empty_heading, &[]));
+    // No relations key: the sentence still costs nothing, where the parse it
+    // replaced answered could-not-look for a citation it could not check.
+    let no_key = serde_json::json!({ "id": "CLOUD-999", "description": body }).to_string();
+    let quiet = lint(&dir, &no_key);
     assert_eq!(code(&quiet), 0, "{}", stderr(&quiet));
-
-    // The span ends at the next heading …
-    let next_heading = "**Refinement — Ready**\n\n\
-                        ### Blockers (§8)\n\n\
-                        None.\n\n\
-                        ### Notes\n\n\
-                        `blockedBy` CLOUD-77 is discussed here and claimed nowhere.\n";
-    let bounded = lint(&dir, &payload(next_heading, &[]));
-    assert_eq!(code(&bounded), 0, "{}", stderr(&bounded));
-
-    // … and at the paragraph that ends it.
-    let next_paragraph = "**Refinement — Ready**\n\n\
-                          ### Blockers (§8)\n\n\
-                          None.\n\n\
-                          A later paragraph mentioning `blockedBy` CLOUD-78.\n";
-    let stopped = lint(&dir, &payload(next_paragraph, &[]));
-    assert_eq!(code(&stopped), 0, "{}", stderr(&stopped));
+    assert!(
+        !stderr(&quiet).contains("unjudgeable-relations"),
+        "{}",
+        stderr(&quiet)
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1533,10 +1337,10 @@ fn a_parents_refinement_gate_heading_is_a_ready_block() {
     // And a clause inside a parent block is still CHECKED — the exemption is from
     // the floor, never from the rules.
     let claiming = "## Refinement gate\n\n\
-                    * **Blockers (§8).** `blockedBy` CLOUD-29.\n";
+                    * **Commit / bump (§6).** `feat` → **minor**.\n";
     let held = lint(&dir, &payload(claiming, &[]));
     assert_eq!(code(&held), 2);
-    assert!(stderr(&held).contains("blocker-cited-without-relation (CLOUD-29)"));
+    assert!(stderr(&held).contains("bump-disagrees-with-type"));
 }
 
 #[test]
@@ -1549,15 +1353,12 @@ fn the_non_canonical_opener_is_reported_and_its_content_still_judged() {
     let dir = pre_release("ready-opener-dialect");
     let body = "**Definition of ready**\n\n\
                 * **Source of truth (§1).** One artifact.\n\
-                * **Blockers (§8).** `blockedBy` CLOUD-29.\n";
+                * **Commit / bump (§6).** `feat` → **minor**.\n";
     let output = lint(&dir, &payload(body, &[]));
     assert_eq!(code(&output), 2);
     let text = stderr(&output);
     assert!(text.contains("non-canonical-ready-opener"), "{text}");
-    assert!(
-        text.contains("blocker-cited-without-relation (CLOUD-29)"),
-        "{text}"
-    );
+    assert!(text.contains("bump-disagrees-with-type"), "{text}");
 }
 
 #[test]
@@ -1659,8 +1460,13 @@ fn a_missing_relations_key_is_a_gap_and_never_a_phantom_blocker() {
     // issue of citing a phantom blocker, and implying a remedy for a relation
     // that already exists. Measured on CLOUD-326, same body, only the key
     // differing: four violations with it stripped, exit 0 with it injected.
-    let dir = pre_release("ready-gap");
-    let body = block("* **Blockers (§8).** `blockedBy` CLOUD-29.");
+    //
+    // Held on the claims object's `blockers` key since CLOUD-1771 stopped reading
+    // the §8 sentence: the key is the citation the gap is about.
+    let dir = with_tasks("ready-gap");
+    let mut object = complete_claims();
+    object["blockers"] = serde_json::json!(["CLOUD-29"]);
+    let body = claims_block(&serde_json::to_string_pretty(&object).expect("encodable"));
 
     let no_key = raw_payload(&serde_json::json!({ "id": "CLOUD-999", "description": body }));
     let gap = lint(&dir, &no_key);
@@ -1686,9 +1492,9 @@ fn a_judgeable_violation_outranks_the_gap() {
     // behind a caller's thin fetch. The pointer prints on both arms, so nothing
     // the gate noticed is swallowed.
     let dir = pre_release("ready-order");
-    let body = block(
-        "* **Blockers (§8).** `blockedBy` CLOUD-29.\n\
-         * **Commit / bump (§6).** `feat` → **minor**.",
+    let body = format!(
+        "{}\n\nThe rest is deferred to CLOUD-44.\n",
+        block("* **Commit / bump (§6).** `feat` → **minor**.")
     );
     let value = serde_json::json!({ "id": "CLOUD-999", "description": body });
     let output = lint(&dir, &raw_payload(&value));
@@ -1868,10 +1674,10 @@ fn the_bodys_cited_keys_are_emitted_before_any_verdict() {
 
 #[test]
 fn the_section_eight_span_emits_its_keys_as_their_own_set() {
-    // A SEPARATE LINE from `cites-body`, and not for tidiness: its span does not
-    // exist until the §8 scan, so a caller can be handed one set and not the
-    // other — and an absent line means "this run never got far enough to know",
-    // per set.
+    // A SEPARATE LINE from `cites-body`, and not for tidiness: since CLOUD-1771
+    // it names the board's `blockedBy` edges rather than the §8 sentence, so it
+    // is a different set from the body's citations — and an absent line means
+    // "this run never got far enough to know", per set.
     let dir = pre_release("ready-emissions-blockers");
     let body = block("* **Blockers (§8).** `blockedBy` CLOUD-29. See also CLOUD-88.");
     let output = lint(&dir, &payload(&body, &["CLOUD-29"]));
@@ -2064,7 +1870,6 @@ fn no_line_of_the_issue_reaches_the_output() {
     let body = format!(
         "**Refinement — Ready**\n\n\
          * **Source of truth (§1).** {secret}\n\
-         * **Blockers (§8).** `blockedBy` CLOUD-29.\n\
          * **Commit / bump (§6).** `feat` → **minor**.\n"
     );
     let output = lint(&dir, &payload(&body, &[]));
@@ -2080,7 +1885,7 @@ fn no_line_of_the_issue_reaches_the_output() {
     );
     // And it still SAID something: a pointer-only assertion over a silent verb
     // would pass while measuring nothing.
-    assert!(stderr(&output).contains("blocker-cited-without-relation"));
+    assert!(stderr(&output).contains("bump-disagrees-with-type"));
 }
 
 // ---------------------------------------------------------------------------

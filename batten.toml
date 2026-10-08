@@ -2347,7 +2347,9 @@ regex = '(?i)replay'
 id = "ready-replay-count"
 regex = '(?i)[0-9][^.]{0,40}fir(e|ed|ing)|fir(e|ed|ing)[^.]{0,40}[0-9]|would-fire'
 
-# The §8 label.
+# The §8 label. UNREAD since CLOUD-1771, which stopped `ready lint` reading the
+# §8 sentence; kept only because the pinned engine still requires it, and deleted
+# by CLOUD-2168 once the pin carries that change.
 [[pattern]]
 id = "ready-blockers-label"
 regex = '(?i)Blockers \((§|clause )8\)'
@@ -2745,6 +2747,9 @@ regex = '</?issue[^>]*>'
 id = "ready-bump-token"
 regex = '(?i)major|minor|patch|no bump|none'
 
+# UNREAD since CLOUD-1771, and kept for the pinned engine until CLOUD-2168, like
+# `ready-blockers-label` above. What follows is the history of what they did.
+#
 # THE §8 CLAIM SPAN, and the three rows are one predicate: a claim STARTS at a
 # blocked-by token and ENDS at either of the other two relation names. A
 # well-formed §8 bullet cross-references the other directions — "`relatedTo`

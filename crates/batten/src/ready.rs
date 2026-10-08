@@ -312,10 +312,6 @@ pub struct Grammar {
     deny_severity: Regex,
     replay_named: Regex,
     replay_count: Regex,
-    blockers_label: Regex,
-    blockedby_claim: Regex,
-    blocks_tail: Regex,
-    relatedto_tail: Regex,
     defer_verb: Regex,
     key: Regex,
     closing_verb: Regex,
@@ -349,10 +345,6 @@ pub const REQUIRED_PATTERNS: &[&str] = &[
     "ready-deny-severity",
     "ready-replay-named",
     "ready-replay-count",
-    "ready-blockers-label",
-    "ready-blockedby-claim",
-    "ready-blocks-tail",
-    "ready-relatedto-tail",
     "ready-defer-verb",
     "ready-issue-key",
     "ready-closing-verb",
@@ -470,10 +462,6 @@ impl Grammar {
             deny_severity: find("ready-deny-severity")?,
             replay_named: find("ready-replay-named")?,
             replay_count: find("ready-replay-count")?,
-            blockers_label: find("ready-blockers-label")?,
-            blockedby_claim: find("ready-blockedby-claim")?,
-            blocks_tail: find("ready-blocks-tail")?,
-            relatedto_tail: find("ready-relatedto-tail")?,
             defer_verb: find("ready-defer-verb")?,
             prose_dialect_required_from: None,
             pressure_test_required_from: None,
@@ -1097,7 +1085,7 @@ pub fn lint(grammar: &Grammar, payload: &Payload, root: &Path) -> Result<Report>
     }
     check_replay(grammar, &block, &line_of, &mut report);
     if !structured {
-        check_blockers(grammar, payload, &block_lines, &line_of, &mut report);
+        emit_prose_blockers(grammar, payload, &mut report);
     }
     check_deferrals(grammar, payload, &mut report);
 
@@ -1604,104 +1592,28 @@ fn check_claimed_tests(claims: &serde_json::Value, line: usize, report: &mut Rep
     }
 }
 
-/// §8: blockers linked, not assumed.
+/// §8 on a prose block: the board's edges, never the block's sentence (CLOUD-1771).
 ///
-/// The highest-value rule here, and the only one prose cannot fake. A block
-/// CLAIMING a blocker while carrying no such relation is asserting a dependency
-/// the board does not know about — exactly the failure the clause names.
+/// A `blockedBy` relation is live on both sides of the ref, so a §8 sentence
+/// restating it is a copy that goes stale while the edge stays true: measured on
+/// CLOUD-1306, whose sentence named a blocker Done for a day and deferred an
+/// Urgent row. This used to parse that sentence and hold its keys to the edges,
+/// which kept the copy load-bearing. It now reads nothing from the block, and
+/// `cites-blockers` names the edges themselves.
 ///
-/// What opens a claim is the consumer's `ready-blockedby-claim` row, which
-/// carries the corpus's spellings of one concept — the tracker's own token and
-/// the English phrase alike. Naming a spelling here too would be a second
-/// authority on it (CLOUD-1113), and after CLOUD-1146 the vocabulary is not this
-/// crate's to name at all.
-///
-/// **Claims, not mentions.** A well-formed §8 bullet also cross-references the
-/// other relation directions, and flagging those would punish precision. So only
-/// ids in the span after the first claim opener are claims, and the span ends at
-/// a `blocks`/`relatedTo` token or the sentence's end. Widening WHICH spellings
-/// open a claim leaves every one of those span rules untouched, which is what
-/// keeps a §8 bullet that cross-references a sibling from becoming a claim.
-fn check_blockers(
-    grammar: &Grammar,
-    payload: &Payload,
-    block_lines: &[&str],
-    line_of: &dyn Fn(&Regex) -> usize,
-    report: &mut Report,
-) {
-    let label = &grammar.blockers_label;
-    let Some(start) = first_line(label, block_lines) else {
-        // No §8 span at all, so no keys are emitted for it. An absent line is
-        // "this run never got far enough to know", per set.
-        report
-            .emissions
-            .push(emit_keys(grammar, "cites-blockers", ""));
-        return;
-    };
-
-    // The claim is not always ON the label line. The corpus's usual dialect is a
-    // single-line bullet, but a `### Blockers (§8)` heading with the claim in
-    // the paragraph below is equally legitimate markdown, and reading only the
-    // label line made every such issue pass VACUOUSLY. So: the label line plus
-    // the first paragraph after it, stopping at the next heading or the blank
-    // line that ends it. Bounded on purpose — a greedier span would swallow
-    // later sections and flag ids that assert nothing about blocking.
-    let mut span: Vec<&str> = Vec::new();
-    let mut seen_body = false;
-    for (offset, line) in block_lines[start - 1..].iter().enumerate() {
-        if offset == 0 {
-            span.push(line);
-            continue;
-        }
-        if line.starts_with('#') {
-            break;
-        }
-        if line.trim().is_empty() {
-            if seen_body {
-                break;
-            }
-            continue;
-        }
-        seen_body = true;
-        span.push(line);
-    }
-    let text = grammar.strip_mentions(&span.join("\n"));
-
-    let claim = grammar
-        .blockedby_claim
-        .find(&text)
-        .map(|m| m.as_str().to_owned())
-        .unwrap_or_default();
-    // A claim is one sentence: the §8 bullet legitimately carries trailing
-    // cross-references that assert nothing about blocking.
-    let claim = claim.split(". ").next().unwrap_or_default().to_owned();
-    let claim = grammar.blocks_tail.replace(&claim, "");
-    let claim = grammar.relatedto_tail.replace(&claim, "");
-
-    report
-        .emissions
-        .push(emit_keys(grammar, "cites-blockers", &span.join("\n")));
-
-    for cited in keys_in(grammar, &claim) {
-        // THE SCAN STILL RUNS, THE CROSS-CHECK DOES NOT (CLOUD-679). Finding the
-        // citation is what makes "the missing key is the SOLE reason" computable
-        // at all: a payload with no key and nothing cited lost nothing and must
-        // stay clean, because CLOUD-526 declares that a caller may project
-        // everything but `.description` away.
-        if !payload.relations_present {
-            report.unjudgeable += 1;
-            if report.unjudged_line == 0 {
-                report.unjudged_line = line_of(&grammar.blockers_label);
-            }
-            continue;
-        }
-        if !payload.blocked_by.iter().any(|edge| edge == &cited) {
-            report.findings.push(Finding {
-                line: line_of(&grammar.blockers_label),
-                rule: format!("blocker-cited-without-relation ({cited})"),
-            });
-        }
-    }
+/// EMITTED WITH OR WITHOUT A RELATIONS KEY, as the empty set where there is none:
+/// that is the line the retired program was recorded emitting for a block with
+/// no §8 span (`authority_replay.rs`'s `RECORDED`), and a consumer branching on
+/// its presence keeps the answer it had. The claims object's `blockers` key is a
+/// key rather than prose, and [`check_claimed_blockers`] still holds it to the
+/// edges.
+//MUTANT prose-blockers-from-the-sentence|s@^        \&payload.blocked_by.join(" "),$@        \&payload.description,@|a_section_eight_sentence_is_never_read_as_a_claim
+fn emit_prose_blockers(grammar: &Grammar, payload: &Payload, report: &mut Report) {
+    report.emissions.push(emit_keys(
+        grammar,
+        "cites-blockers",
+        &payload.blocked_by.join(" "),
+    ));
 }
 
 /// Deferral claims linked, not asserted (CLOUD-197).

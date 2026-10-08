@@ -158,19 +158,16 @@ fn corpus() -> Vec<(&'static str, serde_json::Value)> {
                 Some(edge("blockedBy", "CLOUD-2")),
             ),
         ),
+        // The could-not-look shape. It was a §8 citation over a payload with no
+        // relations key until CLOUD-1771 stopped reading the §8 sentence; that
+        // shape and its sibling are pinned as decided divergences below, and this
+        // deferral reaches the same status through the rule that still reads one.
         (
-            "a §8 blocker cited with no such relation",
+            "a deferral over a payload carrying no relations key",
             payload(
                 "CLOUD-1",
-                "**Refinement — Ready**\n\n* **Blockers (§8).** `blockedBy` CLOUD-3.",
-                Some(edge("blockedBy", "CLOUD-2")),
-            ),
-        ),
-        (
-            "a §8 citation over a payload carrying no relations key",
-            payload(
-                "CLOUD-1",
-                "**Refinement — Ready**\n\n* **Blockers (§8).** `blockedBy` CLOUD-3.",
+                "**Refinement — Ready**\n\n* **Authority boundary (§1).** The crate.\n\nThe rest \
+                 is deferred to CLOUD-9.",
                 None,
             ),
         ),
@@ -297,6 +294,10 @@ fn claims_object() -> Vec<(&'static str, serde_json::Value)> {
 /// payload to the program at the commit that deleted it — and the compiled
 /// authority is held to them. A shape added to the corpus later has no recording,
 /// and the length assertion below says so rather than letting it pass unchecked.
+///
+/// The deferral-without-relations entry was captured the same way, by piping its
+/// payload to the program at `421415bd^`, after CLOUD-1771 moved the two §8
+/// shapes it replaces into the decided divergences.
 /// One recorded answer: the exit code and the three captured fields.
 type Recorded = (
     i32,
@@ -305,15 +306,14 @@ type Recorded = (
     Option<&'static str>,
 );
 
-const RECORDED: [Recorded; 13] = [
+const RECORDED: [Recorded; 12] = [
     (1, Some(""), None, None),
     (1, Some(""), Some(""), None),
     (1, Some(""), Some(""), None),
     (0, Some(""), Some(""), None),
     (0, Some(""), Some(""), None),
     (0, Some("CLOUD-2"), Some("CLOUD-2"), None),
-    (1, Some("CLOUD-3"), Some("CLOUD-3"), None),
-    (2, Some("CLOUD-3"), Some("CLOUD-3"), None),
+    (2, Some("CLOUD-9"), Some(""), None),
     (1, Some("CLOUD-9"), Some(""), None),
     (0, Some("CLOUD-9"), Some(""), None),
     (0, Some(""), Some(""), Some("patch")),
@@ -359,7 +359,7 @@ fn the_compiled_authority_answers_what_the_program_was_recorded_answering() {
     }
 }
 
-/// The two shapes where the compiled authority DELIBERATELY answers differently
+/// The shapes where the compiled authority DELIBERATELY answers differently
 /// from what the program was recorded answering — each owned by the row that
 /// decided it, and each pinned so the difference stays a decision rather than a
 /// drift.
@@ -369,6 +369,10 @@ fn the_compiled_authority_answers_what_the_program_was_recorded_answering() {
 /// emitted `none` — the token the board check's In Review exemption reads.
 /// CLOUD-1395: a row created after `[ready] prose_dialect_required_from` owes the
 /// claims object, which the program had no clause for (recorded: exit `0`).
+/// CLOUD-1771: a §8 sentence is no longer read, so a blocker it names that the
+/// board does not carry is not refused, and `cites-blockers` names the board's
+/// edges (recorded: exit `1` with the edge, exit `2` without the key, each
+/// emitting the sentence's `CLOUD-3`).
 #[test]
 fn the_recorded_divergences_are_the_compiled_authoritys_decided_answers() {
     let root = root();
@@ -395,6 +399,30 @@ fn the_recorded_divergences_are_the_compiled_authoritys_decided_answers() {
     assert_eq!(
         status, 1,
         "recorded: exit 0, the program having no ratchet clause"
+    );
+
+    let sentence = "**Refinement — Ready**\n\n* **Blockers (§8).** `blockedBy` CLOUD-3.";
+    let unlinked = serde_json::json!({
+        "id": "CLOUD-1",
+        "description": sentence,
+        "relations": { "blockedBy": [ { "id": "CLOUD-2" } ] },
+    });
+    let (status, out) = batten::ready::adjudicate(&grammar, &unlinked, &root)
+        .expect("the compiled authority reads the payload");
+    assert_eq!(status, 0, "recorded: exit 1, the sentence's key unlinked");
+    assert_eq!(
+        emitted(&out, "cites-blockers "),
+        Some("CLOUD-2"),
+        "recorded: `CLOUD-3`, the sentence's key"
+    );
+    let keyless = serde_json::json!({ "id": "CLOUD-1", "description": sentence });
+    let (status, out) = batten::ready::adjudicate(&grammar, &keyless, &root)
+        .expect("the compiled authority reads the payload");
+    assert_eq!(status, 0, "recorded: exit 2, a citation it could not check");
+    assert_eq!(
+        emitted(&out, "cites-blockers "),
+        Some(""),
+        "recorded: `CLOUD-3`, the sentence's key"
     );
 }
 
