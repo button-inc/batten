@@ -529,6 +529,50 @@ fn a_first_sighting_carries_the_rows_reason_and_both_labels() {
     );
 }
 
+/// A live class carrying `doc`, over the real load-time validator (CLOUD-2143).
+fn documented(why: Option<&str>, act: &[&str]) -> batten::verdict::DeclaredVerdict {
+    let mut class = batten::verdict::vendored()
+        .into_iter()
+        .find(|class| class.id == "tool run loose")
+        .expect("a vendored class to dress");
+    class.doc = batten::doc::Doc {
+        why: why.map(str::to_owned),
+        act: act.iter().map(|item| (*item).to_owned()).collect(),
+        dont: Vec::new(),
+    };
+    class
+}
+
+fn loads(class: batten::verdict::DeclaredVerdict) -> Result<(), String> {
+    batten::verdict::validate(&[class], &batten::verdict::Vocabulary::default())
+        .map_err(|error| error.to_string())
+}
+
+/// The load tier of the first sighting's budget (CLOUD-2143): over 640 bytes
+/// does not load, and the same class under it does — the anti-vacuity half.
+#[test]
+fn a_class_doc_over_640_bytes_does_not_load() {
+    let small = documented(Some("A short reason"), &["do the one thing"]);
+    assert_eq!(loads(small), Ok(()), "a doc within budget loads");
+    let item = "x".repeat(200);
+    let big = documented(Some("A short reason"), &[&item, &item, &item]);
+    let refused = loads(big).expect_err("a 640-byte-plus doc is refused at load");
+    assert!(refused.contains("640"), "{refused}");
+}
+
+#[test]
+fn a_class_doc_citing_an_issue_key_does_not_load() {
+    let cited = documented(Some("Measured on ABC-123"), &["do the one thing"]);
+    let refused = loads(cited).expect_err("an issue key in a doc is refused");
+    assert!(refused.contains("issue key"), "{refused}");
+}
+
+#[test]
+fn a_class_doc_with_two_sentence_why_does_not_load() {
+    let two = documented(Some("One thing. Another thing"), &["do the one thing"]);
+    assert!(loads(two).is_err(), "`why` is one sentence");
+}
+
 /// Every id the engine raises with no `[[rule]]` row resolves to a definition
 /// compiled into the binary (CLOUD-2142), and an unknown name to none.
 ///

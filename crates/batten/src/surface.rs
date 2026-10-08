@@ -1211,6 +1211,23 @@ const RULE_ID_ARG: FlagDecl = FlagDecl {
     value: ValueDecl::Str,
 };
 
+/// `--history` on `policy explain` (CLOUD-2144): print each named row's history
+/// — its comment block, keys and class paragraph at HEAD, then the commits that
+/// changed it — which is the read a change to the row owes.
+const EXPLAIN_HISTORY: FlagDecl = FlagDecl {
+    id: "history",
+    long: Some("history"),
+    short: None,
+    help: "Print each named config row's history: the row at HEAD, then the commits that changed it",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Bool,
+};
+
 const VERDICT_TOKEN: FlagDecl = FlagDecl {
     id: "token",
     long: None,
@@ -5032,7 +5049,7 @@ pub const SURFACE: &[CommandDecl] = &[
         data_channel: true,
         exits: EXITS_STANDARD,
         effect: Effect::Read,
-        flags: &[VERDICT_TOKEN, JSON],
+        flags: &[VERDICT_TOKEN, JSON, EXPLAIN_HISTORY],
     },
     // The OTHER dereference, and the emitted line carries pointers to both
     // (CLOUD-1637). `explain` answers about the CLASS; this answers about the

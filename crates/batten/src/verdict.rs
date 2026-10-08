@@ -325,8 +325,12 @@ pub struct DeclaredVerdict {
     /// a column that carries no information 99% of the time.
     #[serde(default, skip_serializing_if = "Applicability::is_default")]
     pub applicability: Applicability,
-    /// One line, the hot path's whole payload.
+    /// One line, the hot path's whole payload, and a first sighting's `what`.
     pub gloss: String,
+    /// How to deal with a refusal of this class, delivered once per context
+    /// window beside the gloss (CLOUD-2143). See [`crate::doc`].
+    #[serde(default, skip_serializing_if = "crate::doc::Doc::is_empty")]
+    pub doc: crate::doc::Doc,
     /// What the class means, at length. `batten policy explain`'s payload, and
     /// the **deliberate exception** to pointer-only output (house style §6):
     /// `explain` is local documentation rather than a finding, and carrying the
@@ -376,6 +380,31 @@ impl DeclaredVerdict {
     #[must_use]
     pub fn retired(&self) -> bool {
         self.successor.is_some() || self.withdrawn.is_some()
+    }
+
+    /// What a first sighting of this class carries after its pointers: the
+    /// gloss, the doc's sections and each override's admissible precondition
+    /// (CLOUD-2143). The one text both budget tiers measure.
+    #[must_use]
+    pub fn first_sighting(&self) -> String {
+        let act: Vec<&str> = self.doc.act.iter().map(String::as_str).collect();
+        let mut body = self.gloss.trim().to_owned();
+        let sections = crate::doc::render(&self.doc, &act);
+        if !sections.is_empty() {
+            body.push_str(". ");
+            body.push_str(&sections);
+        }
+        for route in &self.routes {
+            if let (RouteKind::Override, Some(precondition)) =
+                (route.kind, route.precondition.as_deref())
+            {
+                body.push_str(&format!(
+                    " Admissible as '{}' when {precondition}.",
+                    route.id
+                ));
+            }
+        }
+        body
     }
 }
 
@@ -1023,6 +1052,16 @@ fn validate_one(
              successor cannot name, so a blank one retires the token while explaining nothing"
         )));
     }
+    // THE FIRST SIGHTING'S BUDGET (CLOUD-2143): the gloss, the doc and every
+    // admissible precondition together, because that is what a reader is handed
+    // once per window. Checked on what IS declared; a class with no doc still
+    // loads, and this repository's own registry is held to carrying one by
+    // `every_vendored_and_declared_doc_is_within_160_o200k_tokens`.
+    if !verdict.retired()
+        && let Some(why) = crate::doc::violation(&verdict.doc, &verdict.first_sighting())
+    {
+        return Err(UsageError::raise(format!("verdict `{id}`'s doc {why}")));
+    }
     let mut route_ids: BTreeSet<&str> = BTreeSet::new();
     for route in &verdict.routes {
         validate_route(id, route, grammar, used)?;
@@ -1450,6 +1489,11 @@ pub enum Native {
     /// variant inserted mid-enum moves every later discriminant, which
     /// `semver` refuses. A config fault, so it is in [`Native::CONFIG_FAULTS`].
     RegisterTableRefused,
+    /// A config row was changed by a context that has not read its history
+    /// (CLOUD-2144).
+    ///
+    /// **APPENDED LAST**, for [`Native::ProseColumnRefused`]'s reason.
+    RuleReadMissing,
 }
 
 impl Native {
@@ -1519,6 +1563,7 @@ impl Native {
         Native::TaggerUnannotated,
         Native::ProseColumnRefused,
         Native::RegisterTableRefused,
+        Native::RuleReadMissing,
     ];
 
     /// The classes the CONFIG LOADER raises, in `parse_ungated` order.
@@ -1595,6 +1640,7 @@ impl Native {
             Native::PatternTableRefused => "pattern declare refused",
             Native::TraversalTableRefused => "traversal declare refused",
             Native::RegisterTableRefused => "register declare refused",
+            Native::RuleReadMissing => "rule read missing",
             Native::VerdictTableRefused => "verdict declare refused",
             Native::RedirectTableRefused => "redirect declare refused",
             Native::DeferralTableRefused => "deferral declare refused",
@@ -1808,6 +1854,26 @@ it, so this can fire in a repository whose `protected` set is empty.",
         routes: &[
             read("config read first", "batten.toml"),
             run("readers declared", "batten config show"),
+        ],
+        applicability: Applicability::Advice,
+    },
+    VendoredVerdict {
+        id: "rule read missing",
+        gloss: "a config row changed by a context that has not read why it exists",
+        class: "A rule's reasons live in the comment block above its row, its class \
+paragraph and the commits that shaped it, and nothing checked that a context changing the \
+row had read any of them -- which is how a gate's prose decays into a gloss nobody can act \
+on. So a write to a `[[rule]]` or `[[verdict]]` row of the committed authority needs this \
+context to have read that row's history, as it stands at HEAD: a commit to the row voids \
+the read, and so does a compaction, because what was read left the window with it. A new \
+row has no history and needs none.",
+        routes: &[
+            run("rule read first", "batten policy explain '<id>' --history"),
+            admit(
+                "articulate the sweep",
+                "the write is one mechanical change applied across many rows, named in full, \
+whose every row would need the same history read for no different decision",
+            ),
         ],
         applicability: Applicability::Advice,
     },
@@ -2723,6 +2789,9 @@ pub fn declared_from(entry: &VendoredVerdict) -> DeclaredVerdict {
     DeclaredVerdict {
         id: entry.id.to_owned(),
         gloss: entry.gloss.to_owned(),
+        // Joined by id from the one doc table (CLOUD-2143), so the vendored and
+        // preset halves are documented in one place.
+        doc: crate::doc::vendored(entry.id),
         class: entry.class.to_owned(),
         // Carried rather than defaulted (CLOUD-1639): this is the one projection
         // between the two tables, so a vendored class that declares a repairing
@@ -2821,6 +2890,7 @@ mod tests {
         DeclaredVerdict {
             id: id.to_owned(),
             gloss: "a short line".to_owned(),
+            doc: crate::doc::Doc::default(),
             class: "the long definition".to_owned(),
             routes: vec![route("do the thing")],
             successor: None,
@@ -3137,6 +3207,7 @@ mod tests {
                 | Native::PatternTableRefused
                 | Native::TraversalTableRefused
                 | Native::RegisterTableRefused
+                | Native::RuleReadMissing
                 | Native::VerdictTableRefused
                 | Native::RedirectTableRefused
                 | Native::DeferralTableRefused

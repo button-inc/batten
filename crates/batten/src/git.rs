@@ -4866,6 +4866,72 @@ pub fn path_was_deleted(dir: &Path, path: &str) -> Result<Option<bool>> {
     ))
 }
 
+/// The first-parent commits from `HEAD` at which `path`'s blob changed, newest
+/// first, as `(sha, subject)` (CLOUD-2144).
+///
+/// The walk `batten policy explain --history` reads a row's past through: a
+/// commit that left the file's blob unchanged cannot have changed any row in it,
+/// so only these are worth reading. First parent only, for
+/// [`path_transitions`]' reason: this repository lands by fast-forward.
+///
+/// # Errors
+///
+/// Raises when `dir` is not a repository, or is shallow — a truncated walk is
+/// could-not-look, never a short history.
+pub fn path_changes(dir: &Path, path: &str) -> Result<Vec<(String, String)>> {
+    let repo = open(dir)?;
+    if repo.is_shallow() {
+        return Err(UsageError::raise(
+            "the repository is shallow, so a path's history cannot be walked".to_owned(),
+        ));
+    }
+    let blob_of = |commit: &gix::Commit<'_>| {
+        commit
+            .tree()
+            .ok()
+            .and_then(|tree| tree.lookup_entry_by_path(path).ok().flatten())
+            .map(|entry| entry.object_id())
+    };
+    let Ok(mut commit) = repo.head_commit() else {
+        return Ok(Vec::new());
+    };
+    let mut found = Vec::new();
+    loop {
+        let parent = commit
+            .parent_ids()
+            .next()
+            .and_then(|id| repo.find_commit(id).ok());
+        let here = blob_of(&commit);
+        let before = parent.as_ref().and_then(blob_of);
+        if here.is_some() && here != before {
+            found.push((commit.id().to_string(), subject_of(&commit)));
+        }
+        match parent {
+            Some(parent) => commit = parent,
+            None => break,
+        }
+    }
+    Ok(found)
+}
+
+/// A commit's full message, for the newest entries a history read prints.
+///
+/// # Errors
+///
+/// Raises when `dir` is not a repository or `sha` names no commit.
+pub fn message_of(dir: &Path, sha: &str) -> Result<String> {
+    let repo = open(dir)?;
+    let id = gix::ObjectId::from_hex(sha.as_bytes())
+        .map_err(|_| UsageError::raise(format!("`{sha}` is not a commit id")))?;
+    let commit = repo
+        .find_commit(id)
+        .map_err(|_| UsageError::raise(format!("no commit `{sha}`")))?;
+    Ok(commit
+        .message_raw()
+        .map(|raw| String::from_utf8_lossy(raw.as_ref()).into_owned())
+        .unwrap_or_default())
+}
+
 /// Whether `commit`'s tree carries `path`.
 fn holds(repo: &gix::Repository, commit: &gix::Commit<'_>, path: &str) -> bool {
     let _ = repo;

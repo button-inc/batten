@@ -2298,6 +2298,7 @@ pub(crate) fn verdicts(ids: &[&str]) -> Vec<batten::verdict::DeclaredVerdict> {
         .map(|id| batten::verdict::DeclaredVerdict {
             id: (*id).to_owned(),
             gloss: format!("the fixture class {id}"),
+            doc: batten::doc::Doc::default(),
             class: format!("What {id} means, at the length `batten policy explain` answers with."),
             // Advice, which is the default and what every fixture class wants:
             // a repairing class would make the boundary spawn this row's `fix`
