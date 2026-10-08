@@ -67,18 +67,6 @@ impl Advice {
             classed: true,
         }
     }
-
-    /// An already-rendered, already-marked classed entry: the eager re-delivery
-    /// a compaction's `SessionStart` carries.
-    #[must_use]
-    pub fn delivered(tier: AdvisoryTier, text: impl Into<String>) -> Advice {
-        Advice {
-            tier,
-            text: text.into(),
-            finding: None,
-            classed: true,
-        }
-    }
 }
 
 /// The `[advisory]` table: what ONE emission of the whole channel may cost.
@@ -231,6 +219,15 @@ mod tests {
         Advice::new(tier, text)
     }
 
+    /// A classed entry whose finding is already rendered, as `sight_advice`
+    /// leaves it.
+    fn classed(tier: AdvisoryTier, text: &str) -> Advice {
+        Advice {
+            classed: true,
+            ..Advice::new(tier, text)
+        }
+    }
+
     #[test]
     fn three_producers_emit_one_document_ordered_by_tier() {
         // THE ROW'S OWN CASE. Three producers on one boundary, admitted in
@@ -336,8 +333,8 @@ mod tests {
         // ceiling bounds only unclassed text — which is still counted.
         let emission = admit(
             vec![
-                Advice::delivered(AdvisoryTier::Warning, "w".repeat(80)),
-                Advice::delivered(AdvisoryTier::Advisory, "a".repeat(80)),
+                classed(AdvisoryTier::Warning, &"w".repeat(80)),
+                classed(AdvisoryTier::Advisory, &"a".repeat(80)),
                 entry(AdvisoryTier::Caution, &"c".repeat(80)),
             ],
             Some(&Channel { max_tokens: 1 }),

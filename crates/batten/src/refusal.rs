@@ -407,13 +407,15 @@ fn admission_bindings(token: &str, subjects: &[crate::verdict::Subject]) -> Vec<
 /// `$GIT_DIR/batten-sightings/<digest(context)>/<digest(key)>`, where the context
 /// is the session plus the agent id where a subagent is the reader — a
 /// subagent's first sighting used to come back compact because another context
-/// in the clone had already marked it. Each file holds the FULL arm's text, so a
-/// compaction can re-deliver it.
+/// in the clone had already marked it. Each file holds the full arm's text, for
+/// a reader of the store; nothing re-delivers it.
 ///
-/// **Compaction is a `SessionStart` with `source: compact`**, and it is visible:
-/// the boundary re-delivers every full arm this context holds on that event and
-/// keeps the marks, so the context holds exactly one copy at every moment. Any
-/// other source forgets this context alone.
+/// **A window is an epoch, and a new one starts empty (CLOUD-2145).** A
+/// `SessionStart` that loses the window — `compact`, `clear`, `startup` —
+/// forgets this context alone, and each gate's NEXT firing is full again; one
+/// that carries it over — `resume`, `fork` — keeps it. Nothing is pushed at the
+/// boundary: an eager re-delivery paid for every gate the previous window met,
+/// most of which never fire again, into one channel with a size cap.
 ///
 /// **A failure to read or write answers TRUE**, which is the direction that
 /// matters: an unreadable store means the class explains itself again, costing a
@@ -424,19 +426,35 @@ pub fn first_sighting(root: &Path, context: &str, key: &str, full: &str) -> bool
     let Some(dir) = context_dir(root, context) else {
         return true;
     };
-    // One file per key rather than a list: two refusals firing concurrently
-    // would otherwise read-modify-write the same document and one would lose its
-    // mark, which shows up as a rule explaining itself twice — cheap, but the
-    // kind of race that is easier to not have.
+    // One file per key, CREATED EXCLUSIVELY (CLOUD-2145): the existence test and
+    // the mark are one operation, so of a parallel batch of identical firings
+    // exactly one reads "first". A check-then-write let every one of them.
     let path = dir.join(crate::provision::digest(key.as_bytes()));
-    if path.exists() {
-        return false;
-    }
     let _ = std::fs::create_dir_all(&dir);
-    // Discarded deliberately: an unwritable store means the next firing explains
-    // itself again, which is the safe direction.
-    let _ = crate::durable::replace(&path, full);
-    true
+    // An error other than "already there" answers TRUE: an unwritable store
+    // means the next firing explains itself again, which is the safe direction.
+    crate::durable::create_exclusive(&path, full).unwrap_or(true)
+}
+
+/// How to read a finding line, delivered once per epoch ahead of the first
+/// finding that reaches a context (CLOUD-2145). At most 96 `o200k` tokens.
+pub const LEGEND: &str = "batten: a finding reads `<name> at <subjects>; <routes>`; \
+the first in a window adds a dash and what to do, later ones stop before it. \
+`batten policy explain <name>` prints the whole class; `--history` why it exists, \
+read before changing a rule.";
+
+/// The sighting key the legend is marked under: no class token has a space-free
+/// spelling, so it collides with none.
+const LEGEND_KEY: &str = "legend";
+
+/// `text` with the legend ahead of it if this context has not had it this epoch.
+//MUTANT legend-every-firing|s@^    if first_sighting(root, context, LEGEND_KEY, LEGEND) {$@    if true {@|the_first_finding_of_an_epoch_carries_the_legend
+#[must_use]
+pub fn with_legend(root: &Path, context: &str, text: &str) -> String {
+    if first_sighting(root, context, LEGEND_KEY, LEGEND) {
+        return format!("{LEGEND}\n{text}");
+    }
+    text.to_owned()
 }
 
 /// The directory one context's sightings live in.
@@ -465,23 +483,6 @@ pub fn forget_sightings(root: &Path, context: &str) {
     if let Some(dir) = context_dir(root, context) {
         let _ = std::fs::remove_dir_all(dir);
     }
-}
-
-/// Every full arm this context has seen, sorted so re-delivery is byte-stable.
-#[must_use]
-pub fn sighted(root: &Path, context: &str) -> Vec<String> {
-    let Some(dir) = context_dir(root, context) else {
-        return Vec::new();
-    };
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return Vec::new();
-    };
-    let mut texts: Vec<String> = entries
-        .filter_map(Result::ok)
-        .filter_map(|entry| std::fs::read_to_string(entry.path()).ok())
-        .collect();
-    texts.sort_unstable();
-    texts
 }
 
 /// An item's identity: the rule, the class, and a digest of its DEFINITION, so
@@ -1295,9 +1296,7 @@ mod sightings {
         assert!(first_sighting(&dir, "b", "branch write unsafe", "full"));
         assert!(!first_sighting(&dir, "a", "branch write unsafe", "full"));
 
-        assert_eq!(sighted(&dir, "a"), vec!["full".to_owned()]);
         forget_sightings(&dir, "a");
-        assert!(sighted(&dir, "a").is_empty());
         assert!(
             first_sighting(&dir, "a", "branch write unsafe", "full"),
             "session start forgets, so the next reader is told"
@@ -1306,6 +1305,22 @@ mod sightings {
             !first_sighting(&dir, "b", "branch write unsafe", "full"),
             "and another context keeps what it saw"
         );
+    }
+
+    /// The legend rides the first delivery of an epoch and no later one, and a
+    /// forgotten context hears it again (CLOUD-2145).
+    #[test]
+    fn the_legend_comes_once_per_epoch() {
+        let dir = repo("legend");
+        let first = with_legend(&dir, "s", "line one");
+        assert!(first.starts_with(LEGEND) && first.ends_with("line one"));
+        assert_eq!(with_legend(&dir, "s", "line two"), "line two");
+        assert!(
+            with_legend(&dir, "t", "other").starts_with(LEGEND),
+            "another context is its own epoch"
+        );
+        forget_sightings(&dir, "s");
+        assert!(with_legend(&dir, "s", "again").starts_with(LEGEND));
     }
 
     /// A TREE WITH NO GIT DIRECTORY ANSWERS TRUE, which is the safe direction:

@@ -509,6 +509,20 @@ fn the_repository_as_it_stands_is_clean() {
     );
 }
 
+/// The skill teaches the legend the engine prints, byte for byte (CLOUD-2145):
+/// the pre-1050 example it carried taught a format no refusal had used since.
+#[test]
+fn the_skill_carries_the_engines_legend_verbatim() {
+    let text = fs::read_to_string(at_root(&format!("{AUTHORED}/batten/SKILL.md")))
+        .expect("the shipped skill is readable");
+    let legend = batten::refusal::LEGEND;
+    assert!(
+        text.lines()
+            .any(|line| line.strip_prefix("> ") == Some(legend)),
+        "skills/batten/SKILL.md must quote `refusal::LEGEND` on one `> ` line: {legend}"
+    );
+}
+
 #[test]
 fn every_authored_skill_is_discovered_over_the_real_tree() {
     // Anti-vacuity for the case above: a discovery that found nothing would report
