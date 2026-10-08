@@ -334,10 +334,30 @@ fn this_repos_own_history_satisfies_its_committed_convention() {
     let parent = common::git_command(&root, &["rev-parse", "HEAD~1"])
         .output()
         .expect("run git");
+    let parents = common::git_in(&root, &["cat-file", "-p", "HEAD"])
+        .lines()
+        .filter(|line| line.starts_with("parent "))
+        .count();
     let output = if parent.status.success() {
         let base = String::from_utf8_lossy(&parent.stdout).trim().to_owned();
         let head = common::git_in(&root, &["rev-parse", "HEAD"]);
-        common::run(&root, &["commit", "check", &format!("{base}..{head}")])
+        Some(common::run(
+            &root,
+            &["commit", "check", &format!("{base}..{head}")],
+        ))
+    } else if parents > 1 {
+        // THE FORGE'S OWN MERGE, on a pull request's depth-1 checkout: nobody
+        // authored it, this repository lands by fast-forward so it never
+        // reaches `main`, and the commit that WAS authored is a parent the fetch
+        // did not bring. Asserted to be exactly that, so this arm cannot absorb
+        // an authored commit that fails the convention (measured on the musl
+        // leg, which judged `Merge <sha> into <sha>`).
+        let subject = common::git_in(&root, &["log", "-1", "--format=%s"]);
+        assert!(
+            subject.starts_with("Merge ") && subject.contains(" into "),
+            "a merge HEAD here is the forge's synthetic one, never authored: {subject}"
+        );
+        None
     } else {
         let message = common::scratch("commit-wiring-head").join("MESSAGE");
         fs::create_dir_all(message.parent().expect("a parent")).expect("the scratch dir");
@@ -346,7 +366,7 @@ fn this_repos_own_history_satisfies_its_committed_convention() {
             common::git_in(&root, &["log", "-1", "--format=%B"]),
         )
         .expect("write HEAD's message");
-        common::run(
+        Some(common::run(
             &root,
             &[
                 "commit",
@@ -354,12 +374,14 @@ fn this_repos_own_history_satisfies_its_committed_convention() {
                 "--message",
                 message.to_str().expect("utf-8"),
             ],
-        )
+        ))
     };
-    assert!(
-        output.status.success(),
-        "the committed convention refuses this repository's own last commit: {}{}",
-        common::stdout(&output),
-        common::stderr(&output)
-    );
+    if let Some(output) = output {
+        assert!(
+            output.status.success(),
+            "the committed convention refuses this repository's own last commit: {}{}",
+            common::stdout(&output),
+            common::stderr(&output)
+        );
+    }
 }

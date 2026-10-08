@@ -57,21 +57,31 @@ fn a_launchers_prefix_precedes_the_analysers_own_flags() {
 /// (comparison of the CLOUD-2059 rewrite). They run the analyser by path, so
 /// `rules::symbols_launcher` — the choice between the pinned mediator and the
 /// bare program — lost its only exercise when the whole-crate cases moved to
-/// the toy. Asserted on the composition, which costs no clippy run: a tree that
-/// pins its toolchain is reached through the mediator, and one that does not is
-/// reached bare.
+/// the toy. Asserted on the composition, which costs no clippy run: the
+/// launcher mediates EXACTLY when the pin's record reads, and a tree with no pin
+/// is reached bare.
+///
+/// AGAINST THE PIN'S OWN ANSWER, not an assumed one: a CI runner can hold no
+/// readable record for this checkout, and asserting "mediated" there failed on
+/// the musl leg while the launcher was right to go bare.
 #[test]
 fn the_engine_launcher_mediates_a_pinned_tree_and_runs_bare_elsewhere() {
     let checkout = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
         .canonicalize()
         .expect("the checkout");
-    let pinned = batten::rules::symbols_launcher(&checkout).argv(&["clippy"]);
-    assert!(
-        pinned.len() > 1 && pinned.last().map(String::as_str) == Some("clippy"),
-        "this checkout pins its toolchain, so the analyser is reached through \
-         the mediator's prefix: {pinned:?}"
+    let argv = batten::rules::symbols_launcher(&checkout).argv(&["clippy"]);
+    let pin_reads = matches!(
+        batten::pinned::cached(&checkout),
+        batten::facts::Look::Is(_)
     );
+    assert_eq!(
+        argv.len() > 1,
+        pin_reads,
+        "the analyser is reached through the mediator exactly when the pin \
+         reads: pin_reads={pin_reads} argv={argv:?}"
+    );
+    assert_eq!(argv.last().map(String::as_str), Some("clippy"));
 
     let bare = toy("launcher-unpinned");
     assert_eq!(

@@ -966,13 +966,19 @@ fn run_one(handler: &Handler, payload: &str) -> Outcome {
         reason = "stays: this IS the dispatch — a handler is a declared program and running it is the module's whole purpose (CLOUD-898)"
     )]
     let spawned = crate::rules::spawn_resolving(Some(Path::new(".")), program, |program, extra| {
-        Command::new(program)
+        let mut builder = Command::new(program);
+        builder
             .args(extra)
             .args(args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
+            .stderr(Stdio::piped());
+        // ITS OWN GROUP, so the bound reaches what the handler started
+        // (CLOUD-2059). Killing the direct child alone left `sh -c "sleep …"`'s
+        // `sleep` running under init: measured on the musl leg, a step bounded at
+        // 300ms left a `sleep 3600` for the runner's cleanup to find.
+        crate::exec::lead_group(&mut builder);
+        builder.spawn()
     });
     let Ok(mut child) = spawned else {
         return Outcome::Broke(Violation::NotSpawnable);
@@ -1030,8 +1036,17 @@ fn run_one(handler: &Handler, payload: &str) -> Outcome {
             Err(_) => break None,
         }
         if Instant::now() >= deadline {
-            // Killed, then reaped: leaving a zombie would leak a process per
-            // timed-out handler for the life of the hook process.
+            // The GROUP first, then the leader killed and reaped: leaving a
+            // zombie would leak a process per timed-out handler for the life of
+            // the hook process, and leaving the group would leak its children
+            // for as long as they run.
+            #[cfg(unix)]
+            if let Some(pgid) = i32::try_from(child.id())
+                .ok()
+                .and_then(rustix::process::Pid::from_raw)
+            {
+                crate::exec::signal_group(pgid, rustix::process::Signal::KILL);
+            }
             let _ = child.kill();
             let _ = child.wait();
             timed_out = true;

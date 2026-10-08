@@ -482,8 +482,17 @@ fn a_step_that_hangs_is_killed_at_its_declared_bound() {
     // slow drain: a step the parent fails to kill, or a pipe it fails to stop
     // draining, holds the case past nextest's `terminate-after`, which ends it
     // RED. At 30s either defect printed the kill line late and passed.
+    //
+    // AND WHAT THE STEP STARTED DIES WITH IT. The step backgrounds its sleep and
+    // records that pid, so the case can ask whether the kill reached past the
+    // shell: it used to stop at the direct child, and the musl leg's runner
+    // found the `sleep` still running after the case had passed.
     let bench = bench("session-bound", &[("hanging", 300)]);
-    bench.step("hanging", "sleep 3600");
+    let pid_file = bench.repo.join("grandchild.pid");
+    bench.step(
+        "hanging",
+        &format!("sleep 3600 &\necho $! > '{}'\nwait", pid_file.display()),
+    );
 
     let door = bench.session_start();
 
@@ -492,6 +501,26 @@ fn a_step_that_hangs_is_killed_at_its_declared_bound() {
     assert!(
         said.contains("hook.handler hanging: exceeded 300ms and was killed"),
         "the declared bound is imposed by the parent, not hoped for: {said}"
+    );
+    let grandchild: i32 = std::fs::read_to_string(&pid_file)
+        .expect("the step recorded the pid it started")
+        .trim()
+        .parse()
+        .expect("a pid");
+    // `ps` rather than `/proc`, which the macOS leg does not have. A killed
+    // orphan is reaped by init on its own schedule, so a zombie is dead too.
+    #[expect(
+        clippy::disallowed_types,
+        reason = "stays, test-only: asking the OS whether a pid lives is a question for `ps`, and no door in `common` answers it"
+    )]
+    let state = std::process::Command::new("ps")
+        .args(["-o", "stat=", "-p", &grandchild.to_string()])
+        .output()
+        .expect("run ps");
+    let state = String::from_utf8_lossy(&state.stdout).trim().to_owned();
+    assert!(
+        state.is_empty() || state.starts_with('Z'),
+        "the step's own child outlived the bound: pid {grandchild} is {state}"
     );
 }
 

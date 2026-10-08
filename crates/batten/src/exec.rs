@@ -510,7 +510,7 @@ fn group_is_empty(pgid: rustix::process::Pid) -> bool {
 /// the outcome being asked for, and `ESRCH` on the way to exiting is not a
 /// failure anyone can act on.
 #[cfg(unix)]
-fn signal_group(pgid: rustix::process::Pid, signal: rustix::process::Signal) {
+pub(crate) fn signal_group(pgid: rustix::process::Pid, signal: rustix::process::Signal) {
     // `let _`, not `drop`: the result is `Copy`, so dropping it is a no-op the
     // compiler warns about rather than the discard it looks like.
     let _ = rustix::process::kill_process_group(pgid, signal);
