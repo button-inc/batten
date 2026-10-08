@@ -477,8 +477,13 @@ fn a_step_that_hangs_is_killed_at_its_declared_bound() {
     // express was killed early". The parent's own record can: a step that ran
     // out its bound is reported as exceeding it and killed, and one that was
     // never bounded sleeps its 30s and passes silently.
+    //
+    // AN HOUR, NOT 30S, so the clock assertion this replaced is not lost to a
+    // slow drain: a step the parent fails to kill, or a pipe it fails to stop
+    // draining, holds the case past nextest's `terminate-after`, which ends it
+    // RED. At 30s either defect printed the kill line late and passed.
     let bench = bench("session-bound", &[("hanging", 300)]);
-    bench.step("hanging", "sleep 30");
+    bench.step("hanging", "sleep 3600");
 
     let door = bench.session_start();
 

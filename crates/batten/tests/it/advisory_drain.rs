@@ -816,17 +816,18 @@ fn spread_fixture(name: &str, drain_table: &str, spans: usize) -> (PathBuf, Path
 }
 
 #[test]
-fn a_rule_over_the_cardinality_cap_reports_it_beside_every_entry_and_the_cap_is_config() {
-    // CLOUD-82 (b) over the binary, reversed by CLOUD-2075: the cap REPORTS and
-    // withholds nothing. The cap that decides the report is the one in
-    // `batten.toml` — two caps, two payloads.
+fn a_rule_over_the_cardinality_cap_shows_the_cap_and_the_cap_is_config() {
+    // CLOUD-82 (b) over the binary, bounded again by CLOUD-2163: a rule over its
+    // cap shows `cap` entries and a summary naming the total, so one noisy rule
+    // cannot take the window. The cap is the one in `batten.toml` — two caps,
+    // two payloads.
     let (capped, home_c) = spread_fixture(
         "drain-cap-on",
         "\n[drain]\ninterval_ms = 0\ncardinality_cap = 2\n",
         4,
     );
     let lines = payload(&hook(&capped, &home_c, &post_tool_batch("s1")));
-    assert_eq!(lines.len(), 5, "four entries and the cap report: {lines:?}");
+    assert_eq!(lines.len(), 3, "two entries and the summary: {lines:?}");
     assert_eq!(
         lines[0], "rule 'no-todo': 4 findings, over the cardinality cap of 2",
         "the report leads its rule's entries"
@@ -846,22 +847,35 @@ fn a_rule_over_the_cardinality_cap_reports_it_beside_every_entry_and_the_cap_is_
 }
 
 #[test]
-fn an_emitted_payload_over_the_configured_token_budget_reports_it() {
-    // CLOUD-82 (a) over the binary, reversed by CLOUD-2075: the budget REPORTS,
-    // with the same estimator `[budget]` gates instruction files with, and
-    // withholds no pointer.
-    const BUDGET: usize = 20;
+fn a_drain_over_its_token_budget_renders_within_it_and_points_at_the_rest() {
+    // CLOUD-82 (a) over the binary, bounded by CLOUD-2163: the payload the agent
+    // receives stays within the configured budget, measured with the estimator
+    // `[budget]` gates instruction files with, and its last line names how many
+    // pointers did not fit and the verb that lists them.
+    const BUDGET: usize = 60;
     let (repo, home) = spread_fixture(
         "drain-budget",
         &format!("\n[drain]\ninterval_ms = 0\ncardinality_cap = 100\ntoken_budget = {BUDGET}\n"),
         12,
     );
     let lines = payload(&hook(&repo, &home, &post_tool_batch("s1")));
-    assert_eq!(lines.len(), 13, "every pointer and the report: {lines:?}");
+    let rendered = lines.join("\n");
     assert!(
-        lines.last().is_some_and(|line| line.starts_with("budget: ")
-            && line.ends_with(&format!(" tokens over the declared {BUDGET}"))),
-        "and the payload says how far over it is: {lines:?}"
+        batten::budget::estimate_tokens(&rendered) <= BUDGET,
+        "the drain spent more of the window than it may: {lines:?}"
+    );
+    let shown = lines.iter().filter(|line| line.contains("' at ")).count();
+    assert!(shown > 0 && shown < 12, "{lines:?}");
+    assert_eq!(
+        lines.last().map(String::as_str),
+        Some(
+            format!(
+                "budget: {} more past the declared {BUDGET} tokens; `batten check` lists them",
+                12 - shown
+            )
+            .as_str()
+        ),
+        "{lines:?}"
     );
 }
 
