@@ -24,7 +24,9 @@ const ROW_LINE: &str = "id = \"tool select other\"";
 /// modules: without the modules the config does not load, and the landed floor
 /// admits any edit of the authority — which would pass every case vacuously.
 fn fixture(name: &str) -> PathBuf {
-    let staged = Fixture::new(name).config(include_str!("../../../../batten.toml"));
+    let staged = Fixture::new(name).config(&without_session_handlers(include_str!(
+        "../../../../batten.toml"
+    )));
     let modules = staged.path().join("policy");
     std::fs::create_dir_all(&modules).expect("the fixture's policy directory is creatable");
     let committed = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../policy");
@@ -40,6 +42,40 @@ fn fixture(name: &str) -> PathBuf {
         }
     }
     staged.git().base_commit().build()
+}
+
+/// The authority minus its `session-start` handler rows.
+///
+/// THE COMPACTION CASE SENDS A REAL `SessionStart`, and the committed rows run
+/// this repository's own session setup from the fixture: a toolchain install, a
+/// release build and a target prune that deletes the scratch directory the
+/// fixture lives in. Measured: five minutes, then a spawn into a directory that
+/// no longer existed. The receipt expiry this suite judges is the engine's, not
+/// a handler's, so the rows are dropped rather than run.
+fn without_session_handlers(config: &str) -> String {
+    let mut out = String::with_capacity(config.len());
+    let mut block: Vec<&str> = Vec::new();
+    let flush = |block: &mut Vec<&str>, out: &mut String| {
+        let session = block.first() == Some(&"[[hook.handler]]")
+            && block
+                .iter()
+                .any(|line| line.trim() == "on = \"session-start\"");
+        if !session {
+            for line in block.iter() {
+                out.push_str(line);
+                out.push('\n');
+            }
+        }
+        block.clear();
+    };
+    for line in config.lines() {
+        if line.starts_with('[') {
+            flush(&mut block, &mut out);
+        }
+        block.push(line);
+    }
+    flush(&mut block, &mut out);
+    out
 }
 
 /// A PreToolUse `Edit` of the authority in `session`, replacing `old` with `new`.
@@ -202,6 +238,74 @@ fn one_commit_over_two_rows_prints_its_message_once() {
     assert!(
         out.contains("sweep both rows (printed above)"),
         "and is pointed at the second time: {out}"
+    );
+}
+
+#[test]
+fn a_message_the_cap_cut_is_not_pointed_at() {
+    let repo = fixture("history-cap-cut");
+    let other = "path write unsafe";
+    let other_line = "id = \"path write unsafe\"";
+    // SIZED FROM THE ROWS THEMSELVES, so the case cannot pass vacuously: the
+    // sweep's message fits under the other row's cap, and the filler leaves the
+    // first row no room for it.
+    let measured = |id: &str| {
+        common::stdout(&run_with_stdin(
+            &repo,
+            &["policy", "explain", id, "--history"],
+            "",
+        ))
+        .len()
+    };
+    let cap = 8_000;
+    let sweep_body = "s".repeat(cap - measured(other) - 300);
+    let filler_body = "f".repeat(cap - measured(ROW) - 300);
+    let path = repo.join("batten.toml");
+    let text = std::fs::read_to_string(&path).unwrap();
+    let text = text
+        .replacen(ROW_LINE, &format!("# swept\n{ROW_LINE}"), 1)
+        .replacen(other_line, &format!("# swept\n{other_line}"), 1);
+    std::fs::write(&path, &text).unwrap();
+    let sweep = format!("sweep both rows\n\nA body only this sweep carries.\n{sweep_body}");
+    git_in(&repo, &["commit", "-q", "-am", &sweep]);
+    // A newer commit to ROW alone whose message fills its cap, so ROW's history
+    // cuts the sweep's message rather than printing it.
+    std::fs::write(
+        &path,
+        text.replacen(ROW_LINE, &format!("# again\n{ROW_LINE}"), 1),
+    )
+    .unwrap();
+    git_in(
+        &repo,
+        &[
+            "commit",
+            "-q",
+            "-am",
+            &format!("fill the cap\n\n{filler_body}"),
+        ],
+    );
+    let alone = common::stdout(&run_with_stdin(
+        &repo,
+        &["policy", "explain", ROW, "--history"],
+        "",
+    ));
+    assert!(
+        alone.contains("fill the cap") && !alone.contains("A body only this sweep carries."),
+        "the premise: ROW's cap prints the filler and cuts the sweep: {alone}"
+    );
+    assert!(
+        alone.contains(" sweep both rows\n"),
+        "a message too long to fit still lists its subject: {alone}"
+    );
+    let run = run_with_stdin(&repo, &["policy", "explain", ROW, other, "--history"], "");
+    let out = common::stdout(&run);
+    assert!(
+        out.contains("A body only this sweep carries."),
+        "the second row prints the message the first row's cap cut: {out}"
+    );
+    assert!(
+        !out.contains("sweep both rows (printed above)"),
+        "and never points at it as printed: {out}"
     );
 }
 
