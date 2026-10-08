@@ -3890,14 +3890,31 @@ the timer."""
 # The marker is minted from `create_pull_request`'s own RESULT, so it exists only
 # once a PR really opened, and it is keyed on the branch the session sits on.
 # `land::retire_branch` sweeps it on the landed path (`BRANCH_KEYED_RECEIPTS`),
-# which is the only thing that frees the next PR — and `validate_marker` refuses
-# this row at load if that sweep is ever removed.
+# and `validate_marker` refuses this row at load if that sweep is ever removed.
+#
+# A PR CLOSED UNMERGED FREES THE BRANCH TOO (CLOUD-2083, CLOUD-2127). Before the
+# `clear` row below, only landing swept the marker, so a superseded PR left its
+# branch name refused forever and the marker was deleted by hand. The selector
+# reads the call's INPUT, so only an `update_pull_request` that sets
+# `state = "closed"` clears it, and `requires` only one the forge answered.
+#MUTANT-SUITE crates/batten/tests/it/one_pr.rs
+#MUTANT pr-open-clear-row-dropped|s@^selects = "closed"$@selects = "never"@|a_pull_request_closed_unmerged_frees_its_branch_for_the_next_one
 [[mint]]
 name = "pr-open"
 tool = "create_pull_request"
 key = "branch"
 requires = ["url"]
 mode = "replace"
+body = "{now} {url}"
+
+[[mint]]
+name = "pr-open"
+tool = "update_pull_request"
+key = "branch"
+selects_at = "state"
+selects = "closed"
+requires = ["url"]
+mode = "clear"
 body = "{now} {url}"
 
 [[rule]]
@@ -3911,7 +3928,8 @@ reason = """
 This branch already has an unlanded pull request, and AGENTS.md's rule is one \
 PR for all of it: every extra PR is a whole CI matrix and a whole landing lap. \
 Put the new commits on the open PR's branch, or land it first — `mise run land` \
-sweeps this marker when the PR merges. A second PR is correct only when the \
+sweeps this marker when the PR merges, and closing it unmerged through \
+`update_pull_request` clears it too. A second PR is correct only when the \
 first must MERGE before the second is correct, and that dependency belongs in \
 the Ready block's `blockers`."""
 

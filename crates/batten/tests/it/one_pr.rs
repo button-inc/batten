@@ -20,24 +20,9 @@ const BRANCH: &str = "claude/one-pr-probe";
 
 const TOOL: &str = "mcp__github__create_pull_request";
 
-/// The `clear` row that frees a branch whose PR closed unmerged (CLOUD-2083).
-///
-/// Carried HERE rather than in the committed config until a released engine
-/// knows `mode = "clear"`: `engine gate` refuses a config the pinned release
-/// cannot load, so the row lands in `batten.toml` only after that release.
-const CLEAR_ROW: &str = "\n[[mint]]\nname = \"pr-open\"\ntool = \"update_pull_request\"\n\
-                         key = \"branch\"\nselects_at = \"state\"\nselects = \"closed\"\n\
-                         requires = [\"url\"]\nmode = \"clear\"\nbody = \"{now} {url}\"\n";
-
 /// This repository's own rows and modules, on [`BRANCH`].
 fn repo(name: &str) -> PathBuf {
-    repo_with(name, "")
-}
-
-/// [`repo`], with `extra` appended to the committed config.
-fn repo_with(name: &str, extra: &str) -> PathBuf {
-    let config = format!("{}{extra}", include_str!("../../../../batten.toml"));
-    let staged = Fixture::new(name).config(&config);
+    let staged = Fixture::new(name).config(include_str!("../../../../batten.toml"));
     let modules = staged.path().join("policy");
     std::fs::create_dir_all(&modules).expect("the fixture's policy directory is creatable");
     let committed = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -152,7 +137,7 @@ fn plant(dir: &Path) {
 /// survives the close.
 #[test]
 fn a_pull_request_closed_unmerged_frees_its_branch_for_the_next_one() {
-    let dir = repo_with("one-pr-closed", CLEAR_ROW);
+    let dir = repo("one-pr-closed");
     plant(&dir);
     update_a_pr(&dir, "closed");
     assert!(!marker(&dir).exists(), "a close clears the marker");
@@ -168,7 +153,7 @@ fn a_pull_request_closed_unmerged_frees_its_branch_for_the_next_one() {
 /// refusal standing, so the `clear` row is not a sweep on every update.
 #[test]
 fn an_update_that_does_not_close_leaves_the_marker() {
-    let dir = repo_with("one-pr-reopened", CLEAR_ROW);
+    let dir = repo("one-pr-reopened");
     plant(&dir);
     update_a_pr(&dir, "open");
     assert!(
