@@ -421,9 +421,54 @@ fn command_of(name: &str, input: &serde_json::Value) -> String {
     }
 }
 
+/// Whether a call named `name` running `command` takes `route`, one a finding
+/// line printed (CLOUD-2141).
+///
+/// `run <command>`: the call opens with the route's words up to its first
+/// `<placeholder>`, and carries every literal word after it — so a route
+/// `batten policy explain '<id>' --history` is taken by the history read and
+/// not by a bare lookup. `read <path>[ via <tool>]`: the call names the path,
+/// or is the tool the route reads it through.
+fn takes(route: &str, name: &str, command: &str) -> bool {
+    if let Some(run) = route.strip_prefix("run ") {
+        // The lookup hop every line prints is a dereference, not a remedy: the
+        // history read is the one lookup a route asks for as its remedy.
+        let lookup =
+            run.starts_with("batten policy explain") || run.starts_with("batten policy rule");
+        if lookup && !run.contains("--history") {
+            return false;
+        }
+        let words: Vec<&str> = run.split_whitespace().collect();
+        let opening = words.iter().take_while(|word| !word.contains('<')).count();
+        // PER SEGMENT, NOT PER LINE: `cd <dir> && mise run land` takes the
+        // route `mise run land`, and a prefix test of the whole line never saw
+        // it. Measured: every Bash call of the census's own session opened
+        // with a `cd`.
+        return opening > 0
+            && command.split(['&', ';', '|']).any(|segment| {
+                let said: Vec<&str> = segment.split_whitespace().collect();
+                said.starts_with(&words[..opening])
+                    && words[opening..]
+                        .iter()
+                        .filter(|word| !word.contains('<'))
+                        .all(|word| said.contains(word))
+            });
+    }
+    if let Some(read) = route.strip_prefix("read ") {
+        let (path, via) = match read.split_once(" via ") {
+            Some((path, via)) => (path, Some(via)),
+            None => (read, None),
+        };
+        return command.contains(path) || via.is_some_and(|tool| name.ends_with(tool));
+    }
+    false
+}
+
 /// The bucket a refusal of `call` falls in, given the call after it.
+//MUTANT offered-routes-unread|s@^    if offered.iter().any(|route| takes(route, name, \&command)) {$@    if false {@|a_route_the_refusal_printed_is_followed
 fn follow(
     findings: &[(String, crate::refusal::Arm)],
+    offered: &[String],
     refused: Option<(&str, &serde_json::Value)>,
     next: Option<(&str, &serde_json::Value)>,
     routes: &BTreeMap<String, Vec<String>>,
@@ -432,6 +477,13 @@ fn follow(
         return Follow::Ended;
     };
     let command = command_of(name, input);
+    // A ROUTE THE LINE PRINTED, FIRST: the refusal's own pointers are what it
+    // asked for, and a class's declared routes are only the ones every row of
+    // it shares. Measured over 81 refusals: counting only the latter bucketed
+    // the `--history` read the history gate names as "other".
+    if offered.iter().any(|route| takes(route, name, &command)) {
+        return Follow::Followed;
+    }
     if command.starts_with("batten policy explain") || command.starts_with("batten policy rule") {
         return Follow::Dereferenced;
     }
@@ -495,6 +547,7 @@ pub fn windows(stream: &Stream, routes: &BTreeMap<String, Vec<String>>) -> Windo
                     call,
                     tokens,
                     findings,
+                    routes: offered,
                 } => {
                     charge(&mut window, *tokens, findings);
                     window.refusals += 1;
@@ -508,7 +561,13 @@ pub fn windows(stream: &Stream, routes: &BTreeMap<String, Vec<String>>) -> Windo
                                 _ => None,
                             }
                         });
-                    let bucket = follow(findings, calls.get(call.as_str()).copied(), next, routes);
+                    let bucket = follow(
+                        findings,
+                        offered,
+                        calls.get(call.as_str()).copied(),
+                        next,
+                        routes,
+                    );
                     for (slot, candidate) in window.buckets.iter_mut().zip(Follow::ALL) {
                         if candidate == bucket {
                             *slot += 1;
@@ -592,8 +651,59 @@ mod tests {
                 findings: key
                     .map(|key| vec![(key.to_owned(), crate::refusal::Arm::Full)])
                     .unwrap_or_default(),
+                routes: Vec::new(),
             },
         }
+    }
+
+    /// A refusal of `call` whose line offered `routes`.
+    fn refused_offering(line: usize, call: &str, routes: &[&str]) -> Record {
+        let mut record = refused_at(line, call, Some("r\u{1f}c9\u{1f}d"));
+        if let Event::Refused {
+            routes: offered, ..
+        } = &mut record.event
+        {
+            *offered = routes.iter().map(|route| (*route).to_owned()).collect();
+        }
+        record
+    }
+
+    /// A route the refusal's own line printed is followed when the next call
+    /// takes it, and the lookup hop every line prints is still a dereference
+    /// (CLOUD-2141). Measured before this: 0 of 81 refusals bucketed as
+    /// followed, the history read the history gate names among them.
+    ///
+    /// The suite `offered-routes-unread` is killed in.
+    #[test]
+    fn a_route_the_refusal_printed_is_followed() {
+        let history = "run batten policy explain '<id>' --history";
+        let lookup = "run batten policy explain 'r' 'c9'";
+        let read = "read rules/scanning.md";
+        let records = vec![
+            // followed: the history read, placeholder filled.
+            call_at(1, "a", "Edit", "batten.toml"),
+            refused_offering(2, "a", &[history, lookup]),
+            call_at(
+                3,
+                "b",
+                "Bash",
+                "batten policy explain 'tool pin other' --history",
+            ),
+            // dereferenced: the bare lookup the same line printed.
+            refused_offering(4, "b", &[history, lookup]),
+            call_at(5, "c", "Bash", "batten policy explain 'r' 'c9'"),
+            // followed: the document route, read.
+            refused_offering(6, "c", &[read, lookup]),
+            call_at(7, "d", "Read", "/home/x/rules/scanning.md"),
+            // other: a route's opening words without its literal tail.
+            refused_offering(8, "d", &["run mise exec -- <program> --pinned"]),
+            call_at(9, "e", "Bash", "mise exec -- cargo build"),
+            // followed: the route as the second segment of a compound line.
+            refused_offering(10, "e", &["run mise run land"]),
+            call_at(11, "f", "Bash", "cd /x && mise run land"),
+        ];
+        let census = windows(&session(records, 4_000), &BTreeMap::new());
+        assert_eq!(census.segments[0].buckets, [3, 0, 1, 1, 0]);
     }
 
     #[test]

@@ -505,6 +505,10 @@ pub struct Parsed {
     pub arm: Arm,
     /// [`key_of`] over the line's definition.
     pub key: String,
+    /// The routes the line offered, each as printed (`run <command>`,
+    /// `read <path>[ via <tool>]`), override requests excluded: pointers, which
+    /// is what lets a census ask whether the next call took one (CLOUD-2141).
+    pub routes: Vec<String>,
 }
 
 /// Read one quoted name from the front of `text`, returning it and the rest.
@@ -560,11 +564,13 @@ pub fn parse_finding(line: &str) -> Option<Parsed> {
         .collect();
     let definition = format!("{} —{}", routes.join("; "), tail.unwrap_or_default());
     let key = key_of(&rule, verdict.as_deref(), &definition);
+    let routes = routes.iter().map(|route| (*route).to_owned()).collect();
     Some(Parsed {
         verdict,
         rule,
         arm,
         key,
+        routes,
     })
 }
 
