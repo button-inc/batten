@@ -89,20 +89,135 @@ impl VendoredDoc {
 /// A separate table rather than a field on each `VendoredVerdict` literal, so
 /// the interaction text is one file to author and review, and
 /// `every_vendored_class_has_a_doc` keeps it whole against both tables.
-pub const VENDORED_DOCS: &[VendoredDoc] = &[VendoredDoc {
-    id: "rule read missing",
-    why: Some(
-        "A rule changed by a reader who never saw why it exists loses the reason it was written",
-    ),
-    act: &[
-        "run the `batten policy explain '<id>' --history` the line names, one call with no pipe",
-        "then make the same edit",
-    ],
-    dont: &[
-        "edit the row through a shell to get around this",
-        "read a different row's history",
-    ],
-}];
+pub const VENDORED_DOCS: &[VendoredDoc] = &[
+    // ── native ──────────────────────────────────────────────────────────────
+    VendoredDoc {
+        id: "path write refused",
+        why: Some(
+            "The path is one this repository declared protected, so it is refused before the write rather than reported after",
+        ),
+        act: &[
+            "make the change through the surface the line names (its redirect, or the config row that owns it)",
+            "undo a change you did not mean with `git restore`",
+        ],
+        dont: &[
+            "reach the same path through another program, a shell redirect or a script",
+            "retry the same write",
+        ],
+    },
+    VendoredDoc {
+        id: "program name unknown",
+        why: Some(
+            "The boundary cannot tell what this program does to a protected path, so it will not guess",
+        ),
+        act: &[
+            "run the same work with a program the config declares, or a plain read tool",
+            "if the program only reads, declare it in `protected_readers` in `batten.toml`",
+        ],
+        dont: &["wrap the program in another one to hide it"],
+    },
+    VendoredDoc {
+        id: "rule read missing",
+        why: Some(
+            "A rule changed by a reader who never saw why it exists loses the reason it was written",
+        ),
+        act: &[
+            "run the `batten policy explain '<id>' --history` the line names, one call with no pipe",
+            "then make the same edit",
+        ],
+        dont: &[
+            "edit the row through a shell to get around this",
+            "read a different row's history",
+        ],
+    },
+    VendoredDoc {
+        id: "task run twice",
+        why: Some("A second copy races the first over the same refs, lock and remote"),
+        act: &[
+            "run `batten task alive` to see what the holder is doing",
+            "wait for that run's exit, then act on its result",
+        ],
+        dont: &[
+            "delete the lock file",
+            "start the task again under another name",
+        ],
+    },
+    VendoredDoc {
+        id: "history drop unpushed",
+        why: Some(
+            "The reset would discard commits that exist in no other clone, and nothing else holds them",
+        ),
+        act: &[
+            "push or branch the commits first; `git reflog` still holds them",
+            "move the ref and keep the work with `git reset --soft`",
+            "revert one file with `git checkout -- <path>`",
+        ],
+        dont: &["reset with a different verb that discards the same commits"],
+    },
+    VendoredDoc {
+        id: "config write refused",
+        why: Some(
+            "Overwriting the committed authority would replace a reviewed policy with defaults, silently",
+        ),
+        act: &["edit the `batten.toml` that exists"],
+        dont: &["delete it so `init` can write a fresh one"],
+    },
+    VendoredDoc {
+        id: "outcome table refused",
+        why: Some(
+            "A row that can fire on nothing reads as coverage while its route was never walked",
+        ),
+        act: &["fix the `[[outcome]]` row and key the refusal names, in `batten.toml`"],
+        dont: &["delete the row to make the config load"],
+    },
+    VendoredDoc {
+        id: "plan read stale",
+        why: Some("The gate would enforce a step plan nobody reviewed a diff of"),
+        act: &["regenerate the projection with `batten hk contract` and review its diff"],
+        dont: &["edit the committed projection by hand to match"],
+    },
+    VendoredDoc {
+        id: "handler answer denied",
+        why: Some("A program the config registers as a hook handler answered deny for this call"),
+        act: &["read that `[hook.handler]` row in `batten.toml` for what it guards, and meet it"],
+        dont: &["retry the call unchanged"],
+    },
+    VendoredDoc {
+        id: "scanner pin missing",
+        why: Some(
+            "An unpinned scanner resolves to whatever is ambient, so its green would say nothing",
+        ),
+        act: &[
+            "declare the scanner as a `[[provision]]` entry in `batten.toml`",
+            "then run `batten provision`",
+        ],
+        dont: &["remove the `secrets` rule"],
+    },
+    VendoredDoc {
+        id: "scanner install missing",
+        why: Some("Nothing was scanned, and a scan of nothing must not read as a clean tree"),
+        act: &["run `batten provision`, then the check again"],
+        dont: &["treat the empty result as a pass"],
+    },
+    VendoredDoc {
+        id: "spawn run refused",
+        why: Some("This rule kind runs a command, and `check` is a read-only verb by contract"),
+        act: &["run it through `batten enforce`, which may spawn"],
+        dont: &["change the rule's kind to get it under `check`"],
+    },
+    VendoredDoc {
+        id: "turn finish unmet",
+        why: Some("A stop is a completion claim, and the turn's facts say the work is not landed"),
+        act: &[
+            "finish what the line names; for unlanded work run `mise run land`",
+            "or say in words what blocks it",
+        ],
+        dont: &[
+            "re-declare the work finished",
+            "end the turn again unchanged",
+        ],
+    },
+];
 
 /// The vendored doc for `id`, or an empty one where none is declared.
 #[must_use]

@@ -2042,8 +2042,12 @@
           "type": "string",
           "maxLength": 1536
         },
+        "doc": {
+          "description": "How to deal with a refusal of this class, delivered once per context\nwindow beside the gloss (CLOUD-2143). See [`crate::doc`].",
+          "$ref": "#/$defs/Doc"
+        },
         "gloss": {
-          "description": "One line, the hot path's whole payload.",
+          "description": "One line, the hot path's whole payload, and a first sighting's `what`.",
           "type": "string",
           "maxLength": 120
         },
@@ -2190,6 +2194,37 @@
         "path",
         "marker"
       ]
+    },
+    "Doc": {
+      "description": "One class's interaction sections, beside its `gloss`.",
+      "type": "object",
+      "properties": {
+        "do": {
+          "description": "The correct next actions, one to three, naming the routes.",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 1536
+          }
+        },
+        "dont": {
+          "description": "The wrong responses observed, up to three.",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 1536
+          }
+        },
+        "why": {
+          "description": "The harm the class prevents, in one sentence.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 1536
+        }
+      },
+      "additionalProperties": false
     },
     "DrainConfig": {
       "description": "The `[drain]` table: how often the advisory drain may wake, when it stops\nasking, and how much it may say when it does.\n\nEvery key here bounds **the engine's own output**, which is why none of them\nis layered raise-only by [`crate::resolve`]: \"raise\" has no meaning for an\ninterval — a longer one is quieter and a shorter one is louder — and a cap on\nwhat Batten prints about itself is not a policy bar a local file could\nweaken. The committed authority sets them, and a local file does not move\nthem.",

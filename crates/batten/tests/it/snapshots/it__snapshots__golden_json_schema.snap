@@ -2780,6 +2780,14 @@ expression: stdout_of(&output)
           "data_channel": true,
           "flags": [
             {
+              "name": "history",
+              "short": null,
+              "long": "history",
+              "takes_value": false,
+              "positional": false,
+              "help": "Print each named config row's history: the row at HEAD, then the commits that changed it"
+            },
+            {
               "name": "json",
               "short": "J",
               "long": "json",

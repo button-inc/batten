@@ -2694,6 +2694,7 @@ debug\:"Add resolution detail"
 trace\:"Add everything"))' \
 '-J[Emit byte-stable JSON instead of pointer lines]' \
 '--json[Emit byte-stable JSON instead of pointer lines]' \
+'--history[Print each named config row'\''s history\: the row at HEAD, then the commits that changed it]' \
 '--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
 '*--silent[Say nothing but a verdict or a usage error]' \
 '*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
