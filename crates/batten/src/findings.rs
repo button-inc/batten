@@ -302,6 +302,9 @@ pub enum NotShown {
     /// is what keeps the suppression out of both sides of the false-positive rate:
     /// the agent was not shown it, so its silence says nothing.
     FlapSuppressed,
+    /// The drain's token budget cut it from the response this boundary
+    /// (CLOUD-2175). The store still holds it; `state list` reads it.
+    OverTokenBudget,
 }
 
 /// Whether a finding ever reached the agent.
