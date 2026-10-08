@@ -91,42 +91,40 @@
 //! that ran and found nothing. That is the false green this engine exists to
 //! catch, in a place nobody would look.
 //!
-//! # The journal keeps everything; the response is bounded (CLOUD-2175)
+//! # The journal keeps everything; the response is small by shape (CLOUD-2175)
 //!
-//! * The **per-rule cardinality cap** ([`DrainConfig::cardinality_cap`]): a rule
-//!   over it adds `rule '<id>': <n> findings, over the cardinality cap of <cap>`
-//!   ahead of its entries. That is a statement about the **rule** — a rule-health
-//!   signal, not a to-do list — and it withholds nothing on its own.
-//! * The **token budget** ([`DrainConfig::token_budget`]), measured with
-//!   [`crate::budget::estimate_tokens`], bounds the RESPONSE. Lines are admitted
-//!   salient-first while they fit; the first that does not ends the payload, and
-//!   it closes with `budget: <n> more line(s) past the declared <budget> tokens
-//!   are in the journal; run batten state list`. CLOUD-2075 had the budget only
-//!   report, which kept every pointer and handed a large journal to the context
-//!   whole: an overrun line appended to an overrun.
+//! A drain says what is NEW since this session was last told, one line per rule:
 //!
-//! Every identity the cut withholds is journalled as
-//! [`NotShown::OverTokenBudget`], so its silence is not counted against the
-//! agent, and the store still holds it for `state list`. The scope filter's
-//! withholding is journalled as [`NotShown::DrainSuppressed`].
+//! ```text
+//! rule 'r' 3 new at src/a.rs:3,9(2->5) src/b.rs:2 +4 more, 12 told earlier; run batten state list --rule 'r'
+//! told earlier, still open: rule 'q' 37; run batten state list
+//! ```
 //!
-//! Between the two, lines are ordered **salient-first** — by tier, then rule,
-//! then fingerprint. The occurrence count is deliberately *not* a sort key:
-//! CLOUD-80's no-escalation law says a duplicate count never escalates a tier,
-//! and on the emission plane the way to obey it is to make salience structurally
-//! independent of the count rather than to remember not to look.
+//! * **The unit is the rule.** Its label is said once and its locations are
+//!   factored by file; no fingerprint is spent on a pointer `state list`
+//!   resolves.
+//! * **The delta.** An identity told at a count it has not risen past
+//!   ([`WakeState::counts`]) is counted, not relisted, so a backlog costs one
+//!   line and a drain follows the turn's work rather than the session's
+//!   history. A count that ROSE is news (`old->new`); one that fell is not,
+//!   because re-raising on a fix punishes the fix.
+//! * **The location cap** ([`DrainConfig::cardinality_cap`]) is how many
+//!   locations a rule lists; the rest are `+N more` with the command that
+//!   returns exactly that rule's set. Elided identities are not anchored, so the
+//!   list pages as the agent fixes it, and they are journalled as
+//!   [`NotShown::OverCardinalityCap`].
+//! * **The token budget** ([`DrainConfig::token_budget`]) is the relief valve:
+//!   an ordinary drain never reaches it. Past it, whole rule lines are cut
+//!   salient-last and the payload closes with `budget: <n> more line(s) past
+//!   the declared <budget> tokens are in the journal; run batten state list`;
+//!   each cut identity is journalled as [`NotShown::OverTokenBudget`].
 //!
-//! A **group re-raise** renders as `old->new` in the count field, against what
-//! this session's last drain actually said ([`WakeState::counts`]) — the store
-//! carries no count anchor, and the honest anchor for "should I mention this
-//! again" is what the agent was last told. One identity's occurrences are a
-//! count by construction ([`crate::identity::count_occurrences`]), so a 500→501
-//! re-raise is one line carrying one in-scope pointer; there is no instance list
-//! to expand and no path by which 501 pointers could be emitted. A count that
-//! *fell* renders as the plain new count: a ratchet is not a re-raise, because
-//! re-raising on incremental fixing punishes the fix.
+//! Lines are ordered **salient-first** — by tier, then rule. The occurrence
+//! count is deliberately *not* a sort key: CLOUD-80's no-escalation law says a
+//! duplicate count never escalates a tier.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result};
@@ -449,6 +447,17 @@ impl WakeState {
             self.counts.clone_from(&cycle.counts);
         } else {
             self.empty_polls = self.empty_polls.saturating_add(1);
+            // A CLEARED IDENTITY LEAVES THE TOLD SET even on a silent cycle, and
+            // one that fell is anchored where it fell (CLOUD-2175): its return
+            // is news, and an anchor that outlived the fall would hold the
+            // re-raise back as already told. Never raised here — a rise on a
+            // silent cycle is news the next emission still owes.
+            self.counts.retain(|key, _| cycle.counts.contains_key(key));
+            for (key, anchored) in &mut self.counts {
+                if let Some(now) = cycle.counts.get(key) {
+                    *anchored = (*anchored).min(*now);
+                }
+            }
         }
     }
 }
@@ -512,6 +521,13 @@ pub struct Drained {
     /// Identities the token budget cut from this response (CLOUD-2175). Still in
     /// the store; journalled as [`NotShown::OverTokenBudget`].
     pub budget_withheld: Vec<FindingRecord>,
+    /// How many in-scope identities are NEWS this cycle — never told this
+    /// session, or risen since (CLOUD-2175). Zero is the repeat: a payload with
+    /// nothing fresh is the `unchanged` boundary, whatever the told line counts.
+    pub fresh: usize,
+    /// Fresh identities past their rule's location cap: counted on the rule's
+    /// line, one pointer away, journalled as [`NotShown::OverCardinalityCap`].
+    pub cap_elided: Vec<FindingRecord>,
     /// Flapping identities per rule, for the rule-health annotation. Pointer-only:
     /// a rule id and a count, never a finding's content.
     pub flapping: BTreeMap<String, usize>,
@@ -540,79 +556,181 @@ struct Surfaced<'a> {
     instance: &'a Instance,
 }
 
-/// One thing the payload can say: a pointer, or a rule's cardinality summary.
+/// One rule's slice of a drain (CLOUD-2175): the identities that are NEWS —
+/// never told this session, or risen since — and the ones already told.
 ///
-/// One type because both are ordered together; neither is ever dropped
-/// (CLOUD-2075): the summary REPORTS a rule over its cap beside every entry.
-#[derive(Debug, Clone, Copy)]
-enum Item<'a> {
-    /// One identity's pointer line.
-    Entry(Surfaced<'a>),
-    /// One rule's summary, reporting that it is over the cardinality cap.
-    Summary {
-        rule: &'a str,
-        tier: AdvisoryTier,
-        count: usize,
-    },
+/// The unit of the payload is the RULE, not the identity: one line carries the
+/// rule's label once and its locations factored by file, so a rule with forty
+/// findings costs one line and not forty, and no fingerprint is spent on a
+/// pointer `state list` resolves.
+struct Group<'a> {
+    rule: &'a str,
+    tier: AdvisoryTier,
+    fresh: Vec<Surfaced<'a>>,
+    told: Vec<Surfaced<'a>>,
 }
 
-impl Item<'_> {
-    /// The sort key: tier first (strongest first), then rule, then fingerprint.
-    ///
-    /// The occurrence count is **not** in it, and that is the point: CLOUD-80's
-    /// no-escalation law says a duplicate count never escalates a tier, so
-    /// salience is made structurally independent of the count rather than left
-    /// to a reviewer noticing.
-    fn key(&self) -> (std::cmp::Reverse<AdvisoryTier>, &str, String) {
-        match self {
-            Item::Entry(surfaced) => (
-                std::cmp::Reverse(surfaced.record.tier),
-                surfaced.record.rule.as_str(),
-                surfaced.record.identity.fingerprint.to_hex(),
-            ),
-            // The empty digest sorts a rule's summary ahead of any entry that
-            // shares its tier and rule — of which, by construction, it has none.
-            Item::Summary { rule, tier, .. } => (std::cmp::Reverse(*tier), rule, String::new()),
-        }
+/// Whether this session was already told `surfaced` at a count it has not
+/// risen past since — the delta's one predicate (CLOUD-2175).
+///
+/// A drain re-sending what the agent already holds grows with the session's
+/// history, not with the turn's work; holding back what was told is what keeps
+/// a drain the size of what changed. A count that ROSE is news again, which is
+/// CLOUD-82's re-raise; a count that fell is not, because re-raising on a fix
+/// punishes the fix.
+//MUTANT told-relisted|s@^    let told = previous.get(\&surfaced.record.identity.fingerprint.to_hex());$@    let told = None::<\&u64>;@|a_finding_told_earlier_is_counted_not_relisted
+fn already_told(surfaced: &Surfaced<'_>, previous: &BTreeMap<String, u64>) -> bool {
+    let told = previous.get(&surfaced.record.identity.fingerprint.to_hex());
+    match (told, surfaced.instance.occurrences) {
+        (Some(old), Observation::Observed(count)) => count <= *old,
+        (Some(_), Observation::NotObserved(_)) => true,
+        (None, _) => false,
     }
 }
 
-/// Render one line for a record, given the instance to point at and what the
-/// last drain said this identity's count was.
+/// The surfaced set as one [`Group`] per rule, salient-first: tier, then rule.
 ///
-/// **Pointer-only** (rule 4): a fingerprint, a rule id, a `path:line` coordinate
-/// and a count. The store holds no matched content, so there is none here to
-/// leak — the discipline is stated anyway because this is the one place emission
-/// shape is decided, and it should carry the contract rather than assume it.
-///
-/// A count that **rose** renders as `old->new`: the identity is the same, and
-/// the delta is the news. A count that fell renders plainly — a ratchet is not a
-/// re-raise, because re-raising on incremental fixing punishes the fix. The line
-/// stays one labelled rule and three space-separated fields whichever branch is
-/// taken: `rule '<id>' at <fingerprint> <path>[:<line>] <count>` (CLOUD-2075).
-fn render_line(record: &FindingRecord, instance: &Instance, previous: Option<u64>) -> String {
-    let count = match instance.occurrences {
-        Observation::Observed(count) => match previous {
-            Some(old) if count > old => format!("{old}->{count}"),
-            _ => count.to_string(),
-        },
-        Observation::NotObserved(_) => "held".to_owned(),
-    };
-    let at = match instance.line {
-        Some(line) => format!("{}:{line}", instance.path),
-        None => instance.path.clone(),
-    };
-    let rule = crate::refusal::label(crate::refusal::Label::Rule, &record.rule);
-    format!(
-        "{rule} at {} {at} {count}",
-        record.identity.fingerprint.to_hex()
-    )
+/// The occurrence count is **not** a sort key, and that is the point:
+/// CLOUD-80's no-escalation law says a duplicate count never escalates a tier,
+/// so salience is structurally independent of the count. Within a group the
+/// locations are ordered by path and line, so the listing reads as a work list.
+fn group<'a>(
+    shown: BTreeMap<String, Surfaced<'a>>,
+    previous: &BTreeMap<String, u64>,
+) -> Vec<Group<'a>> {
+    let mut by_rule: BTreeMap<&'a str, Group<'a>> = BTreeMap::new();
+    for surfaced in shown.into_values() {
+        // A COUNT OF ZERO IS RESOLVED, not a thing to fix: listed as "new" it
+        // would send the agent after a finding its last scan cleared. Skipping
+        // it also drops its anchor, so its return reads as news.
+        if surfaced.instance.occurrences == Observation::Observed(0) {
+            continue;
+        }
+        let rule = surfaced.record.rule.as_str();
+        let entry = by_rule.entry(rule).or_insert_with(|| Group {
+            rule,
+            tier: surfaced.record.tier,
+            fresh: Vec::new(),
+            told: Vec::new(),
+        });
+        entry.tier = entry.tier.max(surfaced.record.tier);
+        if already_told(&surfaced, previous) {
+            entry.told.push(surfaced);
+        } else {
+            entry.fresh.push(surfaced);
+        }
+    }
+    let mut groups: Vec<Group<'a>> = by_rule.into_values().collect();
+    for group in &mut groups {
+        group.fresh.sort_by(|left, right| {
+            (&left.instance.path, left.instance.line)
+                .cmp(&(&right.instance.path, right.instance.line))
+        });
+    }
+    groups.sort_by(|left, right| {
+        (std::cmp::Reverse(left.tier), left.rule).cmp(&(std::cmp::Reverse(right.tier), right.rule))
+    });
+    groups
 }
 
-/// The line a rule over the cardinality cap adds BESIDE its entries.
-fn cap_summary(rule: &str, count: usize, cap: usize) -> String {
-    let rule = crate::refusal::label(crate::refusal::Label::Rule, rule);
-    format!("{rule}: {count} findings, over the cardinality cap of {cap}")
+/// The locations of `listed`, factored by file: `a.rs:3,9(42) b.rs:2×3`.
+///
+/// **Pointer-only** (rule 4): a path, a line, and only the count that is news —
+/// `(42)` for a span occurring more than once, `(old->new)` for a risen one,
+/// `(held)` for one whose rule did not run. Identical locations collapse to
+/// `×n`, so distinct identities at one span cost one token rather than n. The
+/// store holds no matched content, so there is none here to leak.
+fn locations(listed: &[Surfaced<'_>], previous: &BTreeMap<String, u64>) -> String {
+    let spot = |surfaced: &Surfaced<'_>| -> (String, Option<usize>, String) {
+        let note = match surfaced.instance.occurrences {
+            Observation::Observed(count) => {
+                match previous.get(&surfaced.record.identity.fingerprint.to_hex()) {
+                    Some(old) if count > *old => format!("({old}->{count})"),
+                    _ if count > 1 => format!("({count})"),
+                    _ => String::new(),
+                }
+            }
+            Observation::NotObserved(_) => "(held)".to_owned(),
+        };
+        (surfaced.instance.path.clone(), surfaced.instance.line, note)
+    };
+    let mut runs: Vec<((String, Option<usize>, String), usize)> = Vec::new();
+    for surfaced in listed {
+        let here = spot(surfaced);
+        match runs.last_mut() {
+            Some((last, times)) if *last == here => *times += 1,
+            _ => runs.push((here, 1)),
+        }
+    }
+    let mut out = String::new();
+    let mut last_path: Option<String> = None;
+    for ((path, line, note), times) in runs {
+        let repeat = if times > 1 {
+            format!("×{times}")
+        } else {
+            String::new()
+        };
+        match line {
+            Some(line) if last_path.as_deref() == Some(path.as_str()) => {
+                let _ = write!(out, ",{line}{note}{repeat}");
+            }
+            _ => {
+                if !out.is_empty() {
+                    out.push(' ');
+                }
+                out.push_str(&path);
+                if let Some(line) = line {
+                    let _ = write!(out, ":{line}");
+                }
+                let _ = write!(out, "{note}{repeat}");
+            }
+        }
+        last_path = Some(path);
+    }
+    out
+}
+
+/// A rule's one line: its fresh count, up to `cap` locations, how many more it
+/// holds and how many it was told earlier, and — whenever anything is not
+/// listed — the command that returns exactly that rule's set.
+//MUTANT location-cap-unread|s@^    let listed = group.fresh.len().min(cap);$@    let listed = group.fresh.len();@|a_rule_past_its_location_cap_points_at_the_rest
+fn group_line(group: &Group<'_>, cap: usize, previous: &BTreeMap<String, u64>) -> (String, usize) {
+    let listed = group.fresh.len().min(cap);
+    let label = crate::refusal::label(crate::refusal::Label::Rule, group.rule);
+    let mut line = format!("{label} {} new", group.fresh.len());
+    if listed > 0 {
+        let _ = write!(line, " at {}", locations(&group.fresh[..listed], previous));
+    }
+    let more = group.fresh.len() - listed;
+    if more > 0 {
+        let _ = write!(line, " +{more} more");
+    }
+    if !group.told.is_empty() {
+        let _ = write!(line, ", {} told earlier", group.told.len());
+    }
+    if more > 0 || !group.told.is_empty() {
+        let _ = write!(line, "; run batten state list --rule '{}'", group.rule);
+    }
+    (line, listed)
+}
+
+/// The one line for every rule with nothing new: what the session already
+/// holds, as counts, so a backlog costs one line per drain and never its list.
+fn told_line(groups: &[&Group<'_>]) -> String {
+    let rules: Vec<String> = groups
+        .iter()
+        .map(|group| {
+            format!(
+                "{} {}",
+                crate::refusal::label(crate::refusal::Label::Rule, group.rule),
+                group.told.len()
+            )
+        })
+        .collect();
+    format!(
+        "told earlier, still open: {}; run batten state list",
+        rules.join(", ")
+    )
 }
 
 /// The line closing a payload the token budget cut (CLOUD-2175): how much was
@@ -673,13 +791,16 @@ pub fn cycle(
     // digest covers every identity this cycle looked at. See [`state_lines`] for
     // why that is the difference between a report id and a set hash.
     let state = state_lines(&selected.shown);
-    let items = cap(selected.shown, config.cardinality_cap);
-    let clamped = clamp(&items, config, previous);
+    let groups = group(selected.shown, previous);
+    let fresh = groups.iter().map(|group| group.fresh.len()).sum();
+    let clamped = clamp(&groups, config, previous);
     let result_id = result_fingerprint(&clamped, &state, &selected.scope_filtered);
     Drained {
         lines: clamped.lines,
         scope_filtered: selected.scope_filtered,
         budget_withheld: clamped.withheld,
+        fresh,
+        cap_elided: clamped.elided,
         flapping: flapping_by_rule(records, &assessment),
         duplicates: selected.duplicates,
         counts: clamped.counts,
@@ -820,127 +941,121 @@ fn select<'a>(
     }
 }
 
-/// Stage two: report every rule that surfaced more distinct identities than its
-/// cardinality cap, BESIDE its entries (CLOUD-2075).
-///
-/// Grouped by rule over `shown`, whose iteration is by fingerprint hex, so both
-/// the grouping and every group's contents are a function of the SET. The result
-/// is sorted salient-first.
-//MUTANT-SUITE crates/batten/src/drain.rs
-//MUTANT capped-pointers-withheld|s@^        items.extend(surfaced.into_iter().map(Item::Entry));$@        items.extend(surfaced.into_iter().take(cap).map(Item::Entry));@|a_rule_over_the_cardinality_cap_still_shows_every_pointer
-fn cap(shown: BTreeMap<String, Surfaced<'_>>, cap: usize) -> Vec<Item<'_>> {
-    let mut per_rule: BTreeMap<&str, Vec<Surfaced<'_>>> = BTreeMap::new();
-    for surfaced in shown.into_values() {
-        per_rule
-            .entry(surfaced.record.rule.as_str())
-            .or_default()
-            .push(surfaced);
-    }
-
-    let mut items: Vec<Item<'_>> = Vec::new();
-    for (rule, surfaced) in per_rule {
-        if surfaced.len() > cap {
-            // The summary carries the strongest tier the rule surfaced, so it
-            // sorts ahead of the rule's own entries rather than below them.
-            let tier = surfaced
-                .iter()
-                .map(|entry| entry.record.tier)
-                .max()
-                .unwrap_or(AdvisoryTier::Advisory);
-            items.push(Item::Summary {
-                rule,
-                tier,
-                count: surfaced.len(),
-            });
-        }
-        items.extend(surfaced.into_iter().map(Item::Entry));
-    }
-    items.sort_by(|left, right| left.key().cmp(&right.key()));
-    items
-}
-
-/// What the clamp emitted and the counts it told the agent — which become the
-/// next drain's re-raise anchor.
+/// What the clamp emitted, what it anchored, and what it withheld and why.
 struct Clamped {
     lines: Vec<String>,
     counts: BTreeMap<String, u64>,
     rules: BTreeMap<String, u64>,
     withheld: Vec<FindingRecord>,
+    elided: Vec<FindingRecord>,
 }
 
-/// Stage three: admit lines salient-first while the response fits its token
-/// budget, then close a cut response with where the rest is (CLOUD-2175).
+/// Stage two: one line per rule, the told backlog as one count line, and the
+/// token budget as a relief valve over the whole (CLOUD-2175).
 ///
-/// A payload that fits whole is emitted whole, with no closing line. One that
-/// does not is cut at the FIRST line that would not fit with the closing line
-/// reserved — never skipping ahead to a smaller later line, which would put a
-/// less salient pointer in front of a more salient one withheld. The first line
-/// is always admitted, so a budget can never mute the channel. Only what was
-/// admitted anchors the next re-raise or carries a rule remedy: what the agent
-/// was not told is not what it was told.
-//MUTANT budget-cut-dropped|s@^    let whole = within(\&\[\], \&rendered.join("\\n"), None, config.token_budget);$@    let whole = true;@|an_over_budget_drain_is_cut_to_the_budget_with_a_journal_pointer
-//MUTANT budget-pointer-dropped|s@^        lines.push(budget_summary(withheld.len() + summaries_cut, config.token_budget));$@        let _ = summaries_cut;@|an_over_budget_drain_is_cut_to_the_budget_with_a_journal_pointer
-fn clamp(items: &[Item<'_>], config: &DrainConfig, previous: &BTreeMap<String, u64>) -> Clamped {
-    let rendered: Vec<String> = items
+/// **The shape keeps the payload small, not the budget.** A drain carries what
+/// is new since this session was last told — at most `cardinality_cap`
+/// locations per rule, the rest one pointer away — so its size follows the
+/// turn's work rather than the session's history, and the budget is never the
+/// thing that bounds an ordinary drain.
+///
+/// **The budget is the relief valve**, and tripping it means the shape failed:
+/// a payload that fits is emitted whole; one that does not is cut at the first
+/// RULE line that would not fit with the closing line reserved — whole rules,
+/// salience-last first, never skipping ahead to a smaller later line — and
+/// closes with how many lines it withheld and where they are. The first line is
+/// always admitted, so a budget can never mute the channel.
+///
+/// **What is anchored is what was told.** A listed identity and a told one
+/// anchor the next drain's delta; an elided or cut one does not, so it is news
+/// again next time — which is how the list pages as the agent fixes it.
+//MUTANT budget-cut-dropped|s@^    let whole = within(\&\[\], \&candidates.join("\\n"), None, config.token_budget);$@    let whole = true;@|an_over_budget_drain_is_cut_to_the_budget_with_a_journal_pointer
+//MUTANT budget-pointer-dropped|s@^        lines.push(budget_summary(cut, config.token_budget));$@        let _ = cut;@|an_over_budget_drain_is_cut_to_the_budget_with_a_journal_pointer
+fn clamp(groups: &[Group<'_>], config: &DrainConfig, previous: &BTreeMap<String, u64>) -> Clamped {
+    let mut candidates: Vec<String> = Vec::new();
+    let mut owners: Vec<Option<(usize, usize)>> = Vec::new();
+    for (index, group) in groups.iter().enumerate() {
+        if group.fresh.is_empty() {
+            continue;
+        }
+        let (line, listed) = group_line(group, config.cardinality_cap, previous);
+        candidates.push(line);
+        owners.push(Some((index, listed)));
+    }
+    let backlog: Vec<&Group<'_>> = groups
         .iter()
-        .map(|item| match item {
-            Item::Entry(surfaced) => render_line(
-                surfaced.record,
-                surfaced.instance,
-                previous
-                    .get(&surfaced.record.identity.fingerprint.to_hex())
-                    .copied(),
-            ),
-            Item::Summary { rule, count, .. } => cap_summary(rule, *count, config.cardinality_cap),
-        })
+        .filter(|group| group.fresh.is_empty() && !group.told.is_empty())
         .collect();
-    let whole = within(&[], &rendered.join("\n"), None, config.token_budget);
-    // The closing line at its widest, reserved so admitting a line can never
-    // push the summary itself past the budget.
-    let reserve = budget_summary(items.len(), config.token_budget);
+    if !backlog.is_empty() {
+        candidates.push(told_line(&backlog));
+        owners.push(None);
+    }
+    let whole = within(&[], &candidates.join("\n"), None, config.token_budget);
+    let reserve = budget_summary(candidates.len(), config.token_budget);
 
     let mut lines: Vec<String> = Vec::new();
     let mut counts: BTreeMap<String, u64> = BTreeMap::new();
     let mut rules: BTreeMap<String, u64> = BTreeMap::new();
     let mut withheld: Vec<FindingRecord> = Vec::new();
-    let mut summaries_cut = 0;
-    let mut cut = false;
-    for (item, candidate) in items.iter().zip(rendered) {
-        cut = cut
-            || !(whole
+    let mut elided: Vec<FindingRecord> = Vec::new();
+    let mut cut = 0;
+    for (candidate, owner) in candidates.into_iter().zip(owners) {
+        let fits = cut == 0
+            && (whole
                 || lines.is_empty()
                 || within(&lines, &candidate, Some(&reserve), config.token_budget));
-        match item {
-            Item::Entry(surfaced) if cut => withheld.push(surfaced.record.clone()),
-            Item::Summary { .. } if cut => summaries_cut += 1,
-            Item::Entry(surfaced) => {
-                *rules.entry(surfaced.record.rule.clone()).or_insert(0) += 1;
-                // Only an observed count anchors the next drain's re-raise: a
-                // rule that did not run said nothing about how many.
-                if let Observation::Observed(count) = surfaced.instance.occurrences {
-                    counts.insert(surfaced.record.identity.fingerprint.to_hex(), count);
-                }
+        let Some((index, listed)) = owner else {
+            if fits {
                 lines.push(candidate);
+            } else {
+                cut += 1;
             }
-            Item::Summary { rule, count, .. } => {
-                let total = u64::try_from(*count).unwrap_or(u64::MAX);
-                let listed = rules.entry((*rule).to_owned()).or_insert(0);
-                *listed = (*listed).max(total);
-                lines.push(candidate);
-            }
+            continue;
+        };
+        let group = &groups[index];
+        if !fits {
+            cut += 1;
+            withheld.extend(group.fresh.iter().map(|surfaced| surfaced.record.clone()));
+            continue;
+        }
+        rules.insert(
+            group.rule.to_owned(),
+            u64::try_from(group.fresh.len()).unwrap_or(u64::MAX),
+        );
+        for surfaced in &group.fresh[..listed] {
+            anchor(&mut counts, surfaced);
+        }
+        elided.extend(
+            group.fresh[listed..]
+                .iter()
+                .map(|surfaced| surfaced.record.clone()),
+        );
+        lines.push(candidate);
+    }
+    // The told set stays anchored whatever was cut: it was told, and a drain
+    // that forgot it would re-send the whole backlog as news.
+    for group in groups {
+        for surfaced in &group.told {
+            anchor(&mut counts, surfaced);
         }
     }
-    if cut {
-        lines.push(budget_summary(
-            withheld.len() + summaries_cut,
-            config.token_budget,
-        ));
+    if cut > 0 {
+        lines.push(budget_summary(cut, config.token_budget));
     }
     Clamped {
         lines,
         counts,
         rules,
         withheld,
+        elided,
+    }
+}
+
+/// Record what this payload told the agent an identity's count was. Only an
+/// observed count anchors: a rule that did not run said nothing about how many.
+fn anchor(counts: &mut BTreeMap<String, u64>, surfaced: &Surfaced<'_>) {
+    if let Observation::Observed(count) = surfaced.instance.occurrences {
+        counts.insert(surfaced.record.identity.fingerprint.to_hex(), count);
     }
 }
 
@@ -1081,7 +1196,13 @@ pub fn journal_suppressions(store_dir: &Path, shard: &str, cycle: &Drained) -> R
         &cycle.budget_withheld,
         NotShown::OverTokenBudget,
     )?;
-    Ok(scoped + cut)
+    let elided = record_suppressions(
+        store_dir,
+        shard,
+        &cycle.cap_elided,
+        NotShown::OverCardinalityCap,
+    )?;
+    Ok(scoped + cut + elided)
 }
 
 /// Journal every identity this payload actually emitted.
@@ -1213,6 +1334,8 @@ mod tests {
             lines: Vec::new(),
             scope_filtered: Vec::new(),
             budget_withheld: Vec::new(),
+            fresh: 0,
+            cap_elided: Vec::new(),
             flapping: BTreeMap::new(),
             duplicates: 0,
             counts: BTreeMap::new(),
@@ -1506,7 +1629,11 @@ mod tests {
             first.lines, again.lines,
             "and the bytes agree, not just the digest"
         );
-        assert_eq!(first.lines.len(), 2);
+        assert_eq!(
+            first.lines,
+            ["rule 'r' 2 new at src/a.rs:1 src/b.rs:1"],
+            "one rule, one line, factored by file"
+        );
 
         // A count that moved is a re-raise, and must NOT short-circuit.
         let mut moved = records.clone();
@@ -1667,10 +1794,11 @@ mod tests {
             &scope,
             Some(&Context::new("refs/heads/z")),
         );
-        assert!(here.lines[0].ends_with(" 42"));
+        assert_eq!(here.lines, ["rule 'r' 1 new at src/a.rs:1(42)"]);
         let fallback = cycled(&multi_records(&multi), &scope, None);
-        assert!(
-            fallback.lines[0].ends_with(" 1"),
+        assert_eq!(
+            fallback.lines,
+            ["rule 'r' 1 new at src/a.rs:1"],
             "no ref: the first instance, deterministically, never nothing"
         );
     }
@@ -1696,37 +1824,37 @@ mod tests {
         held.instances[0].occurrences =
             Observation::NotObserved(crate::findings::NotObserved::RuleSkipped);
         let drained = cycled(&[held], &changed(&[]), None);
-        assert!(drained.lines[0].ends_with(" held"));
+        assert_eq!(drained.lines, ["rule 'r' 1 new at src/a.rs:1(held)"]);
     }
 
     #[test]
     fn every_line_is_a_pointer_and_never_a_payload() {
         // Rule 4, asserted rather than promised: the rendered line carries a
-        // fingerprint, a rule id, a `path:line` and a count — and nothing that
-        // could be the matched content, which the store does not hold anyway.
+        // rule id, a count and a `path:line` — and nothing that could be the
+        // matched content, which the store does not hold anyway. No fingerprint
+        // either (CLOUD-2175): `state list` resolves one, and a pointer is the
+        // location the agent acts on.
         let one = record(FindingKind::Code, "r", "src/a.rs", "TODO");
         let drained = cycled(std::slice::from_ref(&one), &changed(&["src/a.rs"]), None);
-        assert_eq!(
-            drained.lines,
-            vec![format!(
-                "rule 'r' at {} src/a.rs:1 1",
-                one.identity.fingerprint.to_hex()
-            )]
-        );
+        assert_eq!(drained.lines, ["rule 'r' 1 new at src/a.rs:1"]);
+        assert!(!drained.lines[0].contains(&one.identity.fingerprint.to_hex()));
     }
 
     // --- (f) CLOUD-82: the emission contract -------------------------------
 
-    /// `count` distinct identities for one rule, all inside one changed file.
+    /// `count` distinct identities for one rule, one per line of one changed
+    /// file, as real findings are.
     fn spread(rule: &str, count: usize) -> Vec<FindingRecord> {
         (0..count)
             .map(|index| {
-                record(
+                let mut one = record(
                     FindingKind::Code,
                     rule,
                     "src/a.rs",
                     &format!("TODO {index}"),
-                )
+                );
+                one.instances[0].line = Some(index + 1);
+                one
             })
             .collect()
     }
@@ -1744,36 +1872,33 @@ mod tests {
         }
     }
 
+    /// A RULE PAST ITS LOCATION CAP POINTS AT THE REST (CLOUD-2175): the cap is
+    /// how many locations one line lists, the rest are counted on the same line
+    /// beside the command that returns exactly them — and they are not anchored,
+    /// so the next drain lists them as the first ones are fixed.
     #[test]
-    fn a_rule_over_the_cardinality_cap_still_shows_every_pointer() {
-        // CLOUD-2075 §7 case 18. Eleven identities of one rule under the default
-        // cap of 10: eleven labelled entries plus the summary that REPORTS the
-        // rule over its cap. The cap withholds nothing.
+    fn a_rule_past_its_location_cap_points_at_the_rest() {
         let config = DrainConfig {
-            token_budget: usize::MAX,
-            ..DrainConfig::default()
+            cardinality_cap: 3,
+            ..generous()
         };
         let drained = cycle(
-            &spread("r", 11),
+            &spread("r", 5),
             &changed(&["src/a.rs"]),
             None,
             &config,
             &BTreeMap::new(),
             &[],
         );
-        let entries = drained
-            .lines
-            .iter()
-            .filter(|line| line.starts_with("rule 'r' at "))
-            .count();
-        assert_eq!(entries, 11, "{:?}", drained.lines);
-        assert!(
-            drained.lines.contains(&format!(
-                "rule 'r': 11 findings, over the cardinality cap of {}",
-                config.cardinality_cap
-            )),
-            "{:?}",
-            drained.lines
+        assert_eq!(
+            drained.lines,
+            ["rule 'r' 5 new at src/a.rs:1,2,3 +2 more; run batten state list --rule 'r'"]
+        );
+        assert_eq!(drained.counts.len(), 3, "only what was listed is anchored");
+        assert_eq!(
+            drained.cap_elided.len(),
+            2,
+            "the rest are journalled as elided"
         );
     }
 
@@ -1793,31 +1918,61 @@ mod tests {
             &BTreeMap::new(),
             &[],
         );
-        assert_eq!(drained.lines.len(), 7, "{:?}", drained.lines);
-        assert!(
-            drained
-                .lines
-                .contains(&"rule 'noisy': 5 findings, over the cardinality cap of 2".to_owned())
-        );
-        assert!(
-            drained
-                .lines
-                .iter()
-                .any(|line| line.starts_with("rule 'quiet' ")),
-            "the quiet rule keeps its pointer: {:?}",
-            drained.lines
+        assert_eq!(
+            drained.lines,
+            [
+                "rule 'noisy' 5 new at src/a.rs:1,2 +3 more; run batten state list --rule 'noisy'",
+                "rule 'quiet' 1 new at src/a.rs:1",
+            ],
+            "the quiet rule keeps its line"
         );
     }
 
-    /// THE RESPONSE IS BOUNDED, THE JOURNAL IS NOT (CLOUD-2175). An over-budget
-    /// drain admits pointers salient-first while they fit, closes with how many
-    /// were withheld and the command that lists them, and hands every withheld
-    /// record back for the journal — none is lost, none floods the context.
+    /// THE DELTA (CLOUD-2175): what this session was already told is counted,
+    /// never relisted, so a drain is the size of what changed and a backlog
+    /// costs one line.
+    #[test]
+    fn a_finding_told_earlier_is_counted_not_relisted() {
+        let config = generous();
+        let records = spread("r", 3);
+        let scope = changed(&["src/a.rs"]);
+        let first = cycle(&records, &scope, None, &config, &BTreeMap::new(), &[]);
+        assert_eq!(first.lines, ["rule 'r' 3 new at src/a.rs:1,2,3"]);
+        let mut more = records.clone();
+        more.extend(spread("r", 4).into_iter().skip(3));
+        let second = cycle(&more, &scope, None, &config, &first.counts, &[]);
+        assert_eq!(
+            second.lines,
+            ["rule 'r' 1 new at src/a.rs:4, 3 told earlier; run batten state list --rule 'r'"],
+            "only the new identity is listed"
+        );
+        let settled = cycle(&more, &scope, None, &config, &second.counts, &[]);
+        assert_eq!(
+            settled.lines,
+            ["told earlier, still open: rule 'r' 4; run batten state list"],
+            "a backlog with nothing new is one count line"
+        );
+    }
+
+    /// THE RELIEF VALVE (CLOUD-2175). A delta too wide for its budget is cut
+    /// by whole RULE lines, salience-last, closes with how many lines it
+    /// withheld and the command that lists them, and hands every cut record back
+    /// for the journal — none is lost, none floods the context.
     #[test]
     fn an_over_budget_drain_is_cut_to_the_budget_with_a_journal_pointer() {
-        let records = spread("r", 10);
+        const RULES: usize = 10;
+        let records: Vec<FindingRecord> = (0..RULES)
+            .map(|index| {
+                record(
+                    FindingKind::Code,
+                    &format!("rule-{index}"),
+                    "src/a.rs",
+                    "TODO",
+                )
+            })
+            .collect();
         let config = DrainConfig {
-            token_budget: 120,
+            token_budget: 60,
             ..generous()
         };
         let drained = cycle(
@@ -1831,15 +1986,15 @@ mod tests {
         let entries = drained
             .lines
             .iter()
-            .filter(|line| line.starts_with("rule 'r' at "))
+            .filter(|line| line.starts_with("rule '"))
             .count();
         assert!(
-            (1..10).contains(&entries),
-            "some pointers, not all: {:?}",
+            (1..RULES).contains(&entries),
+            "some rule lines, not all: {:?}",
             drained.lines
         );
         assert!(
-            crate::budget::estimate_tokens(&render(&drained)) <= 120,
+            crate::budget::estimate_tokens(&render(&drained)) <= 60,
             "the response is within its budget: {:?}",
             drained.lines
         );
@@ -1847,20 +2002,20 @@ mod tests {
         assert_eq!(
             last,
             &format!(
-                "budget: {} more line(s) past the declared 120 tokens are in the journal; \
+                "budget: {} more line(s) past the declared 60 tokens are in the journal; \
                  run batten state list",
-                10 - entries
+                RULES - entries
             )
         );
         assert_eq!(
             drained.budget_withheld.len(),
-            10 - entries,
+            RULES - entries,
             "every cut record goes to the journal"
         );
         assert_eq!(
             drained.counts.len(),
             entries,
-            "only what was told anchors a re-raise"
+            "only what was told anchors the delta"
         );
     }
 
@@ -1903,10 +2058,7 @@ mod tests {
             &previous,
             &[],
         );
-        assert_eq!(
-            drained.lines,
-            vec![format!("rule 'r' at {key} src/a.rs:1 500->501")]
-        );
+        assert_eq!(drained.lines, ["rule 'r' 1 new at src/a.rs:1(500->501)"]);
         assert_eq!(
             drained.counts.get(&key).copied(),
             Some(501),
@@ -1934,7 +2086,13 @@ mod tests {
         );
         assert_eq!(
             drained.lines,
-            vec![format!("rule 'r' at {key} src/a.rs:1 10")]
+            ["told earlier, still open: rule 'r' 1; run batten state list"],
+            "a fall is not news: the identity stays told"
+        );
+        assert_eq!(
+            drained.counts.get(&key).copied(),
+            Some(10),
+            "the anchor follows it down"
         );
     }
 
@@ -2036,14 +2194,14 @@ mod tests {
         assert_eq!(drained.scope_filtered.len(), 1, "the one outside the diff");
         assert!(!drained.budget_withheld.is_empty(), "a budget of 20 cuts");
         assert_eq!(
-            drained.counts.len() + drained.budget_withheld.len(),
+            drained.counts.len() + drained.cap_elided.len() + drained.budget_withheld.len(),
             6,
-            "every in-scope identity was shown or cut, never lost"
+            "every in-scope identity was listed, elided or cut, never lost"
         );
         assert_eq!(
             journal_suppressions(&dir, "shard", &drained).unwrap(),
-            1 + drained.budget_withheld.len(),
-            "the scoped one and every cut one are journalled"
+            1 + drained.cap_elided.len() + drained.budget_withheld.len(),
+            "the scoped one, every elided one and every cut one are journalled"
         );
 
         let _ = std::fs::remove_dir_all(&dir);

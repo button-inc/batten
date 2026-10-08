@@ -20,7 +20,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::refusal::Refusal;
+use crate::refusal::{Arm, Refusal};
 use crate::severity::AdvisoryTier;
 
 /// One producer's contribution, with the latency its content demands.
@@ -40,8 +40,9 @@ pub struct Advice {
     /// The finding this entry projects, rendered only when it is emitted, so
     /// advice dropped beside a verdict is never marked seen (CLOUD-2075).
     pub finding: Option<Box<Refusal>>,
-    /// A classed entry carries a pointer the ruling needs, so no ceiling
-    /// suppresses it; only unclassed text is admitted by tier.
+    /// Whether the text is a classed finding, rendered or still to render. The
+    /// ceiling holds every entry alike (CLOUD-2175); this says what kind of
+    /// line it is, never whether it may be shed.
     pub classed: bool,
 }
 
@@ -58,8 +59,7 @@ impl Advice {
     }
 
     /// Text that is ALREADY labelled finding lines, rendered by its producer —
-    /// the drain's payload, whose every line is `rule '<id>' at …` (CLOUD-2078).
-    /// Classed, so no ceiling sheds it.
+    /// the drain's payload, whose every line is `rule '<id>' …` (CLOUD-2078).
     #[must_use]
     pub fn rendered(tier: AdvisoryTier, text: impl Into<String>) -> Advice {
         Advice {
@@ -122,105 +122,168 @@ pub struct Emission {
     pub text: String,
     /// How many entries did not fit.
     pub suppressed: usize,
+    /// The entries that did not fit, full and joined — what the caller stores so
+    /// the closing line can name a handle that returns exactly them.
+    pub overflow: String,
 }
 
-/// The line a truncated emission ends with, so a partial report cannot read as a
-/// complete one.
+/// How an emission learns which arm each finding gets (CLOUD-2175): `peek`
+/// answers without marking, so the ceiling can decide; `mark` answers as the
+/// finding is delivered, so only what is admitted is ever marked seen.
+pub trait Sighter {
+    /// The arm `refusal` would get, marking nothing.
+    fn peek(&self, refusal: &Refusal) -> Arm;
+    /// The arm `refusal` gets as it is delivered, marking it seen.
+    fn mark(&mut self, refusal: &Refusal) -> Arm;
+}
+
+/// A channel with no window: every finding is full and nothing is marked.
+#[derive(Debug, Clone, Copy)]
+pub struct Unsighted;
+
+impl Sighter for Unsighted {
+    fn peek(&self, _: &Refusal) -> Arm {
+        Arm::Full
+    }
+
+    fn mark(&mut self, _: &Refusal) -> Arm {
+        Arm::Full
+    }
+}
+
+/// The widest handle a closing line can name, reserved while admitting so the
+/// line itself never pushes an emission past its ceiling.
+const WIDEST_HANDLE: &str =
+    "advisory:0000000000000000000000000000000000000000000000000000000000000000";
+
+/// The line closing an emission the ceiling cut, so a partial report cannot
+/// read as a complete one: how many entries were withheld, the ceiling, and the
+/// handle returning exactly them — or that they could not be stored.
 ///
 /// **A truncated report that reads as complete is the false green in advisory
-/// form**, which is the row's own words and the reason the count is not
-/// optional. `drain.rs`'s `budget_summary` is the shape reused: a count and a
-/// ceiling, never the text that was dropped — the suppressed entries are
-/// pointers somebody else's producer composed, and reprinting them here would
-/// spend the budget this exists to hold.
+/// form**, and a count with no way to the rest is a truncation that calls
+/// itself a summary (CLOUD-2175).
 #[must_use]
-pub fn suppressed_line(suppressed: usize, ceiling: usize) -> String {
-    format!(
-        "advisory: {suppressed} further finding(s) suppressed at the declared channel ceiling of {ceiling} token(s)"
-    )
+pub fn suppressed_line(suppressed: usize, ceiling: usize, handle: Option<&str>) -> String {
+    match handle {
+        Some(handle) => format!(
+            "advisory: {suppressed} further finding(s) past the declared channel ceiling of \
+             {ceiling} token(s); run batten capture show {handle}"
+        ),
+        None => format!(
+            "advisory: {suppressed} further finding(s) past the declared channel ceiling of \
+             {ceiling} token(s), and they could not be stored"
+        ),
+    }
 }
 
-/// Admit producers to one emission in tier order until the ceiling is spent.
+/// Merge entries whose findings differ only in their subjects (CLOUD-2175):
+/// one class over several subjects is one line, keeping the first's position
+/// and the stronger tier.
+fn merged(entries: Vec<Advice>) -> Vec<Advice> {
+    let mut out: Vec<Advice> = Vec::new();
+    'entries: for entry in entries {
+        if let Some(refusal) = entry.finding.as_deref() {
+            for held in &mut out {
+                if held
+                    .finding
+                    .as_deref_mut()
+                    .is_some_and(|other| other.absorb(refusal))
+                {
+                    held.tier = held.tier.max(entry.tier);
+                    continue 'entries;
+                }
+            }
+        }
+        out.push(entry);
+    }
+    out
+}
+
+/// Admit this call's advice to one emission, under the channel's ceiling.
 ///
 /// # The ordering is the whole design
 ///
 /// Sorted by tier, strongest first, and STABLE within a tier so two producers at
-/// one latency keep the order the boundary produced them in — which is the same
-/// declaration-order tie-break every other table here uses, and the one that
-/// keeps output byte-stable under §6.
+/// one latency keep the order the boundary produced them in — byte-stable under
+/// §6.
 ///
-/// # Under-budget is untouched
+/// # What fits is decided before anything is marked (CLOUD-2175)
 ///
-/// With no ceiling declared, or with everything fitting, this joins and returns
-/// exactly what it was handed and suppresses nothing. That is the anti-vacuity
-/// half: a budget that reordered or trimmed the ordinary case would be paid for
-/// on every call that was never the problem.
+/// Each finding is measured at the arm it WOULD get ([`Sighter::peek`]), and
+/// marked ([`Sighter::mark`]) only once admitted. With no ceiling, or with
+/// everything fitting, the whole set is admitted untouched — the ordinary case
+/// pays nothing. Otherwise entries are admitted while they fit with the closing
+/// line reserved, and the first that does not ends the emission: never skipping
+/// to a smaller later entry, which would put a less urgent line ahead of a more
+/// urgent one withheld. Every class is held to the ceiling; CLOUD-2075's
+/// exemption for classed entries made it bound almost nothing once every
+/// emitter was classed.
 ///
 /// # The FIRST entry is always admitted
 ///
-/// Even where it alone exceeds the ceiling. A channel that could emit nothing at
-/// all would turn a budget into a mute switch, and the count line would then be
-/// the only thing said — a report about a report. The overflow is still counted,
-/// so the reader learns the ceiling is too small for its own content rather than
-/// hearing silence.
-///
-/// # A classed entry is never suppressed
-///
-/// It carries a pointer the ruling needs (CLOUD-2075): the ceiling bounds only
-/// text that carries no class, and a classed entry over it is still emitted.
+/// Even where it alone exceeds the ceiling: a channel that could emit nothing
+/// would turn a budget into a mute switch.
 //MUTANT-SUITE crates/batten/src/advisory.rs
-//MUTANT classed-advice-suppressed|s@^        if entry.classed {$@        if false {@|a_classed_entry_is_never_suppressed_at_the_ceiling
+//MUTANT advisory-ceiling-unread|s@^    let whole = within(\&probes);$@    let whole = true;@|what_does_not_fit_is_counted_and_returned_rather_than_dropped
+//MUTANT cut-entry-marked|s@^            overflow.push(match entry.finding {$@            overflow.push(match entry.finding.map(|refusal| { let _ = sighter.mark(\&refusal); refusal }) {@|a_cut_finding_is_never_marked_seen
 #[must_use]
-pub fn admit(entries: Vec<Advice>, ceiling: Option<&Channel>) -> Emission {
-    let Some(ceiling) = ceiling else {
-        return Emission {
-            text: joined(&entries),
-            suppressed: 0,
-        };
-    };
-    let mut ordered = entries;
+pub fn admit(
+    entries: Vec<Advice>,
+    ceiling: Option<&Channel>,
+    sighter: &mut dyn Sighter,
+) -> Emission {
+    use crate::budget::estimate_tokens;
+    let mut ordered = merged(entries);
     // `Reverse` because `AdvisoryTier` derives `Ord` weakest-first, and what must
     // survive a full channel is what has to be answered soonest.
     ordered.sort_by_key(|entry| std::cmp::Reverse(entry.tier));
+    let probes: Vec<String> = ordered
+        .iter()
+        .map(|entry| match entry.finding.as_deref() {
+            Some(refusal) => refusal.render_finding(sighter.peek(refusal)),
+            None => entry.text.clone(),
+        })
+        .collect();
+    let within = |texts: &[String]| {
+        ceiling.is_none_or(|held| estimate_tokens(&joined_text(texts)) <= held.max_tokens)
+    };
+    let whole = within(&probes);
+    let reserve =
+        ceiling.map(|held| suppressed_line(ordered.len(), held.max_tokens, Some(WIDEST_HANDLE)));
 
-    let mut admitted: Vec<Advice> = Vec::new();
-    let mut suppressed = 0;
-    for entry in ordered {
-        if entry.classed {
-            admitted.push(entry);
+    let mut admitted: Vec<String> = Vec::new();
+    let mut overflow: Vec<String> = Vec::new();
+    for (entry, probe) in ordered.into_iter().zip(probes) {
+        let fits = overflow.is_empty()
+            && (whole || admitted.is_empty() || {
+                let mut candidate = admitted.clone();
+                candidate.push(probe.clone());
+                candidate.extend(reserve.clone());
+                within(&candidate)
+            });
+        if !fits {
+            overflow.push(match entry.finding {
+                Some(refusal) => refusal.render_finding(Arm::Full),
+                None => entry.text,
+            });
             continue;
         }
-        let candidate = joined_with(&admitted, &entry);
-        if admitted.is_empty() || crate::budget::estimate_tokens(&candidate) <= ceiling.max_tokens {
-            admitted.push(entry);
-        } else {
-            suppressed += 1;
-        }
+        admitted.push(match entry.finding {
+            Some(refusal) => refusal.render_finding(sighter.mark(&refusal)),
+            None => entry.text,
+        });
     }
-    let mut text = joined(&admitted);
-    if suppressed > 0 {
-        text.push_str("\n\n");
-        text.push_str(&suppressed_line(suppressed, ceiling.max_tokens));
+    Emission {
+        text: joined_text(&admitted),
+        suppressed: overflow.len(),
+        overflow: joined_text(&overflow),
     }
-    Emission { text, suppressed }
 }
 
-/// The channel's one separator, in one place so the measurement and the emission
-/// cannot disagree about what a joined document costs.
-fn joined(entries: &[Advice]) -> String {
-    entries
-        .iter()
-        .map(|entry| entry.text.as_str())
-        .collect::<Vec<&str>>()
-        .join("\n\n")
-}
-
-/// What `admitted` would cost with `next` added — measured on the JOINED form,
-/// because the separator is part of what the channel carries.
-fn joined_with(admitted: &[Advice], next: &Advice) -> String {
-    let mut all: Vec<&str> = admitted.iter().map(|entry| entry.text.as_str()).collect();
-    all.push(next.text.as_str());
-    all.join("\n\n")
+/// The channel's one separator, over rendered texts.
+fn joined_text(texts: &[String]) -> String {
+    texts.join("\n\n")
 }
 
 #[cfg(test)]
@@ -232,20 +295,47 @@ mod tests {
         Advice::new(tier, text)
     }
 
-    /// A classed entry whose finding is already rendered, as `sight_advice`
-    /// leaves it.
-    fn classed(tier: AdvisoryTier, text: &str) -> Advice {
-        Advice {
-            classed: true,
-            ..Advice::new(tier, text)
+    fn emit(entries: Vec<Advice>, ceiling: Option<&Channel>) -> Emission {
+        admit(entries, ceiling, &mut Unsighted)
+    }
+
+    /// A sighter recording what it was asked to mark.
+    #[derive(Default)]
+    struct Recording {
+        marked: Vec<String>,
+    }
+
+    impl Sighter for Recording {
+        fn peek(&self, _: &Refusal) -> Arm {
+            Arm::Pointer
         }
+
+        fn mark(&mut self, refusal: &Refusal) -> Arm {
+            self.marked.push(refusal.subjects_text().to_owned());
+            Arm::Pointer
+        }
+    }
+
+    fn finding(tier: AdvisoryTier, subject: &str) -> Advice {
+        classed(tier, crate::verdict::Native::RunBroken, subject)
+    }
+
+    fn classed(tier: AdvisoryTier, class: crate::verdict::Native, subject: &str) -> Advice {
+        Advice::finding(
+            tier,
+            Refusal::engine(
+                class,
+                &[crate::verdict::artifact(subject)],
+                crate::refusal::Fix::None,
+            ),
+        )
     }
 
     #[test]
     fn three_producers_emit_one_document_ordered_by_tier() {
         // THE ROW'S OWN CASE. Three producers on one boundary, admitted in
         // `AdvisoryTier` order — what must be answered soonest leads.
-        let emission = admit(
+        let emission = emit(
             vec![
                 entry(AdvisoryTier::Advisory, "drain says a thing"),
                 entry(AdvisoryTier::Warning, "the contract moved"),
@@ -261,12 +351,12 @@ mod tests {
     }
 
     #[test]
-    fn what_does_not_fit_is_counted_rather_than_dropped_silently() {
-        // THE MUTATION CASE (CLOUD-418): remove the comparison in `admit` and
-        // this goes red, because everything fits and nothing is counted. A
-        // truncated report that reads as complete is the false green in advisory
-        // form, which is why the count is not optional.
-        let emission = admit(
+    fn what_does_not_fit_is_counted_and_returned_rather_than_dropped() {
+        // THE MUTATION CASE (CLOUD-418): remove the ceiling and this goes red,
+        // because everything fits and nothing is counted. What did not fit is
+        // returned whole, so the caller can store it and name where it went
+        // (CLOUD-2175) — a count with no way to the rest is a truncation.
+        let emission = emit(
             vec![
                 entry(AdvisoryTier::Warning, &"w".repeat(80)),
                 entry(AdvisoryTier::Caution, &"c".repeat(80)),
@@ -275,24 +365,23 @@ mod tests {
             Some(&Channel { max_tokens: 30 }),
         );
         assert_eq!(emission.suppressed, 2, "two did not fit: {}", emission.text);
-        assert!(
-            emission.text.starts_with(&"w".repeat(80)),
-            "and the one that survives is the one due soonest: {}",
-            emission.text
+        assert_eq!(
+            emission.text,
+            "w".repeat(80),
+            "the one due soonest survives"
         );
-        assert!(
-            emission.text.contains("2 further finding(s) suppressed"),
-            "the drop is counted: {}",
-            emission.text
+        assert_eq!(
+            emission.overflow,
+            format!("{}\n\n{}", "c".repeat(80), "a".repeat(80)),
+            "and the rest is handed back whole, in order"
         );
     }
 
     #[test]
     fn an_undeclared_ceiling_leaves_the_channel_exactly_as_it_was() {
         // ANTI-VACUITY. A consumer that has not adopted the table emits what it
-        // emitted before, in the order the boundary produced — no reordering, no
-        // count line, nothing paid on a call that was never the problem.
-        let emission = admit(
+        // emitted before, in the order the boundary produced.
+        let emission = emit(
             vec![
                 entry(AdvisoryTier::Advisory, "first"),
                 entry(AdvisoryTier::Warning, "second"),
@@ -300,15 +389,12 @@ mod tests {
             None,
         );
         assert_eq!(emission.suppressed, 0);
-        assert_eq!(emission.text, "first\n\nsecond");
+        assert_eq!(emission.text, "second\n\nfirst");
     }
 
     #[test]
     fn the_first_entry_is_admitted_even_when_it_alone_is_over() {
-        // A channel that could emit nothing would make the count line the only
-        // thing said — a report about a report. The overflow is still counted, so
-        // the reader learns the ceiling is too small rather than hearing silence.
-        let emission = admit(
+        let emission = emit(
             vec![
                 entry(AdvisoryTier::Warning, &"w".repeat(400)),
                 entry(AdvisoryTier::Advisory, "short"),
@@ -328,9 +414,7 @@ mod tests {
 
     #[test]
     fn one_tier_keeps_the_boundarys_own_order() {
-        // Stable within a tier, so two producers at one latency stay byte-stable
-        // under §6 rather than depending on a sort nobody declared.
-        let emission = admit(
+        let emission = emit(
             vec![
                 entry(AdvisoryTier::Caution, "alpha"),
                 entry(AdvisoryTier::Caution, "beta"),
@@ -340,25 +424,54 @@ mod tests {
         assert_eq!(emission.text, "alpha\n\nbeta");
     }
 
+    /// THE CEILING HOLDS CLASSED ENTRIES TOO, and a cut one is never marked
+    /// seen (CLOUD-2175): marked and cut, it would read as delivered and its
+    /// next firing would carry the pointer alone.
     #[test]
-    fn a_classed_entry_is_never_suppressed_at_the_ceiling() {
-        // CLOUD-2075: a classed entry carries a pointer the ruling needs, so the
-        // ceiling bounds only unclassed text — which is still counted.
+    fn a_cut_finding_is_never_marked_seen() {
+        let mut sighter = Recording::default();
         let emission = admit(
             vec![
-                classed(AdvisoryTier::Warning, &"w".repeat(80)),
-                classed(AdvisoryTier::Advisory, &"a".repeat(80)),
+                finding(AdvisoryTier::Warning, &"w".repeat(120)),
                 entry(AdvisoryTier::Caution, &"c".repeat(80)),
+                classed(
+                    AdvisoryTier::Advisory,
+                    crate::verdict::Native::CheckRunRed,
+                    "a-subject",
+                ),
             ],
-            Some(&Channel { max_tokens: 1 }),
+            Some(&Channel { max_tokens: 40 }),
+            &mut sighter,
         );
-        assert!(emission.text.contains(&"w".repeat(80)), "{}", emission.text);
-        assert!(emission.text.contains(&"a".repeat(80)), "{}", emission.text);
+        assert_eq!(emission.suppressed, 2, "{}", emission.text);
+        assert_eq!(
+            sighter.marked,
+            ["w".repeat(120)],
+            "only the admitted one is marked"
+        );
         assert!(
-            !emission.text.contains(&"c".repeat(80)),
+            emission.overflow.contains("a-subject"),
             "{}",
+            emission.overflow
+        );
+    }
+
+    /// ONE CLASS, ONE LINE (CLOUD-2175): findings of a class that differ only
+    /// in their subjects merge, so the label and routes are paid once.
+    #[test]
+    fn findings_of_one_class_merge_into_one_line() {
+        let emission = emit(
+            vec![
+                finding(AdvisoryTier::Advisory, "first"),
+                finding(AdvisoryTier::Warning, "second"),
+            ],
+            None,
+        );
+        assert_eq!(emission.text.lines().count(), 1, "{}", emission.text);
+        assert!(
+            emission.text.contains("at first, second"),
+            "both subjects on the one line: {}",
             emission.text
         );
-        assert_eq!(emission.suppressed, 1);
     }
 }
