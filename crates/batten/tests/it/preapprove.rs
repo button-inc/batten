@@ -168,11 +168,15 @@ fn an_explicit_timeout_is_left_alone() {
 
 #[test]
 fn a_foreground_call_is_not_rewritten() {
+    // A GRANTED foreground call: the rewrite rides only a grant, so a call this
+    // repository refuses (a foreground `mise`) would pass whatever the module did.
     for input in [
-        serde_json::json!({ "command": "mise run mutant", "run_in_background": false }),
-        serde_json::json!({ "command": "mise run mutant" }),
+        serde_json::json!({ "command": "git status", "run_in_background": false }),
+        serde_json::json!({ "command": "git status" }),
     ] {
         let payload = background(&input);
+        let (decision, _) = verdict(&payload).unwrap_or_default();
+        assert_eq!(decision, "allow", "the case needs a grant: {payload}");
         assert_eq!(updated_input(&payload), None, "{payload}");
     }
 }

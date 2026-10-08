@@ -244,6 +244,7 @@ pub fn changed_ranges(
 }
 
 /// The receipt file for one (row, context) pair.
+//MUTANT history-receipt-ignores-context|s@^        .join(format!("history-read.{}.{}", short(id), short(context)))$@        .join(format!("history-read.{}.{}", short(id), short(\&context[..0])))@|another_contexts_receipt_does_not_admit
 fn receipt_path(git_dir: &Path, id: &str, context: &str) -> PathBuf {
     let short = |text: &str| crate::receipt::hex_sha256(text.as_bytes())[..16].to_owned();
     git_dir
@@ -307,7 +308,6 @@ pub fn forget_context(git_dir: &Path, context: &str) -> std::io::Result<()> {
 ///
 /// `head` is the authority's text at `HEAD`; `current` the working text the
 /// ranges index. An id absent at `HEAD` is a new row and owes nothing.
-//MUTANT history-receipt-ignores-context|s@^        .filter(|id| !admits(git_dir, context, id, \&digest(\&owned_at_head(id))))$@        .filter(|id| !admits(git_dir, "", id, \&digest(\&owned_at_head(id))))@|another_contexts_receipt_does_not_admit
 #[must_use]
 pub fn unread(
     git_dir: &Path,

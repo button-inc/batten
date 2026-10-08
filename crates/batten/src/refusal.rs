@@ -727,7 +727,7 @@ pub(crate) const RULE_HOP_PLACEHOLDER: &str = "batten policy explain '<rule-id>'
 //MUTANT collapsed-row-unlabelled|s@^    if let Some(token) = refusal.verdict() {$@    if let Some(token) = refusal.verdict() \&\& token != refusal.rule() {@|a_collapsed_row_still_labels_rule_and_verdict
 //MUTANT advice-routes-dropped|s@^    for route in routes(refusal) {$@    for route in routes(refusal).into_iter().take(0) {@|a_warn_advisory_carries_its_document_route_on_an_allowed_pre_tool_call
 //MUTANT explain-hop-drops-class|s@^        \&\& class != refusal.rule()$@        \&\& false@|every_line_names_one_explain_hop_for_both_names
-//MUTANT rule-label-dropped|s@^        line.push_str(\&label(Label::Rule, refusal.rule()));$@        line.push_str(refusal.rule());@|every_hook_policy_table_deny_names_its_fix
+//MUTANT rule-label-dropped|s@^        line.push_str(\&label(Label::Rule, refusal.rule()));$@        line.push_str(refusal.rule());@|a_rule_finding_opens_with_its_rule_label
 //MUTANT engine-finding-rule-label|s@^    if !refusal.rule().is_empty() {$@    if true {@|an_engine_finding_carries_no_rule_label
 fn finding_line(refusal: &Refusal, arm: Arm) -> String {
     let mut line = String::new();
@@ -846,8 +846,8 @@ fn route_text(refusal: &Refusal, route: &crate::verdict::Route) -> Option<String
 /// other error is `verb run broken` with its chain as subjects, outermost first.
 /// A finding is ONE line, so each message's first line is the subject and the
 /// rest — a TOML parse caret, a multi-line detail — is returned to print after it.
-//MUTANT usage-failure-misclassed|s@usage.verdict.unwrap_or(crate::verdict::Native::UsageRefused)@usage.verdict.unwrap_or(crate::verdict::Native::RunBroken)@|every_cli_failure_renders_its_verdict_label
-//MUTANT config-fault-class-dropped|s@^        let class = usage.verdict.unwrap_or(crate::verdict::Native::UsageRefused);$@        let class = crate::verdict::Native::UsageRefused;@|every_config_fault_names_its_table_s_declared_class
+//MUTANT usage-failure-misclassed|s@^        let class = usage.verdict.unwrap_or(Native::UsageRefused);$@        let class = usage.verdict.unwrap_or(Native::RunBroken);@|every_cli_failure_renders_its_verdict_label
+//MUTANT config-fault-class-dropped|s@^        let class = usage.verdict.unwrap_or(Native::UsageRefused);$@        let class = Native::UsageRefused;@|every_config_fault_names_its_table_s_declared_class
 #[must_use]
 pub fn of_failure(failure: &anyhow::Error) -> Option<(Refusal, String)> {
     if failure
@@ -863,9 +863,8 @@ pub fn of_failure(failure: &anyhow::Error) -> Option<(Refusal, String)> {
         (head, lines.collect::<Vec<_>>().join("\n"))
     };
     if let Some(usage) = failure.downcast_ref::<crate::UsageError>() {
-        let class = usage
-            .verdict
-            .unwrap_or(crate::verdict::Native::UsageRefused);
+        use crate::verdict::Native;
+        let class = usage.verdict.unwrap_or(Native::UsageRefused);
         let (head, rest) = split(&usage.message);
         // ALREADY A FINDING: a raiser that rendered its own refusal (`check`'s
         // spawning-kind refusal) is printed as it is, never wrapped as the
@@ -1262,6 +1261,19 @@ mod tests {
             let parsed = parse_finding(&line).expect("an engine line parses");
             assert_eq!(parsed.verdict.as_deref(), Some(class), "{line}");
             assert!(parsed.rule.is_empty(), "{line}");
+        }
+    }
+
+    /// A RULE'S FINDING LEADS WITH ITS LABELLED NAME. The override route also
+    /// carries `--rule '<id>'`, so only the line's opening proves the label.
+    #[test]
+    fn a_rule_finding_opens_with_its_rule_label() {
+        let refusal = Refusal::new("some-gate", "it fired", Fix::None);
+        for arm in [Arm::Pointer, Arm::Full] {
+            let line = refusal.render_finding(arm);
+            assert!(line.starts_with("rule 'some-gate'"), "labelled: {line}");
+            let parsed = parse_finding(&line).expect("a rule line parses");
+            assert_eq!(parsed.rule, "some-gate", "{line}");
         }
     }
 
