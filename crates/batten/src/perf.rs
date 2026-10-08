@@ -684,6 +684,44 @@ pub fn base_key(repo: &Path, base_sha: &str) -> Result<String> {
     ))
 }
 
+/// The trees the `batten` BINARY is compiled from at `rev`: its `src`, both
+/// manifest layers and the lockfile.
+///
+/// NARROWER THAN [`base_key`] ON PURPOSE. That key names a cache entry, so it
+/// takes all of `crates/`; this one answers whether two builds COULD differ, and
+/// `crates/batten/tests` cannot change a byte of the binary. Every non-test
+/// `include_str!` in the crate reads under `src/`.
+///
+/// # Errors
+///
+/// A repository that cannot be opened.
+//MUTANT binary-key-takes-tests|s@^        \&id("crates/batten/src")?,$@        \&id("crates")?,@|a_test_only_commit_keeps_the_binary_source_key
+pub fn binary_source_key(repo: &Path, rev: &str) -> Result<String> {
+    let id = |path: &str| -> Result<String> {
+        Ok(crate::git::resolve_ref(repo, &format!("{rev}:{path}"))?.unwrap_or_default())
+    };
+    Ok(crate_key(
+        &id("crates/batten/src")?,
+        &format!("{}\n{}", id("crates/batten/Cargo.toml")?, id("Cargo.toml")?),
+        &id("Cargo.lock")?,
+    ))
+}
+
+/// Whether two arms' binary sources differ, so identical bytes are a
+/// contradiction rather than the expected build (CLOUD-2164).
+///
+/// An unknown side is "differs": the guard it feeds stays armed when it cannot
+/// look. Measured on #1134: a test-and-config-only change built its head from
+/// the base's very sources after `build` had dropped the shared units, got the
+/// base's bytes, and the guard refused it as a wrong binary.
+//MUTANT identical-sources-suspect|s@^        (Some(base), Some(head)) => base != head,$@        (Some(_), Some(_)) => true,@|identical_arms_from_identical_sources_are_not_suspect
+fn sources_differ(base: Option<&str>, head: Option<&str>) -> bool {
+    match (base, head) {
+        (Some(base), Some(head)) => base != head,
+        _ => true,
+    }
+}
+
 /// Whether the base arm can be measured without spawning cargo at all.
 ///
 /// A FILE rather than a path that exists: a build killed mid-link — and this gate
@@ -1206,11 +1244,19 @@ fn measure(repo: &Path, options: Options, base_sha: &str) -> Result<Vec<Record>>
     }
     // THE GUARD THE MEASURED DEFECT LACKED (CLOUD-2060): a pair whose arms are
     // the same bytes measures nothing, and its ratio of ~1 reads as a pass. The
-    // null experiment copies one arm on purpose, after this.
+    // null experiment copies one arm on purpose, after this. Identical bytes from
+    // identical binary sources are the expected build, never a contradiction
+    // (CLOUD-2164); a dirty tree's sources are not HEAD's, so it stays armed.
+    let base_sources = binary_source_key(repo, base_sha).ok();
+    let head_sources = crate::git::uncommitted(repo)
+        .is_ok_and(|changed| changed == 0)
+        .then(|| binary_source_key(repo, "HEAD").ok())
+        .flatten();
     if arms_suspect(
         options.null,
         base_built_now,
-        same_bytes(&base_bin, &head_bin),
+        same_bytes(&base_bin, &head_bin)
+            && sources_differ(base_sources.as_deref(), head_sources.as_deref()),
     ) {
         bail!(
             "perf-pair: the head arm is byte-identical to the base arm, so a build handed back the wrong binary. No measurement."
@@ -3487,6 +3533,74 @@ mod tests {
         git(&["commit", "-q", "-m", "three"]);
         let third = git(&["rev-parse", "HEAD"]);
         let key = |sha: &str| base_key(&repo, sha).expect("key");
+        assert_eq!(key(&first), key(&second));
+        assert_ne!(key(&second), key(&third));
+    }
+
+    /// CLOUD-2164: identical arms built from identical binary sources are the
+    /// expected build, and an unknown side keeps the guard armed.
+    #[test]
+    fn identical_arms_from_identical_sources_are_not_suspect() {
+        assert!(!sources_differ(Some("k"), Some("k")), "#1134's own case");
+        assert!(sources_differ(Some("k"), Some("k2")));
+        assert!(sources_differ(None, Some("k")));
+        assert!(sources_differ(Some("k"), None));
+    }
+
+    /// CLOUD-2164: a commit under `crates/batten/tests` moves [`base_key`] and
+    /// leaves [`binary_source_key`], and one under `src` moves both.
+    #[test]
+    #[expect(
+        clippy::expect_used,
+        reason = "test-only: a failed fixture write should fail the case loudly"
+    )]
+    #[expect(
+        clippy::disallowed_types,
+        reason = "stays: test-only, builds the fixture repository `binary_source_key` reads; no production spawn"
+    )]
+    fn a_test_only_commit_keeps_the_binary_source_key() {
+        let repo = perf_scratch("binary-source-key");
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .args([
+                    "-c",
+                    "user.name=t",
+                    "-c",
+                    "user.email=t@t",
+                    "-c",
+                    "commit.gpgsign=false",
+                ])
+                .args(args)
+                .current_dir(&repo)
+                .output()
+                .expect("git");
+            assert!(out.status.success(), "git {args:?}");
+            String::from_utf8(out.stdout)
+                .expect("utf8")
+                .trim()
+                .to_owned()
+        };
+        git(&["init", "-q", "-b", "main"]);
+        std::fs::create_dir_all(repo.join("crates/batten/src")).expect("mkdir");
+        std::fs::create_dir_all(repo.join("crates/batten/tests")).expect("mkdir");
+        std::fs::write(repo.join("crates/batten/src/lib.rs"), "a").expect("write");
+        std::fs::write(repo.join("crates/batten/tests/it.rs"), "t").expect("write");
+        git(&["add", "-A"]);
+        git(&["commit", "-q", "-m", "one"]);
+        let first = git(&["rev-parse", "HEAD"]);
+        std::fs::write(repo.join("crates/batten/tests/it.rs"), "t2").expect("write");
+        git(&["add", "-A"]);
+        git(&["commit", "-q", "-m", "two"]);
+        let second = git(&["rev-parse", "HEAD"]);
+        std::fs::write(repo.join("crates/batten/src/lib.rs"), "b").expect("write");
+        git(&["add", "-A"]);
+        git(&["commit", "-q", "-m", "three"]);
+        let third = git(&["rev-parse", "HEAD"]);
+        let key = |sha: &str| binary_source_key(&repo, sha).expect("key");
+        assert_ne!(
+            base_key(&repo, &first).expect("key"),
+            base_key(&repo, &second).expect("key")
+        );
         assert_eq!(key(&first), key(&second));
         assert_ne!(key(&second), key(&third));
     }
