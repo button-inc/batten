@@ -280,7 +280,67 @@ fn no_refusal_lost_its_pointer() {
 /// stated reason: naming a consumer's policy filenames inside `crates/**` is
 /// non-negotiable rule 1, and `source name other` computes that.
 fn fixture(name: &str) -> PathBuf {
-    let staged = Fixture::new(name).config(include_str!("../../../../batten.toml"));
+    stage(name, COMMITTED)
+}
+
+/// The committed config, as every fixture here stages it.
+const COMMITTED: &str = include_str!("../../../../batten.toml");
+
+/// [`fixture`] for a case that sends a `SessionStart`, with the committed
+/// config's session provisioning removed: every `[[startup]]` row and every
+/// `session-start` handler.
+///
+/// The engine's own session-start work — forgetting a context's sightings,
+/// re-delivering them on a compaction — runs before any declared row and is what
+/// those cases assert. The declared rows are this repository's provisioning, and
+/// in a fixture they are worse than irrelevant: the fixture lives under
+/// `target/tmp`, mise walks up to this checkout's `mise.toml`, and each `mise run
+/// session:*` then provisions the HOST — `mise install`, the git hooks, `wiring
+/// reclaim -y`, a forge probe over the network. Measured 2026-10-08
+/// (CLOUD-2173): 200 spawned processes and 78s for one `SessionStart` alone, and
+/// 260s under the suite, which made each such case the suite's critical path.
+//MUTANT-SUITE crates/batten/tests/it/refusal_ceiling.rs
+//MUTANT session-startup-rows-kept|s@^    config\.remove("startup");$@@|the_session_fixture_carries_no_session_provisioning
+//MUTANT session-start-handlers-kept|s@^            \.retain(\x7crow\x7c row\.get("on")\.and_then(toml_edit::Item::as_str) != Some("session-start"));$@            .retain(\x7c_\x7c true);@|the_session_fixture_carries_no_session_provisioning
+fn session_fixture(name: &str) -> PathBuf {
+    let mut config: toml_edit::DocumentMut =
+        COMMITTED.parse().expect("the committed config is TOML");
+    config.remove("startup");
+    if let Some(handlers) = config
+        .get_mut("hook")
+        .and_then(|hook| hook.get_mut("handler"))
+        .and_then(toml_edit::Item::as_array_of_tables_mut)
+    {
+        handlers
+            .retain(|row| row.get("on").and_then(toml_edit::Item::as_str) != Some("session-start"));
+    }
+    stage(name, &config.to_string())
+}
+
+/// How many `[[startup]]` rows and `session-start` handlers `config` declares.
+fn session_provisioning(config: &str) -> (usize, usize) {
+    let config: toml_edit::DocumentMut = config.parse().expect("a TOML config");
+    let startup = config
+        .get("startup")
+        .and_then(toml_edit::Item::as_array_of_tables)
+        .map_or(0, toml_edit::ArrayOfTables::len);
+    let handlers = config
+        .get("hook")
+        .and_then(|hook| hook.get("handler"))
+        .and_then(toml_edit::Item::as_array_of_tables)
+        .map_or(0, |rows| {
+            rows.iter()
+                .filter(|row| {
+                    row.get("on").and_then(toml_edit::Item::as_str) == Some("session-start")
+                })
+                .count()
+        });
+    (startup, handlers)
+}
+
+/// Stage `config` and the committed policy modules in a fixture named `name`.
+fn stage(name: &str, config: &str) -> PathBuf {
+    let staged = Fixture::new(name).config(config);
     let modules = staged.path().join("policy");
     std::fs::create_dir_all(&modules).expect("the fixture's policy directory is creatable");
     let committed = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -496,11 +556,38 @@ fn two_contexts_in_one_clone_each_get_the_full_text() {
     );
 }
 
+/// The session fixture stages no session provisioning, and the committed config
+/// has some to strip (CLOUD-2173).
+///
+/// The second half is the anti-vacuity: were the committed config ever to
+/// declare none, the first half would pass over a strip that removes nothing, and
+/// the two `SessionStart` cases below would still be fast for a reason this case
+/// no longer proves.
+#[test]
+fn the_session_fixture_carries_no_session_provisioning() {
+    let (startup, handlers) = session_provisioning(COMMITTED);
+    assert!(
+        startup > 0,
+        "the committed config declares `[[startup]]` rows"
+    );
+    assert!(
+        handlers > 0,
+        "the committed config declares session-start handlers"
+    );
+    let repo = session_fixture("session-provisioning-stripped");
+    let staged = std::fs::read_to_string(repo.join("batten.toml")).expect("the staged config");
+    assert_eq!(
+        session_provisioning(&staged),
+        (0, 0),
+        "a SessionStart in this fixture must not provision the host"
+    );
+}
+
 /// A `SessionStart` forgets one context and leaves the rest (CLOUD-2075 §7
 /// case 5).
 #[test]
 fn a_session_start_forgets_only_that_contexts_sightings() {
-    let repo = fixture("session-start-scoped");
+    let repo = session_fixture("session-start-scoped");
     let command = "head -40 batten.toml";
     let _ = fires_in(&repo, Some("A"), None, command);
     let _ = fires_in(&repo, Some("B"), None, command);
@@ -523,7 +610,7 @@ fn a_session_start_forgets_only_that_contexts_sightings() {
 /// case 6), and keeps it marked.
 #[test]
 fn a_compaction_redelivers_every_seen_item_once_at_session_start() {
-    let repo = fixture("compaction-redelivers");
+    let repo = session_fixture("compaction-redelivers");
     let command = "head -40 batten.toml";
     let full = fires_in(&repo, Some("A"), None, command);
     assert!(full.contains(FULL), "{full}");
