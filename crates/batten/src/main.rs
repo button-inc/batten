@@ -94,7 +94,11 @@ fn report(failure: &anyhow::Error, mode: Mode, err: &mut dyn Write) -> ExitCode 
         }
         None => failure.to_string(),
     };
-    if failure.backtrace().status() == std::backtrace::BacktraceStatus::Captured {
+    // A BACKTRACE DIAGNOSES BATTEN, so only an internal failure carries one: a
+    // usage refusal is about the caller's input, and frames there are noise.
+    if code == batten::ExitCode::Internal
+        && failure.backtrace().status() == std::backtrace::BacktraceStatus::Captured
+    {
         text.push('\n');
         text.push_str(&failure.backtrace().to_string());
     }
