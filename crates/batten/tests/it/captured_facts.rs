@@ -534,3 +534,88 @@ fn a_mentioning_document_does_not_answer_for_the_key() {
          the containment defect (CLOUD-1387)\n{answer}{cause}"
     );
 }
+
+// --- The shipped `claim-before-code` module over a real capture ---------------
+
+/// THE SHIPPED MODULE, read from this repository rather than restated, so a
+/// mutation of its predicate reaches this case. Before it, the module's
+/// `#MUTANT` row named a case that drove `input.tree.captured` through a probe
+/// and never installed the module, so its row could only survive.
+const CLAIM_MODULE: &str = include_str!("../../../../policy/claim-before-code.rego");
+
+/// The repository's own `claim mint absent` row, over [`DECLARED_KEY`].
+fn claim_config() -> String {
+    format!(
+        r#"version = 1
+
+[[rule]]
+id = "claim mint absent"
+kind = "policy"
+scope = "tree"
+module = "claim-before-code.rego"
+severity = "deny"
+
+[[rule.captured]]
+id = "this-row"
+key = "{DECLARED_KEY}"
+key_at = "id"
+node = "project"
+reduce = "present"
+
+[[verdict]]
+id = "claim mint absent"
+gloss = "a declared row was captured and carries no project"
+class = "A fixture copy of the repository's class, raised by the shipped module."
+
+[[verdict.route]]
+id = "claim module"
+kind = "document"
+target = "claim-before-code.rego"
+"#
+    )
+}
+
+/// `batten check` over the shipped module, with one `get_issue` for the key.
+fn claim_check(name: &str, record: &serde_json::Value) -> (String, String) {
+    let dir = common::Fixture::new(&format!("captured-claim-{name}"))
+        .git()
+        .build();
+    let home = scratch(&format!("captured-claim-{name}-home"));
+    write(&dir, "batten.toml", &claim_config());
+    write(&dir, "claim-before-code.rego", CLAIM_MODULE);
+    let store = home
+        .join("data")
+        .join(env!("CARGO_PKG_NAME"))
+        .join(batten::state::derive_repo_name(&dir).expect("derive the repo state segment"))
+        .join("captures");
+    std::fs::create_dir_all(&store).expect("create the capture store");
+    store_call(&store, "get_issue", &record.to_string());
+    let outcome = check(&dir, &home);
+    (stdout(&outcome), stderr(&outcome))
+}
+
+#[test]
+fn the_shipped_module_refuses_a_captured_row_with_no_project() {
+    let (answer, cause) = claim_check(
+        "unfiled",
+        &serde_json::json!({"id": DECLARED_KEY, "status": "unstarted"}),
+    );
+    assert!(
+        answer.contains("claim mint absent"),
+        "a captured row carrying no project is unfiled and must be refused\n{answer}{cause}"
+    );
+}
+
+/// The positive control, without which the case above is satisfied by a module
+/// that refuses every captured row.
+#[test]
+fn the_shipped_module_passes_a_captured_row_on_a_project() {
+    let (answer, cause) = claim_check(
+        "filed",
+        &serde_json::json!({"id": DECLARED_KEY, "project": "Batten"}),
+    );
+    assert!(
+        !answer.contains("claim mint absent"),
+        "a captured row on a project is filed and must not be refused\n{answer}{cause}"
+    );
+}

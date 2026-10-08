@@ -127,5 +127,4 @@ test_could_not_look_does_not_fault if {
 }
 
 #MUTANT-SUITE crates/batten/tests/it/captured_facts.rs
-#MUTANT-OWNER CLOUD-845|the tier this module names drives `input.tree.captured` and never installs the module, so no case in it can turn red under a mutation of the predicate
-#MUTANT refusal-unread|s@^\tcount(refused) > 0$@\tfalse@|a_declared_reduction_reaches_the_module
+#MUTANT refusal-unread|s@^\tcount(refused) > 0$@\tfalse@|the_shipped_module_refuses_a_captured_row_with_no_project
