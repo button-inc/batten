@@ -1245,7 +1245,7 @@ run = [
 ]
 
 [tasks."fuzz:search"]
-description = "Report: the bounded libFuzzer search over both targets, `fuzz`'s no-argument half (CLOUD-112)"
+description = "Report: the bounded libFuzzer search over every target, `fuzz`'s no-argument half (CLOUD-112)"
 # TWO corpus directories, and the order is the whole point. libFuzzer writes
 # every coverage-expanding input into the FIRST directory and treats the rest as
 # read-only seeds — so the machine's working set lands in git-ignored
@@ -1255,14 +1255,15 @@ description = "Report: the bounded libFuzzer search over both targets, `fuzz`'s 
 # anything anyone chose. A crash still lands in `fuzz/artifacts/`, which IS
 # tracked, because a reproducer is exactly the file worth reviewing.
 #
-# The two targets are written out rather than looped over: two entries, each
+# The targets are written out rather than looped over: one entry each, each
 # stopping the search if it fails, is exactly what the `for` did. `FUZZ_SECONDS`
 # bounds each, 60 when unset.
 depends = ["fuzz:tools"]
 run = [
-  "mkdir -p fuzz/work/hook_decode fuzz/work/config_parse",
+  "mkdir -p fuzz/work/hook_decode fuzz/work/config_parse fuzz/work/lease_wire",
   "cargo +nightly fuzz run hook_decode fuzz/work/hook_decode fuzz/corpus/hook_decode -- -max_total_time={% if env.FUZZ_SECONDS %}{{env.FUZZ_SECONDS}}{% else %}60{% endif %}",
   "cargo +nightly fuzz run config_parse fuzz/work/config_parse fuzz/corpus/config_parse -- -max_total_time={% if env.FUZZ_SECONDS %}{{env.FUZZ_SECONDS}}{% else %}60{% endif %}",
+  "cargo +nightly fuzz run lease_wire fuzz/work/lease_wire fuzz/corpus/lease_wire -- -max_total_time={% if env.FUZZ_SECONDS %}{{env.FUZZ_SECONDS}}{% else %}60{% endif %}",
 ]
 
 [tasks.test]
