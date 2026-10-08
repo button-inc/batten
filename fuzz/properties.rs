@@ -160,8 +160,16 @@ pub fn exercise_config_parse(data: &[u8]) {
             batten::config::emit(&config).expect("an accepted Config must be re-emittable");
         let reread = batten::config::parse(&emitted, "fuzz")
             .expect("an accepted Config must survive its own emitted form");
+        // EVERYTHING BUT `unresolvable` (CLOUD-2140). That field is `serde(skip)`
+        // by design — the loader's reading ABOUT the file (rows it dropped), not a
+        // key — so the emitted form cannot carry it and the re-read starts empty.
+        // The dropped rows themselves are absent from both sides, which is what
+        // this clause is about. Found by the search: a row this build could not
+        // resolve tripped it (`fuzz/artifacts/config_parse/crash-759a…`).
+        let mut as_read = config.clone();
+        as_read.unresolvable.clear();
         assert_eq!(
-            config, reread,
+            as_read, reread,
             "the loader accepted a value it does not read back: a silently-wrong parse"
         );
 

@@ -1,0 +1,346 @@
+# Batten's own policy configuration.
+#
+# Consumer #1 is Batten itself: this checked-in file is what `batten check` runs
+# against this repository. It is intentionally minimal at the scaffold stage and
+# grows as the rule and check engine lands.
+#
+# Configuration is one committed authority (this file) plus raise-only overrides
+# (env vars, flags, and a git-ignored batten.local.toml that may only tighten
+# policy). There is no upward directory walk and no conf.d merge surface. See the
+# Batten house style, §8.
+
+# The config schema version. This build supports version 1.
+version = 1
+
+# Minimum Batten version permitted to read this file (semver). Enforced: a binary
+# older than this refuses to run rather than reporting green over rules it does
+# not understand (exit 1 — a statement about the invocation, not a policy
+# verdict). Equal or newer runs.
+#
+# Raised off 0.0.0 when this file started declaring `[epoch]` (CLOUD-32): a new
+# key must be REFUSED by an older binary, never ignored. `deny_unknown_fields`
+# is what actually forces that — an older build fails on the unknown key — and
+# this floor states the intent so the refusal names the version rather than the
+# key.
+#
+# Raised again for `[ci]` (CLOUD-54), to the version that introduces it. Not the
+# version that will *release* it: release-plz bumps on landing, so naming the
+# next tag would make this file refuse the very build that has to lint it. The
+# floor is documentation-grade either way — `deny_unknown_fields` is what
+# actually refuses an older binary.
+min_batten_version = "0.0.59"
+
+# The ref work must land on (CLOUD-51) — the target `batten worktree status`
+# judges uncommitted, unpushed, and unlanded work against.
+#
+# Consumer-specific by nature, which is why it lives here and never in the crate
+# (non-negotiable rule 1): which ref is the trunk is a property of the repository
+# being gated. The core ships no default, so an absent key means the gate has no
+# target — exit 1, never a guessed one and never a vacuous pass.
+#
+# `origin/main` rather than `main`: this repo is trunk-based and lands by
+# fast-forward, so the question is whether work reached the remote trunk. A local
+# `main` can be behind, and judging against it would call work landed that only
+# this checkout has seen. Read as it is on disk — the gate fetches nothing
+# (agents fetch, gates decide).
+#
+# Merged-ness here is decided by patch identity, never ancestry, which is what
+# makes the key usable at all: landing by rebase gives every landed commit a new
+# SHA, so a landed branch is never an ancestor of the trunk and `git branch
+# --merged` would report this repository's own finished work as outstanding
+# forever.
+#
+# NOT to be confused with `unlanded` below it in the schema: that is a
+# path-membership set the rule engine evaluates over tree content. VCS state and
+# path membership are orthogonal, and one key meaning both is the conflation
+# CLOUD-37 kept `scope`/`protected`/`unlanded` apart to avoid.
+must_land_on = "origin/main"
+
+# ---------------------------------------------------------------------------
+# The protected-path gate (CLOUD-96): {mutating verb} × {protected path}.
+#
+# This is not a `[[rule]]` row and deliberately so. The gate is the INTERSECTION
+# of the two tables below, and expressing an intersection as rules would need one
+# row per verb × path pair — the config restating what a set operation already
+# says. `batten hook` crosses them per mediated call.
+#
+# The incident: an agent retracting its own managed state reached for `rm`
+# instead of the surface that owns the file. Managed state has a defined mutation
+# path and a raw destructive verb bypasses its bookkeeping.
+
+# Which paths are guarded. Consumer-specific by nature, which is why they live
+# here and never in the crate (non-negotiable rule 1) — the engine holds the
+# matcher, this file holds the answer.
+protected = [
+  # Agent memory: written through the Serena tools, never by hand.
+  ".serena/memories/**",
+  # The policy authority itself. Deleting it is the maximal weakening — it
+  # disarms every gate at on. Deleting it is the maximal weakening — it
+  # disarms every gate at once, including this one.
+  "batten.toml",
+  # CI's definition of green.
+  ".github/workflows/**",
+]
+
+# Batten gates this repository with its own engine — consumer #1 in practice,
+# not just in principle. Rules below whose `scope` is "tree" run under `batten
+# check`; rules whose `scope` is "mediated_call" are adjudicated by `batten hook`
+# against one command at a time and are never evaluated by `check` (CLOUD-48).
+
+# ---------------------------------------------------------------------------
+# The `gh` lifecycle, as config rather than Rust (CLOUD-48).
+#
+# These four rows were a hardcoded `match` inside `crates/batten/src/hook.rs`.
+# Moving them here is the point of the change twice over: the engine stops
+# carrying one consumer's task names (non-negotiable rule 1 — `git grep -Fn
+# "mise run land" crates/` now finds nothing outside a test fixture), and a
+# reviewer can read exactly what will be refused without reading Rust (§9).
+#
+# `pattern` for a shape rule is the banned command line as you would say it: the
+# first word is the effective program — matched AFTER wrapper look-through, so
+# `mise exec -- gh pr merge` and `env GH_PAGER= gh pr merge` both match — and the
+# rest are the adjacent non-flag words that must follow it.
+#
+# `reason` is required on a shape rule, unlike on a file rule: a mediated deny
+# reaches a model as the entire explanation, so a refusal that named only its id
+# would be un-actionable (CLOUD-122). The crate appends the bypass hatch.
+[[rule]]
+id = "gh-pr-merge"
+kind = "shape"
+scope = "mediated_call"
+severity = "deny"
+pattern = "gh pr merge"
+reason = """
+`gh pr merge` (like the merge button) rewrites commits under new SHAs, \
+discarding the exact objects CI tested. Use `mise run land`, which comments \
+/fast-forward so main advances to this branch's already-passed commits."""
+
+# The one row with a second condition. Only a comment carrying the landing
+# directive is the lifecycle; an ordinary `gh pr comment` is not. The directive
+# lives inside a quoted `--body`, so it is not one of the words `pattern`
+# matches — `contains` looks at the segment as written, which is the only reason
+# this key exists.
+[[rule]]
+id = "gh-pr-comment-fast-forward"
+kind = "shape"
+scope = "mediated_call"
+severity = "deny"
+pattern = "gh pr comment"
+contains = "fast-forward"
+reason = """
+Commenting /fast-forward by hand only STARTS the merge — it does not wait for \
+it, and the usual pairing with a guessed `sleep` reports before the merge \
+lands. Use `mise run land` (backgrounded): it comments, then blocks until the \
+PR is MERGED or the fast-forward bot refuses."""
+
+[[rule]]
+id = "gh-pr-checks"
+kind = "shape"
+scope = "mediated_call"
+severity = "deny"
+pattern = "gh pr checks"
+reason = """
+Hand-watching CI is the ad-hoc shape `mise run ci-wait` replaces. It polls \
+check-runs for HEAD until every one is terminal, prints their conclusions, and \
+exits non-zero unless all are green — with no timeout to reintroduce the \
+VM-reap gap. Background it. (`gh pr view`/`list`/`create`, `gh pr ready`, `gh \
+api`, `gh run view` are NOT blocked.)"""
+
+[[rule]]
+id = "gh-run-watch"
+kind = "shape"
+scope = "mediated_call"
+severity = "deny"
+pattern = "gh run watch"
+reason = """
+Hand-watching CI is the ad-hoc shape `mise run ci-wait` replaces. Background \
+it rather than holding a foreground poll open."""
+
+# A conflict marker reaching a source file means a botched merge landed. The
+# shape is unambiguous and no compiler catches it in every file type, which is
+# exactly the banned-shape case `forbid` exists for.
+#
+# `severity` (what a match does: "derun reports.
+#
+# One setting, resolved once, exposed three ways. Overrides, highest precedence
+# first:
+#
+#   --fail-on-warning              the flag (no negative form: it can only turn
+#                                  the setting on, never off)
+#   BATTEN_FAIL_ON_WARNING=true    the env var; "true"/"false" only, and an
+#                                  empty value means unset, not invalid
+#   batten.ltcal.toml              the git-ignored local file
+#
+# Policy-bearing, so §8's raise-only rule governs it: once this file commits
+# `true`, no lower-precedence source can turn it back off — that is refused with
+# exit 1 rather than applied. Every consumer reads the resolved value; no verb
+# carries a promotion knob of its own, and `batten exec` is deliberately not a
+# consumer at all (an exec output match always fails, because a warn-but-pass
+# match would be invisible to an agent reading only the exit code).
+fail_on_warning = false
+
+# The three path sets policy is defined over. They overlap in practice but are
+# three independent evaluators: a path's membership in each is computed from that
+# key's list alone, and no membership is ever derived from another set's.
+#
+#   scope      the paths policy applies to, as an ordered include/exclude list.
+#              A "!" prefix marks an exclude (gitignore's spelling) and an
+#              exclude beats an overlapping include, whatever the order.
+#   protected  paths whose modification is guarded. A plain include set.
+#   unlanded   paths whose work is not yet landed. A plain include set.
+#
+# A "!" entry in protected or unlanded is refused with exit 1 rather than read as
+# a literal glob — only scope carries exclude semantics. An absent key is the
+# *empty* set, never "everything": deen streams must not silently stop being gated).
+#
+# `reason` is REQUIRED. A promoted exit code is the whole of what a caller gets
+# back, so a refusal naming only its id would be un-actionable — and the report is
+# pointer-only (`stream:line <id>`), never the line that matched, because a
+# wrapped command's output is the likeliest place for a secret to appear.
+#
+# REACH FOR SOMETHING ELSE WHEN: the tool has its own severity model (configure
+# that — do not rebuild it as output-scraping); you want to gate a file's contents
+# (a `command` rule over a glob); or you want to promote an existing Batten
+# finding (`fail_on_warning`, which does not apply here).
+#
+# A git-ignored batten.local.toml may ADD a pattern — one more way to catch a
+# lying command is tighteningrward the shell gate's bar unchanged. `max_lines = 199`
+# is the documented 200-line CLAUDE.md target restated for a `<=` boundary — the
+# shell gate failed AT 200, so 199 is the same bar, not a loosening. Raising
+# either number is a visible diff in this file, pinned by a test in
+# `crates/batten/tests/cli.rs`.
+[budget.instructions]
+files = ["AGENTS.md"]
+max_tokens = 3500
+max_lines = 199
+
+# The other half of what loads on every session, and the half `files` cannot
+# reach: Serena's project file documents `initial_prompt` as content that "will
+# always be given to the LLM upon activating the project (contrary to the
+# memories, which are loaded on demand)". The cost is a string inside a document,
+# not a document, so it is declared as an embedded entry rather than a glob
+# (CLOUD-298).
+#
+# It is empty today, and that is the reason to gate it rather than fix it in
+# passing: an empty value contributes nothing and prints no row, so this costs
+# nothing now — and the first person to put text there pays for it against the
+# same budget as an AGENTS.md section instead of getting it free past a green
+# gate. A file the engine cannot parse is exit 1, never a silent zero.
+[[budget.instructions.embedded]]
+path = ".serena/project.yml"
+key = "initial_prompt"
+
+# The test suite is half of this repository's definition of green, and was the
+# unguarded half (CLOUD-55). It cannot be a `protected` path — tests are edited
+# every day, so a protected glob would block writing them — so the computable
+# property is DIRECTION of change, the same shape `trust.rs` encodes for config.
+#
+# The token is consumer config, not an engine fact: `#[test]` is this
+# repository's test marker, and another language's marker works with no engine
+# change (non-negotiable rule 1).
+#
+# `base = "origin/main"`: the trunk this branch will land on, so the comparison
+# is against what is already released rather than against this branch's own
+# history. A legitimate reduction goes through a `[[waiver]]` with a reason and
+# an expiry — never `severity = "allow"`, which switches the row off forever and
+# tells nobody.
+[[rule]]
+id = "tests-not-deleted"
+kind = "ratchet"
+glob = "crates/**/*.rs"
+pattern = "#[test]"
+direction = "non_decreasing"
+base = "origin/main"
+severity = "deny"
+scope = "tree"
+no_fix_reason = "restore the tests, or waive the reduction deliberately; which of the two is the whole question"
+
+# `tests/**/*.bats`, recursive — and the recursion is safe nected  paths whose modification is guarded. A plain include set.
+#   unlanded   paths whose work is not yet landed. A plain include set.
+#
+# A "!" entry in protected or unlanded is refused with exit 1 rather than read as
+# a literal glob — only scope carries exclude semantics. An absent key is the
+# *empty* set, never "everything": deen streams must not silently stop being gated).
+#
+# `reason` is REQUIRED. A promoted exit code is the whole of what a caller gets
+# back, so a refusal naming only its id would be un-actionable — and the report is
+# pointer-only (`stream:line <id>`), never the line that matchthe same files. Widened back
+# because the narrow glob was only correct while every bats suite sat directly in
+# `tests/` — this one covers a nested one the day it is written.
+[[rule]]
+id = "bats-tests-not-deleted"
+kind = "ratchet"
+glob = "tests/**/*.bats"
+pattern = "@test \""
+direction = "non_decreasing"
+base = "origin/main"
+severity = "deny"
+scope = "tree"
+no_fix_reason = "restore the tests, or waive the reduction deliberately; which of the two is the whole question"
+
+# The mirror direction: a disabled test is a deleted test that still counts, so
+# the guard is on the token RISING.
+#
+# The pabare `#[ignore]` is a literal substring, so it also matches every prose mention
+# of the attribute — including the sentence you are reading and the fixtures in
+# `crates/batten/tests/ratchet.rs` that exercise this very row. Measured: the
+# unanchored form counts 5 in a tree containing zero disabled tests, so the row
+# would have failed on its own documentation. An attribute always begins a line;
+# a mention does not. (`budget.rs` anchors its HTML-comment scan for the same
+# reason.)
+[[rule]]
+id = "no-new-ignores"
+kind = "ratchet"
+glob = "crates/**/*.rs"
+pattern = "\n#[ignore]"
+direction = "non_increasing"
+base = "origin/main"
+severity = "deny"
+scope = "tree"
+no_fix_reason = "delete the new ignore, or waive it deliberately; an ignore is a decision, not a defect to rewrite"
+
+# Advisory rather than blocking: assertions thinning out while the `#[test]`
+# count holds is the gutting shape, and it is worth saying without blocking —
+# a refactor legitimately merges assertions. `--fail-on-warning` and
+# `--strictness strict` promote it when a run wants the stricter reading.
+[[rule]]
+id = "assertions-not-gutted"
+kind = "ratchet"
+glob = "crates/batten/tests/**/*.rs"
+pattern = "assert"
+direction = "non_decreasing"
+base = "origin/main"
+severity = "warn"
+scope = "tree"
+no_fix_reason = "restore the assertions, or waive the reduction deliberately"
+
+# The merge contract, DERIVED from this repository's GitHub ruleset (CLOUD-54).
+#
+# The host is the authority; this is a pryjection a gate polices. `mise run
+# ci-drift` pipes `gh api repos/{owner}/{repo}/rules/branches/main` into
+# `batten config lint --host-rules -`, so an edit on either side that the other
+# does not follow fails the build rather than drifting quietly.
+#
+# `required_checks` is `final` alone: the ruleset requires that one check-run,
+# and `final` is the aggregating job every other CI job reports through. There
+# is no `allowed_merge_methods` key because the ruleset carries no
+# `pull_request` rule — the host constrains no merge method, which is a
+# different claim from constraining none of them, and writing an empty list here
+# would assert the second.
+#
+# Landing is by `/fast-forward` regardless (see AGENTS.md): the merge button is
+# blocked so `main` only ever advances to a SHA that already passed CI. That is
+# repository discipline, not a host constraint, and it is deliberately not
+# encoded here — this table records what the HOST enforces, and recording a
+# convention as a host rule would be the second authority the whole issue exists
+# to prevent.
+[ci]
+required_checks = ["final"]
+
+[epoch]
+tracked = [
+  "batten.toml",
+  "AGENTS.md",
+  "hk.pkl",
+  ".claude/settings.json",
+]
