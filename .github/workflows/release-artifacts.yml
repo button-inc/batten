@@ -51,21 +51,19 @@ name: release-artifacts
 # Each job runs `mise run dist <target>`, the SAME command a maintainer runs
 # locally, so the archive CI uploads is the archive you can reproduce.
 #
-# TRIGGER: `release: published` fires because release-plz authenticates with
-# RELEASE_PLZ_TOKEN (a PAT), not the default GITHUB_TOKEN — releases created by
-# GITHUB_TOKEN deliberately do not trigger other workflows. If that secret is
-# ever removed, this workflow stops firing silently; use the workflow_dispatch
-# below to recover, and see the same note in release-plz.yml.
+# TRIGGER: DISPATCHED, NEVER A RELEASE EVENT (CLOUD-2121). release-plz creates
+# the release as a DRAFT so it is never visible without its binaries, and GitHub
+# triggers no workflow on `created` for a draft and never fires `published` for
+# one. Measured on v0.0.206: this file listened for `release: created`, no run
+# ever started, and the release stayed a draft while `main` pinned it. So
+# release-plz.yml's job that tags the release dispatches this workflow with the
+# tag, and the same dispatch is the manual recovery for a failed leg.
 
 on:
-  # `created`, not `published` (CLOUD-2121): release-plz creates the release as a
-  # DRAFT, and a draft fires `created` and never `published`. Publishing is this
-  # workflow's last job, once every asset is uploaded, so a release is never
-  # visible without its binaries.
-  release:
-    types: [created]
-  # Recovery: re-run against an existing tag (a dropped trigger, a failed matrix
-  # leg). Uploading is idempotent — `gh release upload --clobber` replaces.
+  # The only trigger. Publishing is this workflow's last job, once every asset is
+  # uploaded, so a release is never visible without its binaries. Re-running it
+  # against an existing tag is idempotent — `gh release upload --clobber`
+  # replaces, and publishing a published release changes nothing.
   workflow_dispatch:
     inputs:
       tag:
@@ -76,7 +74,7 @@ on:
 concurrency:
   # Keyed by tag, so two releases never race to upload to the same one; not
   # cancel-in-progress, because a half-uploaded release is worse than a slow one.
-  group: release-artifacts-${{ inputs.tag || github.event.release.tag_name }}
+  group: release-artifacts-${{ inputs.tag }}
   cancel-in-progress: false
 
 permissions:
@@ -92,7 +90,6 @@ env:
 jobs:
   dist:
     name: dist (${{ matrix.target }})
-    if: github.event_name != 'release' || github.event.release.draft
     runs-on: ubuntu-latest
     timeout-minutes: 30 # budget: grandfathered measured=2026-08-10
     permissions:
@@ -142,7 +139,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           # Build the tagged commit, never whatever main has drifted to since.
-          ref: ${{ inputs.tag || github.event.release.tag_name }}
+          ref: ${{ inputs.tag }}
           persist-credentials: false
       # cache: false — a release build must not restore a shared cache. zizmor
       # flags cache-poisoning as high severity precisely on artifact-publishing
@@ -244,7 +241,7 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ inputs.tag || github.event.release.tag_name }}
+          TAG: ${{ inputs.tag }}
           ARCHIVE: ${{ steps.dist.outputs.archive }}
         run: mise run batten -- ci step --arg-env TAG --arg-env ARCHIVE -- gh release upload --clobber
       # The binary-level inventory (CLOUD-263), AFTER the upload for CLOUD-258's
@@ -281,7 +278,7 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ inputs.tag || github.event.release.tag_name }}
+          TAG: ${{ inputs.tag }}
           SBOM: ${{ steps.sbom.outputs.sbom }}
         run: mise run batten -- ci step --arg-env TAG --arg-env SBOM -- gh release upload --clobber
       # Attest the BINARY rather than the archive: the provenance should bind to
@@ -325,7 +322,6 @@ jobs:
   # even if that gate were bypassed.
   schema:
     name: schema
-    if: github.event_name != 'release' || github.event.release.draft
     runs-on: ubuntu-latest
     timeout-minutes: 15 # budget: grandfathered measured=2026-08-10
     permissions:
@@ -333,7 +329,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          ref: ${{ inputs.tag || github.event.release.tag_name }}
+          ref: ${{ inputs.tag }}
           persist-credentials: false
       - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5 (CLOUD-404 retry fix, now a release)
         with:
@@ -377,7 +373,7 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ inputs.tag || github.event.release.tag_name }}
+          TAG: ${{ inputs.tag }}
           SPDX: ${{ steps.sbom.outputs.spdx }}
           CDX: ${{ steps.sbom.outputs.cdx }}
           REFERENCE: ${{ steps.reference.outputs.reference }}
@@ -417,7 +413,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          ref: ${{ inputs.tag || github.event.release.tag_name }}
+          ref: ${{ inputs.tag }}
           persist-credentials: false
       - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5 (CLOUD-404 retry fix, now a release)
         with:
@@ -437,13 +433,13 @@ jobs:
           # `batten release sums` reads the credential through `[forge]
           # credential_names` (CLOUD-843), which names no conventional variable.
           BATTEN_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ inputs.tag || github.event.release.tag_name }}
+          TAG: ${{ inputs.tag }}
         run: mise run batten -- ci step --outputs --arg-env TAG -- mise run checksums --
       - name: Upload to the release
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ inputs.tag || github.event.release.tag_name }}
+          TAG: ${{ inputs.tag }}
           SUMS: ${{ steps.checksums.outputs.sums }}
         run: mise run batten -- ci step --arg-env TAG --arg-env SUMS -- gh release upload --clobber
       # PUBLISH LAST (CLOUD-2121). release-plz creates the release as a draft, so
@@ -454,5 +450,5 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ inputs.tag || github.event.release.tag_name }}
+          TAG: ${{ inputs.tag }}
         run: mise run batten -- ci step --arg-env TAG -- gh release edit --draft=false

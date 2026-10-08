@@ -245,6 +245,119 @@ fn no_tag_or_an_empty_tag_falls_back_to_the_latest_release() {
     }
 }
 
+/// A DRAFT IS READ FROM THE RELEASE LIST (CLOUD-2121). The forge answers 404 for
+/// a draft's tag, so the checksums job of a draft-first release died before it
+/// could write the manifest, and the publish step after it never ran: v0.0.206
+/// stayed a draft while `main` pinned it.
+#[test]
+fn a_draft_release_is_read_from_the_release_list() {
+    let (dir, forge) = bench("draft", RELEASE);
+    let listing: Vec<serde_json::Value> = RELEASE
+        .iter()
+        .enumerate()
+        .map(|(index, name)| serde_json::json!({"id": 10 + index, "name": name}))
+        .collect();
+    let list = serde_json::json!([
+        {"tag_name": "v9.9.8", "draft": false, "assets": []},
+        {"tag_name": "v9.9.9", "draft": true, "assets": listing},
+    ]);
+    write(
+        &forge,
+        "release",
+        "HTTP/2 404\n\n{\"message\": \"Not Found\"}",
+    );
+    write(
+        &forge,
+        "list",
+        &format!("HTTP/2 200\ncontent-type: application/json\n\n{list}\n"),
+    );
+    let routes = std::fs::read_to_string(forge.join("routes")).expect("the routes exist");
+    write(&forge, "routes", &format!("/releases?\tlist\n{routes}"));
+    let out = run_sums(&dir, &forge, &["v9.9.9"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    for asset in RELEASE {
+        assert!(sums(&dir).contains(asset), "{asset} is in the manifest");
+    }
+}
+
+/// ANTI-VACUITY for the case above: a list that carries no entry for the tag is
+/// still could-not-look, so the fallback never invents a release.
+#[test]
+fn a_tag_neither_read_nor_listed_is_could_not_look() {
+    let (dir, forge) = bench("unlisted", RELEASE);
+    write(
+        &forge,
+        "release",
+        "HTTP/2 404\n\n{\"message\": \"Not Found\"}",
+    );
+    write(
+        &forge,
+        "list",
+        "HTTP/2 200\ncontent-type: application/json\n\n[{\"tag_name\": \"v9.9.8\", \"assets\": []}]\n",
+    );
+    let routes = std::fs::read_to_string(forge.join("routes")).expect("the routes exist");
+    write(&forge, "routes", &format!("/releases?\tlist\n{routes}"));
+    let out = run_sums(&dir, &forge, &["v9.9.9"]);
+    assert_eq!(out.status.code(), Some(3), "{}", stderr(&out));
+    assert!(!dir.join("out").join(manifest_name()).exists());
+}
+
+/// A DRAFT FIRES NOTHING, SO THE ARTIFACTS ARE DISPATCHED (CLOUD-2121). GitHub
+/// triggers no workflow on `created` for a draft release, so a `release:` trigger
+/// here never ran for v0.0.206 and the draft was never built or published.
+#[test]
+fn the_release_artifacts_run_only_by_dispatch() {
+    use yaml_rust2::YamlLoader;
+    let text = std::fs::read_to_string(common::at_root(".github/workflows/release-artifacts.yml"))
+        .expect("the release artifacts workflow");
+    let docs = YamlLoader::load_from_str(&text).expect("the workflow parses as YAML");
+    let on = docs[0]["on"].as_hash().expect("an `on:` map");
+    let triggers: Vec<&str> = on.keys().filter_map(|key| key.as_str()).collect();
+    assert_eq!(triggers, ["workflow_dispatch"], "{triggers:?}");
+    assert!(
+        !text.contains("github.event.release"),
+        "no expression reads a release event that never arrives"
+    );
+}
+
+/// The other half: the job that tags the release dispatches the artifacts for
+/// the tag it shipped, after resolving it, and only when it shipped one.
+#[test]
+fn the_release_job_dispatches_the_artifacts_for_the_tag_it_shipped() {
+    use yaml_rust2::{Yaml, YamlLoader};
+    let text = std::fs::read_to_string(common::at_root(".github/workflows/release-plz.yml"))
+        .expect("the release workflow");
+    let docs = YamlLoader::load_from_str(&text).expect("the workflow parses as YAML");
+    let job = &docs[0]["jobs"]["release-plz"];
+    let steps = job["steps"].as_vec().expect("release-plz has steps");
+    let field = |step: &Yaml, key: &str| step[key].as_str().unwrap_or_default().to_owned();
+    let resolved = steps
+        .iter()
+        .position(|step| field(step, "id") == "release-tag")
+        .expect("a step resolves the shipped tag");
+    let dispatch = steps
+        .iter()
+        .position(|step| field(step, "run").contains("gh workflow run release-artifacts.yml"))
+        .expect("a step dispatches release-artifacts");
+    assert!(
+        dispatch > resolved,
+        "the dispatch follows the tag's resolution"
+    );
+    let step = &steps[dispatch];
+    assert_eq!(field(step, "if"), "steps.release-tag.outputs.tag != ''");
+    assert!(
+        step["env"]["FIELD"]
+            .as_str()
+            .is_some_and(|value| value == "tag=${{ steps.release-tag.outputs.tag }}"),
+        "the dispatch names the shipped tag"
+    );
+    assert_eq!(
+        job["permissions"]["actions"].as_str(),
+        Some("write"),
+        "the job token may dispatch a workflow"
+    );
+}
+
 #[test]
 fn no_release_resolvable_is_could_not_look_rather_than_hashing_nothing() {
     let (dir, forge) = bench("unresolvable", RELEASE);

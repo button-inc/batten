@@ -567,6 +567,7 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+      actions: write # dispatch release-artifacts for the tag this push shipped (CLOUD-2121)
     env:
       GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}
       # A BOOLEAN, NEVER THE SECRET: a step's `if:` cannot read `secrets`, so the
@@ -679,6 +680,19 @@ jobs:
       - name: Resolve the release tag this push shipped
         id: release-tag
         run: mise run batten -- ci step --capture tag -- git tag --points-at HEAD --list v[0-9]*
+      # THE ARTIFACTS ARE DISPATCHED, BECAUSE A DRAFT FIRES NOTHING (CLOUD-2121).
+      # release-plz creates the release as a draft so it is never visible without
+      # its binaries, and GitHub triggers no workflow on `created` for a draft —
+      # measured on v0.0.206, which had no release-artifacts run at all and stayed
+      # a draft while `main` pinned it. `workflow_dispatch` is one of the events a
+      # job token may still start, so the job that tagged the release is the one
+      # that sends it to be built, checksummed and published.
+      - name: Build, checksum and publish the release this push shipped
+        if: steps.release-tag.outputs.tag != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FIELD: tag=${{ steps.release-tag.outputs.tag }}
+        run: mise run batten -- ci step --arg-env FIELD -- gh workflow run release-artifacts.yml --ref main -f
       # THE SCHEMA IS A RELEASE ASSET, SO A STALE BINARY CAN REASON ABOUT THE
       # WORLD IT IS BEHIND (CLOUD-1572).
       #

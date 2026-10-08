@@ -175,10 +175,49 @@ pub fn read_release(slug: &str, tag: Option<&str>, get: Get<'_>) -> Result<Publi
     let Some(answer) = get(&path) else {
         return Err(format!("the forge did not answer for {path}"));
     };
+    // A DRAFT IS NOT AT ITS TAG (CLOUD-2121). The forge answers 404 for a draft's
+    // tag read, and a draft-first release is a draft for exactly as long as this
+    // module is hashing it — the checksums job runs before the publish step. The
+    // list carries drafts for an authenticated caller, so a 404 on a named tag
+    // asks the list before it is could-not-look.
+    if answer.status == 404
+        && let Some(tag) = tag.filter(|tag| !tag.is_empty())
+    {
+        return read_listed(slug, tag, &path, get);
+    }
     if !answer.is_reading() {
         return Err(format!("the forge answered {} for {path}", answer.status));
     }
     parse_release(&answer.body).ok_or_else(|| format!("the answer for {path} is not a release"))
+}
+
+/// The release tagged `tag`, read from the release list (CLOUD-2121).
+///
+/// Only an entry whose `tag_name` IS the tag is taken; a list with none is the
+/// same could-not-look the tag read would have been, naming both reads.
+//MUTANT draft-unread|s@^        return read_listed(slug, tag, \&path, get);$@        return Err(path.clone());@|a_draft_release_is_read_from_the_release_list
+fn read_listed(slug: &str, tag: &str, tag_path: &str, get: Get<'_>) -> Result<Published, String> {
+    let path = format!("repos/{slug}/releases?per_page=100");
+    let Some(answer) = get(&path) else {
+        return Err(format!(
+            "the forge answered 404 for {tag_path} and did not answer for {path}"
+        ));
+    };
+    if !answer.is_reading() {
+        return Err(format!(
+            "the forge answered 404 for {tag_path} and {} for {path}",
+            answer.status
+        ));
+    }
+    let listed: Vec<serde_json::Value> = serde_json::from_str(&answer.body)
+        .map_err(|_| format!("the answer for {path} is not a release list"))?;
+    listed
+        .iter()
+        .find(|entry| entry.get("tag_name").and_then(|name| name.as_str()) == Some(tag))
+        .and_then(|entry| parse_release(&entry.to_string()))
+        .ok_or_else(|| {
+            format!("the forge answered 404 for {tag_path} and lists no release tagged {tag}")
+        })
 }
 
 /// One asset's bytes, or the pointer saying why they could not be had.
