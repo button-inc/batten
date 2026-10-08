@@ -2730,6 +2730,12 @@ const NATIVE_RULES: &[(&str, &str)] = &[
          branch them before resetting.",
     ),
     (
+        "rule-history-unread",
+        "The history gate: a write changes a config row this context has not read the \
+         history of at its current digest; `batten policy explain '<id>' --history`, one \
+         call naming every row, mints the read.",
+    ),
+    (
         "singleton-held",
         "The singleton gate: a live process already holds this task's lock, and a second run \
          would race it; `batten task alive` reports what the holder is doing.",

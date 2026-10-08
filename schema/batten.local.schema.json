@@ -1514,7 +1514,7 @@
             "string",
             "null"
           ],
-          "maxLength": 1536
+          "maxLength": 240
         },
         "refs": {
           "description": "The refs this policy row resolves, **declared** (CLOUD-907).\n\nEach becomes an entry of `input.tree[\"git-refs\"]` carrying the commit it\nnames and whether HEAD descends from it. A ref that does not resolve is\n**absent from that map**, never present with `ancestor_of_head: false`:\n`origin/main` missing in a shallow clone is not \"the branch has not\nlanded\", and a gate reading it that way reports the wrong verdict with\nfull confidence.\n\nSeparate from [`Rule::ranges`] although git's own ref-name rules would\nmake one column injective — `git check-ref-format` forbids `..` in a ref\nname, so an entry containing it could only be a range. Two columns\nanyway: the two ask different questions, they sit on different surfaces\n(a ref is bounded and a range is not), and CLOUD-883's lesson is that a\ncolumn earns its name from what it does rather than from what it can be\npacked with.",

@@ -221,7 +221,7 @@ pub const VENDORED_DOCS: &[VendoredDoc] = &[
     VendoredDoc {
         id: "receipt read missing",
         why: Some(
-            "The check this call depends on has no verdict for what it is keyed on, the commit or the branch, in this checkout",
+            "The check this call depends on has no verdict for what its receipt is keyed to in this checkout",
         ),
         act: &[
             "run the check the row names, backgrounded, and wait for its exit",

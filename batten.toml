@@ -856,7 +856,7 @@ severity = "deny"
 pattern = "git rebase"
 contains = "origin/main"
 unless_contains = "--onto"
-reason = "Background `mise run land`; it rebases, verifies, pushes and waits. On a conflict, merge each path and run `batten land replay <ref> --resolve <path>` (`<path>=<file>` per commit); there is no `--continue`."
+reason = "Background `mise run land`; it rebases, verifies, pushes and waits. On a conflict, merge each path, then `batten land replay <ref> --resolve <path>` (`<path>=<file>` per commit); the replay is STATELESS, so no `--continue`."
 
 # The toolchain pin, given a mechanism (CLOUD-271). AGENTS.md has said "never a
 # bare `cargo`" since long before anything enforced it, which non-negotiable
@@ -1340,7 +1340,7 @@ trigger = "write"
 # always meant to agree with, has accepted the alternatives all along.
 checks_any = ["claim", "bot", "carry"]
 key = "branch"
-reason = "Claim the issue first: read it with `batten mcp call Linear get_issue`, then `batten capture find <KEY> --tool get_issue --raw | mise run claim-check`, which mints the receipt. Ignored paths and `.git` are never gated."
+reason = "Read it with `batten mcp call Linear get_issue`, then `batten capture find CLOUD-N --tool get_issue --raw | mise run claim-check` (or `batten capture show <handle> --raw`): bytes the tracker returned, never re-type one."
 
 # CLOUD-1390's refusing half — the punt receipt.
 #

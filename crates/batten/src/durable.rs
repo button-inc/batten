@@ -193,6 +193,7 @@ pub fn replace(path: impl AsRef<Path>, contents: impl AsRef<[u8]>) -> std::io::R
 ///
 /// Any I/O error other than the target already existing; the temp file is
 /// removed on every path.
+//MUTANT exclusive-create-overwrites|s@^        Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),$@        Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => Ok(true),@|exactly_one_of_many_concurrent_creators_wins
 pub fn create_exclusive(path: &Path, contents: impl AsRef<[u8]>) -> std::io::Result<bool> {
     let directory = match path.parent() {
         Some(parent) if !parent.as_os_str().is_empty() => parent.to_path_buf(),
@@ -207,7 +208,6 @@ pub fn create_exclusive(path: &Path, contents: impl AsRef<[u8]>) -> std::io::Res
             sync_directory(&directory);
             Ok(true)
         }
-        //MUTANT exclusive-create-overwrites|s@^        Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),$@        Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => Ok(true),@|exactly_one_of_many_concurrent_creators_wins
         Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
         Err(err) => Err(err),
     }

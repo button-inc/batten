@@ -25,17 +25,17 @@ Characters are what is emitted. The token column is `budget::estimate_tokens`, t
 
 | strategy               | residency | first sighting | emitted characters | emitted tokens |
 | ---------------------- | --------- | -------------- | ------------------ | -------------- |
-| `Current`              | `Cold`    | true           | 208                | 52             |
+| `Current`              | `Cold`    | true           | 550                | 138            |
 | `Current`              | `Warm`    | false          | 143                | 35             |
-| `FullEveryTime`        | `Cold`    | true           | 208                | 52             |
-| `FullEveryTime`        | `Warm`    | true           | 208                | 52             |
-| `FirstFullThenCompact` | `Cold`    | true           | 208                | 52             |
+| `FullEveryTime`        | `Cold`    | true           | 550                | 138            |
+| `FullEveryTime`        | `Warm`    | true           | 550                | 138            |
+| `FirstFullThenCompact` | `Cold`    | true           | 550                | 138            |
 | `FirstFullThenCompact` | `Warm`    | false          | 143                | 35             |
 
 ## The margin
 
 - **`branch write unsafe`** — a warm repeat emits 364 characters (91 tokens) today against 630 (158 tokens) delivered in full every time: **266 characters saved per repeat firing**.
-- **`tool run loose`** — a warm repeat emits 143 characters (35 tokens) today against 208 (52 tokens) delivered in full every time: **65 characters saved per repeat firing**.
+- **`tool run loose`** — a warm repeat emits 143 characters (35 tokens) today against 550 (138 tokens) delivered in full every time: **407 characters saved per repeat firing**.
 
 **Every class here pays a real margin**, so a residency protocol has something to withhold on each of them: a first sighting carries the class's own explanation and a repeat carries the bare line. That was not true of every renderer this benchmark has measured — a first sighting used to append `command` routes ONLY, which left a document-route class rendering the identical line cold and warm — so the margin is a property of the renderer under measurement rather than of the strategy table.
 
