@@ -16280,7 +16280,7 @@ fn destructive_call_facts(
 //MUTANT unloadable-config-admits-write|s@^                    return deny_unadjudicable(harness, \&envelope, \&unreadable, mode, out, err);$@                    return Err(unreadable);@|a_write_over_a_config_that_fails_validation_is_refused
 //MUTANT floor-swallows-the-refusal|s@                if recoverable_without_rules(\&envelope) {@                if true {@|a_command_is_still_refused_over_a_config_that_will_not_load
 //MUTANT floor-removed|s@                if recoverable_without_rules(\&envelope) {@                if false {@|a_read_still_answers_over_a_config_that_will_not_load
-//MUTANT advice-beside-the-grant|s@^    let context = matches!(decision, hook::Decision::Preapproved(_)) \&\& !advice.is_empty();$@    let context = false;@|a_preapproval_carries_the_calls_advice_in_one_document
+//MUTANT advice-beside-the-grant|s@^    if !matches!(decision, hook::Decision::Preapproved(_)) || advice.is_empty() {$@    if true {@|a_preapproval_carries_the_calls_advice_in_one_document
 fn run_hook(
     harness: hook::Harness,
     // Resolved by the dispatch (CLOUD-1170) — see `Recency::now`.
