@@ -179,6 +179,40 @@ pub fn replace(path: impl AsRef<Path>, contents: impl AsRef<[u8]>) -> std::io::R
     Ok(())
 }
 
+/// Create `path` holding `contents` only if nothing is there yet: `true` when
+/// this call created it, `false` when it already existed (CLOUD-2145).
+///
+/// THE EXISTENCE TEST AND THE WRITE ARE ONE OPERATION, which is the whole point:
+/// a check-then-write lets two concurrent callers both see "absent" and both
+/// claim the first. The contents go to a synced temp beside the target, and a
+/// hard link publishes it — `link(2)` fails with `AlreadyExists` when the name
+/// is taken, so exactly one caller wins, and the winner's file is never torn
+/// because it was complete before it had a name.
+///
+/// # Errors
+///
+/// Any I/O error other than the target already existing; the temp file is
+/// removed on every path.
+pub fn create_exclusive(path: &Path, contents: impl AsRef<[u8]>) -> std::io::Result<bool> {
+    let directory = match path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent.to_path_buf(),
+        _ => PathBuf::from("."),
+    };
+    let temp = temp_beside(path);
+    let linked =
+        write_temp(&temp, path, contents.as_ref()).and_then(|()| std::fs::hard_link(&temp, path));
+    let _ = std::fs::remove_file(&temp);
+    match linked {
+        Ok(()) => {
+            sync_directory(&directory);
+            Ok(true)
+        }
+        //MUTANT exclusive-create-overwrites|s@^        Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),$@        Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => Ok(true),@|exactly_one_of_many_concurrent_creators_wins
+        Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
+        Err(err) => Err(err),
+    }
+}
+
 /// The file a write should land on: a symlink's target, else the path itself.
 fn resolve(path: &Path) -> PathBuf {
     match std::fs::symlink_metadata(path) {
@@ -263,6 +297,45 @@ mod tests {
         append_whole_lines(&path, "h 1").expect("append");
         append_whole_lines(&path, "h 2").expect("append");
         assert_eq!(std::fs::read_to_string(&path).expect("read"), "h 1\nh 2\n");
+    }
+
+    /// `#MUTANT exclusive-create-overwrites` reddens here: of many threads racing
+    /// to create one name, exactly one is told it created it, and its contents
+    /// are what the file holds.
+    #[test]
+    fn exactly_one_of_many_concurrent_creators_wins() {
+        let dir = scratch("exclusive");
+        let path = dir.join("mark");
+        let winners: usize = std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..16)
+                .map(|n| {
+                    let path = &path;
+                    scope.spawn(move || {
+                        create_exclusive(path, format!("writer {n}")).expect("create")
+                    })
+                })
+                .collect();
+            handles
+                .into_iter()
+                .map(|handle| usize::from(handle.join().expect("join")))
+                .sum()
+        });
+        assert_eq!(winners, 1, "one creator, however many raced");
+        assert!(
+            std::fs::read_to_string(&path)
+                .expect("read")
+                .starts_with("writer "),
+            "the winner's contents, whole"
+        );
+        assert!(
+            !create_exclusive(&path, "late").expect("create"),
+            "a later caller sees it taken"
+        );
+        assert_eq!(
+            std::fs::read_dir(&dir).expect("list").count(),
+            1,
+            "no temp file survives"
+        );
     }
 
     #[test]

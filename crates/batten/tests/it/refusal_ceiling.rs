@@ -370,8 +370,19 @@ fn fires(repo: &Path, command: &str) -> String {
     fires_in(repo, Some("s1"), None, command)
 }
 
-/// One firing in a fixture in `session` (plus `agent`), returning the line.
+/// One firing in a fixture in `session` (plus `agent`), returning the line
+/// without the epoch's legend, which [`delivered_in`] keeps and is measured
+/// against its own ceiling (CLOUD-2145).
 fn fires_in(repo: &Path, session: Option<&str>, agent: Option<&str>, command: &str) -> String {
+    let delivered = delivered_in(repo, session, agent, command);
+    delivered
+        .strip_prefix(batten::refusal::LEGEND)
+        .map_or(delivered.as_str(), str::trim_start)
+        .to_owned()
+}
+
+/// One firing in a fixture, returning everything the reader was handed.
+fn delivered_in(repo: &Path, session: Option<&str>, agent: Option<&str>, command: &str) -> String {
     let run = run_with_stdin(
         repo,
         &["adjudicate", "--harness", "exit-code"],
@@ -383,6 +394,19 @@ fn fires_in(repo: &Path, session: Option<&str>, agent: Option<&str>, command: &s
         "the corpus must refuse, or it measures nothing: {command}"
     );
     stderr(&run).trim().to_owned()
+}
+
+/// A `SessionStart` of `source` for session `A`, through the Claude Code adapter.
+fn starts(repo: &Path, source: &str) {
+    let started = hook(
+        repo,
+        &serde_json::json!({
+            "hook_event_name": "SessionStart",
+            "session_id": "A",
+            "source": source,
+        }),
+    );
+    assert_eq!(started.status.code(), Some(0), "{}", stderr(&started));
 }
 
 /// A hook event other than a Bash call, through the Claude Code adapter.
@@ -685,14 +709,20 @@ fn a_session_start_forgets_only_that_contexts_sightings() {
     assert!(!b.contains(FULL), "B was not touched: {b}");
 }
 
-/// A compaction re-delivers every item the cycle saw, at once (CLOUD-2075 §7
-/// case 6), and keeps it marked.
+/// A compaction closes the epoch and pushes nothing; the gate's next firing is
+/// full again, legend and all (CLOUD-2145).
+///
+/// The suite `compact-keeps-window` is killed in.
 #[test]
-fn a_compaction_redelivers_every_seen_item_once_at_session_start() {
-    let repo = session_fixture("compaction-redelivers");
+fn a_compaction_forgets_and_the_next_firing_is_full() {
+    let repo = session_fixture("compaction-forgets");
     let command = "head -40 batten.toml";
-    let full = fires_in(&repo, Some("A"), None, command);
-    assert!(full.contains(FULL), "{full}");
+    assert!(fires_in(&repo, Some("A"), None, command).contains(FULL));
+    let repeat = fires_in(&repo, Some("A"), None, command);
+    assert!(
+        !repeat.contains(FULL),
+        "the premise: a repeat is the pointer: {repeat}"
+    );
     let compacted = hook(
         &repo,
         &serde_json::json!({
@@ -702,19 +732,139 @@ fn a_compaction_redelivers_every_seen_item_once_at_session_start() {
         }),
     );
     assert_eq!(compacted.status.code(), Some(0), "{}", stderr(&compacted));
-    let document: serde_json::Value = String::from_utf8_lossy(&compacted.stdout)
-        .lines()
-        .find_map(|line| serde_json::from_str(line).ok())
-        .expect("the session start emits its advisory document");
-    let context = document["hookSpecificOutput"]["additionalContext"]
-        .as_str()
-        .expect("an additionalContext string");
     assert!(
-        context.contains(&full),
-        "the full arm is re-delivered byte for byte: {context}"
+        !String::from_utf8_lossy(&compacted.stdout).contains(&repeat),
+        "nothing is re-delivered eagerly at the boundary"
     );
-    let next = fires_in(&repo, Some("A"), None, command);
-    assert!(!next.contains(FULL), "and stays marked: {next}");
+    let next = delivered_in(&repo, Some("A"), None, command);
+    assert!(next.contains(FULL), "the next firing is full: {next}");
+    assert!(
+        next.starts_with(batten::refusal::LEGEND),
+        "and opens the new epoch with the legend: {next}"
+    );
+}
+
+/// A resume carries the window over, so the epoch is kept (CLOUD-2145).
+///
+/// The suite `resume-forgets-window` is killed in.
+#[test]
+fn a_resume_keeps_the_window() {
+    let repo = session_fixture("resume-keeps");
+    let command = "head -40 batten.toml";
+    assert!(fires_in(&repo, Some("A"), None, command).contains(FULL));
+    starts(&repo, "resume");
+    let next = delivered_in(&repo, Some("A"), None, command);
+    assert!(
+        !next.contains(FULL),
+        "a resumed window keeps its pointer: {next}"
+    );
+    assert!(
+        !next.contains(batten::refusal::LEGEND),
+        "and does not re-read the legend: {next}"
+    );
+    starts(&repo, "fork");
+    let forked = fires_in(&repo, Some("A"), None, command);
+    assert!(!forked.contains(FULL), "nor does a fork: {forked}");
+}
+
+/// The first finding of an epoch carries the legend and a later one does not
+/// (CLOUD-2145); a different gate in the same epoch does not repeat it either.
+///
+/// The suite `legend-every-firing` is killed in.
+#[test]
+fn the_first_finding_of_an_epoch_carries_the_legend() {
+    let repo = fixture("legend-once");
+    let first = delivered_in(&repo, Some("A"), None, "head -40 batten.toml");
+    assert!(first.starts_with(batten::refusal::LEGEND), "{first}");
+    let other = delivered_in(
+        &repo,
+        Some("A"),
+        None,
+        "git push --force-with-lease origin main",
+    );
+    assert!(
+        other.contains(FULL),
+        "another gate's first sighting is full: {other}"
+    );
+    assert!(
+        !other.contains(batten::refusal::LEGEND),
+        "the legend is once per epoch, not per gate: {other}"
+    );
+    let session_less = delivered_in(&repo, None, None, "head -40 batten.toml");
+    assert!(
+        !session_less.contains(batten::refusal::LEGEND),
+        "a reader that cannot be named has no epoch to open: {session_less}"
+    );
+}
+
+/// The legend is within the ceiling the design gives it: 96 tokens (CLOUD-2145).
+#[test]
+fn the_legend_is_within_its_ceiling() {
+    let cost = estimated_tokens(batten::refusal::LEGEND);
+    assert!(cost <= 96, "the legend costs {cost} tokens");
+}
+
+/// Parallel identical denials in one batch deliver ONE full copy (CLOUD-2145):
+/// the mark is an exclusive create, so the existence test and the write are a
+/// single operation and exactly one firing reads "first".
+#[test]
+fn parallel_denials_deliver_one_full_copy() {
+    let repo = fixture("parallel-denials");
+    let command = "head -40 batten.toml";
+    let lines: Vec<String> = std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..8)
+            .map(|_| scope.spawn(|| fires_in(&repo, Some("A"), None, command)))
+            .collect();
+        handles
+            .into_iter()
+            .map(|handle| handle.join().expect("a firing thread"))
+            .collect()
+    });
+    let full = lines.iter().filter(|line| line.contains(FULL)).count();
+    assert_eq!(full, 1, "exactly one full arm in the batch: {lines:#?}");
+}
+
+/// An advisory finding on an event the host does not deliver advice through
+/// renders full and marks nothing (CLOUD-2145): the text went to the
+/// operator's stream, so the model has still never seen it.
+///
+/// The suite `delivery-marks-on-emit` is killed in.
+#[test]
+fn an_undelivered_channel_marks_nothing() {
+    let repo = fixture("undelivered-marks-nothing");
+    assert!(
+        !batten::hook::Harness::ExitCode
+            .capabilities()
+            .advisory_reachable("PreToolUse"),
+        "the premise: the exit-code contract has no advisory channel to the model"
+    );
+    // `forge read first` is a warn-severity advisory on a code-host call.
+    let payload = payload_in(Some("A"), None, "gh pr view 1");
+    let advised = |harness: &str| {
+        let run = run_with_stdin(&repo, &["adjudicate", "--harness", harness], &payload);
+        assert_eq!(run.status.code(), Some(0), "{}", stderr(&run));
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&run.stdout),
+            String::from_utf8_lossy(&run.stderr)
+        )
+    };
+    let unreached = advised("exit-code");
+    assert!(
+        unreached.contains("forge read first") && unreached.contains(FULL),
+        "the premise: the advisory fired, in full: {unreached}"
+    );
+    let reached = advised("claude-code");
+    assert!(
+        reached.contains(FULL),
+        "the first DELIVERED firing is full, because the undelivered one marked nothing: \
+         {reached}"
+    );
+    let repeat = advised("claude-code");
+    assert!(
+        repeat.contains("forge read first") && !repeat.contains(FULL),
+        "the anti-vacuity half: a delivered firing does mark: {repeat}"
+    );
 }
 
 /// An edit to a definition mid-cycle is a new item (CLOUD-2075 §7 case 7,

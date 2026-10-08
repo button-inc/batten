@@ -16697,7 +16697,7 @@ fn run_hook(
     // A PRE-APPROVAL TAKES THE ADVICE INTO ITS OWN DOCUMENT (CLOUD-1949): two
     // documents on one stream is the collision above, with the grant as the
     // discarded one.
-    let context = preapproval_context(&decision, &envelope, &mut advice, ceiling);
+    let context = preapproval_context(harness, &decision, &envelope, &mut advice, ceiling);
     emit_channel(harness, &envelope, out, err, advice, ceiling, &decision)?;
     let rendering = Rendering {
         context: context.as_deref(),
@@ -16725,6 +16725,7 @@ fn grant_rewrite(
 /// out of `advice` and marked seen at this emission (CLOUD-2075), or `None`
 /// when the decision is not a pre-approval or there is nothing to carry.
 fn preapproval_context(
+    harness: hook::Harness,
     decision: &hook::Decision,
     envelope: &hook::Envelope,
     advice: &mut Vec<advisory::Advice>,
@@ -16734,8 +16735,13 @@ fn preapproval_context(
         return None;
     }
     let mut taken = std::mem::take(advice);
-    sight_advice(envelope, &mut taken);
-    Some(advisory::admit(taken, ceiling).text)
+    let sighted = sight_advice(harness, envelope, &mut taken);
+    let text = advisory::admit(taken, ceiling).text;
+    Some(if sighted {
+        legend_for(envelope, text)
+    } else {
+        text
+    })
 }
 
 /// The note for an event this host does not declare, or `None` to carry on.
@@ -17528,12 +17534,44 @@ fn fill_turn_advice(
 
 /// Render each classed entry's finding at the moment it is emitted, through the
 /// one chooser, so the context's store is marked only for what reaches it.
-fn sight_advice(envelope: &hook::Envelope, advice: &mut [advisory::Advice]) {
+///
+/// **Marked on DELIVERY, not on emission (CLOUD-2145).** On an event this host's
+/// advisory channel does not reach the model through, the text goes to the
+/// operator's stream ([`emit_advisory`]), so a mark there would withhold the
+/// definition from a reader who never saw it: such a finding renders full and
+/// marks nothing. Returns whether any finding was rendered on a reachable
+/// channel, which is what earns the epoch's legend.
+//MUTANT delivery-marks-on-emit|s@^    let reached = harness.capabilities().advisory_reachable(\&envelope.raw_event);$@    let reached = true;@|an_undelivered_channel_marks_nothing
+fn sight_advice(
+    harness: hook::Harness,
+    envelope: &hook::Envelope,
+    advice: &mut [advisory::Advice],
+) -> bool {
+    let reached = harness
+        .capabilities()
+        .advisory_reachable(&envelope.raw_event);
+    let mut sighted = false;
     for entry in advice {
         if let Some(refusal) = entry.finding.take() {
-            let arm = arm_for(hook::HookSource::Harness, envelope, &refusal);
+            let arm = if reached {
+                sighted = true;
+                arm_for(hook::HookSource::Harness, envelope, &refusal)
+            } else {
+                refusal::Arm::Full
+            };
             entry.text = refusal.render_finding(arm);
         }
+    }
+    sighted
+}
+
+/// `text` with the reading legend ahead of it when it is the first finding this
+/// context meets in its epoch (CLOUD-2145); unchanged where there is no context
+/// to mark it in, which is the session-less payload every other store skips too.
+fn legend_for(envelope: &hook::Envelope, text: String) -> String {
+    match envelope.context() {
+        Some(context) => refusal::with_legend(hook_authority_root(), &context, &text),
+        None => text,
     }
 }
 
@@ -17625,7 +17663,7 @@ fn collect_batch_advice(
     // process, in this order, the record describing what this session LOADED is
     // dropped before a repair can write one describing what it FIXED.
     expire_wiring_record(envelope);
-    expire_sightings(envelope, advice);
+    expire_sightings(envelope);
     expire_history_reads(envelope);
     repair_startup_rows(envelope, overrides);
     report_container_health(envelope, overrides, advice);
@@ -17869,16 +17907,19 @@ fn expire_wiring_record(envelope: &hook::Envelope) {
     let _ = wiring::clear_at_load(hook_authority_root());
 }
 
-/// Decide this context's sightings at `SessionStart`, per source (CLOUD-2075).
+/// Close this context's sighting epoch at a `SessionStart` that loses the window
+/// (CLOUD-2145).
 ///
-/// **`compact` re-delivers eagerly**: every full arm the previous cycle saw goes
-/// out in full on this event's `additionalContext`, and stays marked, so the
-/// context holds exactly one copy at every moment. **Every other source** forgets
-/// this context alone; its next firing is full. Other contexts in the clone are
-/// never touched.
-//MUTANT compact-not-redelivered|s@^    if envelope.start_source.as_deref() == Some(hook::COMPACT_SOURCE) {$@    if false {@|a_compaction_redelivers_every_seen_item_once_at_session_start
+/// **`compact`, `clear`, `startup`, or no source: forget** this context's
+/// sightings and its legend mark, and push nothing. Re-delivery is lazy: each
+/// gate's next firing is full, so a gate that never fires again costs nothing
+/// and no single `additionalContext` carries the whole cycle's prose. **`resume`
+/// and `fork` keep**: the host replays the transcript, so what it delivered is
+/// still in the window. Other contexts in the clone are never touched.
+//MUTANT compact-keeps-window|s@^        Some("resume" | "fork") => {}$@        Some("resume" | "fork" | "compact") => {}@|a_compaction_forgets_and_the_next_firing_is_full
+//MUTANT resume-forgets-window|s@^        Some("resume" | "fork") => {}$@        Some("fork") => {}@|a_resume_keeps_the_window
 //MUTANT drain-result-kept|s@^    forget_drain_result(envelope);$@    let _ = forget_drain_result;@|a_session_start_relists_the_drain_payload
-fn expire_sightings(envelope: &hook::Envelope, advice: &mut Vec<advisory::Advice>) {
+fn expire_sightings(envelope: &hook::Envelope) {
     if envelope.event != hook::Event::SessionStart {
         return;
     }
@@ -17886,26 +17927,19 @@ fn expire_sightings(envelope: &hook::Envelope, advice: &mut Vec<advisory::Advice
     let Some(context) = envelope.context() else {
         return;
     };
-    if envelope.start_source.as_deref() == Some(hook::COMPACT_SOURCE) {
-        for text in refusal::sighted(hook_authority_root(), &context) {
-            advice.push(advisory::Advice::delivered(
-                severity::AdvisoryTier::Warning,
-                text,
-            ));
-        }
-        return;
+    match envelope.start_source.as_deref() {
+        Some("resume" | "fork") => {}
+        _ => refusal::forget_sightings(hook_authority_root(), &context),
     }
-    refusal::forget_sightings(hook_authority_root(), &context);
 }
 
 /// Drop this context's history reads at a `SessionStart` that loses the window
 /// (CLOUD-2144).
 ///
-/// **The opposite of sightings on `compact`**, and on purpose: a sighting is
-/// re-delivered into the new window, so it stays marked; a history read is not,
-/// so after a compaction the context no longer holds what it read and owes the
-/// read again before changing the row. `resume` and `fork` carry the window over
-/// and keep the reads.
+/// **The same epoch rule as sightings** ([`expire_sightings`]): after a
+/// compaction the context no longer holds what it read and owes the read again
+/// before changing the row. `resume` and `fork` carry the window over and keep
+/// the reads.
 //MUTANT compact-keeps-history|s@^        Some("resume" | "fork") => return,$@        Some("resume" | "fork" | "compact") => return,@|a_compaction_drops_the_history_receipt
 fn expire_history_reads(envelope: &hook::Envelope) {
     if envelope.event != hook::Event::SessionStart {
@@ -18331,9 +18365,14 @@ fn emit_channel(
     // Marked only here, after the verdict's early return, so advice dropped
     // beside a verdict is never recorded as seen (CLOUD-2075).
     let mut advice = advice;
-    sight_advice(envelope, &mut advice);
+    let sighted = sight_advice(harness, envelope, &mut advice);
     let emission = advisory::admit(advice, ceiling);
-    emit_advisory(harness, envelope, out, err, &emission.text)
+    let text = if sighted {
+        legend_for(envelope, emission.text)
+    } else {
+        emission.text
+    };
+    emit_advisory(harness, envelope, out, err, &text)
 }
 
 fn emit_advisory(
@@ -20862,7 +20901,9 @@ fn render(
             // the context's store is a write, and a write belongs at the boundary
             // with every other one. `arm_for` is the one chooser (CLOUD-2075).
             let arm = arm_for(hook::HookSource::Harness, envelope, &refusal);
-            let reason = refusal.render_finding(arm);
+            // A deny always reaches the model (its body or its stderr), so it
+            // earns the epoch's legend unconditionally (CLOUD-2145).
+            let reason = legend_for(envelope, refusal.render_finding(arm));
             match hook::encode_deny(harness, &envelope.raw_event, &reason)? {
                 Some(body) => {
                     writeln!(out, "{body}")?;

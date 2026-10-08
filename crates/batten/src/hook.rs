@@ -2620,12 +2620,10 @@ pub struct Envelope {
     /// `agent_id`). Part of the sightings CONTEXT (CLOUD-2075).
     pub agent: Option<String>,
     /// Why a `SessionStart` fired (`startup`, `resume`, `clear`, `compact`),
-    /// when the host says. [`COMPACT_SOURCE`] re-delivers rather than forgets.
+    /// when the host says. `resume` and `fork` keep the sighting epoch; every
+    /// other source closes it (CLOUD-2145).
     pub start_source: Option<String>,
 }
-
-/// The `SessionStart` source a compaction carries (CLOUD-2075).
-pub const COMPACT_SOURCE: &str = "compact";
 
 /// The mode a host names when the turn may propose but not perform.
 ///
@@ -13997,6 +13995,10 @@ deny contains "refused by themodule" if {
                 Validity::Missing,
                 None,
             );
+        }
+        if class == crate::verdict::Native::RuleReadMissing.id() {
+            // A row id with spaces, which is what most `[[rule]]` ids are.
+            return rule_read_missing_refusal(&["tool pin other".to_owned()]);
         }
         panic!(
             "{class} declares an override route and this table has no sample for it. \
