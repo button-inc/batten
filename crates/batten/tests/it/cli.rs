@@ -2604,7 +2604,16 @@ fn an_absent_session_degrades_to_per_invocation_without_panicking() {
             b.status.code(),
             "{harness}: an absent session must not change the verdict"
         );
-        assert_eq!(a.stdout, b.stdout, "{harness}: nor the decision document");
+        // Except the legend (CLOUD-2145): it opens a named context's epoch, and a
+        // payload naming none has no epoch to open. It travels JSON-escaped, and
+        // in every field a host's deny document repeats the reason in.
+        let opened = String::from_utf8_lossy(&a.stdout)
+            .replace(&format!("{}\\n", batten::refusal::LEGEND), "");
+        assert_eq!(
+            opened,
+            String::from_utf8_lossy(&b.stdout),
+            "{harness}: nor the decision document"
+        );
     }
     // An empty string is absent, not a session: the two must not collapse, since
     // a consumer keyed on one hashes `Some("")` and `None` differently.

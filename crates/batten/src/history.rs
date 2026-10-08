@@ -342,6 +342,8 @@ pub struct Assembler<'a> {
     shown: BTreeSet<String>,
 }
 
+//MUTANT history-marks-unprinted|s@^            let full = message$@            let full = message.is_some() \&\& self.shown.insert(sha.clone()) \&\& message@|a_message_the_cap_cut_is_not_pointed_at
+//MUTANT history-full-unfitted|s@^                .is_some_and(|message| fits(short.len() + message.trim_end().len() + 3));$@                .is_some();@|a_message_the_cap_cut_is_not_pointed_at
 impl<'a> Assembler<'a> {
     /// Reads the authority at `HEAD` and lists the commits that changed it.
     ///
@@ -403,8 +405,6 @@ impl<'a> Assembler<'a> {
             let message = (!self.shown.contains(sha) && index < FULL_MESSAGES).then(|| {
                 crate::git::message_of(self.root, sha).unwrap_or_else(|_| subject.clone())
             });
-            //MUTANT history-marks-unprinted|s@^            let full = message$@            let full = message.is_some() \&\& self.shown.insert(sha.clone()) \&\& message@|a_message_the_cap_cut_is_not_pointed_at
-            //MUTANT history-full-unfitted|s@^                .is_some_and(|message| fits(short.len() + message.trim_end().len() + 3));$@                .is_some();@|a_message_the_cap_cut_is_not_pointed_at
             let full = message
                 .as_ref()
                 .is_some_and(|message| fits(short.len() + message.trim_end().len() + 3));
