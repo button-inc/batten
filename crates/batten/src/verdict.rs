@@ -398,10 +398,9 @@ impl DeclaredVerdict {
             if let (RouteKind::Override, Some(precondition)) =
                 (route.kind, route.precondition.as_deref())
             {
-                body.push_str(&format!(
-                    " Admissible as '{}' when {precondition}.",
-                    route.id
-                ));
+                for part in [" Admissible as '", &route.id, "' when ", precondition, "."] {
+                    body.push_str(part);
+                }
             }
         }
         body

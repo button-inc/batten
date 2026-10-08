@@ -141,6 +141,23 @@ pub fn declared(text: &str) -> Option<Pin> {
 /// run nothing at all, including the line its own refusal printed.
 pub const REPAIR: &str = "batten engine update";
 
+/// [`REPAIR`] run under the project's pinned toolchain (CLOUD-2172).
+///
+/// A SOURCE pin is repaired by a build, and a bare `cargo` resolves whatever
+/// toolchain is ambient: measured, a container whose ambient rustup default was
+/// older than the workspace's failed the build and could run nothing else. The
+/// floor admits this spelling too, as one whole string for [`REPAIR`]'s reason,
+/// so the build can be given the pin's environment without opening a shell to
+/// composition.
+pub const REPAIR_PINNED: &str = "mise exec -- batten engine update";
+
+/// Whether `command` is one of the repair's two whole spellings: equality, so
+/// no shell composition rides either.
+#[must_use]
+pub fn is_repair(command: &str) -> bool {
+    command == REPAIR || command == REPAIR_PINNED
+}
+
 //MUTANT-SUITE crates/batten/tests/it/engine_pin.rs
 //MUTANT pin-unread|s@^    let Some(pin) = declared(text) else {$@    let Some(pin) = None::<Pin> else {@|a_release_pin_naming_another_build_is_refused_with_its_install
 //MUTANT stamp-trusted-when-absent|s@^            if stamp.as_deref() != Some(digest) {$@            if stamp.is_some() \&\& stamp.as_deref() != Some(digest) {@|a_source_pin_without_a_stamp_is_refused

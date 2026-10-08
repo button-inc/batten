@@ -1585,7 +1585,12 @@ impl Harness {
                     honoured_on: &["PreToolUse"],
                     declared: Declaration::Yes,
                 },
-                rewrites_tool_output: Declaration::Unknown,
+                // MEASURED 2026-10-08 (CLOUD-2171), live in a Claude Code cloud
+                // session through this engine's own `PostToolUse` hook: a Bash
+                // call printing a full arm the context had already seen, plus a
+                // trailing line, came back as the pointer arm and the trailing
+                // line. The rewrite reaches the model; the rest is untouched.
+                rewrites_tool_output: Declaration::Yes,
                 stop_vetoes_completion: false,
                 timeout_fails_open: false,
                 needs_fail_closed_config: false,
@@ -4525,6 +4530,19 @@ fn event_decides(event: Event) -> Option<Decision> {
     }
 }
 
+/// The history gate (CLOUD-2144): a config row changed by a context that has
+/// not read why it exists. Resolved at the boundary, so this is a lookup; the
+/// fact is could-not-look for every call that is not a write to the authority,
+/// and that allows.
+fn history_gate(facts: &Facts<'_>) -> Option<Decision> {
+    match facts.unread_history {
+        crate::facts::Look::Is(unread) if !unread.is_empty() => {
+            Some(Decision::Deny(rule_read_missing_refusal(unread)))
+        }
+        _ => None,
+    }
+}
+
 /// The gate chain for a mediated call, in the order the chain has always run.
 ///
 /// Split from [`adjudicated_gates`] rather than reordered: every gate below
@@ -4586,14 +4604,9 @@ fn adjudicated_call_gates(policy: &Policy, envelope: &Envelope, facts: &Facts<'_
     if let Some((task, holder)) = facts.singleton {
         return Decision::Deny(singleton_held_refusal(task, holder));
     }
-    // THE HISTORY GATE (CLOUD-2144): a config row changed by a context that has
-    // not read why it exists. Resolved at the boundary, so this is a lookup; the
-    // fact is could-not-look for every call that is not a write to the
-    // authority, and that allows.
-    if let crate::facts::Look::Is(unread) = facts.unread_history
-        && !unread.is_empty()
-    {
-        return Decision::Deny(rule_read_missing_refusal(unread));
+    // THE HISTORY GATE (CLOUD-2144), in its place in the chain.
+    if let Some(denied) = history_gate(facts) {
+        return denied;
     }
     // The write gate, before the command gate and not inside it: a write tool
     // carries no command, so every path below this point used to return Allow
@@ -15770,9 +15783,15 @@ deny contains "refused by themodule" if {
             } else {
                 assert_eq!(encoded, None, "{harness:?} is not measured to rewrite");
             }
-            // No live probe has answered for any host yet, so every row is
-            // `Unknown` until one does — never a guessed `Yes` or `No`.
-            assert_eq!(declared, Declaration::Unknown, "{harness:?}");
+            // Only a live probe moves a row off `Unknown`, never a guess:
+            // Claude Code's answered `Yes` on 2026-10-08 (CLOUD-2171), and no
+            // other host's probe has run.
+            let measured = if *harness == Harness::ClaudeCode {
+                Declaration::Yes
+            } else {
+                Declaration::Unknown
+            };
+            assert_eq!(declared, measured, "{harness:?}");
         }
     }
 

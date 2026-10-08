@@ -708,7 +708,17 @@ fn engine_update(root: &Path, out: &mut dyn Write) -> Result<ExitCode> {
                 .iter()
                 .map(|word| (*word).to_owned())
                 .collect();
-            exec::run_in(root, &build)?;
+            // A FAILED BUILD NAMES ITSELF (CLOUD-2172): the child's output is
+            // captured, so a bare `?` surfaced only its exit status, and a build
+            // the ambient toolchain could not compile read as a silent 101.
+            exec::run_in(root, &build).map_err(|why| {
+                UsageError::raise(format!(
+                    "engine update: `{}` failed ({why}); it builds on the ambient \
+                     toolchain, so run `{}` to build on the project's",
+                    build.join(" "),
+                    engine::REPAIR_PINNED,
+                ))
+            })?;
             let target_dir = std::env::var_os("CARGO_TARGET_DIR")
                 .map_or_else(|| root.join("target"), std::path::PathBuf::from);
             std::fs::read(target_dir.join("release").join("batten"))?
@@ -7908,7 +7918,7 @@ fn run_policy_explain(
 }
 
 /// Print each named config row's history (CLOUD-2144): the read a change to the
-/// row owes, and the call the PostToolUse hook mints that read from.
+/// row owes, and the call the `PostToolUse` hook mints that read from.
 ///
 /// A rule id is tried as typed and then normalised, as `explain` does. A name
 /// that is no row of the committed authority at HEAD is a miss (exit 1) after
@@ -16217,12 +16227,12 @@ fn unread_history(envelope: &hook::Envelope) -> facts::Look<Vec<String>> {
     ) else {
         return facts::Look::CouldNotLook;
     };
-    let content = envelope
+    let written = envelope
         .input
         .pointer("/content")
         .and_then(serde_json::Value::as_str);
     let spans = hook::edit_spans_of(&envelope.input).unwrap_or_default();
-    let Some(ranges) = history::changed_ranges(&current, content, &spans) else {
+    let Some(ranges) = history::changed_ranges(&current, written, &spans) else {
         return facts::Look::CouldNotLook;
     };
     facts::Look::Is(history::unread(
@@ -16902,8 +16912,8 @@ fn read_envelope(
 //MUTANT floor-admits-an-unclassified-call|s@        (hook::Operation::Read, None) => true,@        (_, None) => true,@|a_mutating_mcp_call_is_still_refused_over_a_config_that_will_not_load
 //MUTANT floor-refuses-inert-tools|s@        (hook::Operation::Other(name), None) if hook::INERT_TOOLS.contains(\&name.as_str()) => true,@@|a_search_still_answers_over_a_config_that_will_not_load
 //MUTANT floor-admits-any-write|s@        (hook::Operation::Write, Some(path)) => names_the_config_authority(path),@        (hook::Operation::Write, Some(_)) => true,@|a_write_to_another_path_is_still_refused_over_a_config_that_will_not_load
-//MUTANT floor-refuses-engine-repair|s@        (hook::Operation::Execute, None) => envelope.command.trim() == engine::REPAIR,@@|the_engine_repair_verb_reaches_a_skewed_pin
-//MUTANT floor-admits-a-carried-repair|s@envelope.command.trim() == engine::REPAIR,@envelope.command.contains(engine::REPAIR),@|a_command_carrying_the_repair_verb_is_still_refused
+//MUTANT floor-refuses-engine-repair|s@        (hook::Operation::Execute, None) => engine::is_repair(envelope.command.trim()),@@|the_engine_repair_verb_reaches_a_skewed_pin
+//MUTANT floor-admits-a-carried-repair|s@engine::is_repair(envelope.command.trim()),@envelope.command.contains(engine::REPAIR),@|a_command_carrying_the_repair_verb_is_still_refused
 fn recoverable_without_rules(envelope: &hook::Envelope) -> bool {
     // NO `command.is_empty()` GUARD, AND ITS ABSENCE IS THE DECISION. A `Bash`
     // envelope is `Operation::Execute` with no write, so it lands on `_ => false`
@@ -16928,7 +16938,7 @@ fn recoverable_without_rules(envelope: &hook::Envelope) -> bool {
         // the pin, never by lowering it, so a floor of read-and-edit bricked the
         // container on exactly the remedy its own refusal named. The engine's
         // own verb, spelled whole: equality, so no shell composition rides it.
-        (hook::Operation::Execute, None) => envelope.command.trim() == engine::REPAIR,
+        (hook::Operation::Execute, None) => engine::is_repair(envelope.command.trim()),
         // EVERY OTHER SHAPE REFUSES, `Execute`, `Mcp`, `Subagent` and `Other`
         // among them. An operation this build could not classify is
         // could-not-look, and a could-not-look that mutates is the one thing
@@ -17029,10 +17039,12 @@ fn unadjudicable_remedy() -> Fix {
     Fix::Run(format!(
         "a `Read` still answers and an `Edit` or `Write` of `{}` or `{}` still lands — \
          repair the file with those; where the config is newer than this binary, \
-         `{}` installs its pin and is the one command admitted",
+         `{}` installs its pin, and `{}` builds a source pin on the project's toolchain; \
+         those two are the commands admitted",
         config::CONFIG_FILE,
         resolve::LOCAL_CONFIG_FILE,
         engine::REPAIR,
+        engine::REPAIR_PINNED,
     ))
 }
 
@@ -17939,14 +17951,11 @@ fn expire_sightings(envelope: &hook::Envelope) {
 /// compaction the context no longer holds what it read and owes the read again
 /// before changing the row. `resume` and `fork` carry the window over and keep
 /// the reads.
-//MUTANT compact-keeps-history|s@^        Some("resume" | "fork") => return,$@        Some("resume" | "fork" | "compact") => return,@|a_compaction_drops_the_history_receipt
+//MUTANT compact-keeps-history|s@^    let carried = matches!(envelope.start_source.as_deref(), Some("resume" | "fork"));$@    let carried = matches!(envelope.start_source.as_deref(), Some("resume" | "fork" | "compact"));@|a_compaction_drops_the_history_receipt
 fn expire_history_reads(envelope: &hook::Envelope) {
-    if envelope.event != hook::Event::SessionStart {
+    let carried = matches!(envelope.start_source.as_deref(), Some("resume" | "fork"));
+    if envelope.event != hook::Event::SessionStart || carried {
         return;
-    }
-    match envelope.start_source.as_deref() {
-        Some("resume" | "fork") => return,
-        _ => {}
     }
     let (Some(context), Ok(git_dir)) = (envelope.context(), git::git_dir(hook_authority_root()))
     else {
