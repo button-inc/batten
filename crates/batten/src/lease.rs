@@ -315,6 +315,15 @@ pub fn parse_advertisement(body: &[u8], service: Service) -> Result<Advertisemen
         if name == "capabilities^{}" {
             continue;
         }
+        // A NAME THAT CANNOT BE SPOKEN BACK IS NOT A REF (CLOUD-2159). Every name
+        // read here can become `Update::name`, which `command` frames with space,
+        // NUL and newline — so an empty name, or one carrying any of those, would
+        // forge a second field on the wire. Found by the `lease_wire` search.
+        if name.is_empty() || name.contains(['\0', '\n', ' ']) {
+            return Err(anyhow::anyhow!(
+                "lease: the advertisement carries a ref name git cannot frame"
+            ));
+        }
         refs.insert(name.to_owned(), id.to_owned());
     }
     Ok(Advertisement { refs, capabilities })
