@@ -97,8 +97,15 @@
 //!
 //! ```text
 //! rule 'r' 3 new at src/a.rs:3,9(2->5) src/b.rs:2 +4 more, 12 told earlier; run batten state list --rule 'r'
-//! told earlier, still open: rule 'q' 37; run batten state list
+//! told earlier, still open: 49 finding(s) under 2 rule(s); run batten state list
 //! ```
+//!
+//! **Its size is bounded by the turn, never the backlog**: at most one line per
+//! rule with something new (each at most `cardinality_cap` locations), plus one
+//! fixed-size total for everything already told. A rule told earlier is a count
+//! inside that total, never a line or a name of its own, so a session's
+//! history adds nothing to a drain however many rules or findings it holds. A
+//! drain with nothing new is a repeat and is not sent at all.
 //!
 //! * **The unit is the rule.** Its label is said once and its locations are
 //!   factored by file; no fingerprint is spent on a pointer `state list`
@@ -718,21 +725,14 @@ fn group_line(group: &Group<'_>, cap: usize, previous: &BTreeMap<String, u64>) -
 }
 
 /// The one line for every rule with nothing new: what the session already
-/// holds, as counts, so a backlog costs one line per drain and never its list.
+/// holds, as two counts. Never a list of rules, so its size is the same however
+/// large the backlog grows; `state list` names them.
 fn told_line(groups: &[&Group<'_>]) -> String {
-    let rules: Vec<String> = groups
-        .iter()
-        .map(|group| {
-            format!(
-                "{} {}",
-                crate::refusal::label(crate::refusal::Label::Rule, group.rule),
-                group.told.len()
-            )
-        })
-        .collect();
+    let findings: usize = groups.iter().map(|group| group.told.len()).sum();
+    let named = groups.len();
     format!(
-        "told earlier, still open: {}; run batten state list",
-        rules.join(", ")
+        "told earlier, still open: {findings} finding(s) under {named} rule(s); \
+         run batten state list"
     )
 }
 
@@ -972,6 +972,7 @@ struct Clamped {
 /// **What is anchored is what was told.** A listed identity and a told one
 /// anchor the next drain's delta; an elided or cut one does not, so it is news
 /// again next time — which is how the list pages as the agent fixes it.
+//MUTANT backlog-relisted|s@^        if group.fresh.is_empty() {$@        if false {@|a_drain_s_size_follows_the_turn_not_the_backlog
 //MUTANT budget-cut-dropped|s@^    let whole = within(\&\[\], \&candidates.join("\\n"), None, config.token_budget);$@    let whole = true;@|an_over_budget_drain_is_cut_to_the_budget_with_a_journal_pointer
 //MUTANT budget-pointer-dropped|s@^        lines.push(budget_summary(cut, config.token_budget));$@        let _ = cut;@|an_over_budget_drain_is_cut_to_the_budget_with_a_journal_pointer
 fn clamp(groups: &[Group<'_>], config: &DrainConfig, previous: &BTreeMap<String, u64>) -> Clamped {
@@ -1952,8 +1953,40 @@ mod tests {
         let settled = cycle(&more, &scope, None, &config, &second.counts, &[]);
         assert_eq!(
             settled.lines,
-            ["told earlier, still open: rule 'r' 4; run batten state list"],
+            ["told earlier, still open: 4 finding(s) under 1 rule(s); run batten state list"],
             "a backlog with nothing new is one count line"
+        );
+    }
+
+    /// A DRAIN'S SIZE FOLLOWS THE TURN, NOT THE BACKLOG (CLOUD-2175). However
+    /// many rules and findings the session was already told, a turn that adds
+    /// two findings under one rule drains that rule's line plus one fixed-size
+    /// total — and a backlog fifty times larger drains exactly as many bytes.
+    #[test]
+    fn a_drain_s_size_follows_the_turn_not_the_backlog() {
+        let config = DrainConfig::default();
+        let scope = changed(&["src/a.rs"]);
+        let backlog = |rules: usize| -> Vec<FindingRecord> {
+            (0..rules)
+                .flat_map(|rule| spread(&format!("backlog-{rule:03}"), 20))
+                .collect()
+        };
+        let drain_after_turn = |told: Vec<FindingRecord>| -> Vec<String> {
+            let first = cycle(&told, &scope, None, &generous(), &BTreeMap::new(), &[]);
+            let mut now = told;
+            now.extend(spread("new", 2));
+            cycle(&now, &scope, None, &config, &first.counts, &[]).lines
+        };
+        let small = drain_after_turn(backlog(2));
+        let large = drain_after_turn(backlog(100));
+        assert_eq!(small.len(), 2, "the new rule and the told total: {small:?}");
+        assert!(small[0].starts_with("rule 'new' 2 new at "), "{small:?}");
+        let bytes = |lines: &[String]| lines.iter().map(String::len).sum::<usize>();
+        assert_eq!(
+            // "40 … 2 rule(s)" against "2000 … 100 rule(s)": four digits.
+            bytes(&small) + 4,
+            bytes(&large),
+            "only the digits of the told counts may differ: {small:?} vs {large:?}"
         );
     }
 
@@ -2089,7 +2122,7 @@ mod tests {
         );
         assert_eq!(
             drained.lines,
-            ["told earlier, still open: rule 'r' 1; run batten state list"],
+            ["told earlier, still open: 1 finding(s) under 1 rule(s); run batten state list"],
             "a fall is not news: the identity stays told"
         );
         assert_eq!(
