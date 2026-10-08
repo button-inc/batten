@@ -352,6 +352,193 @@ fn finding(rule: &str, subject: String, line: Option<usize>, remedy: &str) -> Fi
     }
 }
 
+/// What the call after a refusal did (CLOUD-2141), in report order.
+///
+/// Decided mechanically from the next [`Event::ToolCall`] and never from prose:
+/// what the agent SAID is dropped at the parse (rule 4), and judging it would be
+/// an estimate (rule 3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+#[non_exhaustive]
+pub enum Follow {
+    /// The next call started with a route the refusal's class declares.
+    Followed,
+    /// The next call was the refused call again.
+    Repeated,
+    /// The next call looked the refusal up.
+    Dereferenced,
+    /// Any other next call.
+    Other,
+    /// No call followed.
+    Ended,
+}
+
+impl Follow {
+    /// Every bucket, in report order.
+    pub const ALL: [Follow; 5] = [
+        Follow::Followed,
+        Follow::Repeated,
+        Follow::Dereferenced,
+        Follow::Other,
+        Follow::Ended,
+    ];
+}
+
+/// One context window's census: everything between two `SessionStart`s.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[non_exhaustive]
+pub struct Window {
+    /// Distinct finding keys the window carried — the number a per-gate doc
+    /// budget is divided by.
+    pub distinct: usize,
+    /// Tokens of emissions carrying at least one full arm.
+    pub full_tokens: usize,
+    /// Tokens of emissions carrying findings, none of them full.
+    pub pointer_tokens: usize,
+    /// Tokens of emissions carrying no finding at all.
+    pub unlabelled_tokens: usize,
+    /// Refusals in the window.
+    pub refusals: usize,
+    /// Refusals no line of which parsed as a finding.
+    pub unlabelled_refusals: usize,
+    /// Refusals per [`Follow`] bucket, in [`Follow::ALL`]'s order.
+    pub buckets: [usize; 5],
+}
+
+/// [`windows`]' answer: one entry per context window, in stream order.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[non_exhaustive]
+pub struct Windows {
+    /// The windows, `k + 1` of them over `k` session boundaries.
+    pub segments: Vec<Window>,
+}
+
+/// The command a call ran, as a route is compared against it.
+fn command_of(name: &str, input: &serde_json::Value) -> String {
+    match input["command"].as_str() {
+        Some(command) if name == "Bash" => command.to_owned(),
+        _ => input.to_string(),
+    }
+}
+
+/// The bucket a refusal of `call` falls in, given the call after it.
+fn follow(
+    findings: &[(String, crate::refusal::Arm)],
+    refused: Option<(&str, &serde_json::Value)>,
+    next: Option<(&str, &serde_json::Value)>,
+    routes: &BTreeMap<String, Vec<String>>,
+) -> Follow {
+    let Some((name, input)) = next else {
+        return Follow::Ended;
+    };
+    let command = command_of(name, input);
+    if command.starts_with("batten policy explain") || command.starts_with("batten policy rule") {
+        return Follow::Dereferenced;
+    }
+    let followed = findings.iter().any(|(key, _)| {
+        key.split('\u{1f}')
+            .nth(1)
+            .and_then(|class| routes.get(class))
+            .is_some_and(|targets| {
+                targets
+                    .iter()
+                    .any(|target| command.starts_with(target.as_str()))
+            })
+    });
+    if followed {
+        return Follow::Followed;
+    }
+    if refused == Some((name, input)) {
+        return Follow::Repeated;
+    }
+    Follow::Other
+}
+
+/// How many distinct gates each context window met, what their output cost, and
+/// what the agent did after each refusal (CLOUD-2141).
+///
+/// **No I/O, no clock, no tokenizer**, for [`measure`]'s reason; the shipped
+/// binary must not link a tokenizer, so tokens are the transcript's own
+/// estimate. `routes` maps a class token to its declared command targets — the
+/// registry declares routes per class only.
+//MUTANT segment-key-not-reset|s@^                    keys.clear();$@                    let _ = keys.len();@|a_window_census_reports_distinct_gates_per_segment
+//MUTANT deny-follow-misbucketed|s@^            \.nth(1)$@            .nth(0)@|a_deny_is_bucketed_by_the_call_that_follows_it
+#[must_use]
+pub fn windows(stream: &Stream, routes: &BTreeMap<String, Vec<String>>) -> Windows {
+    let calls: BTreeMap<&str, (&str, &serde_json::Value)> = stream
+        .records
+        .iter()
+        .filter_map(|record| match &record.event {
+            Event::ToolCall { id, name, input } => Some((id.as_str(), (name.as_str(), input))),
+            _ => None,
+        })
+        .collect();
+    let mut segments = Vec::new();
+    let mut window = Window::default();
+    let mut keys: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+    for (index, record) in stream.records.iter().enumerate() {
+        let findings =
+            match &record.event {
+                Event::SessionBoundary => {
+                    window.distinct = keys.len();
+                    keys.clear();
+                    segments.push(std::mem::take(&mut window));
+                    continue;
+                }
+                Event::HookOutput {
+                    tokens, findings, ..
+                } => {
+                    charge(&mut window, *tokens, findings);
+                    findings
+                }
+                Event::Refused {
+                    call,
+                    tokens,
+                    findings,
+                } => {
+                    charge(&mut window, *tokens, findings);
+                    window.refusals += 1;
+                    if findings.is_empty() {
+                        window.unlabelled_refusals += 1;
+                    }
+                    let next =
+                        stream.records.iter().skip(index + 1).find_map(|later| {
+                            match &later.event {
+                                Event::ToolCall { name, input, .. } => Some((name.as_str(), input)),
+                                _ => None,
+                            }
+                        });
+                    let bucket = follow(findings, calls.get(call.as_str()).copied(), next, routes);
+                    for (slot, candidate) in window.buckets.iter_mut().zip(Follow::ALL) {
+                        if candidate == bucket {
+                            *slot += 1;
+                        }
+                    }
+                    findings
+                }
+                _ => continue,
+            };
+        keys.extend(findings.iter().map(|(key, _)| key.as_str()));
+    }
+    window.distinct = keys.len();
+    segments.push(window);
+    Windows { segments }
+}
+
+/// Charge one emission's tokens to the class its findings put it in.
+fn charge(window: &mut Window, tokens: usize, findings: &[(String, crate::refusal::Arm)]) {
+    if findings.is_empty() {
+        window.unlabelled_tokens += tokens;
+    } else if findings
+        .iter()
+        .any(|(_, arm)| *arm == crate::refusal::Arm::Full)
+    {
+        window.full_tokens += tokens;
+    } else {
+        window.pointer_tokens += tokens;
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
@@ -381,6 +568,101 @@ mod tests {
                 findings: vec![(key.to_owned(), arm)],
             },
         }
+    }
+
+    /// A Bash call running `command`.
+    fn call_at(line: usize, id: &str, name: &str, command: &str) -> Record {
+        Record {
+            line,
+            event: Event::ToolCall {
+                id: id.to_owned(),
+                name: name.to_owned(),
+                input: serde_json::json!({ "command": command }),
+            },
+        }
+    }
+
+    /// A refusal of `call`, labelled with `key` or unlabelled.
+    fn refused_at(line: usize, call: &str, key: Option<&str>) -> Record {
+        Record {
+            line,
+            event: Event::Refused {
+                call: call.to_owned(),
+                tokens: 7,
+                findings: key
+                    .map(|key| vec![(key.to_owned(), crate::refusal::Arm::Full)])
+                    .unwrap_or_default(),
+            },
+        }
+    }
+
+    #[test]
+    fn a_window_census_reports_distinct_gates_per_segment() {
+        use crate::refusal::Arm;
+        let boundary = |line| Record {
+            line,
+            event: Event::SessionBoundary,
+        };
+        let census = windows(
+            &session(
+                vec![
+                    finding_at(1, "x", Arm::Full),
+                    finding_at(2, "y", Arm::Full),
+                    boundary(3),
+                    finding_at(4, "x", Arm::Full),
+                    finding_at(5, "z", Arm::Pointer),
+                    boundary(6),
+                    finding_at(7, "z", Arm::Pointer),
+                ],
+                4_000,
+            ),
+            &BTreeMap::new(),
+        );
+        let distinct: Vec<usize> = census.segments.iter().map(|w| w.distinct).collect();
+        assert_eq!(
+            distinct,
+            vec![2, 2, 1],
+            "a key counts once in each window it appears in"
+        );
+        assert_eq!(census.segments[1].full_tokens, 10);
+        assert_eq!(census.segments[1].pointer_tokens, 10);
+    }
+
+    #[test]
+    fn a_deny_is_bucketed_by_the_call_that_follows_it() {
+        let key = Some("r\u{1f}c1\u{1f}d");
+        let routes = BTreeMap::from([
+            ("c1".to_owned(), vec!["mise run fix".to_owned()]),
+            ("c2".to_owned(), vec!["mise run other".to_owned()]),
+        ]);
+        let records = vec![
+            // followed: the next call starts with c1's route.
+            call_at(1, "a", "Bash", "cat f"),
+            refused_at(2, "a", key),
+            call_at(3, "b", "Bash", "mise run fix"),
+            // repeated: the next call is the refused one again.
+            call_at(4, "c", "Bash", "ls -la"),
+            refused_at(5, "c", key),
+            call_at(6, "d", "Bash", "ls -la"),
+            // dereferenced: the next call looks the refusal up.
+            refused_at(7, "d", key),
+            call_at(8, "e", "Bash", "batten policy explain 'c1'"),
+            // other.
+            refused_at(9, "e", key),
+            call_at(10, "f", "Bash", "ls"),
+            // other: unlabelled, so there is no class to follow, even though
+            // the next command is a route.
+            refused_at(11, "f", None),
+            call_at(12, "g", "Bash", "mise run fix"),
+            // ended: nothing after it.
+            refused_at(13, "g", key),
+        ];
+        let census = windows(&session(records, 4_000), &routes);
+        let window = &census.segments[0];
+        assert_eq!(window.refusals, 6);
+        assert_eq!(window.unlabelled_refusals, 1);
+        assert_eq!(window.buckets, [1, 1, 1, 2, 1]);
+        assert_eq!(window.buckets.iter().sum::<usize>(), window.refusals);
     }
 
     #[test]

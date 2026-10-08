@@ -272,7 +272,9 @@ pub fn signal(stream: &Stream) -> Option<Signal> {
             | Event::HookOutput { .. }
             // Machinery too (CLOUD-2075): a session start is a cycle boundary.
             | Event::SessionBoundary
-            | Event::AssistantText => {}
+            | Event::AssistantText
+            // A hook refusing a call claims nothing about being done (CLOUD-2141).
+            | Event::Refused { .. } => {}
         }
     }
     latest

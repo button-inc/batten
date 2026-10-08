@@ -292,7 +292,11 @@ pub fn scan(stream: &Stream) -> Vec<Detection> {
             // predicate has nothing to say about it.
             | Event::HookOutput { .. }
             | Event::SessionBoundary
-            | Event::AssistantText => {}
+            | Event::AssistantText
+            // Already read above, from the decision and the failed result it
+            // is derived from (CLOUD-2141); reading it again would count one
+            // refusal twice.
+            | Event::Refused { .. } => {}
         }
     }
     found.into_values().collect()

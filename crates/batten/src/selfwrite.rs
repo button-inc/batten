@@ -202,7 +202,9 @@ pub fn scan(stream: &Stream, memory_root: &str) -> Vec<Detection> {
             // predicate has nothing to say about it.
             | Event::HookOutput { .. }
             | Event::SessionBoundary
-            | Event::AssistantText => {}
+            | Event::AssistantText
+            // A refusal is the host's answer, not the agent writing (CLOUD-2141).
+            | Event::Refused { .. } => {}
         }
     }
     detections

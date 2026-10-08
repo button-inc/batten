@@ -187,6 +187,16 @@ pub enum Origin {
 /// `hook` are two ends of one contract.
 const DENY_EXIT: i64 = crate::ExitCode::Violation.code() as i64;
 
+/// What a host writes between its own label and a hook's deny text when it
+/// hands that deny back as a failed tool result (CLOUD-2141).
+///
+/// Measured on Claude Code: a `PreToolUse` deny reaches the transcript ONLY as a
+/// `tool_result` with `is_error: true` reading `PreToolUse:<Tool> hook error:
+/// <hook text>`, with no hook attachment joined to the call. Required, never
+/// optional: an ordinary failed command (`batten check` exiting 2) carries
+/// finding lines too, and without the separator it would read as a refusal.
+const HOOK_ERROR_SEPARATOR: &str = " hook error: ";
+
 /// Why a turn ended, as the host recorded it (CLOUD-97).
 ///
 /// A **typed vocabulary over the host's `stop_reason` token**, not the token
@@ -423,6 +433,24 @@ pub enum Event {
     ///
     /// **APPENDED, for [`Event::MemoryInjection`]'s reason.**
     SessionBoundary,
+    /// A hook refused a call (CLOUD-2141), from whichever surface the host
+    /// recorded it on: a failed tool result carrying [`HOOK_ERROR_SEPARATOR`]
+    /// (Claude Code), or a [`DENY_EXIT`] decision joined to the output on its
+    /// own line (an exit-code host).
+    ///
+    /// **APPENDED, for [`Event::MemoryInjection`]'s reason.** Keys and a count,
+    /// never the text: the deny's bytes die inside [`collect`], as
+    /// [`Event::HookOutput`]'s do. `findings` may be empty — an unlabelled deny
+    /// is still a deny, and dropping it would undercount exactly the emitters
+    /// that carry no class.
+    Refused {
+        /// The refused call, which the next [`Event::ToolCall`] is read against.
+        call: String,
+        /// Estimated tokens of the deny text, on [`crate::budget`]'s estimator.
+        tokens: usize,
+        /// The labelled findings the deny carried, as `(key, arm)`.
+        findings: Vec<(String, crate::refusal::Arm)>,
+    },
 }
 
 /// One event and where it was found.
@@ -702,6 +730,11 @@ impl Stream {
                 // — how many hooks DECIDED, not what they said — which is
                 // exactly the pair this variant exists to keep apart.
                 Event::HookOutput { .. } | Event::SessionBoundary | Event::AssistantText => {}
+                // `hook_denials` counts exit codes, the question it has always
+                // answered; a refusal's census is `hookcost::windows`' document
+                // (CLOUD-2141), and folding it in here would move a field four
+                // landed assertions read.
+                Event::Refused { .. } => {}
             }
         }
         counts
@@ -721,7 +754,8 @@ impl Stream {
                 Event::MemoryInjection { .. }
                 | Event::HookOutput { .. }
                 | Event::SessionBoundary
-                | Event::AssistantText => false,
+                | Event::AssistantText
+                | Event::Refused { .. } => false,
             };
         }
         kinds
@@ -982,7 +1016,14 @@ fn gather(parsed: &Line, agent: &mut AgentContext) {
 /// The events one attachment record yields: a hook decision, a memory
 /// injection, an operator message sent mid-turn, and hook output.
 fn collect_attachment(attachment: &Attachment, line: usize, records: &mut Vec<Record>) {
+    // AN EXIT-CODE HOST'S DENY (CLOUD-2141): the decision and the hook's output
+    // ride one attachment, so the refusal is pushed below once the output's
+    // findings are read, on this same line.
+    let mut denied: Option<String> = None;
     if let (Some(event), Some(exit_code)) = (&attachment.hook_event, attachment.exit_code) {
+        if exit_code == DENY_EXIT {
+            denied.clone_from(&attachment.tool_use_id);
+        }
         records.push(Record {
             line,
             event: Event::HookDecision {
@@ -1060,6 +1101,29 @@ fn collect_attachment(attachment: &Attachment, line: usize, records: &mut Vec<Re
             });
         }
     }
+    if let Some(call) = denied {
+        // The output pushed just above, when this attachment had one: its
+        // findings and cost are the deny's. None is an unlabelled deny, never
+        // a skipped one.
+        let (tokens, findings) = records
+            .last()
+            .filter(|record| record.line == line)
+            .and_then(|record| match &record.event {
+                Event::HookOutput {
+                    tokens, findings, ..
+                } => Some((*tokens, findings.clone())),
+                _ => None,
+            })
+            .unwrap_or_default();
+        records.push(Record {
+            line,
+            event: Event::Refused {
+                call,
+                tokens,
+                findings,
+            },
+        });
+    }
 }
 
 /// Turn one decoded line into zero or more events.
@@ -1129,7 +1193,13 @@ fn collect(
                     // pushed, and no caller is ever handed the bytes. The same
                     // shape `HookOutput` above already takes, under a key because
                     // this content is wider than that one's.
-                    let digest = match (key, block.content.as_ref().map(result_text)) {
+                    let text = block.content.as_ref().map(result_text);
+                    let failed = block.is_error.unwrap_or(false);
+                    let refused = text
+                        .as_deref()
+                        .filter(|_| failed)
+                        .and_then(|text| refusal_of(&call, text));
+                    let digest = match (key, text) {
                         (Some(key), Some(text)) => {
                             Some(crate::identity::observation_fingerprint(key, &text)?)
                         }
@@ -1143,10 +1213,13 @@ fn collect(
                         line,
                         event: Event::ToolResult {
                             call,
-                            failed: block.is_error.unwrap_or(false),
+                            failed,
                             digest,
                         },
                     });
+                    if let Some(event) = refused {
+                        records.push(Record { line, event });
+                    }
                 }
             }
             // Emptiness only, and the text dies here (rule 4).
@@ -1183,6 +1256,29 @@ fn collect(
 /// reading would fold a re-ordered answer into the one before it.
 ///
 /// The return value is a local of [`collect`]'s tool-result arm and dies there.
+/// The refusal a failed tool result carries, if it carries one (CLOUD-2141).
+///
+/// Only text holding [`HOOK_ERROR_SEPARATOR`] is a hook's deny; everything
+/// after its first occurrence is the hook's own output, read line by line with
+/// [`crate::refusal::parse_finding`] — the same grammar parse
+/// [`Event::HookOutput`]'s findings take, never a reading of prose. A deny no
+/// line of which parses is still one refusal, with no findings.
+//MUTANT-SUITE crates/batten/src/transcript.rs
+//MUTANT refused-prefix-unstripped|s@^    let (_, emitted) = text.split_once(HOOK_ERROR_SEPARATOR)?;$@    let emitted = text.contains(HOOK_ERROR_SEPARATOR).then_some(text)?;@|a_failed_tool_result_carrying_the_hook_separator_is_a_refusal
+fn refusal_of(call: &str, text: &str) -> Option<Event> {
+    let (_, emitted) = text.split_once(HOOK_ERROR_SEPARATOR)?;
+    let findings = emitted
+        .lines()
+        .filter_map(crate::refusal::parse_finding)
+        .map(|parsed| (parsed.key, parsed.arm))
+        .collect();
+    Some(Event::Refused {
+        call: call.to_owned(),
+        tokens: crate::budget::estimate_tokens(text),
+        findings,
+    })
+}
+
 fn result_text(content: &Value) -> String {
     match content {
         Value::String(text) => text.clone(),
@@ -2119,6 +2215,44 @@ mod tests {
             })
             .expect("a hook record");
         assert_eq!(decision, (Some("t1".to_owned()), 2));
+    }
+
+    /// The refusals one tool-result record yields, as `(call, finding count)`.
+    fn refusals_in(content: &str, is_error: bool) -> Vec<(String, usize)> {
+        let record = serde_json::json!({
+            "type": "user",
+            "sessionId": "s",
+            "message": {"role": "user", "content": [{
+                "type": "tool_result",
+                "tool_use_id": "t9",
+                "is_error": is_error,
+                "content": content,
+            }]},
+        });
+        parse(&record.to_string(), "t.jsonl", RecordShape::Jsonl)
+            .expect("parses")
+            .records
+            .into_iter()
+            .filter_map(|record| match record.event {
+                Event::Refused { call, findings, .. } => Some((call, findings.len())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// CLOUD-2141: on Claude Code a deny is ONLY a failed tool result, so the
+    /// separator is what makes it a refusal — labelled or not — and its absence
+    /// is what keeps an ordinary failed command from becoming one.
+    #[test]
+    fn a_failed_tool_result_carrying_the_hook_separator_is_a_refusal() {
+        let labelled = "PreToolUse:Bash hook error: verdict 'tool run loose' rule 'tool run \
+                        loose' at x; run batten policy rule 'tool run loose'";
+        assert_eq!(refusals_in(labelled, true), vec![("t9".to_owned(), 1)]);
+        let unlabelled =
+            "PreToolUse:Bash hook error: plan write refused — a call that is not a read";
+        assert_eq!(refusals_in(unlabelled, true), vec![("t9".to_owned(), 0)]);
+        assert!(refusals_in("Exit code 2\nrule 'no-todo'", true).is_empty());
+        assert!(refusals_in(labelled, false).is_empty());
     }
 
     #[test]
