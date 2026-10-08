@@ -339,7 +339,7 @@ fn the_space_form_is_the_cheapest_spelling_of_a_name() {
 /// (CLOUD-2143). A ratchet: it may only fall, it is held EQUAL so a doc written
 /// without lowering it is a red test, and the branch that ships the doc schema
 /// lands it at zero.
-const DOC_DEBT: usize = 265;
+const DOC_DEBT: usize = 257;
 
 /// Every live class this repository loads: the vendored registry merged with
 /// the committed `[[verdict]]` rows.
