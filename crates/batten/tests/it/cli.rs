@@ -2225,6 +2225,73 @@ fn a_class_still_explains_when_the_config_cannot_be_read() {
         said.contains("could not be read"),
         "and it names WHY rather than reporting zero rows: {said}"
     );
+
+    // THE ENGINE'S OWN ID resolves here too (CLOUD-2142): it is the one a
+    // refusal names exactly when the config will not load.
+    let native = batten_with(
+        &dir,
+        &["policy", "explain", "engine-cannot-adjudicate"],
+        &[],
+    );
+    assert_eq!(
+        native.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&native.stderr)
+    );
+}
+
+/// One verb answers every name a finding line prints (CLOUD-2142): a rule, a
+/// class and an engine id in one call, each under its own header, and an
+/// unknown name is named on stderr after the rest still print.
+#[test]
+fn policy_explain_answers_a_rule_a_class_and_a_native() {
+    let root = common::at_root("");
+    let names = ["tool select other", "tool run loose", "program-unknown"];
+    let mut args = vec!["policy", "explain"];
+    args.extend(names);
+    let explained = batten_with(&root, &args, &[]);
+    assert_eq!(
+        explained.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&explained.stderr)
+    );
+    let out = String::from_utf8_lossy(&explained.stdout);
+    for name in names {
+        assert!(
+            out.contains(&format!("== {name}\n")),
+            "{name}'s header: {out}"
+        );
+    }
+    assert!(
+        out.contains("program-unknown engine"),
+        "the native section: {out}"
+    );
+
+    args.push("no-such-name");
+    let partial = batten_with(&root, &args, &[]);
+    assert_eq!(partial.status.code(), Some(1), "a miss is the usage class");
+    assert_eq!(partial.stdout, explained.stdout, "the rest still print");
+    assert!(
+        String::from_utf8_lossy(&partial.stderr).contains("`no-such-name`"),
+        "the miss is named"
+    );
+
+    // `policy rule` is `explain` with one name, byte for byte.
+    let rule = batten_with(&root, &["policy", "rule", "tool select other"], &[]);
+    let one = batten_with(&root, &["policy", "explain", "tool select other"], &[]);
+    assert_eq!(rule.stdout, one.stdout, "one projection, two spellings");
+    assert_eq!(rule.status.code(), Some(0));
+
+    // `-J` is one array, one element per section.
+    let json = batten_with(&root, &["policy", "explain", "-J", "tool run loose"], &[]);
+    let document: serde_json::Value =
+        serde_json::from_slice(&json.stdout).expect("-J is one JSON document");
+    assert_eq!(
+        document[0]["name"], "tool run loose",
+        "each section names what was asked: {document}"
+    );
 }
 
 #[test]

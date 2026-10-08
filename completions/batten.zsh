@@ -2708,7 +2708,7 @@ trace\:"Add everything"))' \
 '--yes[Confirm a destructive operation that would otherwise refuse]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
-':token -- The verdict token to resolve, e.g. task name undefined:_default' \
+':token -- The names to resolve, as a finding line prints them\: a rule, a class, an engine id:_default' \
 && ret=0
 ;;
 (rule)

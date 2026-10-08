@@ -2246,7 +2246,7 @@ mod tests {
     #[test]
     fn a_failed_tool_result_carrying_the_hook_separator_is_a_refusal() {
         let labelled = "PreToolUse:Bash hook error: verdict 'tool run loose' rule 'tool run \
-                        loose' at x; run batten policy rule 'tool run loose'";
+                        loose' at x; run batten policy explain 'tool run loose'";
         assert_eq!(refusals_in(labelled, true), vec![("t9".to_owned(), 1)]);
         let unlabelled =
             "PreToolUse:Bash hook error: plan write refused — a call that is not a read";

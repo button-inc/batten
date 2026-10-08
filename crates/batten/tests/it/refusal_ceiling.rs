@@ -451,7 +451,7 @@ fn a_shape_first_sighting_names_the_rows_remedy_verb() {
     for needle in [
         "call name refused",
         "commit ship other",
-        "batten policy rule '",
+        "batten policy explain '",
     ] {
         assert!(line.contains(needle), "{needle} missing: {line}");
     }
@@ -494,7 +494,7 @@ fn the_pointer_arm_carries_every_route_and_subject_the_full_arm_does() {
         "rule 'tool select other'",
         "batten.toml",
         "read rules/scanning.md",
-        "run batten policy rule 'tool select other'",
+        "run batten policy explain 'tool select other' 'tool run loose'",
     ] {
         assert!(
             repeat.contains(kept),
@@ -517,10 +517,40 @@ fn a_first_sighting_carries_the_rows_reason_and_both_labels() {
         "a shell text utility stood in for the structured file surface",
         opening.as_str(),
         "read rules/scanning.md",
-        "run batten policy rule 'tool select other'",
-        "Run batten policy explain 'tool run loose'.",
+        "run batten policy explain 'tool select other' 'tool run loose'",
     ] {
         assert!(line.contains(needle), "`{needle}` missing: {line}");
+    }
+    // ONE HOP (CLOUD-2142): the line names its lookup once, for both names.
+    assert_eq!(
+        line.matches("batten policy").count(),
+        1,
+        "exactly one lookup per line: {line}"
+    );
+}
+
+/// Every id the engine raises with no `[[rule]]` row resolves to a definition
+/// compiled into the binary (CLOUD-2142), and an unknown name to none.
+///
+/// The suite [`batten::verdict`]'s `native-table-empty` mutant is killed in.
+#[test]
+fn a_native_rule_id_has_a_definition() {
+    for name in [
+        "engine-cannot-adjudicate",
+        "program-unknown",
+        "stop.unfinished",
+        "hook.handler.some-id",
+    ] {
+        let definition = batten::verdict::native_definition(name)
+            .unwrap_or_else(|| panic!("{name} resolves to nothing"));
+        assert!(!definition.trim().is_empty(), "{name}: empty definition");
+    }
+    for unknown in ["hook.handler.", "no-such-engine-id", ""] {
+        assert_eq!(
+            batten::verdict::native_definition(unknown),
+            None,
+            "{unknown}"
+        );
     }
 }
 
