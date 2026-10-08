@@ -747,9 +747,12 @@ than its producer, which writes whole or removes, and reads the same way.",
     // honours the committed MCP permission rules at all. The settings file, the
     // project file and the rule grammar are the same host vocabulary; the
     // coverage it reads is the consumer's own authority, found by shape.
+    //
+    // VERSION 3 (CLOUD-2157): a backgrounded call that names no timeout is
+    // rewritten to the host's maximum.
     Manifest {
         name: "claude-code-cloud",
-        version: 2,
+        version: 3,
         modules: &[
             PresetModule {
                 scope: RuleScope::Tree,
@@ -804,6 +807,16 @@ than its producer, which writes whole or removes, and reads the same way.",
                 provider: None,
                 pointer: "<preset:claude-code-cloud>/write-is-preapproved.rego",
                 source: include_str!("policy/presets/claude-code-cloud/write-is-preapproved.rego"),
+            },
+            // CLOUD-2157: a backgrounded call that names no timeout runs with
+            // the host's maximum, carried on the grant above it.
+            PresetModule {
+                scope: RuleScope::MediatedCall,
+                provider: None,
+                pointer: "<preset:claude-code-cloud>/background-timeout-is-maximal.rego",
+                source: include_str!(
+                    "policy/presets/claude-code-cloud/background-timeout-is-maximal.rego"
+                ),
             },
             PresetModule {
                 scope: RuleScope::MediatedCall,
