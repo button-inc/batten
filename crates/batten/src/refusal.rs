@@ -1167,12 +1167,12 @@ mod tests {
         let authored = Refusal::new("g", "Because it does.", Fix::Run("mise run x".to_owned()));
         assert_eq!(
             authored.render_finding(Arm::Full),
-            "rule 'g'; run batten policy explain 'g' — Because it does. mise run x."
+            "rule 'g'; run batten policy explain 'g' — Because it does. Do: mise run x."
         );
         let bare = Refusal::new("g", "because it does", Fix::Run("mise run x.".to_owned()));
         assert_eq!(
             bare.render_finding(Arm::Full),
-            "rule 'g'; run batten policy explain 'g' — because it does. mise run x."
+            "rule 'g'; run batten policy explain 'g' — because it does. Do: mise run x."
         );
     }
 

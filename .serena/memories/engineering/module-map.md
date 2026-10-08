@@ -89,6 +89,8 @@ row here, so a new module lands with its line.
 - `remedy.rs` — whether a rule row declares its remedy (CLOUD-1576): `malformed` (both keys, or a blank reason) is a load error, and `classified` checks the `class N (<substrate>): <why>` grammar that `config lint` holds every `no_fix_reason` to. A leaf.
 - `refusal.rs` — the refusal contract (CLOUD-122): ONE `Refusal` value — `{rule, reason, fix}` — constructed at every deny site and projected onto whatever channel a host reads.
 - `hookcost.rs` — what this repository's own hooks cost the session that runs them (CLOUD-417).
+- `doc.rs` — a class's interaction doc (CLOUD-2143): the `why`/`do`/`dont` sections a first sighting carries beside the gloss, their load-time budget (640 bytes, section limits, no issue keys), and the vendored docs keyed by class id.
+- `history.rs` — a config row's history and the gate on changing it (CLOUD-2144): the row/owner map over the committed authority, the owned text digested at HEAD, the per-context `history-read` receipts, and what `policy explain --history` prints.
 - `markers.rs` — counted suppression markers (CLOUD-36): how many times policy was waved through, and where.
 - `mcp.rs` — Batten as an MCP client (CLOUD-1260): the `[mcp]` table, wiring resolution over `[[mcp.source]]` rows, the JSON-RPC session, and the `[[mcp.result]]` reductions.
 - `minted.rs` — one declared FIELD of a receipt `mint.rs` already wrote, read on the TREE surface and bounded by age (CLOUD-1310).
