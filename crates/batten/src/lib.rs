@@ -17541,15 +17541,14 @@ fn fill_turn_advice(
 /// definition from a reader who never saw it: such a finding renders full and
 /// marks nothing. Returns whether any finding was rendered on a reachable
 /// channel, which is what earns the epoch's legend.
-//MUTANT delivery-marks-on-emit|s@^    let reached = harness.capabilities().advisory_reachable(\&envelope.raw_event);$@    let reached = true;@|an_undelivered_channel_marks_nothing
+//MUTANT delivery-marks-on-emit|s@^    let reached = capabilities.advisory_reachable(\&envelope.raw_event);$@    let reached = true;@|an_undelivered_channel_marks_nothing
 fn sight_advice(
     harness: hook::Harness,
     envelope: &hook::Envelope,
     advice: &mut [advisory::Advice],
 ) -> bool {
-    let reached = harness
-        .capabilities()
-        .advisory_reachable(&envelope.raw_event);
+    let capabilities = harness.capabilities();
+    let reached = capabilities.advisory_reachable(&envelope.raw_event);
     let mut sighted = false;
     for entry in advice {
         if let Some(refusal) = entry.finding.take() {
