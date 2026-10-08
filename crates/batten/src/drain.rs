@@ -517,6 +517,10 @@ pub struct Drained {
     /// What this payload told the agent each emitted identity's count was, by
     /// fingerprint hex. The anchor the next drain's re-raise detection reads.
     pub counts: BTreeMap<String, u64>,
+    /// Every rule with an entry in this payload, and how many entries
+    /// (CLOUD-2078): the rules whose remedy rides this payload as one classed
+    /// finding each. Filled whether or not an entry's count was observed.
+    pub rules: BTreeMap<String, u64>,
     /// The digest of [`Drained::lines`], as hex.
     pub result_id: String,
 }
@@ -607,15 +611,10 @@ fn cap_summary(rule: &str, count: usize, cap: usize) -> String {
     format!("{rule}: {count} findings, over the cardinality cap of {cap}")
 }
 
-/// The line closing a payload the budget cut short: how many pointers did not
-/// fit, and the verb that lists every one (CLOUD-2163).
-///
-/// A POINTER TO THE REST, NEVER THE REST. CLOUD-2075 made the budget report-only
-/// so no finding went unseen, and that spent the window the gate exists to
-/// protect: about 30 KB per tool batch, measured, until a 1M-token context was
-/// full. The withheld pointers are one command away and none of them is lost.
-fn budget_summary(withheld: usize, budget: usize) -> String {
-    format!("budget: {withheld} more past the declared {budget} tokens; `batten check` lists them")
+/// The line closing a payload over the token budget. It reports; nothing was
+/// withheld (CLOUD-2075).
+fn budget_summary(over: usize, budget: usize) -> String {
+    format!("budget: {over} tokens over the declared {budget}")
 }
 
 /// Whether `lines` plus `candidate` still fits the budget.
@@ -675,6 +674,7 @@ pub fn cycle(
         flapping: flapping_by_rule(records, &assessment),
         duplicates: selected.duplicates,
         counts: clamped.counts,
+        rules: clamped.rules,
         result_id,
     }
 }
@@ -811,19 +811,14 @@ fn select<'a>(
     }
 }
 
-/// Stage two: a rule that surfaced more distinct identities than its cardinality
-/// cap shows its first `cap` and a summary naming the total (CLOUD-2163).
-///
-/// The summary keeps the rest reachable, and the cap keeps one noisy rule from
-/// taking the window: CLOUD-2075 emitted every entry beside the summary, and one
-/// rule surfacing 22 identities on every tool batch was most of what filled a
-/// session's context.
+/// Stage two: report every rule that surfaced more distinct identities than its
+/// cardinality cap, BESIDE its entries (CLOUD-2075).
 ///
 /// Grouped by rule over `shown`, whose iteration is by fingerprint hex, so both
 /// the grouping and every group's contents are a function of the SET. The result
 /// is sorted salient-first.
 //MUTANT-SUITE crates/batten/src/drain.rs
-//MUTANT cap-unenforced|s@^        items.extend(surfaced.into_iter().take(cap).map(Item::Entry));$@        items.extend(surfaced.into_iter().map(Item::Entry));@|a_rule_over_the_cardinality_cap_shows_only_the_cap
+//MUTANT capped-pointers-withheld|s@^        items.extend(surfaced.into_iter().map(Item::Entry));$@        items.extend(surfaced.into_iter().take(cap).map(Item::Entry));@|a_rule_over_the_cardinality_cap_still_shows_every_pointer
 fn cap(shown: BTreeMap<String, Surfaced<'_>>, cap: usize) -> Vec<Item<'_>> {
     let mut per_rule: BTreeMap<&str, Vec<Surfaced<'_>>> = BTreeMap::new();
     for surfaced in shown.into_values() {
@@ -849,7 +844,7 @@ fn cap(shown: BTreeMap<String, Surfaced<'_>>, cap: usize) -> Vec<Item<'_>> {
                 count: surfaced.len(),
             });
         }
-        items.extend(surfaced.into_iter().take(cap).map(Item::Entry));
+        items.extend(surfaced.into_iter().map(Item::Entry));
     }
     items.sort_by(|left, right| left.key().cmp(&right.key()));
     items
@@ -860,29 +855,25 @@ fn cap(shown: BTreeMap<String, Surfaced<'_>>, cap: usize) -> Vec<Item<'_>> {
 struct Clamped {
     lines: Vec<String>,
     counts: BTreeMap<String, u64>,
+    rules: BTreeMap<String, u64>,
 }
 
-/// Stage three: emit lines salient-first while the payload fits the token
-/// budget, then one line naming how many did not and where they are
-/// (CLOUD-2163).
-///
-/// The reserve is that closing line at its widest, so the payload WITH it stays
-/// within the budget: a bound the last line breaks is not a bound.
-//MUTANT budget-unbounded|s@^        if withheld > 0 \x7c\x7c !within(\&lines, \&candidate, Some(\&reserve), config.token_budget) {$@        if false {@|a_drain_never_renders_past_its_token_budget
+/// Stage three: emit every line salient-first, and REPORT a payload over the
+/// token budget rather than withholding from it (CLOUD-2075).
+//MUTANT budget-pointers-withheld|s@^        lines.push(candidate);$@        if within(\&lines, \&candidate, None, config.token_budget) { lines.push(candidate); }@|an_over_budget_drain_still_shows_every_pointer
 fn clamp(items: &[Item<'_>], config: &DrainConfig, previous: &BTreeMap<String, u64>) -> Clamped {
     let mut lines: Vec<String> = Vec::new();
     let mut counts: BTreeMap<String, u64> = BTreeMap::new();
-    let reserve = budget_summary(items.len(), config.token_budget);
-    let mut withheld = 0_usize;
+    let mut rules: BTreeMap<String, u64> = BTreeMap::new();
     for item in items {
-        let mut told = None;
         let candidate = match item {
             Item::Entry(surfaced) => {
+                *rules.entry(surfaced.record.rule.clone()).or_insert(0) += 1;
                 let key = surfaced.record.identity.fingerprint.to_hex();
                 // Only an observed count anchors the next drain's re-raise: a
                 // rule that did not run said nothing about how many.
                 if let Observation::Observed(count) = surfaced.instance.occurrences {
-                    told = Some((key.clone(), count));
+                    counts.insert(key.clone(), count);
                 }
                 render_line(
                     surfaced.record,
@@ -890,23 +881,27 @@ fn clamp(items: &[Item<'_>], config: &DrainConfig, previous: &BTreeMap<String, u
                     previous.get(&key).copied(),
                 )
             }
-            Item::Summary { rule, count, .. } => cap_summary(rule, *count, config.cardinality_cap),
+            Item::Summary { rule, count, .. } => {
+                let total = u64::try_from(*count).unwrap_or(u64::MAX);
+                let listed = rules.entry((*rule).to_owned()).or_insert(0);
+                *listed = (*listed).max(total);
+                cap_summary(rule, *count, config.cardinality_cap)
+            }
         };
-        if withheld > 0 || !within(&lines, &candidate, Some(&reserve), config.token_budget) {
-            withheld += 1;
-            continue;
-        }
-        // A count anchors the next re-raise only once the agent was TOLD it: a
-        // withheld pointer recorded here would read as seen and never resurface.
-        if let Some((key, count)) = told {
-            counts.insert(key, count);
-        }
         lines.push(candidate);
     }
-    if withheld > 0 {
-        lines.push(budget_summary(withheld, config.token_budget));
+    if let Some((last, head)) = lines.split_last()
+        && !within(head, last, None, config.token_budget)
+    {
+        let cost = crate::budget::estimate_tokens(&lines.join("\n"));
+        let over = cost.saturating_sub(config.token_budget);
+        lines.push(budget_summary(over, config.token_budget));
     }
-    Clamped { lines, counts }
+    Clamped {
+        lines,
+        counts,
+        rules,
+    }
 }
 
 /// The directory holding one wake-state file per session, under a bound store.
@@ -1176,6 +1171,7 @@ mod tests {
             flapping: BTreeMap::new(),
             duplicates: 0,
             counts: BTreeMap::new(),
+            rules: BTreeMap::new(),
             result_id: result_id.to_owned(),
         }
     }
@@ -1704,10 +1700,10 @@ mod tests {
     }
 
     #[test]
-    fn a_rule_over_the_cardinality_cap_shows_only_the_cap() {
-        // CLOUD-2163, superseding CLOUD-2075 §7 case 18. Eleven identities of one
-        // rule under the default cap of 10: ten entries and the summary naming
-        // all eleven, so the rest stays one `batten check` away.
+    fn a_rule_over_the_cardinality_cap_still_shows_every_pointer() {
+        // CLOUD-2075 §7 case 18. Eleven identities of one rule under the default
+        // cap of 10: eleven labelled entries plus the summary that REPORTS the
+        // rule over its cap. The cap withholds nothing.
         let config = DrainConfig {
             token_budget: usize::MAX,
             ..DrainConfig::default()
@@ -1725,7 +1721,7 @@ mod tests {
             .iter()
             .filter(|line| line.starts_with("rule 'r' at "))
             .count();
-        assert_eq!(entries, config.cardinality_cap, "{:?}", drained.lines);
+        assert_eq!(entries, 11, "{:?}", drained.lines);
         assert!(
             drained.lines.contains(&format!(
                 "rule 'r': 11 findings, over the cardinality cap of {}",
@@ -1752,8 +1748,7 @@ mod tests {
             &BTreeMap::new(),
             &[],
         );
-        // Two of noisy's five, its summary, and quiet's one.
-        assert_eq!(drained.lines.len(), 4, "{:?}", drained.lines);
+        assert_eq!(drained.lines.len(), 7, "{:?}", drained.lines);
         assert!(
             drained
                 .lines
@@ -1770,48 +1765,32 @@ mod tests {
     }
 
     #[test]
-    fn a_drain_never_renders_past_its_token_budget() {
-        // CLOUD-2163, superseding CLOUD-2075 §7 case 19. Forty pointers against
-        // a budget that holds a handful: the payload, closing line included,
-        // stays within it, the closing line names how many were withheld, and
-        // only what was shown anchors the next re-raise.
-        let budget = 80;
+    fn an_over_budget_drain_still_shows_every_pointer() {
+        // CLOUD-2075 §7 case 19. The budget reports; it never withholds.
+        let records = spread("r", 3);
         let drained = cycle(
-            &spread("r", 40),
+            &records,
             &changed(&["src/a.rs"]),
             None,
             &DrainConfig {
-                token_budget: budget,
+                token_budget: 8,
                 ..generous()
             },
             &BTreeMap::new(),
             &[],
         );
-        let rendered = drained.lines.join("\n");
-        assert!(
-            crate::budget::estimate_tokens(&rendered) <= budget,
-            "{} tokens over a budget of {budget}: {rendered}",
-            crate::budget::estimate_tokens(&rendered)
-        );
-        let shown = drained
+        let entries = drained
             .lines
             .iter()
             .filter(|line| line.starts_with("rule 'r' at "))
             .count();
-        assert!(shown > 0 && shown < 40, "{:?}", drained.lines);
+        assert_eq!(entries, 3, "{:?}", drained.lines);
         let last = drained.lines.last().expect("a closing line");
-        assert_eq!(
-            last,
-            &format!(
-                "budget: {} more past the declared {budget} tokens; `batten check` lists them",
-                40 - shown
-            )
+        assert!(
+            last.starts_with("budget: ") && last.ends_with(" tokens over the declared 8"),
+            "{last}"
         );
-        assert_eq!(
-            drained.counts.len(),
-            shown,
-            "a withheld pointer reads as unseen"
-        );
+        assert_eq!(drained.counts.len(), 3);
     }
 
     #[test]
@@ -1960,9 +1939,8 @@ mod tests {
 
     #[test]
     fn only_the_scope_filter_withholds_and_only_it_is_journalled() {
-        // The cap and the budget withhold since CLOUD-2163, but they are not
-        // suppressions: a withheld pointer anchors no count, so it resurfaces on
-        // the next drain. The one suppression journalled is still out-of-scope.
+        // CLOUD-2075: the cap and the budget report and withhold nothing, so the
+        // one suppression left to journal is the out-of-scope finding.
         let dir = std::env::temp_dir().join(format!("batten-reasons-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -1983,17 +1961,7 @@ mod tests {
             &[],
         );
         assert_eq!(drained.scope_filtered.len(), 1, "the one outside the diff");
-        let shown = drained
-            .lines
-            .iter()
-            .filter(|line| line.starts_with("rule '") && line.contains("' at "))
-            .count();
-        assert!(
-            shown < 6,
-            "the cap and budget bounded it: {:?}",
-            drained.lines
-        );
-        assert_eq!(drained.counts.len(), shown, "only what was shown anchors");
+        assert_eq!(drained.counts.len(), 6, "every in-scope identity was shown");
         assert_eq!(journal_suppressions(&dir, "shard", &drained).unwrap(), 1);
 
         let _ = std::fs::remove_dir_all(&dir);

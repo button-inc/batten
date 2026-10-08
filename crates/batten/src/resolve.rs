@@ -989,13 +989,25 @@ pub fn authority_violations(
 #[must_use]
 pub fn authority_refusal(violations: &[AuthorityViolation]) -> Option<anyhow::Error> {
     let first = violations.first()?;
-    Some(crate::error::Denial::raise(format!(
-        "{}: an {} reading is the effective authority for {} key(s) a committed source also sets; \
-         an ingested value may only tighten a committed one, never replace it (§8)",
-        first.key,
-        first.effective.as_str(),
-        violations.len(),
-    )))
+    // `layer carry refused` (CLOUD-2078): the first key, the layer that would
+    // replace it, and how many keys it reached.
+    let subjects = [
+        crate::verdict::artifact(&first.key),
+        crate::verdict::artifact(&format!(
+            "an {} reading is the effective authority",
+            first.effective.as_str()
+        )),
+        crate::verdict::artifact(&format!("{} key(s)", violations.len())),
+    ];
+    let refusal = crate::refusal::Refusal::engine(
+        crate::verdict::Native::LayerCarryRefused,
+        &subjects,
+        crate::refusal::Fix::None,
+    );
+    Some(crate::error::Denial::raise(
+        &refusal,
+        crate::refusal::Arm::Full,
+    ))
 }
 
 /// A value paired with every layer that set it, so a later layer can name both

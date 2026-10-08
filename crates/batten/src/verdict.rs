@@ -441,6 +441,16 @@ pub enum Subject {
     },
 }
 
+/// A named thing as a subject: how an engine emitter's own words travel on a
+/// class's line (CLOUD-2078), the handler-deny precedent of text Batten does
+/// not class being a subject of a class Batten does.
+#[must_use]
+pub fn artifact(name: &str) -> Subject {
+    Subject::Artifact {
+        artifact: name.to_owned(),
+    }
+}
+
 impl Subject {
     /// The pointer as one line of output.
     #[must_use]
@@ -1493,6 +1503,43 @@ pub enum Native {
     ///
     /// **APPENDED LAST**, for [`Native::ProseColumnRefused`]'s reason.
     RuleReadMissing,
+    // ── the unclassed emitters' classes (CLOUD-2078) ───────────────────────
+    // One class per emitter FAMILY, never one per site (CLOUD-1313's rule):
+    // the site's own message travels as a subject. APPENDED LAST, for
+    // [`Native::ProseColumnRefused`]'s reason.
+    /// A CLI invocation refused before it ran: a classless `UsageError` or a
+    /// clap usage error.
+    UsageRefused,
+    /// Any other CLI failure: a diagnosis of Batten, not a verdict on the work.
+    RunBroken,
+    /// `pr derive` cannot derive the row a bot PR implies.
+    IssueFileRefused,
+    /// An ingested layer would replace a committed value it may only tighten.
+    LayerCarryRefused,
+    /// A fetched provision does not match its pin.
+    ProvisionPinOther,
+    /// The Stop ladder's unlanded rung.
+    CommitShipMissing,
+    /// The Stop ladder's filed-set rung.
+    IssueListUnclear,
+    /// A `[[hook.handler]]` reported on this call.
+    HookReportNow,
+    /// A `[[hook.handler]]` broke its contract.
+    HookAnswerBroken,
+    /// A response this call should have captured was not.
+    OutputWriteMissing,
+    /// A failing doctor check or startup row.
+    WorkspaceStateBroken,
+    /// A call a declared rule or handler pre-approved.
+    CallGrantNow,
+    /// A land replay conflicted and stopped.
+    CommitPortBlocked,
+    /// The configured gate refused the head `land` verified.
+    CheckRunRed,
+    /// A required CI check failed on the head `land` waited on.
+    JobRunRed,
+    /// `land` spent every lap without landing.
+    LaneCountSpent,
 }
 
 impl Native {
@@ -1563,6 +1610,22 @@ impl Native {
         Native::ProseColumnRefused,
         Native::RegisterTableRefused,
         Native::RuleReadMissing,
+        Native::UsageRefused,
+        Native::RunBroken,
+        Native::IssueFileRefused,
+        Native::LayerCarryRefused,
+        Native::ProvisionPinOther,
+        Native::CommitShipMissing,
+        Native::IssueListUnclear,
+        Native::HookReportNow,
+        Native::HookAnswerBroken,
+        Native::OutputWriteMissing,
+        Native::WorkspaceStateBroken,
+        Native::CallGrantNow,
+        Native::CommitPortBlocked,
+        Native::CheckRunRed,
+        Native::JobRunRed,
+        Native::LaneCountSpent,
     ];
 
     /// The classes the CONFIG LOADER raises, in `parse_ungated` order.
@@ -1667,6 +1730,22 @@ impl Native {
             Native::TaggerUnaccountable => "tag own refused",
             Native::TaggerUnannotated => "tag own unnamed",
             Native::ProseColumnRefused => "prose declare refused",
+            Native::UsageRefused => "input parse refused",
+            Native::RunBroken => "verb run broken",
+            Native::IssueFileRefused => "issue file refused",
+            Native::LayerCarryRefused => "layer carry refused",
+            Native::ProvisionPinOther => "provision pin other",
+            Native::CommitShipMissing => "commit ship missing",
+            Native::IssueListUnclear => "issue list unclear",
+            Native::HookReportNow => "hook report now",
+            Native::HookAnswerBroken => "hook answer broken",
+            Native::OutputWriteMissing => "output write missing",
+            Native::WorkspaceStateBroken => "workspace state broken",
+            Native::CallGrantNow => "call grant now",
+            Native::CommitPortBlocked => "commit port blocked",
+            Native::CheckRunRed => "check run red",
+            Native::JobRunRed => "job run red",
+            Native::LaneCountSpent => "lane run spent",
         }
     }
 }
@@ -2675,6 +2754,160 @@ beside the row, which is never parsed or emitted.",
         routes: &[read("config read first", "batten.toml")],
         applicability: Applicability::Advice,
     },
+    // ── the unclassed emitters' classes (CLOUD-2078) ─────────────────────────
+    // One class per emitter FAMILY: the site's own message travels as a subject,
+    // so it rides both arms and nothing per-site is withheld.
+    VendoredVerdict {
+        id: "input parse refused",
+        gloss: "the invocation was refused before it ran; the subject says why",
+        class: "A verb that refuses its own input -- an unknown flag, a missing argument, a \
+value it cannot use -- has decided nothing about the work. The subject is the verb's own \
+sentence, and `batten --help` lists every verb and flag this build carries.",
+        routes: &[run("verb help first", "batten --help")],
+        applicability: Applicability::Advice,
+    },
+    VendoredVerdict {
+        id: "verb run broken",
+        gloss: "the verb could not complete; the chain is a diagnosis of Batten, not a verdict",
+        class: "An internal failure is exit 3: the verb could not look, so it decided \
+nothing. The subjects are the error chain, outermost first. A failure that repeats on an \
+unchanged tree is a defect in Batten to file with that chain; `batten doctor` checks the \
+environment the verb ran in.",
+        routes: &[run("doctor run first", "batten doctor")],
+        applicability: Applicability::Advice,
+    },
+    VendoredVerdict {
+        id: "issue file refused",
+        gloss: "the row a bot pull request implies cannot be derived, so none is filed",
+        class: "`pr derive` files the tracker row a bot's pull request stands for, and \
+refuses when the author, the owned manifest or the subject cannot be read as one. The \
+subjects name which.",
+        routes: &[read("config read first", "batten.toml")],
+        applicability: Applicability::Advice,
+    },
+    VendoredVerdict {
+        id: "layer carry refused",
+        gloss: "an ingested layer would replace a committed value it may only tighten",
+        class: "Configuration is one committed authority plus raise-only overrides. A layer \
+that would loosen a committed value is refused whole rather than applied in part; the \
+subjects name the first key, the layer and how many keys it touched.",
+        routes: &[read("config read first", "batten.toml")],
+        applicability: Applicability::Advice,
+    },
+    VendoredVerdict {
+        id: "provision pin other",
+        gloss: "the fetched artifact does not match its pin, so nothing was installed",
+        class: "A provision is installed only when its bytes hash to the pinned digest. A \
+mismatch means the pin is stale or the source changed under it; nothing was installed, and \
+the subjects carry both digests.",
+        routes: &[run("check run first", "batten provision apply")],
+        applicability: Applicability::Advice,
+    },
+    VendoredVerdict {
+        id: "commit ship missing",
+        gloss: "the turn declared a stopping point and its commits are not on the landing target",
+        class: "Work that is committed and not landed is in no state anyone else can see, \
+and a container reclaim loses it. The subjects count the commits not on the landing target. \
+Land them, or say in the turn what blocks it.",
+        routes: &[run("land run first", "batten land lap")],
+        applicability: Applicability::Advice,
+    },
+    VendoredVerdict {
+        id: "issue list unclear",
+        gloss: "every row this branch filed, for a by-number answer: independent, or a punt",
+        class: "A row filed while doing a task is either independent work or part of the \
+task deferred. The subjects list every row this branch filed; answer each by number, and \
+close the ones that are this task's here.",
+        routes: &[run("ready lint first", "batten ready lint")],
+        applicability: Applicability::Advice,
+    },
+    VendoredVerdict {
+        id: "hook report now",
+        gloss: "a declared hook handler reported on this call; its words are the subject",
+        class: "A `[[hook.handler]]` row dispatches a program on an event, and its report \
+travels as the subject: `hook.handler.<id>` names the row, the rest is what it said. Its row \
+in the config says what it guards.",
+        routes: &[read("config read first", "batten.toml")],
+        applicability: Applicability::Advice,
+    },
+    VendoredVerdict {
+        id: "hook answer broken",
+        gloss: "a declared hook handler broke its contract, so its answer was not used",
+        class: "A handler answers by exit status and output within its declared timeout. One \
+that could not spawn, timed out, exited outside its contract, said nothing on a refusal, \
+died on a signal or wrote a host decision document of its own broke that contract; the \
+subjects name the row and which.",
+        routes: &[read("config read first", "batten.toml")],
+        applicability: Applicability::Advice,
+    },
+    VendoredVerdict {
+        id: "output write missing",
+        gloss: "this call's response was not captured; the reason id says why",
+        class: "A mediated call's response is captured so a later remedy can hand over its \
+bytes without them entering the context. When the capture is skipped, the subject is the \
+reason id, and the capture is absent for that call only.",
+        routes: &[run("doctor run first", "batten doctor")],
+        applicability: Applicability::Advice,
+    },
+    VendoredVerdict {
+        id: "workspace state broken",
+        gloss: "this environment does not match what the tree declares",
+        class: "A failing doctor check or startup row means a program, pin or provision the \
+tree declares is not present or not reachable here, so gates that need it cannot run. The \
+subjects name the check or row and its reason. `batten startup --repair` runs the declared \
+repairs; `batten doctor` reports what is left.",
+        routes: &[
+            run("doctor run first", "batten doctor"),
+            run("startup repair first", "batten startup --repair"),
+        ],
+        applicability: Applicability::Advice,
+    },
+    VendoredVerdict {
+        id: "call grant now",
+        gloss: "the call was pre-approved by a declared rule or handler",
+        class: "A pre-approval tells the host not to prompt for a call the policy already \
+admits. It is never a refusal and never outranks one: a call any gate refuses is not \
+pre-approved. The rule or handler that granted it is on the line.",
+        routes: &[read("config read first", "batten.toml")],
+        applicability: Applicability::Advice,
+    },
+    VendoredVerdict {
+        id: "commit port blocked",
+        gloss: "a replay onto the landing target conflicted and stopped",
+        class: "The replay is stateless: nothing is half-replayed, so there is no rebase to \
+continue or abort. Merge each conflicted path in the worktree, then name it to `land \
+replay --resolve`, which re-runs the replay from its base with your bytes for that path.",
+        // THE PLAIN REPLAY, NOT ITS `--resolve` SPELLING: a route rides every
+        // line, and a pathless conflict has no path to name. The stop's own
+        // remedy carries `--resolve <first>` when there is one.
+        routes: &[run("replay run first", "batten land replay <base>")],
+        applicability: Applicability::Advice,
+    },
+    VendoredVerdict {
+        id: "check run red",
+        gloss: "the configured gate refused this head",
+        class: "`land` verifies a head before it pushes, with the gate the repository \
+declares. A refusal names its cause; nothing was pushed.",
+        routes: &[run("land verify first", "batten land verify")],
+        applicability: Applicability::Advice,
+    },
+    VendoredVerdict {
+        id: "job run red",
+        gloss: "a required CI check failed on this head",
+        class: "`land` waits on the required checks of the head it pushed, and stops on the \
+first failure. The subjects name the head and each failing check; the same checks run \
+locally.",
+        routes: &[run("land verify first", "batten land verify")],
+        applicability: Applicability::Advice,
+    },
+    VendoredVerdict {
+        id: "lane run spent",
+        gloss: "every lap was spent without a landing",
+        class: "`land` bounds its laps so a moving target cannot keep it running forever. \
+The subjects count the laps, the CI matrices they spent and the lease waits among them.",
+        routes: &[run("land run first", "batten land lap")],
+        applicability: Applicability::Advice,
+    },
 ];
 
 /// Every class the binary ships, as the registry carries them.
@@ -3213,6 +3446,22 @@ mod tests {
                 | Native::TraversalTableRefused
                 | Native::RegisterTableRefused
                 | Native::RuleReadMissing
+                | Native::UsageRefused
+                | Native::RunBroken
+                | Native::IssueFileRefused
+                | Native::LayerCarryRefused
+                | Native::ProvisionPinOther
+                | Native::CommitShipMissing
+                | Native::IssueListUnclear
+                | Native::HookReportNow
+                | Native::HookAnswerBroken
+                | Native::OutputWriteMissing
+                | Native::WorkspaceStateBroken
+                | Native::CallGrantNow
+                | Native::CommitPortBlocked
+                | Native::CheckRunRed
+                | Native::JobRunRed
+                | Native::LaneCountSpent
                 | Native::VerdictTableRefused
                 | Native::RedirectTableRefused
                 | Native::DeferralTableRefused

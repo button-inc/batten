@@ -694,33 +694,51 @@ pub enum Violation {
 }
 
 impl Violation {
-    /// The pointer line this violation reports as.
+    /// Which contract term was broken, as the subject `hook answer broken`
+    /// carries (CLOUD-2078); the class says what each one means.
     ///
     /// Rule 4, and here it is load-bearing rather than ceremonial: a handler's
     /// streams are user-supplied bytes, so quoting them would put the widest
-    /// secret surface on this path into a report. The line carries the handler
-    /// id, what it did, and nothing the handler wrote.
+    /// secret surface on this path into a report. The token carries what the
+    /// handler did and nothing it wrote.
     #[must_use]
-    pub fn line(&self, id: &str) -> String {
+    pub fn token(&self) -> String {
         match self {
-            Violation::NotSpawnable => format!("hook.handler {id}: could not spawn"),
-            Violation::TimedOut(bound) => format!(
-                "hook.handler {id}: exceeded {}ms and was killed",
-                bound.as_millis()
-            ),
-            Violation::UndefinedExit(code) => {
-                format!("hook.handler {id}: exit {code} is outside the contract (0, 1, 2)")
-            }
-            Violation::SilentVerdict(code) => {
-                format!("hook.handler {id}: exit {code} with no reason on stdout or stderr")
-            }
-            Violation::Signalled => format!("hook.handler {id}: killed by signal"),
-            Violation::ImpersonatedHost => format!(
-                "hook.handler {id}: wrote a host decision document; a handler reports to batten, \
-                 which renders per harness"
-            ),
+            Violation::NotSpawnable => String::from("could-not-spawn"),
+            Violation::TimedOut(bound) => format!("timed-out-{}ms", bound.as_millis()),
+            Violation::UndefinedExit(code) => format!("exit-{code}-outside-contract"),
+            Violation::SilentVerdict(code) => format!("exit-{code}-silent"),
+            Violation::Signalled => String::from("signalled"),
+            Violation::ImpersonatedHost => String::from("impersonated-host"),
         }
     }
+}
+
+/// A handler's report as the class it belongs to (CLOUD-2078): its row and
+/// its own words travel as subjects of `hook report now`.
+//MUTANT handler-advice-misclassed|s@^    let class = crate::verdict::Native::HookReportNow;$@    let class = crate::verdict::Native::HookAnswerBroken;@|handler_advice_and_violations_carry_their_row_and_class
+#[must_use]
+pub fn report_refusal(id: &str, text: &str) -> crate::refusal::Refusal {
+    let class = crate::verdict::Native::HookReportNow;
+    let row = crate::verdict::artifact(&format!("hook.handler.{id}"));
+    crate::refusal::Refusal::engine(
+        class,
+        &[row, crate::verdict::artifact(text)],
+        crate::refusal::Fix::None,
+    )
+}
+
+/// A broken contract as the class it belongs to (CLOUD-2078).
+#[must_use]
+pub fn violation_refusal(id: &str, violation: &Violation) -> crate::refusal::Refusal {
+    crate::refusal::Refusal::engine(
+        crate::verdict::Native::HookAnswerBroken,
+        &[
+            crate::verdict::artifact(&format!("hook.handler.{id}")),
+            crate::verdict::artifact(&violation.token()),
+        ],
+        crate::refusal::Fix::None,
+    )
 }
 
 /// What one handler said, read under the contract.
@@ -819,23 +837,25 @@ impl Dispatched {
     /// thing twice — once where it decides something and once where, at the
     /// pre-tool event, nothing is delivered at all.
     #[must_use]
-    pub fn advice(&self) -> Vec<String> {
+    pub fn advice(&self) -> Vec<crate::refusal::Refusal> {
         self.ran
             .iter()
             .filter_map(|ran| match &ran.outcome {
-                Outcome::Advise(text) | Outcome::Reported(text) => Some(text.clone()),
+                Outcome::Advise(text) | Outcome::Reported(text) => {
+                    Some(report_refusal(&ran.id, text.trim_end()))
+                }
                 _ => None,
             })
             .collect()
     }
 
-    /// Every contract violation, as pointer lines.
+    /// Every contract violation, classed `hook answer broken`.
     #[must_use]
-    pub fn violations(&self) -> Vec<String> {
+    pub fn violations(&self) -> Vec<crate::refusal::Refusal> {
         self.ran
             .iter()
             .filter_map(|ran| match &ran.outcome {
-                Outcome::Broke(violation) => Some(violation.line(&ran.id)),
+                Outcome::Broke(violation) => Some(violation_refusal(&ran.id, violation)),
                 _ => None,
             })
             .collect()
@@ -1640,7 +1660,7 @@ mod tests {
         );
         assert_eq!(
             dispatched.advice(),
-            vec!["granted".to_owned()],
+            vec![report_refusal("g", "granted")],
             "without the column the text is advice, exactly as before"
         );
         assert_eq!(
@@ -1801,7 +1821,27 @@ mod tests {
         assert_eq!(dispatched.preapproval(), None);
         assert_eq!(
             dispatched.violations(),
-            vec![Violation::ImpersonatedHost.line("g")]
+            vec![violation_refusal("g", &Violation::ImpersonatedHost)]
+        );
+    }
+
+    /// A handler's report and a broken contract each carry the handler's row
+    /// and their own class (CLOUD-2078); neither is free text any more.
+    ///
+    /// The suite `handler-advice-misclassed` is killed in.
+    #[test]
+    fn handler_advice_and_violations_carry_their_row_and_class() {
+        let advised = report_refusal("h", "look here").render_finding(crate::refusal::Arm::Full);
+        assert!(
+            advised.starts_with("verdict 'hook report now' at hook.handler.h look here"),
+            "{advised}"
+        );
+        assert!(!advised.contains("rule '"), "{advised}");
+        let timed_out = violation_refusal("h", &Violation::TimedOut(Duration::from_millis(300)))
+            .render_finding(crate::refusal::Arm::Full);
+        assert!(
+            timed_out.starts_with("verdict 'hook answer broken' at hook.handler.h timed-out-300ms"),
+            "{timed_out}"
         );
     }
 
@@ -1933,8 +1973,11 @@ mod tests {
             Violation::Signalled,
             Violation::ImpersonatedHost,
         ] {
-            let line = violation.line("h");
-            assert!(line.starts_with("hook.handler h:"), "{line}");
+            let line = violation_refusal("h", &violation).render_finding(crate::refusal::Arm::Full);
+            assert!(
+                line.starts_with("verdict 'hook answer broken' at hook.handler.h "),
+                "{line}"
+            );
             assert!(!line.contains(secret), "{line}");
         }
         let dispatched = Dispatched {

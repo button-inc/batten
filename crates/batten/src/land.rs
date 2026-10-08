@@ -153,18 +153,31 @@ impl Replay {
 /// A function rather than inline `writeln!`s because the caller reaches it only
 /// after a fetch, and a case that had to stand up a serving remote could not
 /// assert this text at all.
+///
+/// ONE CLASSED FINDING (CLOUD-2078): `commit port blocked`, the branch, the
+/// target, the commit, the count and each path as subjects, and the route out
+/// as its remedy — so the stop is one line a reader parses like every other.
+//MUTANT conflict-stop-misclassed|s@^    let class = crate::verdict::Native::CommitPortBlocked;$@    let class = crate::verdict::Native::CheckRunRed;@|the_conflict_stop_names_every_path_and_the_route_out
 #[must_use]
-pub fn conflict_stop(branch: &str, reference: &str, commit: &str, paths: &[String]) -> Vec<String> {
+pub fn conflict_stop(
+    branch: &str,
+    reference: &str,
+    commit: &str,
+    paths: &[String],
+) -> crate::refusal::Refusal {
     let mut named: Vec<&str> = paths.iter().map(String::as_str).collect();
     named.sort_unstable();
 
-    let mut said = vec![format!(
-        "land: replay of {branch} onto {reference} conflicted at {commit} in {} path(s)",
-        named.len()
-    )];
-    for path in &named {
-        said.push(format!("land: {path}"));
-    }
+    let mut subjects = vec![
+        crate::verdict::artifact(branch),
+        crate::verdict::artifact(reference),
+        crate::verdict::artifact(commit),
+        crate::verdict::artifact(&format!("{} path(s)", named.len())),
+    ];
+    subjects.extend(named.iter().map(|path| crate::verdict::Subject::Path {
+        path: (*path).to_owned(),
+    }));
+    let mut said = Vec::new();
     // WHY THE REBASE-IN-PROGRESS EXITS CANNOT APPLY, said here rather than left
     // for the reader to discover. Measured on this branch: the stop named the
     // commit and the paths, the `patch run loose` row named `--continue`,
@@ -175,18 +188,71 @@ pub fn conflict_stop(branch: &str, reference: &str, commit: &str, paths: &[Strin
     // happened. The sentence is what stops that, and it is owed on the pathless
     // reading too.
     said.push(String::from(
-        "land: the replay is STATELESS — nothing is half-replayed, so there is no rebase in \
+        "the replay is STATELESS: nothing is half-replayed, so there is no rebase in \
          progress and --continue, --abort and --skip have nothing to act on",
     ));
     if let Some(first) = named.first() {
         said.push(format!(
-            "land: merge each path above in the worktree, then: batten land replay {reference} --resolve {first}"
+            "merge each path in the worktree, then: batten land replay {reference} --resolve {first}"
         ));
         said.push(String::from(
-            "land: a path conflicting at more than one commit takes --resolve <path>=<file>, one file per commit",
+            "a path conflicting at more than one commit takes --resolve <path>=<file>, one file per commit",
         ));
     }
-    said
+    let class = crate::verdict::Native::CommitPortBlocked;
+    crate::refusal::Refusal::engine(class, &subjects, crate::refusal::Fix::Run(said.join("; ")))
+}
+
+/// Red CI as `job run red` (CLOUD-2078): the head, how many required checks
+/// failed and each one, with the reproduce-locally advice as its remedy.
+#[must_use]
+pub fn red_refusal(sha: &str, findings: &[String]) -> crate::refusal::Refusal {
+    let count = u64::try_from(findings.len()).unwrap_or(u64::MAX);
+    let mut subjects = vec![
+        crate::verdict::artifact(sha),
+        crate::verdict::Subject::Count { count },
+    ];
+    subjects.extend(
+        findings
+            .iter()
+            .map(|finding| crate::verdict::artifact(finding)),
+    );
+    crate::refusal::Refusal::engine(
+        crate::verdict::Native::JobRunRed,
+        &subjects,
+        crate::refusal::Fix::Run(String::from(
+            "reproduce each named check locally: a rebase clears nothing here, so the lap stops",
+        )),
+    )
+}
+
+/// The spent lap budget as `lane run spent` (CLOUD-2078), with the advice its
+/// two readings want: run again on a contended fleet, read the laps otherwise.
+/// CONDITIONAL RATHER THAN APPENDED, because printing both would be the hedge
+/// that leaves a reader no better off.
+#[must_use]
+pub fn spent_refusal(laps: u32, ledger: &Ledger) -> crate::refusal::Refusal {
+    let advice = if ledger.lease_waits > 0 {
+        String::from(
+            "every lease wait lost only to another branch holding the landing lease and spent \
+             nothing: a saturated fleet is not a failing branch, so run this again",
+        )
+    } else {
+        format!(
+            "a conflict, a failed gate or red CI will lose again: read the lap lines above for \
+             how each ended; if every lap lost only to contention, running this again commits \
+             up to {laps} more"
+        )
+    };
+    crate::refusal::Refusal::engine(
+        crate::verdict::Native::LaneCountSpent,
+        &[
+            crate::verdict::artifact(&format!("{laps} lap(s)")),
+            crate::verdict::artifact(&format!("{} CI matri(ces)", ledger.spent())),
+            crate::verdict::artifact(&format!("{} lease wait(s)", ledger.lease_waits)),
+        ],
+        crate::refusal::Fix::Run(advice),
+    )
 }
 
 /// One column's worth of `value`: whitespace collapsed so it cannot become two.

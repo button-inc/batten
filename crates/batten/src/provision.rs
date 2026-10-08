@@ -782,11 +782,18 @@ pub fn apply(
     if !found.eq_ignore_ascii_case(&artifact.sha256) {
         // Pointer-only: the two digests, never a byte of what was fetched. A
         // mismatched artifact is exactly the thing least safe to echo.
-        return Err(crate::Denial::raise(format!(
-            "provision {}: artifact does not match the pinned checksum (pinned {}, fetched {}); \
-             nothing was installed",
-            entry.name, artifact.sha256, found
-        )));
+        // `provision pin other` (CLOUD-2078): the provision and both digests.
+        let subjects = [
+            crate::verdict::artifact(&entry.name),
+            crate::verdict::artifact(&format!("pinned {}", artifact.sha256)),
+            crate::verdict::artifact(&format!("fetched {found}")),
+        ];
+        let refusal = crate::refusal::Refusal::engine(
+            crate::verdict::Native::ProvisionPinOther,
+            &subjects,
+            crate::refusal::Fix::None,
+        );
+        return Err(crate::Denial::raise(&refusal, crate::refusal::Arm::Full));
     }
 
     install(entry, cache_root, &bytes, links_host)?;

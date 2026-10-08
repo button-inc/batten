@@ -240,11 +240,28 @@ fn watermark(home: &Path) -> Option<(u64, String)> {
 /// Batten's own `batten: ` notes are removed either way: those are messages
 /// *about* Batten and travel on a different channel by construction
 /// (`output::message` vs `output::verdict`).
+///
+/// A rule's REMEDY line is removed too (CLOUD-2078): it is a classed finding
+/// beside the payload, recognised by the lookup hop a drain pointer line never
+/// carries, and [`remedies`] returns it.
 fn payload(output: &Output) -> Vec<String> {
     let text = advisory_context(output).unwrap_or_else(|| common::stderr(output));
     text.lines()
         .filter(|line| !line.starts_with("batten: "))
         .filter(|line| !line.is_empty())
+        .filter(|line| !line.contains(REMEDY_HOP))
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+/// The hop every remedy line carries and no drain pointer line does.
+const REMEDY_HOP: &str = "; run batten policy explain '";
+
+/// The drained rules' remedy lines, one per rule (CLOUD-2078).
+fn remedies(output: &Output) -> Vec<String> {
+    let text = advisory_context(output).unwrap_or_else(|| common::stderr(output));
+    text.lines()
+        .filter(|line| line.contains(REMEDY_HOP))
         .map(ToOwned::to_owned)
         .collect()
 }
@@ -683,6 +700,36 @@ fn a_count_only_change_is_news_and_does_not_short_circuit() {
     assert_eq!(again.len(), 1, "one identity, one line: {again:?}");
     assert_ne!(again, vec!["unchanged".to_owned()], "a count is news");
     assert!(again[0].ends_with(" 1->2"));
+}
+
+/// A drained rule's remedy rides the payload as one classed finding: full on
+/// the first emitting drain in a session, its pointer on the next (CLOUD-2078).
+///
+/// The suite `drain-remedy-dropped` is killed in.
+#[test]
+fn a_drained_rules_remedy_is_full_once_then_a_pointer() {
+    let (repo, home) = drained_fixture("drain-remedy", "\n[drain]\ninterval_ms = 0\n");
+    let first = remedies(&hook(&repo, &home, &post_tool_batch("s1")));
+    assert_eq!(first.len(), 1, "one rule, one remedy: {first:?}");
+    assert!(
+        first[0].contains("rule 'no-todo'")
+            && first[0].contains(" — ")
+            && first[0].contains("delete the marker once the work behind it is done"),
+        "{first:?}"
+    );
+    common::write(
+        &repo,
+        "src/a.rs",
+        "fn main() {}\n// TODO fix me\n// TODO fix me\n",
+    );
+    let recorded = state_cmd(&repo, &home, &["state", "record"]);
+    assert_eq!(recorded.status.code(), Some(0));
+    let second = remedies(&hook(&repo, &home, &post_tool_batch("s1")));
+    assert_eq!(second.len(), 1, "{second:?}");
+    assert!(
+        second[0].contains("rule 'no-todo'") && !second[0].contains(" — "),
+        "the second emitting drain carries the pointer: {second:?}"
+    );
 }
 
 #[test]

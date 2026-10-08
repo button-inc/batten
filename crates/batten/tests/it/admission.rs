@@ -1478,10 +1478,12 @@ fn twin_findings_on_one_path_are_each_admitted_by_fingerprint() {
         common::stderr(&refused)
     );
     let said = common::stderr(&refused);
+    // By shape rather than by position: the message is a classed finding's
+    // subject (CLOUD-2078), so its routes follow it on the line.
     let fingerprints: Vec<&str> = said
-        .rsplit_once(": ")
-        .map(|(_, listed)| listed.trim().split(", ").collect())
-        .unwrap_or_default();
+        .split(|c: char| !c.is_ascii_hexdigit())
+        .filter(|word| word.len() == 64)
+        .collect();
     assert_eq!(fingerprints.len(), 2, "the refusal names both: {said}");
 
     for (spent, fingerprint) in fingerprints.iter().enumerate() {

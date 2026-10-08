@@ -1233,6 +1233,139 @@ pub const VENDORED_DOCS: &[VendoredDoc] = &[
         act: &["`git push --force-with-lease=<ref>:<sha>`"],
         dont: &["use a bare `--force-with-lease`, which compares a stale tracking ref"],
     },
+    // ── the unclassed emitters' classes ─────────────────────────────────────
+    VendoredDoc {
+        id: "input parse refused",
+        why: Some("A verb that cannot use its input decided nothing about the work"),
+        act: &[
+            "fix the input the subject names",
+            "check the spelling with `batten --help`",
+        ],
+        dont: &["read the refusal as a verdict on the tree"],
+    },
+    VendoredDoc {
+        id: "verb run broken",
+        why: Some("An internal failure means the verb could not look, so it decided nothing"),
+        act: &[
+            "run `batten doctor` for the environment",
+            "file the chain as a Batten defect when it repeats on an unchanged tree",
+        ],
+        dont: &["read exit 3 as a pass or a refusal", "retry it in a loop"],
+    },
+    VendoredDoc {
+        id: "issue file refused",
+        why: Some("A row filed from an unreadable pull request would track the wrong work"),
+        act: &["fix what the subject names on the pull request, then derive again"],
+        dont: &["file the row by hand"],
+    },
+    VendoredDoc {
+        id: "layer carry refused",
+        why: Some("An override that loosens the committed authority is a second authority"),
+        act: &["change the committed value instead, in its own reviewed commit"],
+        dont: &["split the layer to slip part of it through"],
+    },
+    VendoredDoc {
+        id: "provision pin other",
+        why: Some("Bytes that do not match the pin are not the program that was reviewed"),
+        act: &[
+            "re-pin from the published digest if the release moved",
+            "run `batten provision apply` again",
+        ],
+        dont: &["skip the checksum", "install the artifact by hand"],
+    },
+    VendoredDoc {
+        id: "commit ship missing",
+        why: Some("Committed work that never lands is invisible to everyone and lost on reclaim"),
+        act: &[
+            "land it with `batten land lap`",
+            "or say in the turn what blocks it",
+        ],
+        dont: &["end the turn calling unlanded work done"],
+    },
+    VendoredDoc {
+        id: "issue list unclear",
+        why: Some("A row filed mid-task is either new work or this task deferred"),
+        act: &[
+            "answer each listed row by number",
+            "close here the ones that are this task's",
+        ],
+        dont: &["leave a deferral filed as if it were new work"],
+    },
+    VendoredDoc {
+        id: "hook report now",
+        why: Some("A declared handler is the repository speaking about this call"),
+        act: &[
+            "act on what the subject says",
+            "read its `[[hook.handler]]` row for what it guards",
+        ],
+        dont: &[],
+    },
+    VendoredDoc {
+        id: "hook answer broken",
+        why: Some("A handler outside its contract answered nothing the boundary can use"),
+        act: &["fix the handler's program, timeout or output the subject names"],
+        dont: &["remove the handler row to silence it"],
+    },
+    VendoredDoc {
+        id: "output write missing",
+        why: Some("A response nobody captured cannot be handed over later without re-reading it"),
+        act: &[
+            "re-run the read when its bytes are needed",
+            "run `batten doctor` if it recurs",
+        ],
+        dont: &[],
+    },
+    VendoredDoc {
+        id: "workspace state broken",
+        why: Some("A gate whose program, pin or provision is absent cannot run here"),
+        act: &[
+            "run `batten startup --repair`",
+            "then `batten doctor` for what is left",
+        ],
+        dont: &["work on as if the gates had run"],
+    },
+    VendoredDoc {
+        id: "call grant now",
+        why: Some("A call the policy already admits needs no prompt"),
+        act: &["proceed with the call"],
+        dont: &[],
+    },
+    VendoredDoc {
+        id: "commit port blocked",
+        why: Some("A conflict is the one landing step only its author can decide"),
+        act: &[
+            "merge each listed path in the worktree",
+            "run `batten land replay <base> --resolve <path>`",
+        ],
+        dont: &[
+            "reach for `--continue`, which has nothing to act on",
+            "cherry-pick around it",
+        ],
+    },
+    VendoredDoc {
+        id: "check run red",
+        why: Some("A head the declared gate refuses is not one to push"),
+        act: &[
+            "fix the cause the line names",
+            "run `batten land verify` again",
+        ],
+        dont: &["push around the gate"],
+    },
+    VendoredDoc {
+        id: "job run red",
+        why: Some("A head red in CI is not one to land"),
+        act: &[
+            "reproduce each named check locally and fix it",
+            "run `batten land verify` again",
+        ],
+        dont: &["re-run CI on the same head to see if it passes"],
+    },
+    VendoredDoc {
+        id: "lane run spent",
+        why: Some("A loop that never lands spends CI on a target that keeps moving"),
+        act: &["run `batten land lap` again once the target settles"],
+        dont: &["raise the lap bound to push through"],
+    },
 ];
 
 /// The vendored doc for `id`, or an empty one where none is declared.
