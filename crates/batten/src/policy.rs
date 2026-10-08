@@ -1718,7 +1718,7 @@ pub fn rewrite(bundle: &Bundle, input: &str) -> Look<Vec<Rewrite>> {
         };
         for item in items {
             let field = |name: &str| item[&regorus::Value::from(name)].clone();
-            let text = |name: &str| field(name).as_string().ok().map(|text| text.to_string());
+            let text = |name: &str| field(name).as_string().ok().map(ToString::to_string);
             let (Some(rule), Some(key)) = (text("rule"), text("key")) else {
                 return Look::CouldNotLook;
             };

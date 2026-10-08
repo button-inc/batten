@@ -126,8 +126,8 @@ fn updated_input(payload: &str) -> Option<serde_json::Value> {
     })
 }
 
-fn background(input: serde_json::Value) -> String {
-    envelope("auto", "Bash", &input)
+fn background(input: &serde_json::Value) -> String {
+    envelope("auto", "Bash", input)
 }
 
 /// A backgrounded call that names no timeout runs with the host's maximum, and
@@ -135,7 +135,7 @@ fn background(input: serde_json::Value) -> String {
 /// sweep backgrounded with no `timeout` was killed at the 30-minute default.
 #[test]
 fn a_backgrounded_call_without_a_timeout_is_rewritten_to_the_maximum() {
-    let payload = background(serde_json::json!({
+    let payload = background(&serde_json::json!({
         "command": "mise run mutant",
         "run_in_background": true,
         "description": "Run the mutant task",
@@ -154,7 +154,7 @@ fn a_backgrounded_call_without_a_timeout_is_rewritten_to_the_maximum() {
 
 #[test]
 fn an_explicit_timeout_is_left_alone() {
-    let payload = background(serde_json::json!({
+    let payload = background(&serde_json::json!({
         "command": "mise run mutant",
         "run_in_background": true,
         "timeout": 600_000,
@@ -172,7 +172,7 @@ fn a_foreground_call_is_not_rewritten() {
         serde_json::json!({ "command": "mise run mutant", "run_in_background": false }),
         serde_json::json!({ "command": "mise run mutant" }),
     ] {
-        let payload = background(input);
+        let payload = background(&input);
         assert_eq!(updated_input(&payload), None, "{payload}");
     }
 }

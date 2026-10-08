@@ -16589,18 +16589,27 @@ fn run_hook(
     // documents on one stream is the collision above, with the grant as the
     // discarded one.
     let context = preapproval_context(&decision, &envelope, &mut advice, ceiling);
-    // A REWRITE RIDES THE GRANT AND NOTHING ELSE (CLOUD-2157), resolved here
-    // for `settle_repair`'s reason: the policy is still in hand and `render`
-    // cannot see it.
-    let updated_input = matches!(decision, hook::Decision::Preapproved(_))
-        .then(|| hook::policy_rewrite(&policy, &envelope, &facts))
-        .flatten();
     emit_channel(harness, &envelope, out, err, advice, ceiling, &decision)?;
     let rendering = Rendering {
         context: context.as_deref(),
-        updated_input: updated_input.as_ref(),
+        updated_input: grant_rewrite(&decision, &policy, &envelope, &facts),
     };
     render(harness, &envelope, decision, &rendering, mode, out, err)
+}
+
+/// The input a pre-approval rewrites (CLOUD-2157), or `None` for any other
+/// decision. A rewrite rides the grant and nothing else, and it is resolved at
+/// the boundary for `settle_repair`'s reason: the policy is still in hand there,
+/// and `render` cannot see it.
+fn grant_rewrite(
+    decision: &hook::Decision,
+    policy: &hook::Policy,
+    envelope: &hook::Envelope,
+    facts: &hook::Facts<'_>,
+) -> Option<serde_json::Value> {
+    matches!(decision, hook::Decision::Preapproved(_))
+        .then(|| hook::policy_rewrite(policy, envelope, facts))
+        .flatten()
 }
 
 /// The advice a pre-approval carries in its own document (CLOUD-1949), taken
@@ -20576,7 +20585,7 @@ struct Rendering<'a> {
     context: Option<&'a str>,
     /// The call's input as a module rewrote it, carried in the grant's own
     /// document (CLOUD-2157). Printed, never branched on.
-    updated_input: Option<&'a serde_json::Value>,
+    updated_input: Option<serde_json::Value>,
 }
 
 /// The one chooser between a finding's two arms (CLOUD-2075): the source's
@@ -20600,10 +20609,8 @@ fn render(
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
-    let Rendering {
-        context,
-        updated_input,
-    } = *rendering;
+    let Rendering { context, .. } = *rendering;
+    let updated_input = rendering.updated_input.as_ref();
     // THE DECISION ARRIVES AS A VALUE, which is what makes this a renderer
     // rather than a second adjudicator (CLOUD-898). A handler's refusal and the
     // engine's own reach the host through the identical match below: a

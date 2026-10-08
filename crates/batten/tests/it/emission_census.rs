@@ -340,9 +340,8 @@ fn constructor_arguments(source: &str) -> Vec<String> {
                 .find(|&(_, c)| {
                     match c {
                         '(' => depth += 1,
-                        ')' if depth == 0 => return true,
+                        ')' | ',' if depth == 0 => return true,
                         ')' => depth -= 1,
-                        ',' if depth == 0 => return true,
                         _ => {}
                     }
                     false
