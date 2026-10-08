@@ -335,12 +335,6 @@ fn the_space_form_is_the_cheapest_spelling_of_a_name() {
     );
 }
 
-/// The live classes, vendored and this repository's, that still carry no `do`
-/// (CLOUD-2143). A ratchet: it may only fall, it is held EQUAL so a doc written
-/// without lowering it is a red test, and the branch that ships the doc schema
-/// lands it at zero.
-const DOC_DEBT: usize = 77;
-
 /// Every live class this repository loads: the vendored registry merged with
 /// the committed `[[verdict]]` rows.
 fn live_classes() -> Vec<batten::verdict::DeclaredVerdict> {
@@ -380,10 +374,10 @@ fn every_vendored_and_declared_doc_is_within_160_o200k_tokens() {
         .filter(|class| class.doc.act.is_empty())
         .map(|class| class.id.as_str())
         .collect();
-    assert_eq!(
-        missing.len(),
-        DOC_DEBT,
-        "live classes with no `do`; write each one's doc and lower DOC_DEBT to match: \
-         {missing:?}"
+    // NONE, and no ratchet: the branch that shipped the doc schema wrote every
+    // live class's doc, so a class added without one is the regression.
+    assert!(
+        missing.is_empty(),
+        "live classes with no `do`; a class says what to do on its first sighting: {missing:?}"
     );
 }

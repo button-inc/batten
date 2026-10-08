@@ -94,14 +94,14 @@ pub const VENDORED_DOCS: &[VendoredDoc] = &[
     VendoredDoc {
         id: "path write refused",
         why: Some(
-            "The path is one this repository declared protected, so it is refused before the write rather than reported after",
+            "This repository declared the path protected, so the write is refused before it lands",
         ),
         act: &[
-            "make the change through the surface the line names (its redirect, or the config row that owns it)",
-            "undo a change you did not mean with `git restore`",
+            "make the change through the surface the line names: its redirect, or the row that owns it",
+            "undo an unmeant change with `git restore`",
         ],
         dont: &[
-            "reach the same path through another program, a shell redirect or a script",
+            "reach the path through another program, a redirect or a script",
             "retry the same write",
         ],
     },

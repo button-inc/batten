@@ -16825,6 +16825,8 @@ target = "batten.toml"
 [[verdict]]
 id = "input select loose"
 gloss = "a workflow's paths filter selects a diff its jobs cannot be affected by"
+doc.why = "A widened filter runs jobs that cannot change, and shows only as a bill"
+doc.do = ["narrow the entry that reaches this path, or move the probe if the job gained the input"]
 class = """
 Every widening is invisible except as a bill, which is why it erodes silently. Narrow the entry that reaches this path, or move the probe if the job really did gain the input.
 """
@@ -16837,6 +16839,10 @@ target = "batten.toml"
 [[verdict]]
 id = "workflow read unclear"
 gloss = "the paths filter could not be read, or carries a shape this matcher cannot decide"
+doc.why = "A guessed selection is the silent false-absent the gate exists to stop"
+doc.do = [
+  "rewrite the pattern in a shape the matcher decides, or extend the matcher in the same commit",
+]
 class = """
 A workflow with no filter runs on every pull request — safe and expensive — and reading that as `every probe honoured` reports on a filter that does not exist. A negation, a character class or a star anywhere but the end is refused rather than guessed, because a guessed selection here is the silent false-absent the gate exists to stop: extend the matcher in the same commit as the pattern.
 """
@@ -16849,6 +16855,8 @@ target = "batten.toml"
 [[verdict]]
 id = "module list missing"
 gloss = "a crate source module is absent from the module map"
+doc.why = "An unmapped module's layering constraints were never written down"
+doc.do = ["add its row to `mem:engineering/module-map`, or narrow the rule's selector"]
 class = """
 An unmapped module is not one with no constraints — it is one whose constraints nobody wrote down, and the map is the single authority the layering prose defers to. Add its row, or narrow the rule's selector so the module is honestly out of scope.
 """
@@ -16861,6 +16869,8 @@ target = "batten.toml"
 [[verdict]]
 id = "test run unseen"
 gloss = "a runnable doctest exists in a workspace whose runner does not execute doctests"
+doc.why = "A doctest the runner skips reads as coverage and can never fail"
+doc.do = ["move the assertion into a real test target, or mark the block as documentation"]
 class = """
 The scheduler here does not run doctests, so one written as a test is a test nothing runs — an assertion that reads as coverage and can never fail. Move the assertion into a real test target, or mark the block so it is documentation rather than a test.
 """
@@ -16873,6 +16883,8 @@ target = "batten.toml"
 [[verdict]]
 id = "pattern carry unsafe"
 gloss = "a shell program hands awk a regex through a `-v` assignment"
+doc.why = "A `-v` assignment's escape handling differs between awks, so the match differs too"
+doc.do = ["retire the program onto a verb or module, since shell is not edited in place"]
 class = """
 A pattern passed that way goes through the assignment's own escape handling before awk ever sees it, and that handling is implementation-defined — so the same program matches differently under different awks. Pass the pattern positionally, or inline it in the program text where the escaping is awk's alone.
 """
@@ -16885,6 +16897,8 @@ target = "batten.toml"
 [[verdict]]
 id = "spawn read broken"
 gloss = "a producer is piped into an early-exiting grep under pipefail"
+doc.why = "Under pipefail an early-exiting grep makes a match report failure"
+doc.do = ["retire the program onto a verb or module, since shell is not edited in place"]
 class = """
 An early-exiting grep signals its producer on the first match, and under pipefail that makes the pipeline report FAILURE on a match — so the verdict inverts, and the more reliably the larger the input. Read the producer into a variable first, or drop the early exit.
 """
@@ -16897,6 +16911,8 @@ target = "batten.toml"
 [[verdict]]
 id = "tool grade unclear"
 gloss = "an adopted tool's licence row is unresolved"
+doc.why = "An unresolved licence row is a confirmation nobody made"
+doc.do = ["resolve the tool's row in `CONTRIBUTING.md`, or drop the tool"]
 class = """
 The release precondition is that every adopted tool's licence is confirmed, and an unresolved row is a confirmation nobody made rather than a licence that is fine. Resolve the row, or drop the tool.
 """
@@ -16909,6 +16925,8 @@ target = "batten.toml"
 [[verdict]]
 id = "task guard missing"
 gloss = "a report task carries no declaration keeping it off the landing path"
+doc.why = "Undeclared, a report's non-gate status is a convention the next edit walks through"
+doc.do = ["declare the task as a report"]
 class = """
 A report is a report by a decision no exit code holds unless something declares it. Without the declaration the task's non-gate status is a convention, and a convention is what the next edit walks through.
 """
@@ -16921,6 +16939,8 @@ target = "batten.toml"
 [[verdict]]
 id = "task judge silent"
 gloss = "a report task is reachable from the landing path"
+doc.why = "A report on the landing path can redden or green a landing nobody meant it to"
+doc.do = ["take the task off the landing path, or make it a gate deliberately"]
 class = """
 A task that reports rather than gates must not be able to redden a landing, and must not be able to green one either — reachability makes its output a verdict nobody intended. Take it off the path, or make it a gate deliberately.
 """
@@ -16933,6 +16953,9 @@ target = "batten.toml"
 [[verdict]]
 id = "lock read unclear"
 gloss = "the lockfile does not answer what it resolved for a crate the manifest declares"
+doc.why = "A lockfile that does not describe the manifest decides nothing"
+doc.do = ["regenerate `Cargo.lock`"]
+doc.dont = ["read the lock's silence as agreement"]
 class = """
 A crate declared for this workspace that the lock resolves no dependency for, or a bare entry beside several majors of that dependency, is a lockfile that does not describe the manifest. Nothing can be decided from it — regenerate the lock rather than reading its silence as agreement.
 """
@@ -16945,6 +16968,8 @@ target = "batten.toml"
 [[verdict]]
 id = "version resolve other"
 gloss = "the workspace's own crypto crates resolved different majors of one substrate"
+doc.why = "Crates composed in one expression across majors cannot build"
+doc.do = ["bump the workspace's crypto crates together, or not at all"]
 class = """
 The crates this workspace declares for itself compose in a single expression, so splitting them across majors is a type that does not exist and a build that cannot succeed. Bump them together or not at all; a transitive dependency's own major is not this workspace's to keep.
 """
@@ -16957,6 +16982,8 @@ target = "batten.toml"
 [[verdict]]
 id = "bound carry missing"
 gloss = "an upper bound exists in one of its two files and not the other"
+doc.why = "Half a cap either reddens a bot batch or silently stops a crate advancing"
+doc.do = ["add the missing half to `Cargo.toml` or `renovate.json5`, or remove both"]
 class = """
 A cap and the withholding rule that mirrors it are one decision written twice, and either half alone is wrong in its own way: a cap with no rule lets the bot propose a version the manifest refuses, reddening a whole grouped batch; a rule with no cap withholds a version the manifest admits, so the crate silently never advances and nothing goes red. The second is the half-lift, and it is the direction with no symptom. Add the missing half, or remove both.
 """
@@ -16969,6 +16996,8 @@ target = "batten.toml"
 [[verdict]]
 id = "config carry empty"
 gloss = "the review config declares none of the keys the lifecycle rests on"
+doc.why = "An empty config leaves the tool's defaults in force and satisfies every key check vacuously"
+doc.do = ["declare each lifecycle key with its value"]
 class = """
 A key nobody wrote and a key someone deleted are the same file, and both leave the tool's DEFAULT in force — which is the value these rows exist to refuse. A config carrying no keys at all satisfies every assertion about a key by having nothing to judge, which is the vacuous pass this refuses first. Declare the key with its value.
 """
@@ -16981,6 +17010,8 @@ target = "batten.toml"
 [[verdict]]
 id = "config state wrong"
 gloss = "a review-config key is set to the value that switches the lifecycle off"
+doc.why = "Reviews silently stop, and the gate that consumes them then refuses every pull request"
+doc.do = ["restore the key's value"]
 class = """
 Flipping one of these back is a one-line diff whose symptom is SILENCE: reviews stop happening, which looks exactly like nobody having pushed, and the gate that consumes the review then refuses every pull request for want of an answer the config quietly stopped producing. The visible failure would be the gate rather than the cause. Restore the value, or accept the consequence deliberately and record it.
 """
@@ -16993,6 +17024,8 @@ target = "batten.toml"
 [[verdict]]
 id = "grant carry unsafe"
 gloss = "a workflow can reach a long-lived registry credential"
+doc.why = "A stored credential reaches every job that can read the secret"
+doc.do = ["remove the reference and authenticate through OIDC in the same change"]
 class = """
 A credential stored as a secret is the thing trusted publishing exists to retire, and it reaches every job that can read the secret rather than the one step that needs it. Remove the reference and authenticate through OIDC in the same change; a finding here names a key class and a line, never the matched text, because the class of thing being looked for is the class that must not reach a log.
 """
@@ -17005,6 +17038,9 @@ target = "batten.toml"
 [[verdict]]
 id = "lane grant missing"
 gloss = "publishing is on without the credential-free way to do it"
+doc.why = "Without OIDC the release tool would need a stored registry credential"
+doc.do = ["grant the publishing job `id-token: write` and register a trusted publisher"]
+doc.dont = ["add a registry token"]
 class = """
 The release tool will authenticate to a registry, and the only route that needs no stored credential is the OIDC permission on the job that publishes. Add it and register this repository as a trusted publisher; do not add a registry token. While publishing is off the permission is NOT required — granting it then would be a capability no step uses, which an excessive-permissions audit reads as a finding of its own.
 """
@@ -17017,6 +17053,8 @@ target = "batten.toml"
 [[verdict]]
 id = "timer declare missing"
 gloss = "a workflow job declares no timeout at all"
+doc.why = "An unbounded job can burn a runner until the forge's own ceiling"
+doc.do = ["declare `timeout-minutes` with its budget comment"]
 class = """
 A job with no wall-clock bound can burn a runner until the forge's own ceiling stops it. Declare one, with the budget comment that justifies it.
 """
@@ -17029,6 +17067,8 @@ target = "batten.toml"
 [[verdict]]
 id = "timer carry unnamed"
 gloss = "a timeout carries no budget comment beside it"
+doc.why = "An unjustified limit catches only a wedged job, never a slower one"
+doc.do = ["add the budget comment beside the value, in the measured or grandfathered form"]
 class = """
 A limit with no justification is boilerplate: it cannot fail a job that is merely broken-slow, only one that is fully wedged, and it never tells anyone the job got slower. Add the comment beside the value it bounds — grandfathered if the number predates measurement, which is honest debt rather than an exemption.
 """
@@ -17041,6 +17081,8 @@ target = "batten.toml"
 [[verdict]]
 id = "timer parse unclear"
 gloss = "a budget comment does not match either accepted form"
+doc.why = "A budget a reader cannot parse is one a gate cannot check"
+doc.do = ["write the grandfathered form or the measured one"]
 class = """
 The two grammars are matched WHOLE, so a comment that merely mentions the word cannot pass — a budget a reader cannot parse is one a gate cannot check. Write the grandfathered form or the measured one.
 """
@@ -17053,6 +17095,8 @@ target = "batten.toml"
 [[verdict]]
 id = "timer count wrong"
 gloss = "a measured budget's declared minutes disagree with its own stated p95"
+doc.why = "The arithmetic then justifies a different number than the one enforced"
+doc.do = ["set the minutes to the ceiling of the p95 times the multiplier"]
 class = """
 The declared value must equal the ceiling of the p95 times the repository multiplier, in minutes. A budget whose arithmetic does not hold is a justification for a different number than the one enforced.
 """
@@ -17065,6 +17109,8 @@ target = "batten.toml"
 [[verdict]]
 id = "timer count other"
 gloss = "a measured budget uses a multiplier other than the repository's"
+doc.why = "A per-job multiplier is a per-job argument, invisible as a loosening"
+doc.do = ["use the repository multiplier, or move that constant if the headroom is wrong"]
 class = """
 The multiplier is ONE repository-wide constant rather than a per-job field, because a per-job multiplier is a per-job argument — the point of a single number is that loosening it anywhere is visible as loosening it everywhere. Move the constant if the headroom is genuinely wrong.
 """
@@ -17077,6 +17123,8 @@ target = "batten.toml"
 [[verdict]]
 id = "job list empty"
 gloss = "a workflow declares no jobs this rule can read"
+doc.why = "A file that cannot parse as a workflow is not one with no jobs"
+doc.do = ["fix the workflow, or narrow the rule's selector"]
 class = """
 A file that cannot be parsed as a workflow is not a workflow with no jobs, and a silent pass over it is the failure this arm exists for. Fix the file, or narrow the rule's selector so it is honestly out of scope.
 """
@@ -17089,6 +17137,8 @@ target = "batten.toml"
 [[verdict]]
 id = "tool name unknown"
 gloss = "an install list names a tool the manifest does not declare"
+doc.why = "The installer skips an unknown name and a later step fails on a missing command"
+doc.do = ["correct the name in the list, or declare the tool in `mise.toml`"]
 class = """
 The installer does not fail on an unknown name, so the drift surfaces much later as a missing command in whichever step needed it — a missing TOOL wearing a missing-STEP costume. Correct the name in the list, or declare the tool.
 """
@@ -17101,6 +17151,8 @@ target = "batten.toml"
 [[verdict]]
 id = "tool select missing"
 gloss = "a pull-request workflow runs the installer without an install list"
+doc.why = "Without a list the whole toolchain installs on every push"
+doc.do = ["give the job an install list of the tools it invokes"]
 class = """
 A workflow with no list installs the whole toolchain on every push, and judging the names IN a list can never see it — that is a hole in the trigger rather than in the predicate. Narrow the list to the tools that job invokes.
 """
@@ -17113,6 +17165,8 @@ target = "batten.toml"
 [[verdict]]
 id = "tool pin loose"
 gloss = "an install list is declared without the variables that make it bind"
+doc.why = "The runner re-installs the missing tools at task time, so the list decides nothing"
+doc.do = ["set both auto-install variables to false in the same workflow"]
 class = """
 The runner re-installs the missing tools at task time, so the list decides nothing: one job installed a single tool in 13s and then rebuilt the whole toolchain inside the work step. Set both auto-install variables to false, in the same workflow as the list.
 """
@@ -17125,6 +17179,8 @@ target = "batten.toml"
 [[verdict]]
 id = "spawn reach absent"
 gloss = "a policy row spawns a declared tool no install list installs"
+doc.why = "The row fails closed in CI while passing locally, with nothing naming the cause"
+doc.do = ["add the tool to the install list of the job that runs the row"]
 class = """
 With auto-install off making the list binding, such a row does not run slowly — it fails CLOSED, at deny, while passing locally where the tool is installed, and the landing loop reads that as a verify/CI disagreement with nothing naming the cause. Add the tool to the list of the job that runs the row.
 """
@@ -17137,6 +17193,8 @@ target = "batten.toml"
 [[verdict]]
 id = "module place missing"
 gloss = "a module is judged by the layering rule and absent from its table"
+doc.why = "An unplaced module's constraints were never written down"
+doc.do = ["place the module in the layer table, or narrow the row's selector"]
 class = """
 An unplaced module is not a module with no constraints — it is a module whose \
 constraints nobody wrote down, and the rule cannot tell those apart. Place it, or \
@@ -17151,6 +17209,8 @@ target = "batten.toml"
 [[verdict]]
 id = "layer table dead"
 gloss = "the layer table forbids no edge, so the rule is on and decides nothing"
+doc.why = "A gate that cannot refuse reads as coverage while it is off"
+doc.do = ["declare the forbidden edges, or remove the row"]
 class = """
 A gate that cannot refuse is off, and one that is off while reading as configured \
 is worse than one that is absent — it reads as coverage. Declare the forbidden \
@@ -17165,6 +17225,8 @@ target = "batten.toml"
 [[verdict]]
 id = "remedy select dropped"
 gloss = "a stderr line inside a `>&2` block carries no `::error::` prefix, so readers drop it"
+doc.why = "An unprefixed refusal line is dropped, so the reader never receives the route"
+doc.do = ["prefix every line of the block with `::error::`"]
 class = """
 `land` and every reader following this tree's filter convention drop an \
 unprefixed line. A refusal line without the prefix is ABSENT, not quiet — \
@@ -17180,6 +17242,8 @@ target = "mise.toml"
 [[verdict]]
 id = "remedy own duplicate"
 gloss = "a task body names a bypass it does not read, so it is a second author of another gate's remedy"
+doc.why = "A second copy of a gate's routes drifts from the gate"
+doc.do = ["state no routes and point at the gate, as \"see its message\""]
 class = """
 A second authority drifts. Measured: a caller's copy dropped one route entirely \
 and turned the override's precondition into bookkeeping, leaving a binary whose \
@@ -17196,6 +17260,8 @@ target = "mise.toml"
 [[verdict]]
 id = "workspace declare unused"
 gloss = "a `[workspace.dependencies]` entry no member references resolves to nothing"
+doc.why = "Every graph-reading gate is green about a dependency that is not in the tree"
+doc.do = ["reference it with `workspace = true`, or delete the entry"]
 class = """
 Every graph-reading gate is then green about a dependency that is not in the \
 tree: the entry declares a version, nothing inherits it, and the closure a \
@@ -17211,6 +17277,8 @@ target = "Cargo.toml"
 [[verdict]]
 id = "manifest parse broken"
 gloss = "a manifest could not be parsed, so its references were never counted"
+doc.why = "An orphan cannot be ruled out over a file nobody read"
+doc.do = ["fix the manifest so `mise run lint:toml` parses it"]
 class = """
 An orphan cannot be ruled out over a file nobody read. Could-not-look, reported \
 rather than collapsed into the clean answer.
@@ -17224,6 +17292,8 @@ target = "mise run lint:toml"
 [[verdict]]
 id = "workspace table absent"
 gloss = "no `[workspace.dependencies]` table reached the judged set, so the rule decided nothing"
+doc.why = "A rule whose input never arrived did not look"
+doc.do = ["make the row's selector select the manifest, or remove the row"]
 class = """
 The vacuity arm. A rule whose input never arrived has not established that there \
 are no orphans; it has established that it did not look. Narrow the row's \
@@ -17238,6 +17308,8 @@ target = "batten.toml"
 [[verdict]]
 id = "source parse broken"
 gloss = "a compliance source could not be parsed, so the checker was never judged against the evaluator"
+doc.why = "A file that did not parse contributes no declaration, which is not agreement"
+doc.do = ["fix the file so `mise run lint:toml` parses it"]
 class = """
 The pinned type checker and the shipped evaluator have to agree about which OPA \
 level they implement, and that comparison needs both declarations. A file that \
@@ -17252,6 +17324,8 @@ target = "mise run lint:toml"
 [[verdict]]
 id = "version pin ahead"
 gloss = "the pinned checker implements a newer OPA level than the shipped evaluator records"
+doc.why = "The checker accepts constructs the evaluator cannot run"
+doc.do = ["move the `opa` pin down, or the recorded level up once upstream declares it"]
 class = """
 A rule type checked by one and evaluated by the other is a false green: the \
 checker accepts a construct the evaluator cannot run, so the module passes its \
@@ -17267,6 +17341,8 @@ target = "mise.toml"
 [[verdict]]
 id = "claim state stale"
 gloss = "the recorded compliance level was read against a different evaluator version than the one pinned"
+doc.why = "The pin then tracks a claim nobody checked"
+doc.do = ["re-read upstream's level for the pinned version and move both together"]
 class = """
 The pin then tracks a claim nobody has checked. Re-read upstream's declared level \
 against the version actually pinned and move both together, which is what keeps \
@@ -17281,6 +17357,8 @@ target = "mise.toml"
 [[verdict]]
 id = "claim declare absent"
 gloss = "a declaration this comparison needs is absent, so there is nothing to hold the pin to"
+doc.why = "A comparison with one side missing decides nothing"
+doc.do = ["restore the declaration the subject names in `mise.toml`"]
 class = """
 One class rather than four, distinguished by the subject naming which declaration \
 is missing: the `opa` pin, the recorded compliance level, the evaluator version \
@@ -17297,6 +17375,8 @@ target = "mise.toml"
 [[verdict]]
 id = "version read unread"
 gloss = "a declared version is not MAJOR.MINOR, so no comparison it feeds can be trusted"
+doc.why = "An unparseable version silently orders wrong"
+doc.do = ["write the declared version as MAJOR.MINOR"]
 class = """
 The comparison is numeric, so an unparseable version silently orders wrong rather \
 than failing. Reported at the declaration, because that is where the fix goes.
@@ -17310,6 +17390,8 @@ target = "mise.toml"
 [[verdict]]
 id = "route name undefined"
 gloss = "a route offers a task this tree does not define"
+doc.why = "A refused reader runs the one remedy offered and is told it does not exist"
+doc.do = ["define the task in `mise.toml`, or route to a program on PATH"]
 class = """
 The worst moment for a task to be missing. A reader has just been refused, has \
 been handed the one thing to run, runs it, and is told the task does not exist — \
@@ -17342,6 +17424,8 @@ target = "mise.toml"
 [[verdict]]
 id = "prompt run never"
 gloss = "a review this branch declared it would run has not run over these bytes"
+doc.why = "A declared review that never ran has not been shown to run over this subject"
+doc.do = ["run `mise run verify`", "check the declared runner is installed and on PATH"]
 class = """
 Refuses ABSENCE and nothing else. A declared id missing from the review store \
 means the vendored prompt has not been shown to run over this subject, which is \
@@ -17441,6 +17525,8 @@ target = "/code-review"
 [[verdict]]
 id = "review answer missing"
 gloss = "readying would buy a CI matrix on a head carrying unresolved review threads"
+doc.why = "Readying starts CI, and unresolved threads mean the matrix will be bought again"
+doc.do = ["resolve each thread, read them again with `pull_request_read`, then retry"]
 class = """
 Readying is the event that starts CI, and nothing in `land`'s pre-ready sequence \
 asks about review. The count is the review threads still unresolved, plus one if \
@@ -17471,6 +17557,10 @@ target = "@coderabbitai full review"
 [[verdict]]
 id = "review read absent"
 gloss = "readying would buy a CI matrix on a head nobody has reviewed"
+doc.why = "Zero threads on an unreviewed head looks exactly like a clean review"
+doc.do = [
+  "request a review with `@coderabbitai full review`, answer it, then read with `pull_request_read` `get_reviews`",
+]
 class = """
 The read found no review at all, which the thread count cannot say: a head with \
 zero threads is indistinguishable from a clean review and from an unread one, and \
@@ -17497,6 +17587,9 @@ target = "pull_request_read, method get_reviews, then retry"
 [[verdict]]
 id = "spawn place missing"
 gloss = "a module the adapter table does not place resolves the spawn type"
+doc.why = "A spawn outside the placed modules is a child process nobody placed"
+doc.do = ["route it through `crate::exec`"]
+doc.dont = ["add the module to the adapter table to make it pass"]
 class = """
 The adapter table says which modules own a delegated tool. A spawn outside them \
 is a child process nobody placed, so route it through `exec` — the sanctioned \
@@ -17527,6 +17620,12 @@ target = "policy/spawn-adapters.rego"
 [[verdict]]
 id = "spawn write refused"
 gloss = "this change adds a clippy escape in engine source"
+doc.why = "The spawn inventory may not grow by annotation"
+doc.do = [
+  "use `crate::rest`, `crate::fetch` or `crate::exec::piped_through` instead",
+  "where a new spawn is truly needed, take it to a groomed row",
+]
+doc.dont = ["justify the escape in its own `reason` string"]
 class = """
 A spawn is an inventory row and the inventory may not grow by annotation. Reach \
 for the in-process form first — `crate::rest` for the forge's REST tier, \
@@ -17549,6 +17648,8 @@ target = ".claude/rules/rust.md"
 [[verdict]]
 id = "adapter add refused"
 gloss = "this change adds an entry to the spawn placement table"
+doc.why = "Widening a deny-by-omission table is a two-word edit justified by a comment nothing reads"
+doc.do = ["remove the spawn, or take the widening to a groomed row"]
 class = """
 The placement table is deny-by-omission, so widening it is a two-word edit whose \
 justification lives in a comment nothing reads. That is how two placements landed \
@@ -17564,6 +17665,8 @@ target = "policy/spawn-adapters.rego"
 [[verdict]]
 id = "diff read absent"
 gloss = "the base rev did not resolve, so no change could be read"
+doc.why = "With no delta the rule reads exactly like a change that added nothing"
+doc.do = ["`git fetch origin main` so the base resolves, then run it again"]
 class = """
 Could-not-look is not clean. With no delta every clause of this rule is undefined, \
 which is byte-identical to a tree that added no spawn — the dead-gate class this \
@@ -17581,6 +17684,8 @@ target = "git fetch origin main, so the declared base rev resolves and the chang
 [[verdict]]
 id = "bound state missing"
 gloss = "the MCP startup budget is not declared, so it is the host default"
+doc.why = "The host default kills connects that would succeed, losing the server for the session"
+doc.do = ["set `env.MCP_TIMEOUT` in `.claude/settings.json` at or above the module's floor"]
 class = """
 A timeout nobody chose is boilerplate, not a budget, and it bounds nothing. The host default is below this repository's own worst observed successful connect, so a connect that would have succeeded is killed by it — and the cost is not a retry, it is the server absent for the whole session. Declare the budget.
 """
@@ -17593,6 +17698,8 @@ target = "set `env.MCP_TIMEOUT` in .claude/settings.json to at or above the floo
 [[verdict]]
 id = "bound read wrong"
 gloss = "the declared MCP startup budget is not a whole number of milliseconds"
+doc.why = "An unreadable budget is neither a budget nor an absent one"
+doc.do = ["write `env.MCP_TIMEOUT` as a whole number of milliseconds"]
 class = """
 A value that cannot be read as milliseconds is not a budget and is not an absent one either — the two have different remedies, and reading this as absent sends the reader to add a key that is already there.
 """
@@ -17605,6 +17712,8 @@ target = "write `env.MCP_TIMEOUT` as a whole number of milliseconds in .claude/s
 [[verdict]]
 id = "bound guard early"
 gloss = "the declared MCP startup budget is below its measured floor"
+doc.why = "A budget near the worst observed connect loses the server when a cold container misses it"
+doc.do = ["raise `env.MCP_TIMEOUT` to at or above the declared floor"]
 class = """
 A budget close to the worst observed successful connect loses the whole session's server when it is missed. The floor is twice that measurement, which is the margin a cold container needs while it is also provisioning, building and paying a first index.
 """
@@ -17617,6 +17726,8 @@ target = "raise `env.MCP_TIMEOUT` in .claude/settings.json to at or above the de
 [[verdict]]
 id = "bound measure stale"
 gloss = "a declared floor disagrees with the measurement it names as its basis"
+doc.why = "A floor its own measurement no longer produces is boilerplate"
+doc.do = ["move the floor and its measurement row together in `policy/mcp-timeout-budget.rego`"]
 class = """
 A limit whose recorded justification no longer produces it is the boilerplate CLOUD-266 refuses, wearing a measurement's clothes. Both numbers move together or neither moves: raising the floor needs a new row in the module's own measurement table, and lowering it needs a new measurement.
 """
@@ -17631,6 +17742,11 @@ target = "policy/mcp-timeout-budget.rego"
 [[verdict]]
 id = "verb reach missing"
 gloss = "this branch declares a verb and nothing in the tree reaches it"
+doc.why = "A verb with no caller looks exactly like one that works"
+doc.do = [
+  "invoke it from a mise task, a workflow step or a hook",
+  "or declare `// unreached: <issue> <why>` above its CommandDecl",
+]
 class = """
 A capability that ships without a caller is indistinguishable from one that \
 works: it gets a man page, completions, a module row and a layer, and every gate \
@@ -17657,6 +17773,8 @@ target = "declare `# unreached: <issue> <why>` above the CommandDecl, naming the
 [[verdict]]
 id = "verb reach stale"
 gloss = "a verb is wired and still carries the declaration that says nothing reaches it"
+doc.why = "A stale declaration says the verb has no caller when it has one"
+doc.do = ["drop the `unreached:` line above the CommandDecl"]
 class = """
 A declaration that has outlived its reason reads as coverage: the caller exists, \
 the line still says it does not, and the next reader believes the line. This is \
@@ -17672,6 +17790,8 @@ target = "drop the `# unreached:` line above the CommandDecl; the verb has a cal
 [[verdict]]
 id = "source parse dead"
 gloss = "a declared engine source would not parse, so it was never judged"
+doc.why = "A source the gate never opened was never judged"
+doc.do = ["fix the named source so it parses"]
 class = """
 A module that iterates only the documents it could read reports green over a file \
 it never opened. This names the file instead.
@@ -17685,6 +17805,8 @@ target = "crates/batten/src/rest.rs"
 [[verdict]]
 id = "plan read missing"
 gloss = "a declared plan the boundary could not acquire from the runner"
+doc.why = "A plan nobody could read looks exactly like one with nothing wrong"
+doc.do = ["provision the runner through the project's pin, fix its config, and run the gate again"]
 class = """
 A plan nobody could read and a plan with nothing wrong are identical on the
 decision surface, so this refuses rather than passing. The cause is upstream of
@@ -17701,6 +17823,8 @@ target = "policy/hk-plan-required.rego"
 [[verdict]]
 id = "step run missing"
 gloss = "the plan will not run a step this repository requires"
+doc.why = "A required step the runner silently excludes reads as satisfied"
+doc.do = ["restore the step in `hk.pkl`, or change what the row requires in the same diff"]
 class = """
 A step the row requires is missing from the plan, or present with a status that
 is not inclusion. Either way the gate would run without it, and a required step
@@ -17717,6 +17841,8 @@ target = "hk.pkl"
 [[verdict]]
 id = "plan run refused"
 gloss = "the plan resolved under a profile this row refuses"
+doc.why = "The gate was invoked under a profile this repository does not accept"
+doc.do = ["invoke the gate without the refused profile"]
 class = """
 The plan is a plan the gate would run, and the row refuses the profile set it
 resolved under. Distinct from a missing step because the remedy is different:
@@ -17731,6 +17857,8 @@ target = "hk.pkl"
 [[verdict]]
 id = "symbol count absent"
 gloss = "the symbol census is absent, so no spawn was placed or refused"
+doc.why = "A census nobody could take would read as a tree with no unplaced spawns"
+doc.do = ["install the analyser the row declares and run the check again"]
 class = """
 Could-not-look is not clean (CLOUD-251). `input.tree.symbols` is `null` both when \
 no row declared the fact and when the analyser could not be run or parsed, and \
@@ -17746,6 +17874,8 @@ target = "batten.toml"
 [[verdict]]
 id = "adapter table empty"
 gloss = "the adapter table places no module, so this rule decides nothing"
+doc.why = "A table placing nothing cannot refuse, so the gate is off"
+doc.do = ["restore the placements in `policy/spawn-adapters.rego`"]
 class = """
 The vacuity guard. A table placing nothing cannot refuse anything, and a gate \
 that cannot refuse is off rather than passing.
@@ -18018,6 +18148,8 @@ regex = '^(backlog|todo|in-progress|in-review)$'
 [[verdict]]
 id = "prose state other"
 gloss = "prose outside AGENTS.md states a landing arrangement that file already decides"
+doc.why = "An agent acts on tree prose as a rule, so a second arrangement competes with AGENTS.md"
+doc.do = ["delete the sentence, or paraphrase it so it states no rate"]
 class = """
 AGENTS.md owns how work lands here, and its branch clause is the whole of that decision. A sentence elsewhere in the tree stating a different arrangement is a competing authority rather than a restatement, and the cost is not confusion but action: these files are read by an agent that acts on them without re-deriving, so a local arrangement written in the register of a rule is followed as one. Measured 2026-09-02 -- a module comment quoting a single issue's own internal arrangement was adopted as convention, and the planning turn that read it partitioned its work eight ways against the rule it had loaded minutes earlier. Delete the sentence, or paraphrase it so it reports what one issue arranged without stating a rate.
 """
@@ -18030,6 +18162,8 @@ target = "AGENTS.md"
 [[verdict]]
 id = "source parse refused"
 gloss = "a declared prose source exists and could not be read, so its lines were never judged"
+doc.why = "A source that exists and will not read was reported green unopened"
+doc.do = ["fix the source, or drop it from the rule's globs"]
 class = """
 Could-not-look is not clean (CLOUD-251). A declared source that is ABSENT is ordinary -- a consumer carries fewer of these globs, and firing on that would refuse a state nobody caused -- but one that exists and will not read is a file this gate reported green over without opening. The two causes are distinct in the engine's own channel precisely so a module can refuse the second and stay silent on the first. Fix the source or drop it from the rule's globs; a gate that cannot see its subject must say so rather than pass.
 """
@@ -18042,6 +18176,8 @@ target = "rules/policy-modules.md"
 [[verdict]]
 id = "default state other"
 gloss = "a rules file restates an env default the mechanism does not have"
+doc.why = "An agent acts on the stale value as if the rule said it"
+doc.do = ["correct the value in the rules file, or drop it and point at the mechanism"]
 class = """
 A stale parenthetical in a rules file is not a typo: these files are read by an agent that then acts without re-deriving, so it is a false premise delivered with the authority of the rule. The mechanism's own `${VAR:-N}` is the authority. Correct the prose, or drop the value and let the reader read it there — dropping it is always allowed, because this class never demands that a value be restated.
 """
@@ -18054,6 +18190,8 @@ target = "rules/toolchain.md"
 [[verdict]]
 id = "event wire missing"
 gloss = "a sentence says a task runs on a hook event nothing wires it to"
+doc.why = "A reader trusts that the task runs when nothing runs it"
+doc.do = ["wire the task to the event in `.claude/settings.json`, or say it is absent"]
 class = """
 Scoped to a sentence carrying "runs on", so prose stays free to record an accepted gap beside the wiring it qualifies. What cannot stand is the assertion that a task RUNS on an event `.claude/settings.json` does not wire. Either wire it, or say it is absent.
 """
@@ -18066,6 +18204,8 @@ target = ".claude/settings.json"
 [[verdict]]
 id = "input key dead"
 gloss = "a rules file names a policy input key the generated schema does not carry"
+doc.why = "A module copying the key reads undefined and decides nothing"
+doc.do = ["correct the key against `schema/policy-input.schema.json`, or drop it"]
 class = """
 CLOUD-845's defect in prose. A module copying the key reads an undefined path, Rego reads undefined as does not hold, and the deny set is empty — a dead gate and a clean tree are byte-identical. The generated schemas are the authority; correct the key or drop it.
 """
@@ -18078,6 +18218,8 @@ target = "schema/policy-input.schema.json"
 [[verdict]]
 id = "rule ask missing"
 gloss = "a rules file names a fixed rule the evaluator does not query"
+doc.why = "A module publishing the named spelling contributes nothing to the deny set"
+doc.do = ["correct the name against `crates/batten/src/policy.rs`'s constants"]
 class = """
 The three rule names are the query root, so a module publishing the named spelling contributes nothing to the deny set and fails nothing. `crates/batten/src/policy.rs`'s constants are the authority. Correct the name, or subscript it if the pattern table was meant.
 """
@@ -18090,6 +18232,11 @@ target = "crates/batten/src/policy.rs"
 [[verdict]]
 id = "rule count other"
 gloss = "a rules file states how many arms a rule has and the module has a different number"
+doc.why = "A wrong count travels into prompts and issue bodies as a premise"
+doc.do = [
+  "correct the number, or drop the `(N arms)` and point at the module",
+  "then `mise run rules-drift`",
+]
 class = """
 Predicate 1 one shape up: a restated VALUE against a restated CLOSED COUNT. CLOUD-1150 measured what one costs — `rules/toolchain.md` said one sibling-edit admission was allowed where `shell-retirement.rego` carried three, and a grooming session wrote that premise into two dispatched agent prompts and five issue bodies before anyone read the module. The module's own heads are the authority. Correct the number, or drop the `(N arms)` and let the reader read it there — dropping it is always allowed, because this class never demands that a count be restated.
 """
@@ -18102,6 +18249,8 @@ target = "mise run rules-drift"
 [[verdict]]
 id = "input name missing"
 gloss = "a file claiming to enumerate the policy input keys does not name one the engine emits"
+doc.why = "Authors re-derive a fact the engine already builds"
+doc.do = ["add the missing key to the enumeration in `rules/policy-modules.md`"]
 class = """
 Predicate 3 run backwards, and it fails in the opposite direction: a named key the engine cannot emit is a dead gate, and an emittable key the enumerating file omits is an author re-deriving a fact the engine already builds, or filing a fact-family row for something that ships. Measured 2026-08-30 — `base-delta` and `symbols` were declared by the generated schema and named nowhere in the file whose own closing sentence said the lists were held to it. Scoped to the file that makes that claim; a file promising nothing is untouched.
 """
@@ -18114,6 +18263,8 @@ target = "rules/policy-modules.md"
 [[verdict]]
 id = "drift read unread"
 gloss = "an authority some prose claims against could not be read"
+doc.why = "Prose claims against an authority nobody could read were never checked"
+doc.do = ["make the authority readable, then `mise run rules-drift`"]
 class = """
 The could-not-look arm, and it is conditioned on there being a claim to judge rather than fired at startup: an unreadable authority matters exactly where prose depends on it. Without the condition this row would speak in every fixture repository that inherits this config, which is the scoping defect CLOUD-1164 records for `tree-clean`.
 """
@@ -18155,6 +18306,12 @@ target = "mise run rules-drift"
 [[verdict]]
 id = "step key dead"
 gloss = "a rust-cache shared-key carries a content hash, so no restore can match it"
+doc.why = "The hash sits inside the restore prefix, so every bump misses the cache entirely"
+doc.do = [
+  "delete the hash from `shared-key`",
+  "bump `prefix-key` when a target directory is truly poisoned",
+]
+doc.dont = ["move the hash to another input"]
 class = """
 `Swatinem/rust-cache` composes its key in `src/config.ts`: `prefix-key` at `:73`, `shared-key` at `:77`, the `key` input at `:81`, the job id at `:86`, `runnerOS-runnerArch` at `:93`, `rustEnvHash` at `:130` -- and only THEN assigns `self.restoreKey` at `:133`, appending `lockHash` at `:260`. So `restoreKey` drops exactly one component and every author-supplied input is inside the restore prefix. A `hashFiles(...)` in `shared-key` therefore does not merely invalidate the exact key on a content change; it moves the fallback prefix, and no entry in the store matches at all. Measured here at 12 of 12 steps: every `[workspace.dependencies]` bump went cold across 343 locked crates in every job simultaneously. The remedy is to delete the hash, not to relocate it -- no author-controlled input lands in the dropped suffix, and cargo's own per-unit fingerprint already carries the profile, so a partial rebuild is both correct and strictly cheaper. Bump `prefix-key` when a target directory is genuinely poisoned; that is the one eviction event this key shape has.
 """
@@ -18167,6 +18324,9 @@ target = "policy/ci-cache-declared.rego"
 [[verdict]]
 id = "job declare missing"
 gloss = "a pull-request job forks cargo and its workflow declares no rust-cache step"
+doc.why = "The job builds cold on every run"
+doc.do = ["add a rust-cache step keyed to a family a trunk-side job already warms"]
+doc.dont = ["key it uniquely to this job"]
 class = """
 The job runs a `mise run <task>` whose own body, or one reached through its `depends`, invokes `cargo` -- and no step in that job declares `Swatinem/rust-cache`, so its target directory is empty on every run. Measured on `commit-lint` before this row existed: `commit-attribution` and `commit-check` both at ~341.9s, blocked on one cold debug build, against a lint body of 758.6ms. The absence direction is the one with teeth and the one that fails silently; a job declaring a cache it does not need is not this rule's business. The remedy is a rust-cache step keyed to a family a trunk-side job already warms, because only an entry written from the default branch is readable by every pull request -- a key unique to one job is warmed by nothing and relocates the cost rather than removing it.
 """
@@ -18179,6 +18339,8 @@ target = "policy/ci-cache-declared.rego"
 [[verdict]]
 id = "job write unsafe"
 gloss = "a pull-request job writes to a cache family a trunk-side job already warms"
+doc.why = "A pull-request write is unreadable elsewhere, and the first finisher fixes a thin entry"
+doc.do = ["set `save-if: false` on the pull-request consumer"]
 class = """
 A GitHub Actions cache entry is IMMUTABLE once written and a read is scoped to the run's own ref plus the base branch. Two consequences, and the row is about both: a pull-request write is unreadable by every other pull request, so it is upload time for a multi-gigabyte entry with no reader; and on a fresh key the FIRST job to finish becomes the entry every later reader inherits, which hands the family the thinnest of the trees that read it. Measured here, the readers of one family do not build the same amount -- one builds a single binary and finishes roughly eleven minutes before the job that builds the workspace and its test targets. The remedy is one designated writer on the trunk and `save-if: false` on every pull-request consumer; a pure consumer cannot lose that race because it does not enter it. A family no trunk-side job writes is NOT warmed and is deliberately outside this row: making those read-only would leave them with nothing at all.
 """
@@ -18191,6 +18353,8 @@ target = "policy/ci-cache-declared.rego"
 [[verdict]]
 id = "job read empty"
 gloss = "a pull-request job is read-only against a cache family that is declared and holds nothing on its architecture"
+doc.why = "The job restores nothing on every run, forever"
+doc.do = ["add a warm writer on the reader's architecture, or move the reader to one that has it"]
 class = """
 The complement of `job write unsafe`, and the arrangement that row's own text leaves open: a job already carrying `save-if: false` against a family no trunk-side job writes where that job can read it. The `shared-key` is declared and the entry behind it holds nothing, so the job restores nothing on every run, forever -- and unlike a job that writes its own entry it has no later lap to inherit one, so the cost is a full cold build every time with no term that ever amortises. The failure is silent in the way this whole module is stated over: not a red check, just a green run that took longer, with the symptom in a bill nobody reads. The architecture is half the fact and the half that gets missed: rust-cache composes `runnerOS-runnerArch` into the key INSIDE the restore prefix, so a family written on arm64 and read on x64 is two entries that can never touch, and a reader left behind by an architecture migration keeps a valid `shared-key` and a warm writer that exist on different machines. Measured here on `batten-check`, which could not follow its family to arm64 because its scanner publishes no linux-aarch64 artifact: 683s, 1.9x the next longest job and the critical path of the workflow. The remedy is a warm writer on the reader's own architecture, or moving the reader to the architecture that already has one.
 """
@@ -18203,6 +18367,8 @@ target = "policy/ci-cache-declared.rego"
 [[verdict]]
 id = "task resolve missing"
 gloss = "the manifest that owns the task graph would not parse, so cargo reachability was not decided"
+doc.why = "A graph that will not parse answers nothing about cargo"
+doc.do = ["fix `mise.toml` so it parses"]
 class = """
 Could-not-look, never a verdict about the tree, and since CLOUD-1863 it covers ONE way the walk can fail to answer rather than two: the manifest that owns the task graph would not parse. Absent is a different thing and stays out of this class -- it means the question does not apply here.
 
@@ -18219,6 +18385,9 @@ target = "policy/ci-cache-declared.rego"
 [[verdict]]
 id = "test cover partial"
 gloss = "this branch put a #[cfg] platform attribute on a #[test], so one arm is never compiled where it is authored"
+doc.why = "The other platform's arm is never compiled locally, so CI is where it breaks"
+doc.do = ["use `cfg!` inside the case so both arms compile everywhere"]
+doc.dont = ["put `#[cfg(unix)]` over the case"]
 class = """
 The remedy is `cfg!` inside the case, not an attribute over it. An attribute makes the whole case vanish on the other target, so `cross-check` type-checks only the arm the local host admits and the next edit to the other one is discovered by CI; a `cfg!` keeps both arms compiled everywhere and states the off-platform contract where a reader can see it. Measured on CLOUD-1148: `scratch.rs`'s reaper case asserted collection unconditionally, the `windows` job reddened alone, and the first fix put `#[cfg(unix)]` over it -- which is this verdict. A case whose SUBJECT genuinely does not exist off the platform is a different thing and is not what this refuses: the rule is a ratchet over the diff, so the ~40 pairs already in the tree stay. The could-not-look side is `diff read absent`, which this module raises rather than restating.
 """
@@ -18231,6 +18400,8 @@ target = "policy/cfg-gated-test.rego"
 [[verdict]]
 id = "task read dropped"
 gloss = "a bare mise `run` string reads `$1`, but mise appends arguments to the string, so it is always empty"
+doc.why = "The task silently takes its default and ignores the caller's argument"
+doc.do = ["use the function shape: `run = \"name() { ...; }; name\"`"]
 class = """
 The remedy is the function shape: `run = "name() { ...; }; name"`, so the words mise appends after the body become the function's arguments. A bare body reading `${1:-default}` silently takes the default, and the caller's argument lands as trailing words on the last command. Measured on CLOUD-1916: `darwin-link x86_64-apple-darwin` linked and receipted aarch64, so that required check never linked its own target; `ci-slow-needed` compared the wrong range on #928 the same way.
 """
@@ -18274,6 +18445,10 @@ target = "policy/run-arg-shape.rego"
 [[verdict]]
 id = "suite bind missing"
 gloss = "the runner config declares no slow-timeout this gate can read, so no slow-test ban is in force"
+doc.why = "Without `terminate-after` a slow case is marked but never failed"
+doc.do = [
+  "declare `slow-timeout` with `period` in seconds and `terminate-after` in `.config/nextest.toml`",
+]
 class = """
 `period` alone only MARKS a case slow and prints it; `terminate-after` is what kills it, and the TIMEOUT that follows is what fails the run. A declaration carrying one and not the other is not a ban and must not read as one. An absent file, a commented-out declaration, and a period in a unit this module cannot convert all reach the same class deliberately: nextest accepts `2m` and `500ms`, either of which would leave the comparison unreachable and the gate silently green over a bound nobody is enforcing. Fail-closed is the only honest direction for a guard whose subject is whether a guard exists.
 """
@@ -18286,6 +18461,8 @@ target = "policy/nextest-slow.rego"
 [[verdict]]
 id = "waiver file missing"
 gloss = "a per-test override cites no tracker row directly above it, so the exception is written but not filed"
+doc.why = "An unexplained exception switches the ban off for whichever test was inconvenient"
+doc.do = ["cite the tracker row that owns the slow case directly above the override"]
 class = """
 A per-test override is how a legitimately slow case keeps the ban in force for every other case, so the mechanism is sanctioned and the ceiling deliberately does not reach it. What it owes instead is a reason a reader can follow: an override with no row behind it is the ban switched off for whichever test was inconvenient, and an unexplained exception is the thing that rots while looking like policy.
 """
@@ -18310,6 +18487,9 @@ target = "policy/nextest-slow.rego"
 [[verdict]]
 id = "bound edit refused"
 gloss = "the declared slow-test period is above the ceiling policy/nextest-slow.rego commits to"
+doc.why = "The ratchet only allows the period to fall"
+doc.do = ["lower the period to at or below the ceiling"]
+doc.dont = ["raise the ceiling to fit"]
 class = """
 The ratchet is "never above", not "always exactly", and the asymmetry is the point: lowering the period is free, so a branch that makes the suite faster tightens the bound without negotiating with this gate. Raising it past the ceiling is refused. Lowering the CEILING is a reviewed edit to the module, which is where a reader sees it in the diff rather than inferring it from a number that moved.
 """
