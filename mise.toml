@@ -687,7 +687,14 @@ MUTANT_TASKS = "mise.toml"
 # reported 401, and not a repository-scope verdict. Measure with `mise cache
 # clear` before EACH arm: without it the first arm that succeeds makes every
 # later arm pass from cache, which is how this was misread three times.
-GH_TOKEN = "{{ get_env(name='GITHUB_PERSONAL_ACCESS_TOKEN', default=get_env(name='BATTEN_GITHUB_TOKEN', default=get_env(name='MISE_GITHUB_TOKEN', default=''))) }}"
+#
+# NO PAT AT ALL IS A SUPPORTED STATE, AND THE AMBIENT VALUE IS ITS ANSWER
+# (CLOUD-2134). The chain used to end in `''`, so with no PAT this OVERWROTE the
+# ambient placeholder with nothing and `gh` refused before sending a byte. Without
+# a credential the fence above does not apply (CLOUD-2122), the call is proxied,
+# and the proxy substitutes its own credential for the placeholder — so the
+# ambient value is kept as the last leg.
+GH_TOKEN = "{{ get_env(name='GITHUB_PERSONAL_ACCESS_TOKEN', default=get_env(name='BATTEN_GITHUB_TOKEN', default=get_env(name='MISE_GITHUB_TOKEN', default=get_env(name='GH_TOKEN', default='')))) }}"
 # THE OTHER HALF OF THE SAME REPAIR, and its absence is why the paragraph above
 # describes a 401 the paragraph above did not fix. `GH_TOKEN` is what `gh` and
 # zizmor read; `GITHUB_TOKEN` is what MISE'S OWN backends read — aqua, the
@@ -1238,7 +1245,7 @@ run = [
 ]
 
 [tasks."fuzz:search"]
-description = "Report: the bounded libFuzzer search over both targets, `fuzz`'s no-argument half (CLOUD-112)"
+description = "Report: the bounded libFuzzer search over every target, `fuzz`'s no-argument half (CLOUD-112)"
 # TWO corpus directories, and the order is the whole point. libFuzzer writes
 # every coverage-expanding input into the FIRST directory and treats the rest as
 # read-only seeds — so the machine's working set lands in git-ignored
@@ -1248,14 +1255,16 @@ description = "Report: the bounded libFuzzer search over both targets, `fuzz`'s 
 # anything anyone chose. A crash still lands in `fuzz/artifacts/`, which IS
 # tracked, because a reproducer is exactly the file worth reviewing.
 #
-# The two targets are written out rather than looped over: two entries, each
+# The targets are written out rather than looped over: one entry each, each
 # stopping the search if it fails, is exactly what the `for` did. `FUZZ_SECONDS`
 # bounds each, 60 when unset.
 depends = ["fuzz:tools"]
 run = [
-  "mkdir -p fuzz/work/hook_decode fuzz/work/config_parse",
+  "mkdir -p fuzz/work/hook_decode fuzz/work/config_parse fuzz/work/lease_wire fuzz/work/transcript_parse",
   "cargo +nightly fuzz run hook_decode fuzz/work/hook_decode fuzz/corpus/hook_decode -- -max_total_time={% if env.FUZZ_SECONDS %}{{env.FUZZ_SECONDS}}{% else %}60{% endif %}",
   "cargo +nightly fuzz run config_parse fuzz/work/config_parse fuzz/corpus/config_parse -- -max_total_time={% if env.FUZZ_SECONDS %}{{env.FUZZ_SECONDS}}{% else %}60{% endif %}",
+  "cargo +nightly fuzz run lease_wire fuzz/work/lease_wire fuzz/corpus/lease_wire -- -max_total_time={% if env.FUZZ_SECONDS %}{{env.FUZZ_SECONDS}}{% else %}60{% endif %}",
+  "cargo +nightly fuzz run transcript_parse fuzz/work/transcript_parse fuzz/corpus/transcript_parse -- -max_total_time={% if env.FUZZ_SECONDS %}{{env.FUZZ_SECONDS}}{% else %}60{% endif %}",
 ]
 
 [tasks.test]

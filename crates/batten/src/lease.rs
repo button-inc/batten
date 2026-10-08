@@ -302,12 +302,37 @@ pub fn parse_advertisement(body: &[u8], service: Service) -> Result<Advertisemen
         let Some((id, name)) = payload.split_once(' ') else {
             continue;
         };
+        // AN ID THAT IS NOT AN OBJECT ID IS NOT AN ADVERTISEMENT (CLOUD-2135).
+        // Every line was taken on its word, so a proxy page carrying `foo bar`
+        // became a ref `bar` reading `foo` — and that value is the `old` side of
+        // the next CAS. Refused whole rather than skipped, because a body that
+        // speaks the banner and then something else is not one to half-trust.
+        if !is_object_id(id) {
+            return Err(anyhow::anyhow!(
+                "lease: the advertisement carries a ref id that is not an object id"
+            ));
+        }
         if name == "capabilities^{}" {
             continue;
+        }
+        // A NAME THAT CANNOT BE SPOKEN BACK IS NOT A REF (CLOUD-2159). Every name
+        // read here can become `Update::name`, which `command` frames with space,
+        // NUL and newline — so an empty name, or one carrying any of those, would
+        // forge a second field on the wire. Found by the `lease_wire` search.
+        if name.is_empty() || name.contains(['\0', '\n', ' ']) {
+            return Err(anyhow::anyhow!(
+                "lease: the advertisement carries a ref name git cannot frame"
+            ));
         }
         refs.insert(name.to_owned(), id.to_owned());
     }
     Ok(Advertisement { refs, capabilities })
+}
+
+/// Whether `id` is a git object id: 40 (SHA-1) or 64 (SHA-256) lowercase hex.
+#[must_use]
+pub fn is_object_id(id: &str) -> bool {
+    matches!(id.len(), 40 | 64) && id.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
 /// One ref update, as receive-pack takes it.

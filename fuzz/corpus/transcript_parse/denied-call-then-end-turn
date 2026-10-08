@@ -1,0 +1,4 @@
+{"type":"assistant","sessionId":"s-1","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls"}}]}}
+{"type":"attachment","sessionId":"s-1","attachment":{"type":"hook_success","hookEvent":"PreToolUse","hookName":"PreToolUse:Bash","toolUseID":"t1","exitCode":2,"stderr":"x"}}
+{"type":"user","sessionId":"s-1","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","is_error":true,"content":"x"}]}}
+{"type":"assistant","sessionId":"s-1","message":{"role":"assistant","stop_reason":"end_turn","content":[{"type":"text","text":"done"}]}}
