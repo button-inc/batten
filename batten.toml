@@ -10305,6 +10305,20 @@ rule = "task write other"
 reason = "CLOUD-1717's producers: `[tasks.branch-age-record]` and wave 2's other `run = \"\"\"` producers (4 -> 11 at its landing) are EFFECTS, not predicates. Each predicate migrated to a policy module; what stays outside is a `gh`, `git` or calendar read that section 5 and the clock ban make unmovable into the engine. The programs they replace and their suites leave the tree in the same change, so the bash surface falls while this `mise.toml`-only count rises. `base = \"origin/main\"` floors it on landing."
 expires = "2026-10-31"
 
+# CLOUD-1771's reduction, taken through the second disposition `test count
+# dropped`'s own `no_fix_reason` names: "waive the reduction deliberately". The
+# ten `ready.rs` cases it removes asserted the §8 sentence parser that row deletes,
+# so restoring them would restore the parser; the operator admitted the removal
+# in `.batten/asked.jsonl` after the board's §8 prose was moved onto relations.
+#
+# UNNARROWED and EXPECTED TO LAPSE UNUSED, for the reasons the waivers above
+# record: a ratchet finding's path is the glob plus the counts, and with
+# `base = "origin/main"` the floor becomes the new count the moment this lands.
+[[waiver]]
+rule = "test count dropped"
+reason = "CLOUD-1771 deletes the §8 sentence parser; the ten ready.rs cases that asserted it go with it (operator-admitted in .batten/asked.jsonl)"
+expires = "2026-10-31"
+
 # `cfg-gated-test`'s own first legitimate refusal, taken through the route the
 # class declares rather than the one it declared first. The long form of why an
 # override is not that route sits on `verdict[test cover partial]` above; the

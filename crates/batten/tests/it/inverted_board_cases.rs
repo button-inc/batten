@@ -65,8 +65,13 @@ const INVERSIONS: &[(&str, &str, &str)] = &[
 const LEDGERS: &[(&str, &str)] = &[("tests/ready-lint.bats", "crates/batten/tests/it/ready.rs")];
 
 /// The case names a suite declares — read from the suite while it stands, and
-/// from its successor's `// carried:` ledger once it is retired, so an inversion
-/// stays checkable after the file that recorded it is gone.
+/// from its successor's ledger once it is retired, so an inversion stays
+/// checkable after the file that recorded it is gone.
+///
+/// `// changed:` COUNTS AS DECLARED, beside `// carried:`. Both arms name a case
+/// the retired suite declared; `changed` records that its property later moved
+/// (CLOUD-1771 retired the §8 sentence parser two of these successors asserted),
+/// which is a statement about the case, not its removal from the suite.
 fn declared(suite: &str) -> Vec<String> {
     if let Ok(text) = fs::read_to_string(at_root(suite)) {
         return case_names(&text);
@@ -78,7 +83,11 @@ fn declared(suite: &str) -> Vec<String> {
     fs::read_to_string(at_root(ledger))
         .unwrap()
         .lines()
-        .filter_map(|line| line.trim_start().strip_prefix("// carried: \""))
+        .filter_map(|line| {
+            let line = line.trim_start();
+            line.strip_prefix("// carried: \"")
+                .or_else(|| line.strip_prefix("// changed: \""))
+        })
         .filter_map(|rest| rest.split_once('"'))
         .map(|(case, _)| case.to_owned())
         .collect()
