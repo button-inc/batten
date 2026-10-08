@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.209](https://github.com/button-inc/batten/compare/v0.0.208...v0.0.209) - 2026-10-08
+
+### Fixed
+
+- *(ready)* stop reading the §8 sentence; cites-blockers names the edges
+
+### Other
+
+- *(harness)* stop mise's config search at the fixture root on every spawn
+- *(ready)* read changed: ledger rows as declared; waive CLOUD-1771's count drop
+- *(refusal-ceiling)* stage no session provisioning for the SessionStart cases
+
 ## [0.0.208](https://github.com/button-inc/batten/compare/v0.0.207...v0.0.208) - 2026-10-08
 
 ### Fixed
