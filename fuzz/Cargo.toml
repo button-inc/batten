@@ -58,3 +58,10 @@ path = "fuzz_targets/lease_wire.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "transcript_parse"
+path = "fuzz_targets/transcript_parse.rs"
+test = false
+doc = false
+bench = false
