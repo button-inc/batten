@@ -221,6 +221,12 @@ pub struct Config {
     /// table cannot exempt a path.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub perf: Option<Perf>,
+    /// The mutation sweep's committed enforced set (CLOUD-2010). Absent means
+    /// this file declares none, and `batten mutate` then reads only the
+    /// raise-only `$MUTANT_GATES` — both empty is a usage error, never an empty
+    /// sweep.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mutate: Option<Mutate>,
     /// Programs that only ever READ the operands they are given, so naming a
     /// [`Config::protected`] path is not a mutation (CLOUD-1141).
     ///
@@ -1010,6 +1016,40 @@ pub struct Lease {
     /// reason this is a short named list rather than a pattern.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub fast_forward_branches: Vec<String>,
+}
+
+/// The `[mutate]` table: which gates `batten mutate` must show able to fail
+/// (CLOUD-2010).
+///
+/// # Why a committed table, and why the variable only raises it
+///
+/// The enforced set was an environment variable that only this repository's own
+/// task runner set, so every consumer's `mutate census` refused with
+/// `MUTANT_GATES is unset` and a consumer's suite could be shown to pass but
+/// never shown able to fail. House-style §8 is the shape: ONE committed
+/// authority, plus raise-only overrides. `$MUTANT_GATES` still adds names; it
+/// can never remove one this table declares.
+///
+/// The `#MUTANT` rows themselves stay beside the code (`mutate.rs`'s `ROW`):
+/// this table names WHICH gates are enforced, never how one is mutated, so it
+/// is not the second authority a manifest of mutations would be.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct Mutate {
+    /// The enforced gates. Each entry is a gate name exactly as `$MUTANT_GATES`
+    /// carries one, or — when it contains `*` — a glob over tracked paths,
+    /// expanded sorted to the name each matched file already has as a subject
+    /// (`X` for `policy/X.rego`, the task name for `mise-tasks/X.sh`) and to the
+    /// file's own path only where no other arm names it. A glob matching
+    /// nothing is kept as written, so the census reports it `names-no-subject`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub gates: Vec<String>,
+    /// Narrows which tracked files the census's declaration arm reads, in
+    /// [`Config::scope`]'s include/exclude grammar. Absent means every tracked
+    /// file — the declaration arm is opt-in by the `#MUTANT` lines a file
+    /// carries, so there is no population to bound by default.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub scope: Vec<String>,
 }
 
 /// The `[receipt]` table: which receipts a head must carry to be called verified.
@@ -4525,6 +4565,10 @@ impl Config {
             // Declaring nothing accepts no regression, which is also the safe
             // reading: an authority that cannot be read must not exempt a path.
             perf: None,
+            // Declaring nothing enforces no gate. `batten mutate` then reads the
+            // environment alone and refuses when that is empty too, so an
+            // unreadable authority cannot become a sweep over nothing.
+            mutate: None,
             // No protected paths means the unknown-program clause has nothing to
             // guard, so an empty reader set costs nothing here and is the honest
             // value: a config declaring nothing declares no readers either.

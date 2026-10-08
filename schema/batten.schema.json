@@ -326,6 +326,17 @@
       ],
       "maxLength": 1536
     },
+    "mutate": {
+      "description": "The mutation sweep's committed enforced set (CLOUD-2010). Absent means\nthis file declares none, and `batten mutate` then reads only the\nraise-only `$MUTANT_GATES` — both empty is a usage error, never an empty\nsweep.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Mutate"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "outcome": {
       "description": "The post-tool outcome signatures this repository recognises (CLOUD-945).\n\n**Consumer config, and that is non-negotiable rule 1 rather than a\npreference**: which codes and which program-specific patterns count as a\nclass is the repository's answer, and `crates/batten` holds the matcher\nonly. An empty table recognises nothing, which is the honest default —\nan advisory channel that fires on a signature nobody declared is noise\nthat nobody chose.",
       "type": "array",
@@ -3231,6 +3242,29 @@
         "recency",
         "max_age_days"
       ]
+    },
+    "Mutate": {
+      "description": "The `[mutate]` table: which gates `batten mutate` must show able to fail\n(CLOUD-2010).\n\n# Why a committed table, and why the variable only raises it\n\nThe enforced set was an environment variable that only this repository's own\ntask runner set, so every consumer's `mutate census` refused with\n`MUTANT_GATES is unset` and a consumer's suite could be shown to pass but\nnever shown able to fail. House-style §8 is the shape: ONE committed\nauthority, plus raise-only overrides. `$MUTANT_GATES` still adds names; it\ncan never remove one this table declares.\n\nThe `#MUTANT` rows themselves stay beside the code (`mutate.rs`'s `ROW`):\nthis table names WHICH gates are enforced, never how one is mutated, so it\nis not the second authority a manifest of mutations would be.",
+      "type": "object",
+      "properties": {
+        "gates": {
+          "description": "The enforced gates. Each entry is a gate name exactly as `$MUTANT_GATES`\ncarries one, or — when it contains `*` — a glob over tracked paths,\nexpanded sorted to the name each matched file already has as a subject\n(`X` for `policy/X.rego`, the task name for `mise-tasks/X.sh`) and to the\nfile's own path only where no other arm names it. A glob matching\nnothing is kept as written, so the census reports it `names-no-subject`.",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 1536
+          }
+        },
+        "scope": {
+          "description": "Narrows which tracked files the census's declaration arm reads, in\n[`Config::scope`]'s include/exclude grammar. Absent means every tracked\nfile — the declaration arm is opt-in by the `#MUTANT` lines a file\ncarries, so there is no population to bound by default.",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 1536
+          }
+        }
+      },
+      "additionalProperties": false
     },
     "MutatingVerb": {
       "description": "One mutating program declared in `batten.toml`.",

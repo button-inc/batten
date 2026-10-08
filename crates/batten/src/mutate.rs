@@ -873,30 +873,123 @@ pub fn resolve(root: &Path, name: &str) -> Option<Gate> {
     })
 }
 
-/// The gate names `$MUTANT_GATES` declares.
+/// The enforced set: the committed `[mutate].gates`, expanded, then every name
+/// `$MUTANT_GATES` adds (CLOUD-2010).
 ///
-/// An unset or empty set is fatal rather than an empty sweep: a task that
-/// silently covers nothing is the defect this exists to refuse, one level up.
+/// **ONE COMMITTED AUTHORITY, PLUS A RAISE-ONLY OVERRIDE** (house-style §8). The
+/// set used to be the variable alone, which only this repository's own task
+/// runner set, so every consumer refused with `MUTANT_GATES is unset`. The
+/// variable still adds names and can never remove one the table declares.
+///
+/// An empty set is fatal rather than an empty sweep: a task that silently
+/// covers nothing is the defect this exists to refuse, one level up.
 ///
 /// # Errors
 ///
-/// Unset or empty is a usage error (→ exit `1`).
-pub fn enforced_set() -> Result<Vec<String>> {
+/// Both empty, a `[mutate]` glob or scope that does not compile, or a tree
+/// whose tracked paths cannot be listed for a glob, is a usage error
+/// (→ exit `1`).
+pub fn enforced_set(root: &Path, table: Option<&crate::config::Mutate>) -> Result<Vec<String>> {
+    let mut names = committed(root, table)?;
     let raw = std::env::var("MUTANT_GATES").unwrap_or_default();
-    let names: Vec<String> = raw
+    for name in raw
         .split(',')
         .map(str::trim)
         .filter(|name| !name.is_empty())
-        .map(str::to_owned)
-        .collect();
+    {
+        if !names.iter().any(|have| have == name) {
+            names.push(name.to_owned());
+        }
+    }
     if names.is_empty() {
         bail!(
-            "MUTANT_GATES is unset — run this through `mise run mutant`, which is where the \
-             enforced set is declared. An empty set makes this a sweep that silently covers \
-             nothing, which is the defect it exists to refuse."
+            "the enforced set is empty — `[mutate].gates` in the committed batten.toml declares \
+             no gate and $MUTANT_GATES adds none. An empty set makes this a sweep that silently \
+             covers nothing, which is the defect it exists to refuse."
         );
     }
     Ok(names)
+}
+
+/// The committed table's gates, each glob expanded to the names its matches
+/// already have as subjects, in tracked-path order.
+//MUTANT-SUITE crates/batten/tests/it/mutate.rs
+//MUTANT committed-set-unread|s@^    let declared = \&table.gates;$@    let declared = \&table.scope;@|census_runs_on_the_set_batten_toml_declares
+fn committed(root: &Path, table: Option<&crate::config::Mutate>) -> Result<Vec<String>> {
+    let Some(table) = table else {
+        return Ok(Vec::new());
+    };
+    // Compiled here, where an error can still be a usage error, so the census's
+    // declaration arm below never meets a scope it cannot read.
+    crate::rules::PathSet::scope(&table.scope)?;
+    let declared = &table.gates;
+    let tracked = if declared.iter().any(|entry| entry.contains('*')) {
+        crate::git::tracked_paths(root)
+            .context("mutate: could not list the tracked tree to expand `[mutate].gates`")?
+    } else {
+        std::collections::BTreeSet::new()
+    };
+    let mut names: Vec<String> = Vec::new();
+    for entry in declared {
+        let expanded = if entry.contains('*') {
+            let selector = crate::rules::Selector::new(entry)?;
+            let matched: Vec<String> = tracked
+                .iter()
+                .filter(|path| selector.matches(path))
+                .map(|path| subject_name(root, path))
+                .collect();
+            // A glob matching nothing stays as written: it resolves to no
+            // source, so the census names it rather than the set shrinking
+            // silently around it.
+            if matched.is_empty() {
+                vec![entry.clone()]
+            } else {
+                matched
+            }
+        } else {
+            vec![entry.clone()]
+        };
+        for name in expanded {
+            if !names.contains(&name) {
+                names.push(name);
+            }
+        }
+    }
+    Ok(names)
+}
+
+/// The name a tracked file already has as a subject: `X` for `policy/X.rego`,
+/// the task name for `mise-tasks/X.sh`, `engine-x` for an engine module, the
+/// preset for a preset's module — and its own path, the file arm's name, for a
+/// file no other arm names.
+///
+/// **CHECKED BY RESOLVING IT BACK**, so a name is only offered where
+/// [`sources_for`] would take it to this very file: a module whose stem a shell
+/// task also carries resolves to the task, and gets its path instead.
+fn subject_name(root: &Path, path: &str) -> String {
+    let engine = format!("{ENGINE}/");
+    let presets = format!("{PRESETS}/");
+    let candidates = [
+        path.strip_prefix("mise-tasks/")
+            .and_then(|rest| rest.strip_suffix(".sh"))
+            .map(str::to_owned),
+        path.strip_prefix("policy/")
+            .and_then(|rest| rest.strip_suffix(".rego"))
+            .map(str::to_owned),
+        path.strip_prefix(&engine)
+            .and_then(|rest| rest.strip_suffix(".rs"))
+            .map(|stem| format!("{ENGINE_PREFIX}{}", stem.replace('_', "-"))),
+        path.strip_prefix(&presets)
+            .and_then(|rest| rest.split_once('/'))
+            .map(|(name, _)| name.to_owned()),
+    ];
+    candidates
+        .into_iter()
+        .flatten()
+        .find(|name| {
+            !name.contains('/') && sources_for(root, name).iter().any(|source| source == path)
+        })
+        .unwrap_or_else(|| path.to_owned())
 }
 
 // ---------------------------------------------------------------------------
@@ -2375,8 +2468,10 @@ fn is_gate(lines: &[String]) -> bool {
 /// discriminate. Presets are in scope for the same reason, and because a runner
 /// blind to them is blind to the one predicate class a `[[pattern]]` row cannot
 /// reach (CLOUD-934).
+///
+/// With a committed `[mutate]` table, a DECLARATION ARM joins them (CLOUD-2010).
 #[must_use]
-pub fn subjects(root: &Path) -> BTreeMap<String, String> {
+pub fn subjects(root: &Path, table: Option<&crate::config::Mutate>) -> BTreeMap<String, String> {
     let mut found = BTreeMap::new();
     if let Ok(entries) = std::fs::read_dir(root.join("mise-tasks")) {
         for entry in entries.filter_map(std::result::Result::ok) {
@@ -2467,7 +2562,52 @@ pub fn subjects(root: &Path) -> BTreeMap<String, String> {
             }
         }
     }
+    if let Some(table) = table {
+        declaring_files(root, table, &mut found);
+    }
     found
+}
+
+/// THE DECLARATION ARM (CLOUD-2010): every tracked file — narrowed by
+/// `[mutate].scope` when set — that carries a `MUTANT`, `MUTANT-SUITE` or
+/// `MUTANT-EXEMPT` line at column zero and is no other arm's subject, keyed by
+/// its path, which is the file arm's name for it.
+///
+/// **ON THE ENGINE AND INLINE-TASK ARMS' TERMS, AND ONLY UNDER A TABLE.** A
+/// consumer's gates live wherever its tree keeps them — `.tf`, YAML, `.rego`,
+/// `.py` — so no directory list can find them, and a file that declares rows is
+/// exactly one that owes a sweep. Held to the set like those arms: a declaring
+/// file no gate entry covers reads `uncovered`. Off without a table, so a
+/// census that declares none is unchanged.
+fn declaring_files(
+    root: &Path,
+    table: &crate::config::Mutate,
+    found: &mut BTreeMap<String, String>,
+) {
+    let scope = crate::rules::PathSet::scope(&table.scope).ok();
+    let claimed: Vec<String> = found.values().cloned().collect();
+    for path in crate::git::tracked_paths(root).unwrap_or_default() {
+        if !table.scope.is_empty() && !scope.as_ref().is_some_and(|set| set.contains(&path)) {
+            continue;
+        }
+        if claimed
+            .iter()
+            .any(|subject| *subject == path || path.starts_with(&format!("{subject}/")))
+        {
+            continue;
+        }
+        let declaring = lines_of(root, &path).is_some_and(|lines| {
+            lines.iter().any(|line| {
+                [ROW, SUITE, EXEMPT]
+                    .iter()
+                    .any(|marker| strip_marker(line, marker).is_some())
+            })
+        });
+        //MUTANT declaring-file-not-a-subject|s@^        if declaring {$@        if false \&\& declaring {@|a_declaring_file_outside_the_set_is_uncovered
+        if declaring {
+            found.insert(path.clone(), path);
+        }
+    }
 }
 
 /// Whether an exemption is filed: an issue key and a reason, separated.
@@ -2494,8 +2634,8 @@ fn exemption_is_filed(row: &str) -> bool {
 /// row's defect, and the prose is in the file the pointer points at
 /// (non-negotiable rule 4).
 #[must_use]
-pub fn census(root: &Path, names: &[String]) -> Census {
-    let subjects = subjects(root);
+pub fn census(root: &Path, names: &[String], table: Option<&crate::config::Mutate>) -> Census {
+    let subjects = subjects(root, table);
     let mut findings = Vec::new();
     for (name, path) in &subjects {
         let in_set = names.iter().any(|declared| declared == name);

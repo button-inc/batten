@@ -1080,6 +1080,15 @@ pub enum WeakeningKind {
     /// not reported. Appended, for the `Ord` reason its neighbours give —
     /// measured, inserting it beside `ForgeCredentialsRemoved` was a semver break.
     ForgeNothingGradedWidened,
+    /// An entry the base ref's `[mutate].gates` declared is gone, so `batten
+    /// mutate` stops holding that gate to a mutation its suite catches
+    /// (CLOUD-2010).
+    ///
+    /// The REMOVED direction only: an entry added is one more gate shown able to
+    /// fail. Compared as written — a glob is one entry — because which files a
+    /// glob reaches is a fact about the tree, not something two parsed configs
+    /// can settle. Appended, for the `Ord` reason its neighbours give.
+    MutateGateRemoved,
 }
 
 impl WeakeningKind {
@@ -1164,6 +1173,7 @@ impl WeakeningKind {
         WeakeningKind::BoardSweepRefusalWidened,
         WeakeningKind::ShellCensusNarrowed,
         WeakeningKind::ForgeNothingGradedWidened,
+        WeakeningKind::MutateGateRemoved,
     ];
 
     /// The stable, lowercase identifier used in machine output (§6).
@@ -1229,6 +1239,7 @@ impl WeakeningKind {
             WeakeningKind::TranscriptHarnessRemoved => "transcript-harness-removed",
             WeakeningKind::ForgeCredentialsRemoved => "forge-credentials-removed",
             WeakeningKind::ForgeNothingGradedWidened => "forge-nothing-graded-widened",
+            WeakeningKind::MutateGateRemoved => "mutate-gate-removed",
             WeakeningKind::AdvisoryCeilingRaised => "advisory-ceiling-raised",
             WeakeningKind::HookOutputCeilingRaised => "hook-output-ceiling-raised",
             WeakeningKind::HookRepeatsRaised => "hook-repeats-raised",
@@ -1669,6 +1680,10 @@ pub const CENSUS: &[FieldCoverage] = &[
     FieldCoverage {
         field: "provisions",
         coverage: Coverage::Compared(&[WeakeningKind::ProvisionRemoved]),
+    },
+    FieldCoverage {
+        field: "mutate",
+        coverage: Coverage::Compared(&[WeakeningKind::MutateGateRemoved]),
     },
     FieldCoverage {
         field: "forge",
@@ -2506,6 +2521,7 @@ fn entry_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
     found.extend(cutover_weakenings(base, working));
 
     found.extend(perf_exemption_weakenings(base, working));
+    found.extend(mutate_gate_weakenings(base, working));
 
     // The mutating-verb table: a removed row un-gates a tool call at the
     // `PreToolUse` boundary, which is the most consequential of these.
@@ -3629,6 +3645,25 @@ fn defects_weakenings(
     )
 }
 
+/// The mutation sweep's committed set (CLOUD-2010), split out of
+/// [`entry_weakenings`] for its line budget. Removed-direction only: a dropped
+/// entry is a gate no longer shown able to fail, and an added one is a gate more.
+fn mutate_gate_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
+    let gates = |config: &Config| {
+        config
+            .mutate
+            .as_ref()
+            .map(|table| table.gates.clone())
+            .unwrap_or_default()
+    };
+    removed_entries(
+        WeakeningKind::MutateGateRemoved,
+        &gates(base),
+        &gates(working),
+        "mutate.gates",
+    )
+}
+
 /// Entries present in `base` and absent from `working`, as weakenings of `key`.
 fn removed_entries(
     kind: WeakeningKind,
@@ -4316,6 +4351,29 @@ mod tests {
                 "true",
                 "false",
             )]
+        );
+    }
+
+    /// Dropping an enforced gate is a weakening; adding one is not (CLOUD-2010).
+    #[test]
+    fn dropping_a_mutate_gate_is_a_weakening_and_adding_one_is_not() {
+        let base = parse("version = 1\n[mutate]\ngates = [\"a\", \"checks/*.rego\"]\n");
+        let working = parse("version = 1\n[mutate]\ngates = [\"a\", \"b\"]\n");
+        assert_eq!(
+            weakenings(&base, &working),
+            vec![Weakening::new(
+                WeakeningKind::MutateGateRemoved,
+                "mutate.gates[checks/*.rego]",
+                "present",
+                "absent",
+            )]
+        );
+        assert!(
+            weakenings(
+                &working,
+                &parse("version = 1\n[mutate]\ngates = [\"a\", \"b\", \"c\"]\n")
+            )
+            .is_empty()
         );
     }
 

@@ -961,7 +961,11 @@ fn an_unset_enforced_set_is_fatal_rather_than_an_empty_one() {
     let root = toy_repo("unset", &[CAUGHT]);
     let (code, _, err) = sweep(&root, "");
     assert_eq!(code, 1, "{err}");
-    assert!(err.contains("MUTANT_GATES is unset"), "{err}");
+    assert!(err.contains("the enforced set is empty"), "{err}");
+    assert!(
+        err.contains("[mutate].gates"),
+        "the refusal names the table: {err}"
+    );
 }
 
 #[cfg(unix)]
@@ -1866,7 +1870,11 @@ fn an_unset_set_is_could_not_look_never_a_closed_census() {
     let root = census_repo("census-unset", &[("alpha-check", "Gate: something")]);
     let (code, _, err) = census(&root, "");
     assert_eq!(code, 1, "{err}");
-    assert!(err.contains("MUTANT_GATES is unset"), "{err}");
+    assert!(err.contains("the enforced set is empty"), "{err}");
+    assert!(
+        err.contains("[mutate].gates"),
+        "the refusal names the table: {err}"
+    );
 }
 
 #[test]
@@ -1882,6 +1890,149 @@ fn output_is_pointer_only_so_the_exemptions_reason_never_reaches_the_log() {
     let (_, out, err) = census(&root, "alpha-check");
     assert!(!out.contains("SECRETPROSE"), "{out}");
     assert!(!err.contains("SECRETPROSE"), "{err}");
+}
+
+// ---------------------------------------------------------------------------
+// The committed enforced set (CLOUD-2010).
+// ---------------------------------------------------------------------------
+
+/// A consumer with no task runner manifest and no `$MUTANT_GATES`: its enforced
+/// set is whatever its `batten.toml` declares, and its gates are `.rego` files
+/// in a directory no built-in arm reads.
+fn consumer(name: &str, mutate_table: &str) -> PathBuf {
+    let root = toy(name);
+    write(
+        &root,
+        "batten.toml",
+        &format!("version = 1\n\n{mutate_table}"),
+    );
+    write(
+        &root,
+        "checks/limit.rego",
+        "#MUTANT-SUITE checks/limit_test.rego\n#MUTANT limit-moved|s/10/999/|test_limit\npackage main\n\nlimit := 10\n",
+    );
+    write(
+        &root,
+        "checks/limit_test.rego",
+        "package main\n\ntest_limit if {\n\tlimit == 10\n}\n",
+    );
+    track(&root);
+    root
+}
+
+/// A second declaring file, deliberately outside `checks/`, `policy/`,
+/// `mise-tasks/` and the engine directory, so only the declaration arm sees it.
+fn add_extra(root: &Path) {
+    write(
+        root,
+        "extra/y.rego",
+        "#MUTANT-SUITE checks/limit_test.rego\n#MUTANT y-moved|s/1/2/|test_limit\npackage extra\n\ny := 1\n",
+    );
+    track(root);
+}
+
+/// Run `mutate census` in a consumer, with `$MUTANT_GATES` exactly as given —
+/// absent when `None`.
+fn consumer_census(root: &Path, gates: Option<&str>) -> (i32, String, String) {
+    let mut command = common::batten();
+    command.args(["mutate", "census"]).current_dir(root);
+    let command = match gates {
+        Some(gates) => command.env("MUTANT_GATES", gates),
+        None => command.env_remove("MUTANT_GATES"),
+    };
+    let answer = command
+        .env_remove("MUTANT_TASKS")
+        .output()
+        .expect("run batten mutate");
+    (
+        answer.status.code().unwrap_or(-1),
+        stdout(&answer),
+        stderr(&answer),
+    )
+}
+
+#[test]
+fn census_runs_on_the_set_batten_toml_declares() {
+    let root = consumer("set-committed", "[mutate]\ngates = [\"checks/*.rego\"]\n");
+    let (code, out, err) = consumer_census(&root, None);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(out.contains("every one enforced"), "{out}");
+}
+
+#[test]
+fn a_declaring_file_outside_the_set_is_uncovered() {
+    let root = consumer("set-uncovered", "[mutate]\ngates = [\"checks/*.rego\"]\n");
+    add_extra(&root);
+    let (code, out, err) = consumer_census(&root, None);
+    assert_eq!(code, 2, "{out}{err}");
+    assert!(out.contains("extra/y.rego uncovered"), "{out}");
+    assert!(!out.contains("checks/limit.rego uncovered"), "{out}");
+}
+
+/// The variable ADDS `extra/y.rego`, and the table's `checks/limit.rego` is
+/// still enforced beside it — a variable that replaced the table would leave
+/// that one `uncovered`, so one clean census shows both halves.
+#[test]
+fn the_environment_only_raises_the_committed_set() {
+    let root = consumer("set-raised", "[mutate]\ngates = [\"checks/*.rego\"]\n");
+    add_extra(&root);
+    let (code, out, err) = consumer_census(&root, Some("extra/y.rego"));
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(!out.contains("uncovered"), "{out}");
+}
+
+#[test]
+fn no_set_anywhere_is_a_usage_error_naming_the_table() {
+    let root = consumer("set-none", "[mutate]\ngates = []\n");
+    let (code, out, err) = consumer_census(&root, None);
+    assert_eq!(code, 1, "{out}{err}");
+    assert!(err.contains("[mutate].gates"), "{err}");
+}
+
+#[test]
+fn a_mutate_table_with_an_unknown_key_is_refused() {
+    let root = consumer(
+        "set-unknown-key",
+        "[mutate]\ngates = [\"checks/*.rego\"]\ngate = [\"typo\"]\n",
+    );
+    let (code, out, err) = consumer_census(&root, None);
+    assert_eq!(code, 1, "{out}{err}");
+    assert!(
+        err.contains("mutate.gate"),
+        "the refusal names the key: {err}"
+    );
+}
+
+#[test]
+fn a_glob_matching_nothing_names_no_subject() {
+    let root = consumer(
+        "set-empty-glob",
+        "[mutate]\ngates = [\"checks/*.rego\", \"nowhere/*.tf\"]\n",
+    );
+    let (code, out, err) = consumer_census(&root, None);
+    assert_eq!(code, 2, "{out}{err}");
+    assert!(out.contains("nowhere/*.tf names-no-subject"), "{out}");
+}
+
+/// A glob over `policy/` names each module by its stem, the name the policy arm
+/// already gives it — so the census's exact comparison holds. Named by path
+/// instead, both modules would read `uncovered`.
+#[test]
+fn a_policy_glob_names_each_module_by_its_stem() {
+    let root = consumer("set-policy-glob", "[mutate]\ngates = [\"policy/*.rego\"]\n");
+    write(&root, "policy/alpha.rego", "package alpha\n");
+    write(&root, "policy/beta.rego", "package beta\n");
+    // The `checks/` gate is exempt, so the census is about the glob alone.
+    write(
+        &root,
+        "checks/limit.rego",
+        "#MUTANT-EXEMPT CLOUD-1|not under test here\npackage main\n",
+    );
+    track(&root);
+    let (code, out, err) = consumer_census(&root, None);
+    assert_eq!(code, 0, "{out}{err}");
+    // `alpha`, `beta`, and the exempt `checks/limit.rego` the declaration arm reads.
+    assert!(out.contains("3 gate(s)"), "{out}");
 }
 
 // ---------------------------------------------------------------------------

@@ -1857,6 +1857,10 @@ fn attribution(
         // path's threshold, so a local layer that could add one would be the
         // weakening §8 refuses.
         ("perf", authority_set(repo.perf.is_some())),
+        // AUTHORITY-ONLY (CLOUD-2010): the enforced set's raise-only channel is
+        // `$MUTANT_GATES`, so a local layer has nothing to add, and one that
+        // could replace the table could drop a gate from the sweep.
+        ("mutate", authority_set(repo.mutate.is_some())),
         ("unlanded", paths.unlanded_source.clone()),
         ("epoch", authority_set(repo.epoch.is_some())),
         ("contract", authority_set(repo.contract.is_some())),
