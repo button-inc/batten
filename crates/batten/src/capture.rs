@@ -72,12 +72,22 @@ pub enum Stream {
     /// live handle would promise a file that is still growing when nothing is
     /// writing it.
     Response,
+    /// What an advisory emission could not fit under its channel ceiling
+    /// (CLOUD-2175): the withheld findings, stored so the line that reports them
+    /// names a handle returning exactly them. Appended, and sealed-only for
+    /// [`Stream::Response`]'s reason — it is written whole.
+    Advisory,
 }
 
 impl Stream {
     /// Every stream, so anything ranging over them is derived rather than typed
     /// twice.
-    pub const ALL: &'static [Stream] = &[Stream::Stdout, Stream::Stderr, Stream::Response];
+    pub const ALL: &'static [Stream] = &[
+        Stream::Stdout,
+        Stream::Stderr,
+        Stream::Response,
+        Stream::Advisory,
+    ];
 
     /// The stable token used in the store key and in the hashed preimage.
     #[must_use]
@@ -86,6 +96,7 @@ impl Stream {
             Stream::Stdout => "stdout",
             Stream::Stderr => "stderr",
             Stream::Response => "response",
+            Stream::Advisory => "advisory",
         }
     }
 }
@@ -120,7 +131,7 @@ impl LiveStream {
     pub const fn new(stream: Stream) -> Option<LiveStream> {
         match stream {
             Stream::Stdout | Stream::Stderr => Some(LiveStream(stream)),
-            Stream::Response => None,
+            Stream::Response | Stream::Advisory => None,
         }
     }
 
@@ -1771,9 +1782,10 @@ pub const DEFAULT_RESPONSE_MAX_RECORDS: u64 = 1024;
 /// only thing that knows which call came first, and an mtime order would make
 /// eviction a function of when the filesystem happened to touch a file.
 ///
-/// Only [`Stream::Response`] records are candidates. A `stdout` or `stderr`
-/// capture is `exec`'s and is never evicted here, which is what keeps today's
-/// behaviour byte-identical for that consumer.
+/// Only [`Stream::Response`] and [`Stream::Advisory`] records are candidates.
+/// A `stdout` or `stderr` capture is `exec`'s and is never evicted here, which
+/// is what keeps today's behaviour byte-identical for that consumer. An
+/// advisory overflow names no call row, so it falls after the ordered ones.
 ///
 /// # Errors
 ///
@@ -1800,7 +1812,9 @@ pub fn evict_to_budget_in(dir: &Path, config: Option<&CaptureConfig>) -> Result<
     bound_calls(dir, max_records)?;
     let held: Vec<Capture> = list_in(dir)?
         .into_iter()
-        .filter(|record| record.stream == Stream::Response.as_str())
+        .filter(|record| {
+            record.stream == Stream::Response.as_str() || record.stream == Stream::Advisory.as_str()
+        })
         .collect();
     let mut total: u64 = held.iter().map(|record| record.bytes).sum();
     let mut count = held.len() as u64;

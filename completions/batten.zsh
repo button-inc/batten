@@ -5919,6 +5919,8 @@ trace\:"Add everything"))' \
 ;;
 (list)
 _arguments "${_arguments_options[@]}" : \
+'--rule=[Only findings of this rule]:rule:_default' \
+'--path=[Only findings observed in this file]:path:_default' \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \

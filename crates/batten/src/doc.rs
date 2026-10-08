@@ -1385,6 +1385,15 @@ pub const VENDORED_DOCS: &[VendoredDoc] = &[
         ],
         dont: &["assume the calls before this one were checked"],
     },
+    VendoredDoc {
+        id: "drain fit broken",
+        why: Some("A cut drain is a turn that produced more than the delta shape holds"),
+        act: &[
+            "read the cut rules with `batten state list --rule <id>`",
+            "fix the turn's findings before adding more",
+        ],
+        dont: &["raise the token budget to make the cut go away"],
+    },
 ];
 
 /// The vendored doc for `id`, or an empty one where none is declared.

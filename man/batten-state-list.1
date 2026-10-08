@@ -4,10 +4,16 @@
 .SH NAME
 batten\-state\-list \- List stored findings and the refs they were observed in
 .SH SYNOPSIS
-\fBbatten state list\fR [\fB\-J\fR|\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+\fBbatten state list\fR [\fB\-\-rule\fR] [\fB\-\-path\fR] [\fB\-J\fR|\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] 
 .SH DESCRIPTION
 List stored findings and the refs they were observed in
 .SH OPTIONS
+.TP
+\fB\-\-rule\fR \fI<rule>\fR
+Only findings of this rule
+.TP
+\fB\-\-path\fR \fI<path>\fR
+Only findings observed in this file
 .TP
 \fB\-J\fR, \fB\-\-json\fR
 Emit byte\-stable JSON instead of pointer lines

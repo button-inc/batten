@@ -1544,6 +1544,9 @@ pub enum Native {
     ContractReadStale,
     /// The engine did not run at this session's start.
     HookRunMissing,
+    /// A drain's delta did not fit its token budget, so the relief valve cut
+    /// it (CLOUD-2175).
+    DrainFitBroken,
 }
 
 impl Native {
@@ -1632,6 +1635,7 @@ impl Native {
         Native::LaneCountSpent,
         Native::ContractReadStale,
         Native::HookRunMissing,
+        Native::DrainFitBroken,
     ];
 
     /// The classes the CONFIG LOADER raises, in `parse_ungated` order.
@@ -1754,6 +1758,7 @@ impl Native {
             Native::LaneCountSpent => "lane run spent",
             Native::ContractReadStale => "contract read stale",
             Native::HookRunMissing => "hook run missing",
+            Native::DrainFitBroken => "drain fit broken",
         }
     }
 }
@@ -2935,6 +2940,16 @@ policy one, and which calls preceded this is not answerable from here.",
         routes: &[run("doctor run first", "batten doctor")],
         applicability: Applicability::Advice,
     },
+    VendoredVerdict {
+        id: "drain fit broken",
+        gloss: "a drain's delta did not fit its token budget, so whole rule lines were cut",
+        class: "A drain carries what is new since the session was last told, a capped number of \
+locations per rule, so its size follows one turn's work and the budget is a relief valve. A cut \
+means one turn produced more new findings across more rules than that shape holds; the cut lines \
+are in the journal and the subjects count them.",
+        routes: &[run("state list first", "batten state list")],
+        applicability: Applicability::Advice,
+    },
 ];
 
 /// Every class the binary ships, as the registry carries them.
@@ -3491,6 +3506,7 @@ mod tests {
                 | Native::LaneCountSpent
                 | Native::ContractReadStale
                 | Native::HookRunMissing
+                | Native::DrainFitBroken
                 | Native::VerdictTableRefused
                 | Native::RedirectTableRefused
                 | Native::DeferralTableRefused

@@ -1764,6 +1764,10 @@ pub enum StateCommand {
     },
     /// List stored findings.
     List {
+        /// Only findings of this rule (CLOUD-2175).
+        rule: Option<String>,
+        /// Only findings observed in this file (CLOUD-2175).
+        path: Option<String>,
         /// Emit the listing as byte-stable JSON instead of pointer lines.
         json: bool,
     },
@@ -3533,6 +3537,8 @@ fn state_of(matches: &ArgMatches) -> Option<StateCommand> {
             disposition: matches.get_one::<String>("disposition").cloned()?,
         }),
         ("list", matches) => Some(StateCommand::List {
+            rule: matches.get_one::<String>("rule").cloned(),
+            path: matches.get_one::<String>("path").cloned(),
             json: flag(matches, "json"),
         }),
         _ => None,

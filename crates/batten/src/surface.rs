@@ -2201,6 +2201,38 @@ const CALLS: FlagDecl = FlagDecl {
     value: ValueDecl::Bool,
 };
 
+/// `state list --rule`: only findings of this rule (CLOUD-2175). The drain's
+/// pointer for a rule whose locations it did not list, so the command returns
+/// exactly the elided set rather than the whole store.
+const STATE_RULE: FlagDecl = FlagDecl {
+    id: "rule",
+    long: Some("rule"),
+    short: None,
+    help: "Only findings of this rule",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
+/// `state list --path`: only findings observed in this file (CLOUD-2175).
+const STATE_PATH: FlagDecl = FlagDecl {
+    id: "path",
+    long: Some("path"),
+    short: None,
+    help: "Only findings observed in this file",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
 /// `--stream <stdout|stderr>` on `capture list`: narrow the listing.
 ///
 /// A plain string rather than a `ValueEnum`, because the set it validates against
@@ -6406,7 +6438,7 @@ pub const SURFACE: &[CommandDecl] = &[
         data_channel: true,
         exits: EXITS_STANDARD,
         effect: Effect::Read,
-        flags: &[JSON],
+        flags: &[STATE_RULE, STATE_PATH, JSON],
     },
     // The out-of-tree verdict stores' WRITE half, and the reason it is one noun
     // with two leaves is that the two stores share a body format and nothing else

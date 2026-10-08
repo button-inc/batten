@@ -308,15 +308,9 @@ fn a_post_tool_event_drains_the_store_as_pointer_lines() {
     assert_eq!(first.status.code(), Some(0), "the drain never denies");
     let lines = payload(&first);
     assert_eq!(lines.len(), 1, "one finding, one line: {lines:?}");
-    // CLOUD-2075's labelled grammar: `rule '<id>' at <fingerprint> <path:line> <count>`.
-    let rest = lines[0]
-        .strip_prefix("rule 'no-todo' at ")
-        .unwrap_or_else(|| panic!("the line labels its rule: {lines:?}"));
-    let fields: Vec<&str> = rest.split(' ').collect();
-    assert_eq!(fields.len(), 3, "fingerprint, path:line, count");
-    assert_eq!(fields[0].len(), 64, "a fingerprint is 64 hex characters");
-    assert_eq!(fields[1], "src/a.rs:2");
-    assert_eq!(fields[2], "1");
+    // CLOUD-2175's grammar: one line per rule, its fresh count and its
+    // locations factored by file — no fingerprint, which `state list` resolves.
+    assert_eq!(lines[0], "rule 'no-todo' 1 new at src/a.rs:2");
     assert!(
         !lines[0].contains("TODO"),
         "a pointer, never the matched content"
@@ -566,10 +560,13 @@ fn a_batch_of_wakes_drains_once_and_the_interval_is_config() {
     common::write(&open, "src/b.rs", "fn other() {}\n// TODO also fix me\n");
     let recorded = state_cmd(&open, &home_o, &["state", "record"]);
     assert_eq!(recorded.status.code(), Some(0));
+    let next = payload(&hook(&open, &home_o, &post_tool_batch("batch")));
     assert_eq!(
-        payload(&hook(&open, &home_o, &post_tool_batch("batch"))).len(),
-        2,
-        "with no window, the next wake reports the new finding immediately"
+        next,
+        [
+            "rule 'no-todo' 1 new at src/b.rs:2, 1 told earlier; run batten state list --rule 'no-todo'"
+        ],
+        "with no window, the next wake reports the new finding immediately — and only it"
     );
 }
 
@@ -599,7 +596,8 @@ fn an_unchanged_finding_set_answers_with_the_marker_rather_than_the_listing() {
     );
     assert_eq!(
         payload(&hook(&many, &home_many, &post_tool_batch("s1"))).len(),
-        4
+        1,
+        "four findings of one rule are one line"
     );
     assert_eq!(
         payload(&hook(&many, &home_many, &post_tool_batch("s1"))),
@@ -699,7 +697,7 @@ fn a_count_only_change_is_news_and_does_not_short_circuit() {
     let again = payload(&hook(&repo, &home, &post_tool_batch("s1")));
     assert_eq!(again.len(), 1, "one identity, one line: {again:?}");
     assert_ne!(again, vec!["unchanged".to_owned()], "a count is news");
-    assert!(again[0].ends_with(" 1->2"));
+    assert!(again[0].contains("(1->2)"), "{again:?}");
 }
 
 /// A drained rule's remedy rides the payload as one classed finding: full on
@@ -862,98 +860,116 @@ fn spread_fixture(name: &str, drain_table: &str, spans: usize) -> (PathBuf, Path
     marked_fixture(name, drain_table, &body)
 }
 
+/// THE LOCATION CAP IS CONFIG, AND ITS POINTER RETURNS EXACTLY THE REST
+/// (CLOUD-2175). A rule lists `cardinality_cap` locations and names the command
+/// for the others; that command, run here, returns the rule's whole set and
+/// nothing of any other rule — a pointer to "everything" would be the flood.
 #[test]
-fn a_rule_over_the_cardinality_cap_reports_it_beside_every_entry_and_the_cap_is_config() {
-    // CLOUD-82 (b) over the binary, reversed by CLOUD-2075: the cap REPORTS and
-    // withholds nothing. The cap that decides the report is the one in
-    // `batten.toml` — two caps, two payloads.
+fn a_rule_past_its_location_cap_points_at_exactly_its_set() {
     let (capped, home_c) = spread_fixture(
         "drain-cap-on",
         "\n[drain]\ninterval_ms = 0\ncardinality_cap = 2\n",
         4,
     );
     let lines = payload(&hook(&capped, &home_c, &post_tool_batch("s1")));
-    assert_eq!(lines.len(), 5, "four entries and the cap report: {lines:?}");
     assert_eq!(
-        lines[0], "rule 'no-todo': 4 findings, over the cardinality cap of 2",
-        "the report leads its rule's entries"
+        lines,
+        ["rule 'no-todo' 4 new at src/a.rs:2,3 +2 more; run batten state list --rule 'no-todo'"]
     );
+    let listed = state_cmd(
+        &capped,
+        &home_c,
+        &["state", "list", "--rule", "no-todo", "-J"],
+    );
+    let records: Vec<serde_json::Value> =
+        serde_json::from_str(&common::stdout(&listed)).expect("state list -J is a document");
+    assert_eq!(records.len(), 4, "the pointer returns the rule's whole set");
+    let other = state_cmd(
+        &capped,
+        &home_c,
+        &["state", "list", "--rule", "another", "-J"],
+    );
+    let none: Vec<serde_json::Value> =
+        serde_json::from_str(&common::stdout(&other)).expect("state list -J is a document");
+    assert!(none.is_empty(), "and nothing of any other rule");
 
     let (uncapped, home_u) = spread_fixture(
         "drain-cap-off",
         "\n[drain]\ninterval_ms = 0\ncardinality_cap = 10\n",
         4,
     );
-    let lines = payload(&hook(&uncapped, &home_u, &post_tool_batch("s1")));
     assert_eq!(
-        lines.len(),
-        4,
-        "under the cap every identity speaks and nothing is reported: {lines:?}"
+        payload(&hook(&uncapped, &home_u, &post_tool_batch("s1"))),
+        ["rule 'no-todo' 4 new at src/a.rs:2,3,4,5"],
+        "under the cap every location is listed and nothing is pointed at"
     );
 }
 
-/// THE RESPONSE IS BOUNDED, THE JOURNAL IS NOT (CLOUD-2175), over the binary.
+/// THE RELIEF VALVE, over the binary (CLOUD-2175). Two rules whose one-line
+/// delta cannot fit a tiny budget: the second rule's line is cut, the payload
+/// closes with how many lines it withheld and where, a `drain fit broken`
+/// finding says the shape failed, and the journal still holds every record,
+/// each cut one journalled `over-token-budget` rather than lost.
 ///
-/// CLOUD-82 (a) had the budget withhold; CLOUD-2075 made it only report, which
-/// handed a large journal to the context whole. Now an over-budget payload is
-/// cut salient-first, closes with how many lines it withheld and the command
-/// that lists them, and that command — run here — still holds every record, each
-/// cut one journalled `over-token-budget` rather than lost.
+/// The suite `drain-cut-unreported` is killed in.
 #[test]
 fn an_over_budget_payload_is_cut_and_points_at_the_journal() {
-    const BUDGET: usize = 20;
-    const SPANS: usize = 12;
+    const BUDGET: usize = 12;
+    const SPANS: usize = 3;
     let (repo, home) = spread_fixture(
         "drain-budget",
-        &format!("\n[drain]\ninterval_ms = 0\ncardinality_cap = 100\ntoken_budget = {BUDGET}\n"),
+        &format!(
+            "\n[[rule]]\nid = \"no-number\"\nkind = \"forbid\"\nseverity = \"deny\"\n\
+             glob = \"**/*.rs\"\npattern = \"number\"\nno_fix_reason = \"renumber by hand\"\n\n\
+             [drain]\ninterval_ms = 0\ntoken_budget = {BUDGET}\n"
+        ),
         SPANS,
     );
-    let lines = payload(&hook(&repo, &home, &post_tool_batch("s1")));
-    let (closing, entries) = lines
-        .split_last()
-        .expect("a cut payload closes with its pointer");
-    assert!(entries.len() < SPANS, "the payload is cut: {lines:?}");
+    let output = hook(&repo, &home, &post_tool_batch("s1"));
+    let lines = payload(&output);
     assert_eq!(
-        closing,
-        &format!(
-            "budget: {} more line(s) past the declared {BUDGET} tokens are in the journal; \
-             run batten state list",
-            SPANS - entries.len()
+        lines.len(),
+        2,
+        "one rule line, then the closing line: {lines:?}"
+    );
+    assert_eq!(
+        lines[1],
+        format!(
+            "budget: 1 more line(s) past the declared {BUDGET} tokens are in the journal; \
+             run batten state list"
         ),
         "the closing line counts what it withheld and names where it is"
+    );
+    assert!(
+        remedies(&output)
+            .iter()
+            .any(|line| line.contains("verdict 'drain fit broken' at 3 finding(s) cut")),
+        "the cut is reported as the shape failing: {:?}",
+        remedies(&output)
     );
 
     let listed = state_cmd(&repo, &home, &["state", "list", "-J"]);
     let records: Vec<serde_json::Value> =
         serde_json::from_str(&common::stdout(&listed)).expect("state list -J is a document");
-    assert_eq!(
-        records.len(),
-        SPANS,
-        "the journal holds every record: {records:?}"
-    );
+    assert_eq!(records.len(), 2 * SPANS, "the journal holds every record");
     let cut = records
         .iter()
         .filter(|record| record["presentation"]["not-shown"] == "over-token-budget")
         .count();
     assert_eq!(
-        cut,
-        SPANS - entries.len(),
+        cut, SPANS,
         "each cut record is journalled as cut, so its silence is not the agent's"
     );
 }
 
 #[test]
 fn a_re_raised_group_reports_the_delta_rather_than_the_instance_list() {
-    // CLOUD-82 (c) over the binary. The same identity observed more often is one
-    // line carrying `old->new` — the identity did not change, the count did, and
-    // the delta is the whole of the news.
+    // CLOUD-82 (c) over the binary. The same identity observed more often is
+    // one location carrying `(old->new)` — the identity did not change, the
+    // count did, and the delta is the whole of the news.
     let (repo, home) = drained_fixture("drain-re-raise", "\n[drain]\ninterval_ms = 0\n");
     let first = payload(&hook(&repo, &home, &post_tool_batch("s1")));
-    assert_eq!(first.len(), 1);
-    assert!(
-        first[0].ends_with(" 1"),
-        "the first sighting is a count: {first:?}"
-    );
+    assert_eq!(first, ["rule 'no-todo' 1 new at src/a.rs:2"]);
 
     // The SAME span again: identical spans fold into one identity with a count
     // of two, which is the multiset re-raise this asserts.
@@ -966,14 +982,11 @@ fn a_re_raised_group_reports_the_delta_rather_than_the_instance_list() {
     assert_eq!(recorded.status.code(), Some(0));
 
     let again = payload(&hook(&repo, &home, &post_tool_batch("s1")));
-    assert_eq!(again.len(), 1, "one identity, one line: {again:?}");
-    assert!(
-        again[0].ends_with(" 1->2"),
-        "the count field carries the delta: {again:?}"
+    assert_eq!(
+        again,
+        ["rule 'no-todo' 1 new at src/a.rs:2(1->2)"],
+        "one identity, one location, the delta on it"
     );
-    let fields: Vec<&str> = again[0].split(' ').collect();
-    assert_eq!(fields.len(), 6, "still a pointer, not an instance list");
-    assert_eq!(fields[4], "src/a.rs:2", "and one in-scope pointer");
 }
 
 #[test]
@@ -1062,8 +1075,11 @@ fn flapping_fixture_under(root: &Path, repo_dir: &str, drain_table: &str) -> (Pa
 /// whichever state this leaves the finding in: a clear that also left the scope
 /// would be asserting the scope filter rather than the policy.
 fn evaluate(repo: &Path, home: &Path, raised: bool) {
+    // RAISED IS NOT THE COMMITTED BODY, so a raised round is in the changed
+    // scope the drain reads: the committed body would be scope-filtered, and
+    // this case counted the cleared rounds' zero-count lines instead.
     let body = if raised {
-        "fn main() {}\n// TODO fix me\n"
+        "fn main() {}\n// TODO fix me\n// raised\n"
     } else {
         "fn main() {}\n// fixed\n"
     };
@@ -1128,8 +1144,19 @@ fn an_alternating_rule_tracks_state_truthfully_and_is_reported_flapping_not_with
         let woken = hook(&repo, &home, &post_tool_batch("flap"));
         assert_eq!(woken.status.code(), Some(0), "the drain never denies");
         let lines = payload(&woken);
-        if lines.iter().any(|line| line.contains("no-todo")) {
+        // A raised round is never silent: the first lists the pointer, and a
+        // return to the report the agent was last shown answers `unchanged`,
+        // which points at the payload the context still holds (CLOUD-2175).
+        if raised {
+            let expected: &[&str] = if round == 0 {
+                &["rule 'no-todo' 1 new at src/a.rs:2"]
+            } else {
+                &["unchanged"]
+            };
+            assert_eq!(lines, expected, "round {round}");
             emissions += 1;
+        } else {
+            assert!(lines.is_empty(), "a cleared round lists nothing: {lines:?}");
         }
         assert_ne!(
             stored(&repo, &home)["presentation"]["not-shown"],
@@ -1137,7 +1164,7 @@ fn an_alternating_rule_tracks_state_truthfully_and_is_reported_flapping_not_with
             "round {round}: a flapping identity is shown, never withheld"
         );
     }
-    assert_eq!(emissions, 3, "every raised round shows its pointer");
+    assert_eq!(emissions, 3, "every raised round answers, none is withheld");
 
     // The rule-health counter, on the operator's channel: a rule id and a count,
     // never a finding's content.

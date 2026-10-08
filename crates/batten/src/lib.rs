@@ -494,7 +494,13 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
                 identity,
                 disposition,
             } => run_state_settle(&identity, &disposition, err),
-            StateCommand::List { json } => run_state_list(json, mode, out, err),
+            StateCommand::List { rule, path, json } => {
+                let only = StateFilter {
+                    rule: rule.as_deref(),
+                    path: path.as_deref(),
+                };
+                run_state_list(only, json, mode, out, err)
+            }
         },
         // The §8 config chain DOES apply, and only to the tool half: `record tool`
         // reads the `[[rule.tools]]` row that names the tool, its pin and the
@@ -7529,7 +7535,30 @@ fn parse_bytes(range: &str) -> Result<(Option<u64>, Option<u64>)> {
 /// violation here would put the store on the deny channel and let a stale record
 /// block a call, which is exactly the interaction law the identity module
 /// states: identity governs advisory reporting and never touches an exit path.
+/// What `state list` narrows to (CLOUD-2175): a rule, a file, or both.
+#[derive(Clone, Copy, Default)]
+struct StateFilter<'a> {
+    rule: Option<&'a str>,
+    path: Option<&'a str>,
+}
+
+impl StateFilter<'_> {
+    /// Whether `record` is in the selection: its rule, and an instance in the
+    /// file. A record outside it is dropped whole, never trimmed.
+    //MUTANT state-filter-unread|s@^        self.rule.is_none_or(|rule| record.rule == rule)$@        true@|a_rule_past_its_location_cap_points_at_the_rest
+    fn keeps(self, record: &findings::FindingRecord) -> bool {
+        self.rule.is_none_or(|rule| record.rule == rule)
+            && self.path.is_none_or(|path| {
+                record
+                    .instances
+                    .iter()
+                    .any(|instance| instance.path == path)
+            })
+    }
+}
+
 fn run_state_list(
+    only: StateFilter<'_>,
     json: bool,
     mode: Mode,
     out: &mut dyn Write,
@@ -7553,7 +7582,8 @@ fn run_state_list(
         }
         return Ok(ExitCode::Success);
     };
-    let records = findings::load_all(&dir)?;
+    let mut records = findings::load_all(&dir)?;
+    records.retain(|record| only.keeps(record));
     if json {
         writeln!(out, "{}", serde_json::to_string_pretty(&records)?)?;
     } else {
@@ -16790,10 +16820,11 @@ fn preapproval_context(
     if !matches!(decision, hook::Decision::Preapproved(_)) || advice.is_empty() {
         return None;
     }
-    let mut taken = std::mem::take(advice);
-    let sighted = sight_advice(harness, envelope, &mut taken);
-    let text = advisory::admit(taken, ceiling).text;
-    Some(if sighted {
+    let taken = std::mem::take(advice);
+    let mut sighter = HookSighter::new(harness, envelope);
+    let emission = advisory::admit(taken, ceiling, &mut sighter);
+    let text = closed_emission(emission, ceiling);
+    Some(if sighter.sighted {
         legend_for(envelope, text)
     } else {
         text
@@ -17604,36 +17635,74 @@ fn push_finding(
     }
 }
 
-/// Render each classed entry's finding at the moment it is emitted, through the
-/// one chooser, so the context's store is marked only for what reaches it.
+/// Which arm each classed entry gets, chosen through the one chooser and
+/// marked only for what the channel admits (CLOUD-2175).
 ///
 /// **Marked on DELIVERY, not on emission (CLOUD-2145).** On an event this host's
 /// advisory channel does not reach the model through, the text goes to the
 /// operator's stream ([`emit_advisory`]), so a mark there would withhold the
 /// definition from a reader who never saw it: such a finding renders full and
-/// marks nothing. Returns whether any finding was rendered on a reachable
+/// marks nothing. `sighted` is whether any finding was marked on a reachable
 /// channel, which is what earns the epoch's legend.
-//MUTANT delivery-marks-on-emit|s@^    let reached = capabilities.advisory_reachable(\&envelope.raw_event);$@    let reached = true;@|an_undelivered_channel_marks_nothing
-fn sight_advice(
-    harness: hook::Harness,
-    envelope: &hook::Envelope,
-    advice: &mut [advisory::Advice],
-) -> bool {
-    let capabilities = harness.capabilities();
-    let reached = capabilities.advisory_reachable(&envelope.raw_event);
-    let mut sighted = false;
-    for entry in advice {
-        if let Some(refusal) = entry.finding.take() {
-            let arm = if reached {
-                sighted = true;
-                arm_for(hook::HookSource::Harness, envelope, &refusal)
-            } else {
-                refusal::Arm::Full
-            };
-            entry.text = refusal.render_finding(arm);
+struct HookSighter<'a> {
+    envelope: &'a hook::Envelope,
+    reached: bool,
+    sighted: bool,
+}
+
+impl<'a> HookSighter<'a> {
+    //MUTANT delivery-marks-on-emit|s@^        let reached = capabilities.advisory_reachable(\&envelope.raw_event);$@        let reached = true;@|an_undelivered_channel_marks_nothing
+    fn new(harness: hook::Harness, envelope: &'a hook::Envelope) -> HookSighter<'a> {
+        let capabilities = harness.capabilities();
+        let reached = capabilities.advisory_reachable(&envelope.raw_event);
+        HookSighter {
+            envelope,
+            reached,
+            sighted: false,
         }
     }
-    sighted
+}
+
+impl advisory::Sighter for HookSighter<'_> {
+    fn peek(&self, refusal: &Refusal) -> refusal::Arm {
+        match (self.reached, self.envelope.context()) {
+            (true, Some(context)) => refusal::peek(hook_authority_root(), &context, refusal),
+            _ => refusal::Arm::Full,
+        }
+    }
+
+    fn mark(&mut self, refusal: &Refusal) -> refusal::Arm {
+        if !self.reached {
+            return refusal::Arm::Full;
+        }
+        self.sighted = true;
+        arm_for(hook::HookSource::Harness, self.envelope, refusal)
+    }
+}
+
+/// An emission's text, closed with where its overflow went when the ceiling
+/// cut it (CLOUD-2175): the overflow is stored whole in the capture store and
+/// the closing line names the handle that returns exactly it.
+fn closed_emission(emission: advisory::Emission, ceiling: Option<&advisory::Channel>) -> String {
+    let Some(ceiling) = ceiling.filter(|_| emission.suppressed > 0) else {
+        return emission.text;
+    };
+    let handle = git::repo_root(hook_authority_root())
+        .ok()
+        .and_then(|root| {
+            capture::store(
+                &root,
+                capture::Stream::Advisory,
+                emission.overflow.as_bytes(),
+            )
+            .ok()
+        })
+        .map(|stored| format!("{}:{}", capture::Stream::Advisory.as_str(), stored.digest));
+    format!(
+        "{}\n\n{}",
+        emission.text,
+        advisory::suppressed_line(emission.suppressed, ceiling.max_tokens, handle.as_deref())
+    )
 }
 
 /// `text` with the reading legend ahead of it when it is the first finding this
@@ -18062,6 +18131,14 @@ fn forget_drain_result(envelope: &hook::Envelope) {
     if let Ok(root) = session::root(&dir, session) {
         let _ = session::forget_result(&dir, &root);
     }
+    // AND WHAT IT WAS TOLD (CLOUD-2175): the delta holds back what the context
+    // already holds, and a new epoch's context holds none of it, so the next
+    // drain lists in full.
+    let mut wake = drain::load_wake(&dir, session);
+    if !wake.counts.is_empty() {
+        wake.counts.clear();
+        let _ = drain::save_wake(&dir, session, &wake);
+    }
 }
 
 /// Run the declared handlers for this envelope's event (CLOUD-898).
@@ -18412,13 +18489,13 @@ fn emit_channel(
     }
     // Marked only here, after the verdict's early return, so advice dropped
     // beside a verdict is never recorded as seen (CLOUD-2075).
-    let mut advice = advice;
-    let sighted = sight_advice(harness, envelope, &mut advice);
-    let emission = advisory::admit(advice, ceiling);
-    let text = if sighted {
-        legend_for(envelope, emission.text)
+    let mut sighter = HookSighter::new(harness, envelope);
+    let emission = advisory::admit(advice, ceiling, &mut sighter);
+    let text = closed_emission(emission, ceiling);
+    let text = if sighter.sighted {
+        legend_for(envelope, text)
     } else {
-        emission.text
+        text
     };
     emit_advisory(harness, envelope, out, err, &text)
 }
@@ -18738,6 +18815,16 @@ fn print_rule_remedies(
     Ok(())
 }
 
+/// The report id a drain's watermark records: this cycle's, unless nothing in
+/// it was fresh — then the last SHOWN report's, because a cycle that told the
+/// agent nothing new is the repeat of that one, not a new report (CLOUD-2175).
+fn shown_id(previous: Option<&session::Watermark>, drained: &drain::Drained) -> String {
+    match previous {
+        Some(mark) if drained.fresh == 0 && !mark.result_id.is_empty() => mark.result_id.clone(),
+        _ => drained.result_id.clone(),
+    }
+}
+
 /// Milliseconds since the Unix epoch, saturating; `0` before it.
 fn unix_millis() -> u64 {
     std::time::SystemTime::now()
@@ -18747,14 +18834,18 @@ fn unix_millis() -> u64 {
         })
 }
 
-/// One remediation-bearing refusal per rule a drained payload carries
-/// (CLOUD-2078), taking each rule's remediation from its first record.
-fn drained_rule_refusals(
+/// What a drained payload owes beside its lines (CLOUD-2078, CLOUD-2175): one
+/// remediation-bearing refusal per rule it carries, taking each rule's
+/// remediation from its first record — and, when the budget cut it, the
+/// `drain fit broken` finding saying the delta shape did not hold.
+//MUTANT drain-cut-unreported|s@^    if !drained.budget_withheld.is_empty() {$@    if false {@|an_over_budget_payload_is_cut_and_points_at_the_journal
+fn drained_refusals(
     records: &[findings::FindingRecord],
-    rules: &std::collections::BTreeMap<String, u64>,
+    drained: &drain::Drained,
     registry: &[verdict::DeclaredVerdict],
 ) -> Vec<refusal::Refusal> {
-    rules
+    let mut owed: Vec<refusal::Refusal> = drained
+        .rules
         .iter()
         .map(|(rule, count)| {
             let remediation = records
@@ -18763,10 +18854,21 @@ fn drained_rule_refusals(
                 .and_then(|record| record.remediation.as_ref());
             refusal::of_rule(rule, registry, *count, remediation)
         })
-        .collect()
+        .collect();
+    if !drained.budget_withheld.is_empty() {
+        owed.push(refusal::Refusal::engine(
+            verdict::Native::DrainFitBroken,
+            &[verdict::artifact(&format!(
+                "{} finding(s) cut",
+                drained.budget_withheld.len()
+            ))],
+            refusal::Fix::None,
+        ));
+    }
+    owed
 }
 
-//MUTANT drain-remedy-dropped|s@^        for rule_refusal in drained_rule_refusals(\&records, \&drained.rules, registry) {$@        for rule_refusal in drained_rule_refusals(\&records, \&drained.rules, registry).into_iter().take(0) {@|a_drained_rules_remedy_is_full_once_then_a_pointer
+//MUTANT drain-remedy-dropped|s@^        for rule_refusal in drained_refusals(\&records, \&drained, registry) {$@        for rule_refusal in drained_refusals(\&records, \&drained, registry).into_iter().take(0) {@|a_drained_rules_remedy_is_full_once_then_a_pointer
 fn drain_advisories(
     envelope: &hook::Envelope,
     overrides: &Overrides,
@@ -18865,9 +18967,11 @@ fn drain_advisories(
     // not re-list the set its parent had just shown.
     let root = session::root(&dir, session)?;
     let previous = session::load_watermark(&dir, &root)?;
-    let repeat = previous
-        .as_ref()
-        .is_some_and(|mark| mark.result_id == drained.result_id);
+    // NOTHING FRESH IS THE REPEAT (CLOUD-2175): what was told is not news again.
+    let repeat = drained.fresh == 0
+        || previous
+            .as_ref()
+            .is_some_and(|mark| mark.result_id == drained.result_id);
 
     // **Persistence is never skipped, which is the half the short-circuit must
     // not take with it.** The ordinal advances on every cycle including this one,
@@ -18877,7 +18981,7 @@ fn drain_advisories(
     session::save_watermark(
         &dir,
         &root,
-        &session::Watermark::next(previous.as_ref(), drained.result_id.clone()),
+        &session::Watermark::next(previous.as_ref(), shown_id(previous.as_ref(), &drained)),
     )?;
 
     // Three outcomes, and the middle one is what CLOUD-166 adds: say the payload,
@@ -18912,7 +19016,7 @@ fn drain_advisories(
             severity::AdvisoryTier::Advisory,
             drain::render(&drained),
         ));
-        for rule_refusal in drained_rule_refusals(&records, &drained.rules, registry) {
+        for rule_refusal in drained_refusals(&records, &drained, registry) {
             push_finding(advice, severity::AdvisoryTier::Advisory, rule_refusal);
         }
     } else if repeat && !drained.lines.is_empty() {

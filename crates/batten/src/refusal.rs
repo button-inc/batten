@@ -482,6 +482,24 @@ pub fn sight(root: &Path, context: &str, refusal: &Refusal) -> Arm {
     Arm::Full
 }
 
+/// Which arm `refusal` WOULD get in `context`, marking nothing (CLOUD-2175).
+///
+/// The advisory channel decides what fits by this, then marks only what it
+/// admits: a finding marked and then cut would read as delivered to a reader
+/// who never saw it, and its next firing would be the pointer alone.
+#[must_use]
+pub fn peek(root: &Path, context: &str, refusal: &Refusal) -> Arm {
+    let Some(dir) = context_dir(root, context) else {
+        return Arm::Full;
+    };
+    let key = refusal.sighting_key();
+    if dir.join(crate::provision::digest(key.as_bytes())).exists() {
+        Arm::Pointer
+    } else {
+        Arm::Full
+    }
+}
+
 /// Forget every item this ONE context has seen (CLOUD-2075). Other contexts in
 /// the clone are never touched.
 //MUTANT forget-sightings-noop|s@^        let _ = std::fs::remove_dir_all(dir);$@        let _ = dir;@|a_session_start_forgets_only_that_contexts_sightings
@@ -1070,6 +1088,40 @@ impl Refusal {
             fix,
             bindings: admission_bindings(token, subjects),
         }
+    }
+
+    /// The rendered subjects, as the ` at ` clause prints them.
+    #[must_use]
+    pub fn subjects_text(&self) -> &str {
+        &self.subjects
+    }
+
+    /// Fold `other` into this refusal when the two differ only in their subjects
+    /// (CLOUD-2175): one class raised over several subjects in one emission is
+    /// one line naming them all, so its label, routes and definition are paid
+    /// once. `false`, and nothing changed, for any other pair.
+    pub fn absorb(&mut self, other: &Refusal) -> bool {
+        let same = self.rule == other.rule
+            && self.verdict == other.verdict
+            && self.routes == other.routes
+            && self.fix == other.fix
+            && self.gloss == other.gloss
+            && self.readers == other.readers;
+        if !same || self.verdict.is_none() {
+            return false;
+        }
+        if other.subjects != self.subjects && !other.subjects.is_empty() {
+            if !self.subjects.is_empty() {
+                self.subjects.push_str(", ");
+            }
+            self.subjects.push_str(&other.subjects);
+            for binding in &other.bindings {
+                if !self.bindings.contains(binding) {
+                    self.bindings.push(binding.clone());
+                }
+            }
+        }
+        true
     }
 
     /// Every spelling a mediated admission binds to, printed spelling first

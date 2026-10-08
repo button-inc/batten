@@ -3605,6 +3605,8 @@ complete -c batten -n "__fish_batten_using_subcommand state; and __fish_seen_sub
 complete -c batten -n "__fish_batten_using_subcommand state; and __fish_seen_subcommand_from settle" -l no-input -d 'Never prompt; treat the run as unattended'
 complete -c batten -n "__fish_batten_using_subcommand state; and __fish_seen_subcommand_from settle" -s y -l yes -d 'Confirm a destructive operation that would otherwise refuse'
 complete -c batten -n "__fish_batten_using_subcommand state; and __fish_seen_subcommand_from settle" -s h -l help -d 'Print help (see more with \'--help\')'
+complete -c batten -n "__fish_batten_using_subcommand state; and __fish_seen_subcommand_from list" -l rule -d 'Only findings of this rule' -r
+complete -c batten -n "__fish_batten_using_subcommand state; and __fish_seen_subcommand_from list" -l path -d 'Only findings observed in this file' -r
 complete -c batten -n "__fish_batten_using_subcommand state; and __fish_seen_subcommand_from list" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
