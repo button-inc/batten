@@ -1448,6 +1448,40 @@ pub(crate) fn run_with_stdin(dir: &Path, args: &[&str], input: &str) -> Output {
     stdin_run(&mut batten(), dir, args, input)
 }
 
+/// The authority minus its `session-start` handler rows.
+///
+/// A CASE THAT SENDS A REAL `SessionStart` over the committed authority runs this
+/// repository's own session setup from the fixture: a toolchain install, a
+/// release build and a target prune that deletes the scratch directory the
+/// fixture lives in. Measured: five minutes, then a spawn into a directory that
+/// no longer existed. What such a case judges is the engine's lifecycle, not a
+/// handler's, so the rows are dropped rather than run.
+pub(crate) fn without_session_handlers(config: &str) -> String {
+    let mut out = String::with_capacity(config.len());
+    let mut block: Vec<&str> = Vec::new();
+    let flush = |block: &mut Vec<&str>, out: &mut String| {
+        let session = block.first() == Some(&"[[hook.handler]]")
+            && block
+                .iter()
+                .any(|line| line.trim() == "on = \"session-start\"");
+        if !session {
+            for line in block.iter() {
+                out.push_str(line);
+                out.push('\n');
+            }
+        }
+        block.clear();
+    };
+    for line in config.lines() {
+        if line.starts_with('[') {
+            flush(&mut block, &mut out);
+        }
+        block.push(line);
+    }
+    flush(&mut block, &mut out);
+    out
+}
+
 /// Run `command` in `dir` with `args`, writing `input` to its stdin and closing
 /// it, and capture its output. Refuses a fall-through BEFORE the spawn, since it
 /// runs below `Batten`'s own methods.
