@@ -76,14 +76,21 @@ pub fn exercise_hook_decode(data: &[u8]) {
             // default. The property was wrong, not the decoder — which is the
             // search earning its keep on the day it landed. Its input is kept
             // as a seed (`corpus/hook_decode/no-event-key-takes-the-default`).
-            let named = serde_json::from_str::<serde_json::Value>(raw)
-                .ok()
-                .and_then(|payload| {
-                    payload
-                        .get("hook_event_name")
-                        .and_then(serde_json::Value::as_str)
-                        .map(str::to_owned)
-                });
+            // Read the payload the way the decoder does — BOM stripped — or a
+            // BOM-prefixed payload reads as naming nothing here while the decoder
+            // reads its name. And an EMPTY name is no name (CLOUD-2139): both
+            // halves of that were found by the search on one input.
+            let named = serde_json::from_str::<serde_json::Value>(
+                raw.strip_prefix('\u{feff}').unwrap_or(raw),
+            )
+            .ok()
+            .and_then(|payload| {
+                payload
+                    .get("hook_event_name")
+                    .and_then(serde_json::Value::as_str)
+                    .filter(|name| !name.is_empty())
+                    .map(str::to_owned)
+            });
             match named {
                 Some(named) => assert_eq!(
                     envelope.raw_event, named,
