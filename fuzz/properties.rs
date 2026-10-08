@@ -236,3 +236,38 @@ pub fn exercise_lease_wire(data: &[u8]) {
         "parse_body is not a function of its input"
     );
 }
+
+/// Every property the transcript reader owes a caller, over one input
+/// (CLOUD-2136).
+///
+/// The transcript is written by the host, not by Batten, and `enforce` reads it
+/// for its turn findings — so these are bytes this engine did not produce
+/// deciding something.
+///
+/// # Panics
+///
+/// On any violated property, for the reason given above.
+pub fn exercise_transcript_parse(data: &[u8]) {
+    let Ok(body) = std::str::from_utf8(data) else {
+        return;
+    };
+    let shape = batten::hook::RecordShape::Jsonl;
+    let first = batten::transcript::parse(body, "fuzz.jsonl", shape).map_err(|e| e.to_string());
+    assert_eq!(
+        first,
+        batten::transcript::parse(body, "fuzz.jsonl", shape).map_err(|e| e.to_string()),
+        "transcript::parse is not a function of its input"
+    );
+    // NO PARTIAL STREAM. The module's contract is that a line which does not
+    // decode refuses the WHOLE stream — no caller ever receives a transcript
+    // with a line silently skipped, because a truncated stream presented as a
+    // clean one is the false green this engine exists to catch.
+    if first.is_ok() {
+        for line in body.lines().filter(|line| !line.trim().is_empty()) {
+            assert!(
+                serde_json::from_str::<serde_json::Value>(line).is_ok(),
+                "a stream was accepted around a line that is not JSON"
+            );
+        }
+    }
+}

@@ -1260,10 +1260,11 @@ description = "Report: the bounded libFuzzer search over every target, `fuzz`'s 
 # bounds each, 60 when unset.
 depends = ["fuzz:tools"]
 run = [
-  "mkdir -p fuzz/work/hook_decode fuzz/work/config_parse fuzz/work/lease_wire",
+  "mkdir -p fuzz/work/hook_decode fuzz/work/config_parse fuzz/work/lease_wire fuzz/work/transcript_parse",
   "cargo +nightly fuzz run hook_decode fuzz/work/hook_decode fuzz/corpus/hook_decode -- -max_total_time={% if env.FUZZ_SECONDS %}{{env.FUZZ_SECONDS}}{% else %}60{% endif %}",
   "cargo +nightly fuzz run config_parse fuzz/work/config_parse fuzz/corpus/config_parse -- -max_total_time={% if env.FUZZ_SECONDS %}{{env.FUZZ_SECONDS}}{% else %}60{% endif %}",
   "cargo +nightly fuzz run lease_wire fuzz/work/lease_wire fuzz/corpus/lease_wire -- -max_total_time={% if env.FUZZ_SECONDS %}{{env.FUZZ_SECONDS}}{% else %}60{% endif %}",
+  "cargo +nightly fuzz run transcript_parse fuzz/work/transcript_parse fuzz/corpus/transcript_parse -- -max_total_time={% if env.FUZZ_SECONDS %}{{env.FUZZ_SECONDS}}{% else %}60{% endif %}",
 ]
 
 [tasks.test]

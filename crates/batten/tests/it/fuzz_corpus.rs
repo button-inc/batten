@@ -81,10 +81,11 @@ type Exercise = fn(&[u8]);
 fn every_corpus_input_still_satisfies_every_property() {
     // Named per target so a failure names the surface, and so a corpus that
     // emptied for one target cannot hide behind the other's count.
-    let targets: [(&str, Exercise); 3] = [
+    let targets: [(&str, Exercise); 4] = [
         ("hook_decode", exercise_hook_decode),
         ("config_parse", exercise_config_parse),
         ("lease_wire", exercise_lease_wire),
+        ("transcript_parse", exercise_transcript_parse),
     ];
 
     let fuzz = fuzz_dir();
