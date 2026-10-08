@@ -806,14 +806,14 @@ fn no_pull_request_to_ask_is_could_not_look_and_never_a_refusal() {
 #[test]
 fn the_conflict_stop_and_its_gate_name_a_route_that_exists() {
     // THE MESSAGE MOVED, AND THIS FOLLOWS IT. It was written inline in the
-    // dispatch arm when this case was; `land::conflict_stop` owns it now,
+    // dispatch arm when this case was; `land_conflict_stop` (in `lib.rs`, since CLOUD-2078 kept `land` plumbing) owns it now,
     // precisely so a case that cannot stand up a serving remote can still assert
     // the text. Reading the arm would leave this asserting about a `writeln!`
     // loop and passing for nothing.
-    let source = std::fs::read_to_string(common::at_root("crates/batten/src/land.rs"))
+    let source = std::fs::read_to_string(common::at_root("crates/batten/src/lib.rs"))
         .expect("the module is readable");
     let after = source
-        .split_once("pub fn conflict_stop")
+        .split_once("pub fn land_conflict_stop")
         .expect("the function that renders the stop is where the message lives")
         .1;
     let arm = &after[..after.find("\nfn ").unwrap_or(after.len())];

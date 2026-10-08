@@ -8893,6 +8893,15 @@ fn run_override_request(
     // record's existence and state do — which is exactly what makes it safe to
     // print, log, and quote in a commit.
     writeln!(out, "{issued}")?;
+    // THE NEXT STEP, ON STDERR (CLOUD-2078). Only a `Spent` record admits, and
+    // no line a refusal prints names `spend`: measured, a request answered in
+    // full left the gate refusing with nothing saying why.
+    writeln!(
+        err,
+        "batten: issued, not yet admitting; run batten override spend --admission {issued} \
+         --rule '{rule}' --verdict '{}' --subject '{subject}'",
+        resolved.id
+    )?;
     Ok(ExitCode::Success)
 }
 
@@ -10657,7 +10666,7 @@ fn run_land_laps(run: Laps<'_>, out: &mut dyn Write, err: &mut dyn Write) -> Res
 fn say_the_laps_are_spent(laps: u32, ledger: &land::Ledger, err: &mut dyn Write) -> Result<()> {
     // ONE CLASSED LINE (CLOUD-2078): `lane run spent`, its readings decided in
     // `land::spent_refusal`.
-    let spent = land::spent_refusal(laps, ledger);
+    let spent = land_spent_refusal(laps, ledger);
     output::verdict(
         err,
         &format!(
@@ -12103,7 +12112,7 @@ fn run_land_replay(
     match replayed {
         land::Replay::Conflicted { commit, paths } => {
             // ONE CLASSED LINE ON STDERR (CLOUD-2078), annotated for CI.
-            let stop = land::conflict_stop(branch, reference, &commit, &paths);
+            let stop = land_conflict_stop(branch, reference, &commit, &paths);
             output::verdict(
                 err,
                 &format!(
@@ -13407,7 +13416,7 @@ fn say_what_the_wait_saw(
             // ONE CLASSED LINE (CLOUD-2078): `job run red`, the head and each
             // failing check as subjects, the advice below as its remedy.
             let named: Vec<String> = findings.iter().map(ToString::to_string).collect();
-            let red = land::red_refusal(sha, &named);
+            let red = land_red_refusal(sha, &named);
             output::verdict(
                 err,
                 &format!("::error:: land: {}", red.render_finding(refusal::Arm::Full)),
@@ -17527,13 +17536,9 @@ fn fill_turn_advice(
     // reach nobody at all, which is a worse answer than the deny it replaced —
     // an advisory nothing surfaces is a sensor with no reader.
     //
-    // NOT FOLDED INTO THE `advice.is_empty()` BLOCK ABOVE. That one is the
-    // end-of-turn channel, where at most one nudge per turn is the measured rule
-    // because two nudges is how a channel stops being read. This one rides a
-    // single tool call the agent is making right now: it is about the call in
-    // hand rather than about the turn, and suppressing it because something else
-    // already spoke would make the signal arrive at some calls and not others for
-    // reasons the reader cannot see. `policy_advice` is empty at `Stop` (the
+    // NOT FOLDED INTO THE STOP LADDER ABOVE. That one is the end-of-turn
+    // channel; this one rides a single tool call the agent is making right now,
+    // about the call in hand rather than about the turn. `policy_advice` is empty at `Stop` (the
     // block above owns that moment), and returns every non-blocking module's
     // line on a call (CLOUD-1470); the key test drops a finding two bundles
     // raised identically (CLOUD-2075).
@@ -18489,10 +18494,11 @@ fn report_contract_drift(
         if !matches!(envelope.event, hook::Event::SessionStart) {
             // WARNING: the engine is not mediating this session at all, which is
             // the one advisory whose subject is the gate rather than the work.
-            advice.push(advisory::Advice::new(
+            push_finding(
+                advice,
                 severity::AdvisoryTier::Warning,
                 contract::unmediated_session(),
-            ));
+            );
         }
         return;
     };
@@ -18507,10 +18513,11 @@ fn report_contract_drift(
     // toward an unbounded stream of the same one.
     // An unwritable snapshot costs a repeated notice, never a refused call.
     drop(contract::record(&git_dir, session, &current));
-    advice.push(advisory::Advice::new(
+    push_finding(
+        advice,
         severity::AdvisoryTier::Caution,
         contract::render(&change, &declared.wiring),
-    ));
+    );
 }
 
 /// What this call's write would land, resolved only if a row asks (CLOUD-758).
@@ -19334,9 +19341,8 @@ fn stop_nudges(
     // are equally about the turn's conduct — but this one is not about conduct.
     // The others say the turn was untidy; this one says the work does not exist
     // anywhere but here, and a container reclaim ends it. A style nit outranking
-    // that is the inversion CLOUD-1372 records, and it is the ladder's own
-    // "at most one nudge" budget that made the ordering load-bearing rather than
-    // cosmetic.
+    // that is the inversion CLOUD-1372 records. Every rung now speaks
+    // (CLOUD-2078), so the order is what a reader meets first, not who is heard.
     if !envelope.writes_available() {
         return Vec::new();
     }
@@ -19762,14 +19768,15 @@ fn already_marked(seen: Option<&Path>, key: &str) -> bool {
     })
 }
 
-/// What the `filed-here` row says about this branch, suppressed and rendered.
+/// What the `filed-here` row says about this branch: the flagged paths, then
+/// every filed id.
 ///
 /// # Two questions over one predicate, which is what keeps them from drifting
 ///
-/// [`Suppression::PerRow`] answers the narrow one — which filed row names a file
-/// this branch is holding open — from the row's own findings.
-/// [`Suppression::PerSet`] answers the broad one no predicate scores: here is
-/// EVERY row you spun off. Its ids come from the recorder's record directly,
+/// The first list answers the narrow one — which filed row names a file this
+/// branch is holding open — from the row's own findings. The second answers the
+/// broad one no predicate scores: here is EVERY row you spun off. Its ids come
+/// from the recorder's record directly,
 /// because a finding is emitted only for a refusal and the checklist is about
 /// the whole set.
 ///
@@ -20477,7 +20484,7 @@ fn record_absence(
 
 /// A capture notice as the class it belongs to (CLOUD-2078): the reason id is
 /// its one subject.
-//MUTANT capture-notice-misclassed|s@^    let class = verdict::Native::OutputWriteMissing;$@    let class = verdict::Native::RunBroken;@|a_capture_notice_is_full_once_then_a_pointer
+//MUTANT capture-notice-misclassed|s@^    let class = verdict::Native::OutputWriteMissing;$@    let class = verdict::Native::RunBroken;@|a_capture_notice_is_a_classed_finding
 fn capture_notice(reason: &str) -> refusal::Refusal {
     let class = verdict::Native::OutputWriteMissing;
     refusal::Refusal::engine(class, &[verdict::artifact(reason)], refusal::Fix::None)
@@ -23350,8 +23357,10 @@ fn run_rules(
         // than inventing a line number it does not have. Both of those are
         // `Finding`'s own renderer now, not this site's.
         output::lines(out, &findings)?;
-        print_rule_remedies(err, &findings, &config.rules, &config.verdicts)?;
     }
+    // ON BOTH ARMS: the remedies ride stderr, which `-J` leaves free, and a
+    // machine reader of the document is still an agent that must act on it.
+    print_rule_remedies(err, &findings, &config.rules, &config.verdicts)?;
     report_dispositions(mode, err, &scan)?;
     report_clean_run(json, mode, err, &findings, &config, &scan)?;
     // THE PIN IS MINTED HERE, and the position is the meaning (CLOUD-720):
@@ -24785,10 +24794,173 @@ fn run_generate(command: &GenerateCommand, out: &mut dyn Write) -> Result<ExitCo
     Ok(ExitCode::Success)
 }
 
+/// LAND'S STOPS AS FINDINGS, built here rather than in `land` (CLOUD-2078):
+/// `land` is plumbing, and an edge onto `refusal` would pull its closure past
+/// the bound `module_closure` holds. `land` reports the facts; this classes them.
+///
+/// What a conflicted replay says to the author it stopped (CLOUD-1537).
+///
+/// **The loop's one human stop had no route in it.** `--resolve` has been the way
+/// past a conflicted replay since v0.0.153 and its only mention anywhere in the
+/// crate was its own flag doc, so a stopped author was told where the conflict
+/// was and nothing about what to do — while `patch run loose` denied the
+/// `git rebase` they would reach for next. A remedy nobody can find is the same
+/// as no remedy.
+///
+/// **Every path, not a count and the first.** The defect this replaces printed
+/// `in N path(s); first is X`, which is unusable as a work list: `--resolve` takes
+/// each path, so naming one of three leaves the author to discover the rest by
+/// re-running.
+///
+/// **Sorted**, because the merge's own order is not a fact a caller can rely on
+/// and this text is compared between runs.
+///
+/// **Pointer-only** (non-negotiable rule 4): paths and a command, never a hunk and
+/// never a conflict marker — which is the whole of what a conflict consists of and
+/// exactly what a reader must not be handed here.
+///
+/// A function rather than inline `writeln!`s because the caller reaches it only
+/// after a fetch, and a case that had to stand up a serving remote could not
+/// assert this text at all.
+///
+/// ONE CLASSED FINDING (CLOUD-2078): `commit port blocked`, the branch, the
+/// target, the commit, the count and each path as subjects, and the route out
+/// as its remedy — so the stop is one line a reader parses like every other.
+//MUTANT-SUITE crates/batten/tests/it/rebase.rs
+//MUTANT conflict-stop-misclassed|s@^    let class = crate::verdict::Native::CommitPortBlocked;$@    let class = crate::verdict::Native::CheckRunRed;@|the_conflict_stop_names_every_path_and_the_route_out
+#[must_use]
+pub fn land_conflict_stop(
+    branch: &str,
+    reference: &str,
+    commit: &str,
+    paths: &[String],
+) -> crate::refusal::Refusal {
+    let mut named: Vec<&str> = paths.iter().map(String::as_str).collect();
+    named.sort_unstable();
+
+    let mut subjects = vec![
+        crate::verdict::artifact(branch),
+        crate::verdict::artifact(reference),
+        crate::verdict::artifact(commit),
+        crate::verdict::artifact(&format!("{} path(s)", named.len())),
+    ];
+    subjects.extend(named.iter().map(|path| crate::verdict::Subject::Path {
+        path: (*path).to_owned(),
+    }));
+    let mut said = Vec::new();
+    // WHY THE REBASE-IN-PROGRESS EXITS CANNOT APPLY, said here rather than left
+    // for the reader to discover. Measured on this branch: the stop named the
+    // commit and the paths, the `patch run loose` row named `--continue`,
+    // `--abort` and `--skip` as the spellings it leaves alone, and a session
+    // followed both, concluded the loop was defective, and was one step from
+    // cherry-picking around it — which completes the replay while writing no lap
+    // record, so `replay halt conflict` would read clean over a conflict that
+    // happened. The sentence is what stops that, and it is owed on the pathless
+    // reading too.
+    said.push(String::from(
+        "the replay is STATELESS: nothing is half-replayed, so there is no rebase in \
+         progress and --continue, --abort and --skip have nothing to act on",
+    ));
+    if let Some(first) = named.first() {
+        said.push(format!(
+            "merge each path in the worktree, then: batten land replay {reference} --resolve {first}"
+        ));
+        said.push(String::from(
+            "a path conflicting at more than one commit takes --resolve <path>=<file>, one file per commit",
+        ));
+    }
+    let class = crate::verdict::Native::CommitPortBlocked;
+    crate::refusal::Refusal::engine(class, &subjects, crate::refusal::Fix::Run(said.join("; ")))
+}
+
+/// Red CI as `job run red` (CLOUD-2078): the head, how many required checks
+/// failed and each one, with the reproduce-locally advice as its remedy.
+#[must_use]
+pub fn land_red_refusal(sha: &str, findings: &[String]) -> crate::refusal::Refusal {
+    let count = u64::try_from(findings.len()).unwrap_or(u64::MAX);
+    let mut subjects = vec![
+        crate::verdict::artifact(sha),
+        crate::verdict::Subject::Count { count },
+    ];
+    subjects.extend(
+        findings
+            .iter()
+            .map(|finding| crate::verdict::artifact(finding)),
+    );
+    crate::refusal::Refusal::engine(
+        crate::verdict::Native::JobRunRed,
+        &subjects,
+        crate::refusal::Fix::Run(String::from(
+            "reproduce each named check locally: a rebase clears nothing here, so the lap stops",
+        )),
+    )
+}
+
+/// The spent lap budget as `lane run spent` (CLOUD-2078), with the advice its
+/// two readings want: run again on a contended fleet, read the laps otherwise.
+/// CONDITIONAL RATHER THAN APPENDED, because printing both would be the hedge
+/// that leaves a reader no better off.
+#[must_use]
+pub fn land_spent_refusal(laps: u32, ledger: &land::Ledger) -> crate::refusal::Refusal {
+    let advice = if ledger.lease_waits > 0 {
+        String::from(
+            "every lease wait lost only to another branch holding the landing lease and spent \
+             nothing: a saturated fleet is not a failing branch, so run this again",
+        )
+    } else {
+        format!(
+            "a conflict, a failed gate or red CI will lose again: read the lap lines above for \
+             how each ended; if every lap lost only to contention, running this again commits \
+             up to {laps} more"
+        )
+    };
+    crate::refusal::Refusal::engine(
+        crate::verdict::Native::LaneCountSpent,
+        &[
+            crate::verdict::artifact(&format!("{laps} lap(s)")),
+            crate::verdict::artifact(&format!("{} CI matri(ces)", ledger.spent())),
+            crate::verdict::artifact(&format!("{} lease wait(s)", ledger.lease_waits)),
+        ],
+        crate::refusal::Fix::Run(advice),
+    )
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// RED CI AND A SPENT BUDGET ARE CLASSED FINDINGS (CLOUD-2078), each
+    /// naming its counts as subjects and its advice as the remedy.
+    #[test]
+    fn red_and_spent_render_their_classes_with_their_counts() {
+        use crate::refusal::Arm;
+        let red = land_red_refusal("deadbeef", &["test (ubuntu) failure".to_owned()]);
+        assert_eq!(red.verdict(), Some(crate::verdict::Native::JobRunRed.id()));
+        let line = red.render_finding(Arm::Full);
+        assert!(
+            line.contains("deadbeef") && line.contains("test (ubuntu) failure"),
+            "{line}"
+        );
+        assert!(
+            line.contains("reproduce each named check locally"),
+            "{line}"
+        );
+
+        let mut ledger = land::Ledger::default();
+        ledger.attempt();
+        let spent = land_spent_refusal(3, &ledger);
+        assert_eq!(
+            spent.verdict(),
+            Some(crate::verdict::Native::LaneCountSpent.id())
+        );
+        let line = spent.render_finding(Arm::Full);
+        assert!(
+            line.contains("3 lap(s)") && line.contains("0 lease wait(s)"),
+            "{line}"
+        );
+        assert!(line.contains("will lose again"), "{line}");
+    }
 
     /// The default lease waits, at the shipped TTL, fit inside an hour, so the
     /// free waiting cannot outlast a hosted background lifetime (CLOUD-2132).

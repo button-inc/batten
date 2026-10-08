@@ -1366,6 +1366,25 @@ pub const VENDORED_DOCS: &[VendoredDoc] = &[
         act: &["run `batten land lap` again once the target settles"],
         dont: &["raise the lap bound to push through"],
     },
+    VendoredDoc {
+        id: "contract read stale",
+        why: Some("A rule read in its old form is one this session is not following"),
+        act: &[
+            "re-read each `changed` path before the next lifecycle step",
+            "read each `added` path before judging it irrelevant",
+            "run `batten doctor hooks` when the wiring moved",
+        ],
+        dont: &["treat an added path as a changed rule"],
+    },
+    VendoredDoc {
+        id: "hook run missing",
+        why: Some("An absent gate and a passing one look the same from outside"),
+        act: &[
+            "install the engine where the host resolves it by bare name",
+            "run `batten doctor` to see which binary `PATH` finds",
+        ],
+        dont: &["assume the calls before this one were checked"],
+    },
 ];
 
 /// The vendored doc for `id`, or an empty one where none is declared.

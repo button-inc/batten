@@ -1260,17 +1260,30 @@ const CENSUS: &[Verb] = &[
         stdin: Stdin::Board,
         disposition: Disposition::PointerOnly,
     },
+    // ECHOES ONE COLUMN SINCE CLOUD-2078: after the pointer lines, each rule
+    // that fired names its remedy once on stderr, and a rule with no `fix`
+    // carries its `no_fix_reason` there. That is the config author's own
+    // declaration of what to do, once per rule per run — never a byte a check
+    // read, which the content half below still refuses.
     Verb {
         path: "check",
         args: &[],
         stdin: Stdin::Nothing,
-        disposition: Disposition::PointerOnly,
+        disposition: Disposition::Echoes(
+            "each rule that fired names its declared remedy once, its `no_fix_reason` where it \
+             has no `fix` (CLOUD-2078)",
+            Echoed::Columns(&["rule[].no_fix_reason"]),
+        ),
     },
     Verb {
         path: "enforce",
         args: &[],
         stdin: Stdin::Nothing,
-        disposition: Disposition::PointerOnly,
+        disposition: Disposition::Echoes(
+            "each rule that fired names its declared remedy once, its `no_fix_reason` where it \
+             has no `fix` (CLOUD-2078)",
+            Echoed::Columns(&["rule[].no_fix_reason"]),
+        ),
     },
     Verb {
         path: "exec",

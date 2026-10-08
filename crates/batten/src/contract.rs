@@ -305,81 +305,50 @@ pub fn record(git_dir: &Path, session: Option<&str>, manifest: &Manifest) -> Res
 /// than a claim about session state, and `batten doctor hooks` is the mechanism
 /// that reads the wiring itself — named, so the notice points at something that
 /// exists.
+/// # One finding, the sections as subjects (CLOUD-2078)
+///
+/// `contract read stale`, each moved path labelled with its partition. The
+/// sentences that used to follow each section — a `changed` path is a rule held
+/// in its old form, an `added` one new capability never read — are the class's
+/// own doc now, delivered once per window rather than on every notice.
+//MUTANT contract-drift-misclassed|s@^    let class = crate::verdict::Native::ContractReadStale;$@    let class = crate::verdict::Native::RunBroken;@|a_moved_contract_file_is_reported_in_band
 #[must_use]
-pub fn render(change: &ChangeSet, wiring: &[String]) -> String {
-    let mut out = format!(
-        "contract-drift {} changed, {} removed\n",
+pub fn render(change: &ChangeSet, wiring: &[String]) -> crate::refusal::Refusal {
+    // ADDED FIRST (CLOUD-490): a new path is an OFFER rather than an
+    // obligation, the one class a relevance filter cannot keep, and almost
+    // always the smaller set — the half worth reading first.
+    let mut subjects = vec![crate::verdict::artifact(&format!(
+        "{} changed, {} removed",
         change.touched(),
         change.removed.len()
-    );
-    // ADDED FIRST, and its own sentence rides with it (CLOUD-490). A new path is
-    // an OFFER rather than an obligation, and it is the one class a relevance
-    // filter cannot keep: nothing in the session's working set names it. Saying
-    // that where the paths are is what stops it being filtered out with the rest.
-    //
-    // This SHORTENS what a reader must act on rather than lengthening it — the
-    // added set is almost always the smaller one, and it is the half worth
-    // reading first.
-    if !change.added.is_empty() {
-        out.push_str("\nadded — you could not have been doing these:\n");
-        for path in &change.added {
-            out.push_str("  ");
-            out.push_str(path);
-            out.push('\n');
-        }
-    }
-    if !change.changed.is_empty() {
-        out.push_str("\nchanged:\n");
-        for path in &change.changed {
-            out.push_str("  ");
-            out.push_str(path);
-            out.push('\n');
-        }
-    }
-    if !change.removed.is_empty() {
-        out.push_str("\nno longer tracked:\n");
-        for path in &change.removed {
-            out.push_str("  ");
-            out.push_str(path);
-            out.push('\n');
-        }
-    }
-    // TWO SENTENCES, EACH SPEAKING ONLY FOR ITS OWN SECTION. The old single
-    // sentence — "read the OLD ones at start" — is FALSE of an added path: there
-    // was no old one. Printing it over both sections is what framed a new
-    // capability as one more file to re-read.
-    if !change.changed.is_empty() {
-        out.push_str(
-            "\nThese files changed under this session, which read the OLD ones at start and has\n\
-             not re-read them. Re-read the ones named above before the next lifecycle step.\n",
-        );
-    }
-    if !change.added.is_empty() {
-        out.push_str(
-            "\nThe added ones are new capability, not a changed rule: this session never read\n\
-             them and has no basis for judging them irrelevant. Read them before deciding they\n\
-             are not worth reading.\n",
+    ))];
+    for (label, paths) in [
+        ("added", &change.added),
+        ("changed", &change.changed),
+        ("removed", &change.removed),
+    ] {
+        subjects.extend(
+            paths
+                .iter()
+                .map(|path| crate::verdict::artifact(&format!("{label} {path}"))),
         );
     }
     // ALL THREE PARTITIONS, and `added` is the one a reader forgets: a wiring file
-    // that ARRIVED is the strongest reason to say the wiring moved, and it is
-    // exactly the class the notice's first line already counts.
-    let touched: Vec<&String> = change
+    // that ARRIVED is the strongest reason to say the wiring moved.
+    // A SUBJECT, NOT A FIX: a fix replaces the class's `do` on the full arm,
+    // and the re-read steps there are owed whether or not the wiring moved. The
+    // class's doc names `batten doctor hooks` against this subject.
+    let touched = change
         .changed
         .iter()
         .chain(change.added.iter())
         .chain(change.removed.iter())
-        .filter(|path| wiring.iter().any(|w| w == *path))
-        .collect();
-    if !touched.is_empty() {
-        out.push_str(
-            "\nThe hook wiring is among them, so what this session is actually running may\n\
-             differ from what the tree declares. `batten doctor hooks` reports the wiring;\n\
-             what THIS process loaded at start is not answerable from inside (CLOUD-187).\n",
-        );
+        .any(|path| wiring.iter().any(|w| w == path));
+    if touched {
+        subjects.push(crate::verdict::artifact("hook wiring moved"));
     }
-    out.push_str("\nReported once per change-set; silence otherwise.\n");
-    out
+    let class = crate::verdict::Native::ContractReadStale;
+    crate::refusal::Refusal::engine(class, &subjects, crate::refusal::Fix::None)
 }
 
 /// The advisory for a session whose `SessionStart` registration never ran
@@ -425,18 +394,19 @@ pub fn render(change: &ChangeSet, wiring: &[String]) -> String {
 /// snapshot in the same branch, so this is emitted once per session and never
 /// again, which is what keeps it credible rather than a line everybody learns to
 /// scroll past.
+///
+/// `hook run missing` since CLOUD-2078, its explanation the class's own doc.
+/// The provisioning step is the consumer's to name — this file used to spell
+/// one repository's `mise` tasks inside `crates/batten`.
 #[must_use]
-pub fn unmediated_session() -> String {
-    "contract-drift: this session's SessionStart registration did not run\n\n\
-     The per-session snapshot is being seeded at a later event, which means the engine\n\
-     was not invoked when this session started. The hosts register it by BARE NAME, so\n\
-     the usual cause is that no `batten` resolved on PATH at that moment — in which case\n\
-     every mediated call until it appeared failed open and said nothing.\n\n\
-     This is a provisioning failure rather than a policy one: `mise run deps-install`\n\
-     installs the released binary, and `mise run deps` reports which one PATH finds.\n\n\
-     Which calls preceded this is not answerable from here, and is not claimed.\n\
-     Reported once per session; silence otherwise.\n"
-        .to_owned()
+pub fn unmediated_session() -> crate::refusal::Refusal {
+    crate::refusal::Refusal::engine(
+        crate::verdict::Native::HookRunMissing,
+        &[crate::verdict::artifact(
+            "SessionStart registration did not run",
+        )],
+        crate::refusal::Fix::None,
+    )
 }
 
 #[cfg(test)]
@@ -499,8 +469,9 @@ mod tests {
             added: Vec::new(),
             removed: Vec::new(),
         };
-        let text = render(&change, &["wiring.json".to_owned()]);
-        assert!(text.contains("wiring.json"));
+        let text =
+            render(&change, &["wiring.json".to_owned()]).render_finding(crate::refusal::Arm::Full);
+        assert!(text.contains("changed wiring.json"));
         assert!(!text.contains(secret));
         assert!(
             !text.contains("+++") && !text.contains("@@"),
@@ -517,45 +488,50 @@ mod tests {
     #[test]
     fn the_wiring_line_is_computable_and_claims_nothing_about_the_session() {
         let wiring = vec!["wiring.json".to_owned()];
+        // The POINTER arm: the full arm adds the class doc, which names
+        // `batten doctor hooks` for every reader whether or not this set moved it.
+        let line = |change: ChangeSet| {
+            render(&change, &wiring).render_finding(crate::refusal::Arm::Pointer)
+        };
 
-        let touched = render(
+        let touched = line(ChangeSet {
+            changed: vec!["wiring.json".to_owned()],
+            added: Vec::new(),
+            removed: Vec::new(),
+        });
+        assert!(touched.contains("hook wiring moved"), "{touched}");
+        // And an ADDED wiring file says so too (CLOUD-490). Partitioning `added`
+        // out of `changed` silently dropped this arm until a review caught it:
+        // the notice counted the path and then reported the wiring as untouched.
+        let arrived = line(ChangeSet {
+            changed: Vec::new(),
+            added: vec!["wiring.json".to_owned()],
+            removed: Vec::new(),
+        });
+        assert!(arrived.contains("hook wiring moved"), "{arrived}");
+        let full = render(
             &ChangeSet {
                 changed: vec!["wiring.json".to_owned()],
                 added: Vec::new(),
                 removed: Vec::new(),
             },
             &wiring,
-        );
-        assert!(touched.contains("The hook wiring is among them"));
-        // And an ADDED wiring file says so too (CLOUD-490). Partitioning `added`
-        // out of `changed` silently dropped this arm until a review caught it:
-        // the notice counted the path and then reported the wiring as untouched.
-        let arrived = render(
-            &ChangeSet {
-                changed: Vec::new(),
-                added: vec!["wiring.json".to_owned()],
-                removed: Vec::new(),
-            },
-            &wiring,
-        );
-        assert!(arrived.contains("The hook wiring is among them"));
-        assert!(touched.contains("batten doctor hooks"));
+        )
+        .render_finding(crate::refusal::Arm::Full);
+        assert!(full.contains("batten doctor hooks"), "{full}");
         assert!(
-            !touched.contains("self-enforced"),
+            !full.contains("self-enforced"),
             "the unactionable clause must not come back"
         );
 
-        let untouched = render(
-            &ChangeSet {
-                changed: vec!["guide.md".to_owned()],
-                added: Vec::new(),
-                removed: Vec::new(),
-            },
-            &wiring,
-        );
+        let untouched = line(ChangeSet {
+            changed: vec!["guide.md".to_owned()],
+            added: Vec::new(),
+            removed: Vec::new(),
+        });
         assert!(
-            !untouched.contains("The hook wiring is among them"),
-            "a change-set that did not touch the wiring says nothing about it"
+            !untouched.contains("hook wiring moved"),
+            "a change-set that did not touch the wiring says nothing about it: {untouched}"
         );
     }
 

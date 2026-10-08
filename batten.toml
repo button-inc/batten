@@ -12164,8 +12164,8 @@ expires = "2027-02-28"
 # THE STRANDED-FINDING CHECK, at the end of the turn that stranded it (CLOUD-252),
 # retired off `mise-tasks/finding-sink-check.sh` under CLOUD-1717. A `stop` row is
 # the engine's end-of-turn ladder's SECOND rung, after the completion reading and
-# the output-posture module and never ahead of them: at most one nudge per turn is
-# the measured rule. The engine used to spawn the file by path, which put this
+# the output-posture module and never ahead of them; every rung that applies
+# speaks, each a finding the window bounds to one full arm (CLOUD-2078). The engine used to spawn the file by path, which put this
 # repository's program inside `crates/batten`; declared here, it is the
 # consumer's. With no transcript it abstains at exit 0 with nothing on stdout,
 # which the door reads as a pass: its table has no abstention code. Since

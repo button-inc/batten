@@ -43,8 +43,8 @@ count for the task is the step count above.
 | arm | steps | bytes | est. tokens | USD / 1k tasks (fresh) | USD / 1k tasks (cache read) | exit |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | baseline | 1 | 2705 | 677 | 1.3540 | 0.1354 | 0 |
-| batten | 1 | 945 | 237 | 0.4740 | 0.0474 | 2 |
-| **ratio** | | **2.86×** | **2.86×** | | | |
+| batten | 1 | 1047 | 262 | 0.5240 | 0.0524 | 2 |
+| **ratio** | | **2.58×** | **2.58×** | | | |
 
 ### build-warning — exec output predicate
 
@@ -60,8 +60,8 @@ count for the task is the step count above.
 | arm | steps | bytes | est. tokens | USD / 1k tasks (fresh) | USD / 1k tasks (cache read) | exit |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | baseline | 2 | 25731 | 6433 | 12.8660 | 1.2866 | 0 |
-| batten | 1 | 458 | 115 | 0.2300 | 0.0230 | 1 |
-| **ratio** | | **56.18×** | **55.94×** | | | |
+| batten | 1 | 4754 | 1189 | 2.3780 | 0.2378 | 1 |
+| **ratio** | | **5.41×** | **5.41×** | | | |
 
 ### log-handle — capture-once handles
 
@@ -77,8 +77,8 @@ count for the task is the step count above.
 | arm | steps | bytes | est. tokens | USD / 1k tasks (fresh) | USD / 1k tasks (cache read) | exit |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | baseline | 2 | 25731 | 6433 | 12.8660 | 1.2866 | 0 |
-| batten | 3 | 919 | 230 | 0.4600 | 0.0460 | 0 |
-| **ratio** | | **28.00×** | **27.97×** | | | |
+| batten | 3 | 5215 | 1304 | 2.6080 | 0.2608 | 0 |
+| **ratio** | | **4.93×** | **4.93×** | | | |
 
 ### board-gate-payload — declared field sets on tracker-payload gates
 

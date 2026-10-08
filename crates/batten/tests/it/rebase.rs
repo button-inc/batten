@@ -339,7 +339,7 @@ fn offset_in(raw: &str, field: &str) -> String {
 /// fixture.** `batten land replay` fetches the base reference before it can
 /// conflict, and the fetch path speaks the wire protocol — a local repository
 /// named as a `file://` remote is refused, measured here. So the binary route
-/// cannot produce this text in a suite at all, and `land::conflict_stop` is the
+/// cannot produce this text in a suite at all, and `land_conflict_stop` is the
 /// decision extracted to where a case can reach it, exactly as `rules/rust.md`
 /// prescribes where the environment cannot create the condition.
 ///
@@ -354,7 +354,7 @@ fn offset_in(raw: &str, field: &str) -> String {
 #[test]
 fn the_conflict_stop_names_every_path_and_the_route_out() {
     let paths = vec![String::from("beta.txt"), String::from("alpha.txt")];
-    let said = batten::land::conflict_stop("work", "refs/heads/main", "abc1234", &paths);
+    let said = batten::land_conflict_stop("work", "refs/heads/main", "abc1234", &paths);
     let whole = said.render_finding(batten::refusal::Arm::Full);
     // ONE CLASSED LINE (CLOUD-2078), with no rule label behind it.
     assert!(
@@ -389,7 +389,7 @@ fn the_conflict_stop_names_every_path_and_the_route_out() {
 
     // ANTI-VACUITY: a conflict with no paths still says what happened, and names
     // no route it cannot spell.
-    let empty = batten::land::conflict_stop("work", "refs/heads/main", "abc1234", &[])
+    let empty = batten::land_conflict_stop("work", "refs/heads/main", "abc1234", &[])
         .render_finding(batten::refusal::Arm::Full);
     assert!(
         empty.contains("0 path(s)") && !empty.contains("--resolve"),

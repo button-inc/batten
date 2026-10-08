@@ -129,132 +129,6 @@ impl Replay {
     }
 }
 
-/// What a conflicted replay says to the author it stopped (CLOUD-1537).
-///
-/// **The loop's one human stop had no route in it.** `--resolve` has been the way
-/// past a conflicted replay since v0.0.153 and its only mention anywhere in the
-/// crate was its own flag doc, so a stopped author was told where the conflict
-/// was and nothing about what to do — while `patch run loose` denied the
-/// `git rebase` they would reach for next. A remedy nobody can find is the same
-/// as no remedy.
-///
-/// **Every path, not a count and the first.** The defect this replaces printed
-/// `in N path(s); first is X`, which is unusable as a work list: `--resolve` takes
-/// each path, so naming one of three leaves the author to discover the rest by
-/// re-running.
-///
-/// **Sorted**, because the merge's own order is not a fact a caller can rely on
-/// and this text is compared between runs.
-///
-/// **Pointer-only** (non-negotiable rule 4): paths and a command, never a hunk and
-/// never a conflict marker — which is the whole of what a conflict consists of and
-/// exactly what a reader must not be handed here.
-///
-/// A function rather than inline `writeln!`s because the caller reaches it only
-/// after a fetch, and a case that had to stand up a serving remote could not
-/// assert this text at all.
-///
-/// ONE CLASSED FINDING (CLOUD-2078): `commit port blocked`, the branch, the
-/// target, the commit, the count and each path as subjects, and the route out
-/// as its remedy — so the stop is one line a reader parses like every other.
-//MUTANT conflict-stop-misclassed|s@^    let class = crate::verdict::Native::CommitPortBlocked;$@    let class = crate::verdict::Native::CheckRunRed;@|the_conflict_stop_names_every_path_and_the_route_out
-#[must_use]
-pub fn conflict_stop(
-    branch: &str,
-    reference: &str,
-    commit: &str,
-    paths: &[String],
-) -> crate::refusal::Refusal {
-    let mut named: Vec<&str> = paths.iter().map(String::as_str).collect();
-    named.sort_unstable();
-
-    let mut subjects = vec![
-        crate::verdict::artifact(branch),
-        crate::verdict::artifact(reference),
-        crate::verdict::artifact(commit),
-        crate::verdict::artifact(&format!("{} path(s)", named.len())),
-    ];
-    subjects.extend(named.iter().map(|path| crate::verdict::Subject::Path {
-        path: (*path).to_owned(),
-    }));
-    let mut said = Vec::new();
-    // WHY THE REBASE-IN-PROGRESS EXITS CANNOT APPLY, said here rather than left
-    // for the reader to discover. Measured on this branch: the stop named the
-    // commit and the paths, the `patch run loose` row named `--continue`,
-    // `--abort` and `--skip` as the spellings it leaves alone, and a session
-    // followed both, concluded the loop was defective, and was one step from
-    // cherry-picking around it — which completes the replay while writing no lap
-    // record, so `replay halt conflict` would read clean over a conflict that
-    // happened. The sentence is what stops that, and it is owed on the pathless
-    // reading too.
-    said.push(String::from(
-        "the replay is STATELESS: nothing is half-replayed, so there is no rebase in \
-         progress and --continue, --abort and --skip have nothing to act on",
-    ));
-    if let Some(first) = named.first() {
-        said.push(format!(
-            "merge each path in the worktree, then: batten land replay {reference} --resolve {first}"
-        ));
-        said.push(String::from(
-            "a path conflicting at more than one commit takes --resolve <path>=<file>, one file per commit",
-        ));
-    }
-    let class = crate::verdict::Native::CommitPortBlocked;
-    crate::refusal::Refusal::engine(class, &subjects, crate::refusal::Fix::Run(said.join("; ")))
-}
-
-/// Red CI as `job run red` (CLOUD-2078): the head, how many required checks
-/// failed and each one, with the reproduce-locally advice as its remedy.
-#[must_use]
-pub fn red_refusal(sha: &str, findings: &[String]) -> crate::refusal::Refusal {
-    let count = u64::try_from(findings.len()).unwrap_or(u64::MAX);
-    let mut subjects = vec![
-        crate::verdict::artifact(sha),
-        crate::verdict::Subject::Count { count },
-    ];
-    subjects.extend(
-        findings
-            .iter()
-            .map(|finding| crate::verdict::artifact(finding)),
-    );
-    crate::refusal::Refusal::engine(
-        crate::verdict::Native::JobRunRed,
-        &subjects,
-        crate::refusal::Fix::Run(String::from(
-            "reproduce each named check locally: a rebase clears nothing here, so the lap stops",
-        )),
-    )
-}
-
-/// The spent lap budget as `lane run spent` (CLOUD-2078), with the advice its
-/// two readings want: run again on a contended fleet, read the laps otherwise.
-/// CONDITIONAL RATHER THAN APPENDED, because printing both would be the hedge
-/// that leaves a reader no better off.
-#[must_use]
-pub fn spent_refusal(laps: u32, ledger: &Ledger) -> crate::refusal::Refusal {
-    let advice = if ledger.lease_waits > 0 {
-        String::from(
-            "every lease wait lost only to another branch holding the landing lease and spent \
-             nothing: a saturated fleet is not a failing branch, so run this again",
-        )
-    } else {
-        format!(
-            "a conflict, a failed gate or red CI will lose again: read the lap lines above for \
-             how each ended; if every lap lost only to contention, running this again commits \
-             up to {laps} more"
-        )
-    };
-    crate::refusal::Refusal::engine(
-        crate::verdict::Native::LaneCountSpent,
-        &[
-            crate::verdict::artifact(&format!("{laps} lap(s)")),
-            crate::verdict::artifact(&format!("{} CI matri(ces)", ledger.spent())),
-            crate::verdict::artifact(&format!("{} lease wait(s)", ledger.lease_waits)),
-        ],
-        crate::refusal::Fix::Run(advice),
-    )
-}
-
 /// One column's worth of `value`: whitespace collapsed so it cannot become two.
 ///
 /// The record is space-separated with a fixed column count, and its readers
@@ -2650,23 +2524,18 @@ pub struct Retired {
 /// next piece of work to reuse the name would be judged against rows that belong
 /// to the last one (CLOUD-774).
 ///
-/// `filed-set-nudged` is here and was NOT in the predecessor's pair, which is a
-/// correction rather than a port: `Suppression::PerSet` writes a third store
-/// under the same key shape, and it landed after the bash cleanup was written. A
-/// port that copied the two literals would have left one family accumulating
-/// forever, which is the drift a named list exists to stop.
-/// `unlanded-nudged` is the fourth, and its absence was the same drift one more
-/// time (CLOUD-1390). `unlanded_pointer` writes
-/// `unlanded-nudged.<slug>` under this same directory and keys the
-/// suppression by the completion finding's own fingerprint, so the family has
-/// the shape this list matches and was simply never added to it.
+/// `filed-here-nudged` and `filed-set-nudged` are no longer written: the Stop
+/// ladder stopped withholding its pointers (CLOUD-2078). They stay listed so a
+/// clone that ran an older engine still has its leftovers swept when the branch
+/// lands, rather than keeping them forever.
+/// `unlanded-nudged` was missing once (CLOUD-1390). `unlanded_pointer` writes
+/// `unlanded-nudged.<slug>` under this same directory, keyed by the completion
+/// finding's own fingerprint, and `turn mint ahead` reads it as its
+/// `while_marker`: the claim was told.
 ///
-/// **What that costs is a SUPPRESSION that outlives the work it was about.** The
-/// nudge is once-per-claim by design — the agent cannot clear `¬landed` inside
-/// the turn it is asked to — so the file exists precisely on the branches that
-/// stopped with work unlanded. Left behind, the next piece of work to reuse the
-/// name inherits it, and the one nudge that says *the work exists nowhere but
-/// here and a container reclaim ends it* is the one that does not fire.
+/// **What a missed family costs is a marker that outlives the work it was
+/// about.** Left behind, the next piece of work to reuse the name inherits it,
+/// and is judged as though it had already been told what the last one was.
 ///
 /// **`pub(crate)` because a `while_marker` row is validated against it**
 /// (CLOUD-1390). A marker that landing does not sweep is a refusal with no spend:

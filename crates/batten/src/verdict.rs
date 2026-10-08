@@ -1540,6 +1540,10 @@ pub enum Native {
     JobRunRed,
     /// `land` spent every lap without landing.
     LaneCountSpent,
+    /// A declared contract file moved under a running session.
+    ContractReadStale,
+    /// The engine did not run at this session's start.
+    HookRunMissing,
 }
 
 impl Native {
@@ -1626,6 +1630,8 @@ impl Native {
         Native::CheckRunRed,
         Native::JobRunRed,
         Native::LaneCountSpent,
+        Native::ContractReadStale,
+        Native::HookRunMissing,
     ];
 
     /// The classes the CONFIG LOADER raises, in `parse_ungated` order.
@@ -1746,6 +1752,8 @@ impl Native {
             Native::CheckRunRed => "check run red",
             Native::JobRunRed => "job run red",
             Native::LaneCountSpent => "lane run spent",
+            Native::ContractReadStale => "contract read stale",
+            Native::HookRunMissing => "hook run missing",
         }
     }
 }
@@ -2908,6 +2916,25 @@ The subjects count the laps, the CI matrices they spent and the lease waits amon
         routes: &[run("land run first", "batten land lap")],
         applicability: Applicability::Advice,
     },
+    VendoredVerdict {
+        id: "contract read stale",
+        gloss: "a declared contract file moved after this session read it",
+        class: "The files a repository declares as a session's contract are read once, at \
+start. A `changed` subject is one this session holds in its old form, an `added` one is new \
+capability it never read, a `removed` one is no longer tracked. A `hook wiring moved` subject \
+means what this session runs may differ from what the tree declares.",
+        routes: &[read("config read first", "batten.toml")],
+        applicability: Applicability::Advice,
+    },
+    VendoredVerdict {
+        id: "hook run missing",
+        gloss: "the engine did not run at this session's start, so earlier calls went unmediated",
+        class: "Hosts register the engine by bare name, so a session whose start event found no \
+binary on `PATH` ran every call before this one unmediated. It is a provisioning failure, not a \
+policy one, and which calls preceded this is not answerable from here.",
+        routes: &[run("doctor run first", "batten doctor")],
+        applicability: Applicability::Advice,
+    },
 ];
 
 /// Every class the binary ships, as the registry carries them.
@@ -3462,6 +3489,8 @@ mod tests {
                 | Native::CheckRunRed
                 | Native::JobRunRed
                 | Native::LaneCountSpent
+                | Native::ContractReadStale
+                | Native::HookRunMissing
                 | Native::VerdictTableRefused
                 | Native::RedirectTableRefused
                 | Native::DeferralTableRefused
