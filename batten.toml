@@ -11099,9 +11099,15 @@ measured = "2026-09-07"
 # `declared 370, live 381`. The count moves and the floors do not, on the same
 # terms. This lap closed at 12317MB free against the 11688MB learned warm floor.
 # NO FLOOR MEASUREMENT IS CLAIMED BY THIS ENTRY.
+#
+# 2026-10-08, 381 -> 393: the test-suite campaign's suites (CLOUD-2059) on a
+# trunk that had grown its own since. `target-prune` reported `declared 381,
+# live 393`. The count moves and the floors do not, on the same terms. This lap
+# closed at 13581MB free against the 10935MB warm floor. NO FLOOR MEASUREMENT IS
+# CLAIMED BY THIS ENTRY.
 [prune.warm.basis]
 glob = "crates/batten/tests/**/*.rs"
-count = 381
+count = 393
 tolerance = 10
 
 # COLD'S BASIS MOVES AND COLD'S FLOOR DOES NOT, and that is the entry above
@@ -11124,7 +11130,7 @@ glob = "crates/batten/tests/**/*.rs"
 # 298, moved with warm's by the 2026-09-25 entry above and for the reason the
 # 2026-09-06 entry measured: a basis refreshed on one arm and not the other makes
 # the very next lap refuse on the arm that was left behind.
-count = 381
+count = 393
 tolerance = 10
 
 # THE REGROWABLE ROOTS THE ESCALATION MAY DROP (CLOUD-1157), in the order it drops
