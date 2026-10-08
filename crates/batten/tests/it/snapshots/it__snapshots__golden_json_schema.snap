@@ -4365,6 +4365,22 @@ expression: stdout_of(&output)
               "takes_value": false,
               "positional": false,
               "help": "Emit byte-stable JSON instead of pointer lines"
+            },
+            {
+              "name": "path",
+              "short": null,
+              "long": "path",
+              "takes_value": true,
+              "positional": false,
+              "help": "Only findings observed in this file"
+            },
+            {
+              "name": "rule",
+              "short": null,
+              "long": "rule",
+              "takes_value": true,
+              "positional": false,
+              "help": "Only findings of this rule"
             }
           ],
           "subcommands": []

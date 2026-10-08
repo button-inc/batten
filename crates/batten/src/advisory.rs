@@ -233,7 +233,6 @@ pub fn admit(
     ceiling: Option<&Channel>,
     sighter: &mut dyn Sighter,
 ) -> Emission {
-    use crate::budget::estimate_tokens;
     let mut ordered = merged(entries);
     // `Reverse` because `AdvisoryTier` derives `Ord` weakest-first, and what must
     // survive a full channel is what has to be answered soonest.
@@ -246,7 +245,9 @@ pub fn admit(
         })
         .collect();
     let within = |texts: &[String]| {
-        ceiling.is_none_or(|held| estimate_tokens(&joined_text(texts)) <= held.max_tokens)
+        ceiling.is_none_or(|held| {
+            crate::budget::estimate_tokens(&joined_text(texts)) <= held.max_tokens
+        })
     };
     let whole = within(&probes);
     let reserve =

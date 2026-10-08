@@ -7542,10 +7542,10 @@ struct StateFilter<'a> {
     path: Option<&'a str>,
 }
 
+//MUTANT state-filter-unread|s@^        self.rule.is_none_or(|rule| record.rule == rule)$@        true@|a_rule_past_its_location_cap_points_at_exactly_its_set
 impl StateFilter<'_> {
     /// Whether `record` is in the selection: its rule, and an instance in the
     /// file. A record outside it is dropped whole, never trimmed.
-    //MUTANT state-filter-unread|s@^        self.rule.is_none_or(|rule| record.rule == rule)$@        true@|a_rule_past_its_location_cap_points_at_the_rest
     fn keeps(self, record: &findings::FindingRecord) -> bool {
         self.rule.is_none_or(|rule| record.rule == rule)
             && self.path.is_none_or(|path| {
@@ -17650,8 +17650,8 @@ struct HookSighter<'a> {
     sighted: bool,
 }
 
+//MUTANT delivery-marks-on-emit|s@^        let reached = capabilities.advisory_reachable(\&envelope.raw_event);$@        let reached = true;@|an_undelivered_channel_marks_nothing
 impl<'a> HookSighter<'a> {
-    //MUTANT delivery-marks-on-emit|s@^        let reached = capabilities.advisory_reachable(\&envelope.raw_event);$@        let reached = true;@|an_undelivered_channel_marks_nothing
     fn new(harness: hook::Harness, envelope: &'a hook::Envelope) -> HookSighter<'a> {
         let capabilities = harness.capabilities();
         let reached = capabilities.advisory_reachable(&envelope.raw_event);
