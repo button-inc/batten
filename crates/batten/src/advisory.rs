@@ -204,9 +204,10 @@ fn merged(entries: Vec<Advice>) -> Vec<Advice> {
 ///
 /// # The ordering is the whole design
 ///
-/// Sorted by tier, strongest first, and STABLE within a tier so two producers at
-/// one latency keep the order the boundary produced them in — byte-stable under
-/// §6.
+/// Under a ceiling, sorted by tier, strongest first, and STABLE within a tier so
+/// two producers at one latency keep the order the boundary produced them in —
+/// byte-stable under §6. With no ceiling nothing can be cut, so nothing is
+/// reordered either: an undeclared table leaves the channel as it was.
 ///
 /// # What fits is decided before anything is marked (CLOUD-2175)
 ///
@@ -225,6 +226,7 @@ fn merged(entries: Vec<Advice>) -> Vec<Advice> {
 /// Even where it alone exceeds the ceiling: a channel that could emit nothing
 /// would turn a budget into a mute switch.
 //MUTANT-SUITE crates/batten/src/advisory.rs
+//MUTANT unceilinged-reordered|s@^    let ranked = ceiling.is_some();$@    let ranked = true;@|an_undeclared_ceiling_leaves_the_channel_exactly_as_it_was
 //MUTANT advisory-ceiling-unread|s@^    let whole = within(\&probes);$@    let whole = true;@|what_does_not_fit_is_counted_and_returned_rather_than_dropped
 //MUTANT cut-entry-marked|s@^            overflow.push(match entry.finding {$@            overflow.push(match entry.finding.map(|refusal| { let _ = sighter.mark(\&refusal); refusal }) {@|a_cut_finding_is_never_marked_seen
 #[must_use]
@@ -235,8 +237,12 @@ pub fn admit(
 ) -> Emission {
     let mut ordered = merged(entries);
     // `Reverse` because `AdvisoryTier` derives `Ord` weakest-first, and what must
-    // survive a full channel is what has to be answered soonest.
-    ordered.sort_by_key(|entry| std::cmp::Reverse(entry.tier));
+    // survive a full channel is what has to be answered soonest. With no ceiling
+    // nothing can be cut, so the boundary's own order stands untouched.
+    let ranked = ceiling.is_some();
+    if ranked {
+        ordered.sort_by_key(|entry| std::cmp::Reverse(entry.tier));
+    }
     let probes: Vec<String> = ordered
         .iter()
         .map(|entry| match entry.finding.as_deref() {
@@ -381,7 +387,8 @@ mod tests {
     #[test]
     fn an_undeclared_ceiling_leaves_the_channel_exactly_as_it_was() {
         // ANTI-VACUITY. A consumer that has not adopted the table emits what it
-        // emitted before, in the order the boundary produced.
+        // emitted before, in the order the boundary produced — no reordering, no
+        // count line, nothing paid on a call that was never the problem.
         let emission = emit(
             vec![
                 entry(AdvisoryTier::Advisory, "first"),
@@ -390,11 +397,14 @@ mod tests {
             None,
         );
         assert_eq!(emission.suppressed, 0);
-        assert_eq!(emission.text, "second\n\nfirst");
+        assert_eq!(emission.text, "first\n\nsecond");
     }
 
     #[test]
     fn the_first_entry_is_admitted_even_when_it_alone_is_over() {
+        // A channel that could emit nothing would make the count line the only
+        // thing said — a report about a report. The overflow is still counted, so
+        // the reader learns the ceiling is too small rather than hearing silence.
         let emission = emit(
             vec![
                 entry(AdvisoryTier::Warning, &"w".repeat(400)),
@@ -415,6 +425,8 @@ mod tests {
 
     #[test]
     fn one_tier_keeps_the_boundarys_own_order() {
+        // Stable within a tier, so two producers at one latency stay byte-stable
+        // under §6 rather than depending on a sort nobody declared.
         let emission = emit(
             vec![
                 entry(AdvisoryTier::Caution, "alpha"),
