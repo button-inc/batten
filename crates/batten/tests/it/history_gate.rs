@@ -166,6 +166,46 @@ fn a_compaction_drops_the_history_receipt() {
 }
 
 #[test]
+fn one_commit_over_two_rows_prints_its_message_once() {
+    let repo = fixture("history-shared-commit");
+    let other_line = "id = \"path write unsafe\"";
+    let path = repo.join("batten.toml");
+    let text = std::fs::read_to_string(&path).unwrap();
+    let text = text
+        .replacen(ROW_LINE, &format!("# swept\n{ROW_LINE}"), 1)
+        .replacen(other_line, &format!("# swept\n{other_line}"), 1);
+    std::fs::write(&path, text).unwrap();
+    git_in(
+        &repo,
+        &[
+            "commit",
+            "-q",
+            "-am",
+            "sweep both rows\n\nA body only this sweep carries.",
+        ],
+    );
+    let run = run_with_stdin(
+        &repo,
+        &["policy", "explain", ROW, "path write unsafe", "--history"],
+        "",
+    );
+    let out = common::stdout(&run);
+    assert!(
+        out.contains("== path write unsafe"),
+        "both rows print: {out}"
+    );
+    assert_eq!(
+        out.matches("A body only this sweep carries.").count(),
+        1,
+        "the shared commit's message prints in full once: {out}"
+    );
+    assert!(
+        out.contains("sweep both rows (printed above)"),
+        "and is pointed at the second time: {out}"
+    );
+}
+
+#[test]
 fn a_new_row_is_admitted_and_an_existing_one_is_not() {
     let repo = fixture("history-new-row");
     // Inserted beside an id-less row, so the edit touches no gated row.

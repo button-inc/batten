@@ -4498,6 +4498,12 @@ severity = "deny"
 [[verdict]]
 id = "path write unsafe"
 gloss = "a production file write bypasses `durable`, so a crash or a second writer can leave it torn"
+doc.why = "An interrupted raw write leaves neither the old state nor the new one"
+doc.do = [
+  "route it through `crate::durable::append` or `crate::durable::replace`",
+  "mark a captured byte stream `// stream:` on the line, naming its commit point",
+]
+doc.dont = ["move the write under `#[cfg(test)]` to hide it"]
 class = """
 Route the write through `crate::durable::append` (one write plus fsync) or \
 `crate::durable::replace` (temp, fsync, rename, directory fsync). A byte stream \
@@ -4529,6 +4535,12 @@ severity = "deny"
 [[verdict]]
 id = "spawn bind loose"
 gloss = "a function returns a `std::process::Command`, so the spawns it builds carry no `#[expect]` of their own"
+doc.why = "A factory moves one spawn annotation onto every caller, so the spawns it launders escape the ban"
+doc.do = [
+  "build the `Command` where it spawns, under an `#[expect(clippy::disallowed_types, reason = ...)]` naming the program",
+  "or do the work in-process",
+]
+doc.dont = ["add a shared launcher for several programs"]
 class = """
 Build the `Command` at the site that spawns it, under an `#[expect(\
 clippy::disallowed_types, reason = ...)]` naming that program and why no \
@@ -6574,6 +6586,11 @@ writer = "batten sbom --conformance"
 [[verdict]]
 id = "manifest check unread"
 gloss = "the SBOM's spec could not be read, or a configured standard can never be satisfied by it"
+doc.why = "A refusal that can never clear is not a verdict about this tree"
+doc.do = [
+  "drop the standard from `[sbom.conformance] standards`, or change the producer",
+  "then run `batten sbom --conformance`",
+]
 class = """
 Could we even ask: a document declaring no or an unclassifiable `spdxVersion`, \
 or a standard requiring SPDX 3 over a document that is not one (CLOUD-666). A \
@@ -6589,6 +6606,12 @@ target = "batten sbom --conformance"
 [[verdict]]
 id = "manifest cover partial"
 gloss = "the NTIA checker refused the SBOM this tree produces under the named standard"
+doc.why = "A document missing the standard's fields fails every consumer that checks it"
+doc.do = [
+  "read the per-standard counts on the `ntia` record's line",
+  "enrich the document, then run `batten sbom --conformance`",
+]
+doc.dont = ["re-run the check unchanged"]
 class = """
 The checker's exit code, never its report. The per-standard counts are on the \
 `ntia` record's line; the fix is enriching the document, not re-running this.
@@ -7191,6 +7214,9 @@ writer = "batten record derive signing-posture"
 [[verdict]]
 id = "test judge never"
 gloss = "the IO-free evaluator test stayed green with regorus's http feature on, so it discriminates nothing"
+doc.why = "That test is the evidence a policy module cannot reach the network, and one that cannot fail is no evidence"
+doc.do = ["fix the test in `crates/batten/tests/policy_modules.rs` so the probe falsifies it"]
+doc.dont = ["weaken the gate"]
 class = """
 A test that is green whether or not the evaluator can reach the network is not \
 evidence that it cannot. `crates/batten/src/policy.rs` admits consumer-authored \
@@ -7208,6 +7234,9 @@ target = "crates/batten/tests/policy_modules.rs"
 [[verdict]]
 id = "test run unread"
 gloss = "the probe build exited non-zero without running the named test to a failure"
+doc.why = "A compile error or another test's panic would otherwise read as the probe falsifying the assertion"
+doc.do = ["fix what stopped the build, then run `mise run evaluator-io-record`"]
+doc.dont = ["read a non-zero exit as the probe's verdict"]
 class = """
 COULD NOT LOOK, and it is the arm a gate written to the obvious shape gets wrong. \
 `cargo test` exits non-zero for a compile error, an unresolved feature, an absent \
@@ -7226,6 +7255,9 @@ target = "mise run evaluator-io-record"
 [[verdict]]
 id = "prose measure partial"
 gloss = "this host carries fewer independent session transcripts than the caller asked for"
+doc.why = "A transcript-derived literal has no corpus until independent sessions accumulate"
+doc.do = ["treat it as progress: the count rises when the collector reaches this host"]
+doc.dont = ["fit a literal to the one transcript it came from", "read it as a permanent block"]
 class = """
 Every prose-shaped literal in this repository is held to a measured corpus — \
 firings AND true positives among them — and a transcript-derived literal has no \
@@ -7244,6 +7276,12 @@ target = "mise run transcript-corpus-record"
 [[verdict]]
 id = "manifest carry unsafe"
 gloss = "a package in the built macOS graph declares a `links` key, so it needs a real SDK to find that library"
+doc.why = "A crate that links a native library cannot build for macOS without an SDK to find it"
+doc.do = [
+  "drop the dependency or its feature that pulls the crate in",
+  "if the crate vendors its own C, add it to `policy/macos-link.rego`'s exemption with a link",
+]
+doc.dont = ["exempt a crate from a reading of its source alone"]
 class = """
 Rule 1, and it is the manifest's OWN statement rather than a guess: a `links` key \
 says the package links a native library. The exemption is a list of crates that \
@@ -11114,9 +11152,14 @@ measured = "2026-09-07"
 # live 393`. The count moves and the floors do not, on the same terms. This lap
 # closed at 13581MB free against the 10935MB warm floor. NO FLOOR MEASUREMENT IS
 # CLAIMED BY THIS ENTRY.
+#
+# 2026-10-08, 393 -> 394: CLOUD-2144's `history_gate.rs`, replayed onto the
+# entry above (on its own branch `target-prune` reported `declared 381, live
+# 392`). The count moves and the floors do not, on the same terms.
+# NO FLOOR MEASUREMENT IS CLAIMED BY THIS ENTRY.
 [prune.warm.basis]
 glob = "crates/batten/tests/**/*.rs"
-count = 393
+count = 394
 tolerance = 10
 
 # COLD'S BASIS MOVES AND COLD'S FLOOR DOES NOT, and that is the entry above
@@ -11139,7 +11182,7 @@ glob = "crates/batten/tests/**/*.rs"
 # 298, moved with warm's by the 2026-09-25 entry above and for the reason the
 # 2026-09-06 entry measured: a basis refreshed on one arm and not the other makes
 # the very next lap refuse on the arm that was left behind.
-count = 393
+count = 394
 tolerance = 10
 
 # THE REGROWABLE ROOTS THE ESCALATION MAY DROP (CLOUD-1157), in the order it drops

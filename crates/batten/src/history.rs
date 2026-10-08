@@ -324,60 +324,107 @@ pub fn unread(
         .collect()
 }
 
-/// The history `batten policy explain <id> --history` prints for one row.
+/// The histories one `batten policy explain <id>… --history` call prints.
 ///
-/// The row as it stands at `HEAD` (its comment block, keys and class paragraph),
-/// then the commits that changed it, newest first: the newest few in full, the
-/// rest as `sha subject`, capped at [`HISTORY_BYTES`].
+/// ONE WALK PER CALL, NOT PER ROW. A sweep reads many rows' histories at once,
+/// and one squash commit commonly changed all of them: re-reading every version
+/// of the authority per row cost seconds each, and re-printing that commit's
+/// whole message under every row it touched cost about 2,000 tokens a row for
+/// nothing new. So the versions are walked once, each version's text is read
+/// once, and a commit's message prints in full the first time only.
+pub struct Assembler<'a> {
+    root: &'a Path,
+    config: &'a str,
+    head: String,
+    versions: Vec<(String, String)>,
+    texts: std::collections::HashMap<String, Option<String>>,
+    shown: BTreeSet<String>,
+}
+
+impl<'a> Assembler<'a> {
+    /// Reads the authority at `HEAD` and lists the commits that changed it.
+    ///
+    /// # Errors
+    ///
+    /// When the authority cannot be read at `HEAD`, or its history cannot be
+    /// walked (a shallow clone).
+    pub fn new(root: &'a Path, config: &'a str) -> anyhow::Result<Self> {
+        Ok(Self {
+            root,
+            config,
+            head: crate::git::show(root, "HEAD", config)?,
+            versions: crate::git::path_changes(root, config)?,
+            texts: std::collections::HashMap::new(),
+            shown: BTreeSet::new(),
+        })
+    }
+
+    /// One row's owned text at the `index`th version, read at most once a call.
+    fn owned_at(&mut self, index: usize, id: &str) -> Option<String> {
+        let sha = self.versions.get(index)?.0.clone();
+        let (root, config) = (self.root, self.config);
+        self.texts
+            .entry(sha)
+            .or_insert_with_key(|sha| crate::git::show(root, sha, config).ok())
+            .as_deref()
+            .and_then(|text| owned_text(text, id))
+    }
+
+    /// The history printed for one row, or `None` when `HEAD` declares no such id.
+    ///
+    /// The row as it stands at `HEAD` (its comment block, keys and class
+    /// paragraph), then the commits that changed it, newest first: the newest
+    /// few in full unless this call already printed them, the rest as
+    /// `sha subject`, capped at [`HISTORY_BYTES`].
+    pub fn assemble(&mut self, id: &str) -> Option<String> {
+        let now = owned_text(&self.head, id)?;
+        let mut out = format!("{}\n", now.trim_end());
+        let mut changes: Vec<(String, String)> = Vec::new();
+        for index in 0..self.versions.len() {
+            let here = self.owned_at(index, id);
+            let before = self.owned_at(index + 1, id);
+            if here != before {
+                changes.push(self.versions[index].clone());
+            }
+            if before.is_none() || changes.len() >= CHANGES_MAX {
+                break;
+            }
+        }
+        if !changes.is_empty() {
+            out.push_str("\nchanged by, newest first:\n");
+        }
+        for (index, (sha, subject)) in changes.iter().enumerate() {
+            let short = &sha[..sha.len().min(10)];
+            let entry = if self.shown.contains(sha) {
+                format!("{short} {subject} (printed above)\n")
+            } else if index < FULL_MESSAGES {
+                self.shown.insert(sha.clone());
+                let message =
+                    crate::git::message_of(self.root, sha).unwrap_or_else(|_| subject.clone());
+                format!("\n{short}\n{}\n", message.trim_end())
+            } else {
+                format!("{short} {subject}\n")
+            };
+            if out.len() + entry.len() > HISTORY_BYTES {
+                out.push_str(&format!(
+                    "… {} older change(s) not shown\n",
+                    changes.len() - index
+                ));
+                break;
+            }
+            out.push_str(&entry);
+        }
+        Some(out)
+    }
+}
+
+/// The history `batten policy explain <id> --history` prints for one row.
 ///
 /// # Errors
 ///
-/// When the authority cannot be read at `HEAD`, or its history cannot be walked
-/// (a shallow clone).
+/// As [`Assembler::new`].
 pub fn assemble(root: &Path, config: &str, id: &str) -> anyhow::Result<Option<String>> {
-    let head = crate::git::show(root, "HEAD", config)?;
-    let Some(now) = owned_text(&head, id) else {
-        return Ok(None);
-    };
-    let mut out = format!("{}\n", now.trim_end());
-    let mut changes: Vec<(String, String)> = Vec::new();
-    let versions = crate::git::path_changes(root, config)?;
-    for (index, (sha, subject)) in versions.iter().enumerate() {
-        let here = crate::git::show(root, sha, config)
-            .ok()
-            .and_then(|text| owned_text(&text, id));
-        let before = versions
-            .get(index + 1)
-            .and_then(|(older, _)| crate::git::show(root, older, config).ok())
-            .and_then(|text| owned_text(&text, id));
-        if here != before {
-            changes.push((sha.clone(), subject.clone()));
-        }
-        if before.is_none() || changes.len() >= CHANGES_MAX {
-            break;
-        }
-    }
-    if !changes.is_empty() {
-        out.push_str("\nchanged by, newest first:\n");
-    }
-    for (index, (sha, subject)) in changes.iter().enumerate() {
-        let short = &sha[..sha.len().min(10)];
-        let entry = if index < FULL_MESSAGES {
-            let message = crate::git::message_of(root, sha).unwrap_or_else(|_| subject.clone());
-            format!("\n{short}\n{}\n", message.trim_end())
-        } else {
-            format!("{short} {subject}\n")
-        };
-        if out.len() + entry.len() > HISTORY_BYTES {
-            out.push_str(&format!(
-                "… {} older change(s) not shown\n",
-                changes.len() - index
-            ));
-            break;
-        }
-        out.push_str(&entry);
-    }
-    Ok(Some(out))
+    Ok(Assembler::new(root, config)?.assemble(id))
 }
 
 #[cfg(test)]

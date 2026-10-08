@@ -7921,13 +7921,11 @@ fn run_policy_history(names: &[String], json: bool, out: &mut dyn Write) -> Resu
     let root = Path::new(".");
     let mut documents = Vec::new();
     let mut misses: Vec<&str> = Vec::new();
+    let mut assembler = history::Assembler::new(root, config::CONFIG_FILE)?;
     for name in names {
-        let found = match history::assemble(root, config::CONFIG_FILE, name)? {
-            Some(text) => Some(text),
-            None => {
-                history::assemble(root, config::CONFIG_FILE, &verdict::normalise_rule_id(name))?
-            }
-        };
+        let found = assembler
+            .assemble(name)
+            .or_else(|| assembler.assemble(&verdict::normalise_rule_id(name)));
         let Some(text) = found else {
             misses.push(name);
             continue;
