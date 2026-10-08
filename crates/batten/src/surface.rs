@@ -1215,14 +1215,14 @@ const VERDICT_TOKEN: FlagDecl = FlagDecl {
     id: "token",
     long: None,
     short: None,
-    help: "The verdict token to resolve, e.g. task name undefined",
+    help: "The names to resolve, as a finding line prints them: a rule, a class, an engine id",
     env: EnvDecl::None,
     global: false,
     positional: true,
     required: true,
     hidden: false,
     rung: Rung::None,
-    value: ValueDecl::Str,
+    value: ValueDecl::StrMany,
 };
 
 /// `--rule <id>` on `check`: run one declared row rather than all of them

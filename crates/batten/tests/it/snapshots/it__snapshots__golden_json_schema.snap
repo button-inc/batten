@@ -2793,7 +2793,7 @@ expression: stdout_of(&output)
               "long": null,
               "takes_value": true,
               "positional": true,
-              "help": "The verdict token to resolve, e.g. task name undefined"
+              "help": "The names to resolve, as a finding line prints them: a rule, a class, an engine id"
             }
           ],
           "subcommands": []

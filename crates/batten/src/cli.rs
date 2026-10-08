@@ -1519,15 +1519,16 @@ pub enum PolicyCommand {
         /// Emit the names as byte-stable JSON instead of one per line.
         json: bool,
     },
-    /// Resolve a verdict token to its class definition and routes (CLOUD-1053).
+    /// Resolve every name a finding line prints — rule, class, engine id — in
+    /// one lookup (CLOUD-1053, CLOUD-2142).
     ///
     /// Appended for [`PolicyCommand::Test`]'s reason: a variant inserted in the
     /// middle re-numbers every later discriminant and `semver` reads that as
     /// `enum_no_repr_variant_discriminant_changed`.
     Explain {
-        /// The token to resolve, e.g. `task name undefined`.
-        token: String,
-        /// Emit the class as byte-stable JSON instead of pointer lines.
+        /// The names to resolve, e.g. `task name undefined`, in print order.
+        tokens: Vec<String>,
+        /// Emit every section as one byte-stable JSON array.
         json: bool,
     },
     /// Judge this session's hook output against its budget (CLOUD-417).
@@ -2506,9 +2507,9 @@ fn policy_of(matches: &ArgMatches) -> Option<PolicyCommand> {
             // `clap` already refuses the absent case — the declaration is
             // `required` — so this default is unreachable rather than a silent
             // empty query.
-            token: matches
-                .get_one::<String>("token")
-                .cloned()
+            tokens: matches
+                .get_many::<String>("token")
+                .map(|names| names.cloned().collect())
                 .unwrap_or_default(),
             json: flag(matches, "json"),
         }),

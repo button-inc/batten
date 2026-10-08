@@ -1728,7 +1728,7 @@ pushed",
 //MUTANT shape-route-circular|s@^            run("rule read first", crate::refusal::RULE_HOP_PLACEHOLDER),$@            read("config read first", "batten.toml"),@|a_shape_first_sighting_names_the_rows_remedy_verb
 const SHAPE_ADMIT_ROUTE: VendoredRoute = admit(
     "articulate the call",
-    "the remedy `batten policy rule` prints for this row cannot perform the change this call \
+    "the remedy `batten policy explain` prints for this row cannot perform the change this call \
 makes, and you can name what the call changes and where a reviewer will see its effect",
 );
 
@@ -2152,7 +2152,7 @@ non-negotiable rule 4 decided at the composer rather than at the report.",
         class: "A `shape` row declares a command spelling that is refused outright. The \
 refusal names the row rather than echoing the command, because the command is the caller's \
 own text and could carry anything. What to run instead is the row's declared remedy, which \
-`batten policy rule` prints; where that remedy cannot perform the change, the class is \
+`batten policy explain` prints; where that remedy cannot perform the change, the class is \
 admissible through a recorded admission bound to the row id at the current commit.",
         routes: &[
             run("rule read first", crate::refusal::RULE_HOP_PLACEHOLDER),
@@ -2598,8 +2598,8 @@ would pass. Replace it with an annotated tag cut under the accountable identity.
     VendoredVerdict {
         id: "prose declare refused",
         gloss: "a config column's text is longer than the cap its column declares",
-        class: "Batten echoes config prose back -- `batten policy explain` prints a class, \
-`batten policy rule` prints a row's reason, and a first sighting renders the reason in full -- \
+        class: "Batten echoes config prose back -- `batten policy explain` prints a class \
+and a row's reason, and a first sighting renders the reason in full -- \
 so the length of every string a config declares is paid in every reader's context. Each \
 column is held to a cap at load: one line for a gloss, a sentence for a route, a remedy or a \
 note, a paragraph for a class or a reason, and the paragraph ceiling for any column not listed \
@@ -2628,6 +2628,89 @@ pub fn vendored() -> Vec<DeclaredVerdict> {
         .map(declared_from)
         .chain(crate::preset::verdict_rows())
         .collect()
+}
+
+/// The rule ids the ENGINE raises under, which no `[[rule]]` row declares
+/// (CLOUD-2142), each with the one sentence `policy explain` answers for it.
+///
+/// Every finding line hops to `batten policy explain '<rule>'`, so a rule id
+/// nothing resolves is a hop to nowhere. A consumer's ids resolve through its own
+/// rows; these are the engine's, declared beside the code that raises them and
+/// answered here so they resolve with no config at all — `engine-cannot-adjudicate`
+/// fires precisely when the config will not load. Where the line also names a
+/// class, the class carries the definition and routes; this says what raised it.
+///
+/// `tests/it/emission_census.rs` keeps the table whole: every production
+/// `Refusal` built from a literal or constant id must resolve, so a new engine id
+/// is a red test rather than an unresolvable name.
+const NATIVE_RULES: &[(&str, &str)] = &[
+    (
+        "engine-cannot-adjudicate",
+        "This build could not load the rules it is registered to enforce, so nothing judged \
+         the call. A Read still answers and an Edit or Write of batten.toml or \
+         batten.local.toml still lands: repair the file with those, or run `batten engine \
+         update` when the config pins a different engine.",
+    ),
+    (
+        "program-unknown",
+        "The mediated-call boundary could not classify the program a shell call names, so \
+         it refused rather than guess what the call changes; the class on the line carries \
+         the routes.",
+    ),
+    (
+        "history-drop",
+        "The destructive-reset gate: this reset would leave the commits the line counts \
+         referenced by nothing and on no remote; `git reflog` still holds them, so push or \
+         branch them before resetting.",
+    ),
+    (
+        "singleton-held",
+        "The singleton gate: a live process already holds this task's lock, and a second run \
+         would race it; `batten task alive` reports what the holder is doing.",
+    ),
+    (
+        "stop.unfinished",
+        "The stop gate: the turn tried to end while work it declared is still unfinished; \
+         the class on the line names what remains.",
+    ),
+    (
+        "ripsecrets",
+        "The secret scanner, which the engine declares rather than a row: its `[[provision]]` \
+         entry is unpinned or not provisioned, so no scan ran; the class on the line routes \
+         the repair.",
+    ),
+    (
+        "init.config-exists",
+        "`batten init` found a config already present and refused to overwrite it.",
+    ),
+    (
+        "hk-contract-drift",
+        "The committed hk plan artifact the line names no longer matches what this engine \
+         generates from the config; regenerate it, as the class on the line routes.",
+    ),
+];
+
+/// Engine rule ids minted from a prefix and a consumer's name (CLOUD-2142).
+const NATIVE_RULE_PREFIXES: &[(&str, &str)] = &[(
+    "hook.handler.",
+    "A `[[hook.handler]]` row's program refused the call; its own words travel as the \
+     line's subject, and its row in batten.toml says what it guards.",
+)];
+
+/// The sentence `policy explain` answers for an engine rule id, or `None` where
+/// the name is not one (CLOUD-2142).
+//MUTANT native-table-empty|s@^    NATIVE_RULES$@    [("", ""); 0]@|a_native_rule_id_has_a_definition
+#[must_use]
+pub fn native_definition(name: &str) -> Option<&'static str> {
+    NATIVE_RULES
+        .iter()
+        .find(|(id, _)| *id == name)
+        .or_else(|| {
+            NATIVE_RULE_PREFIXES
+                .iter()
+                .find(|(prefix, _)| name.starts_with(prefix) && name.len() > prefix.len())
+        })
+        .map(|(_, definition)| *definition)
 }
 
 /// One vendored row, as the registry carries it.

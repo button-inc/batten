@@ -7792,7 +7792,15 @@ fn run_policy_tools(json: bool, overrides: &Overrides, out: &mut dyn Write) -> R
     Ok(ExitCode::Success)
 }
 
-/// Resolve a verdict token to its class definition and routes (CLOUD-1053).
+/// One thing a name resolved to, in both output shapes (CLOUD-2142).
+struct Explained {
+    /// The section as the text channel prints it, newline-terminated.
+    text: String,
+    /// The section as one `-J` array element.
+    json: serde_json::Value,
+}
+
+/// Resolve a name to its row, its class and routes, or its engine definition.
 ///
 /// # The hot path got shorter and this is where the rest went
 ///
@@ -7820,115 +7828,151 @@ fn run_policy_tools(json: bool, overrides: &Overrides, out: &mut dyn Write) -> R
 /// one it does not or for a registry that will not load, `3` for an internal
 /// fault — and never `2`, because this decides nothing about the repository.
 ///
+/// # One verb resolves every name a finding line can print (CLOUD-2142)
+///
+/// A line carries a rule and, where it differs, a class, and its one hop names
+/// both. Each name prints every section it resolves to — the `[[rule]]` row, the
+/// class, the protected-path table, an engine id — because a collapsed id IS
+/// both a row and a class and a reader asking about it wants both answers.
+/// `policy rule` is this function with one name.
+///
 /// # Errors
 ///
-/// Propagates a config-resolution failure, which is the usage class (exit `1`).
+/// When any name resolves to nothing, after printing the ones that did: a
+/// partial answer is still an answer, and the miss is named rather than dropped.
+/// That is the usage class (exit `1`), as is a registry that will not load.
 fn run_policy_explain(
-    token: &str,
+    names: &[String],
     json: bool,
     overrides: &Overrides,
     out: &mut dyn Write,
 ) -> Result<ExitCode> {
     // A CONFIG THAT WILL NOT LOAD IS EXACTLY WHEN A CLASS NEEDS EXPLAINING
-    // (CLOUD-1313). This used to be `resolve::resolve(..)?`, so `explain` died
-    // on the load before it could consult any registry — measured on a repo whose
-    // `batten.toml` carries one malformed table:
-    //
-    //     $ batten policy explain "path write refused"
-    //     batten: invalid config ./batten.toml: TOML parse error at line 3
-    //
-    // `path write refused` is VENDORED. It needs no consumer config, it is what
-    // the mediated boundary raises dozens of times a session, and its remedy was
-    // unreachable in the one repository state where a reader is most likely to be
-    // stuck. The remedy channel went dark precisely when the config broke.
-    //
-    // So a load failure degrades rather than refuses: the union where a config
-    // loads — which is what stops `explain` resolving a token differently from
-    // the gate that raised it — and this binary's vendored classes where it does
-    // not. What genuinely needs the config still says so below rather than
-    // guessing: a `[[rule]]` id and a `[[redirect]]` remedy are the consumer's,
-    // and neither is answerable from a config nobody could read.
+    // (CLOUD-1313). `explain` once died on the load before consulting any
+    // registry, so the vendored `path write refused` — raised dozens of times a
+    // session — was unreachable in the one state a reader is most likely stuck
+    // in. A load failure degrades: the union where a config loads, which keeps
+    // `explain` resolving a name as the gate that raised it did, and this
+    // binary's vendored classes and engine ids where it does not. A `[[rule]]`
+    // row and a `[[redirect]]` remedy are the consumer's, and neither is
+    // answered from a config nobody could read.
     let config = resolve::resolve(Path::new("."), overrides).ok();
     let registry = match &config {
         Some(config) => policy::registry_for(&config.verdicts)?,
         None => verdict::vendored(),
     };
-    let Some((resolved, retired)) = verdict::resolve(&registry, token) else {
-        // A RULE ID RESOLVES HERE TOO (CLOUD-1286), and that is what makes "the
-        // token is the pointer to the fix" true rather than aspirational. The
-        // emitted line carries a class AND the rule id that fired, and the two
-        // answer different halves: the class is Batten's, the row's `reason` is
-        // the CONSUMER's remedy — "use `mise run land`", "reach for the
-        // structured surface". Taking that prose off the hot path without giving
-        // it a lookup would be a refusal naming no remedy, which is the class
-        // `crate::verdict`'s own header exists to kill.
-        //
-        // Tried second rather than first because a class is what a reader most
-        // often has, and the two namespaces cannot collide: a class is three
-        // lowercase words and a rule id is a kebab-case identifier.
-        if let Some(rule) = config
-            .as_ref()
-            .and_then(|config| config.rules.iter().find(|rule| rule.id == token))
-        {
-            let facts = config
-                .as_ref()
-                .map_or(&[][..], |config| config.facts.as_slice());
-            return explain_rule(rule, facts, json, out);
+    let mut documents: Vec<serde_json::Value> = Vec::new();
+    let mut misses: Vec<&str> = Vec::new();
+    for name in names {
+        let sections = explain_name(name, config.as_ref(), &registry)?;
+        if sections.is_empty() {
+            misses.push(name);
+            continue;
         }
-        // THE DERIVED PROTECTED GATE HAS NO `[[rule]]` ROW, and its remedy is
-        // per PATH CLASS rather than per rule (CLOUD-280): a `[[redirect]]`
-        // row's `mutation`, chosen by which glob matched. That remedy left the
-        // emitted line with everything else, and it is the one that had nowhere
-        // to land — a class hop answers about `path write refused` generically
-        // and a rule hop has no row to find. So the gate's own id resolves here,
-        // to the table that answers "what do I do instead for THIS path".
-        // THE CONSUMER'S OWN TABLES, so this arm needs a config that loaded.
-        // Absent one it falls through to the refusal below, which says the class
-        // is undeclared HERE rather than pretending an empty redirect table is
-        // an answer — an empty "what to do instead" reads as "nothing to do".
-        if let (true, Some(config)) = (token == hook::PROTECTED_MUTATION, config.as_ref()) {
-            return explain_redirects(&config.redirects, &config.verbs, json, out);
+        if !json {
+            writeln!(out, "== {name}")?;
         }
-        // Named, and the token is the caller's own argument rather than
-        // anything read out of the tree. A list of what IS declared would be the
-        // whole registry on stderr; the count plus the verb to run is the
-        // pointer-shaped answer.
-        return Err(error::UsageError::raise(format!(
-            "no `[[verdict]]` row and no `[[rule]]` row declares `{token}`; this registry \
-             declares {} class(es) and this config declares {}",
-            registry.len(),
-            // THREE-VALUED, because "0 rules" and "no config could be read" are
-            // different answers and collapsing them would send a reader looking
-            // for a missing row when the real fault is the file.
-            config.as_ref().map_or_else(
-                || "no rules (this config could not be read)".to_owned(),
-                |config| format!("{} rule(s)", config.rules.len()),
-            ),
-        )));
-    };
+        for section in sections {
+            if json {
+                documents.push(section.json);
+            } else {
+                writeln!(out)?;
+                write!(out, "{}", section.text)?;
+            }
+        }
+    }
     if json {
-        writeln!(out, "{}", explain_json(token, resolved, retired)?)?;
+        writeln!(out, "{}", serde_json::to_string(&documents)?)?;
+    }
+    if misses.is_empty() {
         return Ok(ExitCode::Success);
     }
-    writeln!(out, "{} {}", resolved.id, resolved.gloss)?;
+    // Named, and each name is the caller's own argument rather than anything
+    // read out of the tree. A list of what IS declared would be the whole
+    // registry on stderr; the counts are the pointer-shaped answer.
+    Err(error::UsageError::raise(format!(
+        "no `[[verdict]]` row and no `[[rule]]` row declares `{}`; this registry declares {} \
+         class(es) and this config declares {}",
+        misses.join("`, `"),
+        registry.len(),
+        // THREE-VALUED, because "0 rules" and "no config could be read" are
+        // different answers and collapsing them would send a reader looking for
+        // a missing row when the real fault is the file.
+        config.as_ref().map_or_else(
+            || "no rules (this config could not be read)".to_owned(),
+            |config| format!("{} rule(s)", config.rules.len()),
+        ),
+    )))
+}
+
+/// Every section one name resolves to, in print order (CLOUD-2142).
+fn explain_name(
+    name: &str,
+    config: Option<&resolve::Resolved>,
+    registry: &[verdict::DeclaredVerdict],
+) -> Result<Vec<Explained>> {
+    let mut sections = Vec::new();
+    // THE ROW FIRST: where a name is both a row and a class, the row is the more
+    // specific answer — its `reason` is this repository's remedy.
+    if let Some(config) = config {
+        // THE ARGUMENT IS A BOUNDARY, SO IT NORMALISES (CLOUD-1638): stored ids
+        // are rewritten to the space form only under a declared vocabulary, so
+        // the typed spelling is tried first and the normalised one second.
+        let wanted = if config.rules.iter().any(|rule| rule.id == name) {
+            name.to_owned()
+        } else {
+            verdict::normalise_rule_id(name)
+        };
+        // BOTH NAMES A POLICY LINE CAN CARRY (CLOUD-1638): a module's finding id
+        // resolves to the row that binds the module.
+        if let Some(rule) = config
+            .rules
+            .iter()
+            .find(|rule| rule.id == wanted)
+            .or_else(|| owning_row(config, &wanted))
+        {
+            sections.push(explain_rule(name, rule, &config.facts));
+        }
+    }
+    if let Some((resolved, retired)) = verdict::resolve(registry, name) {
+        sections.push(explain_class(name, resolved, retired));
+    }
+    // THE DERIVED PROTECTED GATE HAS NO `[[rule]]` ROW (CLOUD-1286): its remedy
+    // is per PATH CLASS, so its id resolves to the consumer's redirect table —
+    // which needs a config that loaded.
+    if let (true, Some(config)) = (name == hook::PROTECTED_MUTATION, config) {
+        sections.push(explain_redirects(name, &config.redirects, &config.verbs)?);
+    }
+    // THE ENGINE'S OWN IDS resolve with no config at all, which is the case
+    // `engine-cannot-adjudicate` fires in.
+    if let Some(definition) = verdict::native_definition(name) {
+        sections.push(Explained {
+            text: format!("{name} engine\n\n{definition}\n"),
+            json: serde_json::json!({ "name": name, "native": definition }),
+        });
+    }
+    Ok(sections)
+}
+
+/// A class, as `policy explain` prints it (CLOUD-1053).
+fn explain_class(name: &str, resolved: &verdict::DeclaredVerdict, retired: bool) -> Explained {
+    use std::fmt::Write as _;
+    let mut text = format!("{} {}\n", resolved.id, resolved.gloss);
     if retired {
         // The token the reader ASKED for was a tombstone. Said outright rather
         // than silently swapped: a reader who greps their own logs for the old
-        // token has to learn that it moved, and an answer that just showed the
-        // new class would leave them believing the old one is live.
-        writeln!(out, "retired  {token} -> {}", resolved.id)?;
+        // token has to learn that it moved.
+        let _ = writeln!(text, "retired  {name} -> {}", resolved.id);
     }
-    writeln!(out)?;
-    writeln!(out, "{}", resolved.class.trim())?;
-    writeln!(out)?;
+    let _ = write!(text, "\n{}\n\n", resolved.class.trim());
     for route in &resolved.routes {
-        let target = match route.precondition.as_deref() {
-            Some(precondition) => precondition,
-            None => route.target.as_str(),
-        };
-        writeln!(out, "{}  {}  {target}", route.id, route.kind.as_str())?;
+        let target = route.precondition.as_deref().unwrap_or(&route.target);
+        let _ = writeln!(text, "{}  {}  {target}", route.id, route.kind.as_str());
     }
-    Ok(ExitCode::Success)
+    Explained {
+        text,
+        json: explain_json(name, resolved, retired),
+    }
 }
 
 /// Resolve the derived protected gate to the table that answers it (CLOUD-1286).
@@ -7939,41 +7983,34 @@ fn run_policy_explain(
 /// would leave the fallback unreachable, which is the tier this repository's own
 /// `rm` and `mv` rows land in.
 fn explain_redirects(
+    name: &str,
     redirects: &[redirect::Redirect],
     verbs: &[verbs::MutatingVerb],
-    json: bool,
-    out: &mut dyn Write,
-) -> Result<ExitCode> {
-    if json {
-        writeln!(
-            out,
-            "{}",
-            serde_json::to_string_pretty(&serde_json::json!({
-                "rule": hook::PROTECTED_MUTATION,
-                "redirects": redirects,
-                "verbs": verbs,
-            }))?
-        )?;
-        return Ok(ExitCode::Success);
-    }
-    writeln!(out, "{} protected", hook::PROTECTED_MUTATION)?;
-    writeln!(out)?;
+) -> Result<Explained> {
+    use std::fmt::Write as _;
+    let json = serde_json::json!({
+        "name": name,
+        "rule": hook::PROTECTED_MUTATION,
+        "redirects": serde_json::to_value(redirects)?,
+        "verbs": serde_json::to_value(verbs)?,
+    });
+    let mut text = format!("{} protected\n\n", hook::PROTECTED_MUTATION);
     for row in redirects {
-        writeln!(out, "{}  {}", row.glob, row.mutation)?;
+        let _ = writeln!(text, "{}  {}", row.glob, row.mutation);
         // The READ remedy where a class declares one (CLOUD-1258). Printed on
         // its own line rather than folded into the mutation's, because they are
         // answers to two different questions and a reader arriving from a read
         // refusal must not have to pick the right half out of one sentence.
         if let Some(read) = row.read.as_deref() {
-            writeln!(out, "{}  read  {read}", row.glob)?;
+            let _ = writeln!(text, "{}  read  {read}", row.glob);
         }
     }
     for row in verbs {
         if let Some(redirect) = row.redirect.as_deref() {
-            writeln!(out, "{}  {redirect}", row.verb)?;
+            let _ = writeln!(text, "{}  {redirect}", row.verb);
         }
     }
-    Ok(ExitCode::Success)
+    Ok(Explained { text, json })
 }
 
 /// Resolve a `[[rule]]` id to the remedy its row declares (CLOUD-1286).
@@ -7998,12 +8035,8 @@ fn explain_redirects(
 /// the record is then verified against, which is what closes the loop and what a
 /// second wording of it would break. That command left the emitted line with
 /// everything else, so it has to arrive here or the loop does not close.
-fn explain_rule(
-    rule: &rules::Rule,
-    facts: &[facts::Declared],
-    json: bool,
-    out: &mut dyn Write,
-) -> Result<ExitCode> {
+fn explain_rule(name: &str, rule: &rules::Rule, facts: &[facts::Declared]) -> Explained {
+    use std::fmt::Write as _;
     let commands: Vec<&str> = rule
         .checks
         .iter()
@@ -8011,34 +8044,28 @@ fn explain_rule(
         .filter_map(|check| facts.iter().find(|fact| &fact.name == check))
         .filter_map(|fact| fact.command.as_deref())
         .collect();
-    if json {
-        writeln!(
-            out,
-            "{}",
-            serde_json::to_string_pretty(&serde_json::json!({
-                "rule": rule.id,
-                "kind": rule.kind.as_str(),
-                "reason": rule.reason,
-                "commands": commands,
-            }))?
-        )?;
-        return Ok(ExitCode::Success);
-    }
-    writeln!(out, "{} {}", rule.id, rule.kind.as_str())?;
-    writeln!(out)?;
-    match rule.reason.as_deref() {
-        Some(reason) => writeln!(out, "{}", reason.trim())?,
-        // Stated rather than silent, exactly as `Fix::None` is: a reader cannot
-        // tell an absent remedy from a verb that forgot to print one.
-        None => writeln!(out, "this row declares no remedy of its own")?,
-    }
+    let json = serde_json::json!({
+        "name": name,
+        "rule": rule.id,
+        "kind": rule.kind.as_str(),
+        "reason": rule.reason,
+        "commands": commands,
+    });
+    let mut text = format!("{} {}\n\n", rule.id, rule.kind.as_str());
+    // Stated rather than silent when absent, exactly as `Fix::None` is: a
+    // reader cannot tell an absent remedy from a verb that forgot to print one.
+    let reason = rule
+        .reason
+        .as_deref()
+        .map_or("this row declares no remedy of its own", str::trim);
+    let _ = writeln!(text, "{reason}");
     if !commands.is_empty() {
-        writeln!(out)?;
+        text.push('\n');
         for command in commands {
-            writeln!(out, "{command}")?;
+            let _ = writeln!(text, "{command}");
         }
     }
-    Ok(ExitCode::Success)
+    Explained { text, json }
 }
 
 /// Dispatch the `policy` subtree.
@@ -8055,92 +8082,14 @@ fn run_policy(
         PolicyCommand::Budget { json } => run_budget(json, overrides, out),
         PolicyCommand::Test { json } => run_policy_test(json, overrides, out),
         PolicyCommand::Tools { json } => run_policy_tools(json, overrides, out),
-        PolicyCommand::Explain { token, json } => run_policy_explain(&token, json, overrides, out),
+        PolicyCommand::Explain { tokens, json } => {
+            run_policy_explain(&tokens, json, overrides, out)
+        }
         PolicyCommand::Hooks { json } => run_policy_hooks(json, overrides, out),
-        PolicyCommand::Rule { id, json } => run_policy_rule(&id, json, overrides, out),
+        // ONE LOOKUP (CLOUD-2142): `rule` is `explain` with one name, kept so
+        // every line and memory naming it still resolves, byte-identically.
+        PolicyCommand::Rule { id, json } => run_policy_explain(&[id], json, overrides, out),
     }
-}
-
-/// Resolve a rule id to the remedy its row declares (CLOUD-1637).
-///
-/// **The hop the emitted line names, finally built.** CLOUD-1286 moved a row's
-/// `reason` off the hot path saying `batten policy rule <id>` is where it went;
-/// the verb did not exist, so for a row whose class gloss is generic the remedy
-/// was unreachable from the refusal that named it. `call name refused` says only
-/// that the call matches a shape the config refuses — that a board row is read
-/// through `batten mcp call Linear get_issue` is `no-raw-issue-read`'s `reason`,
-/// and nothing dereferenced it.
-///
-/// **A thin wrapper over [`explain_rule`] and deliberately not a second
-/// renderer.** `policy explain` already falls back to a rule id when the argument
-/// resolves to no class, so the projection exists and is exercised; what was
-/// missing is a verb a reader can be POINTED AT. Reusing the projection is what
-/// keeps the two routes to it byte-identical — a second formatter here would be a
-/// second authority over one row's remedy.
-///
-/// Unlike `explain`'s fallback this needs a config that loaded, and says so
-/// rather than reporting the row as undeclared: a `[[rule]]` row is the
-/// consumer's, so "no config could be read" and "no such row" are different
-/// answers and collapsing them sends a reader looking for a missing row when the
-/// fault is the file.
-///
-/// # Errors
-///
-/// When the config cannot be read, or no `[[rule]]` row declares the id.
-fn run_policy_rule(
-    id: &str,
-    json: bool,
-    overrides: &Overrides,
-    out: &mut dyn Write,
-) -> Result<ExitCode> {
-    let config = resolve::resolve(Path::new("."), overrides)?;
-    // THE ARGUMENT IS A BOUNDARY, SO IT NORMALISES (CLOUD-1638), and this is
-    // the surface `normalise_rule_id`'s own doc names — "a `policy rule`
-    // argument" — while being the one path that never called it. Stored ids are
-    // rewritten to the space form at load, so matching a raw argv entry made
-    // `batten policy rule shell-retirement` answer "no `[[rule]]` row and no
-    // module declares" for a row that is declared. Measured in use: the refusal
-    // was read as "that name is not a rule" and the lookup abandoned.
-    //
-    // Normalised for MATCHING only. The refusal below still quotes the caller's
-    // own spelling, because a message naming a form they did not type sends
-    // them hunting for a row by a name that is not on their command line.
-    //
-    // THE REWRITE IS CONDITIONAL, SO THE MATCH IS TOO: `config.rs` rewrites
-    // stored ids only `if !config.vocabulary.is_empty()`, so a tree that has not
-    // adopted the grammar stores a kebab id verbatim and normalising
-    // unconditionally would refuse the row under the only name it has. The
-    // typed spelling is therefore tried first and the normalised one as a
-    // fallback, which is a no-op under the grammar — a stored id is already the
-    // space form there, so only the other two spellings reach it.
-    let wanted = if config.rules.iter().any(|rule| rule.id == id) {
-        id.to_owned()
-    } else {
-        verdict::normalise_rule_id(id)
-    };
-    // BOTH NAMES A LINE CAN CARRY (CLOUD-1638). A `policy` row's finding is
-    // emitted under the MODULE's `"rule":` — `test add duplicate`, not the row
-    // `test fix duplicate` that binds the module — so resolving only `[[rule]]`
-    // ids left the id a reader actually sees pointing at nothing. Falling back
-    // to the owning row answers the question they asked: what refused me, and
-    // what does its row say to do. The row id is tried FIRST, because where the
-    // two coincide the row is the more specific answer.
-    let owner = config
-        .rules
-        .iter()
-        .find(|rule| rule.id == wanted)
-        .or_else(|| owning_row(&config, &wanted));
-    let Some(rule) = owner else {
-        // Named, and the id is the caller's own argument rather than anything
-        // read out of the tree. A list of what IS declared would be every row on
-        // stderr; the count plus the sibling verb is the pointer-shaped answer.
-        return Err(error::UsageError::raise(format!(
-            "no `[[rule]]` row and no module declares `{id}`; this config declares {} rule(s). \
-             A three-word name may be a CLASS instead — resolve it with `batten policy explain`",
-            config.rules.len(),
-        )));
-    };
-    explain_rule(rule, &config.facts, json, out)
 }
 
 /// The `[[rule]]` row whose module declares this finding id (CLOUD-1638).
@@ -8885,12 +8834,16 @@ fn parse_answers(raw: &str) -> std::collections::BTreeMap<String, String> {
         .collect()
 }
 
-/// The `-J` shape of [`run_policy_explain`], byte-stable.
+/// The `-J` shape of one class section of [`run_policy_explain`], byte-stable.
 ///
-/// `token` and `resolved` are both carried, and they differ exactly when the
-/// asked-for token was a tombstone — which is the one fact a caller reading this
+/// `name` and `resolved` are both carried, and they differ exactly when the
+/// asked-for name was a tombstone — which is the one fact a caller reading this
 /// programmatically cannot reconstruct from either alone.
-fn explain_json(token: &str, resolved: &verdict::DeclaredVerdict, retired: bool) -> Result<String> {
+fn explain_json(
+    name: &str,
+    resolved: &verdict::DeclaredVerdict,
+    retired: bool,
+) -> serde_json::Value {
     let routes: Vec<serde_json::Value> = resolved
         .routes
         .iter()
@@ -8903,14 +8856,14 @@ fn explain_json(token: &str, resolved: &verdict::DeclaredVerdict, retired: bool)
             })
         })
         .collect();
-    Ok(serde_json::to_string(&serde_json::json!({
-        "token": token,
+    serde_json::json!({
+        "name": name,
         "resolved": resolved.id,
         "retired": retired,
         "gloss": resolved.gloss,
         "class": resolved.class.trim(),
         "routes": routes,
-    }))?)
+    })
 }
 
 // The length is the four report terms rendered in two output shapes, and the
@@ -16998,8 +16951,9 @@ fn unadjudicable_remedy() -> Fix {
 /// [`ExitCode::Violation`]. Raising a [`Denial`] here would send `2` to the one
 /// host that reads the document instead of the number.
 ///
-/// **The refusal is `unloaded`**: no `policy rule` hop resolves when the config
-/// did not load, so its line names none (CLOUD-2075).
+/// **The refusal is `unloaded`**, and its hop still resolves: `policy explain`
+/// answers `engine-cannot-adjudicate` from the engine's own table with no config
+/// (CLOUD-2142).
 //MUTANT refusal-drops-the-cause|s@^        .filter(\x7cline\x7c !is_source_excerpt(line))$@        .take(1)@|a_fact_row_that_states_no_returns_is_refused_at_load_over_the_binary
 fn deny_unadjudicable(
     harness: hook::Harness,

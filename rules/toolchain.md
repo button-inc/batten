@@ -442,7 +442,7 @@ policy explain "<class>"` on the CLASS token (not the rule id) lists its routes,
   and where one is an override, `batten override request` then `batten override
 spend` is the way through that leaves a record. These four
   rows render under `call name refused`, which declares an override route
-  (CLOUD-1806): read the row's remedy with `batten policy rule '<id>'` first,
+  (CLOUD-1806): read the row's remedy with `batten policy explain '<id>'` first,
   and where it cannot perform the change, `batten override request` then
   `spend` is the recorded way through, bound to the row id at the current
   commit.

@@ -252,10 +252,6 @@ pub struct Refusal {
     /// ([`Refusal::read_through`]).
     #[serde(skip)]
     readers: std::collections::BTreeMap<String, String>,
-    /// Whether `batten policy rule '<id>'` resolves this refusal's row: false
-    /// only where the config did not load ([`Refusal::unloaded`]).
-    #[serde(skip)]
-    dereferenceable: bool,
     /// The one-line gloss of the declared class, for the first-sighting arm
     /// (CLOUD-1637).
     ///
@@ -611,7 +607,7 @@ pub enum Arm {
 pub enum Label {
     /// A declared class, dereferenced by `batten policy explain`.
     Verdict,
-    /// A `[[rule]]` id, dereferenced by `batten policy rule`.
+    /// A `[[rule]]` id; `batten policy explain` dereferences both labels.
     Rule,
 }
 
@@ -652,17 +648,18 @@ const OVERRIDE_OPENER: &str = "admit with batten override request ";
 /// CLOUD-1806's class route. The hop [`finding_line`] appends names the same
 /// verb with the real id, so a route whose target is this placeholder is
 /// dropped at render rather than printed twice.
-pub(crate) const RULE_HOP_PLACEHOLDER: &str = "batten policy rule '<rule-id>'";
+pub(crate) const RULE_HOP_PLACEHOLDER: &str = "batten policy explain '<rule-id>'";
 
 /// The one projection every channel carries (CLOUD-2075):
-/// `[verdict '<T>' ]rule '<R>'[ at <S>](; <route>)*[; run batten policy rule '<R>'][ — <tail>]`.
+/// `[verdict '<T>' ]rule '<R>'[ at <S>](; <route>)*; run batten policy explain '<R>'[ '<T>'][ — <tail>]`.
 ///
 /// Both labels are printed even where the id equals the token, so a reader can
 /// always tell a rule from a verdict. Every route — override routes included,
 /// each a ready `override request` with the subject the refusal binds — is on
-/// BOTH arms, so the pointer arm sheds no way out. The full arm adds the
-/// definition: the class gloss (or the undeclared refusal's reason), the row's
-/// own remedy, each override's precondition, and the `explain` hop.
+/// BOTH arms, so the pointer arm sheds no way out, and so is the one `explain`
+/// hop that resolves both names (CLOUD-2142). The full arm adds the definition:
+/// the class gloss (or the undeclared refusal's reason), the row's own remedy,
+/// and each override's precondition.
 ///
 /// Nothing is shed and no ceiling is consulted: `[refusal]`'s keys are
 /// measured by `refusal_ceiling`'s corpus case, which reports an over-ceiling
@@ -671,6 +668,7 @@ pub(crate) const RULE_HOP_PLACEHOLDER: &str = "batten policy rule '<rule-id>'";
 //MUTANT pointer-arm-routes-dropped|s@^    for route in routes(refusal) {$@    for route in routes(refusal).into_iter().take(if arm == Arm::Full { usize::MAX } else { 0 }) {@|the_pointer_arm_carries_every_route_and_subject_the_full_arm_does
 //MUTANT collapsed-row-unlabelled|s@^    if let Some(token) = refusal.verdict() {$@    if let Some(token) = refusal.verdict() \&\& token != refusal.rule() {@|a_collapsed_row_still_labels_rule_and_verdict
 //MUTANT advice-routes-dropped|s@^    for route in routes(refusal) {$@    for route in routes(refusal).into_iter().take(0) {@|a_warn_advisory_carries_its_document_route_on_an_allowed_pre_tool_call
+//MUTANT explain-hop-drops-class|s@^        \&\& class != refusal.rule()$@        \&\& false@|every_line_names_one_explain_hop_for_both_names
 //MUTANT rule-label-dropped|s@^    line.push_str(\&label(Label::Rule, refusal.rule()));$@    line.push_str(refusal.rule());@|every_hook_policy_table_deny_names_its_fix
 fn finding_line(refusal: &Refusal, arm: Arm) -> String {
     let mut line = String::new();
@@ -687,9 +685,16 @@ fn finding_line(refusal: &Refusal, arm: Arm) -> String {
         line.push_str("; ");
         line.push_str(&route);
     }
-    if refusal.dereferenceable {
-        line.push_str("; run batten policy rule ");
-        line.push_str(&quoted(refusal.rule()));
+    // ONE HOP FOR BOTH NAMES (CLOUD-2142): `policy explain` resolves a rule, a
+    // class and an engine id alike, so the line names it once, with the class
+    // only where it differs from the rule.
+    line.push_str("; run batten policy explain ");
+    line.push_str(&quoted(refusal.rule()));
+    if let Some(class) = refusal.verdict()
+        && class != refusal.rule()
+    {
+        line.push(' ');
+        line.push_str(&quoted(class));
     }
     if arm == Arm::Pointer {
         return line;
@@ -713,11 +718,6 @@ fn finding_line(refusal: &Refusal, arm: Arm) -> String {
         line.push_str(&quoted(id));
         line.push_str(" when ");
         line.push_str(&sentence(precondition));
-    }
-    if let Some(class) = refusal.verdict() {
-        line.push_str(" Run batten policy explain ");
-        line.push_str(&quoted(class));
-        line.push('.');
     }
     line
 }
@@ -772,7 +772,6 @@ impl Refusal {
             routes: Vec::new(),
             subjects: String::new(),
             readers: std::collections::BTreeMap::new(),
-            dereferenceable: true,
             // Likewise: no class, so no gloss. The undeclared arm's payload is
             // the consumer's own `reason`, which the full arm carries.
             gloss: String::new(),
@@ -794,14 +793,15 @@ impl Refusal {
         self
     }
 
-    /// The refusal for a config that did not load: no `policy rule` hop
-    /// resolves, so the line names none (CLOUD-2075).
+    /// The refusal for a config that did not load (CLOUD-2075).
+    ///
+    /// Identical to [`Refusal::new`] since CLOUD-2142: it used to drop the line's
+    /// hop because no `[[rule]]` row resolved without a config, and now
+    /// `policy explain` answers an engine id from [`crate::verdict::native_definition`]
+    /// with no config at all, so the hop resolves and stays.
     #[must_use]
     pub fn unloaded(rule: impl Into<String>, reason: impl Into<String>, fix: Fix) -> Refusal {
-        Refusal {
-            dereferenceable: false,
-            ..Refusal::new(rule, reason, fix)
-        }
+        Refusal::new(rule, reason, fix)
     }
 
     /// Name the reader each document route's target is read through, where the
@@ -902,7 +902,6 @@ impl Refusal {
                 .unwrap_or_default(),
             subjects: crate::verdict::render_subjects(subjects),
             readers: std::collections::BTreeMap::new(),
-            dereferenceable: true,
             gloss: crate::verdict::gloss_of(registry, token)
                 .unwrap_or_default()
                 .to_owned(),
@@ -1127,17 +1126,17 @@ mod tests {
     #[test]
     fn every_line_names_its_rule_hop_whatever_the_fix() {
         // Both dispositions, because the one that matters is the one with nothing
-        // declared: the `policy rule` hop is the way out there (CLOUD-2075).
+        // declared: the explain hop is the way out there (CLOUD-2075, CLOUD-2142).
         for fix in [Fix::None, Fix::Run("do this".to_owned())] {
             let full = Refusal::new("g", "why", fix).render_finding(Arm::Full);
-            assert!(full.contains("; run batten policy rule 'g'"), "{full}");
+            assert!(full.contains("; run batten policy explain 'g'"), "{full}");
         }
+        // CLOUD-2142: an engine id resolves with no config, so a config that did
+        // not load keeps the hop rather than losing it.
+        let unloaded = Refusal::unloaded("g", "why", Fix::None).render_finding(Arm::Full);
         assert!(
-            Refusal::unloaded("g", "why", Fix::None)
-                .render_finding(Arm::Full)
-                .find("policy rule")
-                .is_none(),
-            "a config that did not load resolves no rule hop"
+            unloaded.contains("; run batten policy explain 'g'"),
+            "{unloaded}"
         );
     }
 
@@ -1149,12 +1148,12 @@ mod tests {
         let authored = Refusal::new("g", "Because it does.", Fix::Run("mise run x".to_owned()));
         assert_eq!(
             authored.render_finding(Arm::Full),
-            "rule 'g'; run batten policy rule 'g' — Because it does. mise run x."
+            "rule 'g'; run batten policy explain 'g' — Because it does. mise run x."
         );
         let bare = Refusal::new("g", "because it does", Fix::Run("mise run x.".to_owned()));
         assert_eq!(
             bare.render_finding(Arm::Full),
-            "rule 'g'; run batten policy rule 'g' — because it does. mise run x."
+            "rule 'g'; run batten policy explain 'g' — because it does. mise run x."
         );
     }
 

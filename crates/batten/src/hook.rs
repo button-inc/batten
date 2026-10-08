@@ -14310,8 +14310,47 @@ deny contains "refused by themodule" if {
         );
         // The way out is the row's own hop (CLOUD-2075), never a bare "no".
         let line = refusal.render_finding(crate::refusal::Arm::Full);
-        assert!(line.contains("run batten policy rule 'some-row'"), "{line}");
+        assert!(
+            line.contains("run batten policy explain 'some-row'"),
+            "{line}"
+        );
         assert!(line.contains("it fired"), "{line}");
+    }
+
+    /// CLOUD-2142: one lookup for both names. The hop names the rule and, where
+    /// it differs, the class, on BOTH arms; a collapsed row names its one name
+    /// once; and neither the retired `policy rule` hop nor the full arm's separate
+    /// explain sentence survives.
+    #[test]
+    fn every_line_names_one_explain_hop_for_both_names() {
+        use crate::refusal::{Arm, Fix, Refusal};
+        let class = crate::verdict::Native::ProtectedMutation.id();
+        let split = Refusal::declared(
+            PROTECTED_MUTATION,
+            crate::verdict::Native::ProtectedMutation,
+            &[],
+            Fix::None,
+        );
+        let hop = format!("; run batten policy explain '{PROTECTED_MUTATION}' '{class}'");
+        for arm in [Arm::Pointer, Arm::Full] {
+            let line = split.render_finding(arm);
+            assert!(line.contains(&hop), "{line}");
+            assert!(!line.contains("policy rule '"), "{line}");
+            assert!(!line.contains("Run batten policy explain"), "{line}");
+        }
+        let collapsed = Refusal::declared(
+            class,
+            crate::verdict::Native::ProtectedMutation,
+            &[],
+            Fix::None,
+        )
+        .render_finding(Arm::Full);
+        let once = format!("; run batten policy explain '{class}'");
+        assert!(collapsed.contains(&once), "{collapsed}");
+        assert!(
+            !collapsed.contains(&format!("{once} '")),
+            "a collapsed row names its one name once: {collapsed}"
+        );
     }
 
     /// Adjudicate against the protected fixture with a declared redirect table.
@@ -15518,7 +15557,7 @@ deny contains "refused by themodule" if {
     #[test]
     fn the_tool_output_rewrite_is_emitted_only_where_measured() {
         let rewritten = serde_json::json!({
-            "stdout": "rule 'r'; run batten policy rule 'r'",
+            "stdout": "rule 'r'; run batten policy explain 'r'",
             "stderr": "",
             "interrupted": false,
         });

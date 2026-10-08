@@ -602,7 +602,7 @@ sha256 = "b2c822742e8cbf355ba0cb4cc690c3cd8fdc9ec1916c8148f27bd9098cb7aee4"
 # `reason` is required on a shape rule, unlike on a file rule: a mediated deny
 # reaches a model as the entire explanation, so a refusal that named only its id
 # would be un-actionable (CLOUD-122). It is the row's remedy, which the refusal
-# reaches through `batten policy rule '<id>'`.
+# reaches through `batten policy explain '<id>'`.
 # THESE FOUR WOULD DECLARE `bypass_env = "BATTEN_GH_GUARD_BYPASS"` AND DO NOT YET
 # (CLOUD-437, deferred to CLOUD-1027). They are the ported `gh-guard`, so that
 # name is TRUE of them where it was a fossil everywhere else, and declaring it
@@ -619,7 +619,7 @@ sha256 = "b2c822742e8cbf355ba0cb4cc690c3cd8fdc9ec1916c8148f27bd9098cb7aee4"
 # So until that row is groomed, these four declare no per-row hatch. That is a
 # statement about the column, NOT a remedy: their class, `call name refused`,
 # declares an override route (CLOUD-1806). A reader looking for the way past a
-# refusal reads the row's remedy with `batten policy rule '<id>'`, and where that
+# refusal reads the row's remedy with `batten policy explain '<id>'`, and where that
 # remedy cannot perform the change, walks `batten override request`/`spend` —
 # the recorded way through, bound to the row id at the current commit. This comment
 # used to say these rows "take the general" hatch "like every other row", which an
@@ -5762,7 +5762,8 @@ max_tokens = 110000
 #
 # This bounds the POINTER arm — what every firing after the first in a context
 # emits. CLOUD-2075 put both labels, the subjects, every route (override routes
-# included, as the ready request that admits) and the `policy rule` hop on that
+# included, as the ready request that admits) and the ONE `policy explain` hop,
+# naming the rule and, where it differs, the class (CLOUD-2142), on that
 # arm, because a pointer a ruling needs is never shed. So the number is the
 # measured widest pointer the tree emits, rounded up to a multiple of 16, and
 # nothing reads it at runtime: `refusal_ceiling.rs`'s corpus case REPORTS an
@@ -5783,7 +5784,7 @@ max_tokens = 96
 #
 # The full arm is the pointer arm plus ` — ` and the definition: the class gloss
 # (or an undeclared row's reason), the ROW'S OWN REMEDY, each override's
-# precondition and the `policy explain` hop. It is delivered once per context per
+# precondition; the hop is the pointer arm's, never repeated. It is delivered once per context per
 # compaction cycle. Measured 2026-10-03 the same way as the key above:
 #
 #  159  full  tool run loose / tool select other (the row's reason is the bulk)
