@@ -51,3 +51,10 @@ path = "fuzz_targets/config_parse.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "lease_wire"
+path = "fuzz_targets/lease_wire.rs"
+test = false
+doc = false
+bench = false

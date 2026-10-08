@@ -183,3 +183,56 @@ pub fn exercise_config_parse(data: &[u8]) {
         );
     }
 }
+
+/// Every property the git smart-HTTP decoders owe a caller, over one input
+/// (CLOUD-2135).
+///
+/// `lease` reads these bytes straight off a remote — or off whatever answered in
+/// its place, a proxy's error page included — and the readings decide the lease:
+/// an advertisement's ids are the `old` side of the next compare-and-set, and a
+/// report says whether a push applied. A wrong reading there is a wrong verdict
+/// about who holds the landing lock, which is the failure that matters.
+///
+/// # Panics
+///
+/// On any violated property, for the reason given above.
+pub fn exercise_lease_wire(data: &[u8]) {
+    use batten::lease::{Service, is_object_id, parse_advertisement, parse_body, parse_report};
+
+    for service in [Service::UploadPack, Service::ReceivePack] {
+        let first = parse_advertisement(data, service).map_err(|error| error.to_string());
+        // DETERMINISM: the lease is re-observed and compared, so a reading that
+        // varies on the same bytes makes every comparison noise.
+        assert_eq!(
+            first,
+            parse_advertisement(data, service).map_err(|error| error.to_string()),
+            "parse_advertisement is not a function of its input ({service:?})"
+        );
+        if let Ok(advertisement) = first {
+            // AN ACCEPTED ADVERTISEMENT CARRIES ONLY OBJECT IDS, because each is
+            // the `old` side of a CAS; and no name a later line could not echo
+            // back into a command (`Update::command` frames with space and NUL).
+            for (name, id) in &advertisement.refs {
+                assert!(is_object_id(id), "a ref read a non-object id ({service:?})");
+                assert!(
+                    !name.is_empty() && !name.contains(['\0', '\n']),
+                    "a ref name that cannot round-trip into a command ({service:?})"
+                );
+            }
+        }
+    }
+
+    let report = parse_report(data).map_err(|error| error.to_string());
+    assert_eq!(
+        report,
+        parse_report(data).map_err(|error| error.to_string()),
+        "parse_report is not a function of its input"
+    );
+
+    // `parse_body` is total by signature; the property is that it is a function.
+    assert_eq!(
+        parse_body(data),
+        parse_body(data),
+        "parse_body is not a function of its input"
+    );
+}
