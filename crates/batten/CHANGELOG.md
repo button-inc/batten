@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.208](https://github.com/button-inc/batten/compare/v0.0.207...v0.0.208) - 2026-10-08
+
+### Fixed
+
+- *(perf)* identical arms are suspect only when the binary's sources differ
+- *(config)* clear pr-open when a pull request is closed unmerged
+
+### Other
+
+- *(one_pr)* keep the close cases' bodies, empty their fixture row
+
 ## [0.0.207](https://github.com/button-inc/batten/compare/v0.0.206...v0.0.207) - 2026-10-08
 
 ### Added
