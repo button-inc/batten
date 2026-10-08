@@ -647,7 +647,16 @@ fn follow_pin(may_build: bool) -> Result<Option<ExitCode>> {
     let engine = match (pin.release.as_deref(), pin.source.as_deref()) {
         (Some(tag), None) => {
             let cache = state::repo_state_dir(&root)?;
-            engine::pinned_release(&cache, env!("CARGO_PKG_REPOSITORY"), tag)?
+            match engine::pinned_release(&cache, env!("CARGO_PKG_REPOSITORY"), tag) {
+                Ok(path) => path,
+                // ON THE HOOK PATH A FETCH THAT FAILS FALLS THROUGH to the
+                // refusal floor, which still decides the call and admits the
+                // one repair verb (CLOUD-2116). An error here would end the
+                // hook before that floor answered: measured, the admitted
+                // `batten engine update` was refused at exit 1.
+                Err(_) if !may_build => return Ok(None),
+                Err(err) => return Err(err),
+            }
         }
         (None, Some(_)) if may_build => {
             engine_update(&root, &mut std::io::sink())?;
