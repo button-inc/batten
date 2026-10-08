@@ -1530,6 +1530,9 @@ pub enum PolicyCommand {
         tokens: Vec<String>,
         /// Emit every section as one byte-stable JSON array.
         json: bool,
+        /// Print each named row's history rather than its definition
+        /// (CLOUD-2144).
+        history: bool,
     },
     /// Judge this session's hook output against its budget (CLOUD-417).
     ///
@@ -2512,6 +2515,7 @@ fn policy_of(matches: &ArgMatches) -> Option<PolicyCommand> {
                 .map(|names| names.cloned().collect())
                 .unwrap_or_default(),
             json: flag(matches, "json"),
+            history: flag(matches, "history"),
         }),
         ("rule", matches) => Some(PolicyCommand::Rule {
             // Unreachable for the reason `explain`'s own default is: the

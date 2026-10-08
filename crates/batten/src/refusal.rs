@@ -265,6 +265,11 @@ pub struct Refusal {
     /// and so has no gloss to carry.
     #[serde(skip)]
     gloss: String,
+    /// The class's interaction doc, rendered on the full arm after the gloss
+    /// (CLOUD-2143). Skipped for [`Refusal::gloss`]'s reason: the `-J` payload
+    /// is unchanged. Empty for a refusal with no class.
+    #[serde(skip)]
+    doc: crate::doc::Doc,
     /// The declared class this refusal belongs to, when it has one (CLOUD-1050).
     ///
     /// `Some` for every one of Batten's OWN refusal sites, which name a
@@ -664,7 +669,8 @@ pub(crate) const RULE_HOP_PLACEHOLDER: &str = "batten policy explain '<rule-id>'
 /// Nothing is shed and no ceiling is consulted: `[refusal]`'s keys are
 /// measured by `refusal_ceiling`'s corpus case, which reports an over-ceiling
 /// line rather than truncating one.
-//MUTANT full-arm-reason-dropped|s@^    if let Some(remedy) = refusal.remedy() {$@    if let Some(remedy) = None::<\&str> {@|a_first_sighting_carries_the_rows_reason_and_both_labels
+//MUTANT full-arm-reason-dropped|s@^    let remedy = refusal.remedy();$@    let remedy = None::<\&str>;@|a_first_sighting_carries_the_rows_reason_and_both_labels
+//MUTANT reason-replaces-do-dropped|s@^        Some(remedy) => vec!\[remedy\],$@        Some(_) => refusal.doc.act.iter().map(String::as_str).collect(),@|a_rule_reason_replaces_the_class_do
 //MUTANT pointer-arm-routes-dropped|s@^    for route in routes(refusal) {$@    for route in routes(refusal).into_iter().take(if arm == Arm::Full { usize::MAX } else { 0 }) {@|the_pointer_arm_carries_every_route_and_subject_the_full_arm_does
 //MUTANT collapsed-row-unlabelled|s@^    if let Some(token) = refusal.verdict() {$@    if let Some(token) = refusal.verdict() \&\& token != refusal.rule() {@|a_collapsed_row_still_labels_rule_and_verdict
 //MUTANT advice-routes-dropped|s@^    for route in routes(refusal) {$@    for route in routes(refusal).into_iter().take(0) {@|a_warn_advisory_carries_its_document_route_on_an_allowed_pre_tool_call
@@ -709,9 +715,18 @@ fn finding_line(refusal: &Refusal, arm: Arm) -> String {
         line.push(' ');
         line.push_str(&sentence(definition));
     }
-    if let Some(remedy) = refusal.remedy() {
+    // THE CLASS'S DOC (CLOUD-2143), with the firing row's own remedy in place
+    // of the class's `do` where it declares one: the row knows this
+    // repository's way out, the class only the general one.
+    let remedy = refusal.remedy();
+    let act: Vec<&str> = match remedy {
+        Some(remedy) => vec![remedy],
+        None => refusal.doc.act.iter().map(String::as_str).collect(),
+    };
+    let sections = crate::doc::render(&refusal.doc, &act);
+    if !sections.is_empty() {
         line.push(' ');
-        line.push_str(&sentence(remedy));
+        line.push_str(&plain(&sections));
     }
     for (id, precondition) in refusal.preconditions() {
         line.push_str(" Admissible as ");
@@ -775,6 +790,7 @@ impl Refusal {
             // Likewise: no class, so no gloss. The undeclared arm's payload is
             // the consumer's own `reason`, which the full arm carries.
             gloss: String::new(),
+            doc: crate::doc::Doc::default(),
             verdict: None,
             reason: reason.into(),
             fix,
@@ -905,6 +921,9 @@ impl Refusal {
             gloss: crate::verdict::gloss_of(registry, token)
                 .unwrap_or_default()
                 .to_owned(),
+            doc: crate::verdict::resolve(registry, token)
+                .map(|(entry, _)| entry.doc.clone())
+                .unwrap_or_default(),
             verdict: Some(token.to_owned()),
             reason: crate::verdict::render_line(registry, token, subjects),
             fix,

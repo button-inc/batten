@@ -4588,6 +4588,15 @@ fn adjudicated_call_gates(policy: &Policy, envelope: &Envelope, facts: &Facts<'_
     if let Some((task, holder)) = facts.singleton {
         return Decision::Deny(singleton_held_refusal(task, holder));
     }
+    // THE HISTORY GATE (CLOUD-2144): a config row changed by a context that has
+    // not read why it exists. Resolved at the boundary, so this is a lookup; the
+    // fact is could-not-look for every call that is not a write to the
+    // authority, and that allows.
+    if let crate::facts::Look::Is(unread) = facts.unread_history
+        && !unread.is_empty()
+    {
+        return Decision::Deny(rule_read_missing_refusal(unread));
+    }
     // The write gate, before the command gate and not inside it: a write tool
     // carries no command, so every path below this point used to return Allow
     // for it. That is why the `Write|Edit|MultiEdit|NotebookEdit` matcher was
@@ -5001,6 +5010,11 @@ const MAX_PROSPECTIVE_BYTES: u64 = 1 << 20;
 /// One span for the single-edit shape, N for the batch shape. `None` is a
 /// payload carrying neither, which the caller answers as could-not-look: a write
 /// shape nothing here recognises must never read as inspected-and-clean.
+#[must_use]
+pub fn edit_spans_of(input: &Value) -> Option<Vec<(String, String, bool)>> {
+    edit_spans(input)
+}
+
 fn edit_spans(input: &Value) -> Option<Vec<(String, String, bool)>> {
     let replace_all = |value: &Value| {
         value
@@ -5090,6 +5104,13 @@ pub struct Facts<'a> {
     /// **Empty is a real answer and it allows**: every commit in range is on a
     /// remote, which is the ordinary undo the row insists must not be refused.
     pub discards: &'a crate::facts::Look<Vec<String>>,
+    /// The config rows this call's write touches whose current history this
+    /// context has not read (CLOUD-2144).
+    ///
+    /// **Resolved at the boundary** for `discards`' reason — it reads the HEAD
+    /// blob and the receipt store — and only for a write to the authority.
+    /// Could-not-look ALLOWS; empty is a real answer and allows.
+    pub unread_history: &'a crate::facts::Look<Vec<String>>,
     /// What the agent reported for each agent-sourced check.
     pub sourced: &'a AgentFacts,
     /// What this call's write would land, before it happens (CLOUD-758).
@@ -5166,6 +5187,9 @@ impl<'a> Facts<'a> {
             // is a claim about a repository's remotes, and a caller that resolved
             // nothing is not making it (CLOUD-462).
             discards: &crate::facts::Look::CouldNotLook,
+            // Could-not-look, never "every row read": a caller that resolved
+            // nothing has not established what this context read (CLOUD-2144).
+            unread_history: &crate::facts::Look::CouldNotLook,
             // Could-not-look, never "an empty write". A `Facts::none` caller has
             // resolved nothing, which is a different claim from having looked
             // and found no content.
@@ -7611,6 +7635,46 @@ fn program_name(token: &str) -> &str {
 /// The day a second mediator exists this becomes a set and the key becomes a
 /// name rather than a boolean; spelling it now would be a vocabulary with one
 /// member and no consumer.
+/// The row ids a `batten policy explain … --history` call names, when the call
+/// is exactly that and nothing else (CLOUD-2144).
+///
+/// ONE segment on ONE line: a piped read (`… | head`) shows the agent a part of
+/// the history, and a list (`… && x`) could have its output buried, so neither
+/// mints a read. The program is resolved through [`effective_program`], so
+/// `mise exec -- batten` and an env prefix are the same call.
+#[must_use]
+pub fn history_read_ids(command: &str) -> Option<Vec<String>> {
+    let crate::facts::Look::Is(parsed) = segments(command) else {
+        return None;
+    };
+    let [segment] = parsed.as_slice() else {
+        return None;
+    };
+    let [line] = segment.lines.as_slice() else {
+        return None;
+    };
+    let tokens: Vec<&str> = line.words.iter().map(String::as_str).collect();
+    let index = effective_program(&tokens)?;
+    let program = program_token(tokens[index]);
+    if program.rsplit('/').next() != Some("batten") {
+        return None;
+    }
+    let rest = &tokens[index + 1..];
+    let explain = rest
+        .windows(2)
+        .position(|pair| pair == ["policy", "explain"])?;
+    let after = &rest[explain + 2..];
+    if !after.contains(&"--history") {
+        return None;
+    }
+    let ids: Vec<String> = after
+        .iter()
+        .filter(|word| !word.starts_with('-'))
+        .map(|word| (*word).to_owned())
+        .collect();
+    (!ids.is_empty()).then_some(ids)
+}
+
 fn program_reach(command: &str) -> Vec<serde_json::Value> {
     let crate::facts::Look::Is(parsed) = segments(command) else {
         return Vec::new();
@@ -7901,6 +7965,35 @@ pub const PROTECTED_MUTATION: &str = "protected-mutation";
 /// states: `forbid` matches a literal, and this predicate is over VCS state. The
 /// same reason `must_land_on` is a top-level key rather than a rule.
 pub const HISTORY_DROP: &str = "history-drop";
+
+/// The rule id the history gate refuses under (CLOUD-2144).
+pub const RULE_READ_MISSING: &str = "rule-history-unread";
+
+/// Refuse a write to config rows whose history this context has not read.
+///
+/// The subjects are the row ids — the exact names the remedy's
+/// `batten policy explain '<id>' --history` takes.
+fn rule_read_missing_refusal(ids: &[String]) -> Refusal {
+    let subjects: Vec<crate::verdict::Subject> = ids
+        .iter()
+        .map(|id| crate::verdict::Subject::Artifact {
+            artifact: id.clone(),
+        })
+        .collect();
+    let remedy = format!(
+        "batten policy explain {} --history",
+        ids.iter()
+            .map(|id| format!("'{id}'"))
+            .collect::<Vec<_>>()
+            .join(" ")
+    );
+    Refusal::declared(
+        RULE_READ_MISSING,
+        crate::verdict::Native::RuleReadMissing,
+        &subjects,
+        Fix::declared(Some(&remedy)),
+    )
+}
 
 /// The rule id the singleton gate refuses under (CLOUD-438).
 pub const SINGLETON_HELD: &str = "singleton-held";
@@ -10612,6 +10705,7 @@ mod tests {
         vec![crate::verdict::DeclaredVerdict {
             id: "branch write unsafe".to_owned(),
             gloss: "branch write unsafe".to_owned(),
+            doc: crate::doc::Doc::default(),
             class: "The long definition of the class.".to_owned(),
             routes: vec![
                 route(
@@ -10745,6 +10839,7 @@ mod tests {
                 waived: &crate::waiver::Live::new(),
                 sourced: &None,
                 singleton: &None,
+                unread_history: &crate::facts::Look::CouldNotLook,
                 // Could-not-look: these unit cases resolve no repository, so
                 // they make no claim about what a reset would discard. The
                 // compiled tier `history_drop.rs` is where that fact is real.
@@ -12542,6 +12637,7 @@ mod tests {
             .map(|id| crate::verdict::DeclaredVerdict {
                 id: id.to_owned(),
                 gloss: format!("the fixture class {id}"),
+                doc: crate::doc::Doc::default(),
                 class: format!("What {id} means, at length."),
                 routes: vec![crate::verdict::Route {
                     id: "read the authority".to_owned(),
@@ -14388,6 +14484,58 @@ deny contains "refused by themodule" if {
         assert!(
             !collapsed.contains(&format!("{once} '")),
             "a collapsed row names its one name once: {collapsed}"
+        );
+    }
+
+    /// CLOUD-2143: a first sighting carries the class's doc, and a row that
+    /// declares its own remedy puts it in place of the class's `do` — on the
+    /// full arm only.
+    #[test]
+    fn a_rule_reason_replaces_the_class_do() {
+        use crate::refusal::{Arm, Fix, Refusal};
+        let registry = vec![crate::verdict::DeclaredVerdict {
+            id: "task read first".to_owned(),
+            gloss: "a task was run before it was read".to_owned(),
+            doc: crate::doc::Doc {
+                why: Some("A task run blind changes what nobody checked".to_owned()),
+                act: vec!["read the class way out".to_owned()],
+                dont: vec!["retry it verbatim".to_owned()],
+            },
+            class: "The long definition.".to_owned(),
+            routes: vec![crate::verdict::Route {
+                id: "task read other".to_owned(),
+                kind: crate::verdict::RouteKind::Document,
+                target: "rules/tasks.md".to_owned(),
+                precondition: None,
+            }],
+            successor: None,
+            withdrawn: None,
+            applicability: crate::verdict::Applicability::Advice,
+        }];
+        let class_only = Refusal::from_class("row-a", &registry, "task read first", &[], Fix::None)
+            .render_finding(Arm::Full);
+        for part in [
+            "A task run blind changes what nobody checked.",
+            "Do: read the class way out.",
+            "Don't: retry it verbatim.",
+        ] {
+            assert!(class_only.contains(part), "`{part}` missing: {class_only}");
+        }
+        let row = Refusal::from_class(
+            "row-b",
+            &registry,
+            "task read first",
+            &[],
+            Fix::declared(Some("run the row's own way out")),
+        );
+        let full = row.render_finding(Arm::Full);
+        assert!(full.contains("Do: run the row's own way out."), "{full}");
+        assert!(!full.contains("read the class way out"), "{full}");
+        assert!(full.contains("Don't: retry it verbatim."), "{full}");
+        let pointer = row.render_finding(Arm::Pointer);
+        assert!(
+            !pointer.contains("Don't:"),
+            "the doc is the full arm's: {pointer}"
         );
     }
 

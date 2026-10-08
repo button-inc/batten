@@ -334,3 +334,56 @@ fn the_space_form_is_the_cheapest_spelling_of_a_name() {
          {space:.2} means a word in the table stopped being one token"
     );
 }
+
+/// The live classes, vendored and this repository's, that still carry no `do`
+/// (CLOUD-2143). A ratchet: it may only fall, it is held EQUAL so a doc written
+/// without lowering it is a red test, and the branch that ships the doc schema
+/// lands it at zero.
+const DOC_DEBT: usize = 409;
+
+/// Every live class this repository loads: the vendored registry merged with
+/// the committed `[[verdict]]` rows.
+fn live_classes() -> Vec<batten::verdict::DeclaredVerdict> {
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let config = batten::config::load(&root.join("batten.toml"))
+        .expect("this repository's committed config loads");
+    batten::policy::registry_for(&config.verdicts)
+        .expect("the committed registry resolves")
+        .into_iter()
+        .filter(|class| !class.retired())
+        .collect()
+}
+
+/// CLOUD-2143's test-binary tier: what a first sighting hands its reader is at
+/// most 160 tokens under the pin, for every live class, and every live class
+/// says what to do. Load holds the same text to 640 bytes for any consumer; this
+/// is the exact count the shipped binary cannot make.
+#[test]
+fn every_vendored_and_declared_doc_is_within_160_o200k_tokens() {
+    let bpe = tiktoken_rs::o200k_base().expect("the pinned encoding is vendored with the crate");
+    let classes = live_classes();
+    assert!(classes.len() > 300, "the census reads the whole registry");
+    let mut over: Vec<(usize, String)> = classes
+        .iter()
+        .map(|class| {
+            let tokens = bpe
+                .encode_with_special_tokens(&class.first_sighting())
+                .len();
+            (tokens, class.id.clone())
+        })
+        .filter(|(tokens, _)| *tokens > 160)
+        .collect();
+    over.sort();
+    assert!(over.is_empty(), "first sightings over 160 tokens: {over:?}");
+    let missing: Vec<&str> = classes
+        .iter()
+        .filter(|class| class.doc.act.is_empty())
+        .map(|class| class.id.as_str())
+        .collect();
+    assert_eq!(
+        missing.len(),
+        DOC_DEBT,
+        "live classes with no `do`; write each one's doc and lower DOC_DEBT to match: \
+         {missing:?}"
+    );
+}

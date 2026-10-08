@@ -54,6 +54,7 @@ pub mod design;
 pub mod disk_watch;
 pub mod dispatch;
 pub mod dist;
+pub mod doc;
 pub mod doctor;
 pub mod drain;
 pub mod durable;
@@ -79,6 +80,7 @@ pub mod git;
 pub mod gitwrite;
 pub mod graph;
 pub mod handler;
+pub mod history;
 pub mod hk;
 pub mod hook;
 pub mod hookcost;
@@ -7905,6 +7907,51 @@ fn run_policy_explain(
     )))
 }
 
+/// Print each named config row's history (CLOUD-2144): the read a change to the
+/// row owes, and the call the PostToolUse hook mints that read from.
+///
+/// A rule id is tried as typed and then normalised, as `explain` does. A name
+/// that is no row of the committed authority at HEAD is a miss (exit 1) after
+/// the rest print.
+///
+/// # Errors
+///
+/// When a name names no row, or the history cannot be walked (a shallow clone).
+fn run_policy_history(names: &[String], json: bool, out: &mut dyn Write) -> Result<ExitCode> {
+    let root = Path::new(".");
+    let mut documents = Vec::new();
+    let mut misses: Vec<&str> = Vec::new();
+    for name in names {
+        let found = match history::assemble(root, config::CONFIG_FILE, name)? {
+            Some(text) => Some(text),
+            None => {
+                history::assemble(root, config::CONFIG_FILE, &verdict::normalise_rule_id(name))?
+            }
+        };
+        let Some(text) = found else {
+            misses.push(name);
+            continue;
+        };
+        if json {
+            documents.push(serde_json::json!({ "name": name, "history": text }));
+        } else {
+            writeln!(out, "== {name}\n")?;
+            write!(out, "{text}")?;
+        }
+    }
+    if json {
+        writeln!(out, "{}", serde_json::to_string(&documents)?)?;
+    }
+    if misses.is_empty() {
+        return Ok(ExitCode::Success);
+    }
+    Err(error::UsageError::raise(format!(
+        "no `[[rule]]` or `[[verdict]]` row of the committed {} declares `{}` at HEAD",
+        config::CONFIG_FILE,
+        misses.join("`, `"),
+    )))
+}
+
 /// Every section one name resolves to, in print order (CLOUD-2142).
 fn explain_name(
     name: &str,
@@ -8082,7 +8129,12 @@ fn run_policy(
         PolicyCommand::Budget { json } => run_budget(json, overrides, out),
         PolicyCommand::Test { json } => run_policy_test(json, overrides, out),
         PolicyCommand::Tools { json } => run_policy_tools(json, overrides, out),
-        PolicyCommand::Explain { tokens, json } => {
+        PolicyCommand::Explain {
+            tokens,
+            json,
+            history: true,
+        } => run_policy_history(&tokens, json, out),
+        PolicyCommand::Explain { tokens, json, .. } => {
             run_policy_explain(&tokens, json, overrides, out)
         }
         PolicyCommand::Hooks { json } => run_policy_hooks(json, overrides, out),
@@ -16121,6 +16173,65 @@ fn pinned_for(
     }
 }
 
+/// The per-call facts [`run_hook`] resolves beyond the policy's own: the
+/// destructive pair, the unread history a config write touches, and the
+/// dispatch receipt. One call so `run_hook` stays under its line ceiling.
+#[expect(
+    clippy::type_complexity,
+    reason = "four facts the Facts literal borrows one by one; a struct would only be destructured again"
+)]
+fn call_facts(
+    envelope: &hook::Envelope,
+) -> (
+    facts::Look<Vec<String>>,
+    Option<(String, String)>,
+    facts::Look<Vec<String>>,
+    facts::Look<()>,
+) {
+    let (discards, singleton) = destructive_call_facts(envelope);
+    (
+        discards,
+        singleton,
+        unread_history(envelope),
+        dispatch_facts(envelope),
+    )
+}
+
+/// The rows of the config authority this call's write touches that this
+/// context has not read the current history of (CLOUD-2144).
+///
+/// Resolved only for a write to the authority itself, so nearly every call
+/// opens nothing. Could-not-look on anything unreadable — no context, no HEAD,
+/// an edit span not found — and it ALLOWS, for `discards`' reason.
+fn unread_history(envelope: &hook::Envelope) -> facts::Look<Vec<String>> {
+    if envelope.operation != hook::Operation::Write
+        || envelope.writes.as_deref() != Some(config::CONFIG_FILE)
+    {
+        return facts::Look::CouldNotLook;
+    }
+    let root = hook_authority_root();
+    let (Some(context), Ok(git_dir)) = (envelope.context(), git::git_dir(root)) else {
+        return facts::Look::CouldNotLook;
+    };
+    let (Ok(head), Ok(current)) = (
+        git::show(root, "HEAD", config::CONFIG_FILE),
+        std::fs::read_to_string(root.join(config::CONFIG_FILE)),
+    ) else {
+        return facts::Look::CouldNotLook;
+    };
+    let content = envelope
+        .input
+        .pointer("/content")
+        .and_then(serde_json::Value::as_str);
+    let spans = hook::edit_spans_of(&envelope.input).unwrap_or_default();
+    let Some(ranges) = history::changed_ranges(&current, content, &spans) else {
+        return facts::Look::CouldNotLook;
+    };
+    facts::Look::Is(history::unread(
+        &git_dir, &context, &head, &current, &ranges,
+    ))
+}
+
 /// The two facts a DESTRUCTIVE mediated call resolves, and nothing else does
 /// (CLOUD-462, CLOUD-438).
 ///
@@ -16483,11 +16594,11 @@ fn run_hook(
     let manifest = manifest_for(&policy, &envelope);
     let pinned = pinned_for(&policy, &envelope);
     let (tasks, extracted) = session_facts(&policy, &envelope);
-    let (discards, singleton) = destructive_call_facts(&envelope);
-    let dispatch = dispatch_facts(&envelope);
+    let (discards, singleton, unread_history, dispatch) = call_facts(&envelope);
     let facts = hook::Facts {
         singleton: &singleton,
         discards: &discards,
+        unread_history: &unread_history,
         receipts: &receipts,
         keys: &keys,
         stop: &stop,
@@ -17517,6 +17628,7 @@ fn collect_batch_advice(
     // dropped before a repair can write one describing what it FIXED.
     expire_wiring_record(envelope);
     expire_sightings(envelope, advice);
+    expire_history_reads(envelope);
     repair_startup_rows(envelope, overrides);
     report_container_health(envelope, overrides, advice);
     Ok(())
@@ -17786,6 +17898,32 @@ fn expire_sightings(envelope: &hook::Envelope, advice: &mut Vec<advisory::Advice
         return;
     }
     refusal::forget_sightings(hook_authority_root(), &context);
+}
+
+/// Drop this context's history reads at a `SessionStart` that loses the window
+/// (CLOUD-2144).
+///
+/// **The opposite of sightings on `compact`**, and on purpose: a sighting is
+/// re-delivered into the new window, so it stays marked; a history read is not,
+/// so after a compaction the context no longer holds what it read and owes the
+/// read again before changing the row. `resume` and `fork` carry the window over
+/// and keep the reads.
+//MUTANT compact-keeps-history|s@^        Some("resume" | "fork") => return,$@        Some("resume" | "fork" | "compact") => return,@|a_compaction_drops_the_history_receipt
+fn expire_history_reads(envelope: &hook::Envelope) {
+    if envelope.event != hook::Event::SessionStart {
+        return;
+    }
+    match envelope.start_source.as_deref() {
+        Some("resume" | "fork") => return,
+        _ => {}
+    }
+    let (Some(context), Ok(git_dir)) = (envelope.context(), git::git_dir(hook_authority_root()))
+    else {
+        return;
+    };
+    // Best-effort: a store that cannot be listed leaves stale reads that the
+    // digest still bounds, which is the safe direction for a cleanup to fail.
+    let _ = history::forget_context(&git_dir, &context);
 }
 
 /// Mark every finding a tool's output carries as seen in this context, and cut
@@ -18895,6 +19033,7 @@ fn record_post_tool(
     // records is the only thing `config lint` accepts as admitting a weakening,
     // so it is keyed to a HOST fact rather than to a row a branch could edit.
     record_asked(envelope, harness);
+    record_history_reads(envelope);
     // THE APPROVAL RECEIPT (CLOUD-1978): the owner's answer to a question naming
     // drafted dispatch prompts by digest. Read from the result — what the host
     // recorded from the human — never from the input the caller filled.
@@ -18912,6 +19051,51 @@ fn record_post_tool(
     // Ordered after so a recorder can never be the reason a receipt goes
     // unwritten — the two are independent, and the cheaper one goes first.
     write_records(overrides, envelope);
+}
+
+/// Record this context's read of each row a `--history` call named (CLOUD-2144).
+///
+/// Native rather than a `[[mint]]` row: a mint reads the tool's RESULT, and a
+/// Bash result is free text, while what this records — the context and the
+/// digest of each row's text at `HEAD` — is the engine's to compute. Keyed to the
+/// HEAD text, so a later commit to the row voids the read on its own. A failed
+/// call mints nothing, and neither does one that named a row this config does
+/// not declare.
+fn record_history_reads(envelope: &hook::Envelope) {
+    if envelope.event != hook::Event::PostTool || envelope.result.is_null() {
+        return;
+    }
+    let Some(ids) = hook::history_read_ids(&envelope.command) else {
+        return;
+    };
+    if facts::payload_in(&envelope.result)
+        .unwrap_or_else(|| envelope.result.clone())
+        .pointer("/is_error")
+        .and_then(serde_json::Value::as_bool)
+        == Some(true)
+    {
+        return;
+    }
+    let root = hook_authority_root();
+    let (Some(context), Ok(git_dir)) = (envelope.context(), git::git_dir(root)) else {
+        return;
+    };
+    // The ONE committed authority, at its one location (house style §8): no
+    // directory walk to resolve, so its git path is the constant.
+    let Ok(head) = git::show(root, "HEAD", config::CONFIG_FILE) else {
+        return;
+    };
+    let now = boundary_epoch();
+    for id in ids {
+        let id = if history::owned_text(&head, &id).is_some() {
+            id
+        } else {
+            verdict::normalise_rule_id(&id)
+        };
+        if let Some(owned) = history::owned_text(&head, &id) {
+            let _ = history::record_read(&git_dir, &context, &id, &history::digest(&owned), now);
+        }
+    }
 }
 
 /// The end-of-turn rules that are not a module, ranked (CLOUD-1051).

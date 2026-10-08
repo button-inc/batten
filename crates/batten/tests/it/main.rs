@@ -213,6 +213,7 @@ mod harness_isolation;
 mod harness_wiring;
 mod history_drop;
 mod history_facts;
+mod history_gate;
 mod hk_contract;
 mod hk_evidence;
 mod hk_fix_selection;
