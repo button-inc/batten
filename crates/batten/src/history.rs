@@ -268,7 +268,7 @@ pub fn record_read(
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    std::fs::write(path, format!("{id}\x1f{digest}\x1f{now}\n"))
+    crate::durable::replace(path, format!("{id}\x1f{digest}\x1f{now}\n"))
 }
 
 /// Whether `context` holds a read of `id`'s history at `digest`.

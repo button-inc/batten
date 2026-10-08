@@ -111,6 +111,12 @@ declared_modules := {
 	# before landing. It reaches only `minted` (the receipt directory) and
 	# `durable` (the write); `lib` and `hook` read it, and it reads neither.
 	"dispatch",
+	# `doc` (CLOUD-2143) and `history` (CLOUD-2144) arrived on one branch, and
+	# this rule named both on the gate before landing. `doc` is a class's
+	# vendored what/why/do/dont, read by `verdict` and `refusal`, and reads
+	# nothing in the crate. `history` assembles a rule's history and keeps its
+	# read receipts; `lib` reads it, and it reaches `git`, `receipt` and `durable`.
+	"doc", "history",
 	# `review` arrived with CLOUD-472 and this rule named it an eighth time —
 	# module written, both test tiers green, and nobody had placed it. It is
 	# `symbols`' class exactly: an acquisition module resolving a `Cost::Effect`

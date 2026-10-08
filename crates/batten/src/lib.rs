@@ -9749,7 +9749,18 @@ fn run_land(
             let Some(reference) = land_reference(root, reference.as_deref(), err)? else {
                 return Ok(ExitCode::Internal);
             };
-            run_land_replay(root, &url, &reference, &branch, resolve, *propose, out, err)
+            run_land_replay(
+                root,
+                &url,
+                &reference,
+                &branch,
+                ReplayAsk {
+                    resolve,
+                    propose: *propose,
+                },
+                out,
+                err,
+            )
         }
         // NO REMOTE RESOLVED HERE ANY MORE. The staleness arm asks the FORGE
         // through its conditional endpoint rather than the git remote, so this
@@ -11198,7 +11209,18 @@ fn run_the_step(
         // auto-resolution refusal, reached through the driver rather than a flag.
         // NO PROPOSALS EITHER (CLOUD-1956), for the same reason: nothing unattended
         // is handed a merge to trust.
-        land::Step::Replay => run_land_replay(root, url, reference, branch, &[], false, out, err)?,
+        land::Step::Replay => run_land_replay(
+            root,
+            url,
+            reference,
+            branch,
+            ReplayAsk {
+                resolve: &[],
+                propose: false,
+            },
+            out,
+            err,
+        )?,
         land::Step::Verify => run_land_verify(root, bet, branch, Some(reference), out, err)?,
         land::Step::Lease => run_land_lease(root, branch, out, err)?,
         land::Step::Ready => run_land_ready(root, branch, bet, ledger, out, err)?,
@@ -12170,16 +12192,25 @@ fn run_land_push(root: &Path, url: &str, branch: &str, out: &mut dyn Write) -> R
 }
 
 /// `batten land replay`: advance the base and replay this branch onto it.
+/// How a replay is asked for: the `--resolve` files, and whether to propose
+/// rather than apply. Paired so `run_land_replay` stays inside the argument
+/// bound with both of its output streams.
+#[derive(Clone, Copy)]
+struct ReplayAsk<'a> {
+    resolve: &'a [String],
+    propose: bool,
+}
+
 fn run_land_replay(
     root: &Path,
     url: &str,
     reference: &str,
     branch: &str,
-    resolve: &[String],
-    propose: bool,
+    ask: ReplayAsk<'_>,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
+    let ReplayAsk { resolve, propose } = ask;
     let (replayed, candidates) = if propose {
         land::replay_proposing(root, url, reference, branch, resolve)?
     } else {
@@ -16286,26 +16317,23 @@ fn pinned_for(
 
 /// The per-call facts [`run_hook`] resolves beyond the policy's own: the
 /// destructive pair, the unread history a config write touches, and the
-/// dispatch receipt. One call so `run_hook` stays under its line ceiling.
-#[expect(
-    clippy::type_complexity,
-    reason = "four facts the Facts literal borrows one by one; a struct would only be destructured again"
-)]
-fn call_facts(
-    envelope: &hook::Envelope,
-) -> (
-    facts::Look<Vec<String>>,
-    Option<(String, String)>,
-    facts::Look<Vec<String>>,
-    facts::Look<()>,
-) {
+/// dispatch receipt. One call so `run_hook` stays under its line ceiling, and
+/// a named struct rather than a tuple, so no `type_complexity` escape is owed.
+struct CallFacts {
+    discards: facts::Look<Vec<String>>,
+    singleton: Option<(String, String)>,
+    unread_history: facts::Look<Vec<String>>,
+    dispatch: facts::Look<()>,
+}
+
+fn call_facts(envelope: &hook::Envelope) -> CallFacts {
     let (discards, singleton) = destructive_call_facts(envelope);
-    (
+    CallFacts {
         discards,
         singleton,
-        unread_history(envelope),
-        dispatch_facts(envelope),
-    )
+        unread_history: unread_history(envelope),
+        dispatch: dispatch_facts(envelope),
+    }
 }
 
 /// The rows of the config authority this call's write touches that this
@@ -16705,11 +16733,11 @@ fn run_hook(
     let manifest = manifest_for(&policy, &envelope);
     let pinned = pinned_for(&policy, &envelope);
     let (tasks, extracted) = session_facts(&policy, &envelope);
-    let (discards, singleton, unread_history, dispatch) = call_facts(&envelope);
+    let call = call_facts(&envelope);
     let facts = hook::Facts {
-        singleton: &singleton,
-        discards: &discards,
-        unread_history: &unread_history,
+        singleton: &call.singleton,
+        discards: &call.discards,
+        unread_history: &call.unread_history,
         receipts: &receipts,
         keys: &keys,
         stop: &stop,
@@ -16720,7 +16748,7 @@ fn run_hook(
         pinned: &pinned,
         tasks: &tasks,
         extracted: &extracted,
-        dispatch: &dispatch,
+        dispatch: &call.dispatch,
     };
     // THE DOOR (CLOUD-898). Declared handlers run here, under the contract in
     // `crate::handler`: bounded by the parent, fail-open on anything they break,
@@ -18795,6 +18823,15 @@ fn print_rule_remedies(
     Ok(())
 }
 
+/// Milliseconds since the Unix epoch, saturating; `0` before it.
+fn unix_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| {
+            u64::try_from(since.as_millis()).unwrap_or(u64::MAX)
+        })
+}
+
 /// One remediation-bearing refusal per rule a drained payload carries
 /// (CLOUD-2078), taking each rule's remediation from its first record.
 fn drained_rule_refusals(
@@ -18855,12 +18892,7 @@ fn drain_advisories(
     let seqno = access.format().seqno;
     let mut state = drain::load_wake(&dir, session);
 
-    let now_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |since| {
-            u64::try_from(since.as_millis()).unwrap_or(u64::MAX)
-        });
-
+    let now_ms = unix_millis();
     match drain::decide_wake(&state, &config, now_ms, seqno) {
         drain::Wake::Coalesced => {
             state.coalesce();
