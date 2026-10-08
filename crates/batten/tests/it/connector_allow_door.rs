@@ -358,7 +358,7 @@ fn the_impersonation_detector_is_live_behind_this_row() {
     // stream is `emit_advisory`'s reachability fallback, not an audience.
     let reported = format!("{}{}", answer.out, answer.err);
     assert!(
-        reported.contains("hook.handler connector-allow-guard: wrote a host decision document"),
+        reported.contains("hook.handler.connector-allow-guard impersonated-host"),
         "{reported}"
     );
     // And the refusal it tried to write did NOT become one. Asserted over the

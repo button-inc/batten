@@ -10572,7 +10572,7 @@ fn a_handler_that_refuses_and_says_nothing_allows_rather_than_denying() {
          refusal: {document:?}"
     );
     assert!(
-        document.contains("no reason on stdout or stderr"),
+        document.contains("verdict 'hook answer broken'") && document.contains("exit-2-silent"),
         "and the author is told what their handler did: {document:?}"
     );
 }
@@ -10655,7 +10655,7 @@ fn a_handler_writing_a_host_document_is_reported_and_not_forwarded() {
     let document = common::stdout(&output);
     assert_eq!(output.status.code(), Some(0));
     assert!(
-        document.contains("wrote a host decision document"),
+        document.contains("verdict 'hook answer broken'") && document.contains("impersonated-host"),
         "the violation is named: {document:?}"
     );
     assert!(
@@ -10680,7 +10680,7 @@ fn a_handler_that_hangs_is_killed_at_its_bound_and_the_turn_still_ends() {
     // this line exists only when the parent imposed the bound — which is what an
     // elapsed-time ceiling here used to approximate.
     assert!(
-        common::stdout(&output).contains("hook.handler slow: exceeded 300ms and was killed"),
+        common::stdout(&output).contains("hook.handler.slow timed-out-300ms"),
         "the bound was imposed, and the author is told which handler and by how much: {:?}",
         common::stdout(&output)
     );

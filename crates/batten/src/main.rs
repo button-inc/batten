@@ -64,20 +64,66 @@ fn main() -> ExitCode {
 ///   statement about the invocation, not chatter about it — so `--silent` must
 ///   not empty it.
 /// * An internal failure to *complete* prints its full chain for diagnosis.
+///
+/// The last two render as ONE CLASSED FINDING (CLOUD-2078): `input parse
+/// refused` or the fault's declared class for a usage error, `verb run broken`
+/// with the chain as subjects for an internal one, through the same
+/// projection every other refusal takes. A message's further lines, and a
+/// backtrace `RUST_BACKTRACE` captured, follow the finding as diagnosis.
 fn report(failure: &anyhow::Error, mode: Mode, err: &mut dyn Write) -> ExitCode {
     if let Some(passthrough) = failure.downcast_ref::<batten::Passthrough>() {
         return ExitCode::from(passthrough.byte());
     }
     if let Some(denial) = failure.downcast_ref::<batten::Denial>() {
         let _ = output::verdict(err, &denial.to_string());
-        batten::ExitCode::Violation.into()
-    } else if failure.downcast_ref::<batten::UsageError>().is_some() {
-        let _ = output::error(mode, err, &failure.to_string());
-        batten::ExitCode::Usage.into()
-    } else {
-        let _ = output::error(mode, err, &format!("{failure:?}"));
-        batten::ExitCode::Internal.into()
+        return batten::ExitCode::Violation.into();
     }
+    let code = if failure.downcast_ref::<batten::UsageError>().is_some() {
+        batten::ExitCode::Usage
+    } else {
+        batten::ExitCode::Internal
+    };
+    let mut text = match batten::refusal::of_failure(failure) {
+        Some((refusal, rest)) => {
+            let mut text = refusal.render_finding(batten::refusal::Arm::Full);
+            if !rest.is_empty() {
+                text.push('\n');
+                text.push_str(&rest);
+            }
+            text
+        }
+        None => failure.to_string(),
+    };
+    if failure.backtrace().status() == std::backtrace::BacktraceStatus::Captured {
+        text.push('\n');
+        text.push_str(&failure.backtrace().to_string());
+    }
+    let _ = output::error(mode, err, &text);
+    code.into()
+}
+
+/// Clap's own usage error, as the same classed finding (CLOUD-2078): its first
+/// line is the subject and the usage hint it prints after follows as diagnosis.
+fn report_usage(rendered: &str, mode: Mode, err: &mut dyn Write) {
+    let mut lines = rendered.trim().lines();
+    let head = lines
+        .next()
+        .unwrap_or_default()
+        .trim_start_matches("error: ")
+        .to_owned();
+    let subjects = [batten::verdict::artifact(&head)];
+    let refusal = batten::refusal::Refusal::engine(
+        batten::verdict::Native::UsageRefused,
+        &subjects,
+        batten::refusal::Fix::None,
+    );
+    let mut text = refusal.render_finding(batten::refusal::Arm::Full);
+    let rest: Vec<&str> = lines.collect();
+    if !rest.is_empty() {
+        text.push('\n');
+        text.push_str(rest.join("\n").trim_start_matches('\n'));
+    }
+    let _ = output::error(mode, err, &text);
 }
 
 fn real_main(mode: Mode, err: &mut dyn Write) -> Result<batten::ExitCode> {
@@ -92,12 +138,14 @@ fn real_main(mode: Mode, err: &mut dyn Write) -> Result<batten::ExitCode> {
     let cli = match batten::cli::try_parse() {
         Ok(cli) => cli,
         Err(failure) => {
-            let _ = failure.print();
-            return Ok(if failure.use_stderr() {
-                batten::ExitCode::Usage
-            } else {
-                batten::ExitCode::Success
-            });
+            // `--help` and `--version` are an answer on stdout, untouched; a
+            // usage error is a classed finding like every other refusal.
+            if !failure.use_stderr() {
+                let _ = failure.print();
+                return Ok(batten::ExitCode::Success);
+            }
+            report_usage(&failure.render().to_string(), mode, err);
+            return Ok(batten::ExitCode::Usage);
         }
     };
     // Nothing emits at `Verbose` or above yet — the ladder is the mechanism, and

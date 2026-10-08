@@ -3108,16 +3108,16 @@ pub enum Decision {
     /// reached — which is the one direction this whole surface must be unable to
     /// travel. `Deny`, `Ask` and `Waived` are all left standing.
     ///
-    /// Carries a plain `String` rather than a [`Refusal`], and the asymmetry is the
-    /// point: a `Refusal` exists to name a remedy, and a grant has nothing to
-    /// remedy. What it owes instead is provenance — WHICH committed rule is being
-    /// projected onto WHICH live name — and that is prose its producer writes,
-    /// because only the producer knows. §5's "every refusal names something to
-    /// run" does not reach here, there being no refusal.
+    /// Carries the grant as a classed finding of `call grant now` (CLOUD-2078):
+    /// its provenance — WHICH committed rule or handler granted it — is the
+    /// rule label or a subject, so the reason a host shows is the same grammar
+    /// every other line Batten writes into a context takes. It names no remedy,
+    /// there being nothing to remedy, and its reader is the human the host would
+    /// have prompted, so it renders in full every time.
     ///
     /// Degrades to a plain allow wherever [`Capabilities::preapprove`] is
     /// unreachable, which is silence and is the host's ordinary flow.
-    Preapproved(String),
+    Preapproved(Refusal),
     /// The boundary ran a row's declared repair and it SUCCEEDED (CLOUD-1639).
     ///
     /// **An allow, on [`Decision::Waived`]'s reading and for the same reason**:
@@ -7010,7 +7010,7 @@ pub fn policy_preapproval(
     policy: &Policy,
     envelope: &Envelope,
     facts: &Facts<'_>,
-) -> Option<String> {
+) -> Option<Refusal> {
     if envelope.event != Event::PreTool || policy.bundles.is_empty() {
         return None;
     }
@@ -7019,12 +7019,18 @@ pub fn policy_preapproval(
         if let crate::facts::Look::Is(ids) = crate::policy::preapprove(bundle, &input)
             && let Some(id) = ids.first()
         {
-            return Some(format!(
-                "pre-approved by batten rule `{id}`: a call the committed policy allows (CLOUD-1949)"
-            ));
+            return Some(preapproval_refusal(id));
         }
     }
     None
+}
+
+/// A module's grant as `call grant now`, under the rule id that granted it
+/// (CLOUD-2078): a module finding id `policy explain` resolves.
+//MUTANT preapproval-misclassed|s@^    let class = crate::verdict::Native::CallGrantNow;$@    let class = crate::verdict::Native::CallFixSilent;@|a_preapproval_reason_labels_its_rule_and_verdict
+fn preapproval_refusal(id: &str) -> Refusal {
+    let class = crate::verdict::Native::CallGrantNow;
+    Refusal::declared(id.to_owned(), class, &[], Fix::None)
 }
 
 /// The call's input as a pre-approval rewrites it, or `None` where no module

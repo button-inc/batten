@@ -447,11 +447,17 @@ read before changing a rule.";
 /// spelling, so it collides with none.
 const LEGEND_KEY: &str = "legend";
 
+/// Whether this context's epoch still owes the legend, marking it delivered.
+//MUTANT legend-every-firing|s@^    first_sighting(root, context, LEGEND_KEY, LEGEND)$@    true@|the_first_finding_of_an_epoch_carries_the_legend
+#[must_use]
+pub fn legend_due(root: &Path, context: &str) -> bool {
+    first_sighting(root, context, LEGEND_KEY, LEGEND)
+}
+
 /// `text` with the legend ahead of it if this context has not had it this epoch.
-//MUTANT legend-every-firing|s@^    if first_sighting(root, context, LEGEND_KEY, LEGEND) {$@    if true {@|the_first_finding_of_an_epoch_carries_the_legend
 #[must_use]
 pub fn with_legend(root: &Path, context: &str, text: &str) -> String {
-    if first_sighting(root, context, LEGEND_KEY, LEGEND) {
+    if legend_due(root, context) {
         return format!("{LEGEND}\n{text}");
     }
     text.to_owned()
@@ -535,16 +541,37 @@ fn unquote(text: &str) -> Option<(String, &str)> {
 ///
 /// `None` for a line that does not open with a label, which is every line that
 /// is not a finding.
+///
+/// A CHANNEL PREFIX ending `: ` (`batten: `, `::error:: land: `) is read past
+/// rather than part of the grammar, and a line may carry the class label alone
+/// — an engine refusal with no `[[rule]]` row (CLOUD-2078), which keys under
+/// an empty rule. Only a prefix ending `: ` qualifies, so prose that merely
+/// mentions a rule mid-sentence is never read as a finding.
 #[must_use]
 pub fn parse_finding(line: &str) -> Option<Parsed> {
+    let opening = ["verdict '", "rule '"]
+        .iter()
+        .filter_map(|label| line.find(label))
+        .min()?;
+    let (prefix, line) = line.split_at(opening);
+    if !(prefix.is_empty() || prefix.ends_with(": ")) {
+        return None;
+    }
     let mut rest = line;
     let mut verdict = None;
     if let Some(after) = rest.strip_prefix("verdict ") {
         let (name, tail) = unquote(after)?;
         verdict = Some(name);
-        rest = tail.strip_prefix(' ')?;
+        rest = tail;
     }
-    let (rule, _) = unquote(rest.strip_prefix("rule ")?)?;
+    let rule = match rest
+        .strip_prefix(" rule ")
+        .or_else(|| rest.strip_prefix("rule "))
+    {
+        Some(after) => unquote(after)?.0,
+        None if verdict.is_some() => String::new(),
+        None => return None,
+    };
     let (head, tail) = match line.split_once(" —") {
         Some((head, tail)) => (head, Some(tail)),
         None => (line, None),
@@ -682,14 +709,22 @@ pub(crate) const RULE_HOP_PLACEHOLDER: &str = "batten policy explain '<rule-id>'
 //MUTANT collapsed-row-unlabelled|s@^    if let Some(token) = refusal.verdict() {$@    if let Some(token) = refusal.verdict() \&\& token != refusal.rule() {@|a_collapsed_row_still_labels_rule_and_verdict
 //MUTANT advice-routes-dropped|s@^    for route in routes(refusal) {$@    for route in routes(refusal).into_iter().take(0) {@|a_warn_advisory_carries_its_document_route_on_an_allowed_pre_tool_call
 //MUTANT explain-hop-drops-class|s@^        \&\& class != refusal.rule()$@        \&\& false@|every_line_names_one_explain_hop_for_both_names
-//MUTANT rule-label-dropped|s@^    line.push_str(\&label(Label::Rule, refusal.rule()));$@    line.push_str(refusal.rule());@|every_hook_policy_table_deny_names_its_fix
+//MUTANT rule-label-dropped|s@^        line.push_str(\&label(Label::Rule, refusal.rule()));$@        line.push_str(refusal.rule());@|every_hook_policy_table_deny_names_its_fix
+//MUTANT engine-finding-rule-label|s@^    if !refusal.rule().is_empty() {$@    if true {@|an_engine_finding_carries_no_rule_label
 fn finding_line(refusal: &Refusal, arm: Arm) -> String {
     let mut line = String::new();
     if let Some(token) = refusal.verdict() {
         line.push_str(&label(Label::Verdict, token));
-        line.push(' ');
     }
-    line.push_str(&label(Label::Rule, refusal.rule()));
+    // A RULE-LESS REFUSAL PRINTS NO RULE LABEL (CLOUD-2078): an engine emitter
+    // with no `[[rule]]` row behind it would otherwise name a rule nothing
+    // resolves, and its class is the one name the hop below looks up.
+    if !refusal.rule().is_empty() {
+        if !line.is_empty() {
+            line.push(' ');
+        }
+        line.push_str(&label(Label::Rule, refusal.rule()));
+    }
     if !refusal.subjects.is_empty() {
         line.push_str(" at ");
         line.push_str(&plain(&refusal.subjects));
@@ -701,8 +736,11 @@ fn finding_line(refusal: &Refusal, arm: Arm) -> String {
     // ONE HOP FOR BOTH NAMES (CLOUD-2142): `policy explain` resolves a rule, a
     // class and an engine id alike, so the line names it once, with the class
     // only where it differs from the rule.
-    line.push_str("; run batten policy explain ");
-    line.push_str(&quoted(refusal.rule()));
+    line.push_str("; run batten policy explain");
+    if !refusal.rule().is_empty() {
+        line.push(' ');
+        line.push_str(&quoted(refusal.rule()));
+    }
     if let Some(class) = refusal.verdict()
         && class != refusal.rule()
     {
@@ -780,6 +818,79 @@ fn route_text(refusal: &Refusal, route: &crate::verdict::Route) -> Option<String
         Some(reader) => format!("{text} via {reader}"),
         None => text,
     })
+}
+
+/// A CLI failure as one classed finding (CLOUD-2078), plus the diagnosis lines
+/// that follow it: `None` for a [`crate::error::Passthrough`] (no output of
+/// Batten's own) or a [`crate::error::Denial`] (already a rendered finding).
+///
+/// A [`crate::UsageError`] is its declared class, or `input parse refused`; any
+/// other error is `verb run broken` with its chain as subjects, outermost first.
+/// A finding is ONE line, so each message's first line is the subject and the
+/// rest — a TOML parse caret, a multi-line detail — is returned to print after it.
+//MUTANT usage-failure-misclassed|s@usage.verdict.unwrap_or(crate::verdict::Native::UsageRefused)@usage.verdict.unwrap_or(crate::verdict::Native::RunBroken)@|every_cli_failure_renders_its_verdict_label
+//MUTANT config-fault-class-dropped|s@^        let class = usage.verdict.unwrap_or(crate::verdict::Native::UsageRefused);$@        let class = crate::verdict::Native::UsageRefused;@|every_config_fault_names_its_table_s_declared_class
+#[must_use]
+pub fn of_failure(failure: &anyhow::Error) -> Option<(Refusal, String)> {
+    if failure
+        .downcast_ref::<crate::error::Passthrough>()
+        .is_some()
+        || failure.downcast_ref::<crate::error::Denial>().is_some()
+    {
+        return None;
+    }
+    let split = |text: &str| -> (String, String) {
+        let mut lines = text.lines();
+        let head = lines.next().unwrap_or_default().trim().to_owned();
+        (head, lines.collect::<Vec<_>>().join("\n"))
+    };
+    if let Some(usage) = failure.downcast_ref::<crate::UsageError>() {
+        let class = usage
+            .verdict
+            .unwrap_or(crate::verdict::Native::UsageRefused);
+        let (head, rest) = split(&usage.message);
+        let subjects = [crate::verdict::artifact(&head)];
+        return Some((Refusal::engine(class, &subjects, Fix::None), rest));
+    }
+    let mut subjects = Vec::new();
+    let mut rest = Vec::new();
+    for cause in failure.chain() {
+        let (head, tail) = split(&cause.to_string());
+        subjects.push(crate::verdict::artifact(&head));
+        if !tail.is_empty() {
+            rest.push(tail);
+        }
+    }
+    let refusal = Refusal::engine(crate::verdict::Native::RunBroken, &subjects, Fix::None);
+    Some((refusal, rest.join("\n")))
+}
+
+/// The remediation-bearing finding for a `check` or drain rule (CLOUD-2078):
+/// once per rule, carrying the row's `fix` argv or its `no_fix_reason`.
+///
+/// A rule whose id is also a declared class renders that class; any other rule
+/// is a rule-only line whose definition is its `no_fix_reason`.
+//MUTANT rule-remedy-dropped|s@^        Some(crate::findings::Remediation::Fix(argv)) => Fix::Run(argv.join(" ")),$@        Some(crate::findings::Remediation::Fix(_)) => Fix::None,@|a_check_run_prints_each_rules_remedy_once
+#[must_use]
+pub fn of_rule(
+    rule: &str,
+    registry: &[crate::verdict::DeclaredVerdict],
+    findings: u64,
+    remediation: Option<&crate::findings::Remediation>,
+) -> Refusal {
+    let fix = match remediation {
+        Some(crate::findings::Remediation::Fix(argv)) => Fix::Run(argv.join(" ")),
+        Some(crate::findings::Remediation::NoFix(_)) | None => Fix::None,
+    };
+    let count = crate::verdict::Subject::Count { count: findings };
+    if crate::verdict::resolve(registry, rule).is_some() {
+        return Refusal::from_class(rule, registry, rule, &[count], fix);
+    }
+    let why = match remediation {
+        Some(crate::findings::Remediation::NoFix(why)) => why.as_str(),
+        Some(crate::findings::Remediation::Fix(_)) | None => "",
+    };
+    Refusal::new(rule, why, fix).at(format!("{findings} finding(s)"))
 }
 
 impl Refusal {
@@ -891,6 +1002,23 @@ impl Refusal {
     ) -> Refusal {
         let registry = crate::verdict::vendored();
         Refusal::from_class(rule, &registry, native.id(), subjects, fix)
+    }
+
+    /// One of Batten's own refusals with NO `[[rule]]` row behind it
+    /// (CLOUD-2078): a CLI failure, a Stop rung, a handler's report, a capture
+    /// notice, a failing doctor check, a land stop.
+    ///
+    /// [`Refusal::declared`] with an empty rule, so the line prints the class
+    /// label alone and its one lookup hop names the class. The engine's own
+    /// discriminating id travels in `subjects` instead — a doctor check's name,
+    /// `hook.handler.<id>`, a capture reason.
+    #[must_use]
+    pub fn engine(
+        native: crate::verdict::Native,
+        subjects: &[crate::verdict::Subject],
+        fix: Fix,
+    ) -> Refusal {
+        Refusal::declared(String::new(), native, subjects, fix)
     }
 
     /// The same constructor, over a registry and a token the caller resolved.

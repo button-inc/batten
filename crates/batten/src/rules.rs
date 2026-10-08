@@ -15781,7 +15781,10 @@ mod tests {
             Isolated::Propagate(_)
         ));
         assert!(matches!(
-            isolate(|| Err(crate::error::Denial::raise("refused"))),
+            isolate(|| Err(crate::error::Denial::raise(
+                &crate::refusal::Refusal::new("r", "refused", crate::refusal::Fix::None),
+                crate::refusal::Arm::Full,
+            ))),
             Isolated::Propagate(_)
         ));
     }

@@ -57,6 +57,19 @@ impl Advice {
         }
     }
 
+    /// Text that is ALREADY labelled finding lines, rendered by its producer —
+    /// the drain's payload, whose every line is `rule '<id>' at …` (CLOUD-2078).
+    /// Classed, so no ceiling sheds it.
+    #[must_use]
+    pub fn rendered(tier: AdvisoryTier, text: impl Into<String>) -> Advice {
+        Advice {
+            tier,
+            text: text.into(),
+            finding: None,
+            classed: true,
+        }
+    }
+
     /// One classed entry, rendered through the finding projection at emission.
     #[must_use]
     pub fn finding(tier: AdvisoryTier, refusal: Refusal) -> Advice {

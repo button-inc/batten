@@ -469,7 +469,7 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         Some(Command::Design { command }) => match command {
             DesignCommand::Audit { json } => run_design_audit(json, &overrides, out),
         },
-        Some(Command::Startup { repair, json }) => run_startup(repair, json, &overrides, out),
+        Some(Command::Startup { repair, json }) => run_startup(repair, json, &overrides, out, err),
         Some(Command::Provision { command }) => match command {
             ProvisionCommand::Status { json } => run_provision_status(json, &overrides, out),
             ProvisionCommand::Apply { dry_run } => run_provision_apply(dry_run, &overrides, err),
@@ -1619,6 +1619,7 @@ fn run_startup(
     json: bool,
     overrides: &Overrides,
     out: &mut dyn Write,
+    err: &mut dyn Write,
 ) -> Result<ExitCode> {
     let config = resolve::resolve(Path::new("."), overrides)?;
     let here = Path::new(".");
@@ -1639,6 +1640,11 @@ fn run_startup(
         // could-not-look-as-clean failure the whole table exists to refuse.
         output::lines(out, &outcomes)?;
         writeln!(out, "startup: {} row(s), {failed} failed", outcomes.len())?;
+        let findings: Vec<refusal::Refusal> = outcomes
+            .iter()
+            .filter_map(startup::Outcome::finding)
+            .collect();
+        print_labelled(err, &findings)?;
     }
     // `Usage`, never `Violation` — `doctor`'s reasoning, inherited: a mediating
     // harness reads `2` as a policy denial, and "this container is not what the
@@ -5383,32 +5389,43 @@ fn bot_lane(overrides: &Overrides) -> Result<bot::BotLane> {
 /// proposed.
 fn derive_row(lane: &bot::BotLane, number: &str) -> Result<(bot::Pull, String, String)> {
     let pull = bot::forge::pull(&lane.repo, number)?;
+    // Each refusal is `issue file refused` with what it names as subjects
+    // (CLOUD-2078): the pull request, then why no row can be derived from it.
+    let refused = |why: Vec<verdict::Subject>| -> anyhow::Error {
+        let mut subjects = vec![verdict::artifact(&format!("#{number}"))];
+        subjects.extend(why);
+        let refusal = refusal::Refusal::engine(
+            verdict::Native::IssueFileRefused,
+            &subjects,
+            refusal::Fix::None,
+        );
+        Denial::raise(&refusal, refusal::Arm::Full)
+    };
     if !bot::is_lane_bot(&pull.login, &lane.bots) {
-        return Err(Denial::raise(format!(
-            "pr derive: #{number} was opened by '{}', which is not a bot this lane files for — an \
-             agent's pull request carries its own claim receipt and its own issue",
+        return Err(refused(vec![verdict::artifact(&format!(
+            "author {} is no bot this lane files for",
             pull.login
-        )));
+        ))]));
     }
     let files = bot::forge::files(&lane.repo, number)?;
     let owned = bot::owned(&files, &lane.owned_manifests)?;
     if owned.is_empty() {
         // Pointer-only: the paths, never their contents.
-        return Err(Denial::raise(format!(
-            "pr derive: #{number} touches no manifest this lane owns, so there is no bump to \
-             describe: {} — filing a row here would assert a change nobody proposed",
-            files.join(" ")
-        )));
+        let mut why = vec![verdict::artifact("no owned manifest among")];
+        why.extend(
+            files
+                .iter()
+                .map(|path| verdict::Subject::Path { path: path.clone() }),
+        );
+        return Err(refused(why));
     }
     // READ from the subject rather than chosen: the bot's own config already
     // decided it. A subject with no prefix is a lane defect, and the commit gate
     // would refuse it anyway, so this says so instead of inventing a type.
     let Some(kind) = bot::conventional_type(&pull.title) else {
-        return Err(Denial::raise(format!(
-            "pr derive: #{number}'s subject carries no Conventional type, so the commit gate would \
-             refuse it and it could never land — fix the bot's configured type rather than filing \
-             a row for a commit that cannot merge"
-        )));
+        return Err(refused(vec![verdict::artifact(
+            "subject carries no Conventional type, so the commit gate would refuse it",
+        )]));
     };
     let repo_root = git::repo_root(Path::new("."))?;
     let template = std::fs::read_to_string(repo_root.join(&lane.body_template)).map_err(|err| {
@@ -9644,7 +9661,7 @@ fn run_land(
             let Some(reference) = land_reference(root, reference.as_deref(), err)? else {
                 return Ok(ExitCode::Internal);
             };
-            run_land_replay(root, &url, &reference, &branch, resolve, *propose, out)
+            run_land_replay(root, &url, &reference, &branch, resolve, *propose, out, err)
         }
         // NO REMOTE RESOLVED HERE ANY MORE. The staleness arm asks the FORGE
         // through its conditional endpoint rather than the git remote, so this
@@ -10638,19 +10655,15 @@ fn run_land_laps(run: Laps<'_>, out: &mut dyn Write, err: &mut dyn Write) -> Res
 /// advice — run it again, versus go and read the failure — and printing both
 /// would be the hedge that leaves a reader no better off.
 fn say_the_laps_are_spent(laps: u32, ledger: &land::Ledger, err: &mut dyn Write) -> Result<()> {
-    if ledger.lease_waits > 0 {
-        writeln!(
-            err,
-            "::error:: land: {laps} lap(s) bought no landing, spending {} CI matri(ces); {} of those lost only to another branch holding the landing lease, and spent nothing. A saturated fleet is not a failing branch — run this again.",
-            ledger.spent(),
-            ledger.lease_waits
-        )?;
-        return Ok(());
-    }
-    writeln!(
+    // ONE CLASSED LINE (CLOUD-2078): `lane run spent`, its readings decided in
+    // `land::spent_refusal`.
+    let spent = land::spent_refusal(laps, ledger);
+    output::verdict(
         err,
-        "::error:: land: {laps} lap(s) bought no landing, spending {} CI matri(ces). A conflict, a failed gate or red CI will lose again — read the lap lines above for how each ended. If every lap lost only to contention, running this again commits up to {laps} more.",
-        ledger.spent()
+        &format!(
+            "::error:: land: {}",
+            spent.render_finding(refusal::Arm::Full)
+        ),
     )?;
     Ok(())
 }
@@ -11097,7 +11110,7 @@ fn run_the_step(
         // auto-resolution refusal, reached through the driver rather than a flag.
         // NO PROPOSALS EITHER (CLOUD-1956), for the same reason: nothing unattended
         // is handed a merge to trust.
-        land::Step::Replay => run_land_replay(root, url, reference, branch, &[], false, out)?,
+        land::Step::Replay => run_land_replay(root, url, reference, branch, &[], false, out, err)?,
         land::Step::Verify => run_land_verify(root, bet, branch, Some(reference), out, err)?,
         land::Step::Lease => run_land_lease(root, branch, out, err)?,
         land::Step::Ready => run_land_ready(root, branch, bet, ledger, out, err)?,
@@ -12077,6 +12090,7 @@ fn run_land_replay(
     resolve: &[String],
     propose: bool,
     out: &mut dyn Write,
+    err: &mut dyn Write,
 ) -> Result<ExitCode> {
     let (replayed, candidates) = if propose {
         land::replay_proposing(root, url, reference, branch, resolve)?
@@ -12088,9 +12102,15 @@ fn run_land_replay(
     };
     match replayed {
         land::Replay::Conflicted { commit, paths } => {
-            for line in land::conflict_stop(branch, reference, &commit, &paths) {
-                writeln!(out, "{line}")?;
-            }
+            // ONE CLASSED LINE ON STDERR (CLOUD-2078), annotated for CI.
+            let stop = land::conflict_stop(branch, reference, &commit, &paths);
+            output::verdict(
+                err,
+                &format!(
+                    "::error:: land: {}",
+                    stop.render_finding(refusal::Arm::Full)
+                ),
+            )?;
             for line in land::proposal_lines(reference, &candidates) {
                 writeln!(out, "{line}")?;
             }
@@ -12252,67 +12272,59 @@ fn run_land_verify(
             Ok(ExitCode::Internal)
         }
         land::Verified::Refused { sha, cause } => {
-            writeln!(out, "land: {sha} was refused by the configured gate")?;
-            match cause {
-                // Handled above: it is not a refusal about anything and never
-                // reaches this reader.
-                land::Refusal::Moved => {}
-                // NOT THIS BRANCH'S DOING, so none of the tree advice applies.
-                // The remedy is the consumer's own words from the row that
-                // matched; this engine knows there was a match and nothing about
-                // what to do, which is what keeps the reclaim's name out of it.
-                land::Refusal::Environment { remedy } => {
-                    writeln!(
-                        err,
-                        "::error:: land: the gate died of the environment rather than of this tree — {remedy}"
-                    )?;
-                }
-                // A SUSPICION, NEVER A VERDICT, and the wording is load-bearing.
-                // This row retracted two attributions in one day for treating
-                // "speculative" as the explanation because it was the salient
-                // difference — so it says how to FIND OUT rather than deciding.
-                //
-                // BOTH recoveries, because `rebase --onto` is not the only one
-                // and the cheaper one is available whenever the remote still
-                // holds this branch unborrowed.
-                land::Refusal::Tree => {
-                    if let Some(base) = bet.published() {
-                        writeln!(
-                            err,
-                            "::error:: land: this tree is SPECULATIVE — it carries {} borrowed from {base}, so the failure may not be yours.",
-                            short(base)
-                        )?;
-                        // THE BASE REF IS THE LAP'S AND A HAND-DRIVEN VERIFY HAS
-                        // NONE, so it is `Option` rather than a guess. `batten
-                        // land verify` run alone takes no positional — the lap
-                        // is what knows which trunk this branch is landing onto
-                        // — and naming a default here would print a recovery
-                        // that reaches the wrong ref in any repository whose
-                        // trunk is spelled differently (non-negotiable rule 1).
-                        // The `reset --hard` half needs no base and is offered
-                        // either way.
-                        match reference {
-                            Some(reference) => writeln!(
-                                err,
-                                "  Re-run the gate off the borrowed base: git rebase --onto {reference} {base}, or git reset --hard <this branch's own head>."
-                            )?,
-                            None => writeln!(
-                                err,
-                                "  Re-run the gate off the borrowed base: git rebase --onto <your base> {base}, or git reset --hard <this branch's own head>."
-                            )?,
-                        }
-                        writeln!(
-                            err,
-                            "  If it still fails off the borrowed base, it is yours."
-                        )?;
-                    } else {
-                        writeln!(err, "::error:: land: reproduce and fix locally.")?;
-                    }
-                }
-            }
+            // ONE CLASSED LINE ON STDERR (CLOUD-2078): the head is a subject
+            // of `check run red`, and the cause's advice is its remedy.
+            let refused = verify_refusal(&sha, &cause, bet.published(), reference);
+            output::verdict(
+                err,
+                &format!(
+                    "::error:: land: {}",
+                    refused.render_finding(refusal::Arm::Full)
+                ),
+            )?;
             Ok(ExitCode::Violation)
         }
     }
+}
+
+/// The refused gate as `check run red`, with the cause's own advice as its
+/// remedy (CLOUD-2078).
+///
+/// - **Environment**: not this branch's doing, so none of the tree advice
+///   applies; the remedy is the consumer's own words from the row that matched.
+/// - **Speculative tree**: a SUSPICION, never a verdict, and the wording is
+///   load-bearing. It says how to FIND OUT rather than deciding, with both
+///   recoveries. The base ref is the lap's and a hand-driven verify has none,
+///   so it is `Option` rather than a guess that would reach the wrong ref in a
+///   repository whose trunk is spelled differently (non-negotiable rule 1).
+/// - **Tree**: reproduce and fix locally.
+//MUTANT verify-refusal-misclassed|s@^    let class = verdict::Native::CheckRunRed;$@    let class = verdict::Native::JobRunRed;@|a_refused_gate_renders_its_verdict_with_its_cause
+fn verify_refusal(
+    sha: &str,
+    cause: &land::Refusal,
+    published: Option<&str>,
+    reference: Option<&str>,
+) -> refusal::Refusal {
+    let advice = match (cause, published) {
+        // Handled by the caller: it is not a refusal about anything.
+        (land::Refusal::Moved, _) => String::new(),
+        (land::Refusal::Environment { remedy }, _) => {
+            format!("the gate died of the environment rather than of this tree: {remedy}")
+        }
+        (land::Refusal::Tree, Some(base)) => {
+            let onto = reference.unwrap_or("<your base>");
+            format!(
+                "this tree is SPECULATIVE: it carries {} borrowed from {base}, so the failure \
+                 may not be yours. Re-run the gate off the borrowed base: git rebase --onto \
+                 {onto} {base}, or git reset --hard <this branch's own head>. If it still fails \
+                 off the borrowed base, it is yours.",
+                short(base)
+            )
+        }
+        (land::Refusal::Tree, None) => String::from("reproduce and fix locally."),
+    };
+    let class = verdict::Native::CheckRunRed;
+    refusal::Refusal::engine(class, &[verdict::artifact(sha)], refusal::Fix::Run(advice))
 }
 
 /// The declared `[[verify_environment_pattern]]` rows, or none.
@@ -13392,14 +13404,14 @@ fn say_what_the_wait_saw(
         land::Waited::Red { findings } => {
             // POINTERS, and `Finding` has nowhere to put a log line. The count
             // leads because it is what a reader acts on; the names follow.
-            writeln!(
+            // ONE CLASSED LINE (CLOUD-2078): `job run red`, the head and each
+            // failing check as subjects, the advice below as its remedy.
+            let named: Vec<String> = findings.iter().map(ToString::to_string).collect();
+            let red = land::red_refusal(sha, &named);
+            output::verdict(
                 err,
-                "::error:: land: {} required check(s) failed on {sha}",
-                findings.len()
+                &format!("::error:: land: {}", red.render_finding(refusal::Arm::Full)),
             )?;
-            for finding in findings {
-                writeln!(err, "  {finding}")?;
-            }
             // THE RE-RUN ECONOMY, and it is what `failed_runs`/`rerun_failed`
             // were built for and never reached. `tests/land.bats` splits it in
             // two: *"a run that died before any mise step is re-run, not
@@ -13411,11 +13423,8 @@ fn say_what_the_wait_saw(
             // learn what one already answered.
             //
             // Stated here rather than left silent, because the two functions
-            // exist and a reader finding them uncalled deserves the reason.
-            writeln!(
-                out,
-                "land: reproduce this locally; a rebase clears nothing here, so the lap stops"
-            )?;
+            // exist and a reader finding them uncalled deserves the reason. The
+            // advice rides the refusal above as its remedy.
         }
         land::Waited::Stale { base } => {
             writeln!(
@@ -17489,6 +17498,7 @@ fn record_ripcord(root: &Path, envelope: &hook::Envelope, err: &mut dyn Write) {
 /// function is the hottest in the binary and sits under a line lint, so a third
 /// producer belongs beside the second rather than inline. The ordering is the
 /// ordering below, and each block carries its own argument.
+//MUTANT ladder-one-nudge|s@^    for nudge in stop_nudges(overrides, envelope, raw) {$@    for nudge in stop_nudges(overrides, envelope, raw).into_iter().take(1) {@|every_applicable_stop_rung_speaks_in_rank_order
 fn fill_turn_advice(
     policy: &hook::Policy,
     envelope: &hook::Envelope,
@@ -17497,18 +17507,19 @@ fn fill_turn_advice(
     raw: &str,
     advice: &mut Vec<advisory::Advice>,
 ) {
-    if advice.is_empty() {
-        if let Some(refusal) = hook::stop_advice(policy, envelope, facts) {
-            advice.push(advisory::Advice::finding(
-                severity::AdvisoryTier::Caution,
-                refusal.read_through(&policy.redirects),
-            ));
-        } else if let Some(nudge) = stop_nudges(overrides, envelope, raw) {
-            advice.push(advisory::Advice::new(
-                severity::AdvisoryTier::Caution,
-                nudge,
-            ));
-        }
+    // EVERY APPLICABLE STOP RUNG SPEAKS, IN RANK ORDER (CLOUD-2078). "At most
+    // one nudge" bounded the FULL TEXT, and the projection now bounds that per
+    // context per window; a rung's POINTER rides every Stop it applies to, so
+    // nothing a reader needs is withheld because something else spoke first.
+    if let Some(refusal) = hook::stop_advice(policy, envelope, facts) {
+        push_finding(
+            advice,
+            severity::AdvisoryTier::Caution,
+            refusal.read_through(&policy.redirects),
+        );
+    }
+    for nudge in stop_nudges(overrides, envelope, raw) {
+        push_finding(advice, severity::AdvisoryTier::Caution, nudge);
     }
     // THE WRITE-TIME SIGNAL (CLOUD-1131), and it is the delivery half of the
     // demotion `hook::policy_rules` performs. A `mediated_call` module enabled at
@@ -17527,20 +17538,36 @@ fn fill_turn_advice(
     // line on a call (CLOUD-1470); the key test drops a finding two bundles
     // raised identically (CLOUD-2075).
     for refusal in hook::policy_advice(policy, envelope, facts) {
-        let refusal = refusal.read_through(&policy.redirects);
-        let key = refusal.sighting_key();
-        let seen = advice.iter().any(|entry| {
-            entry
-                .finding
-                .as_ref()
-                .is_some_and(|other| other.sighting_key() == key)
-        });
-        if !seen {
-            advice.push(advisory::Advice::finding(
-                severity::AdvisoryTier::Warning,
-                refusal,
-            ));
-        }
+        push_finding(
+            advice,
+            severity::AdvisoryTier::Warning,
+            refusal.read_through(&policy.redirects),
+        );
+    }
+}
+
+/// Push a finding unless one with the same POINTER is already in the emission
+/// (CLOUD-2078).
+///
+/// The pointer arm, not the sighting key: a rule-less refusal keys on its class
+/// and definition alone, so two handler rungs or two capture reasons of one
+/// class share a key, and a key-equality dedup would drop all but the first —
+/// withholding a pointer. The pointer carries labels, subjects and routes, so
+/// a refusal raised twice is still dropped and two subjects both survive.
+fn push_finding(
+    advice: &mut Vec<advisory::Advice>,
+    tier: severity::AdvisoryTier,
+    refusal: refusal::Refusal,
+) {
+    let pointer = refusal.render_finding(refusal::Arm::Pointer);
+    let seen = advice.iter().any(|entry| {
+        entry
+            .finding
+            .as_ref()
+            .is_some_and(|other| other.render_finding(refusal::Arm::Pointer) == pointer)
+    });
+    if !seen {
+        advice.push(advisory::Advice::finding(tier, refusal));
     }
 }
 
@@ -17852,40 +17879,18 @@ fn report_container_health(
     let rows = resolve::resolve(here, overrides)
         .map(|resolved| startup::evaluate(here, &resolved.startup))
         .unwrap_or_default();
-    let failing: Vec<String> = report
+    // ONE CLASSED FINDING PER FAILING CHECK AND ROW (CLOUD-2078): the
+    // paragraph that used to follow the list is `workspace state broken`'s
+    // class text now, where `batten policy explain` serves it, and its full arm
+    // arrives once per context per window.
+    for finding in report
         .checks
         .iter()
-        .filter(|check| !check.ok)
-        .map(doctor::Check::line)
-        .chain(
-            rows.iter()
-                .filter(|outcome| !outcome.ok)
-                .map(startup::Outcome::line),
-        )
-        .collect();
-    if failing.is_empty() {
-        return;
+        .filter_map(doctor::Check::finding)
+        .chain(rows.iter().filter_map(startup::Outcome::finding))
+    {
+        push_finding(advice, severity::AdvisoryTier::Warning, finding);
     }
-    let mut out = String::from(
-        "container-health: this session's environment does not match what the tree declares\n\n",
-    );
-    for line in &failing {
-        out.push_str("  ");
-        out.push_str(line);
-        out.push('\n');
-    }
-    out.push_str(
-        "\n`batten doctor` reports the engine's own checks and `batten startup` this\n\
-         repository's declared `[[startup]]` rows; `-J` is the data channel for both. Each\n\
-         line above names what failed and the subjects it failed over, and a row's meaning\n\
-         is its `gloss` in `batten.toml`.\n\n\
-         A gate whose program cannot be reached decides NOTHING while the config reads as\n\
-         if it does, so treat this as work before the work rather than as background noise.\n\
-         Every declared repair has already run this session; what is listed is what it did\n\
-         not fix. `batten startup --repair` runs them again by hand.\n\n\
-         Reported at session start only, and only when something is wrong.\n",
-    );
-    advice.push(advisory::Advice::new(severity::AdvisoryTier::Warning, out));
 }
 
 /// Drop the at-load wiring record at the one moment it stops being true
@@ -18076,18 +18081,14 @@ fn dispatch_handlers(
     // answered" is a property of what is being said and the boundary has only
     // the string. A handler's advice is `Advisory`; a contract violation is
     // `Warning`, because it is a statement that a declared invariant is broken.
-    advice.extend(
-        dispatched
-            .advice()
-            .into_iter()
-            .map(|text| advisory::Advice::new(severity::AdvisoryTier::Advisory, text)),
-    );
-    advice.extend(
-        dispatched
-            .violations()
-            .into_iter()
-            .map(|text| advisory::Advice::new(severity::AdvisoryTier::Warning, text)),
-    );
+    // Each is a classed finding (CLOUD-2078), so its full text is delivered
+    // once per context per window and its pointer on every firing.
+    for report in dispatched.advice() {
+        push_finding(advice, severity::AdvisoryTier::Advisory, report);
+    }
+    for broken in dispatched.violations() {
+        push_finding(advice, severity::AdvisoryTier::Warning, broken);
+    }
     // A REFUSAL IS DEMOTED TO ADVICE ON A MOMENT THAT CANNOT CARRY ONE, and this
     // is the door's own loophole rather than a hypothetical. CLOUD-889 made
     // `adjudicate` structurally unable to refuse at `Stop` — that is what ended
@@ -18118,8 +18119,14 @@ fn dispatch_handlers(
         // across the two functions that can each enforce one is what keeps either
         // from being a comment.
         if let Some((id, reason)) = dispatched.preapproval() {
-            return Some(hook::Decision::Preapproved(format!(
-                "hook.handler.{id}: {reason}"
+            // `call grant now`, the row and its reason as subjects (CLOUD-2078).
+            return Some(hook::Decision::Preapproved(refusal::Refusal::engine(
+                verdict::Native::CallGrantNow,
+                &[
+                    verdict::artifact(&format!("hook.handler.{id}")),
+                    verdict::artifact(reason.trim_end()),
+                ],
+                refusal::Fix::None,
             )));
         }
         return None;
@@ -18667,6 +18674,55 @@ fn prospective_for(policy: &hook::Policy, envelope: &hook::Envelope) -> hook::Pr
     }
 }
 
+/// Each rule's remedy once, on stderr, after the finding lines (CLOUD-2078).
+///
+/// The stdout lines and `-J` are untouched — they are the data channel. What
+/// this adds is the remedy those pointer lines cannot carry: one classed
+/// finding per distinct rule, through the one projection, with the owning
+/// row's `fix` or `no_fix_reason`.
+fn print_rule_remedies(
+    err: &mut dyn Write,
+    found: &[rules::Finding],
+    declared: &[rules::Rule],
+    registry: &[verdict::DeclaredVerdict],
+) -> Result<()> {
+    let mut counts: std::collections::BTreeMap<&str, u64> = std::collections::BTreeMap::new();
+    for finding in found {
+        *counts
+            .entry(finding.owner.as_deref().unwrap_or(&finding.rule))
+            .or_insert(0) += 1;
+    }
+    for (rule, count) in counts {
+        let remediation = declared
+            .iter()
+            .find(|row| row.id == rule)
+            .and_then(rules::Rule::remediation);
+        let remedy = refusal::of_rule(rule, registry, count, remediation.as_ref());
+        output::verdict(err, &remedy.render_finding(refusal::Arm::Full))?;
+    }
+    Ok(())
+}
+
+/// One remediation-bearing refusal per rule a drained payload carries
+/// (CLOUD-2078), taking each rule's remediation from its first record.
+fn drained_rule_refusals(
+    records: &[findings::FindingRecord],
+    rules: &std::collections::BTreeMap<String, u64>,
+    registry: &[verdict::DeclaredVerdict],
+) -> Vec<refusal::Refusal> {
+    rules
+        .iter()
+        .map(|(rule, count)| {
+            let remediation = records
+                .iter()
+                .find(|record| &record.rule == rule)
+                .and_then(|record| record.remediation.as_ref());
+            refusal::of_rule(rule, registry, *count, remediation)
+        })
+        .collect()
+}
+
+//MUTANT drain-remedy-dropped|s@^        for rule_refusal in drained_rule_refusals(\&records, \&drained.rules, registry) {$@        for rule_refusal in drained_rule_refusals(\&records, \&drained.rules, registry).into_iter().take(0) {@|a_drained_rules_remedy_is_full_once_then_a_pointer
 fn drain_advisories(
     envelope: &hook::Envelope,
     overrides: &Overrides,
@@ -18700,7 +18756,9 @@ fn drain_advisories(
         return Ok(());
     };
 
-    let config = resolve::resolve(here, overrides)?.drain.unwrap_or_default();
+    let resolved = resolve::resolve(here, overrides)?;
+    let config = resolved.drain.clone().unwrap_or_default();
+    let registry = resolved.verdicts.as_slice();
     let access = journal::open(&dir)?;
     let seqno = access.format().seqno;
     let mut state = drain::load_wake(&dir, session);
@@ -18806,13 +18864,20 @@ fn drain_advisories(
     // reporting them where the agent could not read them. `emit_advisory` puts
     // both outcomes on the surface the host actually delivers, and keeps stderr
     // for the hosts that declare no channel, where it is still the operator's.
+    // EACH RULE'S REMEDY RIDES THE PAYLOAD AS ONE CLASSED FINDING (CLOUD-2078):
+    // full once per context per window, its pointer on every payload after. An
+    // `unchanged` repeat pushes none — it points at a payload the context still
+    // holds, and that payload's rule refusals were pushed with it.
     if emitted {
-        advice.push(advisory::Advice::new(
+        advice.push(advisory::Advice::rendered(
             severity::AdvisoryTier::Advisory,
             drain::render(&drained),
         ));
+        for rule_refusal in drained_rule_refusals(&records, &drained.rules, registry) {
+            push_finding(advice, severity::AdvisoryTier::Advisory, rule_refusal);
+        }
     } else if repeat && !drained.lines.is_empty() {
-        advice.push(advisory::Advice::new(
+        advice.push(advisory::Advice::rendered(
             severity::AdvisoryTier::Advisory,
             drain::UNCHANGED,
         ));
@@ -19172,9 +19237,13 @@ fn record_history_reads(envelope: &hook::Envelope) {
 /// end-of-turn check on the path that must stay free — committing and pushing to
 /// a draft is what survives a container reclaim. So every unreadable path,
 /// missing program and unresolvable branch yields `None`.
-fn stop_nudges(overrides: &Overrides, envelope: &hook::Envelope, raw: &str) -> Option<String> {
+fn stop_nudges(
+    overrides: &Overrides,
+    envelope: &hook::Envelope,
+    raw: &str,
+) -> Vec<refusal::Refusal> {
     if envelope.event != hook::Event::Stop {
-        return None;
+        return Vec::new();
     }
     // EVERY DECLARED STOP ROW RUNS ON EVERY STOP, BEFORE ANY RULE CAN RETURN
     // (review of #962). `dispatch_handlers` stopped running them at `Stop` so their
@@ -19185,10 +19254,10 @@ fn stop_nudges(overrides: &Overrides, envelope: &hook::Envelope, raw: &str) -> O
     // run is unconditional; only WHICH ONE THING IS SAID stays the ladder's call.
     let handler_said = stop_handler_advice(overrides, raw);
     if envelope.stop_active == Some(true) {
-        return None;
+        return Vec::new();
     }
     if std::env::var_os(STOP_GUARD_BYPASS).is_some() {
-        return None;
+        return Vec::new();
     }
     // NO ADVISORY WHOSE REMEDY THIS TURN MAY NOT PERFORM (CLOUD-895).
     //
@@ -19269,15 +19338,13 @@ fn stop_nudges(overrides: &Overrides, envelope: &hook::Envelope, raw: &str) -> O
     // "at most one nudge" budget that made the ordering load-bearing rather than
     // cosmetic.
     if !envelope.writes_available() {
-        return None;
+        return Vec::new();
     }
+    let mut rungs = Vec::new();
     if std::env::var_os(UNLANDED_BYPASS).is_none()
         && let Some(pointer) = unlanded_pointer()
     {
-        return Some(format!(
-            "{pointer}\nThis turn declared a stopping point and the work is not on the landing \
-             target. Land it, or say what blocks it."
-        ));
+        rungs.push(pointer);
     }
     // RULE 2 — the consumer's declared `[[hook.handler]] on = "stop"` rows, in
     // declaration order, the first that speaks. This is where a program reading
@@ -19287,22 +19354,31 @@ fn stop_nudges(overrides: &Overrides, envelope: &hook::Envelope, raw: &str) -> O
     // rule 1's plainest violation. The door's bound applies, and a row that
     // breaks its contract — times out, cannot spawn — is silence, as every
     // failure on this routine is.
-    if let Some(said) = handler_said {
-        return Some(said);
-    }
+    rungs.extend(handler_said);
     // RULE 3 — a row this branch filed names a file this branch is changing. The
     // same predicate `land` decides on, run here so the punt surfaces at the end
     // of the turn that created it rather than when a runner is about to be spent.
     //
-    // ONCE PER ROW PER BRANCH. A Stop hook sees no PR body, so repeating one
-    // pointer every turn for the rest of a session is exactly how this channel
-    // dies. The turn the overlap first appears is the one that can still act
-    // cheaply, which is the whole reason for running it ahead of `land`.
-    if let Some(fresh) = filed_here_pointers(overrides, root, Suppression::PerRow) {
-        return Some(format!(
-            "{fresh}\nA row this branch filed names a file this branch is changing. Finish it \
-             now while the file is open, or make sure the PR body closes it when you land."
-        ));
+    // ITS POINTER ON EVERY STOP IT APPLIES TO (CLOUD-2078): the full text is
+    // bounded once per context per window by the projection, which is what the
+    // per-row store used to approximate by withholding the pointer too.
+    let filed = filed_here_rows(overrides, root);
+    if let Some((flagged, _)) = &filed
+        && !flagged.is_empty()
+    {
+        let subjects: Vec<verdict::Subject> = flagged
+            .iter()
+            .map(|path| verdict::Subject::Path { path: path.clone() })
+            .collect();
+        if let Ok(config) = resolve::resolve(root, overrides) {
+            rungs.push(refusal::Refusal::from_class(
+                FILED_OVER_OWN_DIFF,
+                &config.verdicts,
+                FILED_OVER_OWN_DIFF,
+                &subjects,
+                refusal::Fix::None,
+            ));
+        }
     }
     // RULE 4 was the completion reading and is now RULE 1, at the top of this
     // function (CLOUD-1372). Its hatch is unchanged and still shared with the
@@ -19314,16 +19390,22 @@ fn stop_nudges(overrides: &Overrides, envelope: &hook::Envelope, raw: &str) -> O
     // asks the broad one no predicate scores (non-negotiable rule 3): here is the
     // whole set, say for each that it is genuinely independent work.
     //
-    // SUPPRESSED ON THE SET, NOT PER ROW, and that is the whole difference. A
-    // per-row receipt would show a partial list, and a checklist with rows hidden
-    // is not a checklist. File another row and the whole list is asked again,
-    // because the question is about the set.
-    let rows = filed_here_pointers(overrides, root, Suppression::PerSet)?;
-    Some(format!(
-        "{rows}\nEvery row above was spun off while this branch was open. For each, by number: \
-         is it genuinely independent work, or a punt you could close here? Close the punts; \
-         leave a reason for the rest."
-    ))
+    // THE WHOLE SET, every Stop it applies to: a checklist with rows hidden is
+    // not a checklist, and the projection bounds its full text per window.
+    if let Some((_, filed_rows)) = filed
+        && !filed_rows.is_empty()
+    {
+        let subjects: Vec<verdict::Subject> = filed_rows
+            .iter()
+            .map(|row| verdict::artifact(&format!("{row} filed")))
+            .collect();
+        rungs.push(refusal::Refusal::engine(
+            verdict::Native::IssueListUnclear,
+            &subjects,
+            refusal::Fix::None,
+        ));
+    }
+    rungs
 }
 
 /// Point the committed transcript path at the session the host just named.
@@ -19601,7 +19683,8 @@ fn record_state(overrides: &Overrides) {
 /// `skipped` and `errored` are the engine's words for "did not look", and a
 /// question asked on the strength of a scan that never ran is the false green in
 /// nudge form. Only an observed, positive count is a finding.
-fn unlanded_pointer() -> Option<String> {
+//MUTANT unlanded-pointer-suppressed|s@^    let marked = already_marked(seen.as_deref(), \&key);$@    let marked = already_marked(seen.as_deref(), \&key); if marked { return None; }@|a_later_stop_on_one_claim_still_carries_the_unlanded_pointer
+fn unlanded_pointer() -> Option<refusal::Refusal> {
     let branch = git::current_branch(Path::new(".")).ok().flatten()?;
     let context = format!("refs/heads/{branch}");
     // THE REPO ROOT, NOT THE HOOK'S ANCHOR, and the two are not the same object.
@@ -19645,26 +19728,38 @@ fn unlanded_pointer() -> Option<String> {
     //
     // The receipt still lives beside the lease and board-write records in the git
     // dir, out of the tree, so a nudge never dirties the worktree it asks about.
+    //
+    // THE POINTER RIDES EVERY APPLICABLE STOP (CLOUD-2078); the marker is still
+    // appended once per claim, because it is also `turn mint ahead`'s
+    // `while_marker` and that row reads it as "this claim was told".
     let key = identity.fingerprint.to_hex();
     let seen = git::git_dir(Path::new(".")).ok().map(|dir| {
         dir.join("batten-receipts")
             .join(format!("unlanded-nudged.{}", branch.replace('/', "-")))
     });
-    if let Some(path) = seen.as_deref() {
-        if std::fs::read_to_string(path).is_ok_and(|seen| seen.lines().any(|line| line == key)) {
-            return None;
-        }
+    let marked = already_marked(seen.as_deref(), &key);
+    if !marked && let Some(path) = seen.as_deref() {
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        // Best-effort: an unwritable receipt costs a repeated nudge, never the
-        // nudge itself, so it must not swallow the finding.
+        // Best-effort: an unwritable receipt costs nothing the pointer needs.
         let _ = crate::durable::append(path, &key);
     }
-    Some(format!(
-        "unlanded: {count} commit(s) not on the landing target ({})",
-        completion::RULE_ID
+    Some(refusal::Refusal::engine(
+        verdict::Native::CommitShipMissing,
+        &[
+            verdict::artifact(completion::RULE_ID),
+            verdict::Subject::Count { count },
+        ],
+        refusal::Fix::None,
     ))
+}
+
+/// Whether the claim `key` is already recorded in the marker at `seen`.
+fn already_marked(seen: Option<&Path>, key: &str) -> bool {
+    seen.is_some_and(|path| {
+        std::fs::read_to_string(path).is_ok_and(|text| text.lines().any(|line| line == key))
+    })
 }
 
 /// What the `filed-here` row says about this branch, suppressed and rendered.
@@ -19687,11 +19782,14 @@ fn unlanded_pointer() -> Option<String> {
 /// That is the half an agent must act on — *finish it now while the file is
 /// open* — and the id is one board read away. Recorded rather than glossed,
 /// because it is a real narrowing of what the nudge says.
-fn filed_here_pointers(
-    overrides: &Overrides,
-    root: &Path,
-    suppression: Suppression,
-) -> Option<String> {
+///
+/// # Nothing is suppressed here any more (CLOUD-2078)
+///
+/// The per-row and per-set receipt stores withheld the POINTER after the first
+/// Stop, to bound a channel that repeated full text. The projection bounds the
+/// full text once per context per window now, and a pointer withheld is a
+/// pointer the reader needed, so both stores and their writes are gone.
+fn filed_here_rows(overrides: &Overrides, root: &Path) -> Option<(Vec<String>, Vec<String>)> {
     let config = resolve::resolve(root, overrides).ok()?;
     let only = [FILED_HERE_ROW.to_owned()];
     let (selected, _checks) = select_rules(&config.rules, &only).ok()?;
@@ -19727,103 +19825,42 @@ fn filed_here_pointers(
         },
     )
     .ok()?;
-    let flagged: std::collections::BTreeSet<String> = scan
+    let flagged: Vec<String> = scan
         .findings
         .iter()
         .filter(|finding| finding.rule == FILED_OVER_OWN_DIFF)
         .map(|finding| finding.path.clone())
+        .collect::<std::collections::BTreeSet<String>>()
+        .into_iter()
         .collect();
     let git_dir = git::git_dir(root).ok()?;
     let branch = git::current_branch(root).ok()??;
-    let lines: Vec<String> = match suppression {
-        Suppression::PerRow => flagged.into_iter().collect(),
-        Suppression::PerSet => {
-            // EVERY ROW, MARKED — the checklist's whole question. A row whose
-            // named paths intersect the diff is marked so the reader can see
-            // which ones rule 3 already asked about; the rest are `filed`, and
-            // the judgement about all of them is the agent's.
-            // The same partition the writer used (CLOUD-1300): this checklist is
-            // about rows THIS attempt filed, so a previous attempt's rows on a
-            // reused branch name are not its business either.
-            let claim = claim::claimed_token(&git_dir.join("batten-receipts"), &branch);
-            let record = recorder::record_path(&git_dir, BOARD_RECORD, &branch, claim.as_deref());
-            let text = std::fs::read_to_string(record).ok()?;
-            let mut seen = std::collections::BTreeSet::new();
+    // EVERY ROW THIS ATTEMPT FILED — the checklist's whole question. The same
+    // partition the writer used (CLOUD-1300): a previous attempt's rows on a
+    // reused branch name are not this checklist's business.
+    let claim = claim::claimed_token(&git_dir.join("batten-receipts"), &branch);
+    let record = recorder::record_path(&git_dir, BOARD_RECORD, &branch, claim.as_deref());
+    let mut seen = std::collections::BTreeSet::new();
+    let filed: Vec<String> = std::fs::read_to_string(record)
+        .map(|text| {
             text.lines()
                 .filter_map(|line| {
                     let mut columns = line.split(' ');
                     (columns.next()? == "issue").then(|| columns.next())?
                 })
                 .filter(|id| seen.insert((*id).to_owned()))
-                .map(|id| format!("{id} filed"))
+                .map(str::to_owned)
                 .collect()
-        }
-    };
-    if lines.is_empty() {
-        return None;
-    }
-    // THE SUPPRESSION, and its unit is what the two modes disagree about. Rule 3
-    // stores one line per row, so a second row is asked about and the first is
-    // not; rule 5 stores the whole set as one key, so the list is asked again in
-    // full the moment it changes and never partially.
-    let (store, keys) = match suppression {
-        Suppression::PerRow => (
-            git_dir
-                .join("batten-receipts")
-                .join(format!("filed-here-nudged.{}", branch.replace('/', "-"))),
-            lines.clone(),
-        ),
-        Suppression::PerSet => (
-            git_dir
-                .join("batten-receipts")
-                .join(format!("filed-set-nudged.{}", branch.replace('/', "-"))),
-            vec![lines.join(" ")],
-        ),
-    };
-    let already: std::collections::BTreeSet<String> = std::fs::read_to_string(&store)
-        .map(|text| text.lines().map(str::to_owned).collect())
+        })
         .unwrap_or_default();
-    let fresh: Vec<String> = keys
-        .iter()
-        .filter(|key| !already.contains(*key))
-        .cloned()
-        .collect();
-    if fresh.is_empty() {
-        return None;
-    }
-    // Written before the nudge is returned, so a turn that is interrupted after
-    // being told still counts as told. Silent on failure, like everything here.
-    if let Some(parent) = store.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    if !fresh.is_empty() {
-        let text = fresh.iter().fold(String::new(), |mut text, key| {
-            text.push_str(key);
-            text.push('\n');
-            text
-        });
-        let _ = crate::durable::append(&store, &text);
-    }
-    Some(match suppression {
-        Suppression::PerRow => fresh.join("\n"),
-        Suppression::PerSet => lines.join("\n"),
-    })
+    Some((flagged, filed))
 }
 
-/// The row the two nudge modes read, and the predicate whose findings rule 3 uses.
+/// The row the filed-here rungs read, and the predicate whose findings rung 3 uses.
 const FILED_HERE_ROW: &str = "filed-here";
 const FILED_OVER_OWN_DIFF: &str = "issue file same";
 /// The record the checklist enumerates.
 const BOARD_RECORD: &str = "board-writes";
-
-/// Whether a filed-row pointer is suppressed per row or per set.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Suppression {
-    /// Rule 3: one nudge per row per branch.
-    PerRow,
-    /// Rule 5: one nudge per SET per branch.
-    PerSet,
-}
 
 /// The first thing a declared `on = "stop"` handler said, or `None`.
 ///
@@ -19831,19 +19868,31 @@ enum Suppression {
 /// carries no verdict (`Event::carries_a_verdict`), so a refusal is demoted to
 /// the channel the dispatch door demotes it to on every such moment. A broken
 /// contract says nothing — this runs where silence is the failure mode.
-fn stop_handler_advice(overrides: &Overrides, raw: &str) -> Option<String> {
+fn stop_handler_advice(overrides: &Overrides, raw: &str) -> Vec<refusal::Refusal> {
     // The same reader dispatch uses, so an unreadable declaration is silence
     // here too rather than a fault on the path that must stay free.
-    let handlers = hook_table(overrides)?.handlers;
-    let dispatched = handler::dispatch(&handlers, hook::Event::Stop, "", None, raw);
-    dispatched.ran.iter().find_map(|ran| match &ran.outcome {
-        handler::Outcome::Advise(text)
-        | handler::Outcome::Reported(text)
-        | handler::Outcome::Deny(text) => {
-            Some(format!("hook.handler.{}: {}", ran.id, text.trim_end()))
-        }
-        _ => None,
-    })
+    let Some(table) = hook_table(overrides) else {
+        return Vec::new();
+    };
+    let dispatched = handler::dispatch(&table.handlers, hook::Event::Stop, "", None, raw);
+    // EVERY ROW THAT SPOKE, classed (CLOUD-2078): a report as `hook report now`,
+    // a refusal demoted at `Stop` as the class the dispatch door demotes it to.
+    dispatched
+        .ran
+        .iter()
+        .filter_map(|ran| match &ran.outcome {
+            handler::Outcome::Advise(text) | handler::Outcome::Reported(text) => {
+                Some(handler::report_refusal(&ran.id, text.trim_end()))
+            }
+            handler::Outcome::Deny(text) => Some(refusal::Refusal::declared(
+                format!("hook.handler.{}", ran.id),
+                verdict::Native::HandlerDenied,
+                &[verdict::artifact(text.trim_end())],
+                refusal::Fix::None,
+            )),
+            _ => None,
+        })
+        .collect()
 }
 
 /// Append every declared record this result earns (CLOUD-1051).
@@ -20296,14 +20345,9 @@ fn capture_response(
     harness: hook::Harness,
     advice: &mut Vec<advisory::Advice>,
 ) {
-    let mut note = |reason: &str| {
-        // Pointer-only: the reason id, never a path and never a byte count that
-        // could fingerprint the content. The same id reaches `doctor`.
-        advice.push(advisory::Advice::new(
-            severity::AdvisoryTier::Advisory,
-            format!("hook.capture.response: {reason}"),
-        ));
-    };
+    // Pointer-only: the reason id, never a path and never a byte count that
+    // could fingerprint the content. The same id reaches `doctor`.
+    let mut note = |reason: &str| push_capture_notice(advice, reason);
     // NO FALLBACK TO THE CWD, which is what makes the doc above true: resolving
     // to wherever the agent happens to be standing would mint a state root there
     // on every post-tool call. The anchor rather than `.` for the second half of
@@ -20395,10 +20439,7 @@ fn record_absent_response(
     // and mints no blob, so nothing else would ever bring the log inside its
     // record bound — and `next_order` scans that log on every later call.
     if capture::evict_to_budget(&root, capture_budget().as_ref()).is_err() {
-        advice.push(advisory::Advice::new(
-            severity::AdvisoryTier::Advisory,
-            format!("hook.capture.response: {}", capture::STORE_UNWRITABLE),
-        ));
+        push_capture_notice(advice, capture::STORE_UNWRITABLE);
     }
 }
 
@@ -20430,11 +20471,26 @@ fn record_absence(
         absent: Some(reason.to_owned()),
     };
     if capture::record_call(root, &row).is_err() {
-        advice.push(advisory::Advice::new(
-            severity::AdvisoryTier::Advisory,
-            format!("hook.capture.response: {}", capture::STORE_UNWRITABLE),
-        ));
+        push_capture_notice(advice, capture::STORE_UNWRITABLE);
     }
+}
+
+/// A capture notice as the class it belongs to (CLOUD-2078): the reason id is
+/// its one subject.
+//MUTANT capture-notice-misclassed|s@^    let class = verdict::Native::OutputWriteMissing;$@    let class = verdict::Native::RunBroken;@|a_capture_notice_is_full_once_then_a_pointer
+fn capture_notice(reason: &str) -> refusal::Refusal {
+    let class = verdict::Native::OutputWriteMissing;
+    refusal::Refusal::engine(class, &[verdict::artifact(reason)], refusal::Fix::None)
+}
+
+/// The one push site for a capture notice, classed.
+//MUTANT capture-notice-free-text|s@^    push_finding(advice, severity::AdvisoryTier::Advisory, capture_notice(reason));$@    advice.push(advisory::Advice::new(severity::AdvisoryTier::Advisory, format!("hook.capture.response: {reason}")));@|every_advisory_push_carries_a_class
+fn push_capture_notice(advice: &mut Vec<advisory::Advice>, reason: &str) {
+    push_finding(
+        advice,
+        severity::AdvisoryTier::Advisory,
+        capture_notice(reason),
+    );
 }
 
 /// The `[capture]` bound, or `None` when the authority cannot be read.
@@ -20911,13 +20967,21 @@ fn render(
             let arm = arm_for(hook::HookSource::Harness, envelope, &refusal);
             // A deny always reaches the model (its body or its stderr), so it
             // earns the epoch's legend unconditionally (CLOUD-2145).
-            let reason = legend_for(envelope, refusal.render_finding(arm));
+            let legend = envelope
+                .context()
+                .is_some_and(|context| refusal::legend_due(hook_authority_root(), &context))
+                .then_some(refusal::LEGEND);
+            let rendered = refusal.render_finding(arm);
+            let reason = match legend {
+                Some(legend) => format!("{legend}\n{rendered}"),
+                None => rendered,
+            };
             match hook::encode_deny(harness, &envelope.raw_event, &reason)? {
                 Some(body) => {
                     writeln!(out, "{body}")?;
                     Ok(ExitCode::Success)
                 }
-                None => Err(Denial::raise(reason)),
+                None => Err(Denial::raise_opened(&refusal, arm, legend)),
             }
         }
         // The escalation degradation (CLOUD-45 §7(b)), decided in exactly one
@@ -20945,7 +21009,7 @@ fn render(
                     writeln!(out, "{body}")?;
                     Ok(ExitCode::Success)
                 }
-                None => Err(Denial::raise(asked)),
+                None => Err(Denial::raise(&refusal, refusal::Arm::Full)),
             }
         }
         // The pre-approval, and it is the mirror image of the arm above it. An
@@ -20967,7 +21031,10 @@ fn render(
         // THE CALL'S ADVICE RIDES IN THE SAME DOCUMENT (CLOUD-1949), and where the
         // grant cannot be spoken it still goes out as the advisory it would have
         // been on a plain allow — a nudge is never the price of a pre-approval.
-        hook::Decision::Preapproved(reason) => {
+        hook::Decision::Preapproved(grant) => {
+            // FULL ON EVERY FIRING (CLOUD-2078): its reader is the human the
+            // host would have prompted, as for `Ask`, so there is no store.
+            let reason = grant.render_finding(refusal::Arm::Full);
             match hook::encode_preapproval(
                 harness,
                 &envelope.raw_event,
@@ -23283,6 +23350,7 @@ fn run_rules(
         // than inventing a line number it does not have. Both of those are
         // `Finding`'s own renderer now, not this site's.
         output::lines(out, &findings)?;
+        print_rule_remedies(err, &findings, &config.rules, &config.verdicts)?;
     }
     report_dispositions(mode, err, &scan)?;
     report_clean_run(json, mode, err, &findings, &config, &scan)?;
@@ -24024,7 +24092,7 @@ fn run_doctor(
 ) -> Result<ExitCode> {
     match *command {
         cli::DoctorCommand::Forge => run_doctor_forge(overrides, out),
-        cli::DoctorCommand::Diagnose { json } => run_diagnose(json, out),
+        cli::DoctorCommand::Diagnose { json } => run_diagnose(json, out, err),
         cli::DoctorCommand::Hooks { json } => run_doctor_hooks(json, out),
         cli::DoctorCommand::Mediator { json } => run_doctor_mediator(json, out),
         cli::DoctorCommand::Session { json } => run_doctor_session(json, out),
@@ -24419,7 +24487,7 @@ fn run_doctor_mediator(json: bool, out: &mut dyn Write) -> Result<ExitCode> {
     Ok(report.code())
 }
 
-fn run_diagnose(json: bool, out: &mut dyn Write) -> Result<ExitCode> {
+fn run_diagnose(json: bool, out: &mut dyn Write, err: &mut dyn Write) -> Result<ExitCode> {
     let report = doctor::diagnose(Path::new("."));
     if json {
         // A data channel emits its document unconditionally, including for a
@@ -24433,8 +24501,31 @@ fn run_diagnose(json: bool, out: &mut dyn Write) -> Result<ExitCode> {
             "doctor: {} check(s), {failed} failed",
             report.checks.len()
         )?;
+        let findings: Vec<refusal::Refusal> = report
+            .checks
+            .iter()
+            .filter_map(doctor::Check::finding)
+            .collect();
+        print_labelled(err, &findings)?;
     }
     Ok(report.code())
+}
+
+/// The labelled projection of a verb's failing items, on stderr (CLOUD-2078):
+/// the stdout data lines are untouched, and what an agent reads carries the
+/// labels. Full for the first item of each class in the invocation, the
+/// pointer for the rest, so one invocation states a definition once.
+fn print_labelled(err: &mut dyn Write, findings: &[refusal::Refusal]) -> Result<()> {
+    let mut stated = std::collections::BTreeSet::new();
+    for finding in findings {
+        let arm = if stated.insert(finding.sighting_key()) {
+            refusal::Arm::Full
+        } else {
+            refusal::Arm::Pointer
+        };
+        output::verdict(err, &finding.render_finding(arm))?;
+    }
+    Ok(())
 }
 
 /// Is batten wired on every hook surface of every harness (CLOUD-777)?

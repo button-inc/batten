@@ -230,9 +230,10 @@ fn repo_with(name: &str, config: &str) -> std::path::PathBuf {
     Fixture::new(name).config(config).build()
 }
 
-/// The `batten: ` prefix `output::error` writes, then the class, then the prose.
+/// The `batten: ` prefix `output::error` writes, then the class's own label
+/// (CLOUD-2078): a config fault is a classed finding like every other refusal.
 fn refusal_names(stderr: &str, class: &str) -> bool {
-    stderr.contains(&format!("batten: {class}: "))
+    stderr.contains(&format!("batten: verdict '{class}'"))
 }
 
 #[test]

@@ -738,9 +738,14 @@ fn a_compaction_forgets_and_the_next_firing_is_full() {
     );
     let next = delivered_in(&repo, Some("A"), None, command);
     assert!(next.contains(FULL), "the next firing is full: {next}");
+    // THE NEW EPOCH OPENS WITH THE LEGEND, on whichever finding reaches the
+    // context first: a session start that reports its own findings (a fixture
+    // container with programs off `PATH`) carries it, and the firing after it
+    // then does not need to.
+    let started = String::from_utf8_lossy(&compacted.stdout);
     assert!(
-        next.starts_with(batten::refusal::LEGEND),
-        "and opens the new epoch with the legend: {next}"
+        started.contains(batten::refusal::LEGEND) || next.starts_with(batten::refusal::LEGEND),
+        "the new epoch opens with the legend: {started}\n---\n{next}"
     );
 }
 
