@@ -894,6 +894,16 @@ fn pin_mise(command: &mut Command) {
     command
         .env("MISE_TASK_RUN_AUTO_INSTALL", "false")
         .env("MISE_EXEC_AUTO_INSTALL", "false");
+    // A FIXTURE RESOLVES ITS OWN MANIFEST AND NO OTHER (CLOUD-2176). Every
+    // `Fixture` is created under `CARGO_TARGET_TMPDIR`, which sits inside this
+    // checkout, and mise walks up from its cwd: without the ceiling, a fixture
+    // config naming `mise run <task>` runs THIS checkout's task of that name.
+    // Measured on CLOUD-2173: one `SessionStart` in a fixture ran every
+    // `session:*` task against the host, 200 processes and 78s. A case run over
+    // the real repository has its manifest in its own cwd, below no ceiling.
+    // The declared mutation, in a plain comment for the reason above:
+    // MUTANT fixture-mise-walks-to-checkout|s@^    command.env("MISE_CEILING_PATHS", env!("CARGO_TARGET_TMPDIR"));$@@|every_spawn_stops_mises_walk_at_the_fixture_root
+    command.env("MISE_CEILING_PATHS", env!("CARGO_TARGET_TMPDIR"));
 }
 
 /// The mise data dir [`batten`] pins, for the case asserting a state redirect

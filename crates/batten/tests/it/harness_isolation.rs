@@ -131,6 +131,25 @@ fn every_spawn_of_the_binary_pins_the_home() {
     }
 }
 
+/// mise's config search stops at the fixture root on every spawn (CLOUD-2176), so
+/// a fixture under `target/tmp` cannot resolve this checkout's `mise.toml` and run
+/// its tasks against the host — which a `SessionStart` in a fixture did, for every
+/// `session:*` task, until CLOUD-2173.
+#[test]
+fn every_spawn_stops_mises_walk_at_the_fixture_root() {
+    let root = Path::new(env!("CARGO_TARGET_TMPDIR"));
+    let command = common::batten();
+    let ceiling = command
+        .get_envs()
+        .find(|(name, _)| *name == "MISE_CEILING_PATHS")
+        .and_then(|(_, value)| value);
+    assert_eq!(
+        ceiling,
+        Some(root.as_os_str()),
+        "every spawn must stop mise's config search at the fixture root"
+    );
+}
+
 /// REFUSED BEFORE THE CHILD EXISTS, not reported after it ran: the point is that
 /// a falling-through fixture never touches the checkout. `init` writes
 /// `batten.toml` into its working directory, so a child that ran leaves one.
