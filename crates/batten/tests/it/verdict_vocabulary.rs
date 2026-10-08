@@ -369,15 +369,24 @@ fn every_vendored_and_declared_doc_is_within_160_o200k_tokens() {
         .collect();
     over.sort();
     assert!(over.is_empty(), "first sightings over 160 tokens: {over:?}");
+    let vendored: std::collections::BTreeSet<String> = batten::verdict::vendored()
+        .into_iter()
+        .map(|class| class.id)
+        .collect();
+    // VENDORED CLASSES ONLY, for now. A declared class's doc is a `batten.toml`
+    // key, and this repository's own config may carry only keys its pinned
+    // RELEASE reads (`engine gate`), so the engine that reads `doc` lands first.
+    // The commit that took the declared docs out took the declared half of this
+    // assertion with them; reverting it once a release reads `doc` restores both
+    // (CLOUD-2143).
     let missing: Vec<&str> = classes
         .iter()
-        .filter(|class| class.doc.act.is_empty())
+        .filter(|class| vendored.contains(&class.id) && class.doc.act.is_empty())
         .map(|class| class.id.as_str())
         .collect();
-    // NONE, and no ratchet: the branch that shipped the doc schema wrote every
-    // live class's doc, so a class added without one is the regression.
     assert!(
         missing.is_empty(),
-        "live classes with no `do`; a class says what to do on its first sighting: {missing:?}"
+        "vendored classes with no `do`; a class says what to do on its first sighting: \
+         {missing:?}"
     );
 }
