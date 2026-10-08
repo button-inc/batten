@@ -332,6 +332,7 @@ pub fn unread(
 /// whole message under every row it touched cost about 2,000 tokens a row for
 /// nothing new. So the versions are walked once, each version's text is read
 /// once, and a commit's message prints in full the first time only.
+#[derive(Debug)]
 pub struct Assembler<'a> {
     root: &'a Path,
     config: &'a str,
@@ -395,12 +396,21 @@ impl<'a> Assembler<'a> {
         }
         for (index, (sha, subject)) in changes.iter().enumerate() {
             let short = &sha[..sha.len().min(10)];
+            // A FULL MESSAGE THAT WOULD NOT FIT FALLS BACK TO ITS SUBJECT rather than
+            // ending the list: a row whose newest change is one long squash would
+            // otherwise print no change at all.
+            let fits = |entry_len: usize| out.len() + entry_len <= HISTORY_BYTES;
+            let message = (!self.shown.contains(sha) && index < FULL_MESSAGES).then(|| {
+                crate::git::message_of(self.root, sha).unwrap_or_else(|_| subject.clone())
+            });
+            //MUTANT history-marks-unprinted|s@^            let full = message$@            let full = message.is_some() \&\& self.shown.insert(sha.clone()) \&\& message@|a_message_the_cap_cut_is_not_pointed_at
+            //MUTANT history-full-unfitted|s@^                .is_some_and(|message| fits(short.len() + message.trim_end().len() + 3));$@                .is_some();@|a_message_the_cap_cut_is_not_pointed_at
+            let full = message
+                .as_ref()
+                .is_some_and(|message| fits(short.len() + message.trim_end().len() + 3));
             let entry = if self.shown.contains(sha) {
                 format!("{short} {subject} (printed above)\n")
-            } else if index < FULL_MESSAGES {
-                self.shown.insert(sha.clone());
-                let message =
-                    crate::git::message_of(self.root, sha).unwrap_or_else(|_| subject.clone());
+            } else if let Some(message) = message.as_ref().filter(|_| full) {
                 format!("\n{short}\n{}\n", message.trim_end())
             } else {
                 format!("{short} {subject}\n")
@@ -411,6 +421,11 @@ impl<'a> Assembler<'a> {
                     changes.len() - index
                 ));
                 break;
+            }
+            // MARKED ONLY ONCE IT IS IN THE OUTPUT: a message the cap cut was
+            // never printed, so a later row must not point at it as if it were.
+            if full {
+                self.shown.insert(sha.clone());
             }
             out.push_str(&entry);
         }

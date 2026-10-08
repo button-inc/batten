@@ -7299,6 +7299,11 @@ target = "policy/macos-link.rego"
 [[verdict]]
 id = "workspace reach unsafe"
 gloss = "a crate that links an Apple system framework from a build script is reachable in the built macOS graph"
+doc.why = "A crate linking an Apple framework cannot build for macOS without a real SDK"
+doc.do = [
+  "drop the dependency or the feature that pulls the crate in",
+  "prove a new list entry with a link, not a reading",
+]
 class = """
 Rule 2, and it is a LIST, so it is incomplete by construction: a crate nobody has \
 listed slips past. That residual gap is closed by actually linking the target, \
@@ -7319,6 +7324,11 @@ target = "policy/macos-link.rego"
 [[verdict]]
 id = "workspace read absent"
 gloss = "the platform graph resolved and the walk reached no built package, so nothing was inspected"
+doc.why = "A walk that inspected nothing would otherwise read as a clean graph"
+doc.do = [
+  "run `mise run macos-link-record` again",
+  "if it stays at zero, fix the workspace member set or the platform filter",
+]
 class = """
 `scanned 0` is the producer saying it looked and resolved nothing. Before the \
 module read that count, the record was byte-identical to a fully walked clean \
@@ -8855,6 +8865,9 @@ severity = "deny"
 [[verdict]]
 id = "path admit unsafe"
 gloss = "a path a change to which can move the slow tier is declared inert, so the verdict would be silently not taken"
+doc.why = "An inert entry over a path the slow tier reads makes that tier not run while every check goes green"
+doc.do = ["narrow or remove the inert entry in `batten.toml` so the path is no longer covered"]
+doc.dont = ["add an inert entry before arguing it"]
 class = """
 The inert list decides what CI may skip. An entry covering a path the slow tier \
 reads does not make the tier fail — it makes it NOT RUN, and every required check \
@@ -8869,6 +8882,10 @@ target = "batten.toml"
 [[verdict]]
 id = "path list dropped"
 gloss = "a path proven inert is no longer covered, so a diff that cannot move the slow tier pays for it"
+doc.why = "Dropping a proven-inert path costs minutes on every lap and nothing else would ever report it"
+doc.do = [
+  "restore the inert entry in `batten.toml`, or argue why the path can now move the slow tier",
+]
 class = """
 The half that pays for the split, and the half that erodes silently: a narrowing \
 here is invisible except as minutes on every lap. It is not a correctness fault — \
@@ -8882,6 +8899,8 @@ target = "batten.toml"
 [[verdict]]
 id = "config read unread"
 gloss = "the declared authority carries no inert list, so what CI may skip was never read"
+doc.why = "A list the gate cannot see was never reviewed, and is not a clean one"
+doc.do = ["restore the inert list in `batten.toml`"]
 class = """
 Could-not-look, and it is not clean. A list this gate cannot see is a list nobody \
 reviewed, and reporting a tree with no list as though its list were sound is the \
@@ -10085,6 +10104,9 @@ regex = 'hk@([0-9]+\.[0-9]+\.[0-9]+)'
 [[verdict]]
 id = "tool pin other"
 gloss = "hk.pkl's `amends` URL names a different hk than mise.toml pins, or one of them names none"
+doc.why = "A hook config run against a binary that did not ship its schema"
+doc.do = ["set `mise.toml`'s hk pin and `hk.pkl`'s `amends` URL to one version together"]
+doc.dont = ["bump only one of the two"]
 class = """
 mise.toml pins the hk binary and hk.pkl amends the hk config package by URL, and \
 the two move independently: a bump to one without the other runs the hook config \
@@ -10098,6 +10120,9 @@ target = "policy/hk-pin-agreement.rego"
 [[verdict]]
 id = "prose place refused"
 gloss = "a path under docs/ is tracked; research and evidence belong on the tracker row"
+doc.why = "A repository docs folder is a second home nothing reads"
+doc.do = ["move the content onto the tracker row it backs", "remove the path from the index"]
+doc.dont = ["rename the folder to dodge the rule"]
 class = """
 A repository docs/ folder is a second home for research and evidence that nothing \
 reads and everything forgets. Move the file's content onto the tracker row it \
@@ -10110,6 +10135,9 @@ target = "AGENTS.md"
 [[verdict]]
 id = "path ship refused"
 gloss = "the break-glass sentinel is tracked, so every clone would inherit the bypass"
+doc.why = "A committed sentinel ships one tree's bypass to every clone"
+doc.do = ["`git rm --cached .batten-ripcord`, disarm it, and fix the lockout in the config"]
+doc.dont = ["commit the sentinel to get past a lockout"]
 class = """
 `.batten-ripcord` admits the repair floor over a config that loads and denies. One \
 operator arms it in one tree for as long as the lockout lasts; committed, it ships \
@@ -13354,6 +13382,9 @@ gloss = "does not match the declared shape"
 [[verdict]]
 id = "gate run unsafe"
 gloss = "a call to this engine discards its status, so a could-not-look is read as a measured negative"
+doc.why = "Discarding the status turns a missing subcommand or a failure into a plausible empty answer"
+doc.do = ["keep the exit status and branch on it", "or retire the script onto a verb"]
+doc.dont = ["add `2>/dev/null || true` after a `batten` call"]
 class = """
 `$(batten <verb> … 2>/dev/null || true)` collapses three unlike states into one
 empty string: the leaf answered nothing, the leaf failed, and this binary has no
@@ -13379,6 +13410,9 @@ target = "mise-tasks/landed-check.sh"
 [[verdict]]
 id = "prose declare missing"
 gloss = "a rule stub carries no `paths:` trigger, so the one mechanism it exists for does not fire"
+doc.why = "The stub exists only for its loading trigger, and without one it loads for nobody"
+doc.do = ["add the `paths:` frontmatter to the stub under `.claude/rules`"]
+doc.dont = ["delete the stub"]
 class = """
 The stub is kept for its loading trigger and nothing else — its own body says
 deleting it would cost that trigger. Without one it is a file that loads for
@@ -13393,6 +13427,8 @@ target = ".claude/rules"
 [[verdict]]
 id = "prose read unread"
 gloss = "a rule stub's frontmatter would not parse, so its trigger could not be read"
+doc.why = "A stub that does not parse was never judged, which is not a clean one"
+doc.do = ["fix the stub's YAML frontmatter so it parses"]
 class = """
 Could-not-look, refused rather than reported clean: a module that iterates only
 the stubs that parsed reports green over the one it never saw, and a dead gate
@@ -13405,6 +13441,8 @@ target = ".claude/rules"
 [[verdict]]
 id = "prompt declare missing"
 gloss = "a SKILL.md declares no usable `name` or `description`, so a harness has no basis to load it"
+doc.why = "A skill no harness selects looks exactly like one that had nothing to say"
+doc.do = ["give the `SKILL.md` a non-blank `name` and `description`"]
 class = """
 The failure is silent by construction: a skill a harness never selects looks
 exactly like one it selected and that had nothing to say. Blank counts as absent
@@ -13418,6 +13456,8 @@ target = "skills"
 [[verdict]]
 id = "prompt name wrong"
 gloss = "a SKILL.md's declared `name` is not the directory it ships in"
+doc.why = "A harness routes by directory and displays by name, so a disagreement is invisible to both"
+doc.do = ["make the `name` and the directory the same"]
 class = """
 Two authorities for one identity. A harness routes by directory and displays by
 `name`; while they disagree, neither is wrong on its own terms and the
@@ -13430,6 +13470,8 @@ target = "skills"
 [[verdict]]
 id = "prompt read unread"
 gloss = "a SKILL.md carries no frontmatter or would not parse, so its declared fields could not be read"
+doc.why = "A skill whose fields cannot be read was never judged"
+doc.do = ["add or fix the `SKILL.md`'s YAML frontmatter"]
 class = """
 Could-not-look, refused rather than reported clean, for `rules trigger unread`'s
 reason. A `SKILL.md` with no fence declares no fields at all, which is the
@@ -13443,6 +13485,9 @@ target = "skills"
 [[verdict]]
 id = "provision declare dropped"
 gloss = "no [[provision.env]] row carries a no-proxy key, so the provisioned mise wrapper fences nothing"
+doc.why = "The provisioned wrapper is what fences mise's resolver, so without the row its release calls 403"
+doc.do = ["restore the `[[provision.env]]` no-proxy row"]
+doc.dont = ["count `mise.toml`'s `[env]` as covering it"]
 class = """
 The surface that actually runs. `mise.toml`'s `[env]` reaches what mise SPAWNS,
 never mise's own resolver (CLOUD-1455) — the wrapper generated from these rows
@@ -13456,6 +13501,8 @@ target = "batten.toml"
 [[verdict]]
 id = "provision declare partial"
 gloss = "a [[provision.env]] no-proxy row no longer prepends the host mise's release resolver calls"
+doc.why = "A fence that does not name its host fences nothing"
+doc.do = ["put the resolver's host back in the row's value"]
 class = """
 A fence that does not name the host it exists for fences nothing. The row
 survives, so a predicate asking only whether it exists would pass this.
@@ -13467,6 +13514,8 @@ target = "batten.toml"
 [[verdict]]
 id = "provision read unread"
 gloss = "batten.toml would not parse, so the provisioned wrapper's fence could not be read"
+doc.why = "A fence the gate could not read was never judged"
+doc.do = ["make `batten.toml` parse again"]
 class = """
 Could-not-look, refused rather than reported clean: a module that iterates only
 `documents` reports green over a file it never read, and a dead gate and a clean
@@ -13479,6 +13528,8 @@ target = "batten.toml"
 [[verdict]]
 id = "task declare dropped"
 gloss = "mise.toml's [env] carries no no-proxy key, so nothing is fenced out of the agent proxy"
+doc.why = "Without the fence every tool release resolves through a proxy that answers 403"
+doc.do = ["restore both no-proxy spellings in `mise.toml`'s `[env]`"]
 class = """
 A deleted fence is not a narrower fence. `mise install` then resolves every tool
 release through a proxy that injects a repo-scoped token, and api.github.com
@@ -13491,6 +13542,8 @@ target = "mise.toml"
 [[verdict]]
 id = "task declare partial"
 gloss = "the no-proxy value no longer names the host mise's release resolver calls"
+doc.why = "A fence that does not name its host fences nothing"
+doc.do = ["put the resolver's host back in both no-proxy spellings"]
 class = """
 A fence that does not name the host it exists for fences nothing. The keys
 survive, so a predicate asking only whether they exist would pass this. Named
@@ -13503,6 +13556,9 @@ target = "mise.toml"
 [[verdict]]
 id = "claim declare dropped"
 gloss = "the instruction surface no longer states the claim order, or no longer carries its reason"
+doc.why = "Claiming before branching, or twice, fails in opposite directions"
+doc.do = ["restore the missing sentence in the file the finding names"]
+doc.dont = ["widen `AGENTS.md` past its budget to hold both halves"]
 class = """
 The claim receipt is keyed by the branch checked out when `claim check` mints it, which makes two orderings fail in opposite directions: claiming before branching strands the receipt on a branch nothing will land, and claiming a second time refuses `not-todo` against the caller's own claim. AGENTS.md carries the ORDER — branch first, then claim ONCE — and `rules/toolchain.md` carries both failure directions; a budget forces the split, so both arms are required. The remedy is to restore the sentence that went missing in the file the finding names, never to widen the always-loaded file past its ceiling.
 """
@@ -13513,6 +13569,12 @@ target = "policy/claim-order-is-stated.rego"
 [[verdict]]
 id = "turn run loose"
 gloss = "this session has taken several turns in a row without doing anything"
+doc.why = "A session that has stopped acting may be stuck on a feedback loop"
+doc.do = [
+  "act, or end the turn saying what blocks",
+  "if something is backgrounded, end the turn: its exit re-invokes the session",
+]
+doc.dont = ["fill the wait with polling or repeated calls"]
 class = """
 Several turns in a row with no tool call between them. The count is the trailing run, so a single action clears it and a session thinking between actions never reaches this — what it names is a session that has stopped acting. It is an effective bound on a suspected feedback path rather than a proof of one: the remedy is to act, or to end the turn and say what is blocking. Where the waiting is real, a backgrounded task re-invokes the session when it exits, so the notification IS the wake-up and a turn with something backgrounded is the designed state rather than one to fill.
 """
@@ -13523,6 +13585,9 @@ target = "policy/repetition-without-progress.rego"
 [[verdict]]
 id = "turn answer missing"
 gloss = "the operator spoke and this session answered only with tool calls"
+doc.why = "An operator whose message goes unanswered cannot tell whether it was heard"
+doc.do = ["write one sentence answering what the operator said, then act"]
+doc.dont = ["keep making calls without saying anything"]
 class = """
 A message from the operator (a prompt, or one sent while the session was working) has no assistant text after it, and this call is another action. The count is tool calls since that message with nothing said. The remedy is one sentence to the operator that answers what they said, then act; it is advisory, because a deny cancelled the very call whose message carried the answer and the host then dropped that text (measured 2026-09-30).
 """
@@ -13533,6 +13598,9 @@ target = "policy/answer-the-operator.rego"
 [[verdict]]
 id = "forge read first"
 gloss = "a code-host call; read the memory documenting this host's GitHub access first"
+doc.why = "Sessions that skipped it took blocked detours and called a working route unreachable"
+doc.do = ["read `.serena/memories/github-access.md` before concluding the host is unreachable"]
+doc.dont = ["report a 403 as out of scope before reading it"]
 class = """
 A call reaching the code host was made with the memory documenting this host's GitHub access unread at the moment it mattered: on 2026-08-31 a session took an `add_repo` detour that memory says is blocked, and on 2026-09-05 one spent six turns claiming the lander could not run before `mise run land` drove the loop first try. The pointer rides the allowed call; the remedy is to read the memory before concluding the host is unreachable.
 """
@@ -13543,6 +13611,9 @@ target = ".serena/memories/github-access.md"
 [[verdict]]
 id = "forge check red"
 gloss = "the forge judged this commit and its fan-in check did not pass"
+doc.why = "The forge looked at this commit and refused it"
+doc.do = ["fix what CI refused, push, and let `mise run land` record the next verdict"]
+doc.dont = ["re-run CI on the same commit", "name individual jobs instead of `final`"]
 class = """
 `final` is the fan-in every required job feeds, and CLOUD-900 records what naming the leaves instead buys: every failure becomes manufacturable by omitting a job. A recorded verdict that is anything but `success` on that check means the forge looked and refused. This is the DECISION half only — the polling stays outside the engine per CLOUD-1177 — so the remedy is to fix what CI refused and let the producer record the next verdict, never to re-read this one.
 """
@@ -13557,6 +13628,9 @@ target = "mise run land"
 [[verdict]]
 id = "turn deny held"
 gloss = "this session recorded refusals and the turn is ending again anyway"
+doc.why = "A refusal left standing at a repeat stop is a finding produced and then abandoned"
+doc.do = ["fix what each refusal names, or file what you decline to fix, before stopping"]
+doc.dont = ["end the turn again with the refusals unaddressed"]
 class = """
 The session's own record counts hook runs that denied, and the agent is stopping a second time with that count still standing. A first stop after refusals is work concluding; a repeat one is a finding produced and then left behind, which is the question `finding-sink-check` reads a transcript to answer. The count is derived from a hook run's exit code rather than from any prose, and no span of session text reaches this decision. A session with no transcript is never this class -- that is could-not-look, and reading it as clean is the false green CLOUD-990 measured.
 """
@@ -13567,6 +13641,9 @@ target = "policy/denials-outlive-the-turn.rego"
 [[verdict]]
 id = "task run loose"
 gloss = "this call is a weaker spelling of a task the project already defines"
+doc.why = "Running the tool directly skips the flags, pin or paired step the task adds"
+doc.do = ["run the task the refusal names, as `mise run <task>`"]
+doc.dont = ["reproduce the task's argv with extra flags"]
 class = """
 The project defines a task whose own argv leads with the same program, so this call runs the tool directly and skips whatever the task adds -- strictness flags, a pinned toolchain, a paired step. The refusal names the task because that name IS the remedy: run it instead. A task with no single-command body is never matched, so this cannot refuse a call by naming a command the task does not actually run.
 """
@@ -13577,6 +13654,8 @@ target = "policy/task-substitution.rego"
 [[verdict]]
 id = "memory resolve missing"
 gloss = "the memory graph has no root, so it is findable only by listing the directory"
+doc.why = "Without `mem:core` a reader cannot discover the graph"
+doc.do = ["restore the `core` memory as the graph root"]
 class = """
 The reference model makes `mem:core` the discovery entry point, and a graph whose root is absent can be reached only by someone who already knows to list the directory. Judged only where memories exist at all: a repository carrying none is not a repository with a broken graph, and refusing there would make this rule unshippable over an ordinary tree.
 """
@@ -13587,6 +13666,8 @@ target = "AGENTS.md"
 [[verdict]]
 id = "memory name duplicate"
 gloss = "a memory name strips to another name, so it cannot be addressed as written"
+doc.why = "The tooling strips one trailing `.md`, so two spellings compete for one address"
+doc.do = ["rename the memory so its name survives the strip, then `mise run memories-check`"]
 class = """
 The tooling silently strips one trailing `.md`, so `foo.md.md` lists as `foo.md` and no reference can ever name the file by its own filename. The two spellings then compete for one address. Rename the file so its name survives the strip.
 """
@@ -13597,6 +13678,8 @@ target = "mise run memories-check"
 [[verdict]]
 id = "memory name unseen"
 gloss = "a memory name carries a character no reference can spell"
+doc.why = "A memory no reference can spell is in the graph with no edge reaching it"
+doc.do = ["rename it within the `memory-name` charset through serena's rename"]
 class = """
 The reference matcher stops at the first character outside its charset, so a memory whose name carries one cannot be referenced at all -- it is in the graph and no edge can reach it. The charset is the `memory-name` registry row, which is the same grammar `mem-reference` reads, so the two cannot drift.
 """
@@ -13607,6 +13690,12 @@ target = "policy/memories.rego"
 [[verdict]]
 id = "memory point stale"
 gloss = "a `mem:` reference names a memory this tree does not carry"
+doc.why = "A dangling reference points its reader at nothing"
+doc.do = [
+  "point the reference at the memory's current name",
+  "rename memories through serena's rename so referrers follow",
+]
+doc.dont = ["`git mv` a memory"]
 class = """
 A dangling edge. The reference tooling's own integrity check is advisory by construction and its rename command is the only thing that keeps referrers in sync, so a `git mv` or any direct write orphans every reference silently -- which is what this exists to make loud. Pointer-only: the referrer's `path:line`, never the surrounding prose.
 """
@@ -13617,6 +13706,8 @@ target = "AGENTS.md"
 [[verdict]]
 id = "memory read unread"
 gloss = "a declared referrer could not be read, so its edges were never judged"
+doc.why = "A referrer the gate could not open was never judged"
+doc.do = ["make the named file readable, or drop it from the declared referrers"]
 class = """
 Could-not-look, and never a file with no stale references. A module iterating only the lines it received reports green over a file it never opened; this names the file instead. Distinct from a clean pass by construction, which is the whole point of the `missing` channel.
 """
@@ -13627,6 +13718,8 @@ target = "policy/memories.rego"
 [[verdict]]
 id = "claim mint absent"
 gloss = "a declared row was captured and carries no project"
+doc.why = "An unfiled row has no board state to read"
+doc.do = ["file the row into its project, then `mise run claim-check`"]
 class = """
 The capture store answered for this row's declared key and the payload carries no project, so the row is unfiled and no board state can be read about it. Asked rather than a status because the store has no clock: it keeps every read and answers from the first in digest order, so a predicate over a mutable field would report a state that has since moved. Absence is not this class -- a key nothing captured leaves the id out of the map entirely, which is could-not-look and never a verdict.
 """
@@ -13637,6 +13730,8 @@ target = "mise run claim-check"
 [[verdict]]
 id = "step declare missing"
 gloss = "a step declaring the slow profile is not selected by the `check` hook"
+doc.why = "The step silently stops running in `ci`, `verify` and CI while pre-commit looks unchanged"
+doc.do = ["select the step in `hk.pkl`'s `check` hook"]
 class = "The false green the two-tier split can produce, and the asymmetric half: the pre-commit path still skips the step, so nothing looks wrong, while `mise run ci`, `verify` and CI have all silently stopped running it. The other direction — the tier stops being skipped at pre-commit — is loud and self-correcting, which is why this is the one with a gate."
 [[verdict.route]]
 id = "gate read first"
@@ -13645,6 +13740,8 @@ target = "hk.pkl"
 [[verdict]]
 id = "tier list empty"
 gloss = "something planned this tree and no step declares the slow profile"
+doc.why = "With no slow step every assertion about the tier passes over an empty set"
+doc.do = ["restore the slow profile on the steps in `hk.pkl` that carry it"]
 class = "The tier has evaporated: every step would run at pre-commit, and every per-step assertion about the tier would pass over an empty set. Distinct from no record at all, which is could-not-look and refuses nothing."
 [[verdict.route]]
 id = "gate read first"
@@ -13653,6 +13750,9 @@ target = "hk.pkl"
 [[verdict]]
 id = "hook declare missing"
 gloss = "the git hook runs hk without `--profile '!slow'`, so every commit pays the slow tier"
+doc.why = "Every commit pays for the slow tier"
+doc.do = ["restore `--profile '!slow'` on the command line that runs the hook"]
+doc.dont = ["count the flag in a comment as present"]
 class = "The economy half rather than the coverage half: the tier is still correct and CI is unaffected. Read from non-comment lines that actually run the hook, because the flag's own explanatory comment kept this green once when the flag had been deleted from the command."
 [[verdict.route]]
 id = "source read first"
@@ -13661,6 +13761,9 @@ target = ".claude/hooks/git-hook.sh"
 [[verdict]]
 id = "tool read broken"
 gloss = "the recorded SBOM scan cannot be judged, so the inventory is unverified"
+doc.why = "The scan is at fault rather than the tree, so the inventory says nothing"
+doc.do = ["run `batten sbom --record` again and read what `batten sbom` produced"]
+doc.dont = ["edit an SBOM field by hand"]
 class = """
 Four states reach this class and none of them is a drifted document: a catalog that found nothing, two scans of one tree that disagree once the volatile fields are removed, a document carrying no DESCRIBES edge to measure its components against, and a producer that recorded no counts at all. What they share is that the SCAN is at fault rather than the tree, so the remedy is never to edit an SBOM field: re-run `batten sbom --record` and read what `batten sbom` actually produced. An empty catalog is the one that most looks like success -- two empty documents agree with each other and with every count -- which is why it refuses here instead of passing every equality trivially.
 """
@@ -13671,6 +13774,9 @@ target = "policy/sbom-inventory.rego"
 [[verdict]]
 id = "manifest count wrong"
 gloss = "the document and the tree it claims to describe do not agree"
+doc.why = "A cataloger missed a component or emitted one per reference site"
+doc.do = ["fix the normalisation in `batten sbom` and record again"]
+doc.dont = ["adjust the expected count to match the scan"]
 class = """
 The cargo count is stated against `Cargo.lock`'s own `source = ` entries rather than a number anyone wrote down, because the issue that specified this recorded 156 cargo and 175 total and the total had moved by 2 a day later. So a disagreement means a cataloger missed something, or emitted a component per REFERENCE SITE rather than per thing depended on -- 340 entries for 290 distinct things, measured. Fix the normalisation in `batten sbom` and re-record; never adjust the expected count to match what the scan happened to produce, which is the one repair that makes the gate decide nothing.
 """
@@ -13681,6 +13787,9 @@ target = "crates/batten/src/sbom.rs"
 [[verdict]]
 id = "manifest state missing"
 gloss = "a field the tree states is NOASSERTION in the published document"
+doc.why = "The tree states the field and the document dropped it"
+doc.do = ["enrich the field in `batten sbom` from its source in the tree, then record again"]
+doc.dont = ["echo an author, email or copyright holder into a finding"]
 class = """
 Supplier, originator, copyright and licence each have a source in this tree -- the lockfile's resolution, `cargo metadata`'s authors, the bytes `Cargo.lock` pins by checksum, and the manifests `cargo-deny` already reads. A `NOASSERTION` in any of them is data the tree states and the document dropped, and `NONE` is conformant where `NOASSERTION` is not, so only the third state refuses. The remedy is to enrich the field in `batten sbom` and re-record. Findings here are counts and never values on purpose: an author name, an email address and a copyright holder are all personal data, and echoing one would publish it into every CI log that reads this gate.
 """
@@ -13708,6 +13817,8 @@ severity = "deny"
 [[verdict]]
 id = "pin parse broken"
 gloss = "a licence-table row carries fewer than three tab-separated fields"
+doc.why = "A short row writes an empty licence into a published document"
+doc.do = ["complete the row with a licence and a copyright, `NONE` where no holder is stated"]
 class = "A short row would write an empty license into a published document: a field that parses as present and says nothing. Complete the row with a license and a copyright (`NONE` where the license file states no holder)."
 [[verdict.route]]
 id = "module read first"
@@ -13716,6 +13827,8 @@ target = "policy/sbom-actions.rego"
 [[verdict]]
 id = "pin parse loose"
 gloss = "a licence-table key is not `owner/repo@<40-hex>`"
+doc.why = "Without the pin a row maps an action to whatever its default branch says today"
+doc.do = ["spell the key exactly as the workflow's `uses:` line pins it"]
 class = "The pin is the drift authority: without it a row maps an action to whatever its default branch says today rather than to the commit this repository builds against. Spell the key exactly as the workflow's `uses:` line pins it."
 [[verdict.route]]
 id = "module read first"
@@ -13737,6 +13850,9 @@ writer = "batten sbom --binary <binary> --target <triple>"
 [[verdict]]
 id = "pin table missing"
 gloss = "a SHA-pinned action in a workflow has no row in the licence table"
+doc.why = "A moved pin no longer matches its licence row, so the published document would degrade quietly"
+doc.do = ["add the new commit's row to `mise-tasks/sbom-actions.tsv`"]
+doc.dont = ["unpin the action to dodge the table"]
 class = """
 A pinned action's licence is immutable, which is what makes a committed table defensible at all -- but only while the table still describes the pins the workflows carry. This fires on the one event that breaks that: a pin moving. The row is matched on repository AND commit together, so a bump that changes the sha stops matching and the gate refuses rather than letting the document degrade quietly. Add the new commit's row to `mise-tasks/sbom-actions.tsv`. Renovate cannot write that table, which is why an action bump opens red and holds the queue slot (CLOUD-1213) -- that is the cost of the table, and it is paid deliberately.
 """
@@ -13749,6 +13865,12 @@ target = "mise-tasks/sbom-actions.tsv"
 [[verdict]]
 id = "path measure late"
 gloss = "a measured invocation path is over the latency budget this repository publishes"
+doc.why = "The path is slower than the contract batten publishes for itself"
+doc.do = [
+  "fix what got slower",
+  "or move the budget in `policy/perf-assert.rego` and README's Performance table together",
+]
+doc.dont = ["read it as runner noise"]
 class = """
 An absolute ceiling rather than a ratchet: 100ms is the Command Line Interface Guidelines' floor for a response that reads as instant, and the ceiling sitting ~20-30x over the measured value IS the tolerance band a shared runner's p95 needs. So this is not noise -- a path here is genuinely slower than the contract batten publishes for itself. Fix what got slower, or move the budget in `policy/perf-assert.rego` AND in README's Performance table together, which the `perf budget unpublished` class refuses to let you do by halves. Whether this commit is slower than the trunk is a different question with a different answer shape and is `perf-gate`'s.
 """
@@ -13761,6 +13883,8 @@ target = "policy/perf-assert.rego"
 [[verdict]]
 id = "path measure partial"
 gloss = "the perf record carries no measurement for a path this repository budgets"
+doc.why = "Green over the measured paths hides the one that was never measured"
+doc.do = ["measure every budgeted path, then `mise run perf-assert`"]
 class = """
 A run that measured five of six paths and reported green over the five is the partial-coverage false green this repository keeps re-meeting, so a budgeted path missing from a PRESENT record is a finding rather than a smaller pass. Absence of the whole record is a different state and is silent: a record whose key does not resolve -- a differently-pinned hyperfine, or a binary rebuilt since the measurement -- is not found at all. So this fires only when a producer ran, recorded, and judged less than the budget table claims.
 """
@@ -13773,6 +13897,9 @@ target = "policy/perf-assert.rego"
 [[verdict]]
 id = "prose state wrong"
 gloss = "the budget this gate enforces and the one README publishes disagree"
+doc.why = "Two authorities for one number, and the published one drifts"
+doc.do = ["move `budgets` in the module and README's budget column together"]
+doc.dont = ["silence one side"]
 class = """
 Publishing a number in one file and enforcing it in another is two authorities for one number, and the one that drifts is always the published one because it has no mechanism. Non-negotiable rule 2 is the general form: a rule ships with its mechanism. The remedy is to move both together -- `budgets` in the module and the Performance table's budget column -- never to silence one side. A path the module budgets whose published cell carries no number is this class too, since an ungated cell beside a gated predicate is the same disagreement written the other way round.
 """
@@ -13790,6 +13917,8 @@ target = "README.md"
 [[verdict]]
 id = "source read missing"
 gloss = "README could not be read, so the published budget cannot be held to the enforced one"
+doc.why = "A budget the gate could not read was never compared"
+doc.do = ["restore `README.md`, or fix the row's `lines`"]
 class = """
 Could-not-look, never a verdict about the tree. The predecessor exited 2 here for the `lock-complete` and `timeout-check` doctrine -- the gate could not read what it was asked to judge -- and that is distinct from a violation on purpose: a gate reporting green over input it failed to parse is the failure that gets a gate switched off. Restore the file or fix the row's `line_sources`; nothing about the measurement is being claimed.
 """
@@ -13805,6 +13934,9 @@ target = "policy/perf-assert.rego"
 [[verdict]]
 id = "test declare partial"
 gloss = "a declared agentic trial names fewer than the fields an outcome can be read against"
+doc.why = "A half-declared trial reads exactly like one that ran"
+doc.do = ["add the missing field the finding names to the trial or the method record"]
+doc.dont = ["delete the row to silence it"]
 class = """
 The failure here is not an absent record, it is a HALF one -- a trial missing its baseline arm reads exactly like a trial that ran, and the write-up is the same length. CLOUD-1089 paid for that twice in one survey: two instruments returned exit 0 while measuring nothing, and both would have been written up as clean results had a human not looked. So a row owes its question and intended outcome, both arms, the model, fixture and run count that make a rerun a rerun, the intervention class, the governed action that bounds the attribution window, the evidence the treatment arm shows, its canary, and the falsifier's statement, downside and disposition. The method record beside it owes the window, what is held constant, what is measured, what deliberately is not, and how a measurement becomes a verdict. Add the field; do not delete the row to silence this.
 """
@@ -13822,6 +13954,9 @@ target = "bench/agentic/method.toml"
 [[verdict]]
 id = "test state early"
 gloss = "a trial's disposition asserts a finding with no result recorded beside it"
+doc.why = "Writing a disposition down is the cheapest way to a finding nobody measured"
+doc.do = ["run the arms and record `[trial.result]`, or set the disposition back to `pending`"]
+doc.dont = ["invent a disposition the method record does not declare"]
 class = """
 `pending` is the honest state for a declared-but-unrun trial and asserts nothing. Every other disposition is a claim about a measurement, so it owes a `[trial.result]` -- and a disposition the method record does not declare at all owes one more thing than that, because a vocabulary invented at the row means nothing to a reader. This is CLOUD-680's laundering shape arriving through the record channel rather than through an override: the cheapest route to a finding is to write one down. The remedy is to run the arms and record the result, or to set the disposition back to `pending`.
 """
@@ -13839,6 +13974,8 @@ target = "bench/agentic/trials.toml"
 [[verdict]]
 id = "input read absent"
 gloss = "a declared agentic record could not be read, so the joint predicate cannot decide"
+doc.why = "Either record absent leaves the other unjudgeable"
+doc.do = ["restore the record, or fix the row's `documents`"]
 class = """
 Could-not-look, never a verdict about the tree. The two records are a JOINT predicate -- the method record owns what "improved" means and the workload record owns each experiment's arms -- so either one absent leaves the other unjudgeable, and reporting green over that would be a dead gate and a clean tree coming out byte-identical on the decision surface. Restore the file or fix the row's `documents`; nothing about any trial is being claimed.
 """
@@ -13851,6 +13988,9 @@ target = "policy/agentic-experiment-record.rego"
 [[verdict]]
 id = "tool judge dirty"
 gloss = "a third-party validator judged this file and reported something"
+doc.why = "A validator ran over this exact revision and did not report clean"
+doc.do = ["fix what the validator named, then `mise run record-verdicts`"]
+doc.dont = ["re-read the old verdict"]
 class = """
 The record exists under this row's exact key -- the declared tool, the version it was pinned at, and the digest of the bytes it read -- so a validator ran over THIS revision and did not report clean. Absence is not this class: a record under any other key is not found at all, which is what keeps a stale verdict from reading as a fresh one. The remedy is to fix what the validator named and let the producer record the next verdict, never to re-read this one.
 """
@@ -13863,6 +14003,9 @@ target = "policy/validator-verdict-clean.rego"
 [[verdict]]
 id = "tag mint wrong"
 gloss = "a release tag does not carry the shape this repository's release tooling mints"
+doc.why = "Every release reading orders and compares on the `v<major>.<minor>.<patch>` shape"
+doc.do = ["retag it in that shape, or move it out of the `v*` namespace"]
+doc.dont = ["cut a release tag by hand"]
 class = """
 `release-plz` mints `v<major>.<minor>.<patch>` and every downstream reading — what has shipped, what is due, what a range since the last release contains — orders and compares on that shape. A tag that does not carry it is either a hand cut nobody will find again or a prerelease the ordering will misplace. Retag it in the shape the tooling mints, or move it out of the `v*` namespace so it is not read as a release.
 """
@@ -13880,6 +14023,8 @@ target = "release-plz.toml"
 [[verdict]]
 id = "lock write other"
 gloss = "a lockfile platform key mise does not emit — install-time residue rather than a lock"
+doc.why = "Residue from an install reads as a lock, and `mise lock` never removes it"
+doc.do = ["remove the key and regenerate, then `mise run lock-check`"]
 class = """
 A key outside the set mise emits was written by an install on somebody's machine, not by a lock. The measured instance carried a checksum and no url and `lock-check` reported "complete and current" over it on every run, because regenerate-and-diff detects drift only and `mise lock` never removes an existing entry. Remove the key and regenerate; the setting that permits the write is `lock write unsafe`'s.
 """
@@ -13892,6 +14037,8 @@ target = "mise run lock-check"
 [[verdict]]
 id = "lock reach missing"
 gloss = "a platform this repository installs on has nothing to install from"
+doc.why = "A required platform with no url leaves the repository unable to provision itself"
+doc.do = ["regenerate the entry, or drop the platform from the module's required set"]
 class = """
 Scoped to the REQUIRED platforms deliberately: mise emits a provenance-only stub where upstream ships no artifact, and failing on every url-less block would fail this repository for a decision upstream made — the defect of the gate this replaces, one level down. A required platform with no block, or a block with no url, is the repository unable to provision itself. Regenerate the entry, or move the platform out of the required set in the module if this repository genuinely stopped installing on it.
 """
@@ -13904,6 +14051,8 @@ target = "mise run lock-check"
 [[verdict]]
 id = "tool pin missing"
 gloss = "a backend that fetches a release asset locks no platform, so it installs an unverified download"
+doc.why = "A fetch-an-asset backend that locks nothing installs an unverified download"
+doc.do = ["regenerate so the entry carries checksums, or move the tool to a backend that verifies"]
 class = """
 Whether locking nothing is fine depends on the BACKEND, never on the absence: npm, pipx, cargo, go, gem and core:rust resolve through their own package manager and cannot lock a url, while a fetch-an-asset backend can. Keying it on the absence is how the one tool here installed from an unverified download passed for its whole life with a bare version and no checksum (CLOUD-281). Regenerate so the entry carries checksums, or move the tool to a backend that verifies.
 """
@@ -13916,6 +14065,8 @@ target = "mise run lock-check"
 [[verdict]]
 id = "tool declare missing"
 gloss = "a lockfile entry locks no platform and names no backend, so what it installs cannot be determined"
+doc.why = "Nothing in the committed bytes says what the entry installs"
+doc.do = ["regenerate the entry, or remove it if the tool is gone"]
 class = """
 A different sentence from `tool pin missing` and a different remedy: that one says the tool installs something unverified, this says nothing in the committed bytes says what it installs at all. The entry is not a lock in any sense. Regenerate it, or remove it if the tool is gone.
 """
@@ -13928,6 +14079,9 @@ target = "mise run lock-check"
 [[verdict]]
 id = "tool pin absent"
 gloss = "a `[tools]` pin has no lockfile entry at all, so every CI job that installs it fails before any gate runs"
+doc.why = "CI installs `--locked` and dies at install, which no local run can see"
+doc.do = ["regenerate the lockfile so the pin has an entry, then `mise run lock-check`"]
+doc.dont = ["trust a green local `verify` for it"]
 class = """
 The omission every other class here is blind to, because each of them judges an entry that is PRESENT — and the one failure a local run structurally cannot see. `[settings] lockfile = false` means nothing here installs `--locked`, so the tool installs fine on this machine forever; CI passes `--locked` and dies at the INSTALL step, before a single gate runs, in every job whose install list names it. Measured on PR #272: a fully green `mise run verify`, then two required checks red for a pin neither of them owns.
 """
@@ -13940,6 +14094,8 @@ target = "mise run lock-check"
 [[verdict]]
 id = "pin read stale"
 gloss = "a `[tools]` pin names a version its lockfile entry does not"
+doc.why = "`mise install --locked` fails on a stale entry that looks present locally"
+doc.do = ["regenerate the lockfile and commit the result"]
 class = """
 `tool pin absent` asks whether a row is THERE; this asks whether it says the same thing as the pin, which is the only question `mise install --locked` actually answers — and the row being present is exactly what makes a stale one invisible locally. Satisfaction rather than equality: a locked version that EXTENDS the pin at a component boundary is fine, because most of this table is pinned that way. Regenerate and commit the result.
 """
@@ -13952,6 +14108,9 @@ target = "mise run lock-check"
 [[verdict]]
 id = "lock write unsafe"
 gloss = "the manifest re-enables install-time lockfile writes, so any `mise install` can write the residue this row rejects"
+doc.why = "Any install can then dirty the lockfile with residue"
+doc.do = ["set `[settings] lockfile = false` in `mise.toml`"]
+doc.dont = ["opt out per caller"]
 class = """
 The other half of `lock write other` rather than a separate concern: that class is half a mechanism while any install can produce a residue key. A per-caller opt-out cannot reach a caller it does not own, which is how a sandbox's own provisioning kept dirtying the tree; `[settings] lockfile = false` denies the write to everyone. Set it false — the scheduled currency job opts back in with `MISE_LOCKFILE=true`.
 """
@@ -13964,6 +14123,8 @@ target = "mise.toml"
 [[verdict]]
 id = "workflow run unsafe"
 gloss = "a workflow installs with mise-action and sets no MISE_LOCKFILE, so it installs UNLOCKED and passes"
+doc.why = "The job installs unlocked and goes green, silently dropping the checksum check"
+doc.do = ["add `MISE_LOCKFILE: \"true\"` to the workflow's env"]
 class = """
 `lockfile = false` turns off the whole lockfile feature rather than only the write, so `mise install --locked` fails outright with "locked mode requires lockfile to be enabled" and a workflow has to set `MISE_LOCKFILE` itself. One that forgets does not fail loudly: mise-action passes `--locked` only when it detects a lockfile, so the job installs unlocked and goes green. A checksum check silently dropped, which is the class this row exists for. Add `MISE_LOCKFILE: "true"` to the workflow's env.
 """
@@ -13976,6 +14137,8 @@ target = ".github/workflows/ci.yml"
 [[verdict]]
 id = "lock read unread"
 gloss = "the manifest declares tools and the lockfile could not be read"
+doc.why = "A repository that locks tools with no readable lockfile cannot be judged"
+doc.do = ["restore or regenerate the lockfile, then `mise run lock-check`"]
 class = """
 Could-not-look, and it is conditioned on there being a subject rather than fired wherever `batten check` runs: a manifest carrying a `[tools]` table is the repository saying it locks tools, and without one there is nothing to report. That scoping is the defect CLOUD-1164 records for `tree-clean`, avoided here rather than survived. A repository declaring tools with no lockfile in the index cannot be judged, which is not the same answer as a clean one.
 """
@@ -13988,6 +14151,8 @@ target = "mise run lock-check"
 [[verdict]]
 id = "lock write partial"
 gloss = "a staged lockfile entry carries a checksum with no url, so it reads as locked and cannot be used"
+doc.why = "A half-written entry reads as locked and cannot install"
+doc.do = ["regenerate it with `mise run lock-complete`, or remove it"]
 class = """
 A platform entry with a checksum and no url is the partial shape a regenerate-and-diff gate structurally cannot catch: `mise lock` never removes or repairs an existing entry, so a stably wrong lockfile passes forever, and one did. Regenerate the entry with `mise run lock-complete`'s own tooling, or remove it — an absent lock is honest where a half-written one is not. Judged over the INDEX rather than the working tree, because this asks about the commit.
 """
@@ -14005,6 +14170,8 @@ target = "rules/toolchain.md"
 [[verdict]]
 id = "commit declare empty"
 gloss = "a `Weakens:` trailer names no key, so it declares nothing while reading as a declaration"
+doc.why = "An empty trailer reads as disclosure and discloses nothing"
+doc.do = ["name the key the change weakens, or drop the trailer"]
 class = """
 `config-lint` compares the weakenings an author DECLARED in a `Weakens:` trailer against the ones `trust::weakenings` DETECTED. A trailer with nothing after the colon satisfies every "did the author declare something" reading and matches no detected weakening, so it buys the appearance of disclosure without the content. Name the key the change weakens, or drop the trailer — an absent declaration is honest where an empty one is not.
 """
@@ -14022,6 +14189,9 @@ target = "rules/commits.md"
 [[verdict]]
 id = "hook wire duplicate"
 gloss = "a registration on a merged surface outside this repository does not reach the mediator"
+doc.why = "A second decider beside the mediator costs seconds per call and splits the verdict"
+doc.do = ["run `batten wiring reclaim`, and again whenever the launcher rewrites it"]
+doc.dont = ["skip the hook step that reports it", "call it environmental and unfixable"]
 class = """
 `PreToolUse` is ONE entry — the engine — and CLOUD-312 measured the alternative: six task-runner launches per Bash call, 1.247s serial to do milliseconds of policy, ~93% of it startup. A second decider registered beside the mediator re-introduces that cost and, worse, splits the verdict across two authorities that can disagree about one call. The wiring this judges is the launcher's own merged settings, which live outside this repository — and `batten wiring reclaim` removes the registration from them, so this IS repairable from here. It is a REPAIR AND NOT A FIX: a launcher that writes those registrations at session start writes them again next session, so the same refusal recurs and the same command answers it each time. CLOUD-1167's fact is what makes the question expressible at all, and the row that declares the file is the whole bound on what the module may read.
 """
@@ -14054,6 +14224,8 @@ target = "rules/toolchain.md"
 [[verdict]]
 id = "hook wire unread"
 gloss = "a declared hook surface exists and will not parse, so the wiring could not be judged"
+doc.why = "A malformed hook surface is a host reading nothing at all"
+doc.do = ["repair the file so it parses, or remove it"]
 class = """
 A surface that will not parse is could-not-look, and saying so is the difference between the engine recording that it could not look and a gate reporting the wiring is fine. Distinct from ABSENT, which is the ordinary case and never a finding: a consumer wires fewer hosts than the engine supports, and no CI runner carries a launcher file. Repair the file or remove it — a malformed hook surface is a host reading nothing at all.
 """
@@ -14066,6 +14238,11 @@ target = "policy/harness-wiring.rego"
 [[verdict]]
 id = "hook wire loose"
 gloss = "a committed hook surface registers a command that is neither the mediator nor declared"
+doc.why = "A second program on a hook surface is a second decider over the same call"
+doc.do = [
+  "retire the guard behind the engine",
+  "or declare it in `policy/harness-wiring.rego`'s table with the issue that will",
+]
 class = """
 The engine registers ONE command per event and adjudicates every mediated call from `batten.toml`, so a second program on a committed hook surface is a second decider over the same call — the split authority CLOUD-312 exists to end. Retire the guard behind the engine, or declare it in `policy/harness-wiring.rego`'s table naming the issue that will. The finding points at the FILE and never at the command: a hook command carries this consumer's directory layout and the host's own variable prefix, which non-negotiable rule 4 keeps out of a gate's output.
 """
@@ -14141,6 +14318,11 @@ target = "policy/harness-wiring.rego"
 [[verdict]]
 id = "connector grant loose"
 gloss = "a reduced tool is also granted raw, so the reduction decides nothing"
+doc.why = "Granted raw beside its reduction, the cheaper-looking full payload wins every call"
+doc.do = [
+  "remove the raw entry from `permissions.allow` in `.claude/settings.json`",
+  "reach the tool through `batten mcp call`",
+]
 class = """
 Dispatch and reduction save nothing while a cheaper-looking route to the full \
 payload sits in the model's tool list. Granting both is not a fallback: the two \
@@ -14170,6 +14352,12 @@ target = "remove the raw connector entry from `permissions.allow` in .claude/set
 [[verdict]]
 id = "grant carry missing"
 gloss = "the committed settings carry an autoMode block, which the classifier never reads"
+doc.why = "A committed block grants nothing and invites the next author to add to it"
+doc.do = [
+  "delete the `autoMode` block from `.claude/settings.json`",
+  "put a needed grant in user, managed or `--settings` scope",
+]
+doc.dont = ["answer a classifier refusal with more committed prose"]
 class = """
 Claude Code's auto-mode classifier reads `autoMode` from `~/.claude/settings.json`, \
 managed settings and `--settings`, and never from `.claude/settings.json` or \
@@ -14239,6 +14427,11 @@ target = "policy/harness-grant.rego"
 [[verdict]]
 id = "shell add refused"
 gloss = "an authored shell rule or bats suite was added, moving CLOUD-843's corpus the wrong way"
+doc.why = "A new shell gate grows the corpus being retired"
+doc.do = [
+  "write it as a policy module with a compiled-binary test",
+  "or own the increase with `# stays-bash: <issue> <why>` in the added file",
+]
 class = """
 CLOUD-843's campaign is retiring 144 shell programs and 161 bats suites onto the \
 policy engine. A new one is invisible to every other sensor here, because \
@@ -14285,6 +14478,9 @@ target = "batten.toml"
 [[verdict]]
 id = "turn ask early"
 gloss = "the turn ended by offering back a decision the agent's own evidence settles"
+doc.why = "Offering an authorized action back stops the human for nothing and leaves it undone"
+doc.do = ["do it", "where a gate needs a human, ask one yes/no on the override"]
+doc.dont = ["end with \"your call\" on what the evidence settles"]
 class = """
 AGENTS.md's punt, in chat: a block reported as a decision, or "that's your call" on \
 what the evidence already settles. Offering an authorized action back stops the \
@@ -14301,6 +14497,9 @@ target = "policy/turn-ask.rego"
 [[verdict]]
 id = "prose report duplicate"
 gloss = "a finding was written as editorial rather than to a durable home"
+doc.why = "Chat stores nothing, so a finding flagged in passing has no reader"
+doc.do = ["put it in the row that owns it, or file one", "otherwise say it plainly, or not at all"]
+doc.dont = ["open with \"one thing I'd flag\" or \"worth noting\""]
 class = """
 Chat stores nothing, so a finding flagged in passing has no reader after the \
 turn ends. The tell is the hedge — an opener plus a communication verb — and it \
@@ -14322,6 +14521,8 @@ target = "say it plainly, or say nothing"
 [[verdict]]
 id = "diff ship early"
 gloss = "every changed line is a comment and no test moved, so a CI matrix would confirm nothing"
+doc.why = "A matrix spent on a comment-only diff confirms nothing that could differ"
+doc.do = ["let the next change to these files carry the prose"]
 class = """
 A full required matrix costs real minutes against a trunk landing every few \
 minutes, and on a diff CI cannot have an opinion about it confirms nothing that \
@@ -14344,6 +14545,9 @@ precondition = "the prose IS the deliverable and cannot wait for the next change
 [[verdict]]
 id = "test add refused"
 gloss = "an added path cargo autodiscovers as a test target mints a second one"
+doc.why = "Each test target relinks the whole dependency closure"
+doc.do = ["`git mv` it under `crates/batten/tests/it/` and declare it in that group's `main.rs`"]
+doc.dont = ["add a `main.rs` in a new test directory"]
 class = """
 Cargo autodiscovers a test target from TWO shapes under `crates/batten/tests/`: a \
 top-level `*.rs`, and a directory carrying `main.rs`. rustc relinks the whole \
@@ -14369,6 +14573,11 @@ target = "git mv <path> crates/batten/tests/it/<path> — then declare it in tha
 [[verdict]]
 id = "spawn add refused"
 gloss = "an integration fixture forks `git init` for itself instead of copying the template"
+doc.why = "Each hand-rolled `git init` costs a process the template already paid for"
+doc.do = [
+  "build the repository with `Fixture::git`",
+  "if initialisation is the subject, mark it `// needs-real-fixture: <issue> <why>`",
+]
 class = """
 Measured over one traced run of the suite — `GIT_TRACE2_EVENT`, one trace file \
 per git process — the fixture path spends 9,476 git processes and 25.17s, of \
@@ -14397,6 +14606,10 @@ target = "crates/batten/tests/it/common/mod.rs"
 [[verdict]]
 id = "check read never"
 gloss = "the landing workflow can move `main` without consulting the required-check roster"
+doc.why = "Branch protection requires only `final`, so a landing could move `main` past unseen checks"
+doc.do = [
+  "restore the step running `mise run checks-green` against the PR head, before the fast-forward",
+]
 class = """
 `protect-main` requires exactly one context, `final`, and `final` declares \
 `needs: [ci, batten-check, bats, perf]` — four of the twenty names in \
@@ -14423,6 +14636,8 @@ target = ".github/workflows/fast-forward.yml"
 [[verdict]]
 id = "source read unread"
 gloss = "a fixture module in the declared set could not be read, so the gate could not look"
+doc.why = "A fixture the gate could not read was never judged"
+doc.do = ["make the named file under `crates/batten/tests/it` readable and parseable"]
 class = """
 `input.tree.missing` is the could-not-look channel, and a module that iterates \
 only its delta reports green over a file it never read — the shape a dead gate \
@@ -14441,6 +14656,12 @@ target = "crates/batten/tests/it"
 [[verdict]]
 id = "issue file unclear"
 gloss = "a row this branch created was never groomed to Ready, so filing cost nothing"
+doc.why = "Ungroomed filing makes spinning off a defect cheaper than fixing it"
+doc.do = [
+  "close the row and fix it in this diff",
+  "or groom it until `batten ready lint --issue <key>` passes",
+  "or comment on the row that already owns it",
+]
 class = """
 Filing is the third sink and the most expensive one on purpose: a new row costs \
 a complete Ready block. That price is what stops a defect in this branch's own \
@@ -14468,6 +14689,12 @@ target = "batten ready lint --issue <key>"
 [[verdict]]
 id = "issue file same"
 gloss = "a row this branch filed names code this branch has open"
+doc.why = "A defect in your own diff is one you already hold the file for"
+doc.do = [
+  "close the row and fix it in this diff",
+  "or close it from the PR body so the merge lands it",
+]
+doc.dont = ["file it while the code is still your diff"]
 class = """
 The punt CLOUD-514 is about. A defect you found in your own diff is a defect you \
 are already holding the file for, so spinning it onto the board is cheaper than \
@@ -14514,6 +14741,12 @@ precondition = "the row DOCUMENTS the change being landed, so naming its files i
 [[verdict]]
 id = "branch write unsafe"
 gloss = "a push that overwrites the remote without having said what it expects to find"
+doc.why = "A bare lease compares against what the last fetch saw, so it overwrites a sibling's commit"
+doc.do = [
+  "`git push --force-with-lease=<ref>:<sha>` naming the commit you expect",
+  "or fetch and rebase onto what is there",
+]
+doc.dont = ["push a bare `--force-with-lease`"]
 class = """
 A bare `--force-with-lease` compares against this clone's remote-tracking ref, so \
 `git fetch` followed by a leased push compares EQUAL and overwrites the sibling \
@@ -14552,6 +14785,12 @@ precondition = "the history being replaced is this clone's own and no other clon
 [[verdict]]
 id = "spawn place wrong"
 gloss = "a spawn would implement in parallel, or in a worktree, inside the one checkout"
+doc.why = "One checkout has one implementer, and a worktree copy fills the disk"
+doc.do = [
+  "do the work in this checkout yourself",
+  "spawn only `Explore` or `Plan` for read-only search and design",
+]
+doc.dont = ["spawn an implementer in a worktree"]
 class = """
 A container holds one checkout on one branch, so implementation is serial and \
 done by the session itself. Subagents are for read-only search and design \
@@ -14567,6 +14806,12 @@ target = "policy/agent-spawn.rego"
 [[verdict]]
 id = "hook skip unseen"
 gloss = "a gate is switched off for this call by an environment assignment nothing recorded"
+doc.why = "A skipped step and a satisfied one look identical from here"
+doc.do = [
+  "read the step's own refusal and fix what it names",
+  "`batten wiring reclaim -y` clears `hooks-wiring-check`",
+]
+doc.dont = ["set `HK_SKIP_STEPS` on the call"]
 class = """
 `HK_SKIP_STEPS` names steps for `hk` to skip, and batten does not read it — so \
 until this class existed a switched-off gate and a satisfied one were \
@@ -14631,6 +14876,12 @@ target = "policy/hook-skip-local.rego"
 [[verdict]]
 id = "test name undefined"
 gloss = "an obligation this row declared names no case, or a case with no mutation that could kill it"
+doc.why = "An obligation can otherwise pass refinement and land with no test behind it"
+doc.do = [
+  "write the case the obligation names, in the file it names",
+  "give it a mutation, then `mise run mutant`",
+  "or groom the row to drop an obligation you are not keeping",
+]
 class = """
 `ready-lint` gates the SHAPE of a Ready block and `verify` gates the CODE, and \
 nothing compared them -- so an obligation could be written, pass refinement, and \
@@ -14669,6 +14920,11 @@ precondition = "the obligation is discharged by a successor this change declares
 [[verdict]]
 id = "marker name undefined"
 gloss = "a declared marker names a case its declared suite does not carry"
+doc.why = "A mutation declared against a case that does not exist is applied by nobody"
+doc.do = [
+  "correct the case name in the `#MUTANT` row, or write the case it names",
+  "then `mise run mutant`",
+]
 class = """
 `mise run mutant` already reports this as `names-no-case`, and that sweep runs \
 only on a schedule -- not in `verify`, not in the `hk` gate, not on any pull \
@@ -14695,6 +14951,12 @@ target = "mise run mutant"
 [[verdict]]
 id = "plan declare held"
 gloss = "an entry this branch declared is neither completed nor withdrawn"
+doc.why = "The branch said it would do this and is landing without it"
+doc.do = [
+  "do the entry, then `batten record plan` with it completed",
+  "or withdraw it deliberately in the recorded plan",
+]
+doc.dont = ["delete the entry from the record to silence it"]
 class = """
 The agent said it would do this and is landing without having done it. The gate \
 reads a status TOKEN and nothing else: it does not judge whether the entry was \
@@ -14730,6 +14992,9 @@ precondition = "the entry is work this branch could not have done — it needs a
 [[verdict]]
 id = "plan declare absent"
 gloss = "this branch is holding work open and declared no plan at all"
+doc.why = "Never recording a plan would otherwise satisfy the plan gate for free"
+doc.do = ["run `batten record plan`, empty for a genuinely trivial change"]
+doc.dont = ["fabricate an entry"]
 class = """
 Not an exhortation to plan: it closes the hole the other class would otherwise \
 leave wide open, because a gate over entries left in flight costs nothing to \
@@ -14748,6 +15013,8 @@ target = "batten record plan"
 [[verdict]]
 id = "issue file held"
 gloss = "a row this branch put on the board is neither closed here nor closed by the body"
+doc.why = "A row filed and left open is a deferral hidden in somebody else's file"
+doc.do = ["close the row and fix it in this diff", "or name it in closing form in the PR body"]
 class = """
 The punt the other two refusals cannot see. `issue file unclear` prices \
 refinement and is payable in typing; `issue file same` prices proximity \
@@ -14784,6 +15051,11 @@ precondition = "the row is work this branch could not have done — it needs a d
 [[verdict]]
 id = "program add refused"
 gloss = "a program was added under mise-tasks/ in an interpreter the corpus does not count"
+doc.why = "Moving shell logic into another interpreter keeps it in the tree uncounted"
+doc.do = [
+  "put the decision in a `policy/*.rego` module and the reading behind a verb in `crates/batten/src/`",
+]
+doc.dont = ["argue in a header that the exclusion admits it"]
 class = """
 The corpus is defined over `mise-tasks/`, and `under_mise_tasks` excludes the \
 extensions that are not shell — so a reading written in another language there \
@@ -14813,6 +15085,9 @@ target = "batten.toml"
 [[verdict]]
 id = "shell edit refused"
 gloss = "an authored shell rule or bats suite was edited in place rather than migrated"
+doc.why = "An edit keeps the shell corpus as large while the campaign reports movement"
+doc.do = ["port the predicate, delete the file, and record the successor on a `// carried:` row"]
+doc.dont = ["edit the shell file in place"]
 class = """
 The load-bearing arm. A migration replaces a shell gate; it does not maintain \
 one. An edit is invisible to every other sensor in this tree — \
@@ -14840,6 +15115,8 @@ target = "rules/policy-modules.md"
 [[verdict]]
 id = "shell edit early"
 gloss = "a write targets a path the retirement gate governs, said at the edit rather than at verify"
+doc.why = "Said after the edit, the retirement gate reads as wrong rather than as a retirement owed"
+doc.do = ["retire the file onto a module or verb rather than editing it"]
 class = """
 The same doctrine as `shell edit refused` and none of its force: this class refuses nothing and moves no exit code. It exists because ORDER changes the conclusion a reader draws. `shell-retirement` is tree-scoped, so its refusal first arrives at `mise run verify` with the edit already finished, and the cheapest reading of a finished edit plus a gate saying no is "the gate is wrong" rather than "this should have been a retirement" — measured twice in one planning session. Arriving at the write costs nothing and removes that reading. The set is deliberately WIDER than the edit-time one, because the mediated surface cannot read a file to check for a shebang: it names a path the tree gate may yet allow, which is the sanctioned direction for advice and would not be for a refusal.
 """
@@ -14854,6 +15131,8 @@ target = "rules/toolchain.md"
 [[verdict]]
 id = "gate skip unseen"
 gloss = "a CI job carves a gate step out and no job runs it"
+doc.why = "A step skipped everywhere has no symptom: the gate is simply gone"
+doc.do = ["run the step in the job meant to answer it, or stop skipping it"]
 class = """
 A workflow job may hand hk a step to skip, so the gate can be split across \
 runners instead of serialising on one. The pairing has two halves and only one \
@@ -14872,6 +15151,8 @@ target = ".github/workflows/ci.yml"
 [[verdict]]
 id = "release cover partial"
 gloss = "a release target this repository publishes names a platform a provisioned tool cannot resolve"
+doc.why = "The gap arrives on a consumer's machine as `no artifact for <key>`"
+doc.do = ["pin the platform's artifact for the provisioned tool, or stop publishing the target"]
 class = """
 Two pinned-tool surfaces exist and only one is gated. `lock-complete` holds every \
 `[tools]` entry to three mandatory platforms; `[[provision]]` carries no such \
@@ -14892,6 +15173,11 @@ target = "batten.toml"
 [[verdict]]
 id = "release check absent"
 gloss = "a published target reaches no verification rung, so it ships unlooked-at"
+doc.why = "Nothing CI runs is the binary a consumer of that target downloads"
+doc.do = [
+  "add the target to a rung such as `mise run cross-check`",
+  "or declare a `verify_gap` with its measurement",
+]
 class = """
 Every release artifact is cross-compiled on one Linux runner, so nothing CI \
 executes is ever the binary a consumer downloads. A published target therefore \
@@ -14913,6 +15199,9 @@ target = "mise run cross-check"
 [[verdict]]
 id = "release watch late"
 gloss = "the release gate is reachable only through the event that silences it, or a clock slower than the releases"
+doc.why = "A gate sharing a trigger with the failure it watches never reports it"
+doc.do = ["trigger it from a trunk push or the completion of the releasing workflow"]
+doc.dont = ["trigger it on `release`", "rely on a clock slower than the releases"]
 class = """
 A gate must not share a trigger with the failure it watches. The release-asset \
 check exists because six consecutive releases shipped no binaries and nothing \
@@ -14939,6 +15228,10 @@ target = ".github/workflows/release-assets.yml"
 [[verdict]]
 id = "layer carry unsafe"
 gloss = "an IO-bearing crate is reachable from the evaluator's node in the resolved dependency graph"
+doc.why = "The evaluator's claim that a policy module cannot do IO is then false"
+doc.do = [
+  "find where the feature was enabled, often another crate taking `regorus` with defaults, and close it there",
+]
 class = """
 `crates/batten/src/policy.rs` admits consumer-authored code to the mediated call \
 on one claim — a policy module "cannot open a file, start a process, or reach the \
@@ -14956,6 +15249,10 @@ target = "policy/evaluator-closure.rego"
 [[verdict]]
 id = "layer read absent"
 gloss = "the graph resolved and carries no evaluator node, so the closure was never walked"
+doc.why = "A walk that never started would read as nothing found"
+doc.do = [
+  "run `mise run evaluator-closure-record` again, and fix the start node if it stays absent",
+]
 class = """
 Could-not-look, and LOUD rather than silent. The producer resolved a graph and \
 found no node to start from, which means the question was not asked — reporting \
@@ -14972,6 +15269,8 @@ target = "mise run evaluator-closure-record"
 [[verdict]]
 id = "task run unknown"
 gloss = "a workflow step runs a mise task that neither the manifest nor a program under mise-tasks/ defines"
+doc.why = "The step dies when it runs, invisibly on an unattended trigger"
+doc.do = ["name a task `mise tasks ls --all` lists, or define the task"]
 class = """
 The step will fail the moment it runs, and it will fail invisibly. A workflow \
 triggered by `schedule`, `workflow_run` or `workflow_dispatch` reaches no pull \
@@ -14998,6 +15297,11 @@ target = "mise tasks ls --all"
 [[verdict]]
 id = "gate table wrong"
 gloss = "a board sweep row reads its gate's exits on the other table, so a refusal and a could-not-look trade places"
+doc.why = "A refusal and a could-not-look trade places when exits are read on the wrong table"
+doc.do = [
+  "delete the row's `refuses` for an engine chain",
+  "or name `[1]` while the body is still shell",
+]
 class = """
 The engine refuses at 2 and cannot look at 1; the shell corpus inverts that. \
 A `[[board.sweep]]` row's `refuses` names which exits are a refusal, and it is \
@@ -15016,6 +15320,8 @@ target = "policy/sweep-exit-table.rego"
 [[verdict]]
 id = "workflow read unread"
 gloss = "the workflow this rule judges would not parse, so nothing was decided"
+doc.why = "A workflow that will not parse was never judged"
+doc.do = ["fix the workflow so it parses"]
 class = """
 A declared source that will not parse is not an absent one. Absent means the \
 question does not apply to this tree; unparsed means the boundary tried to read \
@@ -15032,6 +15338,9 @@ target = ".github/workflows/ci.yml"
 [[verdict]]
 id = "path reach dead"
 gloss = "a cached path carries an expression, so no later run can reach the entry"
+doc.why = "The cache version derives from the path, so a moving path misses every time"
+doc.do = ["hold the cached `path` still and put the expression in the `key`"]
+doc.dont = ["drop the expression from the key instead"]
 class = """
 `actions/cache` identifies an entry by key AND version, and version is derived \
 from the `path` being cached. A path carrying a workflow expression can differ \
@@ -15053,6 +15362,9 @@ target = ".github/workflows/ci.yml"
 [[verdict]]
 id = "lease guard absent"
 gloss = "a job can start spending before the landing lease authorises its branch"
+doc.why = "Anything pushing to a ready pull request buys a matrix without touching the lease"
+doc.do = ["make the lease precondition the first step of every job that can start immediately"]
+doc.dont = ["install a toolchain before asking"]
 class = """
 The lease serialises landing, but enforcing it only inside the lander means \
 anything else pushing to a ready pull request buys a full matrix without ever \
@@ -15072,6 +15384,8 @@ target = ".github/workflows"
 [[verdict]]
 id = "lease guard unsafe"
 gloss = "a precondition body that will not parse reds the first step of every job"
+doc.why = "One truncated fetch would red the first step of every job and re-draft the fleet"
+doc.do = ["run the fetched precondition so a parse failure is not fatal to the caller"]
 class = """
 The presence clause matches the step's NAME, so a copy that reds its own job \
 reads as present and correct. The precondition never exits non-zero by its own \
@@ -15092,6 +15406,9 @@ target = ".github/workflows"
 [[verdict]]
 id = "check grade twice"
 gloss = "a workflow reads check status and decides green with its own copy of the predicate"
+doc.why = "Every hand-rolled copy read a wholly skipped set as green"
+doc.do = ["call `mise run checks-green` instead"]
+doc.dont = ["filter skipped runs in a copy of the predicate"]
 class = """
 The green predicate has one home, and every hand-rolled copy of it so far has \
 been the same defect: filtering out skipped runs counts a WHOLLY skipped set as \
@@ -15109,6 +15426,9 @@ target = "mise run checks-green"
 [[verdict]]
 id = "branch watch missing"
 gloss = "a bot lands on a branch prefix no workflow watches at its trigger"
+doc.why = "A bot whose branches no lander watches accumulates pull requests with nothing red"
+doc.do = ["add the bot's branch prefix to a landing workflow's trigger"]
+doc.dont = ["filter in a job condition instead of the trigger"]
 class = """
 Nothing runs on a bot's behalf unless a workflow is watching its heads. Handing \
 an ecosystem to a bot without pointing a lander at that bot's branch prefix is a \
@@ -15127,6 +15447,8 @@ target = ".github/workflows"
 [[verdict]]
 id = "task run missing"
 gloss = "CI runs a task `verify` does not, so CI is where that failure is discovered"
+doc.why = "CI becomes where a failure is discovered rather than confirmed"
+doc.do = ["make `mise run verify` reach the task CI runs"]
 class = """
 The workflow contract promises that CI runs the same tasks an author runs \
 locally, and that a run CI makes which the author cannot is a bug. A task CI \
@@ -15145,6 +15467,10 @@ target = "mise run verify"
 [[verdict]]
 id = "task cover stale"
 gloss = "a lane is exempted from parity by a claim the manifest no longer bears out"
+doc.why = "A containment claim whose bodies drifted exempts a task for a reason no longer true"
+doc.do = [
+  "restore the covering body as a prefix of the covered one, or remove the pair from `mise.toml`",
+]
 class = """
 `ci-task-parity` asks whether CI runs a task a local `verify` does not, and one \
 shape defeats the name search it asks that with: two lanes where one is the \
@@ -15166,6 +15492,11 @@ target = "mise.toml"
 [[verdict]]
 id = "task admit stale"
 gloss = "a lane is exempted from the LOCAL gate by a claim the manifest no longer bears out"
+doc.why = "An approximation whose claim lapsed turns a moved check into a deleted one"
+doc.do = [
+  "restore the triple in both bodies, `verify`'s reach to the approximator, and the pull-request job",
+  "or remove the declaration",
+]
 class = """
 `task cover stale` one row up is the sensor on a CONTAINMENT claim: one lane's \
 body is a prefix of another's, so running the wide one runs the narrow one and \
@@ -15193,6 +15524,8 @@ target = "mise.toml"
 [[verdict]]
 id = "task run duplicate"
 gloss = "a depends list names a lane and the lane that covers it, so its steps run twice a lap"
+doc.why = "Naming a lane and its cover runs the narrow lane's steps twice a lap"
+doc.do = ["drop the covered lane from the `depends` list"]
 class = """
 Two lanes where one is the other with a filter applied are a set and one of its \
 subsets, not two jobs. CI selects between them; a `depends` list that names both \
@@ -15214,6 +15547,8 @@ target = "mise.toml"
 [[verdict]]
 id = "check name unknown"
 gloss = "the required roster names a check no job creates, so a wait never terminates"
+doc.why = "The landing path waits forever on a check nothing creates, while holding the lease"
+doc.do = ["correct or remove the name in the roster in `mise.toml`"]
 class = """
 `ci-wait` and `land` decide whether a commit got an answer over the required \
 set. A listed name matching no job waits forever for a run nothing will ever \
@@ -15230,6 +15565,9 @@ target = "mise.toml"
 [[verdict]]
 id = "job list loose"
 gloss = "a release leg provisions every pinned tool, so any one of them can cost a platform binary"
+doc.why = "A tool with no part in the build can kill a release leg"
+doc.do = ["set the leg's `install_args` to the tools it uses"]
+doc.dont = ["leave it empty, which installs everything"]
 class = """
 Left unset, the provisioning step installs every pinned tool, and a release \
 leg's success then depends on every one of them resolving — including tools with \
@@ -15250,6 +15588,8 @@ target = ".github/workflows/release-artifacts.yml"
 [[verdict]]
 id = "job list missing"
 gloss = "a pull-request job is silently unrequired, so green can be reported without it"
+doc.why = "A job missing from the roster is never waited on"
+doc.do = ["add the job to the required roster in `mise.toml`"]
 class = """
 The other direction, and the one with no symptom: a job added and not listed is \
 not waited on, so a commit reports green without its verdict. That is the false \
@@ -15266,6 +15606,8 @@ target = "mise.toml"
 [[verdict]]
 id = "release open early"
 gloss = "the release pull request opens ready, so every refresh of it buys a matrix"
+doc.why = "Each trunk push refreshes the release pull request and buys a matrix nobody reads"
+doc.do = ["set the release pull request to open as a draft in `release-plz.toml`"]
 class = """
 release-plz rewrites its branch on every push to the trunk. A non-draft pull \
 request turns each of those refreshes into a full matrix on a diff that is a \
@@ -15283,6 +15625,8 @@ target = "release-plz.toml"
 [[verdict]]
 id = "config carry duplicate"
 gloss = "a retired second bot is back on ecosystems the first already owns"
+doc.why = "A re-added config resurrects a second updater on ecosystems the first serves"
+doc.do = ["delete the retired bot's config again"]
 class = """
 This property INVERTED rather than being deleted: for the length of the \
 migration it asserted that the file carried the keys bounding what that lane \
@@ -15300,6 +15644,9 @@ target = "renovate.json5"
 [[verdict]]
 id = "bound declare missing"
 gloss = "a key that decides what the bot lane spends or covers is absent or set to its own negation"
+doc.why = "A bound key absent or negated lets the bot lane spend or skip without limit"
+doc.do = ["restore the key in `renovate.json5` with the value the finding names"]
+doc.dont = ["set a limit to 0, which reads as unlimited"]
 class = """
 Five keys decide what the lane costs and what it reaches: whether its heads open \
 as drafts, whether they are rebased as the trunk moves, how many accumulate, how \
@@ -15317,6 +15664,9 @@ target = "renovate.json5"
 [[verdict]]
 id = "commit name unnamed"
 gloss = "the commit type is written where a preset silently outranks it"
+doc.why = "A preset's package rule outranks a top-level type, so bot commits fail commit-lint"
+doc.do = ["set the commit type in a package rule"]
+doc.dont = ["set a top-level `semanticCommitType`"]
 class = """
 Every commit here lands by fast-forward through commit-lint, so a bot subject \
 with no conventional type can never land. A top-level `semanticCommitType` is \
@@ -15336,6 +15686,8 @@ target = "renovate.json5"
 [[verdict]]
 id = "manifest cover missing"
 gloss = "an ecosystem this repository maintains has nothing proposing updates for it"
+doc.why = "An ecosystem nobody updates goes stale with nothing red"
+doc.do = ["enable the ecosystem in `renovate.json5`, or drop it from the maintained set"]
 class = """
 An ecosystem nobody updates goes stale with nothing red anywhere. That is \
 precisely the shape that let one pinned toolchain sit twelve releases behind \
@@ -15352,6 +15704,8 @@ target = "renovate.json5"
 [[verdict]]
 id = "job require missing"
 gloss = "the fan-in the abandon spares is not one the landing path waits for"
+doc.why = "Sparing the wrong fan-in cancels the one context branch protection requires"
+doc.do = ["make the spared fan-in the one in the required roster"]
 class = """
 A red required check cancels the runs still spending on that commit, and that \
 saving has one way to become a disaster: cancelling the run carrying the fan-in, \
@@ -15368,6 +15722,8 @@ target = "mise.toml"
 [[verdict]]
 id = "workflow declare empty"
 gloss = "the file named as the fan-in's home does not carry it"
+doc.why = "A moved fan-in leaves the abandon sparing nothing"
+doc.do = ["point the declared workflow at the file that carries the fan-in"]
 class = """
 The abandon compares the declared workflow against each run's path, so a fan-in \
 renamed or moved to another file leaves both readers pointing at nothing: the \
@@ -15384,6 +15740,8 @@ target = "mise.toml"
 [[verdict]]
 id = "job declare duplicate"
 gloss = "the abandon decides which run to spare from a literal rather than the declaration"
+doc.why = "A restated path drifts when the declaration moves"
+doc.do = ["read `CI_FANIN_WORKFLOW` in `crates/batten/src/lib.rs` rather than a literal"]
 class = """
 A literal path in the task is a second authority for one fact, and the copy that \
 drifts is always the one nobody edits. Renaming the fan-in in the manifest would \
@@ -15399,6 +15757,8 @@ target = "crates/batten/src/lib.rs"
 [[verdict]]
 id = "job reach dead"
 gloss = "the abandon is wired, safe, and invoked by nothing"
+doc.why = "An abandon nothing calls saves nothing while every safety check passes"
+doc.do = ["call `land::abandon` from the lap in `crates/batten/src/lib.rs`"]
 class = """
 The anti-vacuity term. Every other assertion about the fan-in is about making \
 the abandon SAFE; none of them notices that it is never called. A mechanism \
@@ -15414,6 +15774,8 @@ target = "crates/batten/src/lib.rs"
 [[verdict]]
 id = "cargo spelling other"
 gloss = "a foreign runner's cargo invocation is not the one `test:cargo` declares"
+doc.why = "A second spelling of `test:cargo` keeps running the old command after the task changes"
+doc.do = ["make the foreign job's cargo invocation match `test:cargo`'s body"]
 class = """
 `job run other` exempts a foreign runner, and correctly — there is no local \
 Windows, so "a free local run would have caught it" is false there. The cost of \
@@ -15432,6 +15794,9 @@ target = ".github/workflows/rust.yml"
 [[verdict]]
 id = "cargo reach absent"
 gloss = "no foreign-runner cargo invocation remains for the spelling rule to judge"
+doc.why = "A tree that lost its foreign coverage would read clean"
+doc.do = ["restore the foreign-runner test leg in `.github/workflows/rust.yml`"]
+doc.dont = ["add `--no-run`, which tests nothing"]
 class = """
 The anti-vacuity term. Every other clause of this rule judges a foreign leg, and \
 none of them fires when there is no foreign leg left — so a tree that lost its \
@@ -15449,6 +15814,8 @@ target = ".github/workflows/rust.yml"
 [[verdict]]
 id = "task read unread"
 gloss = "`test:cargo` yields no cargo invocation, so the comparison has no right-hand side"
+doc.why = "A comparison with no right-hand side would read as a pass"
+doc.do = ["restore a single cargo invocation in `test:cargo`'s body in `mise.toml`"]
 class = """
 Could-not-look, refused rather than reported clean, because a gate that found \
 nothing looks exactly like a gate that passed. It also names the one bound this \
@@ -15465,6 +15832,9 @@ target = "mise.toml"
 [[verdict]]
 id = "suite retire never"
 gloss = "a bats suite declares a subject no shell retirement can delete, and no exemption declares why"
+doc.why = "A suite over a subject the campaign never retires is undeletable, and silently so"
+doc.do = ["declare the exemption and its reason in `policy/suite-subject-retirable.rego`'s table"]
+doc.dont = ["re-subject the suite"]
 class = """
 `SubjectFacts::died` is `all`, so a suite is deletable only once EVERY declared \
 subject is gone from head. A subject that is configuration, a workflow, a \
@@ -15485,6 +15855,9 @@ target = "policy/suite-subject-retirable.rego"
 [[verdict]]
 id = "suite declare missing"
 gloss = "a bats suite declares no `# subject:` at all, so nothing can decide whether it is retirable"
+doc.why = "A suite with no subject satisfies every subject arm trivially"
+doc.do = ["retire the suite onto a compiled tier, since it cannot be edited in place"]
+doc.dont = ["delete a suite's subject header"]
 class = """
 The anti-vacuity half of the class above. Every other arm quantifies over a \
 suite's DECLARED subjects, so a suite with no header satisfies all of them \
@@ -15501,6 +15874,8 @@ target = "rules/toolchain.md"
 [[verdict]]
 id = "suite admit stale"
 gloss = "an exemption names a suite that is gone, or one whose subjects are now all retirable"
+doc.why = "An exemption nothing needs reads as a live claim about a problem that is gone"
+doc.do = ["remove the exemption from `policy/suite-subject-retirable.rego`'s table"]
 class = """
 The table held in the direction that keeps it honest. An exemption nothing needs \
 reads as a live claim about a reachability problem that no longer exists, and a \
@@ -15517,6 +15892,8 @@ target = "policy/suite-subject-retirable.rego"
 [[verdict]]
 id = "suite parse unread"
 gloss = "a declared suite could not be read, so nothing about its subject was judged"
+doc.why = "A suite the gate could not read was never judged"
+doc.do = ["make the named suite readable, then `mise run lint:shell`"]
 class = """
 Could-not-look, and it must not be spelled like either answer. A suite ABSENT \
 from the corpus is not this rule's business; a suite the boundary tried to \
@@ -15536,6 +15913,8 @@ target = "mise run lint:shell"
 [[verdict]]
 id = "task state wrong"
 gloss = "the prose describing `fmt` no longer says it is the formatters-only subset"
+doc.why = "A task and its description that disagree mislead whoever runs it"
+doc.do = ["correct `fmt`'s description and the rules file in the same commit as the task"]
 class = """
 The other direction, and the one the issue's own §2 names as the inverse \
 predicate: exactly one of the two sides is allowed to move. If a later change \
@@ -15552,6 +15931,8 @@ target = "mise.toml"
 [[verdict]]
 id = "task select missing"
 gloss = "a `fmt:*` task exists that no hk step routes, so `mise run fmt` cannot reach it"
+doc.why = "An unrouted fixer looks like a tree that needs no fixing"
+doc.do = ["route the `fmt:*` task from a step in `hk.pkl`"]
 class = """
 The silent half, and the second defect this row was written on. `deno-fmt` \
 carried a check and no fixer while `fmt`'s description named `deno fmt` among \
@@ -15571,6 +15952,8 @@ target = "hk.pkl"
 [[verdict]]
 id = "gate parse unread"
 gloss = "a declared source for the hook selection could not be read, so nothing about it was judged"
+doc.why = "A hook config the gate could not read was never judged"
+doc.do = ["fix `hk.pkl` so `mise run pkl-check hk.pkl` passes"]
 class = """
 Could-not-look, and it must not be spelled like either answer. An ABSENT config \
 is not-applicable — a tree that runs no hk hooks has no selection to judge — \
@@ -15587,6 +15970,10 @@ target = "mise run pkl-check hk.pkl"
 [[verdict]]
 id = "shell retire missing"
 gloss = "a governed file was deleted and the retirement ledger records no successor for it"
+doc.why = "A deletion with no successor makes the logic evaporate"
+doc.do = [
+  "add one `// carried:`, `// subsumed:` or `// changed:` row naming the path, under the declared glob",
+]
 class = """
 CLOUD-908's defect at file granularity: the deletion is admitted and the logic \
 evaporates, with nothing in the tree naming what now holds the predicate. Add \
@@ -15602,6 +15989,8 @@ target = "batten.toml"
 [[verdict]]
 id = "shell retire unclear"
 gloss = "a deleted file carries more than one retirement arm, so it records no answer at all"
+doc.why = "Two arms are two contradicting claims about where the logic went"
+doc.do = ["keep the one arm that is true"]
 class = """
 `carried`, `subsumed` and `changed` are three different claims about where the \
 logic went — preserved, absorbed by a more general property, or deliberately \
@@ -15617,6 +16006,8 @@ target = "batten.toml"
 [[verdict]]
 id = "shell port missing"
 gloss = "a retirement arm names no policy surface, only a test"
+doc.why = "Without a policy successor the retired gate has nothing that runs in its place"
+doc.do = ["name a `policy/*.rego` module, a preset, or engine source as a successor"]
 class = """
 A mapping that names only a test records where the assertions went and not where \
 the predicate went, so the gate it replaced has no successor anything can run. At \
@@ -15635,6 +16026,8 @@ target = "rules/policy-modules.md"
 [[verdict]]
 id = "test port missing"
 gloss = "a retirement arm names no compiled-binary test, so nothing proves the port works"
+doc.why = "A module's own tests fabricate input and cannot prove the engine builds it"
+doc.do = ["name a `crates/batten/tests/*.rs` case as a successor"]
 class = """
 A module's own `test_` rules are the load-time tier and they fabricate their own \
 input, so they cannot prove the ENGINE builds the shape the predicate reads. \
@@ -15651,6 +16044,8 @@ target = "rules/policy-modules.md"
 [[verdict]]
 id = "shell port unnamed"
 gloss = "a retirement arm names engine source without saying whether that is a new verb or mechanism"
+doc.why = "Undeclared, every port silently widens the command surface"
+doc.do = ["declare on the row whether the source is a new verb or mechanism"]
 class = """
 `crates/batten/src/*.rs` is two different dispositions wearing one spelling: a \
 new top-level CLI verb, which widens the command surface, or mechanism a module \
@@ -15670,6 +16065,8 @@ target = "rules/toolchain.md"
 [[verdict]]
 id = "shell retire never"
 gloss = "a `withdrawn` retirement arm was spent over a subject the tree still carries"
+doc.why = "Withdrawing over a live subject is a blanket permission to delete governed files"
+doc.do = ["delete the subject in this change, or name a successor on a `// carried:` row"]
 class = """
 The condition that keeps the fourth arm narrower than a `[[waiver]]` over the \
 path. A withdrawal claims that nothing replaced this file because the thing it \
@@ -15693,6 +16090,8 @@ target = "batten.toml"
 [[verdict]]
 id = "program retire never"
 gloss = "a retirement arm names a governed path this change does not retire"
+doc.why = "The cases moved while the program they tested stayed untested"
+doc.do = ["retire the named path in this change, or drop it from the row"]
 class = """
 A retirement conserves coverage only where the thing under test goes with the \
 suite or is itself the successor the cases moved onto. A row naming a \
@@ -15714,6 +16113,8 @@ target = "batten.toml"
 [[verdict]]
 id = "suite port unnamed"
 gloss = "a `ported` retirement arm names no surviving subject"
+doc.why = "Without the survivor the port claim cannot be checked"
+doc.do = ["write `subject:<path>` on the row, naming the suite's declared subject"]
 class = """
 The fifth arm claims that the cases moved and the thing under test STAYED, so the \
 survivor is the only thing a reader can check the claim against — and naming it is \
@@ -15731,6 +16132,8 @@ target = "batten.toml"
 [[verdict]]
 id = "suite port dead"
 gloss = "a `ported` retirement arm names a subject this same change retires"
+doc.why = "A port is for a subject that survived, so this is a plain retirement"
+doc.do = ["spell the row `// carried:`, or name the subject that survives"]
 class = """
 The mirror of `shell retire never`, and what keeps the two arms from \
 recording one event in two vocabularies. A port describes a subject that SURVIVED; \
@@ -15747,6 +16150,8 @@ target = "batten.toml"
 [[verdict]]
 id = "suite port held"
 gloss = "a `ported` retirement arm names a governed path this change leaves standing"
+doc.why = "Porting cases away from a live governed subject is the deletion the other arms refuse"
+doc.do = ["retire the named path in this change and spell the row `// carried:`"]
 class = """
 This is what keeps CLOUD-1130 whole in the presence of a fifth marker. A live \
 `mise-tasks/` program or a live bats suite is something the campaign RETIRES, so \
@@ -15765,6 +16170,8 @@ target = "batten.toml"
 [[verdict]]
 id = "shell retire empty"
 gloss = "a `withdrawn` retirement arm names neither a successor nor a reason"
+doc.why = "Without a reason the withdrawal is a deletion with a marker on it"
+doc.do = ["write the reason on the same row, after the retired path"]
 class = """
 The fourth arm names no successor by design, so the reason is the only thing a \
 reader can check the claim against — and an arm carrying neither is a file \
@@ -15780,6 +16187,9 @@ target = "batten.toml"
 [[verdict]]
 id = "patch judge wrong"
 gloss = "a reachability answer decides merged-ness, which a rebased landing is invisible to"
+doc.why = "After a rebase the landed commits are not the branch's, so ancestry answers wrongly"
+doc.do = ["decide merged-ness by patch identity, as `git cherry` does"]
+doc.dont = ["use `merge-base --is-ancestor`"]
 class = """
 Merged-ness is decided by patch identity, never by reachability (CLOUD-36). This \
 repository lands by fast-forward after a rebase, so the landed commits are not \
@@ -15795,6 +16205,8 @@ target = "git cherry"
 [[verdict]]
 id = "registry name absent"
 gloss = "a worktree registration names a directory that is no longer there"
+doc.why = "A stale registration refuses later, over a path nobody recognises"
+doc.do = ["run `git worktree prune`"]
 class = """
 `git worktree add` writes a registration under the common dir's `worktrees/` \
 directory and removing the directory does not remove it, so the registry keeps \
@@ -15817,6 +16229,8 @@ target = "git worktree prune"
 [[verdict]]
 id = "registry list unread"
 gloss = "the worktree registry could not be read, so nothing about it was established"
+doc.why = "A registry the gate could not read is not a clean one"
+doc.do = ["establish why the common dir's `worktrees/` will not read, and fix that"]
 class = """
 The row declares `git = ["worktrees"]`, so a null fact is not `nobody asked` — \
 the engine asked and could not look. A registry with no linked worktrees is a \
@@ -15833,6 +16247,8 @@ target = "policy/worktree-registration.rego"
 [[verdict]]
 id = "commit write missing"
 gloss = "a `git commit` names no message source, so git opens $EDITOR and blocks there"
+doc.why = "Git blocks in $EDITOR after the whole pre-commit gate has run"
+doc.do = ["write the message to a file and run `git commit -F <path>`"]
 class = """
 No `-m`, `-F`, `-C`, `--no-edit`, `--fixup` or `--squash`. Git opens $EDITOR and \
 blocks, AFTER `pre-commit` has already spent the whole gate — measured at about \
@@ -15854,6 +16270,8 @@ target = "git commit -F <path>"
 [[verdict]]
 id = "commit bind missing"
 gloss = "a `git commit -F -` has nothing redirected into the element it is written in, so it reads /dev/null"
+doc.why = "The heredoc binds to another element, so git aborts on an empty message after the gate ran"
+doc.do = ["run `git commit -F <path>`, or bind the heredoc to git's own element"]
 class = """
 The heredoc binds to the element that WRITES it. `git commit -F - && mise run \
 land <<'EOF'` hands the message to `land` and leaves git reading the harness's \
@@ -15878,6 +16296,8 @@ target = "git commit -F <path>"
 [[verdict]]
 id = "release ship early"
 gloss = "main moved inside the quiet window and the last release is inside the max wait, so the release PR holds"
+doc.why = "The release waits for a quiet trunk or the max wait, by design"
+doc.do = ["let it accumulate, or have a maintainer comment /fast-forward to land it now"]
 class = """
 The ordinary outcome on most ticks, not a failure: the release PR keeps \
 accumulating every commit since the last tag, and lands once `main` is quiet or \
@@ -15892,6 +16312,8 @@ target = "mise run release-due"
 [[verdict]]
 id = "release measure partial"
 gloss = "a release-due window is missing, torn, or read no commit on main"
+doc.why = "One window without the other decides over part of the answer"
+doc.do = ["run `mise run release-due` again"]
 class = """
 Both windows decide together, so one without the other decides over part of \
 the answer. A window whose closing line is absent or disagrees with its rows is \
@@ -15908,6 +16330,8 @@ target = "mise run release-due"
 [[verdict]]
 id = "release wire missing"
 gloss = "a release workflow does not record, complete, pin, bind or deepen what the Linear release pipeline needs"
+doc.why = "Each shape stays green while a shipped tag never reaches the tracker"
+doc.do = ["fix the workflow node the pointer names"]
 class = """
 Every shape here stays GREEN while a shipped tag never reaches Linear: a \
 dropped `sync` or `complete`, an unpinned ref, a version bound to nothing, a \
@@ -15923,6 +16347,8 @@ target = "policy/release-tracking.rego"
 [[verdict]]
 id = "release wire unread"
 gloss = "a workflow the release-tracking gate judges was not in the read"
+doc.why = "A gate that cannot read its subject must not report green"
+doc.do = ["restore the release workflow, or fix the row's sources"]
 class = "A gate that cannot read its subject must not report green; either workflow absent is this, never a pass earned on the other."
 
 [[verdict.route]]
@@ -15935,6 +16361,11 @@ target = "policy/release-tracking.rego"
 [[verdict]]
 id = "release ship missing"
 gloss = "a release is missing an archive for a matrix target, or an asset the release job uploads"
+doc.why = "A release-triggered failure reaches no gate, so releases ship without binaries unnoticed"
+doc.do = [
+  "re-run `release-artifacts.yml` by workflow_dispatch on the tag",
+  "then `mise run release-assets-record`",
+]
 class = """
 A `release`-triggered run reaches no PR and no gate, so a workflow failing on \
 every release looks exactly like one that never fired: six releases shipped no \
@@ -15954,6 +16385,10 @@ target = "mise run release-assets-record"
 [[verdict]]
 id = "release read partial"
 gloss = "the list of assets a release must carry could not be derived from the build workflow"
+doc.why = "A gate over an unknown asset list must not report a complete release"
+doc.do = [
+  "fix the matrix, upload lines or tag the reading needs, then `mise run release-assets-record`",
+]
 class = """
 The expected list is read off `release-artifacts.yml`'s matrix and upload lines \
 and `mise.toml`'s reference name. A workflow that did not parse, a matrix naming \
@@ -15970,6 +16405,11 @@ target = "mise run release-assets-record"
 [[verdict]]
 id = "event watch held"
 gloss = "this session carries no receipt that it dropped the PR's webhook subscription"
+doc.why = "A live subscription is how a session ends up babysitting a PR"
+doc.do = [
+  "run `mise run pr-unsubscribed drop <pr>`",
+  "where it cannot, call `unsubscribe_pr_activity` and pipe its answer to `mise run pr-unsubscribed record <pr>`",
+]
 class = """
 The harness arms a subscription on every PR this repo opens, and AGENTS.md \
 forbids babysitting one. `mise run pr-unsubscribed drop <pr>` makes the call; \
@@ -15985,6 +16425,8 @@ target = "mise run pr-unsubscribed drop"
 [[verdict]]
 id = "event read partial"
 gloss = "the pr-unsubscribed record is missing one of its three readings"
+doc.why = "A record missing a reading decides over part of the answer"
+doc.do = ["run `mise run pr-unsubscribed check` again"]
 class = "A record missing a reading decides over part of the answer."
 
 [[verdict.route]]
@@ -15998,6 +16440,11 @@ target = "mise run pr-unsubscribed check"
 [[verdict]]
 id = "turn file missing"
 gloss = "a turn cited path:line evidence and gave it no OPEN row"
+doc.why = "A finding written to a closed or unread row is recorded and never scheduled"
+doc.do = [
+  "file an open issue relatedTo the source, or amend an open row you read with `batten mcp call <server> get_issue`",
+]
+doc.dont = ["count a listing as a read"]
 class = """
 Recorded is not scheduled. Writing to a row that is closed — or to one this \
 clone has recorded no read of — records the finding without scheduling it. \
@@ -16017,6 +16464,8 @@ target = "file an open issue linked relatedTo the source, or amend a row that is
 [[verdict]]
 id = "branch watch stale"
 gloss = "a remote branch has outlived the story it was cut for"
+doc.why = "A short-lived branch left standing becomes a long-lived one"
+doc.do = ["delete it with `git push origin --delete <branch>` if finished, or land it"]
 class = """
 Trunk-based development asks a review branch to be "very short-lived" and names \
 the hazard: a short-lived feature branch sleepwalking into a long-lived one. \
@@ -16034,6 +16483,8 @@ target = "git push origin --delete <branch>"
 [[verdict]]
 id = "branch name duplicate"
 gloss = "one branch name has headed several merged pull requests and still exists"
+doc.why = "A reused branch name lives for days while each pull request looks short-lived"
+doc.do = ["`git push origin --delete <branch>`, and cut a fresh name for the next story"]
 class = """
 A per-PR lifetime metric cannot see this: \
 `claude/phase-3-sequential-landing-h26kx0` headed eight consecutive pull \
@@ -16051,6 +16502,8 @@ target = "git push origin --delete <branch>, and cut a fresh name for the next s
 [[verdict]]
 id = "branch list empty"
 gloss = "the branch record was written and names no branch at all"
+doc.why = "A repository with a trunk cannot have no branches, so the listing failed"
+doc.do = ["run `mise run branch-age-record` again and read what it reports"]
 class = """
 A remote reporting no branches cannot be true of a repository with a trunk, so \
 the honest reading is a listing that failed while still exiting zero. ABSENT AND \
@@ -16069,6 +16522,9 @@ target = "mise run branch-age-record"
 [[verdict]]
 id = "sleep run blocked"
 gloss = "a foreground `sleep` spends the session's own turn waiting, and the call is killed at ~2 minutes"
+doc.why = "A wait past about two minutes is killed, and the turn with it"
+doc.do = ["pass `run_in_background` on the long command itself and act on its exit notification"]
+doc.dont = ["sleep in a loop or in the background instead"]
 class = """
 A wait longer than about two minutes does not run slowly, it FAILS — measured at \
 exit 143 and 144 over a hung commit, after which the container was reclaimed \
@@ -16098,6 +16554,9 @@ target = "mise run alive, backgrounded"
 [[verdict]]
 id = "timer run refused"
 gloss = "a backgrounded `sleep` with no loop around it is a timer, not a wait"
+doc.why = "A timer reports the same whether the awaited thing finished, failed or never started"
+doc.do = ["background the long command itself and act on its exit notification"]
+doc.dont = ["wrap the sleep in a loop"]
 class = """
 It exits when the clock says so, never when the thing being waited for happens, \
 so it reports the same whether that thing finished, failed, or never started. \
@@ -16137,6 +16596,9 @@ target = "mise run alive, backgrounded"
 [[verdict]]
 id = "task watch duplicate"
 gloss = "a backgrounded wait polls a process whose exit is already notified"
+doc.why = "The exit is already delivered, and a polling watcher outlives what it watches"
+doc.do = ["delete the loop and end the turn: the backgrounded task wakes you on exit"]
+doc.dont = ["poll the process table with `pgrep`"]
 class = """
 The harness re-invokes the caller when a backgrounded task exits, measured 523 of \
 524 in one session including every failure, so a loop reading the process table \
@@ -16173,6 +16635,9 @@ target = "mise run alive, backgrounded"
 [[verdict]]
 id = "task run blocked"
 gloss = "a foreground `mise` call is killed at ~2 minutes, so it fails rather than runs slowly"
+doc.why = "Any task can cross two minutes behind a cold build, and is then killed with the turn"
+doc.do = ["re-issue the same command with `run_in_background` on the tool call"]
+doc.dont = ["estimate that a task is short enough"]
 class = """
 The harness kills a foreground command at about two minutes, so a `mise` task that runs longer does not run slowly — it FAILS, and takes the turn with it. Every task here can cross that bound behind a cargo build the caller cannot see coming, which is why this is not a duration to estimate: pass `run_in_background` on the tool call itself and act on the exit notification, delivered 523 of 524 in one session including every failure. THERE IS NO FAST LIST, and `alive` is not on one either: a carve-out is a judgement call handed back to the caller this rule exists to stop consulting, and backgrounding a short task costs one turn and returns the same text.
 """
@@ -16193,6 +16658,8 @@ target = "mise run alive, backgrounded"
 [[verdict]]
 id = "redirect write unread"
 gloss = "a backgrounded call redirecting its own output writes a second file nobody reads"
+doc.why = "The harness already captures the output where the human watches"
+doc.do = ["drop the `> file 2>&1` and read the output file the harness names back"]
 class = """
 The harness already captures a backgrounded task's output to a file it names back to the caller, and surfaces it where the HUMAN watches. A `> log 2>&1` inside the command substitutes a private file for that one: the exit notification still fires, the pane the human reads is empty, and the run they were meant to be able to see over is gone. Drop the redirect and read the harness's own output file. AN INPUT REDIRECT IS NOT THIS CLASS — reading a file into a backgrounded command discards nothing and is untouched.
 """
