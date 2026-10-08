@@ -7681,9 +7681,12 @@ delta_sources = ["**"]
 # `mise.toml` and `crates/batten/src` since CLOUD-1909: an inline task declares
 # its mutation in the manifest and an engine module in its own source, because a
 # row mutates the file it is written in. Without them an obligation naming either
-# file reads as undeclared however plainly the row is there.
+# file reads as undeclared however plainly the row is there. The preset tree since
+# CLOUD-2157, for the same reason: a vendored module declares its rows in itself,
+# as `marker name undefined`'s set below already reads it.
 line_sources = [
   "crates/batten/tests/**/*.rs",
+  "crates/batten/src/policy/presets/**/*.rego",
   "policy/*.rego",
   "tests/**/*.bats",
   "mise-tasks/**",
