@@ -751,6 +751,54 @@ fn engine_pin(
     Ok(ExitCode::Success)
 }
 
+/// Wait while the pinned release is a draft being built (CLOUD-2138).
+///
+/// **THE WINDOW IS STRUCTURAL.** Every build refuses a pin other than its own
+/// version, so the release PR moves the pin in the commit that bumps the version,
+/// and `main` pins vX from the moment it lands — while vX is a draft until its
+/// artifacts are built, checksummed and published. Fetching it in that window
+/// answers 404, and refusing then failed every lander's `verify` for the whole
+/// build. A draft is a release being built, not a missing one, so the gate asks
+/// again after one pause, up to a bounded count.
+///
+/// `None` once the tag is no longer a draft, published or absent alike: the
+/// fetch that follows decides either. `Some(waits)` when the bound ran out with
+/// the draft still a draft — could-not-look, never a verdict about the tree.
+//MUTANT draft-pin-not-awaited|s@^    if !release::is_draft(slug, tag, \&get) {$@    if true {@|a_pin_naming_an_unpublished_draft_is_waited_on_never_refused
+fn await_published(tag: &str) -> Option<u32> {
+    // The forge's owner/name: the repository URL's last two segments, the same
+    // URL `engine::release_url` downloads the release from.
+    let mut segments = env!("CARGO_PKG_REPOSITORY")
+        .trim_end_matches('/')
+        .rsplit('/');
+    let name = segments.next().unwrap_or_default();
+    let owner = segments.next().unwrap_or_default();
+    let slug = format!("{owner}/{name}");
+    let slug = slug.as_str();
+    let get = |path: &str| rest::get(path, None);
+    let bound = draft_wait_count("BATTEN_ENGINE_DRAFT_WAITS", 30);
+    let pause = draft_wait_count("BATTEN_ENGINE_DRAFT_WAIT_SECONDS", 60);
+    let mut waited = 0;
+    loop {
+        if !release::is_draft(slug, tag, &get) {
+            return None;
+        }
+        if waited >= bound {
+            return Some(waited);
+        }
+        pr_watch::pause_until(f64::from(pause), &std::sync::atomic::AtomicBool::new(false));
+        waited += 1;
+    }
+}
+
+/// A count from `name`, or `default` when it is unset or unreadable.
+fn draft_wait_count(name: &str, default: u32) -> u32 {
+    std::env::var(name)
+        .ok()
+        .and_then(|raw| raw.trim().parse::<u32>().ok())
+        .unwrap_or(default)
+}
+
 /// `batten engine gate` (CLOUD-2063): the pin as the landing path judges it.
 ///
 /// - A SOURCE pin never lands: it names a build only this branch can make.
@@ -785,6 +833,16 @@ fn engine_gate(root: &Path, lanes: &[String], out: &mut dyn Write) -> Result<Exi
         return Ok(ExitCode::Success);
     };
     let cache = state::repo_state_dir(root)?;
+    if !engine::cached_release(&cache, tag).is_file()
+        && let Some(waited) = await_published(tag)
+    {
+        writeln!(
+            out,
+            "{} engine pin {tag} is a draft its release has not published yet; waited {waited} time(s) for its release-artifacts run",
+            config_path.display()
+        )?;
+        return Ok(ExitCode::Internal);
+    }
     let binary = engine::pinned_release(&cache, env!("CARGO_PKG_REPOSITORY"), tag)?;
     // The pinned engine must decide as itself: never update itself mid-gate.
     let published = [(String::from(ENGINE_UPDATED), String::from("1"))];

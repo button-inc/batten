@@ -191,6 +191,26 @@ pub fn read_release(slug: &str, tag: Option<&str>, get: Get<'_>) -> Result<Publi
     parse_release(&answer.body).ok_or_else(|| format!("the answer for {path} is not a release"))
 }
 
+/// Whether the release tagged `tag` exists and is still a DRAFT (CLOUD-2138).
+///
+/// `false` for a published release, for a tag the list does not carry, and for
+/// any read the forge did not answer: only a positive sighting of the draft
+/// makes a caller wait, so a forge that cannot be read never turns a gate into
+/// a stall.
+#[must_use]
+pub fn is_draft(slug: &str, tag: &str, get: Get<'_>) -> bool {
+    let path = format!("repos/{slug}/releases?per_page=100");
+    let Some(answer) = get(&path).filter(Answer::is_reading) else {
+        return false;
+    };
+    serde_json::from_str::<Vec<serde_json::Value>>(&answer.body).is_ok_and(|listed| {
+        listed.iter().any(|entry| {
+            entry.get("tag_name").and_then(|name| name.as_str()) == Some(tag)
+                && entry.get("draft").and_then(serde_json::Value::as_bool) == Some(true)
+        })
+    })
+}
+
 /// The release tagged `tag`, read from the release list (CLOUD-2121).
 ///
 /// Only an entry whose `tag_name` IS the tag is taken; a list with none is the

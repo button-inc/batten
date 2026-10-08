@@ -111,6 +111,80 @@ fn a_source_pin_is_refused_on_the_landing_path() {
     );
 }
 
+/// A fixture forge whose tag read answers 404 and whose release list carries
+/// `tag` as a draft: a release being built, as every release is between its
+/// release PR landing and its artifacts publishing (CLOUD-2138).
+fn draft_forge(dir: &Path, tag: &str) -> PathBuf {
+    let mut name = dir.file_name().unwrap().to_os_string();
+    name.push(".forge");
+    let forge = dir.with_file_name(name);
+    std::fs::create_dir_all(&forge).unwrap();
+    common::write(&forge, "tag", "HTTP/2 404\n\n{\"message\": \"Not Found\"}");
+    common::write(
+        &forge,
+        "list",
+        &format!(
+            "HTTP/2 200\ncontent-type: application/json\n\n[{{\"tag_name\": \"{tag}\", \"draft\": true, \"assets\": []}}]\n"
+        ),
+    );
+    common::write(&forge, "routes", "/releases?\tlist\n/releases/tags/\ttag\n");
+    forge
+}
+
+/// THE PIN NAMES A DRAFT BEING BUILT, SO THE GATE WAITS, THEN SAYS IT COULD NOT
+/// LOOK (CLOUD-2138). Before this, fetching it answered 404 and the gate refused,
+/// failing every lander's `verify` until the release published — measured on
+/// v0.0.206. With the bound spent it is exit 3, never 2: nothing is wrong with
+/// the tree.
+#[test]
+fn a_pin_naming_an_unpublished_draft_is_waited_on_never_refused() {
+    let dir = repo(
+        "engine-gate-draft",
+        "version = 1\nengine = { release = \"v9.9.9\" }\n",
+    );
+    let forge = draft_forge(&dir, "v9.9.9");
+    let output = common::batten()
+        .state_dir(&data_dir(&dir))
+        .args(["engine", "gate"])
+        .env("BATTEN_REST_FIXTURE", &forge)
+        .env("BATTEN_ENGINE_DRAFT_WAITS", "1")
+        .env("BATTEN_ENGINE_DRAFT_WAIT_SECONDS", "0")
+        .current_dir(&dir)
+        .output()
+        .expect("run batten");
+    assert_eq!(output.status.code(), Some(3), "{}", text(&output));
+    assert!(
+        text(&output).contains(
+            "engine pin v9.9.9 is a draft its release has not published yet; waited 1 time(s)"
+        ),
+        "{}",
+        text(&output)
+    );
+}
+
+/// ANTI-VACUITY: a pin already fetched is a published release, so the gate never
+/// asks the forge about drafts and judges it as before.
+#[test]
+fn a_cached_pin_is_judged_without_asking_about_drafts() {
+    let dir = repo(
+        "engine-gate-cached-draft",
+        "version = 1\nengine = { release = \"v9.9.9\" }\n",
+    );
+    seed_release(&dir, "v9.9.9", 0, &[]);
+    let forge = draft_forge(&dir, "v9.9.9");
+    let output = common::batten()
+        .state_dir(&data_dir(&dir))
+        .args(["engine", "gate"])
+        .env("BATTEN_REST_FIXTURE", &forge)
+        .env("BATTEN_ENGINE_DRAFT_WAITS", "1")
+        .env("BATTEN_ENGINE_DRAFT_WAIT_SECONDS", "0")
+        .current_dir(&dir)
+        .output()
+        .expect("run batten");
+    assert!(output.status.success(), "{}", text(&output));
+    assert!(!text(&output).contains("draft"), "{}", text(&output));
+}
+
 #[test]
 fn no_pin_is_nothing_to_judge() {
     let dir = repo("engine-gate-unpinned", "version = 1\n");
