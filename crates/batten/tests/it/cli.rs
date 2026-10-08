@@ -448,6 +448,93 @@ fn assert_exit_codes(label: &str, cases: &[Case]) {
     }
 }
 
+/// EVERY CLI FAILURE IS A CLASSED FINDING (CLOUD-2078): a parse refusal, a
+/// verb's own usage refusal and a config fault each lead with `batten: verdict`
+/// and name the class a reader looks up, rather than a bare `error:` line.
+#[test]
+fn every_cli_failure_renders_its_verdict_label() {
+    let dir = repo_with_config("cli-failure-label", "version = 1\n");
+    let cases: [(&[&str], &str); 2] = [
+        (&["check", "--no-such-flag"], "input parse refused"),
+        (
+            &[
+                "override",
+                "request",
+                "--rule",
+                "x",
+                "--verdict",
+                "no such class here",
+                "--subject",
+                "a",
+            ],
+            "input parse refused",
+        ),
+    ];
+    for (args, class) in cases {
+        let output = run(&dir, args);
+        let err = stderr(&output);
+        assert_eq!(output.status.code(), Some(1), "{args:?}: {err}");
+        assert!(
+            err.starts_with(&format!("batten: verdict '{class}' at ")),
+            "{args:?} leads with its class: {err}"
+        );
+        assert!(
+            err.contains(&format!("; run batten policy explain '{class}'")),
+            "{args:?} names the one hop: {err}"
+        );
+    }
+}
+
+/// A GATE RUN NAMES EACH RULE'S REMEDY ONCE (CLOUD-2078), on stderr after the
+/// pointer lines: the row's `no_fix_reason` as the definition, with the count —
+/// never once per finding, never on stdout. (A `fix` row is refused at load in
+/// this build, so the `fix` arm is `refusal`'s unit case.)
+#[test]
+fn a_gate_run_prints_each_rules_remedy_once() {
+    let dir = repo_with_config(
+        "check-remedies",
+        "version = 1\n\n\
+         [[rule]]\nid = \"banned\"\nkind = \"forbid\"\nglob = \"src/**/*.rs\"\n\
+         pattern = \"BANNED\"\nseverity = \"deny\"\nno_fix_reason = \"unban it by hand\"\n\n\
+         [[rule]]\nid = \"frowned\"\nkind = \"forbid\"\nglob = \"src/**/*.rs\"\n\
+         pattern = \"FROWNED\"\nseverity = \"deny\"\n\
+         no_fix_reason = \"rename the symbol by hand\"\n",
+    );
+    fs::create_dir_all(dir.join("src")).expect("create fixture src");
+    fs::write(dir.join("src/a.rs"), "// BANNED FROWNED\n").expect("write a.rs");
+    fs::write(dir.join("src/b.rs"), "// BANNED\n").expect("write b.rs");
+    let output = run(&dir, &["check"]);
+    let err = stderr(&output);
+    let out = stdout(&output);
+    assert_eq!(output.status.code(), Some(2), "{err}");
+    let only = |rule: &str| -> String {
+        let lines: Vec<&str> = err
+            .lines()
+            .filter(|line| line.contains(&format!("rule '{rule}'")))
+            .collect();
+        assert_eq!(
+            lines.len(),
+            1,
+            "one remedy per rule, not per finding: {err}"
+        );
+        lines[0].to_owned()
+    };
+    let banned = only("banned");
+    assert!(
+        banned.contains("at 2 finding(s)") && banned.contains("unban it by hand"),
+        "the count and the row's reason: {banned}"
+    );
+    let frowned = only("frowned");
+    assert!(
+        frowned.contains("at 1 finding(s)") && frowned.contains("rename the symbol by hand"),
+        "{frowned}"
+    );
+    assert!(
+        !out.contains("unban it") && !out.contains("rename the symbol"),
+        "the data channel is untouched: {out}"
+    );
+}
+
 #[test]
 fn exit_code_contract() {
     let cases = [

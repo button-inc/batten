@@ -475,3 +475,64 @@ fn every_hook_source_declares_its_finding_lifecycle() {
         assert_eq!(source.finding_lifecycle(), expected, "{}", source.as_str());
     }
 }
+
+// --- the advisory class census (CLOUD-2078) ---------------------------------
+
+/// Every raw `Advice::new(` in production code outside `advisory.rs`, which
+/// defines it: an advisory built from free text rather than from a classed
+/// finding through `push_finding` or `Advice::rendered`.
+fn unclassed_advice(source: &str) -> Vec<(usize, String)> {
+    let production = source.split("#[cfg(test)]").next().unwrap_or(source);
+    production
+        .lines()
+        .enumerate()
+        .filter(|(_, line)| !line.trim_start().starts_with("//"))
+        .filter(|(_, line)| line.contains("Advice::new("))
+        .map(|(index, line)| (index + 1, line.trim().to_owned()))
+        .collect()
+}
+
+/// EVERY ADVISORY NAMES ITS CLASS. A free-text advisory is a line a reader can
+/// look up nowhere, which is the gap CLOUD-2078 closed emitter by emitter; this
+/// keeps a new one from reopening it.
+///
+/// The suite `capture-notice-free-text` is killed in.
+#[test]
+fn every_advisory_push_carries_a_class() {
+    let mut files = Vec::new();
+    sources(&at_root("crates/batten/src"), &mut files);
+    assert!(files.len() > 10, "the census reads the source tree");
+    let mut found = Vec::new();
+    for path in &files {
+        if path.ends_with("advisory.rs") {
+            continue;
+        }
+        let source = fs::read_to_string(path).expect("a source file is readable");
+        for (line, text) in unclassed_advice(&source) {
+            found.push(format!("{}:{line} {text}", path.display()));
+        }
+    }
+    assert!(
+        found.is_empty(),
+        "push a classed finding through `push_finding`, never free text: {found:#?}"
+    );
+}
+
+#[test]
+fn the_advisory_census_discriminates() {
+    let seeded = "fn a() {\n    advice.push(advisory::Advice::new(tier, text));\n}\n";
+    assert_eq!(unclassed_advice(seeded).len(), 1, "a raw push is found");
+    assert!(
+        unclassed_advice("// advice.push(Advice::new(tier, text))\n").is_empty(),
+        "a comment is not an emission"
+    );
+    assert!(
+        unclassed_advice("fn a() {}\n#[cfg(test)]\nfn t() { Advice::new(tier, text); }\n")
+            .is_empty(),
+        "a test tail is not production"
+    );
+    assert!(
+        unclassed_advice("    push_finding(advice, tier, refusal);\n").is_empty(),
+        "the classed route is not flagged"
+    );
+}

@@ -749,6 +749,42 @@ fn a_compaction_forgets_and_the_next_firing_is_full() {
     );
 }
 
+/// A CAPTURE NOTICE IS A FINDING (CLOUD-2078): `output write missing` with its
+/// reason id, where it used to be a free-text line. At `PostToolUse` this host
+/// declares no reachable advisory channel, so the notice reaches the operator's
+/// stream in full on every call and marks nothing (CLOUD-2145's delivery rule).
+///
+/// The suite `capture-notice-misclassed` is killed in.
+#[test]
+fn a_capture_notice_is_a_classed_finding() {
+    let repo = fixture("capture-notice");
+    let unreadable = serde_json::json!({
+        "hook_event_name": "PostToolUse",
+        "session_id": "cap",
+        "tool_name": "Read",
+        "tool_input": { "file_path": "README.md" },
+        "tool_response": [{ "not-text": 1 }],
+    });
+    let notice = |output: &std::process::Output| -> String {
+        let text = stderr(output);
+        text.lines()
+            .find(|line| line.contains("verdict 'output write missing'"))
+            .unwrap_or_else(|| panic!("the notice is classed: {text}"))
+            .to_owned()
+    };
+    let first = notice(&hook(&repo, &unreadable));
+    assert!(
+        first.starts_with("verdict 'output write missing' at capture-response-shape-unreadable")
+            && first.contains(FULL),
+        "the notice names its class and reason and carries the definition: {first}"
+    );
+    let second = notice(&hook(&repo, &unreadable));
+    assert!(
+        second.contains(FULL),
+        "an undelivered channel marks nothing, so the next is full too: {second}"
+    );
+}
+
 /// A resume carries the window over, so the epoch is kept (CLOUD-2145).
 ///
 /// The suite `resume-forgets-window` is killed in.

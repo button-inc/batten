@@ -12,10 +12,10 @@
 # with the facts they need.
 #
 # PRECEDENCE IS THE MODULE'S, NOT THE ENGINE'S, which is why this is Rego at all.
-# `stop-guard` emits at most one nudge per turn — "two nudges on one turn is how a
-# channel stops being read" — and ranks its rules by MEASURED precision: this one
-# leads at 3/3 against `finding-sink-check`'s 1/1, with three unmeasured rules
-# below. When the remaining four arrive they compose here, where the ranking is
+# `stop-guard` ranks its rules by MEASURED precision: this one leads at 3/3
+# against `finding-sink-check`'s 1/1, with three unmeasured rules below. Every
+# rung that applies speaks in that order; the finding window, not silence, keeps
+# a repeat to its pointer (CLOUD-2078). When the remaining four arrive they compose here, where the ranking is
 # readable data, rather than in declaration order in a TOML table.
 #
 # A REFUSAL AT `Stop` IS ADVICE, and that is the engine's existing rule rather

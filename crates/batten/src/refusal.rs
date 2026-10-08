@@ -849,6 +849,12 @@ pub fn of_failure(failure: &anyhow::Error) -> Option<(Refusal, String)> {
             .verdict
             .unwrap_or(crate::verdict::Native::UsageRefused);
         let (head, rest) = split(&usage.message);
+        // ALREADY A FINDING: a raiser that rendered its own refusal (`check`'s
+        // spawning-kind refusal) is printed as it is, never wrapped as the
+        // subject of a second one.
+        if usage.verdict.is_none() && parse_finding(&head).is_some() {
+            return None;
+        }
         let subjects = [crate::verdict::artifact(&head)];
         return Some((Refusal::engine(class, &subjects, Fix::None), rest));
     }
@@ -870,7 +876,7 @@ pub fn of_failure(failure: &anyhow::Error) -> Option<(Refusal, String)> {
 ///
 /// A rule whose id is also a declared class renders that class; any other rule
 /// is a rule-only line whose definition is its `no_fix_reason`.
-//MUTANT rule-remedy-dropped|s@^        Some(crate::findings::Remediation::Fix(argv)) => Fix::Run(argv.join(" ")),$@        Some(crate::findings::Remediation::Fix(_)) => Fix::None,@|a_check_run_prints_each_rules_remedy_once
+//MUTANT rule-remedy-dropped|s@^        Some(crate::findings::Remediation::Fix(argv)) => Fix::Run(argv.join(" ")),$@        Some(crate::findings::Remediation::Fix(_)) => Fix::None,@|a_rules_fix_is_its_remedy_and_its_reason_its_definition
 #[must_use]
 pub fn of_rule(
     rule: &str,
@@ -1179,6 +1185,86 @@ fn sentence(text: &str) -> String {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// AN ENGINE FINDING NAMES ITS CLASS, NEVER A RULE NOTHING RESOLVES
+    /// (CLOUD-2078). Its one hop is the class, and the line still parses.
+    #[test]
+    fn an_engine_finding_carries_no_rule_label() {
+        let refusal = Refusal::engine(
+            crate::verdict::Native::RunBroken,
+            &[crate::verdict::artifact("disk full")],
+            Fix::None,
+        );
+        let class = crate::verdict::Native::RunBroken.id();
+        for arm in [Arm::Pointer, Arm::Full] {
+            let line = refusal.render_finding(arm);
+            assert!(!line.contains("rule '"), "no rule label: {line}");
+            assert!(
+                line.starts_with(&format!("verdict '{class}' at disk full; ")),
+                "the class leads, then the subject: {line}"
+            );
+            assert!(
+                line.contains(&format!("; run batten policy explain '{class}'")),
+                "the hop names the class: {line}"
+            );
+            let parsed = parse_finding(&line).expect("an engine line parses");
+            assert_eq!(parsed.verdict.as_deref(), Some(class), "{line}");
+            assert!(parsed.rule.is_empty(), "{line}");
+        }
+    }
+
+    /// A FAILURE CHAIN IS ONE LINE (CLOUD-2078): every cause's first line is a
+    /// subject, outermost first, and what follows a first line is returned to
+    /// print after the finding rather than broken across it.
+    #[test]
+    fn a_failure_chain_renders_one_classed_line_and_returns_the_rest() {
+        let failure = anyhow::anyhow!("disk full\ncaret detail").context("write the store");
+        let (refusal, rest) = of_failure(&failure).expect("an internal failure renders");
+        assert_eq!(
+            refusal.verdict(),
+            Some(crate::verdict::Native::RunBroken.id())
+        );
+        let line = refusal.render_finding(Arm::Pointer);
+        let outer = line.find("write the store").expect("outer cause named");
+        let inner = line.find("disk full").expect("inner cause named");
+        assert!(outer < inner, "outermost first: {line}");
+        assert!(!line.contains('\n'), "one line: {line}");
+        assert_eq!(rest, "caret detail");
+    }
+
+    /// `of_rule` (CLOUD-2078): a row's `fix` is the remedy a full arm names, and
+    /// a row's `no_fix_reason` is its definition.
+    #[test]
+    fn a_rules_fix_is_its_remedy_and_its_reason_its_definition() {
+        let fix =
+            crate::findings::Remediation::Fix(vec!["mise".into(), "run".into(), "unban".into()]);
+        let fixed = of_rule("banned", &[], 3, Some(&fix)).render_finding(Arm::Full);
+        assert!(fixed.contains("mise run unban"), "{fixed}");
+        assert!(fixed.contains("at 3 finding(s)"), "{fixed}");
+        let why = crate::findings::Remediation::NoFix("by hand".into());
+        let reasoned = of_rule("banned", &[], 1, Some(&why)).render_finding(Arm::Full);
+        assert!(reasoned.contains("by hand"), "{reasoned}");
+    }
+
+    /// A usage refusal whose message is ALREADY a rendered finding is printed
+    /// as it is, never nested as the subject of `input parse refused`.
+    #[test]
+    fn a_rendered_usage_refusal_is_not_wrapped_in_a_second_finding() {
+        let inner = Refusal::declared(
+            "banned",
+            crate::verdict::Native::SpawningRuleOnReadVerb,
+            &[crate::verdict::artifact("command")],
+            Fix::None,
+        )
+        .render_finding(Arm::Full);
+        let failure = crate::UsageError::raise(inner);
+        assert!(of_failure(&failure).is_none(), "printed as raised");
+        let plain = crate::UsageError::raise("unexpected argument");
+        assert!(
+            of_failure(&plain).is_some(),
+            "a prose refusal is still classed"
+        );
+    }
 
     #[test]
     fn the_payload_carries_an_explicit_null_rather_than_dropping_the_key() {

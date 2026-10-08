@@ -677,7 +677,13 @@ fn a_tool_call_is_not_judged_by_the_end_of_turn_rule() {
 /// transcript, the contract the real check keeps.
 #[cfg(unix)]
 fn stub(dir: &Path, exit: i32, stdout: &str) {
-    let path = dir.join("finding-sink-stub.sh");
+    stub_as(dir, "finding-sink", exit, stdout);
+}
+
+/// [`stub`], declared under the row id `id`, so one fixture can carry two rungs.
+#[cfg(unix)]
+fn stub_as(dir: &Path, id: &str, exit: i32, stdout: &str) {
+    let path = dir.join(format!("{id}-stub.sh"));
     fs::write(
         &path,
         format!(
@@ -694,7 +700,7 @@ fn stub(dir: &Path, exit: i32, stdout: &str) {
     let mut text = fs::read_to_string(&config).expect("read config");
     let _ = write!(
         text,
-        "\n[[hook.handler]]\nid = \"finding-sink\"\non = \"stop\"\nrun = [{:?}]\n",
+        "\n[[hook.handler]]\nid = {id:?}\non = \"stop\"\nrun = [{:?}]\n",
         path.display().to_string()
     );
     fs::write(&config, text).expect("declare the stop row");
@@ -741,29 +747,38 @@ fn a_stranded_finding_is_pointed_at_and_the_turn_still_ends() {
     );
 }
 
-/// PRECEDENCE IS MEASURED, NOT ASSERTED. `prose report duplicate` leads at 3/3 against
-/// `finding-sink`'s 1/1, and two nudges on one turn is how a channel stops being
-/// read — so when both would fire, exactly one does and it is the first.
+/// EVERY APPLICABLE RUNG SPEAKS, IN RANK ORDER (CLOUD-2078).
+///
+/// The ladder used to stop at its first rung, so a module finding hid every
+/// handler below it and the hidden ones reached the reader never. Each rung is
+/// now a finding: the first sighting in a window is full and every later one a
+/// pointer, which is what bounds the channel — not silence. `prose report
+/// duplicate` leads at 3/3 against `finding-sink`'s 1/1, so it still comes first.
 // UNIX-ONLY, per CLOUD-113: this case spawns a `#!/bin/sh` stub, and the
 // Windows ladder's third rung resolves the interpreter a shebang names — which
 // `/bin/sh` is not on a Windows runner. `bundle.rs` gates its whole suite for
 // exactly this reason. The rules above spawn nothing and stay cross-platform.
 #[cfg(unix)]
 #[test]
-fn the_measured_rule_keeps_precedence_when_both_would_fire() {
+fn every_applicable_stop_rung_speaks_in_rank_order() {
     let dir = repo("stop-precedence");
     stub(&dir, 1, "turn 12");
+    stub_as(&dir, "second-sink", 1, "turn 13");
     let stdout = stdout_of(&hook(
         &dir,
         &stop_with_transcript(&dir, "One thing I would flag is the exit code."),
     ));
+    let at = |needle: &str| {
+        stdout
+            .find(needle)
+            .unwrap_or_else(|| panic!("{needle} is missing from the ladder: {stdout}"))
+    };
+    let module = at("prose report duplicate");
+    let first = at("turn 12");
+    let second = at("turn 13");
     assert!(
-        stdout.contains("prose report duplicate"),
-        "the measured rule speaks: {stdout}"
-    );
-    assert!(
-        !stdout.contains("turn 12"),
-        "and the one below it does not: {stdout}"
+        module < first && first < second,
+        "the rungs speak in rank order, module first, then the handlers as declared: {stdout}"
     );
 }
 
@@ -886,35 +901,44 @@ fn unlanded_work_at_a_declared_stopping_point_is_pointed_at() {
         "the pointer travels, and it names the rule that decided it: {stdout}"
     );
     assert!(
-        stdout.contains("Land it"),
-        "and what to do about it: {stdout}"
+        stdout.contains("verdict 'commit ship missing'"),
+        "and the class whose paragraph says what to do about it: {stdout}"
     );
 }
 
-/// A REMEDIAL COMMIT DOES NOT RE-ARM THE NUDGE (CLOUD-890).
+/// The `commit ship missing` line in one Stop's advisory, if it spoke.
+fn unlanded_line(stdout: &str) -> Option<String> {
+    let document: serde_json::Value = serde_json::from_str(stdout.trim()).ok()?;
+    let context = document["hookSpecificOutput"]["additionalContext"].as_str()?;
+    context
+        .lines()
+        .find(|line| line.contains("verdict 'commit ship missing'"))
+        .map(str::to_owned)
+}
+
+/// A LATER STOP ON ONE CLAIM STILL CARRIES THE POINTER (CLOUD-2078), and a
+/// remedial commit still does not re-arm the paragraph (CLOUD-890).
 ///
-/// The suppression keyed on `git rev-parse HEAD`, and the nudge it suppressed
-/// says "Land it, or say what blocks it." So the agent committed, HEAD moved,
-/// the key went void and the same pointer fired again — under "commit early and
-/// often" every remedial action re-armed the alarm. A dedup key the recipient can
-/// mint by doing what it was asked is not a suppression key.
-///
-/// Three consecutive commits on one unlanded branch, one advisory. The commits
-/// are real rather than simulated, because HEAD moving is the entire mechanism
-/// being tested.
+/// The ladder used to answer the re-arm defect with silence: one advisory per
+/// claim, then nothing, so a claim still unlanded three stops later was invisible
+/// to the reader the whole time it held. The finding grammar bounds the channel
+/// instead — the first stop in a window carries the full arm, every later one the
+/// pointer — so the level is reported while it holds and its paragraph is paid
+/// once. The commits are real rather than simulated, because HEAD moving is the
+/// mechanism CLOUD-890 measured.
 #[test]
-fn three_remedial_commits_on_one_claim_produce_one_advisory() {
+fn a_later_stop_on_one_claim_still_carries_the_unlanded_pointer() {
     let (repo, home) = unlanded_fixture("stop-unlanded-rearm");
-    let mut spoke = 0;
+    let mut lines = Vec::new();
     for step in 0..3 {
         let stdout = stdout_of(&hook_in(
             &repo,
             &home,
             &stop_payload("Landed and pushed.", false),
         ));
-        if stdout.contains(batten::completion::RULE_ID) {
-            spoke += 1;
-        }
+        lines.push(unlanded_line(&stdout).unwrap_or_else(|| {
+            panic!("stop {step} on a claim still unlanded is silent: {stdout}")
+        }));
         // THE REMEDY, as the agent would perform it: a commit. It does not land
         // the work — nothing here can — so the finding still HOLDS, which is
         // precisely the level this rule must not re-assert on.
@@ -927,9 +951,13 @@ fn three_remedial_commits_on_one_claim_produce_one_advisory() {
         common::git_in(&repo, &["add", "-A"]);
         common::git_in(&repo, &["commit", "-q", "-m", &format!("wip: step {step}")]);
     }
-    assert_eq!(
-        spoke, 1,
-        "the claim is asked once; a commit is not a new claim"
+    assert!(
+        lines[0].contains(" — "),
+        "the first stop carries the full arm: {lines:?}"
+    );
+    assert!(
+        lines[1..].iter().all(|line| !line.contains(" — ")),
+        "a commit is not a new claim, so later stops carry the pointer only: {lines:?}"
     );
 }
 
@@ -974,7 +1002,7 @@ fn a_plan_mode_turn_gets_no_write_remedy_advisory() {
         &plan_mode_payload("Here is the plan; nothing is written yet."),
     ));
     assert!(
-        !stdout.contains("Land it"),
+        !stdout.contains("commit ship missing"),
         "a plan-mode turn must not be told to do what it may not do: {stdout}"
     );
     assert!(
@@ -999,7 +1027,7 @@ fn the_same_turn_outside_plan_mode_still_gets_it() {
         &stop_payload("Here is the plan; nothing is written yet.", false),
     ));
     assert!(
-        stdout.contains("Land it"),
+        stdout.contains("verdict 'commit ship missing'"),
         "the same turn with no declared mode is advised as before: {stdout}"
     );
 }

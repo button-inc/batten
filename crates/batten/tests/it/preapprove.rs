@@ -189,6 +189,27 @@ fn a_host_read_is_preapproved_in_every_mode() {
     }
 }
 
+/// A GRANT'S REASON IS A FINDING (CLOUD-2078): the rule that granted and the
+/// class a reader looks up, rather than a bare module id.
+#[test]
+fn a_preapproval_reason_labels_its_rule_and_verdict() {
+    let read = envelope(
+        "default",
+        "Read",
+        &serde_json::json!({ "file_path": "README.md" }),
+    );
+    let (decision, reason) = verdict(&read).unwrap_or_default();
+    assert_eq!(decision, "allow", "{reason}");
+    assert!(
+        reason.contains("verdict 'call grant now' rule 'call read now'"),
+        "the grant names its class and its rule: {reason}"
+    );
+    assert!(
+        reason.contains("; run batten policy explain 'call read now' 'call grant now'"),
+        "and the one hop that resolves both: {reason}"
+    );
+}
+
 /// DROPPING A PR SUBSCRIPTION NEVER STOPS THE WORLD. The owner's ruling: the
 /// harness subscribes unasked, so the undo is granted in every mode and never
 /// refused in plan mode — measured 2026-09-30 as `plan write refused` on the
