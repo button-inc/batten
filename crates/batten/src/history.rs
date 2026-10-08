@@ -342,6 +342,7 @@ pub struct Assembler<'a> {
     shown: BTreeSet<String>,
 }
 
+//MUTANT history-cap-counts-row|s@^        let row = out.len();$@        let row = 0;@|a_row_longer_than_the_cap_still_lists_its_changes
 //MUTANT history-marks-unprinted|s@^            let full = message$@            let full = message.is_some() \&\& self.shown.insert(sha.clone()) \&\& message@|a_message_the_cap_cut_is_not_pointed_at
 //MUTANT history-full-unfitted|s@^                .is_some_and(|message| fits(short.len() + message.trim_end().len() + 3));$@                .is_some();@|a_message_the_cap_cut_is_not_pointed_at
 impl<'a> Assembler<'a> {
@@ -382,6 +383,10 @@ impl<'a> Assembler<'a> {
     pub fn assemble(&mut self, id: &str) -> Option<String> {
         let now = owned_text(&self.head, id)?;
         let mut out = format!("{}\n", now.trim_end());
+        // THE CAP BOUNDS THE CHANGES, NOT THE ROW: a row whose own comment block
+        // filled it printed "… N older change(s) not shown" and no change at all,
+        // which is the history read failing on the rows that carry the most.
+        let row = out.len();
         let mut changes: Vec<(String, String)> = Vec::new();
         for index in 0..self.versions.len() {
             let here = self.owned_at(index, id);
@@ -401,7 +406,7 @@ impl<'a> Assembler<'a> {
             // A FULL MESSAGE THAT WOULD NOT FIT FALLS BACK TO ITS SUBJECT rather than
             // ending the list: a row whose newest change is one long squash would
             // otherwise print no change at all.
-            let fits = |entry_len: usize| out.len() + entry_len <= HISTORY_BYTES;
+            let fits = |entry_len: usize| out.len() - row + entry_len <= HISTORY_BYTES;
             let message = (!self.shown.contains(sha) && index < FULL_MESSAGES).then(|| {
                 crate::git::message_of(self.root, sha).unwrap_or_else(|_| subject.clone())
             });
@@ -415,11 +420,11 @@ impl<'a> Assembler<'a> {
             } else {
                 format!("{short} {subject}\n")
             };
-            if out.len() + entry.len() > HISTORY_BYTES {
-                out.push_str(&format!(
-                    "… {} older change(s) not shown\n",
-                    changes.len() - index
-                ));
+            if out.len() - row + entry.len() > HISTORY_BYTES {
+                let unshown = changes.len() - index;
+                out.push_str("… ");
+                out.push_str(&unshown.to_string());
+                out.push_str(" older change(s) not shown\n");
                 break;
             }
             // MARKED ONLY ONCE IT IS IN THE OUTPUT: a message the cap cut was
@@ -443,6 +448,7 @@ pub fn assemble(root: &Path, config: &str, id: &str) -> anyhow::Result<Option<St
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

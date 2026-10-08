@@ -360,11 +360,15 @@ fn the_engine_repair_verb_reaches_a_skewed_pin() {
     // other command, `git push` included. The engine's own verb is the repair a
     // read-and-edit floor cannot perform, so it is the one command admitted.
     let dir = fixture("adjudicate-floor-engine-repair", PINS_ANOTHER_RELEASE);
-    assert_eq!(
-        code_for(&dir, &command_envelope("batten engine update")),
-        Some(0),
-        "the repair for a newer pin must reach the shell"
-    );
+    // AND UNDER THE PINNED TOOLCHAIN (CLOUD-2172): a source pin is repaired by a
+    // build, and the bare spelling builds on whatever toolchain is ambient.
+    for repair in ["batten engine update", "mise exec -- batten engine update"] {
+        assert_eq!(
+            code_for(&dir, &command_envelope(repair)),
+            Some(0),
+            "the repair for a newer pin must reach the shell: {repair}"
+        );
+    }
 }
 
 #[test]
@@ -375,6 +379,8 @@ fn a_command_carrying_the_repair_verb_is_still_refused() {
     for command in [
         "batten engine update && rm -rf notes.md",
         "echo x; batten engine update",
+        "mise exec -- batten engine update && git push",
+        "mise exec -- bash -c 'batten engine update'",
         "git push",
     ] {
         assert_eq!(

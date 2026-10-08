@@ -2,8 +2,8 @@
 //! (CLOUD-2144), over the compiled binary and a fixture carrying this
 //! repository's committed `batten.toml` at `HEAD`.
 //!
-//! Every case drives the hook the way a host does: a PreToolUse `Edit` of the
-//! authority, a PostToolUse `Bash` of `batten policy explain … --history` for the
+//! Every case drives the hook the way a host does: a `PreToolUse` `Edit` of the
+//! authority, a `PostToolUse` `Bash` of `batten policy explain … --history` for the
 //! read, and a `SessionStart` for the compaction. The receipt store is the
 //! fixture's own `$GIT_DIR`, so no case reads or writes the tree under test.
 
@@ -44,7 +44,7 @@ fn fixture(name: &str) -> PathBuf {
     staged.git().base_commit().build()
 }
 
-/// A PreToolUse `Edit` of the authority in `session`, replacing `old` with `new`.
+/// A `PreToolUse` `Edit` of the authority in `session`, replacing `old` with `new`.
 fn edit(repo: &Path, session: &str, old: &str, new: &str) -> String {
     let payload = serde_json::json!({
         "hook_event_name": "PreToolUse",
@@ -71,7 +71,7 @@ fn edit_row(repo: &Path, session: &str) -> String {
     edit(repo, session, ROW_LINE, &format!("{ROW_LINE}\n# touched"))
 }
 
-/// The PostToolUse a `--history` read of `ROW` produces, in `session`.
+/// The `PostToolUse` a `--history` read of `ROW` produces, in `session`.
 fn read_history(repo: &Path, session: &str) {
     let payload = serde_json::json!({
         "hook_event_name": "PostToolUse",
@@ -215,13 +215,15 @@ fn a_message_the_cap_cut_is_not_pointed_at() {
     // SIZED FROM THE ROWS THEMSELVES, so the case cannot pass vacuously: the
     // sweep's message fits under the other row's cap, and the filler leaves the
     // first row no room for it.
+    // The CHANGE LIST's length: the cap bounds that, never the row's own text.
     let measured = |id: &str| {
-        common::stdout(&run_with_stdin(
+        let out = common::stdout(&run_with_stdin(
             &repo,
             &["policy", "explain", id, "--history"],
             "",
-        ))
-        .len()
+        ));
+        out.split_once("\nchanged by, newest first:\n")
+            .map_or(0, |(_, changes)| changes.len())
     };
     let cap = 8_000;
     let sweep_body = "s".repeat(cap - measured(other) - 300);
@@ -272,6 +274,41 @@ fn a_message_the_cap_cut_is_not_pointed_at() {
     assert!(
         !out.contains("sweep both rows (printed above)"),
         "and never points at it as printed: {out}"
+    );
+}
+
+/// A row whose own comment block is longer than the cap still lists the
+/// commits that changed it: the cap bounds the change list, not the row.
+///
+/// The suite `history-cap-counts-row` is killed in.
+#[test]
+fn a_row_longer_than_the_cap_still_lists_its_changes() {
+    let repo = fixture("history-long-row");
+    let path = repo.join("batten.toml");
+    let text = std::fs::read_to_string(&path).unwrap();
+    let block = "# a long rationale line for the cap to count\n".repeat(400);
+    assert!(
+        block.len() > batten::history::HISTORY_BYTES,
+        "the premise: the row alone overruns the cap"
+    );
+    std::fs::write(
+        &path,
+        text.replacen(ROW_LINE, &format!("{block}{ROW_LINE}"), 1),
+    )
+    .unwrap();
+    git_in(
+        &repo,
+        &["commit", "-q", "-am", "a long row's newest change"],
+    );
+    let out = common::stdout(&run_with_stdin(
+        &repo,
+        &["policy", "explain", ROW, "--history"],
+        "",
+    ));
+    assert!(
+        out.contains("a long row's newest change"),
+        "the newest change is listed however long the row is: {}",
+        &out[out.len().saturating_sub(600)..]
     );
 }
 
