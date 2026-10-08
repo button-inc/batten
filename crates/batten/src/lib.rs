@@ -20627,13 +20627,10 @@ fn capture_notice(reason: &str) -> refusal::Refusal {
 }
 
 /// The one push site for a capture notice, classed.
-//MUTANT capture-notice-free-text|s@^    push_finding(advice, severity::AdvisoryTier::Advisory, capture_notice(reason));$@    advice.push(advisory::Advice::new(severity::AdvisoryTier::Advisory, format!("hook.capture.response: {reason}")));@|every_advisory_push_carries_a_class
+//MUTANT capture-notice-free-text|s@^    push_finding(advice, severity::AdvisoryTier::Advisory, notice);$@    drop(notice); advice.push(advisory::Advice::new(severity::AdvisoryTier::Advisory, format!("hook.capture.response: {reason}")));@|every_advisory_push_carries_a_class
 fn push_capture_notice(advice: &mut Vec<advisory::Advice>, reason: &str) {
-    push_finding(
-        advice,
-        severity::AdvisoryTier::Advisory,
-        capture_notice(reason),
-    );
+    let notice = capture_notice(reason);
+    push_finding(advice, severity::AdvisoryTier::Advisory, notice);
 }
 
 /// The `[capture]` bound, or `None` when the authority cannot be read.
