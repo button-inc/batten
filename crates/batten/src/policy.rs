@@ -169,6 +169,25 @@ const VIOLATION_RULE: &str = "violation";
 /// batten's refusals, and those stay deny-first by construction.
 const PREAPPROVE_RULE: &str = "preapprove";
 
+/// The rewrite set: `{"rule": id, "key": k, "value": v}` members naming a tool
+/// input key a granted call should run with (CLOUD-2157).
+///
+/// **Rides a pre-approval and nothing else.** A host applies a rewritten input
+/// only beside a permission decision, and the one Batten speaks is the grant, so
+/// a rewrite is read only where [`PREAPPROVE_RULE`] already held. It can never
+/// lower a refusal for the reason the grant cannot.
+const REWRITE_RULE: &str = "rewrite";
+
+/// The tool input keys a module may rewrite, each to a non-negative integer.
+///
+/// **An engine allowlist, never a module's choice**, for `Field`'s reason: a
+/// rewrite that could address `command` would let a config replace the call it
+/// was asked to judge, which is a reference monitor, not a gate. `timeout` is
+/// the one a host default makes wrong for the slow path a background row
+/// prescribes — Claude Code kills a backgrounded call at 30 minutes when it
+/// names none, measured 2026-10-08 on a mutant sweep (CLOUD-2157).
+const REWRITABLE: &[&str] = &["timeout"];
+
 /// The ids a module publishes — a set of strings.
 ///
 /// ```text
@@ -1654,6 +1673,68 @@ pub fn preapprove(bundle: &Bundle, input: &str) -> Look<Vec<String>> {
         return Look::CouldNotLook;
     }
     Look::Is(ids)
+}
+
+/// One input key a granted call runs with, from a module's [`REWRITE_RULE`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Rewrite {
+    /// The declared rule id that asked for it.
+    pub rule: String,
+    /// A [`REWRITABLE`] tool input key.
+    pub key: String,
+    /// The value the key takes.
+    pub value: u64,
+}
+
+/// Whether a module may rewrite this tool input key ([`REWRITABLE`]).
+//MUTANT rewrite-key-unchecked|s@^    REWRITABLE.contains(\&key)$@    true@|a_rewrite_outside_the_allowlist_is_refused
+#[must_use]
+pub fn rewritable(key: &str) -> bool {
+    REWRITABLE.contains(&key)
+}
+
+/// This bundle's rewrites for the call (CLOUD-2157).
+///
+/// Could-not-look on a fault, on an unreadable member, on an id the bundle never
+/// declared, and on a key outside [`REWRITABLE`] or a value that is not a
+/// non-negative integer — [`preapprove`]'s attribution rule, plus the allowlist.
+/// The caller treats could-not-look as no rewrite: the call runs as written.
+#[must_use]
+pub fn rewrite(bundle: &Bundle, input: &str) -> Look<Vec<Rewrite>> {
+    let mut engine = bundle.engine.clone();
+    if engine.set_input_json(input).is_err() {
+        return Look::CouldNotLook;
+    }
+    let Ok(answered) = engine.eval_query(PACKAGE_QUERY.to_owned(), false) else {
+        return Look::CouldNotLook;
+    };
+    let mut found = Vec::new();
+    for value in package_members(&answered, &bundle.packages, REWRITE_RULE) {
+        let items: Vec<regorus::Value> = match value {
+            regorus::Value::Set(items) => items.iter().cloned().collect(),
+            regorus::Value::Array(items) => items.iter().cloned().collect(),
+            regorus::Value::Undefined => continue,
+            _ => return Look::CouldNotLook,
+        };
+        for item in items {
+            let field = |name: &str| item[&regorus::Value::from(name)].clone();
+            let text = |name: &str| field(name).as_string().ok().map(|text| text.to_string());
+            let (Some(rule), Some(key)) = (text("rule"), text("key")) else {
+                return Look::CouldNotLook;
+            };
+            let Ok(value) = field("value").as_u64() else {
+                return Look::CouldNotLook;
+            };
+            if !bundle.declared.contains(rule.as_str()) {
+                return Look::CouldNotLook;
+            }
+            if !rewritable(&key) {
+                return Look::CouldNotLook;
+            }
+            found.push(Rewrite { rule, key, value });
+        }
+    }
+    Look::Is(found)
 }
 
 /// Every string a set- or array-valued rule named `rule` holds under the

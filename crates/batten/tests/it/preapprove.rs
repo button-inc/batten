@@ -116,6 +116,67 @@ fn assert_not_plan_refused(payload: &str) {
     }
 }
 
+/// The `updatedInput` the grant carries, or `None` where it carries none.
+fn updated_input(payload: &str) -> Option<serde_json::Value> {
+    documents(payload).into_iter().find_map(|document| {
+        document
+            .get("hookSpecificOutput")?
+            .get("updatedInput")
+            .cloned()
+    })
+}
+
+fn background(input: serde_json::Value) -> String {
+    envelope("auto", "Bash", &input)
+}
+
+/// A backgrounded call that names no timeout runs with the host's maximum, and
+/// every other key is the call's own (CLOUD-2157). Measured 2026-10-08: a mutant
+/// sweep backgrounded with no `timeout` was killed at the 30-minute default.
+#[test]
+fn a_backgrounded_call_without_a_timeout_is_rewritten_to_the_maximum() {
+    let payload = background(serde_json::json!({
+        "command": "mise run mutant",
+        "run_in_background": true,
+        "description": "Run the mutant task",
+    }));
+    let (decision, _) = verdict(&payload).unwrap_or_default();
+    assert_eq!(decision, "allow", "the rewrite rides the grant: {payload}");
+    let updated = updated_input(&payload).expect("the grant carries the rewrite");
+    assert_eq!(updated["timeout"], 7_200_000, "{updated}");
+    assert_eq!(
+        updated["command"], "mise run mutant",
+        "the call is unchanged"
+    );
+    assert_eq!(updated["run_in_background"], true);
+    assert_eq!(updated["description"], "Run the mutant task");
+}
+
+#[test]
+fn an_explicit_timeout_is_left_alone() {
+    let payload = background(serde_json::json!({
+        "command": "mise run mutant",
+        "run_in_background": true,
+        "timeout": 600_000,
+    }));
+    assert_eq!(
+        updated_input(&payload),
+        None,
+        "a chosen timeout is the caller's"
+    );
+}
+
+#[test]
+fn a_foreground_call_is_not_rewritten() {
+    for input in [
+        serde_json::json!({ "command": "mise run mutant", "run_in_background": false }),
+        serde_json::json!({ "command": "mise run mutant" }),
+    ] {
+        let payload = background(input);
+        assert_eq!(updated_input(&payload), None, "{payload}");
+    }
+}
+
 #[test]
 fn a_host_read_is_preapproved_in_every_mode() {
     for mode in ["default", "plan", "auto"] {

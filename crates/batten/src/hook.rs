@@ -6992,6 +6992,32 @@ pub fn policy_preapproval(
     None
 }
 
+/// The call's input as a pre-approval rewrites it, or `None` where no module
+/// asks for a rewrite (CLOUD-2157).
+///
+/// **Asked only beside a grant**: the caller holds a [`Decision::Preapproved`],
+/// so this never runs on a call any rule refused, and the host applies a
+/// rewritten input only beside a permission decision anyway. Every key other
+/// than the [`crate::policy::rewritable`] ones is the call's own, byte for byte.
+#[must_use]
+pub fn policy_rewrite(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Option<Value> {
+    if envelope.event != Event::PreTool || policy.bundles.is_empty() {
+        return None;
+    }
+    let mut updated = envelope.input.as_object()?.clone();
+    let input = call_document(envelope, facts).ok()?;
+    let mut changed = false;
+    for bundle in &policy.bundles {
+        if let crate::facts::Look::Is(rewrites) = crate::policy::rewrite(bundle, &input) {
+            for rewrite in rewrites {
+                updated.insert(rewrite.key, Value::from(rewrite.value));
+                changed = true;
+            }
+        }
+    }
+    changed.then_some(Value::Object(updated))
+}
+
 /// The input document a policy module decides over.
 ///
 /// **Neutral facts only.** Every field is the concept rather than the host's
@@ -7451,6 +7477,10 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
             "run-in-background": Field::RunInBackground
                 .read(envelope)
                 .and_then(|text| text.parse::<bool>().ok()),
+            // THE CALL'S OWN TIMEOUT, in milliseconds, or `null` where it named
+            // none (CLOUD-2157). A number cannot carry a secret, and it is what
+            // tells a call that took the host's default from one that chose.
+            "timeout": envelope.input.get("timeout").and_then(Value::as_u64),
             // THE SEGMENTATION THE ENGINE ALREADY COMPUTES (CLOUD-857).
             //
             // `command` above is the line EXACTLY as written, and for two years
@@ -10084,6 +10114,11 @@ struct ClaudeVerdictInner<'a> {
     /// the new variant). So the two travel together, in this one object.
     #[serde(rename = "additionalContext", skip_serializing_if = "Option::is_none")]
     additional_context: Option<&'a str>,
+    /// The call's input as a module rewrote it, on a PRE-APPROVAL only
+    /// (CLOUD-2157). Absent on every other verdict, for `additional_context`'s
+    /// reason: the host applies it only beside a permission decision.
+    #[serde(rename = "updatedInput", skip_serializing_if = "Option::is_none")]
+    updated_input: Option<&'a Value>,
 }
 
 /// Encode one Claude Code verdict body, whatever the verdict word.
@@ -10099,6 +10134,7 @@ fn encode_claude_verdict(event: &str, verdict: &str, reason: &str) -> serde_json
             permission_decision: verdict,
             permission_decision_reason: reason,
             additional_context: None,
+            updated_input: None,
         },
     })
 }
@@ -10413,6 +10449,7 @@ pub fn encode_preapproval(
     event: &str,
     reason: &str,
     context: Option<&str>,
+    updated_input: Option<&Value>,
 ) -> serde_json::Result<Option<String>> {
     // The table, consulted before the shape, and asked about this event.
     if !harness.capabilities().preapprove_reachable(event) {
@@ -10428,6 +10465,7 @@ pub fn encode_preapproval(
                 permission_decision: "allow",
                 permission_decision_reason: reason,
                 additional_context: context,
+                updated_input,
             },
         })
         .map(Some),

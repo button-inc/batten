@@ -143,3 +143,13 @@ fn a_sub_package_is_still_reached() {
         "a nested package's finding must carry its pointer\n{answer}"
     );
 }
+
+/// A module may rewrite `timeout` and nothing else (CLOUD-2157): a rewrite that
+/// could address `command` would replace the call the gate was asked to judge.
+#[test]
+fn a_rewrite_outside_the_allowlist_is_refused() {
+    assert!(batten::policy::rewritable("timeout"));
+    for key in ["command", "run_in_background", "file_path", ""] {
+        assert!(!batten::policy::rewritable(key), "{key} is not rewritable");
+    }
+}

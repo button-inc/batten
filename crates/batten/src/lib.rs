@@ -16589,9 +16589,16 @@ fn run_hook(
     // documents on one stream is the collision above, with the grant as the
     // discarded one.
     let context = preapproval_context(&decision, &envelope, &mut advice, ceiling);
+    // A REWRITE RIDES THE GRANT AND NOTHING ELSE (CLOUD-2157), resolved here
+    // for `settle_repair`'s reason: the policy is still in hand and `render`
+    // cannot see it.
+    let updated_input = matches!(decision, hook::Decision::Preapproved(_))
+        .then(|| hook::policy_rewrite(&policy, &envelope, &facts))
+        .flatten();
     emit_channel(harness, &envelope, out, err, advice, ceiling, &decision)?;
     let rendering = Rendering {
         context: context.as_deref(),
+        updated_input: updated_input.as_ref(),
     };
     render(harness, &envelope, decision, &rendering, mode, out, err)
 }
@@ -17002,7 +17009,10 @@ fn deny_unadjudicable(
         ),
         unadjudicable_remedy(),
     );
-    let rendering = Rendering { context: None };
+    let rendering = Rendering {
+        context: None,
+        updated_input: None,
+    };
     // WHICH CHANNEL CARRIED THE REFUSAL IS `render`'S OWN ANSWER, and reading it
     // here is what lets the number say could-not-look without ever spending the
     // refusal to do it (CLOUD-1677's exit-code half).
@@ -20564,6 +20574,9 @@ struct Rendering<'a> {
     /// The admitted advice a pre-approval carries in its own document
     /// (CLOUD-1949). Printed, never branched on — the test above.
     context: Option<&'a str>,
+    /// The call's input as a module rewrote it, carried in the grant's own
+    /// document (CLOUD-2157). Printed, never branched on.
+    updated_input: Option<&'a serde_json::Value>,
 }
 
 /// The one chooser between a finding's two arms (CLOUD-2075): the source's
@@ -20587,7 +20600,10 @@ fn render(
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
-    let Rendering { context } = *rendering;
+    let Rendering {
+        context,
+        updated_input,
+    } = *rendering;
     // THE DECISION ARRIVES AS A VALUE, which is what makes this a renderer
     // rather than a second adjudicator (CLOUD-898). A handler's refusal and the
     // engine's own reach the host through the identical match below: a
@@ -20714,7 +20730,13 @@ fn render(
         // grant cannot be spoken it still goes out as the advisory it would have
         // been on a plain allow — a nudge is never the price of a pre-approval.
         hook::Decision::Preapproved(reason) => {
-            match hook::encode_preapproval(harness, &envelope.raw_event, &reason, context)? {
+            match hook::encode_preapproval(
+                harness,
+                &envelope.raw_event,
+                &reason,
+                context,
+                updated_input,
+            )? {
                 Some(body) => writeln!(out, "{body}")?,
                 None => {
                     if let Some(text) = context {
