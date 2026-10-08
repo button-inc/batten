@@ -647,11 +647,7 @@ scope = "mediated_call"
 severity = "deny"
 pattern = "gh pr comment"
 contains = "fast-forward"
-reason = """
-Commenting /fast-forward by hand only STARTS the merge — it does not wait for \
-it, and the usual pairing with a guessed `sleep` reports before the merge \
-lands. Use `mise run land` (backgrounded): it comments, then blocks until the \
-PR is MERGED or the fast-forward bot refuses."""
+reason = "A hand /fast-forward comment only starts the merge. Run `mise run land` (backgrounded): it comments, then waits until the PR is merged or the fast-forward bot refuses."
 
 [[rule]]
 id = "check watch loose"
@@ -659,12 +655,7 @@ kind = "shape"
 scope = "mediated_call"
 severity = "deny"
 pattern = "gh pr checks"
-reason = """
-Hand-watching CI is the ad-hoc shape `mise run ci-wait` replaces. It polls \
-check-runs for HEAD until every one is terminal, prints their conclusions, and \
-exits non-zero unless all are green — with no timeout to reintroduce the \
-VM-reap gap. Background it. (`gh pr view`/`list`/`create`, `gh pr ready`, `gh \
-api`, `gh run view` are NOT blocked.)"""
+reason = "Run `mise run ci-wait` (backgrounded): it waits until every check on HEAD is terminal, prints the conclusions, and exits non-zero unless all are green. `gh pr view`, `gh api` and `gh run view` are not blocked."
 
 # TWO CLONES CAN WRITE ONE BRANCH AND NOTHING REFUSED IT, measured 2026-09-02 on
 # `claude/cloud-1295-retire-bot-issue`: a sibling session pushed onto this
@@ -865,26 +856,7 @@ severity = "deny"
 pattern = "git rebase"
 contains = "origin/main"
 unless_contains = "--onto"
-reason = """
-Rebasing onto `main` by hand is a lap of the loop `mise run land` drives, and \
-taking it off the task is the race the contract refuses rather than a repair. \
-Background `mise run land`; it fetches, rebases, verifies, pushes and waits, \
-and stops only for a rebase conflict, a failed `verify`, or red CI. TWO \
-SPELLINGS ARE LEFT ALONE, and neither is a lap: the conflict exits \
-(`--continue`, `--abort`, `--skip`) name no target at all, and \
-`git rebase --onto <newbase> <upstream> <branch>` is a range move this loop \
-cannot perform. A CONFLICT is the one step that is yours, and the route to take \
-it is `batten land replay <ref> --resolve <path>`: merge each conflicted path in \
-the worktree, then name it, and the replay re-runs from its base using your \
-bytes for that path. A path conflicting at more than one commit takes \
-`--resolve <path>=<file>`, one file per commit. The stop itself prints both \
-spellings and every conflicted path. THE CONFLICT EXITS ARE LEFT ALONE BY THE \
-PATTERN AND STILL CANNOT APPLY HERE: the replay is STATELESS, so nothing is ever \
-half-replayed, there is no rebase in progress, and `--continue`, `--abort` and \
-`--skip` have nothing to act on — a reader who reaches for one concludes the \
-loop is defective and cherry-picks around it, which completes the replay while \
-writing no lap record at all. This row denies rather than warns because a \
-warn row on this surface reaches nobody."""
+reason = "Background `mise run land`; it rebases, verifies, pushes and waits. On a conflict, merge each path and run `batten land replay <ref> --resolve <path>` (`<path>=<file>` per commit); there is no `--continue`."
 
 # The toolchain pin, given a mechanism (CLOUD-271). AGENTS.md has said "never a
 # bare `cargo`" since long before anything enforced it, which non-negotiable
@@ -978,11 +950,7 @@ severity = "deny"
 pattern = "gh pr create"
 requires_key = '(?i)\bCLOUD-[0-9]+\b'
 base = "origin/main"
-reason = """
-Search the board first (`batten board check` prints the ready frontier), then \
-name the issue: in the branch, in a commit on it, or in the PR body as `Closes \
-CLOUD-<n>`. A PR that names no issue cannot move the board when it merges, so \
-the work lands with nothing recording that it did."""
+reason = "Name the issue this work serves: in the branch, in a commit on it, or in the PR body as `Closes CLOUD-<n>`. A PR naming none cannot move the board when it merges."
 
 # The same predicate at the other publishing moment. Two rows rather than one
 # because a shape row's `pattern` is one command line, and `create` and `ready`
@@ -1027,11 +995,7 @@ severity = "deny"
 pattern = "gh pr ready"
 checks = ["verify", "linear-check"]
 key = "head"
-reason = """
-Run `mise run verify` (background it), then `mise run linear-check`, then \
-retry — or just `mise run land`, which drives the whole loop. A red run on a \
-freshly-readied PR means that step was skipped, and the CI minutes are already \
-spent by then."""
+reason = "Run `mise run verify` (backgrounded), then `mise run linear-check`, then retry, or just `mise run land`, which drives the whole loop. Readying is what starts CI, so prove it green first."
 
 # CLOUD-859. The read-the-review gate, and this repository's FIRST `[[fact]]`
 # row — the agent-sourced channel has had no consumer since CLOUD-776 landed it.
@@ -1267,13 +1231,7 @@ severity = "deny"
 pattern = "gh pr ready"
 checks = ["review-answered"]
 key = "head"
-reason = """
-Read the review before buying a matrix. Run the declared command above — it \
-prints one line per blocking condition and nothing when the head is clear — \
-then retry. If no review exists yet, force one with `@coderabbitai full review` \
-(~3 minutes measured, and free: the draft phase runs no CI), answer what it \
-says, and run the command again. Replayed over the last 100 merges this fires \
-on 89, so the usual outcome is that there is something to read."""
+reason = "Read the review before buying a matrix: run the declared command, answer each line it prints, then retry. If no review exists yet, request one with `@coderabbitai full review` and answer it."
 
 # ITS TOOL-SOURCED SIBLING, added rather than folded into the row above for the
 # reason the `[[fact]]` pair carries: widening an existing row's `checks` is
@@ -1293,13 +1251,7 @@ severity = "deny"
 pattern = "gh pr ready"
 checks = ["review-threads-clear"]
 key = "head"
-reason = """
-Read the review threads before buying a matrix. `pull_request_read`, method \
-`get_review_comments`, `perPage` 100 — the record is minted from that result, \
-and the count it stores is the threads still unresolved plus one if the page was \
-capped. Answer them, resolve them, read again, then retry. The record is filed \
-against the head that was checked out when you read, so a push after a clear \
-answer needs another read."""
+reason = "Read the review threads before buying a matrix: `pull_request_read` with method `get_review_comments` and `perPage` 100 mints the record. Answer and resolve them, read again, then retry; a push needs another read."
 
 # ITS OWN ROW RATHER THAN A SECOND ENTRY IN THE `checks` LIST ABOVE, and the
 # reason is `trust.rs`'s rather than aesthetic. Widening an existing row's
@@ -1321,12 +1273,7 @@ severity = "deny"
 pattern = "gh pr ready"
 checks = ["review-happened"]
 key = "head"
-reason = """
-Nobody has read the reviews on this head. `pull_request_read`, method \
-`get_reviews` — the record is minted from that result and stores how many \
-reviews came back. If none has, force one with `@coderabbitai full review` (~3 \
-minutes measured, and free: the draft phase runs no CI). Filed against the head \
-that was checked out when you read, so a push needs another read."""
+reason = "Read the reviews on this head: `pull_request_read` with method `get_reviews` mints the record. If there are none, request one with `@coderabbitai full review`. A push needs another read."
 
 # The DID-YOU-ANSWER-IT half. The module's own header carries the measurement,
 # the count reformulation, and why the thread ids cannot be in the message.
@@ -1393,31 +1340,7 @@ trigger = "write"
 # always meant to agree with, has accepted the alternatives all along.
 checks_any = ["claim", "bot", "carry"]
 key = "branch"
-reason = """
-Pull the issue first: search the board (`batten board check` prints the ready \
-frontier), then read it with `batten mcp call Linear get_issue '{"id":"<KEY>"}'` and pipe \
-`batten capture find <KEY> --tool get_issue --raw` to `mise run claim-check`. \
-It exits non-zero if someone is already on it, and mints the receipt if not. \
-Then move it Todo -> In Progress and assign yourself — the tracker automation \
-will not, since it fires on the PR event. Scratch work is not gated: anything \
-git-ignored, anything outside the repository, and anything under `.git` is never \
-judged.
-
-Where the payload comes from (CLOUD-990, CLOUD-1121). One command, on any \
-host, keyed on the id you already hold:
-
-    batten capture find CLOUD-N --tool get_issue --raw | mise run claim-check
-
-That replaces the three-step handle hunt this remedy used to name — list the \
-captures, grep them for the id to find a handle, then \
-`batten capture show <handle> --raw` — because finding a handle is itself a \
-read, and a remedy for "this payload should not have to be in context" should \
-not begin by putting a listing there. Those commands still work and are still \
-how you browse.
-
-If the row has never been read here, nothing is stored yet: read it \
-(`batten mcp call Linear get_issue '{"id":"<KEY>"}'`) and the capture mints itself. Every route hands over \
-bytes the tracker returned, never a re-typed copy; do NOT re-type one by hand."""
+reason = "Claim the issue first: read it with `batten mcp call Linear get_issue`, then `batten capture find <KEY> --tool get_issue --raw | mise run claim-check`, which mints the receipt. Ignored paths and `.git` are never gated."
 
 # CLOUD-1390's refusing half — the punt receipt.
 #
@@ -1501,12 +1424,7 @@ while_marker = "unlanded-nudged"
 while_unpushed = true
 checks = ["verify"]
 key = "head"
-reason = """
-The last turn ended with work off its landing target, and this head is \
-committed nowhere but this container — a reclaim ends it. Push it: this row \
-reads the remote-tracking refs and lifts once `HEAD` is on one. Or prove it \
-green here: run `mise run verify` (background it), then `mise run linear-check`, \
-then `mise run land`, which drives the loop and clears the marker."""
+reason = "The last turn ended with work unlanded, and this head exists only in this container. Push it, which lifts this once `HEAD` is on a remote ref, or run `mise run land` (backgrounded), which clears the marker."
 
 # The two read-shaped receipts, minted from the result that earned them
 # (CLOUD-1024). Both rows below DEMAND one of these; these two rows are what
@@ -3601,17 +3519,7 @@ tool = "save_issue"
 when_absent = "input-id"
 checks = ["issue-search"]
 key = "branch"
-reason = """
-Search the board before filing. That is the whole remedy: run whichever \
-issue-listing tool this session carries — search for the `list_issues` suffix \
-rather than a remembered prefix, since the connector is exposed under more than \
-one name over its lifetime (CLOUD-178) — with a query drawn from the finding. \
-The receipt mints itself from that result; there is no second call and no \
-payload to pipe anywhere. A search returning nothing still mints it — zero hits \
-is the honest outcome for a genuinely new finding and is not refused. This \
-judges nothing about whether your row IS a duplicate, which it cannot know; it \
-refuses only to let the question go unasked. Updating an existing issue is never \
-gated."""
+reason = "Search the board before filing: run this session's `list_issues` tool with a query from the finding. The receipt mints from the result, zero hits included. Updating an existing issue is never gated."
 
 # CLOUD-312 row 3: `board-move-guard` retires here. THE THIRD ARM OVER ONE TOOL,
 # and the one that needed a value rather than a presence: rows 1 and 2 split on
@@ -3673,23 +3581,7 @@ key = "named"
 key_from = "input-id"
 key_shape = "^[A-Z][A-Z0-9]*-[0-9]+$"
 max_age = 900
-reason = """
-In Review means the code is on `main`. `batten board check` decides that from the \
-row's PR attachments and it is the only thing that does — reading `git log --grep` \
-does not, because a commit can CITE a row without implementing it. Adjudicate the \
-closure, then move it: `batten mcp call Linear get_issue` for each row with \
-`includeRelations: true`, KEEPING attachments — the capture store mints itself from \
-each read — then `batten board check --issue <key> --issue <key> …` over the whole \
-closure. Exit 0 records which ids it judged and that is what authorises the move; \
-exit 2 means the board is signalling falsely, so fix that first; exit 3 means it \
-could not look, so re-fetch with attachments and relations. A piped set works too \
-(`batten capture show <handle> --raw | batten board check`), and it hands over \
-bytes the tracker returned, so it is as valid as a fresh read. Do not re-type a \
-payload by hand. Measured 2026-08-13: a bulk sweep moved fifteen rows to In \
-Review, CLOUD-480 among them with nothing of it landed, and it sat wrong for 4.5 \
-hours — the board gate refused it in one invocation the moment it was finally \
-asked (CLOUD-512). Every other column is a different question with a different \
-owner and is not gated here."""
+reason = "In Review means the code is on `main`. Read each row with `batten mcp call Linear get_issue`, then `batten board check --issue <key>` over the closure: 0 authorises the move, 2 means fix the board, 3 means re-fetch."
 
 # CLOUD-375's slot, filled (CLOUD-1100). THE FOURTH ARM OVER ONE TOOL, and the
 # one the row above's own comment reserves by name: "In Progress is
@@ -3757,21 +3649,7 @@ key_from = "input-id"
 key_shape = "^[A-Z][A-Z0-9]*-[0-9]+$"
 max_age = 300
 requires_field = { at = 6, is = "ready" }
-reason = """
-Todo is the ready queue, so this move claims the row's Ready block satisfies the \
-refinement gate — and the last read of it says otherwise. Groom the row, then \
-re-read it: `batten ready lint --issue <key>` prints exactly what fails, pointer \
-by pointer, off the payload already in the capture store and with no board call \
-at all. Fix those clauses with `save_issue`, then \
-`batten mcp call Linear get_issue '{"id":"<KEY>","includeRelations":true}'` — the receipt re-mints itself from that result, \
-carrying the new verdict, and there is no second call and no payload to pipe \
-anywhere. Reading the row again WITHOUT changing it does not help and is not \
-meant to: the verdict comes from the body the tracker stored, so only a groom \
-moves it. If the block genuinely has open questions, the honest move is Backlog \
-rather than the queue — the Definition of Ready is explicit that a row with open \
-questions leaves the queue rather than acquiring a block that papers over them. \
-Every other column is a different question with a different owner and is not \
-gated here."""
+reason = "The last read says the Ready block fails. Run `batten ready lint --issue <key>`, fix what it names with `save_issue`, then re-read with `batten mcp call Linear get_issue`. Open questions mean Backlog, not Todo."
 
 # CLOUD-312 row 2: `issue-read-guard` retires here. THE COMPLEMENT OF THE ROW
 # ABOVE, not a duplicate of it — same tool, opposite arm. That row says outright
@@ -3824,17 +3702,7 @@ key = "named"
 key_from = "input-id"
 key_shape = "^[A-Z][A-Z0-9]*-[0-9]+$"
 max_age = 300
-reason = """
-Re-read the row. That is the whole remedy: \
-`batten mcp call Linear get_issue '{"id":"<KEY>","includeRelations":true}'` (the raw tool is refused), and the receipt mints itself from that result — there \
-is no second call and no payload to pipe anywhere. Then make the write from what \
-you just read, not from the plan you built earlier: if the row changed, that is \
-the point, so decide again. This bounds how old the read was; it cannot prove the \
-row is unchanged, because the tracker offers no precondition on write. Measured \
-2026-08-13: a session read a row, planned against it for ~51 minutes, and wrote a \
-Ready block moving it into the ready queue — another session had marked it a \
-duplicate in between, and the write landed anyway (CLOUD-508). Creating an issue \
-is never gated by this row (that is `issue list unread`)."""
+reason = "Re-read the row with `batten mcp call Linear get_issue` (the raw tool is refused); the receipt mints from that result. Then write from what you just read, not from the plan you made earlier."
 
 # CLOUD-312 row 4: `connector-verb-guard` retires here. THREE ROWS, one per verb,
 # and every one is an existing AGENTS.md rule rather than a new one this config
@@ -3876,12 +3744,7 @@ kind = "shape"
 scope = "mediated_call"
 severity = "deny"
 tool = "subscribe_pr_activity"
-reason = """
-No heartbeats to babysit a PR (AGENTS.md). Landing is driven by `mise run land`, \
-which laps fetch -> rebase -> verify -> push -> ci-wait -> fast-forward by itself \
-and stops for three things only: a rebase conflict, a failed `verify`, or red CI. \
-A webhook's silence is not success. Fetching CI on demand is fine; the ban is on \
-the timer."""
+reason = "No webhook babysitting. Run `mise run land` (backgrounded): it laps to the fast-forward by itself and stops only for a rebase conflict, a failed `verify` or red CI. Fetching CI on demand is fine."
 
 # ONE PR ALL OF IT, AS A MECHANISM RATHER THAN A SENTENCE (CLOUD-1891).
 #
@@ -3929,14 +3792,7 @@ scope = "mediated_call"
 severity = "deny"
 tool = "create_pull_request"
 while_marker = "pr-open"
-reason = """
-This branch already has an unlanded pull request, and AGENTS.md's rule is one \
-PR for all of it: every extra PR is a whole CI matrix and a whole landing lap. \
-Put the new commits on the open PR's branch, or land it first — `mise run land` \
-sweeps this marker when the PR merges, and closing it unmerged through \
-`update_pull_request` clears it too. A second PR is correct only when the \
-first must MERGE before the second is correct, and that dependency belongs in \
-the Ready block's `blockers`."""
+reason = "This branch already has an unlanded pull request; the rule is one PR for all of it. Put the new commits on that PR's branch, or land it with `mise run land`. Landing or closing it unmerged sweeps this marker."
 
 [[rule]]
 id = "timer mint refused"
@@ -3944,12 +3800,7 @@ kind = "shape"
 scope = "mediated_call"
 severity = "deny"
 tool = "send_later"
-reason = """
-No heartbeats (`send_later`/Routines/timers) to babysit a PR (AGENTS.md). A \
-backgrounded task re-invokes this session when it exits, so the turn in between is \
-the designed state rather than one to fill — measured 490 self-wakeups in one \
-session against 2 that changed a decision (CLOUD-821). Background the long command \
-and act on its exit."""
+reason = "No timers to babysit a PR. Background the long command and act on its exit: a backgrounded task re-invokes this session when it ends, so the turn in between is the designed state."
 
 [[rule]]
 id = "event mint refused"
@@ -4002,15 +3853,7 @@ max = 3
 # repository writes in its own prompts to name its own files is a property of that
 # repository (non-negotiable rule 1). The charset is `memories-check`'s.
 resolves = [{ reference = "mem:([A-Za-z0-9_/-]+)", path = ".serena/memories/$1.md" }]
-reason = """
-The fixed cost of reading these is paid once PER AGENT, before any of them writes \
-a line — the manifest is the multiplicand and it dominates the fleet width. \
-Measured (CLOUD-287): eight siblings each naming the same eight artifacts, and the \
-one that finished anything spent 63,848 tokens to fetch one issue and run one \
-lint. Cheaper shapes: compute one digest ONCE and pass that, or name only the \
-artifacts this agent must read to do its own step. A path this repository does not \
-track counts for nothing here, so a URL or a branch name is already free — the \
-count is what the spawn can actually be made to read."""
+reason = "Every agent pays to read each artifact its prompt names before it writes a line. Compute one digest once and pass that, or name only what this agent's own step needs; untracked paths and URLs count for nothing."
 
 # The second conjunct. `tokens` is `budget.rs`'s own estimator rather than a rival
 # one (CLOUD-925 §1): one authority for what a ceiling is, so a per-call cap does
@@ -4133,15 +3976,7 @@ delta_sources = ["**"]
 # clean. They were recovered by executing suites one failure at a time. A
 # consumer adopting the extension rule inherits exactly that hazard, so it must
 # inherit the gate for it in the same preset.
-reason = """
-Two properties of a shell program's NAME. It says its language — `.sh` or \
-`.bash` — because a shebang is a content selector only tools that read the \
-first line honour, and one that does not covers the file silently and exits 0. \
-And a sibling it builds at run time (`"$(dirname -- "${BASH_SOURCE[0]}")/x"`) \
-names a file the tree carries, because every caller of that shape guards it and \
-exits 0, so a stale reference goes quiet rather than failing. And no change \
-writes MORE shell than its base: the `[census.shell]` homes may lose shell lines \
-and never gain them, and a new shell file lands only inside its exempt set."""
+reason = "Name a shell program `.sh` or `.bash`; make a sibling it builds at run time a file the tree carries; and write no more shell than the base, since the `[census.shell]` homes may only lose shell lines."
 
 # The substitution family of the same kind (CLOUD-864). Measured over one
 # session's transcript: 34 of 38 Bash calls had a first-class tool that does the
@@ -4190,13 +4025,7 @@ substitutes = ["cat", "head", "tail", "sed:-n", "grep", "rg", "find", "ls", "wc"
 # is not guaranteed present, and a remedy naming an absent tool is unactionable
 # in exactly the session that most needs one. The four questions below are what
 # is invariant; which instrument answers them is whatever the session has.
-reason = """
-Reach for the structured surface this session offers rather than a text utility \
-over a path this repository contains: a range of one file's contents, a pattern \
-across the tree, paths by glob, or what a NAME resolves to. \
-`rules/scanning.md` picks between those question classes. Downstream of \
-a pipe these same utilities are filters over another command's output and are \
-not refused."""
+reason = "Use the structured surface this session offers: a range of one file, a pattern across the tree, paths by glob, or what a name resolves to; `rules/scanning.md` picks between them. After a pipe these utilities are allowed."
 
 [[rule]]
 id = "verdict guard missing"
@@ -4219,19 +4048,7 @@ filters = [
   "sed",
   "wc",
 ]
-reason = """
-The compliant form is the command ALONE in the call, backgrounded and \
-unredirected:
-
-  mise run <task>          with run_in_background on the tool call itself
-
-The tool result IS the verdict, and the harness captures the output to a file it \
-names back — read that in a SEPARATE call. THIS TEXT USED TO PRESCRIBE \
-`>/tmp/<task>.log 2>&1` AND THAT FORM IS NOW REFUSED from both sides: \
-`task run blocked` because the harness kills a foreground call at ~2 minutes, and \
-`redirect write unread` because a private log file is one nobody reads while the \
-pane the human watches stays empty. A pager over a FILE is fine; a pager over a \
-live task is not."""
+reason = "Run the command alone in the call, with `run_in_background` and no redirect: its exit is the verdict. Read the output file the harness names back in a separate call. A pager over a file is fine; over a live task it is not."
 
 # A task runner: `run` names a task and its exit status is that task's verdict.
 # `mise exec`/`mise x` are not here — they run another program, and the engine's
@@ -5689,15 +5506,7 @@ kind = "shape"
 scope = "mediated_call"
 severity = "deny"
 tool = "get_issue"
-reason = """
-Read the row through the reduction: `batten mcp call Linear get_issue \
-'{"id":"<KEY>"}'`, adding `"includeRelations":true` only where you need \
-relations. It stores the response whole — so `ready lint --issue`, `claim \
-check --issue` and the board gates keep reading the entire body from the \
-capture store by key — and hands back the declared projection instead of the \
-payload. Measured 2026-09-02: 20,580 bytes stored, 609 emitted. The raw tool \
-was 85% of one session's whole tool output, and a first read is not an \
-exception: the store is what a gate reads, and it is filled either way."""
+reason = "Read the row through the reduction: `batten mcp call Linear get_issue '{\"id\":\"<KEY>\"}'`. It stores the whole response for the gates and hands back the declared projection; a first read is no exception."
 
 # THE TRANSPORT THRESHOLD, DECLARED RATHER THAN DEFAULTED (CLOUD-1367).
 #
@@ -8121,7 +7930,7 @@ line_sources = [
 ]
 module = "policy/pr-partition-restated.rego"
 severity = "deny"
-reason = "AGENTS.md is the one authority on how work lands: one branch, one commit per row, and a single request over all of them. A second statement of that decision in the opposite direction is not a duplicate, it is a competing rule -- and prose in this tree is read by an agent that then acts without re-deriving, so it carries the authority of the file it sits in. Measured 2026-09-02: one such line, quoting a single issue's own arrangement, was adopted as convention and produced a plan partitioned eight ways. Delete the sentence or paraphrase it so it states no rate."
+reason = "AGENTS.md is the one authority on how work lands: one branch, one commit per row, one request over all of them. Delete the sentence that restates it otherwise, or paraphrase it so it states no rate."
 [[rule]]
 id = "patch judge wrong"
 no_fix_reason = "class 3 (a board, forge or history action): the subject is state outside this tree, which no file edit changes; the refusal's remedy names the action"
@@ -9466,7 +9275,7 @@ scope = "tree"
 documents = [".claude/settings.json"]
 module = "policy/harness-grant.rego"
 severity = "deny"
-reason = "Claude Code's auto-mode classifier does not read `autoMode` from `.claude/settings.json` or `.claude/settings.local.json` - a checked-in repo could otherwise inject its own allow rules (https://code.claude.com/docs/en/auto-mode-config). A committed block grants nothing and reads to the next author as the place a grant goes, which is how this one grew to 22 clauses while the refusals continued (CLOUD-1379). The scopes it does read are `~/.claude/settings.json`, managed settings and `--settings`; the committed lever it does read is CLAUDE.md."
+reason = "The classifier never reads `autoMode` from `.claude/settings.json`. Delete the block; put a needed grant in `~/.claude/settings.json`, managed settings or `--settings`, and committed guidance in CLAUDE.md."
 
 # Closing the raw path, as a gate rather than as a convention (CLOUD-1260).
 #
@@ -9482,7 +9291,7 @@ scope = "tree"
 documents = [".claude/settings.json"]
 module = "policy/connector-not-granted.rego"
 severity = "deny"
-reason = "a `[[mcp.result]]` reduction decides nothing while the raw tool is granted beside it: the two routes return the same payload and the cheaper-looking one wins every time. Measured 2026-08-31 — the raw tools were registered, so one session called them 973 times for 13.2 MB, 73% of all its tool output. Drop the grant; `batten mcp call` is the route that stores the response whole and hands back a pointer, a delta and a declared projection."
+reason = "A reduction decides nothing while the raw tool is granted beside it. Drop the raw grant from `.claude/settings.json`; `batten mcp call` stores the response whole and hands back the declared projection."
 
 # No MCP permission rule is silently skipped by the host — the commit-scoped half
 # of the retired `[tasks.mcp-allow-check]` (CLOUD-843). Three predicates are pure
@@ -9512,7 +9321,7 @@ scope = "tree"
 preset = "claude-code-cloud"
 documents = [".claude/settings.json", ".mcp.json", "batten.toml"]
 severity = "deny"
-reason = "an MCP permission rule the host skips grants or refuses nothing, and its only symptom is a prompt that reads as harness behaviour: a glob in the server segment or a bare `*` is skipped with a warning, an enabled server no allow rule names prompts on every call, and a deny spelled with one host-supplied server name enforces nothing once the host renames it (CLOUD-178). Fix the rule in `.claude/settings.json`, or cover the denied tool with a `mediated_call` row keyed on its `tool`."
+reason = "An MCP rule the host skips grants or refuses nothing. Name servers literally in `.claude/settings.json`, allow each enabled server, and cover a denied tool with a `mediated_call` row keyed on its `tool`."
 
 # Module layering, over the resolved `use` graph (CLOUD-359).
 #
@@ -10052,7 +9861,7 @@ scope = "tree"
 documents = ["mise.toml", "batten.toml"]
 module = "policy/egress-fencing.rego"
 severity = "deny"
-reason = "Two surfaces fence the resolver host out of the agent proxy, and the tree owns both: mise.toml's [env] for what mise spawns, and batten.toml's [[provision.env]] for the wrapper that fences mise's own resolver (CLOUD-1455). Removing or narrowing either restores the 403 the fence exists for. Both spellings are checked on both, because every client in this class reads the lower-case name first."
+reason = "Restore the fence on both surfaces: mise.toml's [env] for what mise spawns, and batten.toml's [[provision.env]] for mise's own resolver, in both no-proxy spellings. Removing or narrowing either restores the 403."
 [[rule]]
 id = "pin declare wrong"
 no_fix_reason = "class 1 (a fix verb over config_edit): config_edit writes the TOML, but no verb exposes it as a command a row's `fix` can name, and the value to write is the judgement the finding asks for"
@@ -10061,7 +9870,7 @@ scope = "tree"
 documents = [".mcp.json", "mise.toml"]
 module = "policy/mise-pin-agreement.rego"
 severity = "deny"
-reason = "mise.toml owns the pin and .mcp.json's copy is a reference to it: move the version in mise.toml and repeat it in the scoped `mise exec`, never the other way round. A launch that names no tool before `--` provisions the whole toolchain and dies with any one of it (CLOUD-316)."
+reason = "mise.toml owns the pin: move the version there and repeat it in .mcp.json's scoped `mise exec`, never the other way round, and name the tool before `--` so the launch provisions only it."
 
 # THREE TASK BODIES THAT WERE GATES, RETIRED ONTO MODULES (CLOUD-1991). `hk-version`,
 # `no-docs-tree` and `no-armed-ripcord` were each a `grep`/`git ls-files` pipeline
@@ -16672,6 +16481,8 @@ target = "drop the `> file 2>&1` and read the output file the harness names back
 [[verdict]]
 id = "workflow parse broken"
 gloss = "a workflow could not be parsed, so its lanes were never judged"
+doc.why = "A workflow the engine could not read established nothing about its lanes"
+doc.do = ["fix the workflow so `mise run lint:deno` parses it"]
 class = """
 Could-not-look, and deliberately not spelled the same way as a workflow whose \
 lanes are all safe. A file the engine could not read has established nothing \
@@ -16686,6 +16497,11 @@ target = "mise run lint:deno"
 [[verdict]]
 id = "lane guard missing"
 gloss = "a job whose TRIGGER carries an outside head holds contents:write and tests no origin"
+doc.why = "An outside head running with a write token can push to this repository"
+doc.do = [
+  "compare `head_repository.full_name` against `github.repository` before using the permission",
+  "or drop `contents: write`",
+]
 class = """
 The privileged-lane shape where the event itself hands the job a head: \
 `pull_request`, `pull_request_target` or `workflow_run`, a token that can write, \
@@ -16708,6 +16524,11 @@ target = ".github/workflows"
 [[verdict]]
 id = "lane resolve missing"
 gloss = "a job that LOOKS UP an outside head holds contents:write and tests no origin"
+doc.why = "An outside head resolved through the pulls API runs with a write token"
+doc.do = [
+  "compare the resolved pull's `.head.repo.full_name` against this repository before checking it out",
+]
+doc.dont = ["test `head_repository.full_name`, which this event does not carry"]
 class = """
 The same privileged-lane shape reached the other way: no trigger carries a head, \
 so the job goes and finds one through the pulls API -- a cron arm, or an \
@@ -16727,6 +16548,8 @@ target = ".github/workflows"
 [[verdict]]
 id = "pin declare other"
 gloss = "a tool version .mcp.json names is not the version mise.toml pins"
+doc.why = "The MCP server silently keeps running the old version after a bump"
+doc.do = ["set the version in `.mcp.json` to the one `mise.toml` pins"]
 class = """
 The second place a pin is written cannot drift from the first. `mise exec` treats \
 the named version as a REQUEST and installs it, so a bump in `mise.toml` leaves \
@@ -16743,6 +16566,8 @@ target = ".mcp.json"
 [[verdict]]
 id = "pin declare missing"
 gloss = "a tool .mcp.json launches has no plain-string pin in mise.toml at all"
+doc.why = "The version the server runs is then decided by a file that owns no version"
+doc.do = ["pin the tool as a plain string in `mise.toml`'s `[tools]`"]
 class = """
 A reference with no authority behind it is not a pin, it is a second opinion. \
 `mise exec` will install whatever the reference names, so the version the server \
@@ -16760,6 +16585,8 @@ target = "mise.toml"
 [[verdict]]
 id = "call run loose"
 gloss = "a `mise exec` launch names no tool before `--`, so it provisions the whole toolchain"
+doc.why = "One unrelated tool failing to install takes the server down"
+doc.do = ["name the tool and version before `--` in `.mcp.json`"]
 class = """
 The regression CLOUD-316 is actually about, and the reason the pin exists at all. \
 A bare `mise exec --` provisions every tool in the manifest before exec'ing \
@@ -16778,6 +16605,8 @@ target = ".mcp.json"
 [[verdict]]
 id = "pin read unread"
 gloss = "mise.toml could not be read, so no pin reference could be compared against it"
+doc.why = "A comparison against an unreadable authority compared nothing"
+doc.do = ["make `mise.toml` parse again"]
 class = """
 Could-not-look, kept loud. `mise.toml` carries the pins, so a tree that could not \
 read it cannot judge a single reference — reporting "they agree" having compared \
@@ -16794,6 +16623,8 @@ target = "mise.toml"
 [[verdict]]
 id = "task name undefined"
 gloss = "a command row names a task this tree does not define"
+doc.why = "The task fails to resolve and the engine reports a finding about a tree it never inspected"
+doc.do = ["define the task in `mise.toml`, or name one that exists"]
 class = """
 `mise run <task>` resolves from the working directory, and the runner is on PATH, \
 so the row does not fail to launch — it STARTS, exits non-zero, and the engine \
@@ -16816,6 +16647,8 @@ target = "batten.toml"
 [[verdict]]
 id = "config parse broken"
 gloss = "the committed authority could not be parsed, so none of its rows could be judged"
+doc.why = "An unreadable authority must not look like a clean one"
+doc.do = ["make `batten.toml` parse, then `mise run config-lint`"]
 class = """
 `batten.toml` carries the rows, so a tree that could not read it cannot have its \
 rows judged at all. Loud rather than silent, for the reason every could-not-look \
@@ -16831,6 +16664,9 @@ target = "mise run config-lint"
 [[verdict]]
 id = "layer reach refused"
 gloss = "a module reaches one the layer table places below it"
+doc.why = "An upward import breaks the layering the module map documents"
+doc.do = ["move the code to the right layer, or invert the dependency"]
+doc.dont = ["reach it through a re-export"]
 class = """
 A layering this tree documents and, before this rule, nothing enforced. The edge \
 is read off the `use` graph rather than off the text, so an import reached \
@@ -16845,6 +16681,8 @@ target = ".serena/memories/engineering/module-map.md"
 [[verdict]]
 id = "step cover missing"
 gloss = "the hook step's trigger does not select a path the config makes an input"
+doc.why = "The gate stops running for commits that touch only that path"
+doc.do = ["add the path to the step's `glob = List(...)`, or narrow the rule that demands it"]
 class = """
 A trigger narrower than the rule set it serves deletes feedback while preserving the verdict: the gate simply stops running for commits that touch only that path, and nothing goes red. Add the path to the step's `glob = List(...)`, or narrow the rule that demands it.
 """
@@ -16857,6 +16695,8 @@ target = "batten.toml"
 [[verdict]]
 id = "step select missing"
 gloss = "the step that runs the gate declares no trigger at all"
+doc.why = "A glob-less step runs on every commit"
+doc.do = ["declare the step's `glob` list"]
 class = """
 A glob-less step runs on every commit, which is what the trigger removed. Its absence is a regression rather than a default: declare the list, or accept the cost deliberately and say so.
 """
@@ -16869,6 +16709,8 @@ target = "batten.toml"
 [[verdict]]
 id = "config parse unread"
 gloss = "the config this containment is read out of yielded no rule glob and no budget path"
+doc.why = "A config the check parses nothing out of is a failed parse, not one with no inputs"
+doc.do = ["fix the parse, or the config"]
 class = """
 A config a containment check parses nothing out of is a failed parse, never a config with no inputs — passing on it is the vacuous green such a check produces most easily. Fix the parse, or the config.
 """
@@ -16881,6 +16723,9 @@ target = "batten.toml"
 [[verdict]]
 id = "version pin stale"
 gloss = "a workflow pins an action commit known to predate a fix this repository depends on"
+doc.why = "A bump back to that commit is a silent downgrade nobody reviews"
+doc.do = ["move the pin forward past the fix"]
+doc.dont = ["remove the denylist entry"]
 class = """
 A bump resolving back to that commit is a silent downgrade, and this repository lands bot bumps with no human in the loop — so the next occurrence of the defect reads as fresh. Move the pin forward; never remove the denylist entry, because a commit does not stop predating the fix.
 """
@@ -16893,6 +16738,8 @@ target = "batten.toml"
 [[verdict]]
 id = "version pin unread"
 gloss = "no judgeable pin of the action under test was found in the workflows"
+doc.why = "A floating ref or a missing pin leaves the denylist unable to speak"
+doc.do = ["pin the action by sha in the workflows"]
 class = """
 A floating ref carries no sha, so the denylist cannot speak about it; a tree with no pin of the action at all is a question this gate could not ask. Either is unreadable rather than clean, because a gate whose subject can vanish and read as green is not a gate.
 """
@@ -16905,6 +16752,11 @@ target = "batten.toml"
 [[verdict]]
 id = "tool reach absent"
 gloss = "a hook registered BY PATH shells out to a tool the manifest pins"
+doc.why = "A by-path hook resolves the tool unpinned or not at all, and fails open"
+doc.do = [
+  "register it through the task runner",
+  "or drop the dependency, or assert the tool and declare `#PIN-OK: <tool>`",
+]
 class = """
 A by-path invocation does not get the task runner's env, so that tool resolves unpinned or not at all — and every hook here fails OPEN, so an absent one allows silently instead of erroring. Register it through the runner and pay the startup, drop the dependency, or assert the tool yourself and declare `#PIN-OK: <tool>` beside the assertion.
 """
@@ -16917,6 +16769,8 @@ target = "batten.toml"
 [[verdict]]
 id = "tool list empty"
 gloss = "the manifest pins no tool, so no by-path hook can be judged against it"
+doc.why = "With nothing pinned every by-path hook passes vacuously"
+doc.do = ["restore the `[tools]` table, or point the rule at the manifest that has one"]
 class = """
 With the pinned set empty every by-path registration passes vacuously, which is a gate judging nothing while reporting clean. Restore the `[tools]` table, or point the rule at the manifest that has one.
 """
@@ -16929,6 +16783,8 @@ target = "batten.toml"
 [[verdict]]
 id = "version declare other"
 gloss = "a derived copy of the toolchain pin names a different compiler line"
+doc.why = "A drifted copy silently switches off the resolution it was written for"
+doc.do = ["raise the pin, then set both copies to its major.minor"]
 class = """
 The pin is the authority and the declared floor and the bot's constraint are its copies; a copy that drifts switches off the resolution it was written for, silently. Raise the pin, then set both copies to its major.minor — the comparison is equality, not a bound, and a patch component is not a difference.
 """
@@ -16941,6 +16797,8 @@ target = "batten.toml"
 [[verdict]]
 id = "version declare missing"
 gloss = "a file that must carry the toolchain number carries none"
+doc.why = "Silence on one copy reads as agreement, and an absent bot constraint switches MSRV resolution off"
+doc.do = ["write the toolchain's major.minor into the file the finding names"]
 class = """
 Silence on any one of the three would read as agreement, which is the failure this family exists to prevent. An absent bot constraint in particular is MSRV-aware resolution switched off rather than a neutral omission, because that updater does not read the manifest floor.
 """
@@ -16953,6 +16811,8 @@ target = "batten.toml"
 [[verdict]]
 id = "input select missing"
 gloss = "a workflow's paths filter does not select an input its jobs read"
+doc.why = "Too narrow a filter makes the jobs absent, and absent reads as green"
+doc.do = ["add the path to the filter, or drop the probe that claims the job reads it"]
 class = """
 A filter that selects too narrowly does not fail: the jobs are simply ABSENT, the required-checks reader accepts absent by design, and the regression lands with every check green. Add the path, or drop the probe that claims the job reads it.
 """

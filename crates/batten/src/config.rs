@@ -1917,6 +1917,16 @@ pub struct TextColumn {
 /// 512. A growth bound over what exists, not a target for it.
 pub const SENTENCE_MAX: usize = 512;
 
+/// The remedy tier: a rule's `reason`, which a first sighting prints as the
+/// class doc's `Do:` (CLOUD-2143).
+///
+/// CHOSEN FROM THE DOC BUDGET, NOT MEASURED: the full arm a first sighting
+/// pays is the line, the gloss and the doc, and the doc is 160 tokens with the
+/// class's own `do`. A remedy that replaces that `do` gets about 60 tokens of
+/// it, which is 240 characters at bytes/4. Rationale is not a remedy: it goes in
+/// the row's comment block, which `policy explain --history` prints.
+pub const REMEDY_MAX: usize = 240;
+
 /// The paragraph tier, and the ceiling for every column not listed tighter.
 ///
 /// MEASURED 2026-10-03 at `4ed344a`: the largest string in any column of this
@@ -1957,8 +1967,9 @@ pub const TEXT_CENSUS: &[TextColumn] = &[
     column("exec_pattern[].reason", SENTENCE_MAX),
     column("verify_environment_pattern[].reason", SENTENCE_MAX),
     column("deferral[].reason", SENTENCE_MAX),
+    // Remedy.
+    column("rule[].reason", REMEDY_MAX),
     // Paragraph.
-    column("rule[].reason", TEXT_MAX),
     column("rule[].criteria", TEXT_MAX),
     column("verdict[].class", TEXT_MAX),
     column("waiver[].reason", TEXT_MAX),
@@ -5448,7 +5459,7 @@ mod tests {
                 "startup[0].gloss",
             ),
             (&redirect, 512, "redirect[0].mutation"),
-            (&reason, 1536, "rule[0].reason"),
+            (&reason, REMEDY_MAX, "rule[0].reason"),
         ] {
             parse(&config(cap), "test").unwrap_or_else(|err| panic!("{pointer} at cap: {err:#}"));
             let err = parse(&config(cap + 1), "test").expect_err(pointer);

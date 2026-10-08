@@ -218,11 +218,16 @@ fn a_routed_read_of_every_committed_memory_is_within_the_declared_ceiling() {
     for entry in std::fs::read_dir(&memories).expect("the committed memories are listable") {
         let name = entry.expect("a memory entry").file_name();
         let path = format!(".serena/memories/{}", name.to_string_lossy());
-        let encoded = serde_json::to_string(&path).expect("a path is encodable");
-        let read = format!(
-            "{{\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"Read\",\
-             \"tool_input\":{{\"file_path\":{encoded}}}}}"
-        );
+        // IN THE SUITE'S SESSION, like every Bash payload here: sightings are kept
+        // per context, so a payload naming none is a first sighting every time and
+        // the "repeat" this measures would be the full arm.
+        let read = serde_json::json!({
+            "hook_event_name": "PreToolUse",
+            "session_id": SUITE_SESSION,
+            "tool_name": "Read",
+            "tool_input": {"file_path": path},
+        })
+        .to_string();
         let Some(line) = repeat_refusal(&read) else {
             panic!("a generic read of a memory must refuse, or this measures nothing: {path}");
         };
@@ -280,7 +285,7 @@ fn no_refusal_lost_its_pointer() {
 /// stated reason: naming a consumer's policy filenames inside `crates/**` is
 /// non-negotiable rule 1, and `source name other` computes that.
 fn fixture(name: &str) -> PathBuf {
-    stage(name, COMMITTED)
+    stage(name, &common::without_session_handlers(COMMITTED))
 }
 
 /// The committed config, as every fixture here stages it.
