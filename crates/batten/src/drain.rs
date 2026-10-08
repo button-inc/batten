@@ -633,6 +633,9 @@ fn group<'a>(
     groups
 }
 
+/// One location as rendered: its path, its line, and the count note it carries.
+type Spot = (String, Option<usize>, String);
+
 /// The locations of `listed`, factored by file: `a.rs:3,9(42) b.rs:2×3`.
 ///
 /// **Pointer-only** (rule 4): a path, a line, and only the count that is news —
@@ -641,7 +644,7 @@ fn group<'a>(
 /// `×n`, so distinct identities at one span cost one token rather than n. The
 /// store holds no matched content, so there is none here to leak.
 fn locations(listed: &[Surfaced<'_>], previous: &BTreeMap<String, u64>) -> String {
-    let spot = |surfaced: &Surfaced<'_>| -> (String, Option<usize>, String) {
+    let spot = |surfaced: &Surfaced<'_>| -> Spot {
         let note = match surfaced.instance.occurrences {
             Observation::Observed(count) => {
                 match previous.get(&surfaced.record.identity.fingerprint.to_hex()) {
@@ -654,7 +657,7 @@ fn locations(listed: &[Surfaced<'_>], previous: &BTreeMap<String, u64>) -> Strin
         };
         (surfaced.instance.path.clone(), surfaced.instance.line, note)
     };
-    let mut runs: Vec<((String, Option<usize>, String), usize)> = Vec::new();
+    let mut runs: Vec<(Spot, usize)> = Vec::new();
     for surfaced in listed {
         let here = spot(surfaced);
         match runs.last_mut() {
