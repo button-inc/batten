@@ -21189,7 +21189,10 @@ fn render(
         hook::Decision::Preapproved(grant) => {
             // FULL ON EVERY FIRING (CLOUD-2078): its reader is the human the
             // host would have prompted, as for `Ask`, so there is no store.
-            let reason = grant.render_finding(refusal::Arm::Full);
+            // A grant refuses nothing: it is a `note` (CLOUD-2145).
+            let reason = grant
+                .with_severity(refusal::Severity::Note)
+                .render_finding(refusal::Arm::Full);
             match hook::encode_preapproval(
                 harness,
                 &envelope.raw_event,

@@ -448,7 +448,7 @@ fn a_refused_gate_renders_its_verdict_with_its_cause() {
     assert_eq!(code, 2, "{said}");
     let line = said
         .lines()
-        .find(|line| line.contains("verdict 'check run red'"))
+        .find(|line| line.contains("batten deny check run red"))
         .unwrap_or_else(|| panic!("the stop names its class: {said}"));
     assert!(
         line.contains("reproduce and fix locally"),

@@ -10747,15 +10747,15 @@ mod tests {
         }]
     }
 
-    /// The FULL arm carries EVERY route, the override included as the ready
-    /// request that admits (CLOUD-2075); the repeat is the address alone, whose
-    /// routes the full arm already put in context (CLOUD-2145).
+    /// CLOUD-2075: both arms carry EVERY route, the override included as the
+    /// ready request that admits; only the full arm adds the definition. The
+    /// routes are how a finding is fixed, so the repeat keeps them (CLOUD-2145).
     ///
     /// Measured on `leased-push`, which declares the rebase first and the
     /// explicit `--force-with-lease=<ref>:<sha>` second — the second is the one
     /// that answers the reader, so it is the assertion that matters.
     #[test]
-    fn the_full_arm_carries_every_route() {
+    fn both_arms_carry_every_route() {
         let registry = two_route_class();
         let refusal = Refusal::from_class(
             "leased-push",
@@ -10764,22 +10764,25 @@ mod tests {
             &[],
             crate::refusal::Fix::None,
         );
-        let text = refusal.render_finding(crate::refusal::Arm::Full);
+        for arm in [crate::refusal::Arm::Full, crate::refusal::Arm::Pointer] {
+            let text = refusal.render_finding(arm);
+            assert!(
+                text.contains("run git push --force-with-lease=<ref>:<sha>"),
+                "{text}"
+            );
+            assert!(text.contains("run git pull --rebase"), "{text}");
+            assert!(
+                text.contains(
+                    "admit with batten override request --rule 'leased-push' --verdict \
+                     'branch write unsafe' --subject '"
+                ),
+                "{text}"
+            );
+        }
         assert!(
-            text.contains("run git push --force-with-lease=<ref>:<sha>"),
-            "{text}"
-        );
-        assert!(text.contains("run git pull --rebase"), "{text}");
-        assert!(
-            text.contains(
-                "admit with batten override request --rule 'leased-push' --verdict \
-                 'branch write unsafe' --subject '"
-            ),
-            "{text}"
-        );
-        assert_eq!(
-            refusal.render_finding(crate::refusal::Arm::Pointer),
-            "rule 'leased-push'"
+            !refusal
+                .render_finding(crate::refusal::Arm::Pointer)
+                .contains(" —")
         );
     }
 
@@ -14431,8 +14434,8 @@ deny contains "refused by themodule" if {
         // is the token and the pointer and stops (CLOUD-1286), so the gloss's
         // opening parenthesis is the thing that must NOT be there.
         assert!(
-            reason.starts_with(&format!("rule '{PROTECTED_MUTATION}'")),
-            "the hot path leads with the gate that fired: {reason}"
+            reason.starts_with("batten deny path write refused "),
+            "the hot path leads with the violation's class: {reason}"
         );
         assert!(
             !reason.contains("path write refused ("),
@@ -14461,21 +14464,17 @@ deny contains "refused by themodule" if {
                 .contains("\"fix\":null"),
             "the key is present and null"
         );
-        // The way out is the row's own hop (CLOUD-2075), never a bare "no".
+        // The row's own reason is its definition, never a bare "no".
         let line = refusal.render_finding(crate::refusal::Arm::Full);
-        assert!(
-            line.contains("run batten policy explain 'some-row'"),
-            "{line}"
-        );
+        assert!(line.starts_with("batten deny some-row — "), "{line}");
         assert!(line.contains("it fired"), "{line}");
     }
 
-    /// CLOUD-2142: one lookup for both names. The full arm's hop names the rule
-    /// and, where it differs, the class; a collapsed row names its one name once;
-    /// and neither the retired `policy rule` hop nor the full arm's separate
-    /// explain sentence survives.
+    /// CLOUD-2145: a finding is named by its VIOLATION CLASS, the name whose
+    /// definition a reader holds and looks up, on both arms — never by the row
+    /// that raised it, and with no lookup hop on the line.
     #[test]
-    fn every_line_names_one_explain_hop_for_both_names() {
+    fn a_finding_is_named_by_its_violation_class() {
         use crate::refusal::{Arm, Fix, Refusal};
         let class = crate::verdict::Native::ProtectedMutation.id();
         let split = Refusal::declared(
@@ -14484,16 +14483,61 @@ deny contains "refused by themodule" if {
             &[],
             Fix::None,
         );
-        let hop = format!("; run batten policy explain '{PROTECTED_MUTATION}' '{class}'");
-        let line = split.render_finding(Arm::Full);
-        assert!(line.contains(&hop), "{line}");
-        assert!(!line.contains("policy rule '"), "{line}");
-        assert!(!line.contains("Run batten policy explain"), "{line}");
-        let parsed = crate::refusal::parse_finding(&line).expect("parses");
-        assert_eq!(
-            parsed.verdict.as_deref(),
-            Some(class),
-            "the hop names the class"
+        for arm in [Arm::Pointer, Arm::Full] {
+            let line = split.render_finding(arm);
+            assert!(line.starts_with(&format!("batten deny {class};")), "{line}");
+            assert!(!line.contains("policy explain"), "{line}");
+            let parsed = crate::refusal::parse_finding(&line).expect("parses");
+            assert_eq!(parsed.verdict.as_deref(), Some(class), "{line}");
+        }
+    }
+
+    /// CLOUD-2145: the head's second word is how the finding bears on the call —
+    /// a refusal `deny`, an advisory its tier's word — so a reader can tell a
+    /// block from a nudge before reading on.
+    #[test]
+    fn an_advisory_finding_carries_its_severity() {
+        use crate::refusal::{Arm, Fix, Refusal, Severity};
+        let refusal = Refusal::declared(
+            PROTECTED_MUTATION,
+            crate::verdict::Native::ProtectedMutation,
+            &[],
+            Fix::None,
+        );
+        let class = crate::verdict::Native::ProtectedMutation.id();
+        for (severity, word) in [
+            (Severity::Deny, "deny"),
+            (Severity::Warn, "warn"),
+            (Severity::Note, "note"),
+        ] {
+            let line = refusal
+                .clone()
+                .with_severity(severity)
+                .render_finding(Arm::Pointer);
+            assert!(
+                line.starts_with(&format!("batten {word} {class}")),
+                "{line}"
+            );
+        }
+    }
+
+    /// CLOUD-1806: the row that raised a class is named ONCE, at the head of the
+    /// first firing's definition, so a reader can find it in the config; a row
+    /// whose id is its class names it once, as the class.
+    #[test]
+    fn a_first_sighting_names_the_row_that_raised_it() {
+        use crate::refusal::{Arm, Fix, Refusal};
+        let class = crate::verdict::Native::ProtectedMutation.id();
+        let split = Refusal::declared(
+            PROTECTED_MUTATION,
+            crate::verdict::Native::ProtectedMutation,
+            &[],
+            Fix::None,
+        );
+        let full = split.render_finding(Arm::Full);
+        assert!(
+            full.contains(&format!(" — {PROTECTED_MUTATION}: ")),
+            "{full}"
         );
         let collapsed = Refusal::declared(
             class,
@@ -14502,42 +14546,16 @@ deny contains "refused by themodule" if {
             Fix::None,
         )
         .render_finding(Arm::Full);
-        let once = format!("; run batten policy explain '{class}'");
-        assert!(collapsed.contains(&once), "{collapsed}");
         assert!(
-            !collapsed.contains(&format!("{once} '")),
+            !collapsed.contains(&format!(" — {class}:")),
             "a collapsed row names its one name once: {collapsed}"
         );
     }
 
-    /// CLOUD-2142: a rule with a class of another name is ADDRESSED by the rule
-    /// alone, on both arms — the class is a property of the gate, named by the
-    /// full arm's hop, never a second label.
+    /// CLOUD-2145: the repeat carries every pointer — name, subjects and every
+    /// route — and stops before the definition, a byte prefix of the full arm.
     #[test]
-    fn a_classed_rule_is_addressed_by_its_rule_alone() {
-        use crate::refusal::{Arm, Fix, Refusal};
-        let split = Refusal::declared(
-            PROTECTED_MUTATION,
-            crate::verdict::Native::ProtectedMutation,
-            &[],
-            Fix::None,
-        );
-        for arm in [Arm::Pointer, Arm::Full] {
-            let line = split.render_finding(arm);
-            assert!(
-                line.starts_with(&format!("rule '{PROTECTED_MUTATION}'")),
-                "{line}"
-            );
-            // The address; the override route's `--verdict` is a flag, not a label.
-            let address = line.split("; ").next().unwrap_or_default();
-            assert!(!address.contains("verdict '"), "{line}");
-        }
-    }
-
-    /// CLOUD-2145: the repeat is the address — the name and this firing's
-    /// subjects, exactly, and a byte prefix of the full arm.
-    #[test]
-    fn the_repeat_is_the_address() {
+    fn the_repeat_carries_every_pointer_and_no_definition() {
         use crate::refusal::{Arm, Fix, Refusal};
         let refusal = Refusal::declared(
             PROTECTED_MUTATION,
@@ -14546,14 +14564,16 @@ deny contains "refused by themodule" if {
             Fix::declared(Some("restore it with git")),
         );
         let repeat = refusal.render_finding(Arm::Pointer);
-        assert_eq!(repeat, format!("rule '{PROTECTED_MUTATION}' at src/a.rs"));
-        let full = refusal.render_finding(Arm::Full);
-        assert!(full.starts_with(&format!("{repeat}; ")), "{full}");
-        let collapsed = crate::refusal::collapse(&full, |_, _| false);
-        assert_eq!(
-            collapsed, repeat,
-            "a seen full arm collapses to the address"
+        assert!(
+            repeat.starts_with("batten deny path write refused at src/a.rs; "),
+            "{repeat}"
         );
+        assert!(repeat.contains("; read batten.toml"), "a route: {repeat}");
+        assert!(!repeat.contains(" —"), "no definition: {repeat}");
+        let full = refusal.render_finding(Arm::Full);
+        assert!(full.starts_with(&format!("{repeat} — ")), "{full}");
+        let collapsed = crate::refusal::collapse(&full, |_, _| false);
+        assert_eq!(collapsed, repeat, "a seen full arm collapses to the repeat");
     }
 
     /// CLOUD-2143: a first sighting carries the class's doc, and a row that

@@ -143,7 +143,7 @@ fn a_declared_program_nothing_can_reach_is_reported_at_session_start() {
     let dir = fixture("health-unreachable", "batten-no-such-program-exists-here");
     let text = advisory(&hook_on(&dir, "SessionStart")).expect("a broken container is news");
     assert!(
-        text.contains("verdict 'workspace state broken'") && !text.contains("rule '"),
+        text.contains("workspace state broken at ") && !text.contains("rule '"),
         "the advisory names its class so a reader can tell the producers apart: {text}"
     );
     assert!(text.contains(CHECK), "the failing check is named: {text}");

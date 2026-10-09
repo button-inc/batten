@@ -475,12 +475,12 @@ fn every_cli_failure_renders_its_verdict_label() {
         let err = stderr(&output);
         assert_eq!(output.status.code(), Some(1), "{args:?}: {err}");
         assert!(
-            err.starts_with(&format!("batten: verdict '{class}' at ")),
+            err.starts_with(&format!("batten deny {class} at ")),
             "{args:?} leads with its class: {err}"
         );
         assert!(
-            err.contains(&format!("; run batten policy explain '{class}'")),
-            "{args:?} names the one hop: {err}"
+            !err.contains("policy explain"),
+            "{args:?} carries no hop: {err}"
         );
     }
 }
@@ -510,7 +510,7 @@ fn a_gate_run_prints_each_rules_remedy_once() {
     let only = |rule: &str| -> String {
         let lines: Vec<&str> = err
             .lines()
-            .filter(|line| line.contains(&format!("rule '{rule}'")))
+            .filter(|line| line.starts_with(&format!("batten deny {rule} at ")))
             .collect();
         assert_eq!(
             lines.len(),
@@ -1365,8 +1365,8 @@ fn check_refuses_a_command_rule_rather_than_skipping_it() {
     // refusal carries the `batten:` prefix that belongs to 1 and 3, and no
     // bypass hatch, because a read-only run has nothing to bypass.
     assert!(
-        stderr.contains("rule 'dyn' at ")
-            && stderr.contains("run batten policy explain 'dyn' 'spawn run refused'")
+        stderr.contains("batten deny spawn run refused at ")
+            && stderr.contains(" — dyn: ")
             && stderr.contains("run batten enforce"),
         "the refusal must adopt the one shape, got: {stderr}"
     );
@@ -2117,19 +2117,15 @@ fn every_hook_policy_table_deny_names_its_fix() {
         assert_eq!(output.status.code(), Some(2), "{}: deny", case.command);
         let stderr = String::from_utf8_lossy(&output.stderr);
         // CLOUD-1286: the sanctioned command is ONE HOP away, and this case is
-        // what proves the hop lands. CLOUD-2075 LABELS the rule, so the id is
-        // read off `rule '<id>'` rather than guessed from word positions.
-        let label = format!("rule '{}'", case.rule);
-        assert!(
-            stderr.contains(&label),
-            "{}: the line labels its rule, got: {stderr}",
+        // what proves the hop lands. The row that raised the class is named on
+        // the first sighting (CLOUD-2145), read off it rather than guessed.
+        let id = common::refusing_rule(&stderr).expect("a finding line");
+        assert_eq!(
+            id, case.rule,
+            "{}: the line names its rule, got: {stderr}",
             case.command
         );
-        let id = stderr
-            .split("rule '")
-            .nth(1)
-            .and_then(|rest| rest.split('\'').next())
-            .expect("a labelled rule id");
+        let id = id.as_str();
         let explained = batten_with(&dir, &["policy", "rule", id], &[]);
         assert_eq!(
             explained.status.code(),
@@ -4587,7 +4583,7 @@ fn a_library_usage_error_is_loud_under_silent_too() {
     let output = batten_with(&dir, &["--silent", "config", "show"], &[]);
     assert_eq!(output.status.code(), Some(1));
     assert!(
-        String::from_utf8_lossy(&output.stderr).contains("batten:"),
+        String::from_utf8_lossy(&output.stderr).starts_with("batten deny "),
         "a usage error names itself even at the quietest rung"
     );
 }
@@ -10660,7 +10656,7 @@ fn a_handler_that_refuses_and_says_nothing_allows_rather_than_denying() {
          refusal: {document:?}"
     );
     assert!(
-        document.contains("verdict 'hook answer broken'") && document.contains("exit-2-silent"),
+        document.contains("hook answer broken at ") && document.contains("exit-2-silent"),
         "and the author is told what their handler did: {document:?}"
     );
 }
@@ -10743,7 +10739,7 @@ fn a_handler_writing_a_host_document_is_reported_and_not_forwarded() {
     let document = common::stdout(&output);
     assert_eq!(output.status.code(), Some(0));
     assert!(
-        document.contains("verdict 'hook answer broken'") && document.contains("impersonated-host"),
+        document.contains("hook answer broken at ") && document.contains("impersonated-host"),
         "the violation is named: {document:?}"
     );
     assert!(

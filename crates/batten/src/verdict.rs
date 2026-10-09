@@ -911,6 +911,14 @@ fn check_name(
             words.len()
         )));
     }
+    // ARM 1b. `at` opens a finding line's subjects (CLOUD-2145), so a name
+    // holding it would end where the reader reads it as starting a pointer.
+    if words.contains(&"at") {
+        return Err(UsageError::raise(format!(
+            "{kind} `{name}`: `at` is the word a finding line opens its subjects with, \
+             so a name cannot carry it"
+        )));
+    }
     // ARM 2.
     for (slot, word) in words.iter().enumerate() {
         let declared = vocabulary

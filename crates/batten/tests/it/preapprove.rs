@@ -205,12 +205,12 @@ fn a_preapproval_reason_labels_its_rule_and_verdict() {
     let (decision, reason) = verdict(&read).unwrap_or_default();
     assert_eq!(decision, "allow", "{reason}");
     assert!(
-        reason.starts_with("rule 'call read now'"),
-        "the grant is addressed by the rule that granted: {reason}"
+        reason.starts_with("batten note call grant now; ") && reason.contains(" — call read now: "),
+        "a grant is a note of its class, naming the rule that granted: {reason}"
     );
     assert!(
-        reason.contains("; run batten policy explain 'call read now' 'call grant now'"),
-        "and the one hop that resolves both: {reason}"
+        !reason.contains("policy explain"),
+        "and no lookup hop, the legend saying how: {reason}"
     );
 }
 

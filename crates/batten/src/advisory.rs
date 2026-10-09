@@ -78,10 +78,11 @@ impl Advice {
     /// One classed entry, rendered through the finding projection at emission.
     #[must_use]
     pub fn finding(tier: AdvisoryTier, refusal: Refusal) -> Advice {
+        let severity = crate::refusal::Severity::of_tier(tier);
         Advice {
             tier,
             text: String::new(),
-            finding: Some(Box::new(refusal)),
+            finding: Some(Box::new(refusal.with_severity(severity))),
             classed: true,
             full_only: false,
         }
@@ -207,6 +208,10 @@ fn merged(entries: Vec<Advice>) -> Vec<Advice> {
                     .is_some_and(|other| other.absorb(refusal))
                 {
                     held.tier = held.tier.max(entry.tier);
+                    let severity = crate::refusal::Severity::of_tier(held.tier);
+                    if let Some(finding) = held.finding.take() {
+                        held.finding = Some(Box::new((*finding).with_severity(severity)));
+                    }
                     continue 'entries;
                 }
             }
