@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.210](https://github.com/button-inc/batten/compare/v0.0.209...v0.0.210) - 2026-10-09
+
+### Added
+
+- *(mutate)* sweep only touched gates at admission
+
+### Fixed
+
+- *(captured)* [**breaking**] select the record the key is the subject of, not one that mentions it
+- *(provision)* hand a launched tool the name it was called by
+- *(mutate)* leave Rust rows to cargo-mutants at admission
+- *(mutate)* count a deleted preset module as touched
+- *(mutate)* read the sweep base from the environment
+- *(handler)* a timed-out handler's whole process group dies with it
+- *(drain)* bound the advisory payload to its budget and cap
+- *(engine)* a failed fetch on the hook path falls through to the floor
+- *(mutate)* gate the re-raise on unix instead of waiving a stub
+- *(engine)* pass the followed engine's output through
+- *(engine)* follow a release pin from the cache, on the hook path too
+- *(exec)* expect the escalation reasons unbuilt where nothing forwards
+- *(symbols)* let a launcher carry the analyser's environment
+- *(mutate)* end a timed-out suite's whole process group, not its direct child
+
+### Other
+
+- *(policy)* drive claim-before-code's mutation through the shipped module
+- *(captured)* build the subject fixture from the template, not a fork
+- *(captured)* pin the subject match, and contain the stop-posture fixture
+- *(provision)* waive the unix-only argv[0] case, and fail where bash is absent
+- *(mutate)* move change narrowing into its own function
+- *(suite)* restore the coverage the clock rewrites dropped
+- *(engine)* run the followed case's engine from outside the checkout
+- *(exec)* withdraw the two exec-lock rows that could not be shown red
+- *(suite)* analyse a toy crate, measure the binary under test
+- *(suite)* a case that cannot run fails, or is a cfg! arm; never retried
+- *(suite)* assert recorded outcomes, never wall clocks
+- *(mutate)* repair the three exec-lock rows, none of which had ever run
+
 ## [0.0.209](https://github.com/button-inc/batten/compare/v0.0.208...v0.0.209) - 2026-10-08
 
 ### Fixed
