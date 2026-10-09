@@ -3813,51 +3813,19 @@ No Routines or timers to babysit a PR (AGENTS.md). `mise run land` drives the wh
 landing loop with no timeout and no cap, and a Routine firing beside it is a second \
 clock nothing reads. Background the task and act on its exit."""
 
-# CLOUD-312 row 6: `fanout-guard` retires here. TWO ROWS OVER ONE SELECTOR,
-# because `max` is single-valued and the guard's two conjuncts cap different
-# SUBJECTS of the same bytes — how many artifacts the prompt names, and how big the
-# prompt is. A single row would have had to pick one.
+# CLOUD-312 row 6: `fanout-guard` retired into two rows over the `Agent` call, and
+# ONE remains. The spawn is gated at all for CLOUD-287's reason: it commits a whole
+# fresh context window to a fresh agent, and it was the one unmediated call.
 #
-# WHY THE `Task` CALL IS GATED AT ALL (CLOUD-287). It was the only unmediated call
-# in the wiring: `.claude/settings.json` mediated Bash, the edit tools, the board
-# verbs and three connector verbs, and no matcher named `Task` — so the one call
-# that commits a whole fresh context window to a fresh agent passed through
-# nothing, while the workflow contract had just been taught to price a spawn
-# "above all" with no mechanism behind it (non-negotiable rule 2).
+# ITS SIBLING `spawn count wrong` IS REMOVED (owner ruling, 2026-10-09). It capped
+# how many tracked paths ONE prompt names, which measured the wrong thing: CLOUD-284's
+# cost multiplies with SIBLINGS sharing a manifest, which a per-prompt count never
+# sees, and it refused a single precise agent whose named paths only told it where
+# to look. The problem it stood for is open on CLOUD-1744.
 #
-# MEASURED: eight sibling agents launched with prompts each naming the same eight
-# artifacts as required reading. The fixed per-agent cost was paid eight times
-# before any agent wrote a line, and the one that finished anything spent 63,848
-# tokens to fetch one issue and run one lint.
-#
-# WIDTH IS THE MULTIPLIER AND THE MANIFEST IS THE MULTIPLICAND — three agents
-# reading twenty artifacts each costs more than twenty agents reading one. It is
-# also the only term a hook can see: `PreToolUse` fires once per call and carries
-# the prompt, where counting siblings would mean inventing per-session state, which
-# `stop-guard` declined for the same reason.
-#
-# THE BLINDNESS, STATED RATHER THAN IMPLIED: this sees what a prompt INSTRUCTS,
-# never what the agent then reads on its own initiative. A spawn told to read one
-# file that goes on to read forty passes here and always will. Capping what is
-# written into the prompt is not a claim about what the agent does with it.
-[[rule]]
-id = "spawn count wrong"
-kind = "shape"
-scope = "mediated_call"
-severity = "deny"
-tool = "Agent"
-measures = "prompt"
-counts = "tracked_artifacts"
-max = 3
-# The `mem:` half of the manifest, and it is the consumer's because a shorthand a
-# repository writes in its own prompts to name its own files is a property of that
-# repository (non-negotiable rule 1). The charset is `memories-check`'s.
-resolves = [{ reference = "mem:([A-Za-z0-9_/-]+)", path = ".serena/memories/$1.md" }]
-reason = "Every agent pays to read each artifact its prompt names before it writes a line. Compute one digest once and pass that, or name only what this agent's own step needs; untracked paths and URLs count for nothing."
-
-# The second conjunct. `tokens` is `budget.rs`'s own estimator rather than a rival
-# one (CLOUD-925 §1): one authority for what a ceiling is, so a per-call cap does
-# not arrive with its own arithmetic.
+# `tokens` is `budget.rs`'s own estimator rather than a rival one (CLOUD-925 §1): one
+# authority for what a ceiling is, so a per-call cap does not arrive with its own
+# arithmetic.
 [[rule]]
 id = "prompt measure wrong"
 kind = "shape"

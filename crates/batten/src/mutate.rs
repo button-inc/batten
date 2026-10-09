@@ -271,9 +271,6 @@ fn task_names(lines: &[String]) -> Vec<String> {
 //MUTANT-SUITE crates/batten/tests/it/mutate.rs
 //MUTANT task-block-unscoped|s@        Some(task) if task_manifest().as_deref() == Some(source) => task_block(&lines, task),@        Some(_) if task_manifest().as_deref() == Some(source) => Some(lines),@|a_task_gate_sweeps_only_its_own_block
 //MUTANT suite-first-only|s@own_suites.get(&row.source)@own_suites.get(\&row.slug)@|each_preset_module_row_runs_under_its_own_declared_suite
-//MUTANT source-change-ignored|s@^                let by_source = .*;$@                let by_source = false;@|a_change_to_one_gate_sweeps_only_that_gate
-//MUTANT suite-change-ignored|s@^                let by_suite = .*;$@                let by_suite = false;@|a_change_to_a_suite_sweeps_its_gate
-//MUTANT deleted-module-ignored|s@^                let by_preset = .*;$@                let by_preset = false;@|a_deleted_preset_module_sweeps_its_gate
 //MUTANT rust-rows-swept-by-hand|s@^                if gate.rows.iter().all(cargo_mutants_owns) .*$@                if false {@|a_change_to_a_rust_gate_is_left_to_cargo_mutants
 //MUTANT every-gate-touched|s@^        \.filter(\x7cname\x7c {$@        .filter(\x7cname\x7c { true \x7c\x7c@|a_change_touching_no_gate_sweeps_nothing
 fn declaring_lines(root: &Path, name: &str, source: &str) -> Option<Vec<String>> {
@@ -1038,15 +1035,51 @@ pub fn touched(
                 if gate.rows.iter().all(cargo_mutants_owns) && !gate.rows.is_empty() {
                     return false;
                 }
-                let by_source = gate.sources.iter().any(|path| changed.contains(path));
-                let by_suite = gate.suites().iter().any(|s| changed.contains(s.path()));
-                let dir = format!("{PRESETS}/{name}/");
-                let by_preset = changed.iter().any(|path| path.starts_with(&dir));
-                by_source || by_suite || by_preset
+                changed_by(&gate, name, changed)
             })
         })
         .cloned()
         .collect()
+}
+
+/// Whether `changed` moves `gate`: a changed path is one of its sources, one of
+/// [`Gate::suites`], or inside its preset directory ([`touched`]'s three arms).
+//MUTANT source-change-ignored|s@^    let by_source = .*;$@    let by_source = false;@|a_change_to_one_gate_sweeps_only_that_gate
+//MUTANT suite-change-ignored|s@^    let by_suite = .*;$@    let by_suite = false;@|a_change_to_a_suite_sweeps_its_gate
+//MUTANT deleted-module-ignored|s@^    let by_preset = .*;$@    let by_preset = false;@|a_deleted_preset_module_sweeps_its_gate
+fn changed_by(gate: &Gate, name: &str, changed: &std::collections::BTreeSet<String>) -> bool {
+    let by_source = gate.sources.iter().any(|path| changed.contains(path));
+    let by_suite = gate.suites().iter().any(|s| changed.contains(s.path()));
+    let dir = format!("{PRESETS}/{name}/");
+    let by_preset = changed.iter().any(|path| path.starts_with(&dir));
+    by_source || by_suite || by_preset
+}
+
+/// The gates `changed` moved that [`touched`] leaves to cargo-mutants, and how
+/// many declared rows they carry: `(gates, rows)`.
+///
+/// SAID, NEVER SILENT (CLOUD-1746). No runner runs cargo-mutants yet, so these
+/// rows are applied by nothing at admission, and a summary reading "every one
+/// caught" over a set that silently excluded them overstates what was checked.
+/// The count is what keeps the deferral visible until a runner is registered.
+//MUTANT deferred-rust-uncounted|s@^                \&\& gate.rows.iter().all(cargo_mutants_owns)$@                \&\& false@|a_change_to_a_rust_gate_is_left_to_cargo_mutants
+#[must_use]
+pub fn deferred_rust(
+    root: &Path,
+    names: &[String],
+    changed: &std::collections::BTreeSet<String>,
+) -> (usize, usize) {
+    names
+        .iter()
+        .filter_map(|name| resolve(root, name).map(|gate| (name, gate)))
+        .filter(|(name, gate)| {
+            !gate.rows.is_empty()
+                && gate.rows.iter().all(cargo_mutants_owns)
+                && changed_by(gate, name, changed)
+        })
+        .fold((0, 0), |(gates, rows), (_, gate)| {
+            (gates + 1, rows + gate.rows.len())
+        })
 }
 
 // ---------------------------------------------------------------------------

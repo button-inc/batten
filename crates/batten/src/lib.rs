@@ -15000,6 +15000,14 @@ fn narrow_to_change(
         .cloned()
         .collect();
     let narrowed = mutate::touched(root, &names, &changed);
+    let (gates, rows) = mutate::deferred_rust(root, &names, &changed);
+    if rows > 0 {
+        writeln!(
+            out,
+            "mutate sweep: {rows} Rust row(s) across {gates} changed gate(s) NOT swept — left \
+             to cargo-mutants, which no runner runs yet (CLOUD-1746)"
+        )?;
+    }
     if narrowed.is_empty() {
         writeln!(
             out,

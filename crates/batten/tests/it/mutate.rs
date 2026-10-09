@@ -1168,6 +1168,12 @@ fn a_change_to_a_rust_gate_is_left_to_cargo_mutants() {
         out.contains("no enforced gate's source or suite changed since HEAD"),
         "{out}"
     );
+    // SAID, NEVER SILENT (CLOUD-1746): no runner runs cargo-mutants, so the row
+    // the change moved was applied by nothing, and the sweep says so.
+    assert!(
+        out.contains("1 Rust row(s) across 1 changed gate(s) NOT swept"),
+        "{out}"
+    );
 }
 
 #[cfg(unix)]

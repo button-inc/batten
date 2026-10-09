@@ -19,6 +19,15 @@
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+// The engine-side rows this suite kills, declared beside the code they mutate
+// (`src/drain.rs`, `src/lib.rs`) and mirrored here so CLOUD-2175's obligations,
+// which name this file, bind (`policy/obligations-bound.rego`'s `declares_slug`):
+/*
+#MUTANT-SUITE crates/batten/tests/it/advisory_drain.rs
+#MUTANT drain-cut-unreported|s@^        crate::verdict::Native::DrainFitBroken,$@        crate::verdict::Native::CallGrantNow,@|an_over_budget_payload_is_cut_and_points_at_the_journal
+#MUTANT state-filter-unread|s@^        self.rule.is_none_or(|rule| record.rule == rule)$@        true@|a_rule_past_its_location_cap_points_at_exactly_its_set
+*/
+
 use crate::common;
 
 use std::fmt::Write as _;

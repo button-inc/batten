@@ -3455,17 +3455,6 @@ const SHAPE_CENSUS: &[ShapeCase] = &[
         rule: "issue read loose",
         site: CensusSite::Checkout,
     },
-    // CLOUD-312 row 6. Four named artifacts against a ceiling of three, over the
-    // tracked set the `Manifest` fixture supplies.
-    ShapeCase {
-        call: CensusCall::Spawn {
-            tool: "Agent",
-            prompt: "read one.txt two.txt three.txt four.txt then act",
-            repeat: 1,
-        },
-        rule: "spawn count wrong",
-        site: CensusSite::Manifest,
-    },
     // The token ceiling reads only the envelope, so no fact about the tree can
     // move its answer and it owes the ambient site. 6100 characters over four is
     // 1525, past the committed 1500.
