@@ -242,26 +242,37 @@ fn watermark(home: &Path) -> Option<(u64, String)> {
 /// (`output::message` vs `output::verdict`).
 ///
 /// A rule's REMEDY line is removed too (CLOUD-2078): it is a classed finding
-/// beside the payload, recognised by the lookup hop a drain pointer line never
-/// carries, and [`remedies`] returns it.
+/// beside the payload, recognised by the count subject a drain pointer line
+/// never carries, and [`remedies`] returns it. So is the epoch's legend.
 fn payload(output: &Output) -> Vec<String> {
     let text = advisory_context(output).unwrap_or_else(|| common::stderr(output));
     text.lines()
         .filter(|line| !line.starts_with("batten: "))
+        .filter(|line| *line != batten::refusal::LEGEND)
         .filter(|line| !line.is_empty())
-        .filter(|line| !line.contains(REMEDY_HOP))
+        .filter(|line| !is_remedy(line))
         .map(ToOwned::to_owned)
         .collect()
 }
 
-/// The hop every remedy line carries and no drain pointer line does.
-const REMEDY_HOP: &str = "; run batten policy explain '";
+/// Whether `line` is a drained rule's remedy, or the drain's own `drain fit
+/// broken` finding: a finding whose subject is a count of findings, which no
+/// drain pointer line — whose subjects are locations — carries.
+fn is_remedy(line: &str) -> bool {
+    batten::refusal::parse_finding(line).is_some()
+        && line.split_once(" at ").is_some_and(|(_, rest)| {
+            rest.split(['—', ';'])
+                .next()
+                .unwrap_or_default()
+                .contains(" finding(s)")
+        })
+}
 
 /// The drained rules' remedy lines, one per rule (CLOUD-2078).
 fn remedies(output: &Output) -> Vec<String> {
     let text = advisory_context(output).unwrap_or_else(|| common::stderr(output));
     text.lines()
-        .filter(|line| line.contains(REMEDY_HOP))
+        .filter(|line| is_remedy(line))
         .map(ToOwned::to_owned)
         .collect()
 }
@@ -310,7 +321,7 @@ fn a_post_tool_event_drains_the_store_as_pointer_lines() {
     assert_eq!(lines.len(), 1, "one finding, one line: {lines:?}");
     // CLOUD-2175's grammar: one line per rule, its fresh count and its
     // locations factored by file — no fingerprint, which `state list` resolves.
-    assert_eq!(lines[0], "rule 'no-todo' 1 new at src/a.rs:2");
+    assert_eq!(lines[0], "batten warn no-todo at src/a.rs:2");
     assert!(
         !lines[0].contains("TODO"),
         "a pointer, never the matched content"
@@ -564,7 +575,7 @@ fn a_batch_of_wakes_drains_once_and_the_interval_is_config() {
     assert_eq!(
         next,
         [
-            "rule 'no-todo' 1 new at src/b.rs:2, 1 told earlier; run batten state list --rule 'no-todo'"
+            "batten warn no-todo at src/b.rs:2 (1 new, 1 told earlier); run batten state list --rule 'no-todo'"
         ],
         "with no window, the next wake reports the new finding immediately — and only it"
     );
@@ -710,7 +721,7 @@ fn a_drained_rules_remedy_rides_its_first_drain_only() {
     let first = remedies(&hook(&repo, &home, &post_tool_batch("s1")));
     assert_eq!(first.len(), 1, "one rule, one remedy: {first:?}");
     assert!(
-        first[0].contains("rule 'no-todo'")
+        first[0].contains("no-todo")
             && first[0].contains(" — ")
             && first[0].contains("delete the marker once the work behind it is done"),
         "{first:?}"
@@ -727,7 +738,7 @@ fn a_drained_rules_remedy_rides_its_first_drain_only() {
     assert_eq!(
         lines
             .iter()
-            .filter(|line| line.starts_with("rule 'no-todo' "))
+            .filter(|line| line.starts_with("batten warn no-todo "))
             .count(),
         1,
         "the drain's own line addresses the rule, and the remedy adds no second \
@@ -880,7 +891,9 @@ fn a_rule_past_its_location_cap_points_at_exactly_its_set() {
     let lines = payload(&hook(&capped, &home_c, &post_tool_batch("s1")));
     assert_eq!(
         lines,
-        ["rule 'no-todo' 4 new at src/a.rs:2,3 +2 more; run batten state list --rule 'no-todo'"]
+        [
+            "batten warn no-todo at src/a.rs:2,3 +2 more (4 new); run batten state list --rule 'no-todo'"
+        ]
     );
     let listed = state_cmd(
         &capped,
@@ -906,7 +919,7 @@ fn a_rule_past_its_location_cap_points_at_exactly_its_set() {
     );
     assert_eq!(
         payload(&hook(&uncapped, &home_u, &post_tool_batch("s1"))),
-        ["rule 'no-todo' 4 new at src/a.rs:2,3,4,5"],
+        ["batten warn no-todo at src/a.rs:2,3,4,5"],
         "under the cap every location is listed and nothing is pointed at"
     );
 }
@@ -943,7 +956,7 @@ fn an_over_budget_payload_is_cut_and_points_at_the_journal() {
     );
     assert!(
         remedies(&output).iter().any(|line| line.contains(&format!(
-            "verdict 'drain fit broken' at {} finding(s) cut",
+            "batten note drain fit broken at {} finding(s) cut",
             2 * SPANS
         ))),
         "the cut is reported as the shape failing: {:?}",
@@ -972,7 +985,7 @@ fn a_re_raised_group_reports_the_delta_rather_than_the_instance_list() {
     // count did, and the delta is the whole of the news.
     let (repo, home) = drained_fixture("drain-re-raise", "\n[drain]\ninterval_ms = 0\n");
     let first = payload(&hook(&repo, &home, &post_tool_batch("s1")));
-    assert_eq!(first, ["rule 'no-todo' 1 new at src/a.rs:2"]);
+    assert_eq!(first, ["batten warn no-todo at src/a.rs:2"]);
 
     // The SAME span again: identical spans fold into one identity with a count
     // of two, which is the multiset re-raise this asserts.
@@ -987,7 +1000,7 @@ fn a_re_raised_group_reports_the_delta_rather_than_the_instance_list() {
     let again = payload(&hook(&repo, &home, &post_tool_batch("s1")));
     assert_eq!(
         again,
-        ["rule 'no-todo' 1 new at src/a.rs:2(1->2)"],
+        ["batten warn no-todo at src/a.rs:2(1->2)"],
         "one identity, one location, the delta on it"
     );
 }
@@ -1152,7 +1165,7 @@ fn an_alternating_rule_tracks_state_truthfully_and_is_reported_flapping_not_with
         // which points at the payload the context still holds (CLOUD-2175).
         if raised {
             let expected: &[&str] = if round == 0 {
-                &["rule 'no-todo' 1 new at src/a.rs:2"]
+                &["batten warn no-todo at src/a.rs:2"]
             } else {
                 &["unchanged"]
             };

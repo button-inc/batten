@@ -341,38 +341,32 @@ fn a_subject_copied_from_the_refusal_line_admits_the_write() {
 }
 
 /// The override route on the line IS the request that admits (CLOUD-2075 §7
-/// case 12): on the full arm, ready to run, with the subject the refusal binds;
-/// the repeat is the address, carrying that same subject (CLOUD-2145).
+/// case 12): on both arms, ready to run, with the subject the refusal binds.
 #[test]
 fn the_override_route_on_the_line_is_the_request_that_admits() {
     let dir = fixture("mediated-admission-route-on-line");
     let opener = format!(
         "admit with batten override request --rule '{RULE}' --verdict '{CLASS}' --subject '"
     );
-    let refuse = || {
+    let mut subject = String::new();
+    for _ in 0..2 {
         let refused = run_with_stdin(
             &dir,
             &["adjudicate", "--harness", "exit-code"],
             &write_payload(GUARDED),
         );
         assert_eq!(refused.status.code(), Some(2), "the premise");
-        String::from_utf8_lossy(&refused.stderr).into_owned()
-    };
-    let said = refuse();
-    let rest = said
-        .split(opener.as_str())
-        .nth(1)
-        .unwrap_or_else(|| panic!("no override route on the line: {said}"));
-    let subject = rest
-        .split('\'')
-        .next()
-        .expect("a quoted subject")
-        .to_owned();
-    let repeat = refuse();
-    assert!(
-        repeat.contains(&format!("rule '{RULE}' at ")) && !repeat.contains(opener.as_str()),
-        "the repeat is the address: {repeat}"
-    );
+        let said = String::from_utf8_lossy(&refused.stderr).into_owned();
+        let rest = said
+            .split(opener.as_str())
+            .nth(1)
+            .unwrap_or_else(|| panic!("no override route on the line: {said}"));
+        subject = rest
+            .split('\'')
+            .next()
+            .expect("a quoted subject")
+            .to_owned();
+    }
     let admission = request(&dir, &subject, "read straight off the override route");
     assert!(spend(&dir, &admission, &subject), "spend must consume it");
     assert_eq!(

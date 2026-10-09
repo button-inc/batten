@@ -251,8 +251,8 @@ fn a_declared_refusal_emits_its_class_and_its_pointers_and_stops() {
     // hatch sentence. Each of the four was a copy of something declared once.
     let line = refusal("sed -n '1,40p' AGENTS.md").expect("the row refuses");
     assert!(
-        line.starts_with("rule 'tool select other'"),
-        "the gate that fired leads the line: {line}"
+        line.starts_with("batten deny tool run loose"),
+        "the violation's class leads the line: {line}"
     );
     for wrapper in ["Refused by", "Fix:", "Bypass with", " ("] {
         assert!(
@@ -437,12 +437,12 @@ fn a_first_sighting_carries_the_gloss_and_its_route_by_kind() {
     let repo = fixture("first-sighting-document-route");
     let line = fires(&repo, "head -40 batten.toml");
     assert!(
-        line.starts_with("rule 'tool select other'"),
-        "the gate that fired leads the line: {line}"
+        line.starts_with("batten deny tool run loose"),
+        "the violation's class leads the line: {line}"
     );
     assert!(
-        line.contains("'tool run loose'"),
-        "its class is named by the hop: {line}"
+        line.contains(" — tool select other: "),
+        "the row that raised it heads the definition: {line}"
     );
     assert!(
         line.contains("batten.toml"),
@@ -481,11 +481,7 @@ fn a_first_sighting_carries_the_gloss_and_its_route_by_kind() {
 fn a_shape_first_sighting_names_the_rows_remedy_verb() {
     let repo = fixture("shape-first-sighting-remedy");
     let line = fires(&repo, "gh pr merge 5");
-    for needle in [
-        "call name refused",
-        "commit ship other",
-        "batten policy explain '",
-    ] {
+    for needle in ["call name refused", "commit ship other"] {
         assert!(line.contains(needle), "{needle} missing: {line}");
     }
     assert!(
@@ -504,33 +500,34 @@ fn a_shape_first_sighting_names_the_rows_remedy_verb() {
     );
 }
 
-/// The repeat is the ADDRESS (CLOUD-2145): the gate's name and this firing's
-/// subjects, a byte prefix of the full arm, and nothing the full arm already put
-/// in the reader's context.
+/// The pointer arm is a byte PREFIX of the full arm, and sheds no pointer
+/// (CLOUD-2075 §7 case 2).
 ///
-/// This replaces CLOUD-2075 §7 case 2, which kept every route on the repeat.
-/// Routes, hop and definition are constant per gate: a repeat that re-sent them
-/// charged the window ~40 tokens a firing to restate what was already there.
+/// Everything the pointer arm says, the full arm said first and in the same
+/// order, and the subjects and routes — every way out — are the same set on
+/// both: the routes are how a finding is fixed, so the repeat keeps them, and
+/// only the definition is said once (CLOUD-2145).
 #[test]
-fn the_repeat_is_the_address_and_a_prefix_of_the_full_arm() {
+fn the_pointer_arm_carries_every_route_and_subject_the_full_arm_does() {
     let repo = fixture("pointer-carries-routes");
     let first = fires(&repo, "head -40 batten.toml");
     let repeat = fires(&repo, "head -40 batten.toml");
+    assert_ne!(first, repeat, "the two arms differ, or nothing was saved");
     assert!(
         first.starts_with(&repeat),
-        "the address is a byte prefix of the full arm: {repeat:?} vs {first:?}"
+        "the pointer is a byte prefix of the full arm: {repeat:?} vs {first:?}"
     );
-    assert_eq!(
-        repeat, "rule 'tool select other' at batten.toml head",
-        "the name and its subjects, nothing else"
-    );
-    for routed in [
+    assert!(!repeat.contains(FULL), "the pointer has no tail: {repeat}");
+    let head = first.split(FULL).next().expect("a head");
+    assert_eq!(head, repeat, "the full arm's pointers ARE the pointer arm");
+    for kept in [
+        "batten deny tool run loose",
+        "batten.toml",
         "read rules/scanning.md",
-        "run batten policy explain 'tool select other' 'tool run loose'",
     ] {
         assert!(
-            first.contains(routed),
-            "the full arm carries `{routed}`: {first}"
+            repeat.contains(kept),
+            "the pointer keeps `{kept}`: {repeat}"
         );
     }
 }
@@ -544,26 +541,24 @@ fn a_first_sighting_carries_the_rows_reason_and_both_labels() {
     let reason = rule_reason("tool select other");
     let opening: String = reason.chars().take(40).collect();
     assert!(
-        line.starts_with("rule 'tool select other' at "),
-        "one name opens the line: {line}"
+        line.starts_with("batten deny tool run loose at "),
+        "the violation's class opens the line: {line}"
     );
     assert!(
-        !line.contains("verdict '"),
-        "the class is no second label: {line}"
+        line.contains(" — tool select other: "),
+        "the row that raised it heads the definition: {line}"
     );
     for needle in [
         "a shell text utility stood in for the structured file surface",
         opening.as_str(),
         "read rules/scanning.md",
-        "run batten policy explain 'tool select other' 'tool run loose'",
     ] {
         assert!(line.contains(needle), "`{needle}` missing: {line}");
     }
-    // ONE HOP (CLOUD-2142): the line names its lookup once, for both names.
-    assert_eq!(
-        line.matches("batten policy").count(),
-        1,
-        "exactly one lookup per line: {line}"
+    // NO HOP (CLOUD-2145): the legend says once how a name is looked up.
+    assert!(
+        !line.contains("batten policy"),
+        "no lookup on the line: {line}"
     );
 }
 
@@ -646,15 +641,19 @@ fn a_collapsed_row_is_named_once() {
     let command = "git push --force-with-lease origin main";
     let first = fires(&repo, command);
     let repeat = fires(&repo, command);
-    assert_eq!(repeat, "rule 'branch write unsafe'", "the address, once");
-    assert!(first.starts_with(&format!("{repeat}; ")), "{first}");
     assert!(
-        first.contains("; run batten policy explain 'branch write unsafe' —"),
-        "the hop names it once: {first}"
+        repeat.starts_with("batten deny branch write unsafe; "),
+        "named once, its routes after: {repeat}"
+    );
+    assert!(first.starts_with(&format!("{repeat} — ")), "{first}");
+    assert_eq!(
+        repeat.matches("branch write unsafe").count(),
+        3,
+        "the name, and the override's --rule and --verdict: {repeat}"
     );
     assert!(
-        !first.contains("verdict 'branch write unsafe' rule"),
-        "no second label: {first}"
+        !first.contains(" — branch write unsafe:"),
+        "a row whose id is its class names no raising row: {first}"
     );
 }
 
@@ -786,13 +785,13 @@ fn a_capture_notice_is_a_classed_finding() {
     let notice = |output: &std::process::Output| -> String {
         let text = stderr(output);
         text.lines()
-            .find(|line| line.contains("verdict 'output write missing'"))
+            .find(|line| line.contains("output write missing"))
             .unwrap_or_else(|| panic!("the notice is classed: {text}"))
             .to_owned()
     };
     let first = notice(&hook(&repo, &unreadable));
     assert!(
-        first.starts_with("verdict 'output write missing' at capture-response-shape-unreadable")
+        first.starts_with("batten note output write missing at capture-response-shape-unreadable")
             && first.contains(FULL),
         "the notice names its class and reason and carries the definition: {first}"
     );

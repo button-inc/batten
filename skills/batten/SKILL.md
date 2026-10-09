@@ -123,26 +123,28 @@ it. That line, verbatim:
 
 <!-- legend: the text of `refusal::LEGEND`; `skill_contract.rs` fails on drift -->
 
-> batten: a finding reads `<name> at <subjects>; <routes> — <what to do>`; a later one in the same window is only `<name> at <subjects>`, the rest being above. `batten policy explain <name>` prints the whole class; `--history` why it exists, read before changing a rule.
+> batten findings read `batten <deny|warn|note> <class> at <subjects>; <routes>`; the first of a class in a window adds `—` and what it means, and `batten policy explain <class>` prints any you forget.
 
 A real deny reason, on its first firing in a window:
 
 ```text
-rule 'tool select other' at batten.toml head; read rules/scanning.md; run batten policy explain 'tool select other' 'tool run loose' — a shell text utility stood in for the structured file surface. ... Do: ... Don't: ...
+batten deny tool run loose at batten.toml head; read rules/scanning.md — tool select other: a shell text utility stood in for the structured file surface. ... Do: ... Don't: ...
 ```
 
 and on every later firing in that window:
 
 ```text
-rule 'tool select other' at batten.toml head
+batten deny tool run loose at batten.toml head; read rules/scanning.md
 ```
 
-The first `;` ends the address: the gate's one name and the subjects it fired
-on. The routes to take follow, then the hop that resolves the name (with its
-class, where the class has another name), and after `—` why the gate exists,
-what to do, and what not to do. A later firing is the address alone, because
-the rest is already above it; a compaction forgets the window, so the next
-firing after one is full again. **Take the named route.** Do not retry the
+`batten` says the line is this gate's and not the host's; `deny`, `warn` or
+`note` says how it bears on the call. The name is the violation's class, the
+one `batten policy explain` defines. Then the subjects it fired on, and after
+the first `;` the routes to take. After `—`, on the first firing only, come the
+row that raised it, why the class exists, what to do, and what not to do. A
+later firing keeps every pointer and drops only that definition, because it is
+already above; a compaction forgets the window, so the next firing after one is
+full again. **Take the named route.** Do not retry the
 refused call with different spelling, and do not route around it through another
 program: the rule is committed config.
 

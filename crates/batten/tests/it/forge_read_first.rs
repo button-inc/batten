@@ -88,20 +88,14 @@ fn adjudicate(dir: &Path, payload: &str) -> (Option<i32>, String) {
 #[test]
 fn a_forge_call_is_handed_its_memory() {
     let dir = bench("forge-read-first-selected");
-    // One session: the first call is handed the memory, and every later one is
-    // addressed by the rule's name, the memory being already in its context
-    // (CLOUD-2145).
-    for (index, payload) in [
+    for payload in [
         bash("gh pr view 1"),
         bash("cd /tmp && mise exec -- gh api repos/o/r"),
         bash("git push origin HEAD"),
         bash("mise run land"),
         tool("mcp__github__get_me"),
         tool("mcp__claude-code-remote__add_repo"),
-    ]
-    .into_iter()
-    .enumerate()
-    {
+    ] {
         let (code, said) = adjudicate(&dir, &payload);
         assert_eq!(
             code,
@@ -110,15 +104,9 @@ fn a_forge_call_is_handed_its_memory() {
         );
         assert!(!said.contains("permissionDecision"), "{payload}: {said}");
         assert!(
-            said.contains("rule 'forge read first'"),
-            "{payload} is not addressed: {said}"
+            said.contains(POINTER),
+            "{payload} carries no pointer: {said}"
         );
-        if index == 0 {
-            assert!(
-                said.contains(POINTER),
-                "the first carries the memory: {said}"
-            );
-        }
     }
 }
 
@@ -174,18 +162,15 @@ fn a_warn_advisory_is_full_once_then_a_pointer() {
     let (first_code, first) = adjudicate(&dir, &bash_in("s1", "gh pr view 1"));
     let (second_code, second) = adjudicate(&dir, &bash_in("s1", "gh pr view 1"));
     assert_eq!((first_code, second_code), (Some(0), Some(0)));
-    let address = "rule 'forge read first'";
-    assert!(
-        first.contains(address) && first.contains(POINTER) && first.contains(" —"),
-        "{first}"
-    );
+    let labels = "batten warn forge read first";
+    assert!(first.contains(labels) && first.contains(" —"), "{first}");
     assert!(
         first.contains("code-host call"),
         "the gloss rides the full arm: {first}"
     );
     assert!(
-        second.contains(&format!("\"{address}\"")),
-        "the second is the address alone: {second}"
+        second.contains(labels) && second.contains(POINTER),
+        "{second}"
     );
     assert!(
         !second.contains(" —"),

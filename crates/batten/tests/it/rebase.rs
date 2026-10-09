@@ -358,7 +358,7 @@ fn the_conflict_stop_names_every_path_and_the_route_out() {
     let whole = said.render_finding(batten::refusal::Arm::Full);
     // ONE CLASSED LINE (CLOUD-2078), with no rule label behind it.
     assert!(
-        whole.contains("verdict 'commit port blocked'") && !whole.contains("rule '"),
+        whole.contains("batten deny commit port blocked at ") && !whole.contains("rule '"),
         "{whole}"
     );
 

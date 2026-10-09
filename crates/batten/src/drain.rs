@@ -96,7 +96,7 @@
 //! A drain says what is NEW since this session was last told, one line per rule:
 //!
 //! ```text
-//! rule 'r' 3 new at src/a.rs:3,9(2->5) src/b.rs:2 +4 more, 12 told earlier; run batten state list --rule 'r'
+//! batten note r at src/a.rs:3,9(2->5) src/b.rs:2 +4 more (7 new, 12 told earlier); run batten state list --rule 'r'
 //! told earlier, still open: 49 finding(s) under 2 rule(s); run batten state list
 //! ```
 //!
@@ -700,25 +700,33 @@ fn locations(listed: &[Surfaced<'_>], previous: &BTreeMap<String, u64>) -> Strin
     out
 }
 
-/// A rule's one line: its fresh count, up to `cap` locations, how many more it
-/// holds and how many it was told earlier, and — whenever anything is not
-/// listed — the command that returns exactly that rule's set.
+/// A rule's one line, in the finding grammar (CLOUD-2145):
+/// `batten <severity> <rule> at <locations>[ +N more][ (<counts>)][; run …]`.
+///
+/// Up to `cap` new locations; the counts only where something is not listed —
+/// how many are new and how many were told earlier — and then the command that
+/// returns exactly that rule's set. Everything listed and nothing told is the
+/// locations alone, the count being their number.
 //MUTANT location-cap-unread|s@^    let listed = group.fresh.len().min(cap);$@    let listed = group.fresh.len();@|a_rule_past_its_location_cap_points_at_the_rest
 fn group_line(group: &Group<'_>, cap: usize, previous: &BTreeMap<String, u64>) -> (String, usize) {
     let listed = group.fresh.len().min(cap);
-    let label = crate::refusal::label(crate::refusal::Label::Rule, group.rule);
-    let mut line = format!("{label} {} new", group.fresh.len());
+    let severity = crate::refusal::Severity::of_tier(group.tier);
+    let mut line = crate::refusal::head(severity, group.rule);
+    line.push_str(" at");
     if listed > 0 {
-        let _ = write!(line, " at {}", locations(&group.fresh[..listed], previous));
+        let _ = write!(line, " {}", locations(&group.fresh[..listed], previous));
     }
     let more = group.fresh.len() - listed;
     if more > 0 {
         let _ = write!(line, " +{more} more");
     }
-    if !group.told.is_empty() {
-        let _ = write!(line, ", {} told earlier", group.told.len());
-    }
-    if more > 0 || !group.told.is_empty() {
+    let unlisted = more > 0 || !group.told.is_empty();
+    if unlisted {
+        let _ = write!(line, " ({} new", group.fresh.len());
+        if !group.told.is_empty() {
+            let _ = write!(line, ", {} told earlier", group.told.len());
+        }
+        line.push(')');
         let _ = write!(line, "; run batten state list --rule '{}'", group.rule);
     }
     (line, listed)
@@ -1636,7 +1644,7 @@ mod tests {
         );
         assert_eq!(
             first.lines,
-            ["rule 'r' 2 new at src/a.rs:1 src/b.rs:1"],
+            ["batten note r at src/a.rs:1 src/b.rs:1"],
             "one rule, one line, factored by file"
         );
 
@@ -1799,11 +1807,11 @@ mod tests {
             &scope,
             Some(&Context::new("refs/heads/z")),
         );
-        assert_eq!(here.lines, ["rule 'r' 1 new at src/a.rs:1(42)"]);
+        assert_eq!(here.lines, ["batten note r at src/a.rs:1(42)"]);
         let fallback = cycled(&multi_records(&multi), &scope, None);
         assert_eq!(
             fallback.lines,
-            ["rule 'r' 1 new at src/a.rs:1"],
+            ["batten note r at src/a.rs:1"],
             "no ref: the first instance, deterministically, never nothing"
         );
     }
@@ -1829,7 +1837,7 @@ mod tests {
         held.instances[0].occurrences =
             Observation::NotObserved(crate::findings::NotObserved::RuleSkipped);
         let drained = cycled(&[held], &changed(&[]), None);
-        assert_eq!(drained.lines, ["rule 'r' 1 new at src/a.rs:1(held)"]);
+        assert_eq!(drained.lines, ["batten note r at src/a.rs:1(held)"]);
     }
 
     #[test]
@@ -1841,7 +1849,7 @@ mod tests {
         // location the agent acts on.
         let one = record(FindingKind::Code, "r", "src/a.rs", "TODO");
         let drained = cycled(std::slice::from_ref(&one), &changed(&["src/a.rs"]), None);
-        assert_eq!(drained.lines, ["rule 'r' 1 new at src/a.rs:1"]);
+        assert_eq!(drained.lines, ["batten note r at src/a.rs:1"]);
         assert!(!drained.lines[0].contains(&one.identity.fingerprint.to_hex()));
     }
 
@@ -1897,7 +1905,7 @@ mod tests {
         );
         assert_eq!(
             drained.lines,
-            ["rule 'r' 5 new at src/a.rs:1,2,3 +2 more; run batten state list --rule 'r'"]
+            ["batten note r at src/a.rs:1,2,3 +2 more (5 new); run batten state list --rule 'r'"]
         );
         assert_eq!(drained.counts.len(), 3, "only what was listed is anchored");
         assert_eq!(
@@ -1926,8 +1934,8 @@ mod tests {
         assert_eq!(
             drained.lines,
             [
-                "rule 'noisy' 5 new at src/a.rs:1,2 +3 more; run batten state list --rule 'noisy'",
-                "rule 'quiet' 1 new at src/a.rs:1",
+                "batten note noisy at src/a.rs:1,2 +3 more (5 new); run batten state list --rule 'noisy'",
+                "batten note quiet at src/a.rs:1",
             ],
             "the quiet rule keeps its line"
         );
@@ -1942,13 +1950,15 @@ mod tests {
         let records = spread("r", 3);
         let scope = changed(&["src/a.rs"]);
         let first = cycle(&records, &scope, None, &config, &BTreeMap::new(), &[]);
-        assert_eq!(first.lines, ["rule 'r' 3 new at src/a.rs:1,2,3"]);
+        assert_eq!(first.lines, ["batten note r at src/a.rs:1,2,3"]);
         let mut more = records.clone();
         more.extend(spread("r", 4).into_iter().skip(3));
         let second = cycle(&more, &scope, None, &config, &first.counts, &[]);
         assert_eq!(
             second.lines,
-            ["rule 'r' 1 new at src/a.rs:4, 3 told earlier; run batten state list --rule 'r'"],
+            [
+                "batten note r at src/a.rs:4 (1 new, 3 told earlier); run batten state list --rule 'r'"
+            ],
             "only the new identity is listed"
         );
         let settled = cycle(&more, &scope, None, &config, &second.counts, &[]);
@@ -1981,7 +1991,7 @@ mod tests {
         let small = drain_after_turn(backlog(2));
         let large = drain_after_turn(backlog(100));
         assert_eq!(small.len(), 2, "the new rule and the told total: {small:?}");
-        assert!(small[0].starts_with("rule 'new' 2 new at "), "{small:?}");
+        assert!(small[0].starts_with("batten note new at "), "{small:?}");
         let bytes = |lines: &[String]| lines.iter().map(String::len).sum::<usize>();
         assert_eq!(
             // "40 … 2 rule(s)" against "2000 … 100 rule(s)": four digits.
@@ -2075,7 +2085,7 @@ mod tests {
         let entries = drained
             .lines
             .iter()
-            .filter(|line| line.starts_with("rule '"))
+            .filter(|line| line.starts_with("batten note "))
             .count();
         assert!(
             (1..RULES).contains(&entries),
@@ -2147,7 +2157,7 @@ mod tests {
             &previous,
             &[],
         );
-        assert_eq!(drained.lines, ["rule 'r' 1 new at src/a.rs:1(500->501)"]);
+        assert_eq!(drained.lines, ["batten note r at src/a.rs:1(500->501)"]);
         assert_eq!(
             drained.counts.get(&key).copied(),
             Some(501),
@@ -2211,7 +2221,7 @@ mod tests {
             &[],
         );
         assert!(
-            quiet.lines[0].starts_with("rule 'warning-rule' "),
+            quiet.lines[0].starts_with("batten warn warning-rule "),
             "the stronger tier leads: {:?}",
             quiet.lines
         );
@@ -2221,7 +2231,7 @@ mod tests {
         let before = vec![escalating.clone(), urgent.clone()];
         let shouted = cycle(&before, &scope, None, &generous(), &BTreeMap::new(), &[]);
         assert!(
-            shouted.lines[0].starts_with("rule 'warning-rule' "),
+            shouted.lines[0].starts_with("batten warn warning-rule "),
             "nine thousand occurrences buy no position: {:?}",
             shouted.lines
         );

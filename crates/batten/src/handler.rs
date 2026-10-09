@@ -1833,14 +1833,15 @@ mod tests {
     fn handler_advice_and_violations_carry_their_row_and_class() {
         let advised = report_refusal("h", "look here").render_finding(crate::refusal::Arm::Full);
         assert!(
-            advised.starts_with("verdict 'hook report now' at hook.handler.h look here"),
+            advised.starts_with("batten deny hook report now at hook.handler.h look here"),
             "{advised}"
         );
         assert!(!advised.contains("rule '"), "{advised}");
         let timed_out = violation_refusal("h", &Violation::TimedOut(Duration::from_millis(300)))
             .render_finding(crate::refusal::Arm::Full);
         assert!(
-            timed_out.starts_with("verdict 'hook answer broken' at hook.handler.h timed-out-300ms"),
+            timed_out
+                .starts_with("batten deny hook answer broken at hook.handler.h timed-out-300ms"),
             "{timed_out}"
         );
     }
@@ -1975,7 +1976,7 @@ mod tests {
         ] {
             let line = violation_refusal("h", &violation).render_finding(crate::refusal::Arm::Full);
             assert!(
-                line.starts_with("verdict 'hook answer broken' at hook.handler.h "),
+                line.starts_with("batten deny hook answer broken at hook.handler.h "),
                 "{line}"
             );
             assert!(!line.contains(secret), "{line}");

@@ -901,7 +901,7 @@ fn unlanded_work_at_a_declared_stopping_point_is_pointed_at() {
         "the pointer travels, and it names the rule that decided it: {stdout}"
     );
     assert!(
-        stdout.contains("verdict 'commit ship missing'"),
+        stdout.contains("commit ship missing"),
         "and the class whose paragraph says what to do about it: {stdout}"
     );
 }
@@ -912,7 +912,7 @@ fn unlanded_line(stdout: &str) -> Option<String> {
     let context = document["hookSpecificOutput"]["additionalContext"].as_str()?;
     context
         .lines()
-        .find(|line| line.contains("verdict 'commit ship missing'"))
+        .find(|line| line.contains("commit ship missing"))
         .map(str::to_owned)
 }
 
@@ -1027,7 +1027,7 @@ fn the_same_turn_outside_plan_mode_still_gets_it() {
         &stop_payload("Here is the plan; nothing is written yet.", false),
     ));
     assert!(
-        stdout.contains("verdict 'commit ship missing'"),
+        stdout.contains("commit ship missing"),
         "the same turn with no declared mode is advised as before: {stdout}"
     );
 }

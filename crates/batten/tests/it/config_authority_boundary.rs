@@ -185,7 +185,7 @@ fn the_refusal_names_the_key_and_the_class_and_never_a_value() {
     // CLASSED (CLOUD-2078): raised already rendered as `layer carry refused`, a
     // name a reader can look up, rather than `verb run broken`.
     assert!(
-        text.starts_with("verdict 'layer carry refused' at must_land_on"),
+        text.starts_with("batten deny layer carry refused at must_land_on"),
         "{text}"
     );
     assert!(text.contains("must_land_on"), "names the key: {text}");

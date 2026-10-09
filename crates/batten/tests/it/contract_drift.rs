@@ -139,7 +139,7 @@ fn a_seed_at_a_later_event_reports_the_unmediated_start() {
         .pipe_notice()
         .expect("a seed at PostToolBatch means SessionStart never ran");
     assert!(
-        told.contains("verdict 'hook run missing' at SessionStart registration did not run"),
+        told.contains("hook run missing at SessionStart registration did not run"),
         "the notice names its class and the condition rather than the symptom: {told}"
     );
     assert!(
@@ -184,7 +184,7 @@ fn a_moved_contract_file_is_reported_in_band() {
 
     let told = drift(&dir, "s1").pipe_notice().expect("the surface moved");
     assert!(
-        told.contains("verdict 'contract read stale' at 1 changed"),
+        told.contains("contract read stale at 1 changed"),
         "the notice is a classed finding leading with the count: {told}"
     );
     assert!(told.contains("changed AGENTS.md"), "{told}");
@@ -242,7 +242,7 @@ fn a_change_set_with_nothing_added_carries_no_added_section() {
     let told = drift(&dir, "s1").pipe_notice().expect("the surface moved");
     let line = told
         .lines()
-        .find(|line| line.contains("verdict 'contract read stale'"))
+        .find(|line| line.contains("contract read stale at "))
         .unwrap_or_else(|| panic!("the drift finding: {told}"));
     let pointer = line.split(" — ").next().unwrap_or(line);
     assert!(pointer.contains("changed AGENTS.md"), "{line}");

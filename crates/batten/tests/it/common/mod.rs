@@ -160,28 +160,48 @@ fn scan_declared_patterns() -> String {
 ///
 /// When no line carries the class, naming what was said.
 pub(crate) fn printed_pointers(said: &str, class: &str, rule: &str) -> String {
-    // CLOUD-2142's grammar: `rule '<rule>' at <subjects>; …`, the class named by
-    // the hop, which the engine's own reader returns.
-    let opener = format!("rule '{rule}' at ");
+    // CLOUD-2145's grammar: `batten <severity> <class> at <subjects>; …`, the
+    // class read by the engine's own reader and the row by `raised_by`.
+    let opener = " at ";
     said.lines()
         .find_map(|line| {
             let parsed = batten::refusal::parse_finding(line)?;
-            if parsed.rule != rule || parsed.verdict.as_deref() != Some(class) {
+            if parsed.verdict.as_deref() != Some(class) || raised_by(line) != rule {
                 return None;
             }
-            let rest = line.split(opener.as_str()).nth(1)?;
+            let rest = line.split_once(opener)?.1;
             let pointers = rest.split("; ").next()?.split(" —").next()?;
             Some(pointers.trim().to_owned())
         })
         .unwrap_or_else(|| panic!("no line refuses as `{class}`: {said}"))
 }
 
-/// The rule that refused, read off the labelled finding line through the
-/// engine's own reader (CLOUD-2075) — never guessed from word positions.
+/// The row a headed finding line names as having raised it: its override
+/// route's `--rule`, else the first sighting's `— <rule>:`, else — a row whose
+/// id is its class, or a classless row — the line's own name.
+fn raised_by(line: &str) -> String {
+    if let Some((_, rest)) = line.split_once("--rule '")
+        && let Some((rule, _)) = rest.split_once('\'')
+    {
+        return rule.to_owned();
+    }
+    if let Some((_, tail)) = line.split_once(" — ")
+        && let Some((rule, _)) = tail.split_once(": ")
+        && !rule.contains(['.', ',', ';'])
+    {
+        return rule.to_owned();
+    }
+    batten::refusal::parse_finding(line)
+        .and_then(|parsed| parsed.verdict)
+        .unwrap_or_default()
+}
+
+/// The rule that refused, read off the finding line (CLOUD-2145): see
+/// [`raised_by`]. Never guessed from word positions.
 pub(crate) fn refusing_rule(said: &str) -> Option<String> {
     said.lines()
-        .find_map(batten::refusal::parse_finding)
-        .map(|parsed| parsed.rule)
+        .find(|line| batten::refusal::parse_finding(line).is_some())
+        .map(raised_by)
 }
 
 pub(crate) fn at_root(name: &str) -> PathBuf {
