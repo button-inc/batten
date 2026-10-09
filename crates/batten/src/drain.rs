@@ -2032,8 +2032,8 @@ mod tests {
             );
             let shown = drained.lines.len() - 1;
             assert_eq!(
-                drained.counts.len(),
-                drained.rules.values().sum::<u64>() as usize,
+                u64::try_from(drained.counts.len()).unwrap(),
+                drained.rules.values().sum::<u64>(),
                 "{case}: only what was shown is anchored"
             );
             if case.starts_with("one rule") {
