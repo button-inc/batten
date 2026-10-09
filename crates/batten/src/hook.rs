@@ -3160,20 +3160,21 @@ pub struct Repair {
     pub subject: Option<String>,
 }
 
-//MUTANT label-spelled-outside-projection|s@^        let rule = label(Label::Rule, \&self.rule);$@        let rule = format!("rule '{}'", self.rule);@|no_finding_label_is_spelled_outside_the_projection
+//MUTANT label-spelled-outside-projection|s@^        let head = head(Severity::Note, crate::verdict::Native::CallFixSilent.id());$@        let head = format!("verdict '{}'", crate::verdict::Native::CallFixSilent.id());@|no_finding_label_is_spelled_outside_the_projection
 impl Repair {
-    /// The record line, labelled so a reader can tell the class from the row
-    /// (CLOUD-2075): `verdict '<class>' rule '<id>'[ at <subject>] repaired
-    /// verdict '<repaired>'`.
+    /// The record line, in the finding grammar (CLOUD-2145): `batten note call
+    /// fix silent at [<subject>, ]<rule> repaired <class>` — the class this
+    /// record is, the row whose fix ran, and the class it spared.
     #[must_use]
     pub fn line_text(&self) -> String {
-        use crate::refusal::{Label, label};
-        let class = label(Label::Verdict, crate::verdict::Native::CallFixSilent.id());
-        let rule = label(Label::Rule, &self.rule);
-        let repaired = label(Label::Verdict, &self.repaired);
+        use crate::refusal::{Severity, head};
+        let head = head(Severity::Note, crate::verdict::Native::CallFixSilent.id());
         match self.subject.as_deref() {
-            Some(subject) => format!("{class} {rule} at {subject} repaired {repaired}"),
-            None => format!("{class} {rule} repaired {repaired}"),
+            Some(subject) => format!(
+                "{head} at {subject}, {} repaired {}",
+                self.rule, self.repaired
+            ),
+            None => format!("{head} at {} repaired {}", self.rule, self.repaired),
         }
     }
 }
@@ -11577,7 +11578,10 @@ mod tests {
         let line = suppressed.line_text();
         assert!(!line.contains("gh pr merge"), "{line}");
         assert!(!line.contains("42"), "{line}");
-        assert_eq!(line, "waived rule 'gh-pr-merge' (expires 2099-01-01)");
+        assert_eq!(
+            line,
+            "batten note gh-pr-merge at this call waived until 2099-01-01"
+        );
     }
 
     #[test]

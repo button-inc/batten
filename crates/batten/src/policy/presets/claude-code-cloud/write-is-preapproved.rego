@@ -1,6 +1,6 @@
 #MUTANT-SUITE crates/batten/tests/it/preapprove.rs
 #MUTANT write-mode-unchecked|s@^\tinput.call\["permission-mode"\] == "auto"$@\ttrue@|an_edit_is_not_preapproved_in_default_mode
-#MUTANT write-destructive-granted|s@^\t\tnot destructive_program\(program\)$@\t\ttrue@|a_destructive_shell_write_is_left_to_the_host_in_auto
+#MUTANT write-destructive-granted|s@^\t\tnot destructive_program(program)$@\t\ttrue@|a_destructive_shell_write_is_left_to_the_host_in_auto
 # In auto mode every write batten allows is put to no one (CLOUD-2002).
 #
 # The owner's rule, 2026-09-29: "Write operations are supposed to be allowed by

@@ -167,7 +167,7 @@ fn row(id: &str, column: &str, hold: &str) -> String {
 /// Which kind it is — held or refused, and the board gate's rule — is the
 /// record's `issue` and `refusal` lines, echoed above it.
 fn refusal(text: &str, pointer: &str) -> bool {
-    let line = format!("{pointer} rule '{RULE}'");
+    let line = format!("batten deny {RULE} at {pointer}");
     text.lines().any(|said| said.trim() == line)
 }
 

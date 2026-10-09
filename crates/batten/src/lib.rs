@@ -21039,6 +21039,9 @@ fn arm_for(source: hook::HookSource, envelope: &hook::Envelope, refusal: &Refusa
     }
 }
 
+//MUTANT-SUITE crates/batten/tests/it/preapprove.rs
+//MUTANT grant-said-every-firing|s@^            let arm = arm_for(hook::HookSource::Harness, envelope, \&grant);$@            let arm = refusal::Arm::Full;@|a_grant_says_its_definition_once_per_window
+//MUTANT-SUITE crates/batten/tests/it/adjudicate_absent.rs
 //MUTANT ask-arm-sighted|s@^            let asked = refusal.render_finding(refusal::Arm::Full);$@            let asked = refusal.render_finding(arm_for(hook::HookSource::Harness, envelope, \&refusal));@|an_ask_carries_the_full_arm_on_every_firing
 fn render(
     harness: hook::Harness,
@@ -21187,12 +21190,13 @@ fn render(
         // grant cannot be spoken it still goes out as the advisory it would have
         // been on a plain allow — a nudge is never the price of a pre-approval.
         hook::Decision::Preapproved(grant) => {
-            // FULL ON EVERY FIRING (CLOUD-2078): its reader is the human the
-            // host would have prompted, as for `Ask`, so there is no store.
-            // A grant refuses nothing: it is a `note` (CLOUD-2145).
-            let reason = grant
-                .with_severity(refusal::Severity::Note)
-                .render_finding(refusal::Arm::Full);
+            // A grant refuses nothing: it is a `note` (CLOUD-2145). And it is
+            // ONCE PER WINDOW like every finding: no human is prompted on a
+            // pre-approved call, so its reason is read by the model, for which
+            // a repeat of the definition is a copy of what is already above.
+            let grant = grant.with_severity(refusal::Severity::Note);
+            let arm = arm_for(hook::HookSource::Harness, envelope, &grant);
+            let reason = grant.render_finding(arm);
             match hook::encode_preapproval(
                 harness,
                 &envelope.raw_event,

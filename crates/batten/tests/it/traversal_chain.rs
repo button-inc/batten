@@ -125,7 +125,10 @@ fn a_closing_chain_exits_zero() {
 fn no_record_for_the_slug_breaks_at_the_entry() {
     let (code, out) = check("chain-no-record", 8, &[("db/e.md", ENTRY)]);
     assert_eq!(code, Some(2), "{out}");
-    assert!(out.contains("db/e.md rule 'broke-at-entry'"), "{out}");
+    assert!(
+        out.contains("batten deny broke-at-entry at db/e.md"),
+        "{out}"
+    );
 }
 
 #[test]
@@ -136,7 +139,10 @@ fn a_record_citing_no_capture_breaks_at_the_record() {
         &[("db/e.md", ENTRY), ("middle/e.md", "---\nother: x\n---\n")],
     );
     assert_eq!(code, Some(2), "{out}");
-    assert!(out.contains("db/e.md rule 'broke-at-record'"), "{out}");
+    assert!(
+        out.contains("batten deny broke-at-record at db/e.md"),
+        "{out}"
+    );
 }
 
 #[test]
@@ -147,7 +153,10 @@ fn a_missing_capture_file_breaks_at_the_capture() {
         &[("db/e.md", ENTRY), ("middle/e.md", RECORD)],
     );
     assert_eq!(code, Some(2), "{out}");
-    assert!(out.contains("db/e.md rule 'broke-at-leaf'"), "{out}");
+    assert!(
+        out.contains("batten deny broke-at-leaf at db/e.md"),
+        "{out}"
+    );
 }
 
 #[test]
@@ -162,7 +171,10 @@ fn a_capture_present_but_unregistered_breaks_at_the_register() {
         ],
     );
     assert_eq!(code, Some(2), "{out}");
-    assert!(out.contains("db/e.md rule 'broke-at-register'"), "{out}");
+    assert!(
+        out.contains("batten deny broke-at-register at db/e.md"),
+        "{out}"
+    );
 }
 
 #[test]
@@ -179,7 +191,7 @@ fn a_cycle_terminates() {
         ],
     );
     assert_eq!(code, Some(2), "{out}");
-    assert!(out.contains("db/e.md rule 'broke-at-"), "{out}");
+    assert!(out.contains("batten deny broke-at-"), "{out}");
 }
 
 #[test]
@@ -195,7 +207,7 @@ fn a_bound_is_reported_as_bound_exceeded_never_as_a_break() {
         ],
     );
     assert_eq!(code, Some(2), "{out}");
-    assert!(out.contains("db/e.md rule 'chain-bound'"), "{out}");
+    assert!(out.contains("batten deny chain-bound at db/e.md"), "{out}");
     assert!(
         !out.contains("broke-at"),
         "a bound says nothing about the chain: {out}"

@@ -28,7 +28,7 @@
 // the same reason:
 /*
 #MUTANT write-mode-unchecked|s@^\tinput.call\["permission-mode"\] == "auto"$@\ttrue@|an_edit_is_not_preapproved_in_default_mode
-#MUTANT write-destructive-granted|s@^\t\tnot destructive_program\(program\)$@\t\ttrue@|a_destructive_shell_write_is_left_to_the_host_in_auto
+#MUTANT write-destructive-granted|s@^\t\tnot destructive_program(program)$@\t\ttrue@|a_destructive_shell_write_is_left_to_the_host_in_auto
 */
 
 use crate::common;
@@ -193,6 +193,46 @@ fn a_host_read_is_preapproved_in_every_mode() {
     }
 }
 
+/// A GRANT SAYS ITS DEFINITION ONCE PER WINDOW (CLOUD-2145): no human is
+/// prompted on a pre-approved call, so its reason is read by the model, and a
+/// repeat is the head and its routes — like every other finding.
+#[test]
+fn a_grant_says_its_definition_once_per_window() {
+    let read = |session: &str| {
+        let payload = serde_json::json!({
+            "hook_event_name": "PreToolUse",
+            "session_id": session,
+            "permission_mode": "default",
+            "tool_name": "Read",
+            "tool_input": { "file_path": "README.md" },
+        })
+        .to_string();
+        verdict(&payload).unwrap_or_default()
+    };
+    let session = format!(
+        "grant-once-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |since| since.as_nanos())
+    );
+    let (first_decision, first) = read(&session);
+    let (second_decision, second) = read(&session);
+    assert_eq!(
+        (first_decision.as_str(), second_decision.as_str()),
+        ("allow", "allow")
+    );
+    assert!(
+        first.contains(" — "),
+        "the first carries the definition: {first}"
+    );
+    assert!(
+        first.starts_with(&second),
+        "the repeat is its prefix: {second} / {first}"
+    );
+    assert!(!second.contains(" — "), "the repeat drops it: {second}");
+}
+
 /// A GRANT'S REASON IS A FINDING (CLOUD-2078): the rule that granted and the
 /// class a reader looks up, rather than a bare module id.
 #[test]
@@ -335,13 +375,23 @@ fn a_linted_and_approved_dispatch_is_preapproved_in_auto() {
 }
 
 /// THE CASE `dispatch-uncleared` KILLS: linted but never approved — the owner
-/// rejected the bundle or has not answered — so the host keeps asking.
+/// rejected the bundle or has not answered — so the dispatch grant is not the
+/// one that answers.
+///
+/// IN AUTO MODE, the only mode the dispatch grant fires in: a default-mode
+/// case could not tell an approval check from its absence, because the mode
+/// check refuses first. In auto every call batten allows is granted by auto's
+/// own row (CLOUD-2125), so what is asserted is WHICH row granted: never the
+/// dispatch rule, which the grant's first sighting names.
 #[test]
 fn a_dispatch_without_approval_is_not_preapproved() {
     let fixture = Dispatch::new("unapproved");
     fixture.linted();
-    // Default mode, where the dispatch grant is the only route to an allow; in
-    // auto every call batten allows is granted (CLOUD-2125).
+    let (_, reason) = verdict(&Dispatch::call("auto", &fixture.prompt)).unwrap_or_default();
+    assert!(
+        !reason.contains("call open now"),
+        "an unapproved dispatch is not the dispatch grant's: {reason}"
+    );
     assert_not_granted(&Dispatch::call("default", &fixture.prompt));
 }
 
@@ -491,6 +541,16 @@ fn an_edit_is_not_preapproved_in_default_mode() {
 fn a_destructive_shell_write_is_left_to_the_host_in_auto() {
     // Outside auto mode, the narrow write grant still withholds it.
     assert_not_granted(&shell("default", "python3 tools/x.py && rm -rf build"));
+    // In auto mode CLOUD-2125's mode grant answers the call under the same
+    // class, so only the row named as raising it tells whether the write grant
+    // withheld itself.
+    let (decision, reason) =
+        verdict(&shell("auto", "python3 tools/x.py && rm -rf build")).unwrap_or_default();
+    assert_eq!(decision, "allow", "the mode grant answers it: {reason}");
+    assert!(
+        reason.contains(" — mode grant now: "),
+        "the write grant must withhold a line carrying rm: {reason}"
+    );
 }
 
 /// THE OWNER'S RULE (CLOUD-2125): in auto mode, a call no gate refuses is

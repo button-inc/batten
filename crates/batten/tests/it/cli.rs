@@ -1263,7 +1263,7 @@ fn check_violation_exits_two_with_pointer_only_output() {
     assert_eq!(output.status.code(), Some(2), "a finding is a violation");
     let stdout = String::from_utf8_lossy(&output.stdout);
     // Pointer only: the location and rule id, never the offending line text.
-    assert_eq!(stdout, "lib.rs:2 rule 'no-todo'\n");
+    assert_eq!(stdout, "batten deny no-todo at lib.rs:2\n");
     assert!(
         !stdout.contains("fix this"),
         "output must not leak the bytes"
@@ -1393,7 +1393,7 @@ fn enforce_runs_a_command_rule_and_maps_its_exit_code() {
     // Rule-scoped pointer: no invented line number, and never the command output.
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
-        "**/*.rs rule 'dyn'\n"
+        "batten deny dyn at **/*.rs\n"
     );
 }
 
@@ -1807,7 +1807,7 @@ fn a_local_override_may_add_a_rule_but_not_redefine_one() {
     assert_eq!(output.status.code(), Some(2), "the added rule must fire");
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
-        "lib.rs:1 rule 'no-fixme'\n"
+        "batten deny no-fixme at lib.rs:1\n"
     );
 
     // Redefining a committed rule could weaken it, so it is refused outright.
@@ -6865,7 +6865,7 @@ fn the_committed_repo_config_gates_a_repository() {
     );
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
-        "crates/** rule 'source carry broken'\n",
+        "batten deny source carry broken at crates/**\n",
         "a command condemns a batch, so the pointer is the glob and carries no line"
     );
 }
@@ -7082,17 +7082,17 @@ fn the_committed_repo_agnosticism_rules_fire_on_every_banned_shape() {
     );
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
-        "crates/demo/notes.txt:1 rule 'fact name other'\n\
-         crates/demo/notes.txt:2 rule 'path name other'\n\
-         crates/demo/notes.txt:3 rule 'source name other'\n\
-         crates/demo/notes.txt:4 rule 'issue name other'\n\
-         crates/demo/notes.txt:5 rule 'issue name other'\n\
-         crates/demo/src/lib.rs:1 rule 'fact name other'\n\
-         crates/demo/src/lib.rs:2 rule 'path name other'\n\
-         crates/demo/src/lib.rs:3 rule 'source name other'\n\
-         crates/demo/src/lib.rs:4 rule 'issue name other'\n\
-         crates/demo/src/lib.rs:5 rule 'issue name other'\n\
-         policy/demo.rego:1 rule 'pattern name other'\n",
+        "batten deny fact name other at crates/demo/notes.txt:1\n\
+         batten deny path name other at crates/demo/notes.txt:2\n\
+         batten deny source name other at crates/demo/notes.txt:3\n\
+         batten deny issue name other at crates/demo/notes.txt:4\n\
+         batten deny issue name other at crates/demo/notes.txt:5\n\
+         batten deny fact name other at crates/demo/src/lib.rs:1\n\
+         batten deny path name other at crates/demo/src/lib.rs:2\n\
+         batten deny source name other at crates/demo/src/lib.rs:3\n\
+         batten deny issue name other at crates/demo/src/lib.rs:4\n\
+         batten deny issue name other at crates/demo/src/lib.rs:5\n\
+         batten deny pattern name other at policy/demo.rego:1\n",
         "one sorted pointer per banned shape per file, and nothing else"
     );
 
@@ -7228,12 +7228,12 @@ fn the_committed_portability_rules_fire_on_every_banned_shape() {
     );
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
-        "mise-tasks/seed.sh:1 rule 'shell parse unsafe'\n\
-         mise-tasks/seed.sh:2 rule 'shell edit unsafe'\n\
-         mise-tasks/seed.sh:3 rule 'shell read unsafe'\n\
-         mise-tasks/seed.sh:4 rule 'shell list unsafe'\n\
-         mise-tasks/seed.sh:5 rule 'shell guard unsafe'\n\
-         tests/seed.bats:2 rule 'branch edit unsafe'\n",
+        "batten deny shell parse unsafe at mise-tasks/seed.sh:1\n\
+         batten deny shell edit unsafe at mise-tasks/seed.sh:2\n\
+         batten deny shell read unsafe at mise-tasks/seed.sh:3\n\
+         batten deny shell list unsafe at mise-tasks/seed.sh:4\n\
+         batten deny shell guard unsafe at mise-tasks/seed.sh:5\n\
+         batten deny branch edit unsafe at tests/seed.bats:2\n",
         "one sorted pointer per banned construct, and nothing else"
     );
 
@@ -7332,7 +7332,7 @@ fn the_committed_example_config_loads_over_the_binary() {
     );
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
-        "**/*.rs rule 'source carry broken'\n",
+        "batten deny source carry broken at **/*.rs\n",
         "a command condemns a batch, so the pointer is the glob and carries no line"
     );
 }
@@ -7386,7 +7386,7 @@ fn the_shipped_starter_config_loads_over_the_binary() {
     );
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
-        "src/main.rs:1 rule 'source carry broken'\n",
+        "batten deny source carry broken at src/main.rs:1\n",
         "a forbid rule points at the line, not at the batch a command condemns"
     );
 }
@@ -7475,7 +7475,7 @@ fn warn_findings_report_without_failing_the_run() {
     );
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
-        "lib.rs:1 rule 'no-todo'\n",
+        "batten warn no-todo at lib.rs:1\n",
         "the warn finding must still be reported"
     );
 }
@@ -12577,7 +12577,7 @@ fn a_tracked_instruction_may_not_prescribe_the_denied_commit_identity() {
     );
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
-        "HOWTO.md:2 rule 'remedy carry refused'\n",
+        "batten deny remedy carry refused at HOWTO.md:2\n",
         "one pointer, and the matched line is never echoed"
     );
 
@@ -13195,7 +13195,10 @@ fn a_met_precondition_lets_the_rule_run_normally() {
         "a met precondition is not a filter: {}",
         stderr(&output)
     );
-    assert_eq!(stdout(&output), "lib.rs:1 rule 'needs-the-vendor-tree'\n");
+    assert_eq!(
+        stdout(&output),
+        "batten deny needs-the-vendor-tree at lib.rs:1\n"
+    );
 }
 
 /// A ratchet still fires on an empty match set, which the new skip must not
@@ -13264,7 +13267,7 @@ fn a_deciding_kind_over_the_same_tree_does_block() {
         "the control must block, or the approximating case proves nothing: {}",
         stderr(&output)
     );
-    assert_eq!(stdout(&output), "lib.rs:1 rule 'no-todo'\n");
+    assert_eq!(stdout(&output), "batten deny no-todo at lib.rs:1\n");
 }
 
 /// Every kind carries a classification, and the vocabulary is total.

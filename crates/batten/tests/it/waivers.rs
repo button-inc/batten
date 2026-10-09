@@ -115,7 +115,10 @@ fn without_a_waiver_the_rule_denies() {
     let (repo, home) = repo("waiver-baseline", RULE);
     let (code, stdout, _) = run(&repo, &home, &["check"]);
     assert_eq!(code, 2, "a deny finding is a policy verdict");
-    assert!(stdout.contains("lib.rs:2 rule 'no-todo'"), "got: {stdout}");
+    assert!(
+        stdout.contains("batten deny no-todo at lib.rs:2"),
+        "got: {stdout}"
+    );
 }
 
 // subsumed: "an exempted entry passes only through a waiver carrying a reason" crates/batten/tests/it/waivers.rs that case was about the waiver SURFACE rather than about `pin add unsafe` — a live waiver clears the verdict and leaves a pointer-only audit line on stderr — and this drives the compiled binary over a `forbid` row to assert exactly that (CLOUD-1137)
@@ -130,11 +133,11 @@ fn a_live_waiver_clears_the_verdict_and_audits_on_stderr() {
     );
     // The compensating control: the suppression is on the record.
     assert!(
-        stderr.contains("waived lib.rs:2 rule 'no-todo'"),
+        stderr.contains("batten note no-todo at lib.rs:2"),
         "got: {stderr}"
     );
     assert!(
-        stderr.contains(&format!("expires {LIVE}")),
+        stderr.contains(&format!("waived until {LIVE}")),
         "the audit line names the expiry it relied on: {stderr}"
     );
     assert!(
@@ -155,7 +158,10 @@ fn a_lapsed_waiver_leaves_the_finding_and_the_verdict_alone() {
     let (repo, home) = repo("waiver-lapsed", &format!("{RULE}{}", waiver(LAPSED)));
     let (code, stdout, stderr) = run(&repo, &home, &["check"]);
     assert_eq!(code, 2, "the rule fires again");
-    assert!(stdout.contains("lib.rs:2 rule 'no-todo'"), "got: {stdout}");
+    assert!(
+        stdout.contains("batten deny no-todo at lib.rs:2"),
+        "got: {stdout}"
+    );
     assert!(
         !stderr.contains("waived"),
         "and nothing is audited as waived: {stderr}"
@@ -240,11 +246,14 @@ fn a_narrowed_waiver_leaves_the_rest_of_the_rule_gating() {
     let (code, stdout, stderr) = run(&repo, &home, &["check"]);
     assert_eq!(code, 2, "the un-waived finding still blocks");
     assert!(
-        stdout.contains("src/mine.rs:1 rule 'no-todo'"),
+        stdout.contains("batten deny no-todo at src/mine.rs:1"),
         "got: {stdout}"
     );
     assert!(!stdout.contains("vendor/dep.rs"), "got: {stdout}");
-    assert!(stderr.contains("waived vendor/dep.rs:1"), "got: {stderr}");
+    assert!(
+        stderr.contains("batten note no-todo at vendor/dep.rs:1 waived"),
+        "got: {stderr}"
+    );
 }
 
 // subsumed: "an exemption with no reason is refused as bad input, not applied" crates/batten/tests/it/waivers.rs exit 1 is a statement about the invocation and never a policy verdict, which is what this asserts, generic over the row waived (CLOUD-1137)
@@ -333,7 +342,9 @@ fn a_live_waiver_lets_the_mediated_call_through_and_audits_it() {
     // The compensating control, in the tree side's shape minus the pointer a
     // mediated call does not have.
     assert!(
-        err.contains(&format!("waived rule 'no-merge' (expires {LIVE})")),
+        err.contains(&format!(
+            "batten note no-merge at this call waived until {LIVE}"
+        )),
         "got: {err}"
     );
     // Pointer-only (non-negotiable 4): never the command, never the reason.

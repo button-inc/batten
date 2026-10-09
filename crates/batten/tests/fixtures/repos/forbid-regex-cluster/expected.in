@@ -1,5 +1,5 @@
 argv: check
 exit: 2
 stdout:
-run.sh:1 rule 'no-grep-q'
-run.sh:2 rule 'no-grep-q'
+batten deny no-grep-q at run.sh:1
+batten deny no-grep-q at run.sh:2
