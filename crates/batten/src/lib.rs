@@ -18868,7 +18868,7 @@ fn drained_refusals(
     owed
 }
 
-//MUTANT drain-remedy-dropped|s@^        for rule_refusal in drained_refusals(\&records, \&drained, registry) {$@        for rule_refusal in drained_refusals(\&records, \&drained, registry).into_iter().take(0) {@|a_drained_rules_remedy_is_full_once_then_a_pointer
+//MUTANT drain-remedy-dropped|s@^        for rule_refusal in drained_refusals(\&records, \&drained, registry) {$@        for rule_refusal in drained_refusals(\&records, \&drained, registry).into_iter().take(0) {@|a_drained_rules_remedy_rides_its_first_drain_only
 fn drain_advisories(
     envelope: &hook::Envelope,
     overrides: &Overrides,
@@ -19016,8 +19016,18 @@ fn drain_advisories(
             severity::AdvisoryTier::Advisory,
             drain::render(&drained),
         ));
+        // A RULE'S REMEDY IS SAID ONCE PER WINDOW (CLOUD-2145): the drain line
+        // already addresses the rule, so the remedy's repeat would be a second
+        // address saying nothing new. `drain fit broken` repeats like any finding.
         for rule_refusal in drained_refusals(&records, &drained, registry) {
-            push_finding(advice, severity::AdvisoryTier::Advisory, rule_refusal);
+            if rule_refusal.rule().is_empty() {
+                push_finding(advice, severity::AdvisoryTier::Advisory, rule_refusal);
+            } else {
+                advice.push(advisory::Advice::first_sighting(
+                    severity::AdvisoryTier::Advisory,
+                    rule_refusal,
+                ));
+            }
         }
     } else if repeat && !drained.lines.is_empty() {
         advice.push(advisory::Advice::rendered(

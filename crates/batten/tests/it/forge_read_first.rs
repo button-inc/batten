@@ -88,14 +88,20 @@ fn adjudicate(dir: &Path, payload: &str) -> (Option<i32>, String) {
 #[test]
 fn a_forge_call_is_handed_its_memory() {
     let dir = bench("forge-read-first-selected");
-    for payload in [
+    // One session: the first call is handed the memory, and every later one is
+    // addressed by the rule's name, the memory being already in its context
+    // (CLOUD-2145).
+    for (index, payload) in [
         bash("gh pr view 1"),
         bash("cd /tmp && mise exec -- gh api repos/o/r"),
         bash("git push origin HEAD"),
         bash("mise run land"),
         tool("mcp__github__get_me"),
         tool("mcp__claude-code-remote__add_repo"),
-    ] {
+    ]
+    .into_iter()
+    .enumerate()
+    {
         let (code, said) = adjudicate(&dir, &payload);
         assert_eq!(
             code,
@@ -104,9 +110,15 @@ fn a_forge_call_is_handed_its_memory() {
         );
         assert!(!said.contains("permissionDecision"), "{payload}: {said}");
         assert!(
-            said.contains(POINTER),
-            "{payload} carries no pointer: {said}"
+            said.contains("rule 'forge read first'"),
+            "{payload} is not addressed: {said}"
         );
+        if index == 0 {
+            assert!(
+                said.contains(POINTER),
+                "the first carries the memory: {said}"
+            );
+        }
     }
 }
 
@@ -136,7 +148,16 @@ fn the_committed_policy_hands_a_gh_read_its_memory() {
             && table.contains(".serena/memories/github-access.md"),
         "the class declares the memory route: {table}"
     );
-    let (code, said) = adjudicate(&root(), &bash("gh pr view 1"));
+    // A session no earlier run used: the checkout's sighting store persists,
+    // and a context that already held the memory would get only the address.
+    let session = format!(
+        "committed-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |since| since.as_nanos())
+    );
+    let (code, said) = adjudicate(&root(), &bash_in(&session, "gh pr view 1"));
     assert_eq!(code, Some(0), "a gh read is allowed here: {said}");
     assert!(said.contains(POINTER), "{said}");
     assert!(
@@ -153,15 +174,18 @@ fn a_warn_advisory_is_full_once_then_a_pointer() {
     let (first_code, first) = adjudicate(&dir, &bash_in("s1", "gh pr view 1"));
     let (second_code, second) = adjudicate(&dir, &bash_in("s1", "gh pr view 1"));
     assert_eq!((first_code, second_code), (Some(0), Some(0)));
-    let labels = "verdict 'forge read first' rule 'forge read first'";
-    assert!(first.contains(labels) && first.contains(" —"), "{first}");
+    let address = "rule 'forge read first'";
+    assert!(
+        first.contains(address) && first.contains(POINTER) && first.contains(" —"),
+        "{first}"
+    );
     assert!(
         first.contains("code-host call"),
         "the gloss rides the full arm: {first}"
     );
     assert!(
-        second.contains(labels) && second.contains(POINTER),
-        "{second}"
+        second.contains(&format!("\"{address}\"")),
+        "the second is the address alone: {second}"
     );
     assert!(
         !second.contains(" —"),

@@ -438,8 +438,8 @@ pub fn first_sighting(root: &Path, context: &str, key: &str, full: &str) -> bool
 
 /// How to read a finding line, delivered once per epoch ahead of the first
 /// finding that reaches a context (CLOUD-2145). At most 96 `o200k` tokens.
-pub const LEGEND: &str = "batten: a finding reads `<name> at <subjects>; <routes>`; \
-the first in a window adds a dash and what to do, later ones stop before it. \
+pub const LEGEND: &str = "batten: a finding reads `<name> at <subjects>; <routes> — <what to do>`; \
+a later one in the same window is only `<name> at <subjects>`, the rest being above. \
 `batten policy explain <name>` prints the whole class; `--history` why it exists, \
 read before changing a rule.";
 
@@ -554,8 +554,20 @@ fn unquote(text: &str) -> Option<(String, &str)> {
     }
 }
 
+/// The class a `rule` line's hop names after its rule, if it names one.
+fn hop_class(line: &str, rule: &str) -> Option<String> {
+    let (_, after) = line.split_once("; run batten policy explain ")?;
+    let (first, rest) = unquote(after)?;
+    if first != rule {
+        return None;
+    }
+    let (class, _) = unquote(rest.strip_prefix(' ')?)?;
+    Some(class)
+}
+
 /// The ONE reader of the finding grammar
-/// `[verdict '<T>' ]rule '<R>'[ at <S>](; <route>)*[ — <tail>]`.
+/// `<label> '<name>'[ at <S>](; <route>)*[ — <tail>]`, and of the pre-CLOUD-2142
+/// `verdict '<T>' rule '<R>'` head.
 ///
 /// `None` for a line that does not open with a label, which is every line that
 /// is not a finding.
@@ -575,13 +587,16 @@ pub fn parse_finding(line: &str) -> Option<Parsed> {
     if !(prefix.is_empty() || prefix.ends_with(": ")) {
         return None;
     }
-    let mut rest = line;
-    let mut verdict = None;
-    if let Some(after) = rest.strip_prefix("verdict ") {
-        let (name, tail) = unquote(after)?;
-        verdict = Some(name);
-        rest = tail;
-    }
+    // ONE LABEL, ONE NAME (CLOUD-2142). A `rule` line names its class, where it
+    // has a different one, as the hop's second name; a line from a release that
+    // still printed `verdict '<T>' rule '<R>'` reads the same way.
+    let (mut verdict, rest) = match line.strip_prefix("verdict ") {
+        Some(after) => {
+            let (name, tail) = unquote(after)?;
+            (Some(name), tail)
+        }
+        None => (None, line),
+    };
     let rule = match rest
         .strip_prefix(" rule ")
         .or_else(|| rest.strip_prefix("rule "))
@@ -590,6 +605,9 @@ pub fn parse_finding(line: &str) -> Option<Parsed> {
         None if verdict.is_some() => String::new(),
         None => return None,
     };
+    if verdict.is_none() {
+        verdict = hop_class(line, &rule);
+    }
     let (head, tail) = match line.split_once(" —") {
         Some((head, tail)) => (head, Some(tail)),
         None => (line, None),
@@ -631,7 +649,9 @@ pub fn collapse(text: &str, mut mark: impl FnMut(&str, &str) -> bool) -> String 
             Some(parsed) if parsed.arm == Arm::Full && !mark(&parsed.key, body) => Arm::Pointer,
             Some(_) | None => Arm::Full,
         };
-        let pointer = body.split(" —").next().unwrap_or(body);
+        // The address ends at the first clause separator: subjects are made
+        // separator-free at render, so nothing of the address is cut.
+        let pointer = body.split("; ").next().unwrap_or(body);
         let rewritten = if arm == Arm::Pointer { pointer } else { body };
         lines.push(rewritten);
     }
@@ -707,45 +727,53 @@ const OVERRIDE_OPENER: &str = "admit with batten override request ";
 /// dropped at render rather than printed twice.
 pub(crate) const RULE_HOP_PLACEHOLDER: &str = "batten policy explain '<rule-id>'";
 
-/// The one projection every channel carries (CLOUD-2075):
-/// `[verdict '<T>' ]rule '<R>'[ at <S>](; <route>)*; run batten policy explain '<R>'[ '<T>'][ — <tail>]`.
+/// The one projection every channel carries (CLOUD-2075, CLOUD-2142):
+/// `<label> '<name>'[ at <S>](; <route>)*; run batten policy explain '<name>'[ '<T>'][ — <tail>]`,
+/// the label `rule` or, for an engine finding with no row, `verdict`.
 ///
-/// Both labels are printed even where the id equals the token, so a reader can
-/// always tell a rule from a verdict. Every route — override routes included,
-/// each a ready `override request` with the subject the refusal binds — is on
-/// BOTH arms, so the pointer arm sheds no way out, and so is the one `explain`
-/// hop that resolves both names (CLOUD-2142). The full arm adds the definition:
-/// the class gloss (or the undeclared refusal's reason), the row's own remedy,
-/// and each override's precondition.
+/// **The repeat is the address** (CLOUD-2145): `<label> '<name>'[ at <S>]`,
+/// a byte prefix of the full arm. It reminds a reader of what the first firing
+/// already put in its context; routes, hop and definition are constant per gate,
+/// so a repeat re-sending them would charge the window for a copy. A compaction
+/// forgets the window, so the next firing after one is full again.
+///
+/// The full arm carries every route — override routes included, each a ready
+/// `override request` with the subject the refusal binds — the one `explain` hop
+/// naming the class only where it differs from the rule, and the definition: the
+/// class gloss (or the undeclared refusal's reason), the row's own remedy, and
+/// each override's precondition.
 ///
 /// Nothing is shed and no ceiling is consulted: `[refusal]`'s keys are
 /// measured by `refusal_ceiling`'s corpus case, which reports an over-ceiling
 /// line rather than truncating one.
 //MUTANT full-arm-reason-dropped|s@^    let remedy = refusal.remedy();$@    let remedy = None::<\&str>;@|a_first_sighting_carries_the_rows_reason_and_both_labels
 //MUTANT reason-replaces-do-dropped|s@^        Some(remedy) => vec!\[remedy\],$@        Some(_) => refusal.doc.act.iter().map(String::as_str).collect(),@|a_rule_reason_replaces_the_class_do
-//MUTANT pointer-arm-routes-dropped|s@^    for route in routes(refusal) {$@    for route in routes(refusal).into_iter().take(if arm == Arm::Full { usize::MAX } else { 0 }) {@|the_pointer_arm_carries_every_route_and_subject_the_full_arm_does
-//MUTANT collapsed-row-unlabelled|s@^    if let Some(token) = refusal.verdict() {$@    if let Some(token) = refusal.verdict() \&\& token != refusal.rule() {@|a_collapsed_row_still_labels_rule_and_verdict
+//MUTANT repeat-carries-routes|s@^    let address = arm == Arm::Pointer;$@    let address = false;@|the_repeat_is_the_address
+//MUTANT classed-rule-addressed-by-class|s@^    let mut line = if refusal.rule().is_empty() {$@    let mut line = if refusal.verdict().is_some() {@|a_classed_rule_is_addressed_by_its_rule_alone
 //MUTANT advice-routes-dropped|s@^    for route in routes(refusal) {$@    for route in routes(refusal).into_iter().take(0) {@|a_warn_advisory_carries_its_document_route_on_an_allowed_pre_tool_call
 //MUTANT explain-hop-drops-class|s@^        \&\& class != refusal.rule()$@        \&\& false@|every_line_names_one_explain_hop_for_both_names
-//MUTANT rule-label-dropped|s@^        line.push_str(\&label(Label::Rule, refusal.rule()));$@        line.push_str(refusal.rule());@|a_rule_finding_opens_with_its_rule_label
+//MUTANT rule-label-dropped|s@^        label(Label::Rule, refusal.rule())$@        refusal.rule().to_owned()@|a_rule_finding_opens_with_its_rule_label
 //MUTANT engine-finding-rule-label|s@^    if !refusal.rule().is_empty() {$@    if true {@|an_engine_finding_carries_no_rule_label
 fn finding_line(refusal: &Refusal, arm: Arm) -> String {
-    let mut line = String::new();
-    if let Some(token) = refusal.verdict() {
-        line.push_str(&label(Label::Verdict, token));
-    }
-    // A RULE-LESS REFUSAL PRINTS NO RULE LABEL (CLOUD-2078): an engine emitter
-    // with no `[[rule]]` row behind it would otherwise name a rule nothing
-    // resolves, and its class is the one name the hop below looks up.
-    if !refusal.rule().is_empty() {
-        if !line.is_empty() {
-            line.push(' ');
-        }
-        line.push_str(&label(Label::Rule, refusal.rule()));
-    }
+    // ONE NAME (CLOUD-2142): the gate that fired, which is the rule, or the
+    // class for an engine finding with no `[[rule]]` row behind it (CLOUD-2078).
+    // The class is a property of the gate, named once by the hop below where it
+    // differs, never a second label on the address.
+    let mut line = if refusal.rule().is_empty() {
+        label(Label::Verdict, refusal.verdict().unwrap_or_default())
+    } else {
+        label(Label::Rule, refusal.rule())
+    };
     if !refusal.subjects.is_empty() {
         line.push_str(" at ");
         line.push_str(&plain(&refusal.subjects));
+    }
+    // THE REPEAT IS THE ADDRESS (CLOUD-2145): the name and this firing's
+    // subjects, which are all a later firing can say that the first did not.
+    // Routes, hop and definition are constant per gate and already in context.
+    let address = arm == Arm::Pointer;
+    if address {
+        return line;
     }
     for route in routes(refusal) {
         line.push_str("; ");
@@ -764,9 +792,6 @@ fn finding_line(refusal: &Refusal, arm: Arm) -> String {
     {
         line.push(' ');
         line.push_str(&quoted(class));
-    }
-    if arm == Arm::Pointer {
-        return line;
     }
     line.push_str(" —");
     let definition = if refusal.verdict.is_some() {
@@ -1251,13 +1276,15 @@ mod tests {
             let line = refusal.render_finding(arm);
             assert!(!line.contains("rule '"), "no rule label: {line}");
             assert!(
-                line.starts_with(&format!("verdict '{class}' at disk full; ")),
+                line.starts_with(&format!("verdict '{class}' at disk full")),
                 "the class leads, then the subject: {line}"
             );
-            assert!(
-                line.contains(&format!("; run batten policy explain '{class}'")),
-                "the hop names the class: {line}"
-            );
+            if arm == Arm::Full {
+                assert!(
+                    line.contains(&format!("; run batten policy explain '{class}' —")),
+                    "the hop names the class: {line}"
+                );
+            }
             let parsed = parse_finding(&line).expect("an engine line parses");
             assert_eq!(parsed.verdict.as_deref(), Some(class), "{line}");
             assert!(parsed.rule.is_empty(), "{line}");
@@ -1476,7 +1503,7 @@ mod tests {
         assert!(full.starts_with(&pointer), "{pointer}\n{full}");
         assert!(!pointer.contains(" —"), "{pointer}");
         assert!(
-            pointer.starts_with("verdict 'path write refused' rule 'protected-mutation' at "),
+            pointer.starts_with("rule 'protected-mutation' at "),
             "{pointer}"
         );
         let parsed = parse_finding(&full).expect("the full arm parses");

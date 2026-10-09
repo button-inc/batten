@@ -160,10 +160,15 @@ fn scan_declared_patterns() -> String {
 ///
 /// When no line carries the class, naming what was said.
 pub(crate) fn printed_pointers(said: &str, class: &str, rule: &str) -> String {
-    // CLOUD-2075's grammar: `verdict '<class>' rule '<rule>' at <subjects>; …`.
-    let opener = format!("verdict '{class}' rule '{rule}' at ");
+    // CLOUD-2142's grammar: `rule '<rule>' at <subjects>; …`, the class named by
+    // the hop, which the engine's own reader returns.
+    let opener = format!("rule '{rule}' at ");
     said.lines()
         .find_map(|line| {
+            let parsed = batten::refusal::parse_finding(line)?;
+            if parsed.rule != rule || parsed.verdict.as_deref() != Some(class) {
+                return None;
+            }
             let rest = line.split(opener.as_str()).nth(1)?;
             let pointers = rest.split("; ").next()?.split(" —").next()?;
             Some(pointers.trim().to_owned())

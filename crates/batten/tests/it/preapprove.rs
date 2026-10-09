@@ -205,8 +205,8 @@ fn a_preapproval_reason_labels_its_rule_and_verdict() {
     let (decision, reason) = verdict(&read).unwrap_or_default();
     assert_eq!(decision, "allow", "{reason}");
     assert!(
-        reason.contains("verdict 'call grant now' rule 'call read now'"),
-        "the grant names its class and its rule: {reason}"
+        reason.starts_with("rule 'call read now'"),
+        "the grant is addressed by the rule that granted: {reason}"
     );
     assert!(
         reason.contains("; run batten policy explain 'call read now' 'call grant now'"),

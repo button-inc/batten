@@ -44,6 +44,9 @@ pub struct Advice {
     /// ceiling holds every entry alike (CLOUD-2175); this says what kind of
     /// line it is, never whether it may be shed.
     pub classed: bool,
+    /// Said on its FULL arm only (CLOUD-2145): an entry whose address another
+    /// line beside it already carries, so its repeat would say nothing new.
+    pub full_only: bool,
 }
 
 impl Advice {
@@ -55,6 +58,7 @@ impl Advice {
             text: text.into(),
             finding: None,
             classed: false,
+            full_only: false,
         }
     }
 
@@ -67,6 +71,7 @@ impl Advice {
             text: text.into(),
             finding: None,
             classed: true,
+            full_only: false,
         }
     }
 
@@ -78,6 +83,17 @@ impl Advice {
             text: String::new(),
             finding: Some(Box::new(refusal)),
             classed: true,
+            full_only: false,
+        }
+    }
+
+    /// A classed entry said only where its reader has not yet had it in full —
+    /// a drained rule's remedy, whose address the drain's own line already is.
+    #[must_use]
+    pub fn first_sighting(tier: AdvisoryTier, refusal: Refusal) -> Advice {
+        Advice {
+            full_only: true,
+            ..Advice::finding(tier, refusal)
         }
     }
 }
@@ -226,6 +242,7 @@ fn merged(entries: Vec<Advice>) -> Vec<Advice> {
 /// Even where it alone exceeds the ceiling: a channel that could emit nothing
 /// would turn a budget into a mute switch.
 //MUTANT-SUITE crates/batten/src/advisory.rs
+//MUTANT first-sighting-repeated|s@^            !held$@            true@|a_drained_rules_remedy_is_said_once_per_window
 //MUTANT unceilinged-reordered|s@^    let ranked = ceiling.is_some();$@    let ranked = true;@|an_undeclared_ceiling_leaves_the_channel_exactly_as_it_was
 //MUTANT advisory-ceiling-unread|s@^    let whole = within(\&probes);$@    let whole = true;@|what_does_not_fit_is_counted_and_returned_rather_than_dropped
 //MUTANT cut-entry-marked|s@^            overflow.push(match entry.finding {$@            overflow.push(match entry.finding.map(|refusal| { let _ = sighter.mark(\&refusal); refusal }) {@|a_cut_finding_is_never_marked_seen
@@ -235,6 +252,19 @@ pub fn admit(
     ceiling: Option<&Channel>,
     sighter: &mut dyn Sighter,
 ) -> Emission {
+    // An entry said on its full arm only is dropped where the reader already has
+    // that arm, before anything is measured, so it costs a full channel nothing.
+    let entries: Vec<Advice> = entries
+        .into_iter()
+        .filter(|entry| {
+            let held = entry.full_only
+                && entry
+                    .finding
+                    .as_deref()
+                    .is_some_and(|refusal| sighter.peek(refusal) == Arm::Pointer);
+            !held
+        })
+        .collect();
     let mut ordered = merged(entries);
     // `Reverse` because `AdvisoryTier` derives `Ord` weakest-first, and what must
     // survive a full channel is what has to be answered soonest. With no ceiling
@@ -325,6 +355,31 @@ mod tests {
 
     fn finding(tier: AdvisoryTier, subject: &str) -> Advice {
         classed(tier, crate::verdict::Native::RunBroken, subject)
+    }
+
+    /// A drained rule's remedy is said in full once per window, and never as a
+    /// second address beside the drain line that already is one (CLOUD-2145).
+    #[test]
+    fn a_drained_rules_remedy_is_said_once_per_window() {
+        let remedy = || {
+            Advice::first_sighting(
+                AdvisoryTier::Advisory,
+                Refusal::engine(
+                    crate::verdict::Native::CheckRunRed,
+                    &[crate::verdict::artifact("remedy-subject")],
+                    crate::refusal::Fix::None,
+                ),
+            )
+        };
+        let seen = admit(
+            vec![finding(AdvisoryTier::Advisory, "kept"), remedy()],
+            None,
+            &mut Recording::default(),
+        );
+        assert!(seen.text.contains("kept"), "{}", seen.text);
+        assert!(!seen.text.contains("remedy-subject"), "{}", seen.text);
+        let fresh = admit(vec![remedy()], None, &mut Unsighted);
+        assert!(fresh.text.contains("remedy-subject"), "{}", fresh.text);
     }
 
     fn classed(tier: AdvisoryTier, class: crate::verdict::Native, subject: &str) -> Advice {
