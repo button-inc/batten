@@ -8758,7 +8758,9 @@ fn blocks(severity: RuleSeverity, fail_on_warning: bool) -> bool {
 /// blank from rendering a fix clause that says nothing.
 ///
 /// [`RuleKind::Shape`]: crate::rules::RuleKind::Shape
+//MUTANT-SUITE crates/batten/src/hook.rs
 //MUTANT shape-subject-dropped|s@^    let shape = rule.pattern.as_deref().or(rule.tool.as_deref());$@    let shape: Option<\&str> = None;@|a_shape_refusal_names_the_shape_it_refused
+//MUTANT-SUITE crates/batten/tests/it/pipeline_shapes.rs
 fn shape_refusal(rule: &Rule) -> Refusal {
     // THE SHAPE THE ROW DECLARES IS THE SUBJECT (CLOUD-2185): its `pattern`
     // (`cargo`, `gh pr merge`) or its `tool`. That is config, never the caller's
@@ -14129,11 +14131,13 @@ deny contains "refused by themodule" if {
         let mut by_tool = shape("review watch refused", "x", None);
         by_tool.pattern = None;
         by_tool.tool = Some("subscribe_pr_activity".to_owned());
+        let by_tool = shape_refusal(&by_tool);
         assert!(
-            shape_refusal(&by_tool)
+            by_tool
                 .render_finding(crate::refusal::Arm::Pointer)
                 .starts_with("batten deny call name refused at subscribe_pr_activity;")
         );
+        assert_eq!(by_tool.bindings(), ["subscribe_pr_activity"]);
     }
 
     /// A receipt row's bindable subjects are listed per class, and its age

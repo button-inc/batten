@@ -6690,6 +6690,29 @@ const WRITE_TOOL: &str = "save_issue";
 ///
 /// [`UsageError`] when the payloads cannot be read, when an issue reaches the
 /// readiness rule carrying no body, or when a receipt exists and will not read.
+/// Each claim refusal IN THE FINDING GRAMMAR (CLOUD-2145), under a class
+/// `policy explain` resolves: `batten deny claim mint refused at <issue>
+/// <reason>`. Pointer-only: the issue id and the reason token, never a body.
+fn print_claim_refusals(
+    mode: Mode,
+    err: &mut dyn Write,
+    refusals: &[claim::Refusal],
+) -> Result<()> {
+    for refused in refusals {
+        let line = refusal::Refusal::engine(
+            verdict::Native::ClaimMintRefused,
+            &[verdict::artifact(&format!(
+                "{} {}",
+                refused.id, refused.rule
+            ))],
+            refusal::Fix::None,
+        )
+        .render_finding(refusal::Arm::Full);
+        output::message(mode, Verbosity::Normal, err, &line)?;
+    }
+    Ok(())
+}
+
 fn run_claim_check(
     repo: &Path,
     grammar: &ready::Grammar,
@@ -6749,20 +6772,7 @@ fn run_claim_check(
     }
     // Pointer-only: the issue id and the rule id, plus a PR number where there is
     // one. Never a body and never a title.
-    // IN THE FINDING GRAMMAR (CLOUD-2145), under a class `policy explain`
-    // resolves: `batten deny claim mint refused at <issue> <reason>`.
-    for refused in &verdict.refusals {
-        let line = refusal::Refusal::engine(
-            verdict::Native::ClaimMintRefused,
-            &[verdict::artifact(&format!(
-                "{} {}",
-                refused.id, refused.rule
-            ))],
-            refusal::Fix::None,
-        )
-        .render_finding(refusal::Arm::Full);
-        output::message(mode, Verbosity::Normal, err, &line)?;
-    }
+    print_claim_refusals(mode, err, &verdict.refusals)?;
     if !verdict.pullable(request) {
         // NAMING WHICH HALF REFUSED, because the remedies are different and
         // offering the wrong one is what shipped the hole CLOUD-816 records: a
@@ -16378,9 +16388,6 @@ fn destructive_call_facts(
 //MUTANT unloadable-config-admits-write|s@^                    return deny_unadjudicable(harness, \&envelope, \&unreadable, mode, out, err);$@                    return Err(unreadable);@|a_write_over_a_config_that_fails_validation_is_refused
 //MUTANT floor-swallows-the-refusal|s@                if recoverable_without_rules(\&envelope) {@                if true {@|a_command_is_still_refused_over_a_config_that_will_not_load
 //MUTANT floor-removed|s@                if recoverable_without_rules(\&envelope) {@                if false {@|a_read_still_answers_over_a_config_that_will_not_load
-//MUTANT-SUITE crates/batten/tests/it/repaired_arms.rs
-//MUTANT repair-record-unsaid|s@^    if let hook::Decision::Repaired(repair) = \&decision {$@    if let Some(repair) = None::<\&hook::Repair> {@|a_silent_repair_record_reaches_the_model
-//MUTANT-SUITE crates/batten/tests/it/admission.rs
 //MUTANT advice-beside-the-grant|s@^    if !matches!(decision, hook::Decision::Preapproved(_)) || advice.is_empty() {$@    if true {@|a_preapproval_carries_the_calls_advice_in_one_document
 fn run_hook(
     harness: hook::Harness,
@@ -16804,24 +16811,6 @@ fn run_hook(
     // longer happened.
     let decision = settle_repair(&policy, &envelope, decision)
         .map_refusal(|refusal| refusal.read_through(&policy.redirects));
-    // A SILENT REPAIR'S RECORD REACHES THE MODEL (CLOUD-2145): the tree changed
-    // under the caller, and stderr at exit `0` is a channel Claude Code never
-    // shows it. It rides the call's advisory document, which falls back to
-    // stderr only on a host that has none.
-    if let hook::Decision::Repaired(repair) = &decision {
-        // The epoch's legend rides it like any first finding of a window: it
-        // is pushed pre-rendered, so the channel's sighter cannot owe it.
-        let record = match envelope.context() {
-            Some(context) => {
-                refusal::with_legend(hook_authority_root(), &context, &repair.line_text())
-            }
-            None => repair.line_text(),
-        };
-        advice.push(advisory::Advice::rendered(
-            severity::AdvisoryTier::Advisory,
-            record,
-        ));
-    }
     let ceiling = policy.advisory.as_ref();
     // A PRE-APPROVAL TAKES THE ADVICE INTO ITS OWN DOCUMENT (CLOUD-1949): two
     // documents on one stream is the collision above, with the grant as the
@@ -16833,6 +16822,41 @@ fn run_hook(
         updated_input: grant_rewrite(&decision, &policy, &envelope, &facts),
     };
     render(harness, &envelope, decision, &rendering, mode, out, err)
+}
+
+/// A REPAIRED CALL IS AN ALLOW THAT OWES A RECORD (CLOUD-1639), and the record
+/// is not optional: every surveyed mutating admission controller that applies
+/// silently still writes an annotation.
+///
+/// IT REACHES THE MODEL (CLOUD-2145): the tree changed under the caller, and
+/// stderr at exit `0` is a channel Claude Code never shows it. It rides the
+/// call's advisory document, which falls back to stderr only on a host that has
+/// none. The epoch's legend rides it like any first finding of a window: it is
+/// pushed pre-rendered, so the channel's sighter cannot owe it.
+///
+/// Pointer-only (rule 4): `Repair` carries a class, a rule id and the subject
+/// the key resolved, and structurally cannot carry the repair's command line or
+/// its output. ONLY `silent` arrives: a `retry` repair is a `Deny` carrying
+/// `call retry now`, because the call as made did not happen.
+//MUTANT-SUITE crates/batten/tests/it/repaired_arms.rs
+//MUTANT repair-record-unsaid|s@^    let hook::Decision::Repaired(repair) = decision else {$@    let Some(repair) = None::<\&hook::Repair> else {@|a_silent_repair_record_reaches_the_model
+//MUTANT-SUITE crates/batten/tests/it/admission.rs
+fn push_repair_record(
+    decision: &hook::Decision,
+    envelope: &hook::Envelope,
+    advice: &mut Vec<advisory::Advice>,
+) {
+    let hook::Decision::Repaired(repair) = decision else {
+        return;
+    };
+    let record = match envelope.context() {
+        Some(context) => refusal::with_legend(hook_authority_root(), &context, &repair.line_text()),
+        None => repair.line_text(),
+    };
+    advice.push(advisory::Advice::rendered(
+        severity::AdvisoryTier::Advisory,
+        record,
+    ));
 }
 
 /// The input a pre-approval rewrites (CLOUD-2157), or `None` for any other
@@ -18522,10 +18546,11 @@ fn emit_channel(
     envelope: &hook::Envelope,
     out: &mut dyn Write,
     err: &mut dyn Write,
-    advice: Vec<advisory::Advice>,
+    mut advice: Vec<advisory::Advice>,
     ceiling: Option<&advisory::Channel>,
     decision: &hook::Decision,
 ) -> Result<()> {
+    push_repair_record(decision, envelope, &mut advice);
     let speaks_a_verdict = matches!(decision, hook::Decision::Deny(_) | hook::Decision::Ask(_));
     if advice.is_empty() || speaks_a_verdict {
         return Ok(());
@@ -18888,8 +18913,8 @@ fn drained_refusals(
 ) -> Vec<refusal::Refusal> {
     drained
         .rules
-        .iter()
-        .filter_map(|(rule, _)| {
+        .keys()
+        .filter_map(|rule| {
             let record = records.iter().find(|record| &record.rule == rule)?;
             refusal::of_rule(rule, registry, record.remediation.as_ref())
         })
@@ -21085,7 +21110,10 @@ fn render(
     // reviewed. It also drops `policy` and `facts` from the signature — a
     // renderer that cannot see the inputs cannot re-decide by accident.
     match decision {
-        hook::Decision::Allow => Ok(ExitCode::Success),
+        // A REPAIRED CALL'S RECORD IS ALREADY SAID by the time this runs:
+        // `run_hook` put it on the advisory channel the model reads
+        // (CLOUD-2145), so it is an allow here with nothing more to write.
+        hook::Decision::Allow | hook::Decision::Repaired(_) => Ok(ExitCode::Success),
         // A suppressed deny (CLOUD-610) is an allow that owes a record, and this
         // is where the record is written — on the ERROR channel, at `Normal`, in
         // the shape the tree side writes at the `waiver::apply` call site. Both
@@ -21102,32 +21130,6 @@ fn render(
             output::message(mode, Verbosity::Normal, err, &suppressed.line_text())?;
             Ok(ExitCode::Success)
         }
-        // A REPAIRED CALL IS AN ALLOW THAT OWES A RECORD (CLOUD-1639), which is
-        // `Waived`'s contract one row up, and the arms are deliberately the same
-        // shape: both are a call that proceeds where something happened a reader
-        // would want to know about, and a second grammar for the second one
-        // would be two audit vocabularies on one channel.
-        //
-        // The record is not optional and not a verbosity level's to withhold.
-        // Every surveyed mutating admission controller applies silently and
-        // still writes an annotation; NONE applies silently and leaves nothing.
-        // `Normal` for the reason the waiver arm gives — a repair that was let
-        // through is not a detail a default run should have to ask for — and
-        // stderr because stdout is the host's decision document.
-        //
-        // Pointer-only (rule 4): `Repair` carries a class, a rule id and the
-        // subject the key resolved, and structurally cannot carry the repair's
-        // command line or its output. The consumer's `fix` string never reaches
-        // a channel the model reads.
-        //
-        // ONLY `silent` ARRIVES HERE. A `retry` repair is a `Deny` carrying
-        // `call retry now`, composed at the boundary — the call as made did not
-        // happen, and an allow would be the silent posture nobody declared.
-        //
-        // THE RECORD IS ALREADY SAID by the time this arm runs: `run_hook` put it
-        // on the advisory channel the model reads (CLOUD-2145), so saying it
-        // again here would put it on stderr twice wherever that is the channel.
-        hook::Decision::Repaired(_) => Ok(ExitCode::Success),
         // One dispatch for every host, because the *shape* of the answer is the
         // adapter's business and the decision is not. A host that reads a body
         // gets one; a host whose channel is the exit code alone gets the §7 `2`

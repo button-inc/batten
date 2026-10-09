@@ -271,7 +271,9 @@ fn a_shape_admission_for_an_unbindable_subject_is_refused() {
             "--verdict",
             SHAPE_CLASS,
             "--subject",
-            "no-merge",
+            // THE OLD SPELLING (CLOUD-2185): before the shape was the subject, an
+            // admission bound the class's own words. It names nothing now.
+            SHAPE_CLASS,
         ],
     );
     let said = String::from_utf8_lossy(&requested.stderr);
