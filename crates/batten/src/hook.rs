@@ -8756,14 +8756,23 @@ fn blocks(severity: RuleSeverity, fail_on_warning: bool) -> bool {
 /// blank from rendering a fix clause that says nothing.
 ///
 /// [`RuleKind::Shape`]: crate::rules::RuleKind::Shape
+//MUTANT shape-subject-dropped|s@^    let shape = rule.pattern.as_deref().or(rule.tool.as_deref());$@    let shape: Option<\&str> = None;@|a_shape_refusal_names_the_shape_it_refused
 fn shape_refusal(rule: &Rule) -> Refusal {
-    // NO SUBJECT, and that is rule 4 rather than an omission: the only thing this
-    // refusal could point at is the command itself, which is the caller's own
-    // text and could carry anything. The row id is the pointer.
+    // THE SHAPE THE ROW DECLARES IS THE SUBJECT (CLOUD-2185): its `pattern`
+    // (`cargo`, `gh pr merge`) or its `tool`. That is config, never the caller's
+    // text, so rule 4 holds — the mediated command, which could carry anything,
+    // is still never echoed — and the line says WHAT was refused. Because it
+    // reads nothing from the call, `bindable_subjects` still lists the binding
+    // from the row alone, and the admission binds the shape rather than the
+    // class's own words.
+    let shape = rule.pattern.as_deref().or(rule.tool.as_deref());
+    let mut subjects: Vec<crate::verdict::Subject> =
+        shape.map(crate::verdict::artifact).into_iter().collect();
+    subjects.extend(policy_url_subject(rule));
     Refusal::declared(
         &rule.id,
         crate::verdict::Native::ShapeRefused,
-        &policy_url_subject(rule),
+        &subjects,
         Fix::declared(rule.reason.as_deref()),
     )
 }
@@ -14088,7 +14097,10 @@ deny contains "refused by themodule" if {
             "the ceiling class keeps its hatch; if it gained an override route its \
              count binding would no longer be inert"
         );
-        let refusal = shape_refusal(&shape("r", "x", None));
+        // A row declaring no shape at all is the one that names nothing now.
+        let mut bare = shape("r", "x", None);
+        bare.pattern = None;
+        let refusal = shape_refusal(&bare);
         assert_eq!(
             refusal.bindings(),
             [crate::admission::subject_as_bound("call name refused")],
@@ -14096,6 +14108,30 @@ deny contains "refused by themodule" if {
             refusal.render_finding(crate::refusal::Arm::Full)
         );
         assert_eq!(refusal.bindings(), ["call,name,refused"]);
+    }
+
+    /// CLOUD-2185: a shape refusal names the shape its row declares — the
+    /// `pattern`, else the `tool` — so the line says what was refused, and the
+    /// admission binds that shape rather than the class's own words. Config,
+    /// never the caller's text: a call carrying more than the shape still
+    /// prints only the shape.
+    #[test]
+    fn a_shape_refusal_names_the_shape_it_refused() {
+        let refusal = shape_refusal(&shape("cargo run loose", "cargo", None));
+        assert_eq!(
+            refusal.render_finding(crate::refusal::Arm::Pointer),
+            "batten deny call name refused at cargo; admit with batten override request \
+             --rule 'cargo run loose' --verdict 'call name refused' --subject 'cargo'"
+        );
+        assert_eq!(refusal.bindings(), ["cargo"]);
+        let mut by_tool = shape("review watch refused", "x", None);
+        by_tool.pattern = None;
+        by_tool.tool = Some("subscribe_pr_activity".to_owned());
+        assert!(
+            shape_refusal(&by_tool)
+                .render_finding(crate::refusal::Arm::Pointer)
+                .starts_with("batten deny call name refused at subscribe_pr_activity;")
+        );
     }
 
     /// A receipt row's bindable subjects are listed per class, and its age

@@ -254,11 +254,9 @@ fn payload(output: &Output) -> Vec<String> {
         .collect()
 }
 
-/// Whether `line` is a drained rule's remedy — headed `batten remedy` — or the
-/// drain's own `drain fit broken` finding, whose subject is the count it cut.
+/// Whether `line` is a drained rule's remedy, headed `batten remedy`.
 fn is_remedy(line: &str) -> bool {
     line.starts_with("batten remedy ")
-        || (batten::refusal::parse_finding(line).is_some() && line.contains(" finding(s) cut"))
 }
 
 /// The drained rules' remedy lines, one per rule (CLOUD-2078).
@@ -947,18 +945,16 @@ fn an_over_budget_payload_is_cut_and_points_at_the_journal() {
     assert_eq!(
         lines,
         [format!(
-            "budget: 2 more line(s) past the declared {BUDGET} tokens are in the journal; \
+            "batten note drain fit broken at 2 line(s) past {BUDGET} tokens; \
              run batten state list"
         )],
-        "the closing line counts what it withheld and names where it is"
+        "the closing line is the shape failing: what it withheld and where it is"
     );
-    assert!(
-        remedies(&output).iter().any(|line| line.contains(&format!(
-            "batten note drain fit broken at {} finding(s) cut",
-            2 * SPANS
-        ))),
-        "the cut is reported as the shape failing: {:?}",
-        remedies(&output)
+    let said = advisory_context(&output).unwrap_or_else(|| common::stderr(&output));
+    assert_eq!(
+        said.matches("drain fit broken").count(),
+        1,
+        "said once, never as a second line beside the closing one: {said}"
     );
 
     let listed = state_cmd(&repo, &home, &["state", "list", "-J"]);

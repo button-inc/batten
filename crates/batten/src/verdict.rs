@@ -976,6 +976,9 @@ pub fn check_rule_id(id: &str, vocabulary: &Vocabulary) -> anyhow::Result<String
 }
 
 /// The per-entry half of [`validate`].
+//MUTANT-SUITE crates/batten/src/verdict.rs
+//MUTANT route-check-dropped|s@^    if verdict.routes.is_empty() \&\& id != Native::CallGrantNow.id() {$@    if false {@|a_class_with_no_route_is_refused_unless_it_is_the_grant
+//MUTANT-SUITE crates/batten/tests/it/refusal_ceiling.rs
 fn validate_one(
     verdict: &DeclaredVerdict,
     grammar: Option<&Vocabulary>,
@@ -1003,16 +1006,22 @@ fn validate_one(
              a token with no definition is a worse string than the prose it replaced"
         )));
     }
-    if verdict.routes.is_empty() {
+    // THE GRANT IS THE ONE CLASS THAT NEVER REFUSES (CLOUD-2145): it allows
+    // the call, so it asks nothing of its reader and a route would point at
+    // nothing. Every other class may refuse, and owes a way out.
+    if verdict.routes.is_empty() && id != Native::CallGrantNow.id() {
         return Err(UsageError::raise(format!(
             "verdict `{id}` declares no route — a refusal owes its reader a way out, \
              which is the contract `Fix` has carried since CLOUD-122"
         )));
     }
-    if verdict
-        .routes
-        .iter()
-        .all(|route| route.kind == RouteKind::Override)
+    // Only a class WITH routes can have an override as its only one: `all`
+    // over none is vacuously true, and the grant declares none.
+    if !verdict.routes.is_empty()
+        && verdict
+            .routes
+            .iter()
+            .all(|route| route.kind == RouteKind::Override)
     {
         return Err(UsageError::raise(format!(
             "verdict `{id}`'s only route is an override — \"ask for it to be waived\" \
@@ -1555,6 +1564,13 @@ pub enum Native {
     /// A drain's delta did not fit its token budget, so the relief valve cut
     /// it (CLOUD-2175).
     DrainFitBroken,
+    /// An issue fails a checkable Ready clause (`ready lint`).
+    IssueGradeRefused,
+    /// `ready lint` could not judge an issue's relations: the fetch lacked them.
+    IssueGradePartial,
+    /// `claim check` refused to mint the claim: someone holds it, or the
+    /// refinement sequence was not followed.
+    ClaimMintRefused,
 }
 
 impl Native {
@@ -1644,6 +1660,9 @@ impl Native {
         Native::ContractReadStale,
         Native::HookRunMissing,
         Native::DrainFitBroken,
+        Native::IssueGradeRefused,
+        Native::IssueGradePartial,
+        Native::ClaimMintRefused,
     ];
 
     /// The classes the CONFIG LOADER raises, in `parse_ungated` order.
@@ -1767,6 +1786,9 @@ impl Native {
             Native::ContractReadStale => "contract read stale",
             Native::HookRunMissing => "hook run missing",
             Native::DrainFitBroken => "drain fit broken",
+            Native::IssueGradeRefused => "issue grade refused",
+            Native::IssueGradePartial => "issue grade partial",
+            Native::ClaimMintRefused => "claim mint refused",
         }
     }
 }
@@ -2889,7 +2911,9 @@ repairs; `batten doctor` reports what is left.",
         class: "A pre-approval tells the host not to prompt for a call the policy already \
 admits. It is never a refusal and never outranks one: a call any gate refuses is not \
 pre-approved. The rule or handler that granted it is on the line.",
-        routes: &[read("config read first", "batten.toml")],
+        // NO ROUTE: a grant asks nothing of its reader, so a way out would be a
+        // pointer with nothing to point the reader at (CLOUD-2145).
+        routes: &[],
         applicability: Applicability::Advice,
     },
     VendoredVerdict {
@@ -2956,6 +2980,33 @@ locations per rule, so its size follows one turn's work and the budget is a reli
 means one turn produced more new findings across more rules than that shape holds; the cut lines \
 are in the journal and the subjects count them.",
         routes: &[run("state list first", "batten state list")],
+        applicability: Applicability::Advice,
+    },
+    VendoredVerdict {
+        id: "issue grade refused",
+        gloss: "the issue fails a checkable Ready clause, named in the subject beside its line",
+        class: "`ready lint` holds an issue's description to the checkable half of the Definition \
+of Ready. Each subject is the issue, the description line, and the clause it fails; the line is \
+where the edit goes. Nothing the issue says is echoed.",
+        routes: &[run("ready lint first", "batten ready lint")],
+        applicability: Applicability::Advice,
+    },
+    VendoredVerdict {
+        id: "issue grade partial",
+        gloss: "the issue's relations were not in the fetch, so its citations could not be judged",
+        class: "A citation is judged against the issue's relations. A payload fetched without \
+them cannot be judged either way, which is could-not-look rather than a pass; the subject is \
+the first citation that hit the gap.",
+        routes: &[run("ready lint first", "batten ready lint")],
+        applicability: Applicability::Advice,
+    },
+    VendoredVerdict {
+        id: "claim mint refused",
+        gloss: "the claim was not minted: the issue is held by another, or was not refined first",
+        class: "`claim check` mints the claim receipt only for an issue nobody else holds and \
+whose refinement came before this session. The subject is the issue and the reason: a holder \
+(`assigned`, a competing branch or PR) or the refinement sequence (`not-ready`).",
+        routes: &[run("claim check first", "batten claim check")],
         applicability: Applicability::Advice,
     },
 ];
@@ -3515,6 +3566,9 @@ mod tests {
                 | Native::ContractReadStale
                 | Native::HookRunMissing
                 | Native::DrainFitBroken
+                | Native::IssueGradeRefused
+                | Native::IssueGradePartial
+                | Native::ClaimMintRefused
                 | Native::VerdictTableRefused
                 | Native::RedirectTableRefused
                 | Native::DeferralTableRefused
@@ -3567,6 +3621,31 @@ mod tests {
     /// Non-negotiable rule 2: the refusals `validate` states are worth nothing
     /// over the one table nobody applies them to, and this is the table that
     /// ships to every consumer.
+    #[test]
+    fn a_class_with_no_route_is_refused_unless_it_is_the_grant() {
+        let stripped = |token: &str| -> Vec<DeclaredVerdict> {
+            vendored()
+                .into_iter()
+                .map(|mut entry| {
+                    if entry.id == token {
+                        entry.routes.clear();
+                    }
+                    entry
+                })
+                .collect()
+        };
+        validate(&stripped(Native::CallGrantNow.id()), &Vocabulary::default())
+            .expect("the grant refuses nothing, so it owes no way out");
+        assert!(
+            validate(
+                &stripped(Native::DrainFitBroken.id()),
+                &Vocabulary::default()
+            )
+            .is_err(),
+            "any other class may refuse, and must name a way out"
+        );
+    }
+
     #[test]
     fn the_vendored_table_validates() {
         let table = vendored();

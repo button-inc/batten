@@ -180,6 +180,10 @@ const SHAPE_CONFIG: &str = "version = 1\n\n\
 
 const SHAPE_CLASS: &str = "call name refused";
 
+/// The subject `no-merge`'s refusal names and binds: the shape its row declares
+/// (CLOUD-2185), never the class's own words.
+const MERGE_SHAPE: &str = "gh pr merge";
+
 fn shape_fixture(name: &str) -> PathBuf {
     Fixture::new(name)
         .config(SHAPE_CONFIG)
@@ -211,11 +215,11 @@ fn a_shape_deny_is_admissible_through_its_class_override() {
         &dir,
         "no-merge",
         SHAPE_CLASS,
-        SHAPE_CLASS,
+        MERGE_SHAPE,
         "the remedy cannot perform this one merge",
     );
     assert!(
-        spend_as(&dir, &admission, "no-merge", SHAPE_CLASS, SHAPE_CLASS),
+        spend_as(&dir, &admission, "no-merge", SHAPE_CLASS, MERGE_SHAPE),
         "spend must consume it"
     );
     let (code, said) = shell(&dir, "gh pr merge 5");
@@ -235,7 +239,7 @@ fn a_shape_admission_does_not_admit_another_shape_row() {
         &dir,
         "no-merge",
         SHAPE_CLASS,
-        SHAPE_CLASS,
+        MERGE_SHAPE,
         "taken for the merge row only",
     );
     assert!(spend_as(
@@ -243,7 +247,7 @@ fn a_shape_admission_does_not_admit_another_shape_row() {
         &admission,
         "no-merge",
         SHAPE_CLASS,
-        SHAPE_CLASS
+        MERGE_SHAPE
     ));
     assert_eq!(
         shell(&dir, "git rebase origin/main").0,
@@ -273,7 +277,7 @@ fn a_shape_admission_for_an_unbindable_subject_is_refused() {
     let said = String::from_utf8_lossy(&requested.stderr);
     assert_eq!(requested.status.code(), Some(1), "{said}");
     assert!(requested.stdout.is_empty(), "no address may be issued");
-    for needle in ["1 subject(s)", "call,name,refused"] {
+    for needle in ["1 subject(s)", "gh,pr,merge"] {
         assert!(said.contains(needle), "{needle} missing from {said}");
     }
 }

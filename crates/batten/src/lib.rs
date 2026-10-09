@@ -6484,12 +6484,23 @@ fn run_ready_lint(
     // Pointer-only per rule 4: the line and the rule id, never the prose that
     // matched. Issue bodies can carry consumer detail, and a lint that echoed
     // them would leak it through CI logs.
+    // IN THE FINDING GRAMMAR (CLOUD-2145), under a class `policy explain`
+    // resolves: `batten deny issue grade refused at <id>:<line> <clause>`, never
+    // the pointer-first shape behind a `batten: ` message prefix.
     for finding in &report.findings {
+        let refused = refusal::Refusal::engine(
+            verdict::Native::IssueGradeRefused,
+            &[verdict::artifact(&format!(
+                "{}:{} {}",
+                payload.id, finding.line, finding.rule
+            ))],
+            refusal::Fix::None,
+        );
         output::message(
             mode,
             Verbosity::Normal,
             err,
-            &format!("{}:{} {}", payload.id, finding.line, finding.rule),
+            &refused.render_finding(refusal::Arm::Full),
         )?;
     }
 
@@ -6503,10 +6514,16 @@ fn run_ready_lint(
             mode,
             Verbosity::Normal,
             err,
-            &format!(
-                "{}:{} unjudgeable-relations",
-                payload.id, report.unjudged_line
-            ),
+            &refusal::Refusal::engine(
+                verdict::Native::IssueGradePartial,
+                &[verdict::artifact(&format!(
+                    "{}:{}",
+                    payload.id, report.unjudged_line
+                ))],
+                refusal::Fix::None,
+            )
+            .with_severity(refusal::Severity::Warn)
+            .render_finding(refusal::Arm::Full),
         )?;
     }
     if !report.findings.is_empty() {
@@ -6733,13 +6750,19 @@ fn run_claim_check(
     }
     // Pointer-only: the issue id and the rule id, plus a PR number where there is
     // one. Never a body and never a title.
-    for refusal in &verdict.refusals {
-        output::message(
-            mode,
-            Verbosity::Normal,
-            err,
-            &format!("{} {}", refusal.id, refusal.rule),
-        )?;
+    // IN THE FINDING GRAMMAR (CLOUD-2145), under a class `policy explain`
+    // resolves: `batten deny claim mint refused at <issue> <reason>`.
+    for refused in &verdict.refusals {
+        let line = refusal::Refusal::engine(
+            verdict::Native::ClaimMintRefused,
+            &[verdict::artifact(&format!(
+                "{} {}",
+                refused.id, refused.rule
+            ))],
+            refusal::Fix::None,
+        )
+        .render_finding(refusal::Arm::Full);
+        output::message(mode, Verbosity::Normal, err, &line)?;
     }
     if !verdict.pullable(request) {
         // NAMING WHICH HALF REFUSED, because the remedies are different and
@@ -18834,49 +18857,33 @@ fn unix_millis() -> u64 {
 }
 
 /// What a drained payload owes beside its lines (CLOUD-2078, CLOUD-2175): one
-/// remediation-bearing refusal per rule it carries, taking each rule's
-/// remediation from its first record — and, when the budget cut it, the
-/// `drain fit broken` finding saying the delta shape did not hold.
-//MUTANT drain-cut-unreported|s@^    if !drained.budget_withheld.is_empty() {$@    if false {@|an_over_budget_payload_is_cut_and_points_at_the_journal
+/// remedy per rule it carries, taking each rule's remediation from its first
+/// record. A budget cut is NOT owed here: the payload's own closing line is the
+/// `drain fit broken` finding (`drain::budget_summary`), and a second would say
+/// it twice.
 fn drained_refusals(
     records: &[findings::FindingRecord],
     drained: &drain::Drained,
     registry: &[verdict::DeclaredVerdict],
 ) -> Vec<refusal::Refusal> {
-    let mut owed: Vec<refusal::Refusal> = drained
+    drained
         .rules
         .iter()
         .filter_map(|(rule, _)| {
             let record = records.iter().find(|record| &record.rule == rule)?;
             refusal::of_rule(rule, registry, record.remediation.as_ref())
         })
-        .collect();
-    if !drained.budget_withheld.is_empty() {
-        owed.push(refusal::Refusal::engine(
-            verdict::Native::DrainFitBroken,
-            &[verdict::artifact(&format!(
-                "{} finding(s) cut",
-                drained.budget_withheld.len()
-            ))],
-            refusal::Fix::None,
-        ));
-    }
-    owed
+        .collect()
 }
 
-/// Push one finding a drain owes. A RULE'S REMEDY IS SAID ONCE PER WINDOW
+/// Push one remedy a drain owes. A RULE'S REMEDY IS SAID ONCE PER WINDOW
 /// (CLOUD-2145): the drain line already addresses the rule, so the remedy's
-/// repeat would be a second address saying nothing new. `drain fit broken`
-/// repeats like any finding.
+/// repeat would be a second address saying nothing new.
 fn push_drained(advice: &mut Vec<advisory::Advice>, refusal: refusal::Refusal) {
-    if refusal.rule().is_empty() {
-        push_finding(advice, severity::AdvisoryTier::Advisory, refusal);
-    } else {
-        advice.push(advisory::Advice::first_sighting(
-            severity::AdvisoryTier::Advisory,
-            refusal,
-        ));
-    }
+    advice.push(advisory::Advice::first_sighting(
+        severity::AdvisoryTier::Advisory,
+        refusal,
+    ));
 }
 
 //MUTANT drain-remedy-dropped|s@^        for rule_refusal in drained_refusals(\&records, \&drained, registry) {$@        for rule_refusal in drained_refusals(\&records, \&drained, registry).into_iter().take(0) {@|a_drained_rules_remedy_rides_its_first_drain_only

@@ -96,8 +96,8 @@
 //! A drain says what is NEW since this session was last told, one line per rule:
 //!
 //! ```text
-//! batten note r at src/a.rs:3,9(2->5) src/b.rs:2 +4 more (7 new, 12 told earlier); run batten state list --rule 'r'
-//! told earlier, still open: 49 finding(s) under 2 rule(s); run batten state list
+//! batten deny r at src/a.rs:3,9(2->5) src/b.rs:2 +4 more (7 new, 12 told earlier); run batten state list --rule 'r'
+//! batten unchanged at 49 finding(s) under 2 rule(s); run batten state list
 //! ```
 //!
 //! **Its size is bounded by the turn, never the backlog**: at most one line per
@@ -122,8 +122,8 @@
 //!   [`NotShown::OverCardinalityCap`].
 //! * **The token budget** ([`DrainConfig::token_budget`]) is the relief valve:
 //!   an ordinary drain never reaches it. Past it, whole rule lines are cut
-//!   salient-last and the payload closes with `budget: <n> more line(s) past
-//!   the declared <budget> tokens are in the journal; run batten state list`;
+//!   salient-last and the payload closes with `batten note drain fit broken
+//!   at <n> line(s) past <budget> tokens; run batten state list`;
 //!   each cut identity is journalled as [`NotShown::OverTokenBudget`].
 //!
 //! Lines are ordered **salient-first** — by tier, then rule. The occurrence
@@ -746,23 +746,30 @@ fn group_line(group: &Group<'_>, cap: usize, previous: &BTreeMap<String, u64>) -
 /// The one line for every rule with nothing new: what the session already
 /// holds, as two counts. Never a list of rules, so its size is the same however
 /// large the backlog grows; `state list` names them.
+///
+/// HEADED [`UNCHANGED`] (CLOUD-2145): these rules are what an `unchanged`
+/// payload is wholly made of, so the one word says both, with provenance.
 fn told_line(groups: &[&Group<'_>]) -> String {
     let findings: usize = groups.iter().map(|group| group.told.len()).sum();
     let named = groups.len();
-    format!(
-        "told earlier, still open: {findings} finding(s) under {named} rule(s); \
-         run batten state list"
-    )
+    format!("{UNCHANGED} at {findings} finding(s) under {named} rule(s); run batten state list")
 }
 
-/// The line closing a payload the token budget cut (CLOUD-2175): how much was
-/// withheld, the budget, and where the rest is read — the store this drain
-/// reads, listed by `state list`.
+/// The line closing a payload the token budget cut (CLOUD-2175): the
+/// `drain fit broken` finding's pointer, counting what was withheld against the
+/// budget, with the class's own route to the rest. Rendered through the one
+/// projection, so it is headed like every finding and is the ONLY line saying
+/// so — the definition is a lookup the legend names.
 fn budget_summary(withheld: usize, budget: usize) -> String {
-    format!(
-        "budget: {withheld} more line(s) past the declared {budget} tokens are in the journal; \
-         run batten state list"
+    crate::refusal::Refusal::engine(
+        crate::verdict::Native::DrainFitBroken,
+        &[crate::verdict::artifact(&format!(
+            "{withheld} line(s) past {budget} tokens"
+        ))],
+        crate::refusal::Fix::None,
     )
+    .with_severity(crate::refusal::Severity::Note)
+    .render_finding(crate::refusal::Arm::Pointer)
 }
 
 /// Whether `lines` plus `candidate` still fits the budget.
@@ -1976,7 +1983,7 @@ mod tests {
         let settled = cycle(&more, &scope, None, &config, &second.counts, &[]);
         assert_eq!(
             settled.lines,
-            ["told earlier, still open: 4 finding(s) under 1 rule(s); run batten state list"],
+            ["batten unchanged at 4 finding(s) under 1 rule(s); run batten state list"],
             "a backlog with nothing new is one count line"
         );
     }
@@ -2049,7 +2056,8 @@ mod tests {
             );
             let last = drained.lines.last().expect("a closing line");
             assert!(
-                last.starts_with("budget: ") && last.ends_with("run batten state list"),
+                last.starts_with("batten note drain fit broken at ")
+                    && last.ends_with("run batten state list"),
                 "{case}: the cut says so and points at the rest: {last}"
             );
             let shown = drained.lines.len() - 1;
@@ -2113,8 +2121,7 @@ mod tests {
         assert_eq!(
             last,
             &format!(
-                "budget: {} more line(s) past the declared 60 tokens are in the journal; \
-                 run batten state list",
+                "batten note drain fit broken at {} line(s) past 60 tokens; run batten state list",
                 RULES - entries
             )
         );
@@ -2197,7 +2204,7 @@ mod tests {
         );
         assert_eq!(
             drained.lines,
-            ["told earlier, still open: 1 finding(s) under 1 rule(s); run batten state list"],
+            ["batten unchanged at 1 finding(s) under 1 rule(s); run batten state list"],
             "a fall is not news: the identity stays told"
         );
         assert_eq!(
