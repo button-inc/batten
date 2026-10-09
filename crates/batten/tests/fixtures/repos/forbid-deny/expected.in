@@ -1,4 +1,4 @@
 argv: check
 exit: 2
 stdout:
-lib.rs:4 rule 'no-todo'
+batten deny no-todo at lib.rs:4

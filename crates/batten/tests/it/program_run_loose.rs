@@ -49,11 +49,11 @@ fn a_task_calling_the_installer_is_refused_and_prose_is_not() {
     );
     assert_eq!(code, Some(2), "{out}");
     assert!(
-        out.contains("mise.toml:3 rule 'program run loose'"),
+        out.contains("batten deny program run loose at mise.toml:3"),
         "an argv entry: {out}"
     );
     assert!(
-        out.contains("mise.toml:5 rule 'program run loose'"),
+        out.contains("batten deny program run loose at mise.toml:5"),
         "a whole run string: {out}"
     );
     assert!(

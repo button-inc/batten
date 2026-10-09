@@ -409,19 +409,20 @@ pub struct Applied {
 
 impl Applied {
     /// The audit line this application renders as, without a trailing newline:
-    /// `waived <path>[:<line>] <rule> (expires <date>)`.
+    /// `batten note <rule> at <path>[:<line>] waived until <date>`.
     ///
-    /// The finding's own pointer shape with a verdict word in front, so a reader
-    /// who greps `check` output can grep this.
+    /// The finding's own shape (CLOUD-2145) as a `note`, so a reader who greps
+    /// `check` output for the rule finds this too, and `waived until` for
+    /// every waiver.
     #[must_use]
     pub fn line_text(&self) -> String {
-        let rule = crate::refusal::label(crate::refusal::Label::Rule, &self.rule);
+        let head = crate::refusal::head(crate::refusal::Severity::Note, &self.rule);
         match self.line {
             Some(line) => format!(
-                "waived {}:{} {rule} (expires {})",
-                self.path, line, self.expires
+                "{head} at {}:{line} waived until {}",
+                self.path, self.expires
             ),
-            None => format!("waived {} {rule} (expires {})", self.path, self.expires),
+            None => format!("{head} at {} waived until {}", self.path, self.expires),
         }
     }
 }
@@ -502,15 +503,15 @@ pub struct Suppressed {
 
 impl Suppressed {
     /// The audit line this suppression renders as, without a trailing newline:
-    /// `waived <rule> (expires <date>)`.
+    /// `batten note <rule> at this call waived until <date>`.
     ///
-    /// [`Applied::line_text`]'s shape with the pointer absent rather than
-    /// invented, so a reader who greps `check` output for `waived ` finds this
-    /// too — which is the point of keeping one verdict word across both channels.
+    /// [`Applied::line_text`]'s shape with the call in the path's place rather
+    /// than an invented path, so a reader who greps for `waived until` finds
+    /// this too — one phrase across both channels.
     #[must_use]
     pub fn line_text(&self) -> String {
-        let rule = crate::refusal::label(crate::refusal::Label::Rule, &self.rule);
-        format!("waived {rule} (expires {})", self.expires)
+        let head = crate::refusal::head(crate::refusal::Severity::Note, &self.rule);
+        format!("{head} at this call waived until {}", self.expires)
     }
 }
 
@@ -715,7 +716,7 @@ mod tests {
         assert_eq!(applied.len(), 1);
         assert_eq!(
             applied[0].line_text(),
-            "waived src/a.rs:3 rule 'r' (expires 2099-01-01)"
+            "batten note r at src/a.rs:3 waived until 2099-01-01"
         );
         assert!(
             !applied[0].line_text().contains("deny"),
@@ -810,7 +811,7 @@ mod tests {
         let (_, applied) = apply(vec![scoped], &[waiver("r", "2099-01-01")], TODAY);
         assert_eq!(
             applied[0].line_text(),
-            "waived **/*.rs rule 'r' (expires 2099-01-01)"
+            "batten note r at **/*.rs waived until 2099-01-01"
         );
     }
 
@@ -925,10 +926,13 @@ mod tests {
             expires: "2099-01-01".to_owned(),
         }
         .line_text();
-        assert_eq!(line, "waived rule 'no-merge' (expires 2099-01-01)");
+        assert_eq!(
+            line,
+            "batten note no-merge at this call waived until 2099-01-01"
+        );
         // One verdict word across both channels, so a reader who greps `check`
         // output for a suppression finds a mediated one too.
-        assert!(line.starts_with("waived "));
+        assert!(line.starts_with("batten note "));
         assert!(
             Applied {
                 path: "src/a.rs".to_owned(),
@@ -937,7 +941,7 @@ mod tests {
                 expires: "2099-01-01".to_owned(),
             }
             .line_text()
-            .starts_with("waived ")
+            .starts_with("batten note ")
         );
     }
 

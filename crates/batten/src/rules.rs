@@ -6303,18 +6303,18 @@ pub struct Finding {
 /// number it does not have — the `None` arm is a different pointer, not a
 /// degraded one.
 ///
-/// The rule is LABELLED (CLOUD-2075), so a reader can always tell a rule from a
-/// verdict: `<path>[:<line>] rule '<id>'[ <reason>]`.
-//MUTANT check-rule-unlabelled|s@^        let rule = crate::refusal::label(crate::refusal::Label::Rule, \&self.rule);$@        let rule = self.rule.clone();@|a_check_finding_line_labels_its_rule
+/// One finding in the grammar every Batten finding takes (CLOUD-2145):
+/// `batten <severity> <id> at <path>[:<line>][ <reason>]`. The head names the
+/// source inside a task's interleaved output, where the command a reader ran
+/// (`mise run verify`) does not; a consumer wanting structure reads `-J`.
+//MUTANT check-line-unheaded|s@^        let head = crate::refusal::head(self.severity.finding_severity(), \&self.rule);$@        let head = self.rule.clone();@|a_check_finding_line_labels_its_rule
 impl crate::output::Line for Finding {
     fn line(&self) -> String {
-        let rule = crate::refusal::label(crate::refusal::Label::Rule, &self.rule);
+        let head = crate::refusal::head(self.severity.finding_severity(), &self.rule);
         let at = match self.line {
-            Some(line) => format!("{}:{} {rule}", self.path, line),
-            None => format!("{} {rule}", self.path),
+            Some(line) => format!("{head} at {}:{line}", self.path),
+            None => format!("{head} at {}", self.path),
         };
-        // Appended rather than interpolated into the pointer, so a consumer
-        // parsing `path:line rule` off the front still parses it.
         match self.reason {
             Some(reason) => format!("{at} {reason}"),
             None => at,
@@ -13714,7 +13714,7 @@ mod tests {
             remediation: Some(crate::findings::Remediation::NoFix("fixture".to_owned())),
             reason: None,
         };
-        assert_eq!(finding.line(), "src/a.rs:3 rule 'r'");
+        assert_eq!(finding.line(), "batten deny r at src/a.rs:3");
     }
 
     /// CLOUD-609's guard on the change itself: `contains` still means MEMBERSHIP.

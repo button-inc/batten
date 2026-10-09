@@ -1,4 +1,4 @@
 argv: check
 exit: 2
 stdout:
-pins.toml:1 rule 'pin-agreement' node-differs
+batten deny pin-agreement at pins.toml:1 node-differs

@@ -2,5 +2,5 @@
 source: crates/batten/tests/it/snapshots.rs
 expression: stdout_of(&output)
 ---
-a.rs:1 rule 'no-todo'
-b.rs:1 rule 'no-todo'
+batten deny no-todo at a.rs:1
+batten deny no-todo at b.rs:1

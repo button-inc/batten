@@ -495,6 +495,10 @@ pub fn message(
     if !mode.verbosity.admits(rung) {
         return Ok(());
     }
+    // A finding already opens with `batten <severity>` (CLOUD-2145).
+    if crate::refusal::is_headed(text) {
+        return writeln!(err, "{text}");
+    }
     writeln!(err, "batten: {text}")
 }
 

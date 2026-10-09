@@ -313,7 +313,7 @@ fn a_release_with_only_the_schema_is_refused() {
     for target in ["x86_64-unknown-linux-gnu", "aarch64-apple-darwin"] {
         assert!(
             text.lines()
-                .any(|line| line.starts_with(&format!("{target} "))),
+                .any(|line| line.ends_with(&format!(" at {target}"))),
             "{target}: {text}"
         );
     }
@@ -395,7 +395,11 @@ fn a_name_containing_another_does_not_satisfy_it() {
     let (dir, forge) = pinned("containing", &assets);
     let (code, text) = decide(&dir, &forge);
     assert_eq!(code, Some(2), "{text}");
-    assert!(text.contains("batten.spdx.json "), "{text}");
+    assert!(
+        text.lines()
+            .any(|line| line.ends_with(" at batten.spdx.json")),
+        "{text}"
+    );
     assert!(text.contains("batten.local.schema.json"), "{text}");
 }
 
@@ -467,7 +471,9 @@ fn a_list_that_cannot_be_derived_is_partial_never_complete() {
         // list from, while `release ship missing` carries only an artifact and
         // falls back to the module's own path.
         assert!(
-            text.contains(".github/workflows/release-artifacts.yml rule 'release grade other'"),
+            text.contains(
+                "batten deny release grade other at .github/workflows/release-artifacts.yml"
+            ),
             "{name}: {text}"
         );
         assert!(
@@ -712,12 +718,12 @@ fn the_real_matrix_is_readable_by_the_module() {
     for (target, tool) in &legs {
         assert!(
             text.lines()
-                .any(|line| line.starts_with(&format!("{target} "))),
+                .any(|line| line.ends_with(&format!(" at {target}"))),
             "{target}: {text}"
         );
-        let sbom = format!("-{TAG}-{target}.spdx.json ");
+        let sbom = format!("-{TAG}-{target}.spdx.json");
         assert_eq!(
-            text.lines().any(|line| line.contains(&sbom)),
+            text.lines().any(|line| line.ends_with(&sbom)),
             tool != "cross",
             "{target} ({tool}): {text}"
         );

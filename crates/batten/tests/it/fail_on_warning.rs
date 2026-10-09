@@ -39,7 +39,7 @@ fn warn_only() -> String {
 }
 
 /// The pointer line the fixture below produces, byte for byte.
-const WARN_POINTER: &str = "lib.rs:2 rule 'no-todo'\n";
+const WARN_POINTER: &str = "batten warn no-todo at lib.rs:2\n";
 
 /// Create a fresh temp repo containing `config`, a `lib.rs` that trips the rule,
 /// and optionally a `batten.local.toml`.

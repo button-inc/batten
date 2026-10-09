@@ -263,7 +263,7 @@ fn a_planted_secret_is_a_pointer_and_never_its_bytes() {
     );
     assert_eq!(
         String::from_utf8_lossy(&out.stdout),
-        "app.conf:1 rule 'source carry unsafe'\n",
+        "batten deny source carry unsafe at app.conf:1\n",
         "stdout is the pointer line and nothing else"
     );
     nowhere(&env, &out, &secret, "text output");
@@ -367,7 +367,7 @@ fn the_same_input_twice_is_byte_identical_and_ordered() {
     assert_eq!(first.stdout, second.stdout, "text output is byte-stable");
     assert_eq!(
         String::from_utf8_lossy(&first.stdout),
-        "a.conf:1 rule 'source carry unsafe'\nb.conf:1 rule 'source carry unsafe'\n",
+        "batten deny source carry unsafe at a.conf:1\nbatten deny source carry unsafe at b.conf:1\n",
         "ordered by path, not by the order the scanner happened to emit"
     );
 
@@ -624,7 +624,7 @@ fn an_erroring_gate_does_not_suppress_another_gates_findings() {
     );
     assert_eq!(
         String::from_utf8_lossy(&out.stdout),
-        "lib.rs:1 rule 'no-todo'\n",
+        "batten deny no-todo at lib.rs:1\n",
         "the surviving gate's finding still reaches stdout"
     );
     let stderr = String::from_utf8_lossy(&out.stderr);

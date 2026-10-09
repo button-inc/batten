@@ -270,11 +270,20 @@ struct Case {
 }
 
 impl Case {
-    /// The pointer a failure is reported under — `path:line rule-id`, the same
-    /// shape a finding takes, and never the matched bytes (rule 4).
+    /// The pointer a failure is reported under — `<rule> at <path>:<line>`, a
+    /// finding's shape after its `batten <severity>` head (CLOUD-2145), and never
+    /// the matched bytes (rule 4).
     fn pointer(&self) -> String {
-        format!("{}:{} rule '{}'", self.path, self.line, self.rule)
+        format!("{} at {}:{}", self.rule, self.path, self.line)
     }
+}
+
+/// A finding line with its `batten <severity> ` head removed, so a case scores
+/// the same whether its rule denies or warns.
+fn without_head(line: &str) -> &str {
+    line.strip_prefix("batten ")
+        .and_then(|rest| rest.split_once(' '))
+        .map_or(line, |(_, body)| body)
 }
 
 /// Every case a fixture's committed files declare.
@@ -352,7 +361,9 @@ fn reported_pointers(stdout: &str) -> Vec<String> {
 /// is: a scorer nothing exercises in both directions is the status quo with more
 /// code.
 fn score(case: &Case, reported: &[String]) -> Outcome {
-    let flagged = reported.iter().any(|line| line == &case.pointer());
+    let flagged = reported
+        .iter()
+        .any(|line| without_head(line) == case.pointer());
     match (case.polarity, flagged) {
         (Polarity::Violating, true) => Outcome::Reported,
         (Polarity::Violating, false) => Outcome::Missing,
@@ -463,9 +474,11 @@ fn a_marker_naming_a_rule_does_not_trip_it() {
         let reported = reported_pointers(&stdout);
         for case in cases {
             let marker_line = case.line - 1;
-            let marker_pointer = format!("{}:{marker_line} {}", case.path, case.rule);
+            let marker_pointer = format!("{} at {}:{marker_line}", case.rule, case.path);
             assert!(
-                !reported.contains(&marker_pointer),
+                !reported
+                    .iter()
+                    .any(|line| without_head(line) == marker_pointer),
                 "{name}: the marker declaring {} is reported by the rule it names",
                 case.pointer()
             );

@@ -1,4 +1,4 @@
 argv: check
 exit: 2
 stdout:
-notes.md:1 rule 'skill-tier' no-document
+batten deny skill-tier at notes.md:1 no-document

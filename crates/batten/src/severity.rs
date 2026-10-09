@@ -169,6 +169,18 @@ pub enum RuleSeverity {
 }
 
 impl RuleSeverity {
+    /// The word a finding of this severity is printed under (CLOUD-2145): a
+    /// match that blocks is `deny`, one reported is `warn`, an allowed one a
+    /// `note`.
+    #[must_use]
+    pub const fn finding_severity(self) -> crate::refusal::Severity {
+        match self {
+            RuleSeverity::Deny | RuleSeverity::Ask => crate::refusal::Severity::Deny,
+            RuleSeverity::Warn => crate::refusal::Severity::Warn,
+            RuleSeverity::Allow => crate::refusal::Severity::Note,
+        }
+    }
+
     /// Every severity, weakest-first, so the [`TABLE`] coverage test is total.
     ///
     /// A new variant must be added here or
