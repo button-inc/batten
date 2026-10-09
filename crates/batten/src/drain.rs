@@ -966,14 +966,17 @@ struct Clamped {
 /// a payload that fits is emitted whole; one that does not is cut at the first
 /// RULE line that would not fit with the closing line reserved — whole rules,
 /// salience-last first, never skipping ahead to a smaller later line — and
-/// closes with how many lines it withheld and where they are. The first line is
-/// always admitted, so a budget can never mute the channel.
+/// closes with how many lines it withheld and where they are. No line is
+/// exempt, the first included (CLOUD-2163): the payload never passes the
+/// budget, and a channel whose first line will not fit still says that much
+/// and where the rest is, so it is never mute.
 ///
 /// **What is anchored is what was told.** A listed identity and a told one
 /// anchor the next drain's delta; an elided or cut one does not, so it is news
 /// again next time — which is how the list pages as the agent fixes it.
 //MUTANT backlog-relisted|s@^        if group.fresh.is_empty() {$@        if false {@|a_drain_s_size_follows_the_turn_not_the_backlog
 //MUTANT budget-cut-dropped|s@^    let whole = within(\&\[\], \&candidates.join("\\n"), None, config.token_budget);$@    let whole = true;@|an_over_budget_drain_is_cut_to_the_budget_with_a_journal_pointer
+//MUTANT budget-first-line-exempt|s@^        let fits = cut == 0 \&\& room;$@        let fits = cut == 0 \&\& (room \x7c\x7c lines.is_empty());@|a_drain_never_renders_past_its_token_budget
 //MUTANT budget-pointer-dropped|s@^        lines.push(budget_summary(cut, config.token_budget));$@        let _ = cut;@|an_over_budget_drain_is_cut_to_the_budget_with_a_journal_pointer
 fn clamp(groups: &[Group<'_>], config: &DrainConfig, previous: &BTreeMap<String, u64>) -> Clamped {
     let mut candidates: Vec<String> = Vec::new();
@@ -1004,10 +1007,8 @@ fn clamp(groups: &[Group<'_>], config: &DrainConfig, previous: &BTreeMap<String,
     let mut elided: Vec<FindingRecord> = Vec::new();
     let mut cut = 0;
     for (candidate, owner) in candidates.into_iter().zip(owners) {
-        let fits = cut == 0
-            && (whole
-                || lines.is_empty()
-                || within(&lines, &candidate, Some(&reserve), config.token_budget));
+        let room = whole || within(&lines, &candidate, Some(&reserve), config.token_budget);
+        let fits = cut == 0 && room;
         let Some((index, listed)) = owner else {
             if fits {
                 lines.push(candidate);
@@ -1988,6 +1989,58 @@ mod tests {
             bytes(&large),
             "only the digits of the told counts may differ: {small:?} vs {large:?}"
         );
+    }
+
+    /// THE PAYLOAD NEVER PASSES ITS BUDGET (CLOUD-2163, kept by CLOUD-2175),
+    /// closing line included and the first line no exception: a rule line too
+    /// wide to fit alone is withheld like any other, and what is said is that
+    /// it was and where it is. Only what was shown anchors the next drain.
+    #[test]
+    fn a_drain_never_renders_past_its_token_budget() {
+        let budget = 40;
+        let config = DrainConfig {
+            token_budget: budget,
+            ..generous()
+        };
+        let scope = changed(&["src/a.rs"]);
+        let many: Vec<FindingRecord> = (0..40)
+            .map(|index| {
+                record(
+                    FindingKind::Code,
+                    &format!("r{index:02}"),
+                    "src/a.rs",
+                    "TODO",
+                )
+            })
+            .collect();
+        let wide = spread("wide", 60);
+        for (records, case) in [
+            (many, "forty rules"),
+            (wide, "one rule wider than the budget"),
+        ] {
+            let drained = cycle(&records, &scope, None, &config, &BTreeMap::new(), &[]);
+            let rendered = drained.lines.join("\n");
+            assert!(
+                crate::budget::estimate_tokens(&rendered) <= budget,
+                "{case}: {} tokens over a budget of {budget}: {rendered}",
+                crate::budget::estimate_tokens(&rendered)
+            );
+            let last = drained.lines.last().expect("a closing line");
+            assert!(
+                last.starts_with("budget: ") && last.ends_with("run batten state list"),
+                "{case}: the cut says so and points at the rest: {last}"
+            );
+            let shown = drained.lines.len() - 1;
+            assert_eq!(
+                drained.counts.len(),
+                drained.rules.values().sum::<u64>() as usize,
+                "{case}: only what was shown is anchored"
+            );
+            if case.starts_with("one rule") {
+                assert_eq!(shown, 0, "{case}: {:?}", drained.lines);
+                assert!(drained.counts.is_empty(), "{case}: nothing was told");
+            }
+        }
     }
 
     /// THE RELIEF VALVE (CLOUD-2175). A delta too wide for its budget is cut
