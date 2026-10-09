@@ -39,6 +39,14 @@
 //! ─── CLOUD-909's REPLAY, row 6 ───────────────────────────────────────────────
 //!
 // replay-call: tests/fanout-guard.bats 5a1c1dc mise-tasks/fanout-guard.sh spawn count wrong deny=2 allow=0
+//!
+//! ─── THE MANIFEST CEILING IS RETIRED (2026-10-09) ────────────────────────────
+//!
+//! `spawn count wrong` is removed from `batten.toml` (owner ruling): it counted the
+//! paths ONE prompt names, which never saw CLOUD-284's multiplier (siblings
+//! sharing a manifest) and refused a single precise agent. The ledger lines above
+//! record the migration as it happened; the manifest cases they name retired with
+//! the row, and the problem is open on CLOUD-1744. The token ceiling stays.
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -111,117 +119,21 @@ fn verdict(repo: &Path, tool: &str, prompt: &str) -> Option<i32> {
     .code()
 }
 
-/// CARRIES: "a manifest over the cap is refused, naming the cap and the count",
-/// "an ordinary single-target spawn is allowed", and the both-directions half of
-/// "the caps are configurable in both directions".
-///
-/// THE MEASURED FAILURE (CLOUD-287): eight siblings, each prompt naming the same
-/// eight artifacts as required reading, so the fixed per-agent cost was paid eight
-/// times before any agent wrote a line — and the one that finished anything spent
-/// 63,848 tokens to fetch one issue and run one lint.
-///
-/// Both directions, and the allow half is what stops this being a row that refuses
-/// every spawn. The at-cap case pins the `<=` boundary the engine inherits from
-/// `budget.rs` rather than re-deciding.
+/// THE RETIREMENT, PINNED: a prompt naming many tracked paths is not refused
+/// for the count. A row that came back keyed to the per-prompt count would red
+/// here rather than return silently (CLOUD-1744 holds the problem it mis-measured).
 #[test]
-fn a_manifest_over_the_cap_is_refused() {
-    let repo = repo("row6-manifest");
-    tracked(&repo, &["a.txt", "b.txt", "c.txt", "d.txt"]);
-
-    let refusal = run_with_stdin(
-        &repo,
-        &["adjudicate", "--harness", "exit-code"],
-        &payload("Agent", "read a.txt b.txt c.txt d.txt then act"),
-    );
-    assert_eq!(
-        refusal.status.code(),
-        Some(2),
-        "four named artifacts is over the declared ceiling of three"
-    );
-    let text = stderr(&refusal);
-    assert!(
-        text.contains("spawn count wrong"),
-        "the row that refused, so a reader can find it in the config: {text}"
-    );
-    // The count AND the ceiling, which is what a reader acts on — one without the
-    // other says either "too many" or "the limit is three" and not both.
-    assert!(
-        text.contains('4') && text.contains('3'),
-        "the refusal names the measurement and the ceiling: {text}"
-    );
-
-    assert_eq!(
-        verdict(&repo, "Agent", "read a.txt b.txt c.txt then act"),
-        Some(0),
-        "three is AT the ceiling, and at is not over"
-    );
-    assert_eq!(
-        verdict(&repo, "Agent", "read a.txt then act"),
-        Some(0),
-        "and an ordinary single-target spawn is what this must not price"
-    );
-}
-
-/// CARRIES: "a mem: reference counts as an artifact, resolved against the tree".
-///
-/// The `resolves` column is the consumer's, because a shorthand a repository
-/// writes in its own prompts to name its own files is a property of that
-/// repository (non-negotiable rule 1). Asserted through the ROW's own rewrite
-/// rather than a fixture's, so a config that stopped resolving `mem:` would red
-/// here.
-#[test]
-fn a_memory_reference_counts_as_an_artifact() {
-    let repo = repo("row6-memories");
-    tracked(
-        &repo,
-        &[
-            "a.txt",
-            "b.txt",
-            ".serena/memories/core.md",
-            ".serena/memories/workflow/landing-loop.md",
-        ],
-    );
-    // Two tracked paths plus two resolvable memory references is four.
+fn naming_many_tracked_paths_is_not_refused() {
+    let repo = repo("row6-manifest-retired");
+    tracked(&repo, &["a.txt", "b.txt", "c.txt", "d.txt", "e.txt"]);
     assert_eq!(
         verdict(
             &repo,
             "Agent",
-            "read a.txt b.txt mem:core mem:workflow/landing-loop then act"
-        ),
-        Some(2),
-        "a mem: reference names a file this repository carries, so it counts"
-    );
-    // The anti-vacuity twin: a reference resolving to nothing counts for nothing.
-    assert_eq!(
-        verdict(
-            &repo,
-            "Agent",
-            "read a.txt b.txt mem:nothing-here mem:also/absent then act"
+            "read a.txt b.txt c.txt d.txt e.txt then act"
         ),
         Some(0),
-        "a reference the memories tree cannot resolve is naming nothing readable"
-    );
-}
-
-/// CARRIES: "a path-shaped token naming nothing tracked does not count".
-///
-/// This is what makes the manifest decidable rather than a guess: the count is
-/// path-shaped tokens INTERSECTED with the tracked set, so a URL, a branch name
-/// and a prose slash drop out by construction. There is no allowlist to tune and
-/// no false positive to appeal, which is the property an allowlist would destroy.
-#[test]
-fn only_tracked_paths_count() {
-    let repo = repo("row6-untracked");
-    tracked(&repo, &["a.txt"]);
-    assert_eq!(
-        verdict(
-            &repo,
-            "Agent",
-            "read nope.txt other/missing.rs https://example.com/x.md origin/main \
-             and/or some prose then act"
-        ),
-        Some(0),
-        "nothing here names a file this repository carries, so nothing counts"
+        "five named artifacts in one prompt is not a fan-out"
     );
 }
 
@@ -270,7 +182,8 @@ fn an_oversize_prompt_is_refused() {
 fn only_a_spawn_is_judged() {
     let repo = repo("row6-selectors");
     tracked(&repo, &["a.txt", "b.txt", "c.txt", "d.txt"]);
-    let over = "read a.txt b.txt c.txt d.txt then act";
+    // Past the token ceiling, the one spawn row left.
+    let over = "x".repeat(6100);
     // ASSERTED BY THE ROWS THAT MUST STAY SILENT, not by the exit code. A tool
     // this row ignores may still be refused by a NEIGHBOUR — measured here:
     // `mcp__Linear__save_issue` carries no `id`, so `issue list unread`
@@ -287,21 +200,19 @@ fn only_a_spawn_is_judged() {
         let output = run_with_stdin(
             &repo,
             &["adjudicate", "--harness", "exit-code"],
-            &payload(tool, over),
+            &payload(tool, &over),
         );
         let text = stderr(&output);
-        for row in ["spawn count wrong", "prompt measure wrong"] {
-            assert!(
-                !text.contains(row),
-                "this call commits no fresh context window, so {row} owes it nothing: \
-                 {tool}: {text}"
-            );
-        }
+        assert!(
+            !text.contains("prompt measure wrong"),
+            "this call commits no fresh context window, so the spawn ceiling owes it \
+             nothing: {tool}: {text}"
+        );
     }
     // The host may expose the spawn with a server prefix; `selects_tool` matches
     // the whole final `__`-delimited segment.
     assert_eq!(
-        verdict(&repo, "mcp__someserver__Agent", over),
+        verdict(&repo, "mcp__someserver__Agent", &over),
         Some(2),
         "whatever prefix the host minted, this is the spawning verb"
     );
@@ -444,13 +355,11 @@ fn the_refusal_carries_no_prompt_bytes() {
     let repo = repo("row6-pointer-only");
     tracked(&repo, &["a.txt", "b.txt", "c.txt", "d.txt"]);
     let secret = "hunter2-do-not-echo-me";
+    // Refused by the token ceiling, the spawn row that remains.
     let output = run_with_stdin(
         &repo,
         &["adjudicate", "--harness", "exit-code"],
-        &payload(
-            "Agent",
-            &format!("read a.txt b.txt c.txt d.txt and remember {secret}"),
-        ),
+        &payload("Agent", &format!("{} remember {secret}", "x".repeat(6100))),
     );
     let rendered = format!(
         "{}{}",
