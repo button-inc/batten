@@ -705,7 +705,7 @@ fn a_count_only_change_is_news_and_does_not_short_circuit() {
 ///
 /// The suite `drain-remedy-dropped` is killed in.
 #[test]
-fn a_drained_rules_remedy_is_full_once_then_a_pointer() {
+fn a_drained_rules_remedy_rides_its_first_drain_only() {
     let (repo, home) = drained_fixture("drain-remedy", "\n[drain]\ninterval_ms = 0\n");
     let first = remedies(&hook(&repo, &home, &post_tool_batch("s1")));
     assert_eq!(first.len(), 1, "one rule, one remedy: {first:?}");
@@ -722,12 +722,18 @@ fn a_drained_rules_remedy_is_full_once_then_a_pointer() {
     );
     let recorded = state_cmd(&repo, &home, &["state", "record"]);
     assert_eq!(recorded.status.code(), Some(0));
-    let second = remedies(&hook(&repo, &home, &post_tool_batch("s1")));
-    assert_eq!(second.len(), 1, "{second:?}");
-    assert!(
-        second[0].contains("rule 'no-todo'") && !second[0].contains(" — "),
-        "the second emitting drain carries the pointer: {second:?}"
+    let output = hook(&repo, &home, &post_tool_batch("s1"));
+    let lines = payload(&output);
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| line.starts_with("rule 'no-todo' "))
+            .count(),
+        1,
+        "the drain's own line addresses the rule, and the remedy adds no second \
+         address beside it (CLOUD-2145): {lines:?}"
     );
+    assert!(remedies(&output).is_empty(), "{:?}", remedies(&output));
 }
 
 #[test]
@@ -906,10 +912,10 @@ fn a_rule_past_its_location_cap_points_at_exactly_its_set() {
 }
 
 /// THE RELIEF VALVE, over the binary (CLOUD-2175). Two rules whose one-line
-/// delta cannot fit a tiny budget: the second rule's line is cut, the payload
-/// closes with how many lines it withheld and where, a `drain fit broken`
-/// finding says the shape failed, and the journal still holds every record,
-/// each cut one journalled `over-token-budget` rather than lost.
+/// deltas cannot fit a tiny budget: no line is exempt (CLOUD-2163), so both are
+/// cut, the payload is the closing line counting what it withheld and where, a
+/// `drain fit broken` finding says the shape failed, and the journal still holds
+/// every record, each cut one journalled `over-token-budget` rather than lost.
 ///
 /// The suite `drain-cut-unreported` is killed in.
 #[test]
@@ -928,22 +934,18 @@ fn an_over_budget_payload_is_cut_and_points_at_the_journal() {
     let output = hook(&repo, &home, &post_tool_batch("s1"));
     let lines = payload(&output);
     assert_eq!(
-        lines.len(),
-        2,
-        "one rule line, then the closing line: {lines:?}"
-    );
-    assert_eq!(
-        lines[1],
-        format!(
-            "budget: 1 more line(s) past the declared {BUDGET} tokens are in the journal; \
+        lines,
+        [format!(
+            "budget: 2 more line(s) past the declared {BUDGET} tokens are in the journal; \
              run batten state list"
-        ),
+        )],
         "the closing line counts what it withheld and names where it is"
     );
     assert!(
-        remedies(&output)
-            .iter()
-            .any(|line| line.contains("verdict 'drain fit broken' at 3 finding(s) cut")),
+        remedies(&output).iter().any(|line| line.contains(&format!(
+            "verdict 'drain fit broken' at {} finding(s) cut",
+            2 * SPANS
+        ))),
         "the cut is reported as the shape failing: {:?}",
         remedies(&output)
     );
@@ -957,7 +959,8 @@ fn an_over_budget_payload_is_cut_and_points_at_the_journal() {
         .filter(|record| record["presentation"]["not-shown"] == "over-token-budget")
         .count();
     assert_eq!(
-        cut, SPANS,
+        cut,
+        2 * SPANS,
         "each cut record is journalled as cut, so its silence is not the agent's"
     );
 }

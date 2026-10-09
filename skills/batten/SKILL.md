@@ -123,18 +123,26 @@ it. That line, verbatim:
 
 <!-- legend: the text of `refusal::LEGEND`; `skill_contract.rs` fails on drift -->
 
-> batten: a finding reads `<name> at <subjects>; <routes>`; the first in a window adds a dash and what to do, later ones stop before it. `batten policy explain <name>` prints the whole class; `--history` why it exists, read before changing a rule.
+> batten: a finding reads `<name> at <subjects>; <routes> — <what to do>`; a later one in the same window is only `<name> at <subjects>`, the rest being above. `batten policy explain <name>` prints the whole class; `--history` why it exists, read before changing a rule.
 
 A real deny reason, on its first firing in a window:
 
 ```text
-verdict 'tool run loose' rule 'tool select other' at batten.toml head; read rules/scanning.md; run batten policy explain 'tool select other' 'tool run loose' — a shell text utility stood in for the structured file surface. ... Do: ... Don't: ...
+rule 'tool select other' at batten.toml head; read rules/scanning.md; run batten policy explain 'tool select other' 'tool run loose' — a shell text utility stood in for the structured file surface. ... Do: ... Don't: ...
 ```
 
-The part before `—` names the gate, the subjects it fired on, and the routes
-to take. The part after it says why the gate exists, what to do, and what not to
-do. Later firings in the same window stop at `—`; the rest is one
-`batten policy explain` away. **Take the named route.** Do not retry the
+and on every later firing in that window:
+
+```text
+rule 'tool select other' at batten.toml head
+```
+
+The first `;` ends the address: the gate's one name and the subjects it fired
+on. The routes to take follow, then the hop that resolves the name (with its
+class, where the class has another name), and after `—` why the gate exists,
+what to do, and what not to do. A later firing is the address alone, because
+the rest is already above it; a compaction forgets the window, so the next
+firing after one is full again. **Take the named route.** Do not retry the
 refused call with different spelling, and do not route around it through another
 program: the rule is committed config.
 

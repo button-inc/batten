@@ -499,7 +499,7 @@ fn a_step_that_hangs_is_killed_at_its_declared_bound() {
     assert_eq!(door.code, Some(0), "a timed-out step allows: {}", door.err);
     let said = format!("{}{}", door.out, door.err);
     assert!(
-        said.contains("hook.handler hanging: exceeded 300ms and was killed"),
+        said.contains("hook.handler.hanging timed-out-300ms"),
         "the declared bound is imposed by the parent, not hoped for: {said}"
     );
     let grandchild: i32 = std::fs::read_to_string(&pid_file)

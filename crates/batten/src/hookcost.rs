@@ -388,8 +388,8 @@ impl Follow {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 #[non_exhaustive]
 pub struct Window {
-    /// Distinct finding keys the window carried — the number a per-gate doc
-    /// budget is divided by.
+    /// Distinct gates the window carried, a gate's full arm and its addresses
+    /// counted once — the number a per-gate doc budget is divided by.
     pub distinct: usize,
     /// Tokens of emissions carrying at least one full arm.
     pub full_tokens: usize,
@@ -527,13 +527,17 @@ pub fn windows(stream: &Stream, routes: &BTreeMap<String, Vec<String>>) -> Windo
         .collect();
     let mut segments = Vec::new();
     let mut window = Window::default();
-    let mut keys: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+    let mut keys: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    // What each gate's full arm told this window, by name: a repeat is only the
+    // address (CLOUD-2145), so its class and routes are the ones already shown.
+    let mut told: BTreeMap<String, (String, Vec<String>)> = BTreeMap::new();
     for (index, record) in stream.records.iter().enumerate() {
         let findings =
             match &record.event {
                 Event::SessionBoundary => {
                     window.distinct = keys.len();
                     keys.clear();
+                    told.clear();
                     segments.push(std::mem::take(&mut window));
                     continue;
                 }
@@ -541,6 +545,7 @@ pub fn windows(stream: &Stream, routes: &BTreeMap<String, Vec<String>>) -> Windo
                     tokens, findings, ..
                 } => {
                     charge(&mut window, *tokens, findings);
+                    remember(&mut told, findings, &[]);
                     findings
                 }
                 Event::Refused {
@@ -554,6 +559,8 @@ pub fn windows(stream: &Stream, routes: &BTreeMap<String, Vec<String>>) -> Windo
                     if findings.is_empty() {
                         window.unlabelled_refusals += 1;
                     }
+                    remember(&mut told, findings, offered);
+                    let (findings_seen, offered_seen) = recalled(&told, findings, offered);
                     let next =
                         stream.records.iter().skip(index + 1).find_map(|later| {
                             match &later.event {
@@ -562,8 +569,8 @@ pub fn windows(stream: &Stream, routes: &BTreeMap<String, Vec<String>>) -> Windo
                             }
                         });
                     let bucket = follow(
-                        findings,
-                        offered,
+                        &findings_seen,
+                        &offered_seen,
                         calls.get(call.as_str()).copied(),
                         next,
                         routes,
@@ -577,11 +584,80 @@ pub fn windows(stream: &Stream, routes: &BTreeMap<String, Vec<String>>) -> Windo
                 }
                 _ => continue,
             };
-        keys.extend(findings.iter().map(|(key, _)| key.as_str()));
+        keys.extend(findings.iter().map(|(key, _)| gate_name(key).to_owned()));
     }
     window.distinct = keys.len();
     segments.push(window);
     Windows { segments }
+}
+
+/// The gate a finding key names: its rule, or its class where it has no rule.
+/// The same gate's two arms key differently — the address carries no class and
+/// no definition — and are one gate.
+fn gate_name(key: &str) -> &str {
+    let mut fields = key.split('\u{1f}');
+    let rule = fields.next().unwrap_or_default();
+    if rule.is_empty() {
+        fields.next().unwrap_or_default()
+    } else {
+        rule
+    }
+}
+
+/// Record what each FULL arm in `findings` told the window: its class and the
+/// routes its emission printed.
+fn remember(
+    told: &mut BTreeMap<String, (String, Vec<String>)>,
+    findings: &[(String, crate::refusal::Arm)],
+    offered: &[String],
+) {
+    for (key, arm) in findings {
+        if *arm != crate::refusal::Arm::Full {
+            continue;
+        }
+        let class = key.split('\u{1f}').nth(1).unwrap_or_default().to_owned();
+        let entry = told
+            .entry(gate_name(key).to_owned())
+            .or_insert_with(|| (class.clone(), Vec::new()));
+        if entry.0.is_empty() {
+            entry.0 = class;
+        }
+        for route in offered {
+            if !entry.1.contains(route) {
+                entry.1.push(route.clone());
+            }
+        }
+    }
+}
+
+/// A refusal's findings and routes with each ADDRESS filled in from what its
+/// gate's full arm told the window: the class into its key, its routes into the
+/// offered set. A gate the window never saw in full is left as it is.
+//MUTANT address-recall-skipped|s@^        let Some((class, earlier)) = told.get(gate_name(key)) else {$@        let Some((class, earlier)) = None::<\&(String, Vec<String>)> else {@|a_repeat_is_bucketed_by_what_its_full_arm_offered
+fn recalled(
+    told: &BTreeMap<String, (String, Vec<String>)>,
+    findings: &[(String, crate::refusal::Arm)],
+    offered: &[String],
+) -> (Vec<(String, crate::refusal::Arm)>, Vec<String>) {
+    let mut keys = Vec::new();
+    let mut routes = offered.to_vec();
+    for (key, arm) in findings {
+        let Some((class, earlier)) = told.get(gate_name(key)) else {
+            keys.push((key.clone(), *arm));
+            continue;
+        };
+        let mut fields: Vec<&str> = key.split('\u{1f}').collect();
+        if fields.len() > 1 && fields[1].is_empty() {
+            fields[1] = class;
+        }
+        keys.push((fields.join("\u{1f}"), *arm));
+        for route in earlier {
+            if !routes.contains(route) {
+                routes.push(route.clone());
+            }
+        }
+    }
+    (keys, routes)
 }
 
 /// Charge one emission's tokens to the class its findings put it in.
@@ -704,6 +780,34 @@ mod tests {
         ];
         let census = windows(&session(records, 4_000), &BTreeMap::new());
         assert_eq!(census.segments[0].buckets, [3, 0, 1, 1, 0]);
+    }
+
+    /// A REPEAT IS ONLY THE ADDRESS (CLOUD-2145), so the route a window's full
+    /// arm offered is the one a repeat's follow-up is judged against, and the
+    /// gate's two arms are one gate. The suite `address-recall-skipped` is
+    /// killed in.
+    #[test]
+    fn a_repeat_is_bucketed_by_what_its_full_arm_offered() {
+        use crate::refusal::Arm;
+        // The full arm keys `rule, class, digest`; the address keys `rule`
+        // alone, since it carries neither class nor definition.
+        let mut repeat = refused_at(4, "b", Some("r\u{1f}\u{1f}d2"));
+        if let Event::Refused { findings, .. } = &mut repeat.event {
+            findings[0].1 = Arm::Pointer;
+        }
+        let records = vec![
+            call_at(1, "a", "Bash", "head -40 batten.toml"),
+            refused_offering(2, "a", &["run mise run land"]),
+            call_at(3, "b", "Bash", "head -40 batten.toml"),
+            repeat,
+            call_at(5, "c", "Bash", "mise run land"),
+        ];
+        let census = windows(&session(records, 4_000), &BTreeMap::new());
+        let window = &census.segments[0];
+        assert_eq!(window.distinct, 1, "one gate, two arms");
+        // The full arm's next call repeats it; the address's takes the route
+        // only the full arm printed.
+        assert_eq!(window.buckets, [1, 1, 0, 0, 0]);
     }
 
     #[test]

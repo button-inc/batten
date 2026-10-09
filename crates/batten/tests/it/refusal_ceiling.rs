@@ -251,8 +251,8 @@ fn a_declared_refusal_emits_its_class_and_its_pointers_and_stops() {
     // hatch sentence. Each of the four was a copy of something declared once.
     let line = refusal("sed -n '1,40p' AGENTS.md").expect("the row refuses");
     assert!(
-        line.starts_with("verdict 'tool run loose' rule 'tool select other'"),
-        "the labelled class leads the line: {line}"
+        line.starts_with("rule 'tool select other'"),
+        "the gate that fired leads the line: {line}"
     );
     for wrapper in ["Refused by", "Fix:", "Bypass with", " ("] {
         assert!(
@@ -437,8 +437,12 @@ fn a_first_sighting_carries_the_gloss_and_its_route_by_kind() {
     let repo = fixture("first-sighting-document-route");
     let line = fires(&repo, "head -40 batten.toml");
     assert!(
-        line.starts_with("verdict 'tool run loose'"),
-        "the class still leads the line: {line}"
+        line.starts_with("rule 'tool select other'"),
+        "the gate that fired leads the line: {line}"
+    );
+    assert!(
+        line.contains("'tool run loose'"),
+        "its class is named by the hop: {line}"
     );
     assert!(
         line.contains("batten.toml"),
@@ -500,49 +504,54 @@ fn a_shape_first_sighting_names_the_rows_remedy_verb() {
     );
 }
 
-/// The pointer arm is a byte PREFIX of the full arm, and sheds no pointer
-/// (CLOUD-2075 §7 case 2).
+/// The repeat is the ADDRESS (CLOUD-2145): the gate's name and this firing's
+/// subjects, a byte prefix of the full arm, and nothing the full arm already put
+/// in the reader's context.
 ///
-/// This reverses the repeat that dropped its routes: everything the pointer arm
-/// says, the full arm said first and in the same order, and the subjects and
-/// routes — every way out — are the same set on both.
+/// This replaces CLOUD-2075 §7 case 2, which kept every route on the repeat.
+/// Routes, hop and definition are constant per gate: a repeat that re-sent them
+/// charged the window ~40 tokens a firing to restate what was already there.
 #[test]
-fn the_pointer_arm_carries_every_route_and_subject_the_full_arm_does() {
+fn the_repeat_is_the_address_and_a_prefix_of_the_full_arm() {
     let repo = fixture("pointer-carries-routes");
     let first = fires(&repo, "head -40 batten.toml");
     let repeat = fires(&repo, "head -40 batten.toml");
-    assert_ne!(first, repeat, "the two arms differ, or nothing was saved");
     assert!(
         first.starts_with(&repeat),
-        "the pointer is a byte prefix of the full arm: {repeat:?} vs {first:?}"
+        "the address is a byte prefix of the full arm: {repeat:?} vs {first:?}"
     );
-    assert!(!repeat.contains(FULL), "the pointer has no tail: {repeat}");
-    let head = first.split(FULL).next().expect("a head");
-    assert_eq!(head, repeat, "the full arm's pointers ARE the pointer arm");
-    for kept in [
-        "rule 'tool select other'",
-        "batten.toml",
+    assert_eq!(
+        repeat, "rule 'tool select other' at batten.toml head",
+        "the name and its subjects, nothing else"
+    );
+    for routed in [
         "read rules/scanning.md",
         "run batten policy explain 'tool select other' 'tool run loose'",
     ] {
         assert!(
-            repeat.contains(kept),
-            "the pointer keeps `{kept}`: {repeat}"
+            first.contains(routed),
+            "the full arm carries `{routed}`: {first}"
         );
     }
 }
 
-/// The full arm carries the row's own reason and both labels (CLOUD-2075 §7
-/// case 1), reversing the first sighting that left the reason out.
+/// The full arm carries the row's own reason, its one name, and the class in
+/// its hop (CLOUD-2075 §7 case 1, CLOUD-2142).
 #[test]
 fn a_first_sighting_carries_the_rows_reason_and_both_labels() {
     let repo = fixture("first-sighting-reason");
     let line = fires(&repo, "head -40 batten.toml");
     let reason = rule_reason("tool select other");
     let opening: String = reason.chars().take(40).collect();
+    assert!(
+        line.starts_with("rule 'tool select other' at "),
+        "one name opens the line: {line}"
+    );
+    assert!(
+        !line.contains("verdict '"),
+        "the class is no second label: {line}"
+    );
     for needle in [
-        "verdict 'tool run loose'",
-        "rule 'tool select other'",
         "a shell text utility stood in for the structured file surface",
         opening.as_str(),
         "read rules/scanning.md",
@@ -627,17 +636,26 @@ fn a_native_rule_id_has_a_definition() {
     }
 }
 
-/// A collapsed row — id equal to its class — still labels both (CLOUD-2075 §7
-/// case 3), on both arms.
+/// A collapsed row — id equal to its class — is named ONCE (CLOUD-2142), on
+/// both arms and in its hop. This replaces CLOUD-2075 §7 case 3, which printed
+/// `verdict 'X' rule 'X'` so a reader could tell the two apart: one `policy
+/// explain` resolves either, so the second copy told the reader nothing.
 #[test]
-fn a_collapsed_row_still_labels_rule_and_verdict() {
+fn a_collapsed_row_is_named_once() {
     let repo = fixture("collapsed-row-labels");
     let command = "git push --force-with-lease origin main";
-    let both = "verdict 'branch write unsafe' rule 'branch write unsafe'";
     let first = fires(&repo, command);
     let repeat = fires(&repo, command);
-    assert!(first.starts_with(both), "{first}");
-    assert!(repeat.starts_with(both), "{repeat}");
+    assert_eq!(repeat, "rule 'branch write unsafe'", "the address, once");
+    assert!(first.starts_with(&format!("{repeat}; ")), "{first}");
+    assert!(
+        first.contains("; run batten policy explain 'branch write unsafe' —"),
+        "the hop names it once: {first}"
+    );
+    assert!(
+        !first.contains("verdict 'branch write unsafe' rule"),
+        "no second label: {first}"
+    );
 }
 
 /// Two contexts in one clone never consume each other's sighting (CLOUD-2075

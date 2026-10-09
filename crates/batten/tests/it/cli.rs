@@ -1365,7 +1365,8 @@ fn check_refuses_a_command_rule_rather_than_skipping_it() {
     // refusal carries the `batten:` prefix that belongs to 1 and 3, and no
     // bypass hatch, because a read-only run has nothing to bypass.
     assert!(
-        stderr.contains("verdict 'spawn run refused' rule 'dyn'")
+        stderr.contains("rule 'dyn' at ")
+            && stderr.contains("run batten policy explain 'dyn' 'spawn run refused'")
             && stderr.contains("run batten enforce"),
         "the refusal must adopt the one shape, got: {stderr}"
     );
