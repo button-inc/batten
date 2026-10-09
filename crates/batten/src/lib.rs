@@ -14786,6 +14786,46 @@ fn narrow_to_change(
     Ok(Some(narrowed))
 }
 
+/// The committed `[mutate]` table `batten mutate` judges by, or the exit code a
+/// table it cannot read whole answers with (CLOUD-2010).
+///
+/// THE COMMITTED AUTHORITY, through the one loader: no `batten.toml`, or one
+/// with no `[mutate]`, declares no set, and a file that will not parse is that
+/// loader's usage error rather than a quiet fallback to the environment alone.
+///
+/// A `[mutate]` KEY THE LOADER DROPPED IS REFUSED HERE, not run past. The loader
+/// keeps going over a key from a newer schema (CLOUD-1428), which is right for a
+/// settings table and wrong for this one: the dropped key may be a misspelled
+/// `gates`, and the sweep would then enforce a smaller set than the file says
+/// while reporting coverage over it.
+fn mutate_table(
+    root: &Path,
+    err: &mut dyn Write,
+) -> Result<std::result::Result<Option<config::Mutate>, ExitCode>> {
+    let config = match config::load_authority(&root.join(config::CONFIG_FILE)) {
+        Ok((config, _)) => config,
+        Err(reason) => {
+            writeln!(err, "::error:: mutate: {reason:#}")?;
+            return Ok(Err(ExitCode::Usage));
+        }
+    };
+    if let Some(dropped) = config
+        .unresolvable
+        .iter()
+        .find(|dropped| dropped.section == "mutate")
+    {
+        writeln!(
+            err,
+            "::error:: mutate: {} {} is not a `[mutate]` key this build reads, so the \
+             enforced set cannot be read whole",
+            config::CONFIG_FILE,
+            dropped.line()
+        )?;
+        return Ok(Err(ExitCode::Usage));
+    }
+    Ok(Ok(config.mutate))
+}
+
 /// `batten mutate`: does each declared gate have a mutation its declared suite
 /// is proven to catch (CLOUD-418, CLOUD-1267)?
 ///
@@ -14814,37 +14854,11 @@ fn run_mutate(
     let anchor = hook_authority_root();
     let resolved = anchor.canonicalize().unwrap_or_else(|_| anchor.to_owned());
     let root: &Path = &resolved;
-    // THE COMMITTED AUTHORITY FIRST (CLOUD-2010), through the one loader: no
-    // `batten.toml`, or one with no `[mutate]`, declares no set, and a file that
-    // will not parse is that loader's usage error rather than a quiet fallback
-    // to the environment alone.
-    let config = match config::load_authority(&root.join(config::CONFIG_FILE)) {
-        Ok((config, _)) => config,
-        Err(reason) => {
-            writeln!(err, "::error:: mutate: {reason:#}")?;
-            return Ok(ExitCode::Usage);
-        }
+    let declared = match mutate_table(root, err)? {
+        Ok(declared) => declared,
+        Err(code) => return Ok(code),
     };
-    // A `[mutate]` KEY THE LOADER DROPPED IS REFUSED HERE, not run past. The
-    // loader keeps going over a key from a newer schema (CLOUD-1428), which is
-    // right for a settings table and wrong for this one: the dropped key may be
-    // a misspelled `gates`, and the sweep would then enforce a smaller set than
-    // the file says while reporting coverage over it.
-    if let Some(dropped) = config
-        .unresolvable
-        .iter()
-        .find(|dropped| dropped.section == "mutate")
-    {
-        writeln!(
-            err,
-            "::error:: mutate: {} {} is not a `[mutate]` key this build reads, so the \
-             enforced set cannot be read whole",
-            config::CONFIG_FILE,
-            dropped.line()
-        )?;
-        return Ok(ExitCode::Usage);
-    }
-    let table = config.mutate.as_ref();
+    let table = declared.as_ref();
     let names = match mutate::enforced_set(root, table) {
         Ok(names) => names,
         Err(reason) => {
