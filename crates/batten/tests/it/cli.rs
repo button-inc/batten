@@ -510,7 +510,7 @@ fn a_gate_run_prints_each_rules_remedy_once() {
     let only = |rule: &str| -> String {
         let lines: Vec<&str> = err
             .lines()
-            .filter(|line| line.starts_with(&format!("batten deny {rule} at ")))
+            .filter(|line| line.starts_with(&format!("batten remedy {rule} ")))
             .collect();
         assert_eq!(
             lines.len(),
@@ -519,15 +519,12 @@ fn a_gate_run_prints_each_rules_remedy_once() {
         );
         lines[0].to_owned()
     };
-    let banned = only("banned");
-    assert!(
-        banned.contains("at 2 finding(s)") && banned.contains("unban it by hand"),
-        "the count and the row's reason: {banned}"
-    );
-    let frowned = only("frowned");
-    assert!(
-        frowned.contains("at 1 finding(s)") && frowned.contains("rename the symbol by hand"),
-        "{frowned}"
+    // No count: each finding is already its own stdout line, so the remedy
+    // line carries only what those cannot — the row's reason.
+    assert_eq!(only("banned"), "batten remedy banned — unban it by hand.");
+    assert_eq!(
+        only("frowned"),
+        "batten remedy frowned — rename the symbol by hand."
     );
     assert!(
         !out.contains("unban it") && !out.contains("rename the symbol"),

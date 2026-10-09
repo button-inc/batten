@@ -18798,19 +18798,18 @@ fn print_rule_remedies(
     declared: &[rules::Rule],
     registry: &[verdict::DeclaredVerdict],
 ) -> Result<()> {
-    let mut counts: std::collections::BTreeMap<&str, u64> = std::collections::BTreeMap::new();
-    for finding in found {
-        *counts
-            .entry(finding.owner.as_deref().unwrap_or(&finding.rule))
-            .or_insert(0) += 1;
-    }
-    for (rule, count) in counts {
+    let rules: std::collections::BTreeSet<&str> = found
+        .iter()
+        .map(|finding| finding.owner.as_deref().unwrap_or(&finding.rule))
+        .collect();
+    for rule in rules {
         let remediation = declared
             .iter()
             .find(|row| row.id == rule)
             .and_then(rules::Rule::remediation);
-        let remedy = refusal::of_rule(rule, registry, count, remediation.as_ref());
-        output::verdict(err, &remedy.render_finding(refusal::Arm::Full))?;
+        if let Some(remedy) = refusal::of_rule(rule, registry, remediation.as_ref()) {
+            output::verdict(err, &remedy.render_finding(refusal::Arm::Full))?;
+        }
     }
     Ok(())
 }
@@ -18847,12 +18846,9 @@ fn drained_refusals(
     let mut owed: Vec<refusal::Refusal> = drained
         .rules
         .iter()
-        .map(|(rule, count)| {
-            let remediation = records
-                .iter()
-                .find(|record| &record.rule == rule)
-                .and_then(|record| record.remediation.as_ref());
-            refusal::of_rule(rule, registry, *count, remediation)
+        .filter_map(|(rule, _)| {
+            let record = records.iter().find(|record| &record.rule == rule)?;
+            refusal::of_rule(rule, registry, record.remediation.as_ref())
         })
         .collect();
     if !drained.budget_withheld.is_empty() {

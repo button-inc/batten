@@ -118,12 +118,12 @@ One verdict, two channels, because hosts differ:
 Both are the same policy verdict. On the first kind of host, exit `0` from
 `batten adjudicate` does not mean allowed — read the decision.
 
-The first finding in a context window arrives after one line saying how to read
-it. That line, verbatim:
+The first finding in a context window arrives after one line saying where to
+look up a definition no longer in context. That line, verbatim:
 
 <!-- legend: the text of `refusal::LEGEND`; `skill_contract.rs` fails on drift -->
 
-> batten findings read `batten <deny|warn|note> <class> at <subjects>; <routes>`; the first of a class in a window adds `—` and what it means, and `batten policy explain <class>` prints any you forget.
+> `batten policy explain <class>` prints any finding's definition.
 
 A real deny reason, on its first firing in a window:
 
@@ -138,7 +138,8 @@ batten deny tool run loose at batten.toml head; read rules/scanning.md
 ```
 
 `batten` says the line is this gate's and not the host's; `deny`, `warn` or
-`note` says how it bears on the call. The name is the violation's class, the
+`note` says how it bears on the call, and `remedy` marks a line that is no
+finding but how a rule's findings are fixed. The name is the violation's class, the
 one `batten policy explain` defines. Then the subjects it fired on, and after
 the first `;` the routes to take. After `—`, on the first firing only, come the
 row that raised it, why the class exists, what to do, and what not to do. A

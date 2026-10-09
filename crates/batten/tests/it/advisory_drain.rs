@@ -241,9 +241,8 @@ fn watermark(home: &Path) -> Option<(u64, String)> {
 /// *about* Batten and travel on a different channel by construction
 /// (`output::message` vs `output::verdict`).
 ///
-/// A rule's REMEDY line is removed too (CLOUD-2078): it is a classed finding
-/// beside the payload, recognised by the count subject a drain pointer line
-/// never carries, and [`remedies`] returns it. So is the epoch's legend.
+/// A rule's REMEDY line is removed too (CLOUD-2078): it is headed `remedy`, not
+/// a severity, and [`remedies`] returns it. So is the epoch's legend.
 fn payload(output: &Output) -> Vec<String> {
     let text = advisory_context(output).unwrap_or_else(|| common::stderr(output));
     text.lines()
@@ -255,17 +254,11 @@ fn payload(output: &Output) -> Vec<String> {
         .collect()
 }
 
-/// Whether `line` is a drained rule's remedy, or the drain's own `drain fit
-/// broken` finding: a finding whose subject is a count of findings, which no
-/// drain pointer line — whose subjects are locations — carries.
+/// Whether `line` is a drained rule's remedy — headed `batten remedy` — or the
+/// drain's own `drain fit broken` finding, whose subject is the count it cut.
 fn is_remedy(line: &str) -> bool {
-    batten::refusal::parse_finding(line).is_some()
-        && line.split_once(" at ").is_some_and(|(_, rest)| {
-            rest.split(['—', ';'])
-                .next()
-                .unwrap_or_default()
-                .contains(" finding(s)")
-        })
+    line.starts_with("batten remedy ")
+        || (batten::refusal::parse_finding(line).is_some() && line.contains(" finding(s) cut"))
 }
 
 /// The drained rules' remedy lines, one per rule (CLOUD-2078).
@@ -321,7 +314,7 @@ fn a_post_tool_event_drains_the_store_as_pointer_lines() {
     assert_eq!(lines.len(), 1, "one finding, one line: {lines:?}");
     // CLOUD-2175's grammar: one line per rule, its fresh count and its
     // locations factored by file — no fingerprint, which `state list` resolves.
-    assert_eq!(lines[0], "batten warn no-todo at src/a.rs:2");
+    assert_eq!(lines[0], "batten deny no-todo at src/a.rs:2");
     assert!(
         !lines[0].contains("TODO"),
         "a pointer, never the matched content"
@@ -402,7 +395,7 @@ fn two_advisory_sources_on_one_batch_still_emit_one_document() {
         "the contract notice is in the document: {context}"
     );
     assert!(
-        context.contains("no-todo") || context.contains("unchanged"),
+        context.contains("no-todo") || context.contains("batten unchanged"),
         "and so is the drain's: {context}"
     );
 }
@@ -575,7 +568,7 @@ fn a_batch_of_wakes_drains_once_and_the_interval_is_config() {
     assert_eq!(
         next,
         [
-            "batten warn no-todo at src/b.rs:2 (1 new, 1 told earlier); run batten state list --rule 'no-todo'"
+            "batten deny no-todo at src/b.rs:2 (1 new, 1 told earlier); run batten state list --rule 'no-todo'"
         ],
         "with no window, the next wake reports the new finding immediately — and only it"
     );
@@ -594,7 +587,7 @@ fn an_unchanged_finding_set_answers_with_the_marker_rather_than_the_listing() {
     );
     assert_eq!(
         payload(&hook(&repo, &home, &post_tool_batch("s1"))),
-        vec!["unchanged".to_owned()],
+        vec!["batten unchanged".to_owned()],
         "the same set again is repetition, and repetition has a name"
     );
 
@@ -612,7 +605,7 @@ fn an_unchanged_finding_set_answers_with_the_marker_rather_than_the_listing() {
     );
     assert_eq!(
         payload(&hook(&many, &home_many, &post_tool_batch("s1"))),
-        vec!["unchanged".to_owned()]
+        vec!["batten unchanged".to_owned()]
     );
 }
 
@@ -626,7 +619,7 @@ fn a_session_start_relists_the_drain_payload() {
     assert_eq!(first.len(), 1, "{first:?}");
     assert_eq!(
         payload(&hook(&repo, &home, &post_tool_batch("s1"))),
-        vec!["unchanged".to_owned()]
+        vec!["batten unchanged".to_owned()]
     );
     let started = hook(
         &repo,
@@ -672,7 +665,7 @@ fn every_cycle_advances_the_watermark_even_the_one_it_short_circuits() {
 
     assert_eq!(
         payload(&hook(&repo, &home, &post_tool_batch("s1"))),
-        vec!["unchanged".to_owned()]
+        vec!["batten unchanged".to_owned()]
     );
     let second = watermark(&home).expect("and so does the one that said nothing new");
     assert_eq!(
@@ -707,7 +700,11 @@ fn a_count_only_change_is_news_and_does_not_short_circuit() {
 
     let again = payload(&hook(&repo, &home, &post_tool_batch("s1")));
     assert_eq!(again.len(), 1, "one identity, one line: {again:?}");
-    assert_ne!(again, vec!["unchanged".to_owned()], "a count is news");
+    assert_ne!(
+        again,
+        vec!["batten unchanged".to_owned()],
+        "a count is news"
+    );
     assert!(again[0].contains("(1->2)"), "{again:?}");
 }
 
@@ -720,9 +717,10 @@ fn a_drained_rules_remedy_rides_its_first_drain_only() {
     let (repo, home) = drained_fixture("drain-remedy", "\n[drain]\ninterval_ms = 0\n");
     let first = remedies(&hook(&repo, &home, &post_tool_batch("s1")));
     assert_eq!(first.len(), 1, "one rule, one remedy: {first:?}");
+    // HEADED `remedy`, never a severity: it refuses nothing, and a severity
+    // word would read as a second finding beside the drain's own line.
     assert!(
-        first[0].contains("no-todo")
-            && first[0].contains(" — ")
+        first[0].starts_with("batten remedy no-todo — ")
             && first[0].contains("delete the marker once the work behind it is done"),
         "{first:?}"
     );
@@ -738,7 +736,7 @@ fn a_drained_rules_remedy_rides_its_first_drain_only() {
     assert_eq!(
         lines
             .iter()
-            .filter(|line| line.starts_with("batten warn no-todo "))
+            .filter(|line| line.starts_with("batten deny no-todo "))
             .count(),
         1,
         "the drain's own line addresses the rule, and the remedy adds no second \
@@ -778,7 +776,7 @@ fn a_warm_fork_resumes_from_its_parents_watermark() {
     assert_eq!(forked.status.code(), Some(0));
     assert_eq!(
         payload(&forked),
-        vec!["unchanged".to_owned()],
+        vec!["batten unchanged".to_owned()],
         "the child inherits what the parent was told, and does not repeat it"
     );
 }
@@ -892,7 +890,7 @@ fn a_rule_past_its_location_cap_points_at_exactly_its_set() {
     assert_eq!(
         lines,
         [
-            "batten warn no-todo at src/a.rs:2,3 +2 more (4 new); run batten state list --rule 'no-todo'"
+            "batten deny no-todo at src/a.rs:2,3 +2 more (4 new); run batten state list --rule 'no-todo'"
         ]
     );
     let listed = state_cmd(
@@ -919,7 +917,7 @@ fn a_rule_past_its_location_cap_points_at_exactly_its_set() {
     );
     assert_eq!(
         payload(&hook(&uncapped, &home_u, &post_tool_batch("s1"))),
-        ["batten warn no-todo at src/a.rs:2,3,4,5"],
+        ["batten deny no-todo at src/a.rs:2,3,4,5"],
         "under the cap every location is listed and nothing is pointed at"
     );
 }
@@ -985,7 +983,7 @@ fn a_re_raised_group_reports_the_delta_rather_than_the_instance_list() {
     // count did, and the delta is the whole of the news.
     let (repo, home) = drained_fixture("drain-re-raise", "\n[drain]\ninterval_ms = 0\n");
     let first = payload(&hook(&repo, &home, &post_tool_batch("s1")));
-    assert_eq!(first, ["batten warn no-todo at src/a.rs:2"]);
+    assert_eq!(first, ["batten deny no-todo at src/a.rs:2"]);
 
     // The SAME span again: identical spans fold into one identity with a count
     // of two, which is the multiset re-raise this asserts.
@@ -1000,7 +998,7 @@ fn a_re_raised_group_reports_the_delta_rather_than_the_instance_list() {
     let again = payload(&hook(&repo, &home, &post_tool_batch("s1")));
     assert_eq!(
         again,
-        ["batten warn no-todo at src/a.rs:2(1->2)"],
+        ["batten deny no-todo at src/a.rs:2(1->2)"],
         "one identity, one location, the delta on it"
     );
 }
@@ -1165,9 +1163,9 @@ fn an_alternating_rule_tracks_state_truthfully_and_is_reported_flapping_not_with
         // which points at the payload the context still holds (CLOUD-2175).
         if raised {
             let expected: &[&str] = if round == 0 {
-                &["batten warn no-todo at src/a.rs:2"]
+                &["batten deny no-todo at src/a.rs:2"]
             } else {
-                &["unchanged"]
+                &["batten unchanged"]
             };
             assert_eq!(lines, expected, "round {round}");
             emissions += 1;

@@ -323,9 +323,11 @@ pub fn admit(
     }
 }
 
-/// The channel's one separator, over rendered texts.
+/// The channel's one separator, over rendered texts: a newline, because every
+/// entry is headed lines already and a blank line between them separates
+/// nothing a reader needs separated.
 fn joined_text(texts: &[String]) -> String {
-    texts.join("\n\n")
+    texts.join("\n")
 }
 
 #[cfg(test)]
@@ -413,7 +415,7 @@ mod tests {
         assert_eq!(emission.suppressed, 0);
         assert_eq!(
             emission.text,
-            "the contract moved\n\nthe turn ended oddly\n\ndrain says a thing"
+            "the contract moved\nthe turn ended oddly\ndrain says a thing"
         );
     }
 
@@ -439,7 +441,7 @@ mod tests {
         );
         assert_eq!(
             emission.overflow,
-            format!("{}\n\n{}", "c".repeat(80), "a".repeat(80)),
+            format!("{}\n{}", "c".repeat(80), "a".repeat(80)),
             "and the rest is handed back whole, in order"
         );
     }
@@ -457,7 +459,7 @@ mod tests {
             None,
         );
         assert_eq!(emission.suppressed, 0);
-        assert_eq!(emission.text, "first\n\nsecond");
+        assert_eq!(emission.text, "first\nsecond");
     }
 
     #[test]
@@ -494,7 +496,7 @@ mod tests {
             ],
             Some(&Channel { max_tokens: 500 }),
         );
-        assert_eq!(emission.text, "alpha\n\nbeta");
+        assert_eq!(emission.text, "alpha\nbeta");
     }
 
     /// THE CEILING HOLDS CLASSED ENTRIES TOO, and a cut one is never marked
