@@ -16809,9 +16809,17 @@ fn run_hook(
     // shows it. It rides the call's advisory document, which falls back to
     // stderr only on a host that has none.
     if let hook::Decision::Repaired(repair) = &decision {
+        // The epoch's legend rides it like any first finding of a window: it
+        // is pushed pre-rendered, so the channel's sighter cannot owe it.
+        let record = match envelope.context() {
+            Some(context) => {
+                refusal::with_legend(hook_authority_root(), &context, &repair.line_text())
+            }
+            None => repair.line_text(),
+        };
         advice.push(advisory::Advice::rendered(
             severity::AdvisoryTier::Advisory,
-            repair.line_text(),
+            record,
         ));
     }
     let ceiling = policy.advisory.as_ref();
