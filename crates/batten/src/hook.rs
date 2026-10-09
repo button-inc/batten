@@ -3163,18 +3163,20 @@ pub struct Repair {
 //MUTANT label-spelled-outside-projection|s@^        let head = head(Severity::Note, crate::verdict::Native::CallFixSilent.id());$@        let head = format!("verdict '{}'", crate::verdict::Native::CallFixSilent.id());@|no_finding_label_is_spelled_outside_the_projection
 impl Repair {
     /// The record line, in the finding grammar (CLOUD-2145): `batten note call
-    /// fix silent at [<subject>, ]<rule> repaired <class>` — the class this
-    /// record is, the row whose fix ran, and the class it spared.
+    /// fix silent at <rule>[ <subject>] (repaired <class>)` — the class this
+    /// record is, the row whose fix ran and the key it ran for as the
+    /// subjects, and the class it spared as the parenthetical detail, the same
+    /// place a drain line's counts sit, so it cannot read as one more subject.
     #[must_use]
     pub fn line_text(&self) -> String {
         use crate::refusal::{Severity, head};
         let head = head(Severity::Note, crate::verdict::Native::CallFixSilent.id());
         match self.subject.as_deref() {
             Some(subject) => format!(
-                "{head} at {subject}, {} repaired {}",
+                "{head} at {} {subject} (repaired {})",
                 self.rule, self.repaired
             ),
-            None => format!("{head} at {} repaired {}", self.rule, self.repaired),
+            None => format!("{head} at {} (repaired {})", self.rule, self.repaired),
         }
     }
 }

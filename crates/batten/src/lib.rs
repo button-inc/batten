@@ -6531,12 +6531,11 @@ fn run_ready_lint(
     }
     if report.unjudgeable > 0 {
         // Could-not-look is this verb's own answer and never a verdict: it never
-        // prints "satisfies", so no caller can cite this run as a green.
-        return Err(UsageError::raise(format!(
-            "ready lint: {} cites {} dependenc(ies) and this payload carries no relations key, \
-             so neither cross-check could run — refetch with the relations included",
-            payload.id, report.unjudgeable
-        )));
+        // prints "satisfies", so no caller can cite this run as a green. Exit
+        // `1` with NOTHING MORE SAID: the `issue grade partial` finding above is
+        // the statement of the gap, and a usage error restating it would be the
+        // same fact twice (CLOUD-2145).
+        return Ok(ExitCode::Usage);
     }
     if !json {
         // NOT UNDER `-J`. stdout is the data channel there and it carries one
@@ -16379,6 +16378,9 @@ fn destructive_call_facts(
 //MUTANT unloadable-config-admits-write|s@^                    return deny_unadjudicable(harness, \&envelope, \&unreadable, mode, out, err);$@                    return Err(unreadable);@|a_write_over_a_config_that_fails_validation_is_refused
 //MUTANT floor-swallows-the-refusal|s@                if recoverable_without_rules(\&envelope) {@                if true {@|a_command_is_still_refused_over_a_config_that_will_not_load
 //MUTANT floor-removed|s@                if recoverable_without_rules(\&envelope) {@                if false {@|a_read_still_answers_over_a_config_that_will_not_load
+//MUTANT-SUITE crates/batten/tests/it/repaired_arms.rs
+//MUTANT repair-record-unsaid|s@^    if let hook::Decision::Repaired(repair) = \&decision {$@    if let Some(repair) = None::<\&hook::Repair> {@|a_silent_repair_record_reaches_the_model
+//MUTANT-SUITE crates/batten/tests/it/admission.rs
 //MUTANT advice-beside-the-grant|s@^    if !matches!(decision, hook::Decision::Preapproved(_)) || advice.is_empty() {$@    if true {@|a_preapproval_carries_the_calls_advice_in_one_document
 fn run_hook(
     harness: hook::Harness,
@@ -16802,6 +16804,16 @@ fn run_hook(
     // longer happened.
     let decision = settle_repair(&policy, &envelope, decision)
         .map_refusal(|refusal| refusal.read_through(&policy.redirects));
+    // A SILENT REPAIR'S RECORD REACHES THE MODEL (CLOUD-2145): the tree changed
+    // under the caller, and stderr at exit `0` is a channel Claude Code never
+    // shows it. It rides the call's advisory document, which falls back to
+    // stderr only on a host that has none.
+    if let hook::Decision::Repaired(repair) = &decision {
+        advice.push(advisory::Advice::rendered(
+            severity::AdvisoryTier::Advisory,
+            repair.line_text(),
+        ));
+    }
     let ceiling = policy.advisory.as_ref();
     // A PRE-APPROVAL TAKES THE ADVICE INTO ITS OWN DOCUMENT (CLOUD-1949): two
     // documents on one stream is the collision above, with the grant as the
@@ -21103,10 +21115,11 @@ fn render(
         // ONLY `silent` ARRIVES HERE. A `retry` repair is a `Deny` carrying
         // `call retry now`, composed at the boundary — the call as made did not
         // happen, and an allow would be the silent posture nobody declared.
-        hook::Decision::Repaired(repair) => {
-            output::message(mode, Verbosity::Normal, err, &repair.line_text())?;
-            Ok(ExitCode::Success)
-        }
+        //
+        // THE RECORD IS ALREADY SAID by the time this arm runs: `run_hook` put it
+        // on the advisory channel the model reads (CLOUD-2145), so saying it
+        // again here would put it on stderr twice wherever that is the channel.
+        hook::Decision::Repaired(_) => Ok(ExitCode::Success),
         // One dispatch for every host, because the *shape* of the answer is the
         // adapter's business and the decision is not. A host that reads a body
         // gets one; a host whose channel is the exit code alone gets the §7 `2`
