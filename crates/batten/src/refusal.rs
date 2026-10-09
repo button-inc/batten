@@ -441,11 +441,11 @@ pub fn first_sighting(root: &Path, context: &str, key: &str, full: &str) -> bool
     crate::durable::create_exclusive(&path, full).unwrap_or(true)
 }
 
-/// How to read a finding line, delivered once per epoch ahead of the first
-/// finding that reaches a context (CLOUD-2145). At most 96 `o200k` tokens.
-pub const LEGEND: &str = "batten findings read `batten <deny|warn|note> <class> at <subjects>; \
-<routes>`; the first of a class in a window adds `—` and what it means, and \
-`batten policy explain <class>` prints any you forget.";
+/// The one sentence a finding cannot carry itself, delivered once per epoch
+/// ahead of the first finding that reaches a context (CLOUD-2145): where a
+/// definition no longer in context is looked up. The line's shape is NOT
+/// described here: it is the same every time, so the first finding shows it.
+pub const LEGEND: &str = "`batten policy explain <class>` prints any finding's definition.";
 
 /// The sighting key the legend is marked under: no class token has a space-free
 /// spelling, so it collides with none.
@@ -728,9 +728,16 @@ pub enum Arm {
 /// a host's own messages.
 pub const PROVENANCE: &str = "batten";
 
-/// How a finding bears on the call, as its line's second word (CLOUD-2145):
-/// `deny` refused it, `warn` must be answered soon, `note` eventually. One ASCII
-/// token each, the shape of a compiler's `error`/`warning`.
+/// What a line is, as its second word (CLOUD-2145): for a finding, how it
+/// bears on the call — `deny` refused it, `warn` must be answered soon, `note`
+/// eventually — and `remedy` for a line that is no finding at all but how a
+/// rule's findings are fixed. One ASCII token each, the shape of a compiler's
+/// `error`/`warning`/`help`.
+///
+/// THE WORD, NOT THE SHAPE, SAYS IT IS A REMEDY: a finding may name no subject
+/// (`batten deny plan write refused; run ExitPlanMode…`), so a missing ` at `
+/// cannot mark a remedy line, and a reader merging stdout and stderr would read
+/// `batten deny <rule> — …` as a second finding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Severity {
     /// The call was refused.
@@ -740,11 +747,18 @@ pub enum Severity {
     Warn,
     /// An advisory with no deadline.
     Note,
+    /// Not a finding: how a rule's findings, each on its own line, are fixed.
+    Remedy,
 }
 
 impl Severity {
-    /// Every severity, in rank order.
-    pub const ALL: [Severity; 3] = [Severity::Deny, Severity::Warn, Severity::Note];
+    /// Every head word.
+    pub const ALL: [Severity; 4] = [
+        Severity::Deny,
+        Severity::Warn,
+        Severity::Note,
+        Severity::Remedy,
+    ];
 
     /// The word the line carries.
     #[must_use]
@@ -753,6 +767,7 @@ impl Severity {
             Severity::Deny => "deny",
             Severity::Warn => "warn",
             Severity::Note => "note",
+            Severity::Remedy => "remedy",
         }
     }
 
@@ -885,8 +900,12 @@ fn finding_line(refusal: &Refusal, arm: Arm) -> String {
     if repeat {
         return line;
     }
-    // No per-line lookup hop: the legend says how to look a name up.
+    // No per-line lookup hop: the legend says how to look a name up. The tail
+    // is built apart so a finding with nothing to define ends at its routes
+    // rather than at a dash promising a definition that never comes.
+    let head_len = line.len();
     line.push_str(" —");
+    let dash_len = line.len();
     // THE ROW THAT RAISED IT, ONCE (CLOUD-1806): a reader can find it in the
     // config, and two rows raising one class are two definitions, each with
     // its own remedy. Not on the repeat: the class is what is looked up.
@@ -925,6 +944,9 @@ fn finding_line(refusal: &Refusal, arm: Arm) -> String {
         line.push_str(&quoted(id));
         line.push_str(" when ");
         line.push_str(&sentence(precondition));
+    }
+    if line.len() == dash_len {
+        line.truncate(head_len);
     }
     line
 }
@@ -1017,34 +1039,41 @@ pub fn of_failure(failure: &anyhow::Error) -> Option<(Refusal, String)> {
     Some((refusal, rest.join("\n")))
 }
 
-/// The remediation-bearing finding for a `check` or drain rule (CLOUD-2078):
-/// once per rule, carrying the row's `fix` argv or its `no_fix_reason`.
+/// The remedy line for a `check` or drain rule (CLOUD-2078): once per rule,
+/// headed `remedy` rather than a severity because it refuses nothing, carrying
+/// the row's `fix` argv or its `no_fix_reason`.
 ///
 /// A rule whose id is also a declared class renders that class; any other rule
-/// is a rule-only line whose definition is its `no_fix_reason`.
+/// is a rule-only line whose definition is its `no_fix_reason`. It carries NO
+/// subject: every finding of the rule is already its own line, so a count here
+/// would say twice what the reader holds. `None` where the row declares neither
+/// a fix nor a reason and is no class: such a line would say nothing.
 //MUTANT rule-remedy-dropped|s@^        Some(crate::findings::Remediation::Fix(argv)) => Fix::Run(argv.join(" ")),$@        Some(crate::findings::Remediation::Fix(_)) => Fix::None,@|a_rules_fix_is_its_remedy_and_its_reason_its_definition
 #[must_use]
 pub fn of_rule(
     rule: &str,
     registry: &[crate::verdict::DeclaredVerdict],
-    findings: u64,
     remediation: Option<&crate::findings::Remediation>,
-) -> Refusal {
+) -> Option<Refusal> {
+    let severity = Severity::Remedy;
     let fix = match remediation {
         Some(crate::findings::Remediation::Fix(argv)) => Fix::Run(argv.join(" ")),
         Some(crate::findings::Remediation::NoFix(_)) | None => Fix::None,
     };
-    let count = crate::verdict::Subject::Count { count: findings };
     if crate::verdict::resolve(registry, rule).is_some() {
-        return Refusal::from_class(rule, registry, rule, &[count], fix);
+        return Some(Refusal::from_class(rule, registry, rule, &[], fix).with_severity(severity));
     }
     let why = match remediation {
         Some(crate::findings::Remediation::NoFix(why)) => why.as_str(),
         Some(crate::findings::Remediation::Fix(_)) | None => "",
     };
-    Refusal::new(rule, why, fix).at(format!("{findings} finding(s)"))
+    let silent = why.is_empty() && matches!(fix, Fix::None);
+    (!silent).then(|| Refusal::new(rule, why, fix).with_severity(severity))
 }
 
+//MUTANT-SUITE crates/batten/tests/it/advisory_drain.rs
+//MUTANT remedy-reranked|s@^        if self.severity != Severity::Remedy {$@        if true {@|a_drained_rules_remedy_rides_its_first_drain_only
+//MUTANT-SUITE crates/batten/src/hook.rs
 impl Refusal {
     /// Build a refusal. The [`Fix`] is required, which is the contract.
     pub fn new(rule: impl Into<String>, reason: impl Into<String>, fix: Fix) -> Refusal {
@@ -1105,10 +1134,13 @@ impl Refusal {
         self
     }
 
-    /// The same finding, printed under `severity` — an advisory channel's.
+    /// The same finding, printed under `severity` — an advisory channel's. A
+    /// remedy stays a remedy: it is no finding, so no channel re-ranks it.
     #[must_use]
     pub fn with_severity(mut self, severity: Severity) -> Refusal {
-        self.severity = severity;
+        if self.severity != Severity::Remedy {
+            self.severity = severity;
+        }
         self
     }
 
@@ -1438,12 +1470,17 @@ mod tests {
     fn a_rules_fix_is_its_remedy_and_its_reason_its_definition() {
         let fix =
             crate::findings::Remediation::Fix(vec!["mise".into(), "run".into(), "unban".into()]);
-        let fixed = of_rule("banned", &[], 3, Some(&fix)).render_finding(Arm::Full);
-        assert!(fixed.contains("mise run unban"), "{fixed}");
-        assert!(fixed.contains("at 3 finding(s)"), "{fixed}");
+        let fixed = of_rule("banned", &[], Some(&fix))
+            .expect("a fix is something to say")
+            .render_finding(Arm::Full);
+        assert_eq!(fixed, "batten remedy banned — Do: mise run unban.");
         let why = crate::findings::Remediation::NoFix("by hand".into());
-        let reasoned = of_rule("banned", &[], 1, Some(&why)).render_finding(Arm::Full);
-        assert!(reasoned.contains("by hand"), "{reasoned}");
+        let reasoned = of_rule("banned", &[], Some(&why))
+            .expect("a reason is something to say")
+            .render_finding(Arm::Full);
+        assert_eq!(reasoned, "batten remedy banned — by hand.");
+        // A row with neither says nothing, rather than a bare head and a dash.
+        assert!(of_rule("banned", &[], None).is_none());
     }
 
     /// A usage refusal whose message is ALREADY a rendered finding is printed

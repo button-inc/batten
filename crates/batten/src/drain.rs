@@ -181,7 +181,10 @@ pub const DEFAULT_EMPTY_POLL_GIVEUP: u32 = 3;
 /// is deliberately **not** emitted for an empty payload: "nothing to say" and
 /// "the same thing as before" are different facts, and collapsing them would
 /// make the marker meaningless.
-pub const UNCHANGED: &str = "unchanged";
+///
+/// HEADED `batten`, so a host's own messages cannot be mistaken for it, nor it
+/// for theirs (CLOUD-2145). Not a finding, so no severity word.
+pub const UNCHANGED: &str = "batten unchanged";
 
 /// Distinct identities one rule may spend entries on in a single drain, when the
 /// config declares none.
@@ -573,6 +576,9 @@ struct Surfaced<'a> {
 struct Group<'a> {
     rule: &'a str,
     tier: AdvisoryTier,
+    /// The rule's own severity, the word its line carries — the same word
+    /// `batten check` prints for it, wherever the line is read.
+    severity: crate::severity::RuleSeverity,
     fresh: Vec<Surfaced<'a>>,
     told: Vec<Surfaced<'a>>,
 }
@@ -617,10 +623,12 @@ fn group<'a>(
         let entry = by_rule.entry(rule).or_insert_with(|| Group {
             rule,
             tier: surfaced.record.tier,
+            severity: surfaced.record.severity,
             fresh: Vec::new(),
             told: Vec::new(),
         });
         entry.tier = entry.tier.max(surfaced.record.tier);
+        entry.severity = entry.severity.max(surfaced.record.severity);
         if already_told(&surfaced, previous) {
             entry.told.push(surfaced);
         } else {
@@ -707,10 +715,13 @@ fn locations(listed: &[Surfaced<'_>], previous: &BTreeMap<String, u64>) -> Strin
 /// how many are new and how many were told earlier — and then the command that
 /// returns exactly that rule's set. Everything listed and nothing told is the
 /// locations alone, the count being their number.
+//MUTANT drain-severity-from-tier|s@^    let severity = group.severity.finding_severity();$@    let severity = crate::refusal::Severity::of_tier(group.tier);@|every_line_is_a_pointer_and_never_a_payload
 //MUTANT location-cap-unread|s@^    let listed = group.fresh.len().min(cap);$@    let listed = group.fresh.len();@|a_rule_past_its_location_cap_points_at_the_rest
 fn group_line(group: &Group<'_>, cap: usize, previous: &BTreeMap<String, u64>) -> (String, usize) {
     let listed = group.fresh.len().min(cap);
-    let severity = crate::refusal::Severity::of_tier(group.tier);
+    // THE RULE'S OWN SEVERITY (CLOUD-2145), never the advisory tier's: one rule
+    // reads with one word whether `check` or a drain shows it.
+    let severity = group.severity.finding_severity();
     let mut line = crate::refusal::head(severity, group.rule);
     line.push_str(" at");
     if listed > 0 {
@@ -1644,7 +1655,7 @@ mod tests {
         );
         assert_eq!(
             first.lines,
-            ["batten note r at src/a.rs:1 src/b.rs:1"],
+            ["batten deny r at src/a.rs:1 src/b.rs:1"],
             "one rule, one line, factored by file"
         );
 
@@ -1807,11 +1818,11 @@ mod tests {
             &scope,
             Some(&Context::new("refs/heads/z")),
         );
-        assert_eq!(here.lines, ["batten note r at src/a.rs:1(42)"]);
+        assert_eq!(here.lines, ["batten deny r at src/a.rs:1(42)"]);
         let fallback = cycled(&multi_records(&multi), &scope, None);
         assert_eq!(
             fallback.lines,
-            ["batten note r at src/a.rs:1"],
+            ["batten deny r at src/a.rs:1"],
             "no ref: the first instance, deterministically, never nothing"
         );
     }
@@ -1837,7 +1848,7 @@ mod tests {
         held.instances[0].occurrences =
             Observation::NotObserved(crate::findings::NotObserved::RuleSkipped);
         let drained = cycled(&[held], &changed(&[]), None);
-        assert_eq!(drained.lines, ["batten note r at src/a.rs:1(held)"]);
+        assert_eq!(drained.lines, ["batten deny r at src/a.rs:1(held)"]);
     }
 
     #[test]
@@ -1849,7 +1860,8 @@ mod tests {
         // location the agent acts on.
         let one = record(FindingKind::Code, "r", "src/a.rs", "TODO");
         let drained = cycled(std::slice::from_ref(&one), &changed(&["src/a.rs"]), None);
-        assert_eq!(drained.lines, ["batten note r at src/a.rs:1"]);
+        // The rule's own word (`deny`), not its advisory tier's (`note`).
+        assert_eq!(drained.lines, ["batten deny r at src/a.rs:1"]);
         assert!(!drained.lines[0].contains(&one.identity.fingerprint.to_hex()));
     }
 
@@ -1905,7 +1917,7 @@ mod tests {
         );
         assert_eq!(
             drained.lines,
-            ["batten note r at src/a.rs:1,2,3 +2 more (5 new); run batten state list --rule 'r'"]
+            ["batten deny r at src/a.rs:1,2,3 +2 more (5 new); run batten state list --rule 'r'"]
         );
         assert_eq!(drained.counts.len(), 3, "only what was listed is anchored");
         assert_eq!(
@@ -1934,8 +1946,8 @@ mod tests {
         assert_eq!(
             drained.lines,
             [
-                "batten note noisy at src/a.rs:1,2 +3 more (5 new); run batten state list --rule 'noisy'",
-                "batten note quiet at src/a.rs:1",
+                "batten deny noisy at src/a.rs:1,2 +3 more (5 new); run batten state list --rule 'noisy'",
+                "batten deny quiet at src/a.rs:1",
             ],
             "the quiet rule keeps its line"
         );
@@ -1950,14 +1962,14 @@ mod tests {
         let records = spread("r", 3);
         let scope = changed(&["src/a.rs"]);
         let first = cycle(&records, &scope, None, &config, &BTreeMap::new(), &[]);
-        assert_eq!(first.lines, ["batten note r at src/a.rs:1,2,3"]);
+        assert_eq!(first.lines, ["batten deny r at src/a.rs:1,2,3"]);
         let mut more = records.clone();
         more.extend(spread("r", 4).into_iter().skip(3));
         let second = cycle(&more, &scope, None, &config, &first.counts, &[]);
         assert_eq!(
             second.lines,
             [
-                "batten note r at src/a.rs:4 (1 new, 3 told earlier); run batten state list --rule 'r'"
+                "batten deny r at src/a.rs:4 (1 new, 3 told earlier); run batten state list --rule 'r'"
             ],
             "only the new identity is listed"
         );
@@ -1991,7 +2003,7 @@ mod tests {
         let small = drain_after_turn(backlog(2));
         let large = drain_after_turn(backlog(100));
         assert_eq!(small.len(), 2, "the new rule and the told total: {small:?}");
-        assert!(small[0].starts_with("batten note new at "), "{small:?}");
+        assert!(small[0].starts_with("batten deny new at "), "{small:?}");
         let bytes = |lines: &[String]| lines.iter().map(String::len).sum::<usize>();
         assert_eq!(
             // "40 … 2 rule(s)" against "2000 … 100 rule(s)": four digits.
@@ -2085,7 +2097,7 @@ mod tests {
         let entries = drained
             .lines
             .iter()
-            .filter(|line| line.starts_with("batten note "))
+            .filter(|line| line.starts_with("batten deny "))
             .count();
         assert!(
             (1..RULES).contains(&entries),
@@ -2157,7 +2169,7 @@ mod tests {
             &previous,
             &[],
         );
-        assert_eq!(drained.lines, ["batten note r at src/a.rs:1(500->501)"]);
+        assert_eq!(drained.lines, ["batten deny r at src/a.rs:1(500->501)"]);
         assert_eq!(
             drained.counts.get(&key).copied(),
             Some(501),
@@ -2221,7 +2233,7 @@ mod tests {
             &[],
         );
         assert!(
-            quiet.lines[0].starts_with("batten warn warning-rule "),
+            quiet.lines[0].starts_with("batten deny warning-rule "),
             "the stronger tier leads: {:?}",
             quiet.lines
         );
@@ -2231,7 +2243,7 @@ mod tests {
         let before = vec![escalating.clone(), urgent.clone()];
         let shouted = cycle(&before, &scope, None, &generous(), &BTreeMap::new(), &[]);
         assert!(
-            shouted.lines[0].starts_with("batten warn warning-rule "),
+            shouted.lines[0].starts_with("batten deny warning-rule "),
             "nine thousand occurrences buy no position: {:?}",
             shouted.lines
         );
@@ -2383,7 +2395,7 @@ mod tests {
         // §7 (a)'s constant-size half, as a property of the marker rather than of
         // a fixture: it is one fixed token, so its estimate cannot grow with the
         // finding count. A marker that interpolated anything would break this.
-        assert_eq!(UNCHANGED, "unchanged");
+        assert_eq!(UNCHANGED, "batten unchanged");
         assert!(
             !UNCHANGED.contains('\n'),
             "one line, so one pointer-free token"
