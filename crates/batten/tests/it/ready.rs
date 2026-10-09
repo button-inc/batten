@@ -1045,7 +1045,7 @@ fn a_section_eight_sentence_is_never_read_as_a_claim() {
     let quiet = lint(&dir, &no_key);
     assert_eq!(code(&quiet), 0, "{}", stderr(&quiet));
     assert!(
-        !stderr(&quiet).contains("unjudgeable-relations"),
+        !stderr(&quiet).contains("issue grade partial"),
         "{}",
         stderr(&quiet)
     );
@@ -1472,7 +1472,7 @@ fn a_missing_relations_key_is_a_gap_and_never_a_phantom_blocker() {
     let gap = lint(&dir, &no_key);
     assert_eq!(code(&gap), 1, "{}", stderr(&gap));
     let text = stderr(&gap);
-    assert!(text.contains("unjudgeable-relations"), "{text}");
+    assert!(text.contains("issue grade partial"), "{text}");
     assert!(!text.contains("blocker-cited-without-relation"), "{text}");
 
     // PRESENT AND EMPTY IS AN ANSWER, so the citation still reports.
@@ -1501,7 +1501,7 @@ fn a_judgeable_violation_outranks_the_gap() {
     assert_eq!(code(&output), 2);
     let text = stderr(&output);
     assert!(text.contains("bump-disagrees-with-type"), "{text}");
-    assert!(text.contains("unjudgeable-relations"), "{text}");
+    assert!(text.contains("issue grade partial"), "{text}");
 }
 
 #[test]
@@ -1528,7 +1528,7 @@ fn the_deferral_rule_carries_the_same_gap_and_it_reaches_further() {
     let gap = lint(&dir, &raw_payload(&no_key));
     assert_eq!(code(&gap), 1);
     let text = stderr(&gap);
-    assert!(text.contains("unjudgeable-relations"), "{text}");
+    assert!(text.contains("issue grade partial"), "{text}");
     assert!(!text.contains("deferral-cited-without-relation"), "{text}");
 
     // Present and empty is an answer, so the hand-off is reported …

@@ -1394,6 +1394,30 @@ pub const VENDORED_DOCS: &[VendoredDoc] = &[
         ],
         dont: &["raise the token budget to make the cut go away"],
     },
+    VendoredDoc {
+        id: "issue grade refused",
+        why: Some("An issue that fails a Ready clause is pulled before it can be done"),
+        act: &[
+            "edit the description at the line the subject names",
+            "re-run `batten ready lint` on the edited body",
+        ],
+        dont: &["move the issue to Todo while a clause fails"],
+    },
+    VendoredDoc {
+        id: "issue grade partial",
+        why: Some("A citation judged without relations would pass by not looking"),
+        act: &["fetch the issue with its relations and lint it again"],
+        dont: &["read the gap as a pass"],
+    },
+    VendoredDoc {
+        id: "claim mint refused",
+        why: Some("Two sessions on one issue do the work twice and land neither cleanly"),
+        act: &[
+            "pick another issue from the ready queue",
+            "take it over with `--takeover` only when the holder has stopped",
+        ],
+        dont: &["start the work without the claim receipt"],
+    },
 ];
 
 /// The vendored doc for `id`, or an empty one where none is declared.

@@ -1049,6 +1049,7 @@ pub fn of_failure(failure: &anyhow::Error) -> Option<(Refusal, String)> {
 /// would say twice what the reader holds. `None` where the row declares neither
 /// a fix nor a reason and is no class: such a line would say nothing.
 //MUTANT rule-remedy-dropped|s@^        Some(crate::findings::Remediation::Fix(argv)) => Fix::Run(argv.join(" ")),$@        Some(crate::findings::Remediation::Fix(_)) => Fix::None,@|a_rules_fix_is_its_remedy_and_its_reason_its_definition
+//MUTANT fix-route-unrendered|s@^        Fix::Run(command) => refusal.with_command_route(\&command),$@        Fix::Run(_) => refusal,@|a_rules_fix_is_its_remedy_and_its_reason_its_definition
 #[must_use]
 pub fn of_rule(
     rule: &str,
@@ -1060,15 +1061,25 @@ pub fn of_rule(
         Some(crate::findings::Remediation::Fix(argv)) => Fix::Run(argv.join(" ")),
         Some(crate::findings::Remediation::NoFix(_)) | None => Fix::None,
     };
-    if crate::verdict::resolve(registry, rule).is_some() {
-        return Some(Refusal::from_class(rule, registry, rule, &[], fix).with_severity(severity));
-    }
-    let why = match remediation {
-        Some(crate::findings::Remediation::NoFix(why)) => why.as_str(),
-        Some(crate::findings::Remediation::Fix(_)) | None => "",
+    let refusal = if crate::verdict::resolve(registry, rule).is_some() {
+        Refusal::from_class(rule, registry, rule, &[], fix.clone())
+    } else {
+        let why = match remediation {
+            Some(crate::findings::Remediation::NoFix(why)) => why.as_str(),
+            Some(crate::findings::Remediation::Fix(_)) | None => "",
+        };
+        if why.is_empty() && matches!(fix, Fix::None) {
+            return None;
+        }
+        Refusal::new(rule, why, fix.clone())
     };
-    let silent = why.is_empty() && matches!(fix, Fix::None);
-    (!silent).then(|| Refusal::new(rule, why, fix).with_severity(severity))
+    // A RUNNABLE FIX IS A ROUTE: an argv the row declares is a command, so it
+    // rides the line's routes rather than its definition.
+    let refusal = refusal.with_severity(severity);
+    Some(match fix {
+        Fix::Run(command) => refusal.with_command_route(&command),
+        Fix::None => refusal,
+    })
 }
 
 //MUTANT-SUITE crates/batten/tests/it/advisory_drain.rs
@@ -1131,6 +1142,20 @@ impl Refusal {
                 self.readers.insert(route.target.clone(), reader.to_owned());
             }
         }
+        self
+    }
+
+    /// The same finding with `command` as a way out it names on EVERY firing: a
+    /// row's runnable `fix` is a route, not prose for the definition the repeat
+    /// drops (CLOUD-2145). [`Refusal::remedy`] then does not say it twice.
+    #[must_use]
+    pub fn with_command_route(mut self, command: &str) -> Refusal {
+        self.routes.push(crate::verdict::Route {
+            id: "rule fix".to_owned(),
+            kind: crate::verdict::RouteKind::Command,
+            target: command.to_owned(),
+            precondition: None,
+        });
         self
     }
 
@@ -1473,7 +1498,7 @@ mod tests {
         let fixed = of_rule("banned", &[], Some(&fix))
             .expect("a fix is something to say")
             .render_finding(Arm::Full);
-        assert_eq!(fixed, "batten remedy banned — Do: mise run unban.");
+        assert_eq!(fixed, "batten remedy banned; run mise run unban");
         let why = crate::findings::Remediation::NoFix("by hand".into());
         let reasoned = of_rule("banned", &[], Some(&why))
             .expect("a reason is something to say")

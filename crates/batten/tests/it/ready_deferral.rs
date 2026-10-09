@@ -243,7 +243,7 @@ fn a_payload_with_no_relations_key_is_a_gap_not_a_parse_failure_and_not_a_verdic
     // Could-not-look is this verb's usage exit, never the verdict's `2`.
     assert_eq!(code(&output), 1, "{}", stderr(&output));
     let text = stderr(&output);
-    assert!(text.contains("unjudgeable-relations"), "{text}");
+    assert!(text.contains("issue grade partial"), "{text}");
     assert!(!text.contains("deferral-cited-without-relation"), "{text}");
     // Still parsed: the id resolved, so this is not the description refusal.
     assert!(text.contains("CLOUD-1:"), "{text}");
