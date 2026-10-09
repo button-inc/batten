@@ -209,9 +209,9 @@ fn a_manifest_with_no_verify_task_cannot_be_judged_and_says_so() {
     // for any deny finding and this fixture declares two verdicts under one
     // rule. That assertion is not expressible on this channel and the reason is
     // the output contract rather than an oversight: `batten check` renders
-    // `<pointer> <rule-id>` and nothing else — measured, this case prints
-    // `mise.toml gate report silent` — because non-negotiable rule 4 keeps the
-    // payload off it. `-J` carries the same fields.
+    // `batten <severity> <rule-id> at <pointer>` and nothing else — measured,
+    // this case prints `batten deny gate report silent at mise.toml` — because
+    // non-negotiable rule 4 keeps the payload off it. `-J` carries the same fields.
     //
     // The verdict IS pinned, one tier down, by
     // `report-only.rego`'s `test_no_verify_task_is_could_not_look`. What the

@@ -270,7 +270,7 @@ test_a_report_run_on_a_schedule_is_the_point_not_a_violation if {
 # arm reads `doc.on`, never `workflow.on`, so the sed matched nothing and the
 # mutation was a no-op reported as caught — a survivor wearing a pass. The
 # catcher is the case that actually reddens when the trigger test stops deciding.
-#MUTANT report-on-pull-request-passes|s@^\ton_pull_request(doc)$@\ttrue@|a_report_run_on_a_schedule_is_the_point_not_a_violation
+#MUTANT report-on-pull-request-passes|s@^\ton_pull_request(doc)$@\ttrue@|a_report_run_by_a_scheduled_workflow_is_the_point_not_a_violation
 #MUTANT report-in-depends-unread|s@named == task@false@|a_report_in_verifys_depends_is_refused_over_the_binary
-#MUTANT report-no-verify-unread|s@not verify$@false@|no_verify_task_is_could_not_look
-#MUTANT report-sequence-body-unread|s@^run_text(task) := concat@run_text_retired(task) := concat@|a_report_in_one_entry_of_a_sequence_body_is_refused_over_the_binary
+#MUTANT report-no-verify-unread|s@not verify$@false@|a_manifest_with_no_verify_task_cannot_be_judged_and_says_so
+#MUTANT report-sequence-body-unread|s@^run_text(task) := text if {$@run_text_retired(task) := text if {@|a_report_in_one_entry_of_a_sequence_body_is_refused_over_the_binary
