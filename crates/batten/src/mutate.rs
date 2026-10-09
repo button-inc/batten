@@ -359,12 +359,11 @@ pub enum Suite {
     Pytest { path: String },
 }
 
+//MUTANT unrecognized-suite-guessed|s@^            return None;$@            return Some(Suite::Pytest { path: path.to_owned() });@|an_unrecognized_suite_is_reported_not_run
 impl Suite {
     /// The suite a declared path names, or `None` for a path this runner has no
     /// runner for — which is reported rather than guessed at.
     #[must_use]
-    //MUTANT-SUITE crates/batten/tests/it/mutate.rs
-    //MUTANT unrecognized-suite-guessed|s@^            return None;$@            return Some(Suite::Pytest { path: path.to_owned() });@|an_unrecognized_suite_is_reported_not_run
     pub fn declared(path: &str) -> Option<Self> {
         let file = Path::new(path)
             .file_name()
@@ -2579,6 +2578,7 @@ pub fn subjects(root: &Path, table: Option<&crate::config::Mutate>) -> BTreeMap<
 /// exactly one that owes a sweep. Held to the set like those arms: a declaring
 /// file no gate entry covers reads `uncovered`. Off without a table, so a
 /// census that declares none is unchanged.
+//MUTANT declaring-file-not-a-subject|s@^        if declaring {$@        if false \&\& declaring {@|a_declaring_file_outside_the_set_is_uncovered
 fn declaring_files(
     root: &Path,
     table: &crate::config::Mutate,
@@ -2603,7 +2603,6 @@ fn declaring_files(
                     .any(|marker| strip_marker(line, marker).is_some())
             })
         });
-        //MUTANT declaring-file-not-a-subject|s@^        if declaring {$@        if false \&\& declaring {@|a_declaring_file_outside_the_set_is_uncovered
         if declaring {
             found.insert(path.clone(), path);
         }
