@@ -12129,6 +12129,23 @@ preapproves = true
 owner = "CLOUD-312"
 expires = "2027-02-28"
 
+# A ROW THIS BRANCH FILED IS SETTLED BEFORE THE NEXT EDIT, not at the land. The
+# `issue file other` row ran only inside `verify` and `land`, after the work it
+# should have shaped was written; a refusal there leaves two moves, discard the
+# work or re-label the board, and the second is laundering. Every arm's remedy is
+# a board or forge action (groom the row, close it, name it in the PR body), so
+# refusing an Edit or Write while one holds blocks no remedy and stops
+# implementation from running ahead of the row. `land` still runs the row.
+# Measured 2026-10-09: the row alone in 1.5s warm, under this 10s bound.
+[[hook.handler]]
+id = "filed-row-settled"
+on = "pre-tool"
+run = ["mise", "run", "-q", "filed-here:guard"]
+matcher = "^(Edit|Write|MultiEdit|NotebookEdit)$"
+timeout_ms = 10000
+owner = "CLOUD-514"
+expires = "2027-02-28"
+
 # THE STRANDED-FINDING CHECK, at the end of the turn that stranded it (CLOUD-252),
 # retired off `mise-tasks/finding-sink-check.sh` under CLOUD-1717. A `stop` row is
 # the engine's end-of-turn ladder's SECOND rung, after the completion reading and

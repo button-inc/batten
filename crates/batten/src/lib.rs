@@ -20003,10 +20003,38 @@ fn already_marked(seen: Option<&Path>, key: &str) -> bool {
 /// Stop, to bound a channel that repeated full text. The projection bounds the
 /// full text once per context per window now, and a pointer withheld is a
 /// pointer the reader needed, so both stores and their writes are gone.
+//MUTANT-SUITE crates/batten/tests/it/stop_posture.rs
+//MUTANT filed-row-selected-by-id|s@^        .filter(|declared| publishers.contains(declared.id.as_str()))$@        .filter(|declared| declared.id == "filed-here")@|a_filed_row_naming_the_diff_is_pointed_at_under_its_real_row_id
+//MUTANT-SUITE crates/batten/tests/it/adjudicate_absent.rs
 fn filed_here_rows(overrides: &Overrides, root: &Path) -> Option<(Vec<String>, Vec<String>)> {
     let config = resolve::resolve(root, overrides).ok()?;
-    let only = [FILED_HERE_ROW.to_owned()];
-    let (selected, _checks) = select_rules(&config.rules, &only).ok()?;
+    // THE ROW IS FOUND BY WHAT IT PUBLISHES, NEVER BY ITS ID. A literal id here
+    // (`filed-here`) outlived the row's rename to `issue file other`, so
+    // `select_rules` refused it, `.ok()?` read that as could-not-look, and this
+    // rung said nothing on every Stop. The predicate is the stable name; the
+    // same lookup the admission mint uses (CLOUD-1571).
+    let policy_rows: Vec<rules::Rule> = config
+        .rules
+        .iter()
+        .filter(|declared| declared.kind == rules::RuleKind::Policy)
+        .cloned()
+        .collect();
+    let bundles = policy::load(
+        root,
+        &policy_rows,
+        policy::Vocabulary::from(&config),
+        policy::ModuleChecks::RunOverSelection,
+        None,
+    )
+    .ok()?;
+    let publishers = policy::publishers_of(&bundles, FILED_OVER_OWN_DIFF);
+    let selected: Vec<rules::Rule> = policy_rows
+        .into_iter()
+        .filter(|declared| publishers.contains(declared.id.as_str()))
+        .collect();
+    if selected.is_empty() {
+        return None;
+    }
     let vocabulary = policy::Vocabulary {
         patterns: &config.patterns,
         verdicts: &config.verdicts,
@@ -20070,8 +20098,7 @@ fn filed_here_rows(overrides: &Overrides, root: &Path) -> Option<(Vec<String>, V
     Some((flagged, filed))
 }
 
-/// The row the filed-here rungs read, and the predicate whose findings rung 3 uses.
-const FILED_HERE_ROW: &str = "filed-here";
+/// The predicate the filed-here rungs select their row by, and whose findings rung 3 uses.
 const FILED_OVER_OWN_DIFF: &str = "issue file same";
 /// The record the checklist enumerates.
 const BOARD_RECORD: &str = "board-writes";
