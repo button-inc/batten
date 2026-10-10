@@ -15215,112 +15215,114 @@ fn run_mutate(
             )?;
             Ok(ExitCode::Violation)
         }
-        cli::MutateCommand::Sweep => {
-            let registry = match mutate::Registry::from_env() {
-                Ok(registry) => registry,
-                Err(reason) => {
-                    writeln!(err, "::error:: mutate: {reason}")?;
-                    return Ok(ExitCode::Usage);
-                }
-            };
-            let narrowed = narrow_to_change(root, names, &registry, err)?;
-            if let Some(id) = std::env::var(mutate::RUNNER)
-                .ok()
-                .filter(|id| !id.trim().is_empty())
-            {
-                return run_registered_runner(
-                    root,
-                    id.trim(),
-                    &registry,
-                    narrowed.change,
-                    out,
-                    err,
-                );
-            }
-            // THE REGISTERED RUNNERS' HALF, COUNTED HERE, RUN WHERE THEY ARE
-            // INSTALLED (CLOUD-1746). The sources each owns in this change are
-            // counted, so the declared sweep below never reads as the whole
-            // verdict; the runner itself is resolved by the run that uses it.
-            if let Some((_, changed)) = &narrowed.change {
-                for kind in registry.registered() {
-                    let owned = mutate::owned_changes(root, changed, &registry, kind);
-                    if !owned.is_empty() {
-                        writeln!(
-                            out,
-                            "mutate sweep: {} changed source(s) owned by {} — judged by `{}={}`",
-                            owned.len(),
-                            kind.id(),
-                            mutate::RUNNER,
-                            kind.id()
-                        )?;
-                    }
-                }
-            }
-            if narrowed.change.is_some() && narrowed.names.is_empty() {
-                let base = narrowed
-                    .change
-                    .as_ref()
-                    .map(|(base, _)| base.as_str())
-                    .unwrap_or_default();
+        cli::MutateCommand::Sweep => run_mutate_sweep(root, names, out, err),
+    }
+}
+
+/// `batten mutate sweep`: the declared runner over the narrowed set, or the one
+/// registered runner `$MUTANT_RUNNER` names over its half of the change.
+fn run_mutate_sweep(
+    root: &Path,
+    names: Vec<String>,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let registry = match mutate::Registry::from_env() {
+        Ok(registry) => registry,
+        Err(reason) => {
+            writeln!(err, "::error:: mutate: {reason}")?;
+            return Ok(ExitCode::Usage);
+        }
+    };
+    let narrowed = narrow_to_change(root, names, &registry, err)?;
+    if let Some(id) = std::env::var(mutate::RUNNER)
+        .ok()
+        .filter(|id| !id.trim().is_empty())
+    {
+        return run_registered_runner(root, id.trim(), &registry, narrowed.change, out, err);
+    }
+    // THE REGISTERED RUNNERS' HALF, COUNTED HERE, RUN WHERE THEY ARE
+    // INSTALLED (CLOUD-1746). The sources each owns in this change are
+    // counted, so the declared sweep below never reads as the whole
+    // verdict; the runner itself is resolved by the run that uses it.
+    if let Some((_, changed)) = &narrowed.change {
+        for kind in registry.registered() {
+            let owned = mutate::owned_changes(root, changed, &registry, kind);
+            if !owned.is_empty() {
                 writeln!(
                     out,
-                    "mutate sweep: no enforced gate's source or suite changed since {base}"
-                )?;
-                return Ok(ExitCode::Success);
-            }
-            let names = narrowed.names;
-            // The staged tree lives beside the build artefacts rather than in
-            // the system temporary directory, and it PERSISTS between runs. Both
-            // are the same economy: a declared suite can be a compiled tier, and
-            // a tree re-created from scratch every sweep would rebuild the whole
-            // crate every sweep. `Staged::new` prunes what the tracked set no
-            // longer names and re-copies only what differs, so a persisted tree
-            // still carries exactly the tracked bytes.
-            let work = root.join("target").join("mutate");
-            std::fs::create_dir_all(&work)?;
-            let sweep = match mutate::sweep_owned(root, &names, work, &registry) {
-                Ok(sweep) => sweep,
-                Err(reason) => {
-                    writeln!(err, "::error:: mutate: {reason}")?;
-                    return Ok(ExitCode::Internal);
-                }
-            };
-            for finding in &sweep.findings {
-                writeln!(out, "{finding}")?;
-            }
-            let code = sweep.code();
-            if code == ExitCode::Success {
-                writeln!(
-                    out,
-                    "mutate sweep: {} declared mutation(s) across {} gate(s), every one caught",
-                    sweep.declared, sweep.gates
-                )?;
-                return Ok(code);
-            }
-            // THE TWO CLASSES ARE COUNTED APART. A could-not-look is not a
-            // suite that passed on broken code — it is a suite nothing could
-            // ask — and adding them produced `124 of 0 declared mutation(s) …
-            // were not caught`, a coverage verdict over a denominator of zero.
-            let unlooked = sweep.unlooked();
-            let uncaught = sweep.findings.len() - unlooked;
-            if uncaught > 0 {
-                writeln!(
-                    err,
-                    "::error:: mutate sweep: {} of {} declared mutation(s) across {} gate(s) were \
-                     not caught — a suite that passes on broken code is not coverage",
-                    uncaught, sweep.declared, sweep.gates
+                    "mutate sweep: {} changed source(s) owned by {} — judged by `{}={}`",
+                    owned.len(),
+                    kind.id(),
+                    mutate::RUNNER,
+                    kind.id()
                 )?;
             }
-            if unlooked > 0 {
-                writeln!(
-                    err,
-                    "::error:: mutate sweep: {unlooked} declared mutation(s) could not be looked \
-                     at — an unresolvable gate or suite is not a pass"
-                )?;
-            }
-            Ok(code)
         }
     }
+    if narrowed.change.is_some() && narrowed.names.is_empty() {
+        let base = narrowed
+            .change
+            .as_ref()
+            .map(|(base, _)| base.as_str())
+            .unwrap_or_default();
+        writeln!(
+            out,
+            "mutate sweep: no enforced gate's source or suite changed since {base}"
+        )?;
+        return Ok(ExitCode::Success);
+    }
+    let names = narrowed.names;
+    // The staged tree lives beside the build artefacts rather than in
+    // the system temporary directory, and it PERSISTS between runs. Both
+    // are the same economy: a declared suite can be a compiled tier, and
+    // a tree re-created from scratch every sweep would rebuild the whole
+    // crate every sweep. `Staged::new` prunes what the tracked set no
+    // longer names and re-copies only what differs, so a persisted tree
+    // still carries exactly the tracked bytes.
+    let work = root.join("target").join("mutate");
+    std::fs::create_dir_all(&work)?;
+    let sweep = match mutate::sweep_owned(root, &names, work, &registry) {
+        Ok(sweep) => sweep,
+        Err(reason) => {
+            writeln!(err, "::error:: mutate: {reason}")?;
+            return Ok(ExitCode::Internal);
+        }
+    };
+    for finding in &sweep.findings {
+        writeln!(out, "{finding}")?;
+    }
+    let code = sweep.code();
+    if code == ExitCode::Success {
+        writeln!(
+            out,
+            "mutate sweep: {} declared mutation(s) across {} gate(s), every one caught",
+            sweep.declared, sweep.gates
+        )?;
+        return Ok(code);
+    }
+    // THE TWO CLASSES ARE COUNTED APART. A could-not-look is not a
+    // suite that passed on broken code — it is a suite nothing could
+    // ask — and adding them produced `124 of 0 declared mutation(s) …
+    // were not caught`, a coverage verdict over a denominator of zero.
+    let unlooked = sweep.unlooked();
+    let uncaught = sweep.findings.len() - unlooked;
+    if uncaught > 0 {
+        writeln!(
+            err,
+            "::error:: mutate sweep: {} of {} declared mutation(s) across {} gate(s) were \
+             not caught — a suite that passes on broken code is not coverage",
+            uncaught, sweep.declared, sweep.gates
+        )?;
+    }
+    if unlooked > 0 {
+        writeln!(
+            err,
+            "::error:: mutate sweep: {unlooked} declared mutation(s) could not be looked \
+             at — an unresolvable gate or suite is not a pass"
+        )?;
+    }
+    Ok(code)
 }
 
 fn run_semver(
