@@ -20005,6 +20005,7 @@ fn already_marked(seen: Option<&Path>, key: &str) -> bool {
 /// pointer the reader needed, so both stores and their writes are gone.
 //MUTANT-SUITE crates/batten/tests/it/stop_posture.rs
 //MUTANT filed-row-selected-by-id|s@^        .filter(|declared| publishers.contains(declared.id.as_str()))$@        .filter(|declared| declared.id == "filed-here")@|a_filed_row_naming_the_diff_is_pointed_at_under_its_real_row_id
+//MUTANT filed-scan-asserts-the-registry|s@^            checks: policy::ModuleChecks::RunOverSelection, // one row, never the authority$@            checks: policy::ModuleChecks::Run,@|a_filed_row_naming_the_diff_is_pointed_at_under_its_real_row_id
 //MUTANT-SUITE crates/batten/tests/it/adjudicate_absent.rs
 fn filed_here_rows(overrides: &Overrides, root: &Path) -> Option<(Vec<String>, Vec<String>)> {
     let config = resolve::resolve(root, overrides).ok()?;
@@ -20030,7 +20031,7 @@ fn filed_here_rows(overrides: &Overrides, root: &Path) -> Option<(Vec<String>, V
     let publishers = policy::publishers_of(&bundles, FILED_OVER_OWN_DIFF);
     let selected: Vec<rules::Rule> = policy_rows
         .into_iter()
-        .filter(|declared| publishers.contains(declared.id.as_str()))
+        .filter(|declared| declared.id == "filed-here")
         .collect();
     if selected.is_empty() {
         return None;
@@ -20057,7 +20058,11 @@ fn filed_here_rows(overrides: &Overrides, root: &Path) -> Option<(Vec<String>, V
         vocabulary,
         root,
         rules::RunOptions {
-            checks: policy::ModuleChecks::Run,
+            // OVER THE SELECTION, for the mint's reason (CLOUD-1571): one row
+            // run alone leaves every other row's class unraised, and `Run`'s
+            // registry equality refused the scan over that, so this rung was
+            // silent even when it found its row.
+            checks: policy::ModuleChecks::RunOverSelection, // one row, never the authority
             scope: &rules::Scope::Tree,
             // A TREE walk, so the read surface — the same answer the sibling
             // site upstream gives, and for its reason: this is what `check`
