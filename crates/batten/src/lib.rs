@@ -15320,19 +15320,59 @@ fn run_mutate_sweep(
         }
     };
     let narrowed = narrow_to_change(root, names, &registry, err)?;
-    if let Some(id) = std::env::var(mutate::RUNNER)
+    // ONE SHARD IS A SLICE OF BOTH HALVES (CLOUD-1746). The declared runner's
+    // gates cost a suite build per mutant, and 94 of them across 14 touched gates
+    // ran the `ci` job past its 87-minute bound on #1132; so `$MUTANT_SHARD`
+    // slices them by gate exactly as it slices the registered runner's mutants,
+    // and the matrix that runs one runs both.
+    let shard = std::env::var(mutate::SHARD)
         .ok()
-        .filter(|id| !id.trim().is_empty())
-    {
-        return run_registered_runner(root, id.trim(), &registry, narrowed.change, out, err);
+        .filter(|shard| !shard.trim().is_empty());
+    let mut narrowed = narrowed;
+    if let Some(shard) = &shard {
+        narrowed.names = match mutate::shard_of(&narrowed.names, shard) {
+            Ok(names) => names,
+            Err(reason) => {
+                writeln!(err, "::error:: mutate: {reason}")?;
+                return Ok(ExitCode::Usage);
+            }
+        };
     }
+    let runner = std::env::var(mutate::RUNNER)
+        .ok()
+        .map(|id| id.trim().to_owned())
+        .filter(|id| !id.is_empty());
+    let change = narrowed.change.clone();
+    let declared = run_declared_sweep(root, narrowed, &registry, shard.as_deref(), out, err)?;
+    let Some(id) = runner else {
+        return Ok(declared);
+    };
+    // BOTH HALVES RUN, AND THE FIRST REFUSAL IS THE VERDICT: a declared finding
+    // must not hide behind a clean registered run, nor the reverse.
+    let registered = run_registered_runner(root, &id, &registry, change, out, err)?;
+    Ok(if declared == ExitCode::Success {
+        registered
+    } else {
+        declared
+    })
+}
+
+/// The declared runner over the narrowed (and possibly sharded) gates.
+fn run_declared_sweep(
+    root: &Path,
+    narrowed: Narrowed,
+    registry: &mutate::Registry,
+    shard: Option<&str>,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
     // THE REGISTERED RUNNERS' HALF, COUNTED HERE, RUN WHERE THEY ARE
     // INSTALLED (CLOUD-1746). The sources each owns in this change are
     // counted, so the declared sweep below never reads as the whole
     // verdict; the runner itself is resolved by the run that uses it.
     if let Some((_, changed)) = &narrowed.change {
         for kind in registry.registered() {
-            let owned = mutate::owned_changes(root, changed, &registry, kind);
+            let owned = mutate::owned_changes(root, changed, registry, kind);
             if !owned.is_empty() {
                 writeln!(
                     out,
@@ -15351,10 +15391,16 @@ fn run_mutate_sweep(
             .as_ref()
             .map(|(base, _)| base.as_str())
             .unwrap_or_default();
-        writeln!(
-            out,
-            "mutate sweep: no enforced gate's source or suite changed since {base}"
-        )?;
+        match shard {
+            Some(shard) => writeln!(
+                out,
+                "mutate sweep: shard {shard} holds none of the gates changed since {base}"
+            )?,
+            None => writeln!(
+                out,
+                "mutate sweep: no enforced gate's source or suite changed since {base}"
+            )?,
+        }
         return Ok(ExitCode::Success);
     }
     let names = narrowed.names;
@@ -15367,7 +15413,7 @@ fn run_mutate_sweep(
     // still carries exactly the tracked bytes.
     let work = root.join("target").join("mutate");
     std::fs::create_dir_all(&work)?;
-    let sweep = match mutate::sweep_owned(root, &names, work, &registry) {
+    let sweep = match mutate::sweep_owned(root, &names, work, registry) {
         Ok(sweep) => sweep,
         Err(reason) => {
             writeln!(err, "::error:: mutate: {reason}")?;

@@ -273,6 +273,8 @@ fn task_names(lines: &[String]) -> Vec<String> {
 //MUTANT suite-first-only|s@own_suites.get(&row.source)@own_suites.get(\&row.slug)@|each_preset_module_row_runs_under_its_own_declared_suite
 //MUTANT registered-rows-swept-by-hand|s@^                if !gate.rows.is_empty() \&\& !gate.rows.iter().any(|row| registry.declares(row)) {$@                if false {@|a_change_to_a_rust_gate_is_judged_by_its_registered_runner
 //MUTANT registered-row-judged-twice|s@^        for row in gate.rows.iter().filter(|row| registry.declares(row)) {$@        for row in \&gate.rows {@|a_registered_runners_rows_are_never_swept_by_the_declared_runner
+//MUTANT shard-slices-unsorted|s@^    sorted.sort();$@@|shards_partition_the_sorted_gates_and_refuse_a_malformed_value
+//MUTANT shard-takes-every-gate|s@^        .filter(|(index, _)| index % n == k)$@        .filter(|_| true)@|shards_partition_the_sorted_gates_and_refuse_a_malformed_value
 //MUTANT every-gate-touched|s@^        \.filter(\x7cname\x7c {$@        .filter(\x7cname\x7c { true \x7c\x7c@|a_change_touching_no_gate_sweeps_nothing
 fn declaring_lines(root: &Path, name: &str, source: &str) -> Option<Vec<String>> {
     let lines = lines_of(root, source)?;
@@ -1070,12 +1072,43 @@ fn changed_by(gate: &Gate, name: &str, changed: &std::collections::BTreeSet<Stri
 /// into config together rather than one key at a time.
 pub const RUNNERS: &str = "MUTANT_RUNNERS";
 
-/// Which registered runner this invocation runs, by its id. Unset runs the
-/// declared runner, which is what `verify` does; a CI job sets it per shard.
+/// Which registered runner this invocation ALSO runs, by its id, after the
+/// declared runner's sweep. Unset runs the declared runner alone, which is what
+/// `verify` does; a CI job sets it where the runner is installed.
 pub const RUNNER: &str = "MUTANT_RUNNER";
 
-/// The shard a registered runner takes, as `k/n` with `k` counted from zero.
+/// The shard this invocation takes, as `k/n` with `k` counted from zero: slice
+/// `k` of the declared runner's gates, and the registered runner's own shard `k`.
 pub const SHARD: &str = "MUTANT_SHARD";
+
+/// The gates one `$MUTANT_SHARD` of `k/n` sweeps: every `n`-th of the sorted
+/// set, starting at `k`.
+///
+/// BY GATE, NOT BY ROW, because a gate's rows share one staged tree and one
+/// suite build: splitting a gate across shards would pay its build twice. Sorted
+/// first, so every shard of one run slices the same order and the slices
+/// partition the set.
+///
+/// # Errors
+///
+/// A value that is not `k/n` with `n > 0` and `k < n`.
+pub fn shard_of(names: &[String], shard: &str) -> Result<Vec<String>, String> {
+    let malformed = || format!("{SHARD}={shard} is not `k/n` with 0 <= k < n");
+    let (k, n) = shard.trim().split_once('/').ok_or_else(malformed)?;
+    let k: usize = k.trim().parse().map_err(|_| malformed())?;
+    let n: usize = n.trim().parse().map_err(|_| malformed())?;
+    if n == 0 || k >= n {
+        return Err(malformed());
+    }
+    let mut sorted = names.to_vec();
+    sorted.sort();
+    Ok(sorted
+        .into_iter()
+        .enumerate()
+        .filter(|(index, _)| index % n == k)
+        .map(|(_, name)| name)
+        .collect())
+}
 
 /// A mutation runner the registry can name.
 ///
@@ -3390,6 +3423,22 @@ mod tests {
             script: String::from("s@a@b@"),
             want: String::from("w"),
             source: source.to_owned(),
+        }
+    }
+
+    #[test]
+    fn shards_partition_the_sorted_gates_and_refuse_a_malformed_value() {
+        let names: Vec<String> = ["d", "a", "c", "b", "e"]
+            .iter()
+            .map(|n| (*n).to_owned())
+            .collect();
+        let slices: Vec<Vec<String>> = (0..2)
+            .map(|k| shard_of(&names, &format!("{k}/2")).expect("a well-formed shard"))
+            .collect();
+        assert_eq!(slices[0], ["a", "c", "e"]);
+        assert_eq!(slices[1], ["b", "d"]);
+        for bad in ["2/2", "0/0", "1", "x/2"] {
+            assert!(shard_of(&names, bad).is_err(), "{bad} is not a shard");
         }
     }
 

@@ -19,7 +19,7 @@
             "hook-profile-check",
             "hk-contract-check",
             "mutant-census",
-            "mutant-changed",
+            "mutant:changed",
             "rules-drift",
             "hooks-wiring-check",
             "reference-check",
@@ -100,7 +100,7 @@
           "parallelGroupId": "group_0"
         },
         {
-          "name": "mutant-changed",
+          "name": "mutant:changed",
           "status": "included",
           "orderIndex": 7,
           "parallelGroupId": "group_0"
@@ -394,7 +394,7 @@
             "hook-profile-check",
             "hk-contract-check",
             "mutant-census",
-            "mutant-changed",
+            "mutant:changed",
             "rules-drift",
             "hooks-wiring-check",
             "reference-check",
@@ -474,7 +474,7 @@
           "parallelGroupId": "group_0"
         },
         {
-          "name": "mutant-changed",
+          "name": "mutant:changed",
           "status": "included",
           "orderIndex": 7,
           "parallelGroupId": "group_0"

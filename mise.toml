@@ -1722,6 +1722,8 @@ description = "Gate: every enforced gate this branch touched since origin/main h
 # `MUTANT_RUNNER=cargo-mutants` and one `MUTANT_SHARD` each, on the
 # cargo-mutants `taiki-e/install-action` installs there. It is not run here: this branch's change measured 743 mutants at about
 # 40s each, which a local gate cannot hold, and the owner ruled it a CI matrix.
+# A shard there also takes its slice of the declared gates, and the `ci` job
+# skips this step: the declared half ran that job past its bound on #1132.
 env = { MUTANT_CHANGED_SINCE = "origin/main", MUTANT_RUNNERS = "cargo-mutants=crates/**/*.rs" }
 run = "cargo run --quiet -p batten -- mutate sweep"
 

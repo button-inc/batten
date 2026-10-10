@@ -111,7 +111,10 @@ local gate = new Mapping<String, Step> {
     glob = List("mise-tasks/**", "policy/*.rego", "mise.toml")
     check = "mise run mutant-census"
   }
-  ["mutant-changed"] {
+  ["mutant:changed"] {
+    // NAMED FOR ITS TASK, because `ci.yml` carves it out of the `ci` job with
+    // `HK_SKIP_STEPS` and `job select missing` pairs that skip with a job whose
+    // `run:` says `mise run <step>`: the `mutants` matrix runs it, sharded.
     // `slow` tier: it builds the engine, so a commit would pay a compile
     // (CLOUD-1397). It runs at `verify` and in CI, before merge.
     //
