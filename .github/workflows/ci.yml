@@ -861,7 +861,7 @@ jobs:
   # Each shard runs `--in-diff` over the Rust sources the change touched, with
   # each source's own unit tests and its declared `MUTANT-SUITE` suites.
   mutants:
-    name: mutants (${{ matrix.shard }}/16)
+    name: mutants (${{ matrix.shard }})
     needs: ci
     if: ${{ github.event.pull_request.draft == false }}
     runs-on: ubuntu-latest
@@ -887,8 +887,11 @@ jobs:
         with:
           shared-key: ci-
           save-if: false
-      - run: mise run batten -- ci step --summary "Mutants - shard ${{ matrix.shard }} of 16" -- mise run mutant:changed:cargo
+      # The same task `verify` runs, told to run the registered runner instead
+      # of the declared one, over this shard of the change's mutants.
+      - run: mise run batten -- ci step --summary "Mutants - shard ${{ matrix.shard }} of 16" -- mise run mutant:changed
         env:
+          MUTANT_RUNNER: cargo-mutants
           MUTANT_SHARD: ${{ matrix.shard }}/16
 
   # The latency regression gate on the surface that reaches a person (CLOUD-172).
