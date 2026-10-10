@@ -1233,24 +1233,31 @@ fn a_rust_gate_with_no_registered_runner_is_swept_by_the_declared_one() {
     assert!(out.contains("engine-rusty/never-applies"), "{out}{err}");
 }
 
-/// The registered runner, asked to run, judges a source no cargo target compiles
-/// as could-not-look rather than as every mutant caught.
+/// The registered runner, asked to run where its program does not resolve, is
+/// could-not-look (`runner-absent`, exit 3) and never every mutant caught.
+/// `PATH` holds only the directory of the `cargo` running this suite, which
+/// carries no `cargo-mutants`, so the case does not depend on what the host
+/// installed.
 #[cfg(unix)]
 #[test]
-fn a_registered_runner_over_a_source_no_target_compiles_cannot_look() {
+fn a_registered_runner_that_does_not_resolve_cannot_look() {
     let root = rust_gate_repo("since-rust-runner");
-    let (code, out, err) = sweep_registered(
-        &root,
-        "toy,other,engine-rusty",
-        "HEAD",
-        "cargo-mutants=crates/**/*.rs",
-        Some("cargo-mutants"),
-    );
-    assert_eq!(code, 3, "{out}{err}");
-    assert!(
-        out.contains("cargo-mutants/crates/batten/src/rusty.rs no-suite"),
-        "{out}{err}"
-    );
+    let cargo = PathBuf::from(env!("CARGO"));
+    let only_cargo = cargo.parent().expect("cargo lives in a directory");
+    let answer = common::batten()
+        .args(["mutate", "sweep"])
+        .current_dir(&root)
+        .env("PATH", only_cargo)
+        .env("MUTANT_GATES", "toy,other,engine-rusty")
+        .env("MUTANT_CHANGED_SINCE", "HEAD")
+        .env("MUTANT_TASKS", "mise.toml")
+        .env("MUTANT_RUNNERS", "cargo-mutants=crates/**/*.rs")
+        .env("MUTANT_RUNNER", "cargo-mutants")
+        .output()
+        .expect("run batten mutate");
+    let (out, err) = (stdout(&answer), stderr(&answer));
+    assert_eq!(answer.status.code(), Some(3), "{out}{err}");
+    assert!(out.contains("cargo-mutants runner-absent"), "{out}{err}");
 }
 
 /// A WHOLE sweep with a runner registered still leaves that runner's rows alone:

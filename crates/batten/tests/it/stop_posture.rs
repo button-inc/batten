@@ -1383,10 +1383,9 @@ severity = "deny"
 /// reached a turn. The fixture carries the real row id, which is the whole case.
 #[test]
 fn a_filed_row_naming_the_diff_is_pointed_at_under_its_real_row_id() {
-    let dir = common::Fixture::new("filed-row-real-id")
-        .config(&format!("{CONFIG}{FILED_ROWS}"))
-        .build();
-    common::pin_origin_main(&dir);
+    let dir = scratch("filed-row-real-id");
+    common::init_repo(&dir);
+    fs::write(dir.join("batten.toml"), format!("{CONFIG}{FILED_ROWS}")).expect("write config");
     fs::create_dir_all(dir.join("policy")).expect("policy dir");
     install_modules(&dir);
     fs::copy(
@@ -1394,6 +1393,9 @@ fn a_filed_row_naming_the_diff_is_pointed_at_under_its_real_row_id() {
         dir.join("policy/filed-here.rego"),
     )
     .expect("install the filed-here module");
+    common::git_in(&dir, &["add", "-A"]);
+    common::git_in(&dir, &["commit", "--quiet", "-m", "base"]);
+    common::pin_origin_main(&dir);
     common::write(&dir, "src/a.rs", "fn main() {}\n");
     let receipts = dir.join(".git/batten-receipts");
     fs::create_dir_all(&receipts).expect("receipts dir");
