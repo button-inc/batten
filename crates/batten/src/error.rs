@@ -22,8 +22,15 @@ use std::fmt;
 /// with the reason on stderr, which is what a hook host reads as the deny.
 ///
 /// [`ExitCode::Violation`]: crate::ExitCode::Violation
+///
+/// **ONLY A [`Refusal`] MAKES ONE (CLOUD-2078).** The field is private and both
+/// constructors take a classed refusal and the arm to render, so nothing
+/// outside this module can build a verdict from prose, which the compiler
+/// rather than a review decides.
+///
+/// [`Refusal`]: crate::refusal::Refusal
 #[derive(Debug)]
-pub struct Denial(pub String);
+pub struct Denial(String);
 
 impl fmt::Display for Denial {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -38,8 +45,24 @@ impl Denial {
     ///
     /// Named `raise` for symmetry with [`UsageError::raise`]: it returns an
     /// [`anyhow::Error`] wrapping the `Denial`, not `Self`.
-    pub fn raise(reason: impl Into<String>) -> anyhow::Error {
-        anyhow::Error::new(Denial(reason.into()))
+    #[must_use]
+    pub fn raise(refusal: &crate::refusal::Refusal, arm: crate::refusal::Arm) -> anyhow::Error {
+        anyhow::Error::new(Denial(refusal.render_finding(arm)))
+    }
+
+    /// [`Denial::raise`] opening with the reading legend, for the first finding
+    /// of a context's epoch (CLOUD-2145).
+    #[must_use]
+    pub fn raise_opened(
+        refusal: &crate::refusal::Refusal,
+        arm: crate::refusal::Arm,
+        legend: Option<&str>,
+    ) -> anyhow::Error {
+        let rendered = refusal.render_finding(arm);
+        anyhow::Error::new(Denial(match legend {
+            Some(legend) => format!("{legend}\n{rendered}"),
+            None => rendered,
+        }))
     }
 }
 

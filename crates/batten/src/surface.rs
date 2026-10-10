@@ -1211,18 +1211,35 @@ const RULE_ID_ARG: FlagDecl = FlagDecl {
     value: ValueDecl::Str,
 };
 
+/// `--history` on `policy explain` (CLOUD-2144): print each named row's history
+/// — its comment block, keys and class paragraph at HEAD, then the commits that
+/// changed it — which is the read a change to the row owes.
+const EXPLAIN_HISTORY: FlagDecl = FlagDecl {
+    id: "history",
+    long: Some("history"),
+    short: None,
+    help: "Print each named config row's history: the row at HEAD, then the commits that changed it",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Bool,
+};
+
 const VERDICT_TOKEN: FlagDecl = FlagDecl {
     id: "token",
     long: None,
     short: None,
-    help: "The verdict token to resolve, e.g. task name undefined",
+    help: "The names to resolve, as a finding line prints them: a rule, a class, an engine id",
     env: EnvDecl::None,
     global: false,
     positional: true,
     required: true,
     hidden: false,
     rung: Rung::None,
-    value: ValueDecl::Str,
+    value: ValueDecl::StrMany,
 };
 
 /// `--rule <id>` on `check`: run one declared row rather than all of them
@@ -2182,6 +2199,38 @@ const CALLS: FlagDecl = FlagDecl {
     hidden: false,
     rung: Rung::None,
     value: ValueDecl::Bool,
+};
+
+/// `state list --rule`: only findings of this rule (CLOUD-2175). The drain's
+/// pointer for a rule whose locations it did not list, so the command returns
+/// exactly the elided set rather than the whole store.
+const STATE_RULE: FlagDecl = FlagDecl {
+    id: "rule",
+    long: Some("rule"),
+    short: None,
+    help: "Only findings of this rule",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
+/// `state list --path`: only findings observed in this file (CLOUD-2175).
+const STATE_PATH: FlagDecl = FlagDecl {
+    id: "path",
+    long: Some("path"),
+    short: None,
+    help: "Only findings observed in this file",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
 };
 
 /// `--stream <stdout|stderr>` on `capture list`: narrow the listing.
@@ -5032,7 +5081,7 @@ pub const SURFACE: &[CommandDecl] = &[
         data_channel: true,
         exits: EXITS_STANDARD,
         effect: Effect::Read,
-        flags: &[VERDICT_TOKEN, JSON],
+        flags: &[VERDICT_TOKEN, JSON, EXPLAIN_HISTORY],
     },
     // The OTHER dereference, and the emitted line carries pointers to both
     // (CLOUD-1637). `explain` answers about the CLASS; this answers about the
@@ -6389,7 +6438,7 @@ pub const SURFACE: &[CommandDecl] = &[
         data_channel: true,
         exits: EXITS_STANDARD,
         effect: Effect::Read,
-        flags: &[JSON],
+        flags: &[STATE_RULE, STATE_PATH, JSON],
     },
     // The out-of-tree verdict stores' WRITE half, and the reason it is one noun
     // with two leaves is that the two stores share a body format and nothing else

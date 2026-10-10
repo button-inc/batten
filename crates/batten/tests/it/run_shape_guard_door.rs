@@ -294,7 +294,7 @@ fn the_impersonation_detector_is_live_behind_this_row() {
     let answer = door(&dir, "ls -la");
     let reported = format!("{}{}", answer.out, answer.err);
     assert!(
-        reported.contains("hook.handler run-shape-guard: wrote a host decision document"),
+        reported.contains("hook.handler.run-shape-guard impersonated-host"),
         "{reported}"
     );
     assert!(answer.allowed(), "{}", answer.out);

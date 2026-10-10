@@ -450,6 +450,9 @@ pub enum Event {
         tokens: usize,
         /// The labelled findings the deny carried, as `(key, arm)`.
         findings: Vec<(String, crate::refusal::Arm)>,
+        /// Every route those findings offered, as printed: pointers, never the
+        /// definition, so the deny's prose still dies inside [`collect`].
+        routes: Vec<String>,
     },
 }
 
@@ -1121,6 +1124,10 @@ fn collect_attachment(attachment: &Attachment, line: usize, records: &mut Vec<Re
                 call,
                 tokens,
                 findings,
+                // THE OUTPUT RECORD KEEPS KEYS, NOT ROUTES, so an exit-code
+                // host's deny offers none to follow: its refusals bucket on the
+                // class's declared routes alone, as they always did.
+                routes: Vec::new(),
             },
         });
     }
@@ -1267,15 +1274,23 @@ fn collect(
 //MUTANT refused-prefix-unstripped|s@^    let (_, emitted) = text.split_once(HOOK_ERROR_SEPARATOR)?;$@    let emitted = text.contains(HOOK_ERROR_SEPARATOR).then_some(text)?;@|a_failed_tool_result_carrying_the_hook_separator_is_a_refusal
 fn refusal_of(call: &str, text: &str) -> Option<Event> {
     let (_, emitted) = text.split_once(HOOK_ERROR_SEPARATOR)?;
-    let findings = emitted
+    let parsed: Vec<crate::refusal::Parsed> = emitted
         .lines()
         .filter_map(crate::refusal::parse_finding)
-        .map(|parsed| (parsed.key, parsed.arm))
+        .collect();
+    let routes = parsed
+        .iter()
+        .flat_map(|finding| finding.routes.iter().cloned())
+        .collect();
+    let findings = parsed
+        .into_iter()
+        .map(|finding| (finding.key, finding.arm))
         .collect();
     Some(Event::Refused {
         call: call.to_owned(),
         tokens: crate::budget::estimate_tokens(text),
         findings,
+        routes,
     })
 }
 
@@ -2246,7 +2261,7 @@ mod tests {
     #[test]
     fn a_failed_tool_result_carrying_the_hook_separator_is_a_refusal() {
         let labelled = "PreToolUse:Bash hook error: verdict 'tool run loose' rule 'tool run \
-                        loose' at x; run batten policy rule 'tool run loose'";
+                        loose' at x; run batten policy explain 'tool run loose'";
         assert_eq!(refusals_in(labelled, true), vec![("t9".to_owned(), 1)]);
         let unlabelled =
             "PreToolUse:Bash hook error: plan write refused — a call that is not a read";

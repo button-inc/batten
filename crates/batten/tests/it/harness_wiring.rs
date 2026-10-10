@@ -446,7 +446,7 @@ fn a_committed_sibling_beside_the_mediator_is_refused() {
     let output = check(&repo, Some(&outside));
     assert!(!output.status.success(), "a sibling passed");
     assert!(
-        findings(&output).contains(".claude/settings.json rule 'hook wire missing'"),
+        findings(&output).contains("batten deny hook wire missing at .claude/settings.json"),
         "wrong finding: {}",
         findings(&output)
     );
@@ -495,7 +495,7 @@ fn a_stop_sibling_is_refused_too_so_the_scope_is_every_event() {
     let output = check(&repo, Some(&outside));
     assert!(!output.status.success(), "a Stop sibling passed");
     assert!(
-        findings(&output).contains(".claude/settings.json rule 'hook wire missing'"),
+        findings(&output).contains("batten deny hook wire missing at .claude/settings.json"),
         "wrong finding: {}",
         findings(&output)
     );
@@ -588,7 +588,7 @@ fn the_launcher_hooks_are_refused_rather_than_tolerated() {
     // A COUNT AND NO PATH: a merged path is under somebody's home directory and
     // differs per machine, so rule 4 and §6 byte-stability both forbid it travelling.
     assert!(
-        findings(&output).contains("2 rule 'hook wire missing'"),
+        findings(&output).contains("batten deny hook wire missing at 2"),
         "wrong finding: {}",
         findings(&output)
     );
@@ -642,7 +642,7 @@ fn the_committed_half_survives_an_absent_merged_surface() {
         "the committed half went silent with no merged surface — CLOUD-1307 has          been reintroduced by recombining the two rows"
     );
     assert!(
-        findings(&output).contains(".claude/settings.json rule 'hook wire missing'"),
+        findings(&output).contains("batten deny hook wire missing at .claude/settings.json"),
         "wrong finding: {}",
         findings(&output)
     );
@@ -694,7 +694,7 @@ fn a_committed_surface_that_will_not_parse_is_reported() {
     // was no name to assert on — a count rendered into the pointer field, which
     // cost a session that could not learn which file the host could not read.
     assert!(
-        findings(&output).contains(".claude/settings.json rule 'hook wire missing'"),
+        findings(&output).contains("batten deny hook wire missing at .claude/settings.json"),
         "the finding does not name the unreadable surface: {}",
         findings(&output)
     );

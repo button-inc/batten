@@ -32,7 +32,7 @@ use crate::common;
 
 use std::path::{Path, PathBuf};
 
-use common::{Fixture, run_with_stdin, stderr};
+use common::{Fixture, run_with_stdin, stderr, stdout};
 
 /// The module every fixture here binds: it refuses one command spelling and
 /// raises a class the fixture's own config declares.
@@ -166,6 +166,39 @@ fn a_silent_repair_allows_and_records() {
     assert!(
         dir.join("repaired.txt").exists(),
         "and the repair actually ran"
+    );
+}
+
+/// THE RECORD REACHES THE MODEL (CLOUD-2145): on Claude Code a hook's stderr at
+/// exit `0` is never shown to it, so a record written only there told the
+/// agent nothing about the tree changing under it. It rides the advisory
+/// document on stdout, and only there.
+#[test]
+fn a_silent_repair_record_reaches_the_model() {
+    let dir = repo(
+        "repair-silent-claude",
+        &config(
+            "silent",
+            "touch repaired.txt",
+            "no_retry_reason = \"the repair is idempotent and the caller has nothing to re-issue\"",
+        ),
+    );
+    let run = run_with_stdin(
+        &dir,
+        &["adjudicate", "--harness", "claude-code"],
+        &payload("needs-repair now"),
+    );
+    assert_eq!(run.status.code(), Some(0));
+    let document = stdout(&run);
+    assert!(
+        document
+            .contains("batten note call fix silent at repair-fixture (repaired call fix pending)"),
+        "the record is in the document the model reads: {document}"
+    );
+    assert!(
+        !stderr(&run).contains("call fix silent"),
+        "and is said once, not again on stderr: {}",
+        stderr(&run)
     );
 }
 

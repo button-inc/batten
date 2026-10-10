@@ -1585,7 +1585,12 @@ impl Harness {
                     honoured_on: &["PreToolUse"],
                     declared: Declaration::Yes,
                 },
-                rewrites_tool_output: Declaration::Unknown,
+                // MEASURED 2026-10-08 (CLOUD-2171), live in a Claude Code cloud
+                // session through this engine's own `PostToolUse` hook: a Bash
+                // call printing a full arm the context had already seen, plus a
+                // trailing line, came back as the pointer arm and the trailing
+                // line. The rewrite reaches the model; the rest is untouched.
+                rewrites_tool_output: Declaration::Yes,
                 stop_vetoes_completion: false,
                 timeout_fails_open: false,
                 needs_fail_closed_config: false,
@@ -2620,12 +2625,10 @@ pub struct Envelope {
     /// `agent_id`). Part of the sightings CONTEXT (CLOUD-2075).
     pub agent: Option<String>,
     /// Why a `SessionStart` fired (`startup`, `resume`, `clear`, `compact`),
-    /// when the host says. [`COMPACT_SOURCE`] re-delivers rather than forgets.
+    /// when the host says. `resume` and `fork` keep the sighting epoch; every
+    /// other source closes it (CLOUD-2145).
     pub start_source: Option<String>,
 }
-
-/// The `SessionStart` source a compaction carries (CLOUD-2075).
-pub const COMPACT_SOURCE: &str = "compact";
 
 /// The mode a host names when the turn may propose but not perform.
 ///
@@ -3105,16 +3108,16 @@ pub enum Decision {
     /// reached — which is the one direction this whole surface must be unable to
     /// travel. `Deny`, `Ask` and `Waived` are all left standing.
     ///
-    /// Carries a plain `String` rather than a [`Refusal`], and the asymmetry is the
-    /// point: a `Refusal` exists to name a remedy, and a grant has nothing to
-    /// remedy. What it owes instead is provenance — WHICH committed rule is being
-    /// projected onto WHICH live name — and that is prose its producer writes,
-    /// because only the producer knows. §5's "every refusal names something to
-    /// run" does not reach here, there being no refusal.
+    /// Carries the grant as a classed finding of `call grant now` (CLOUD-2078):
+    /// its provenance — WHICH committed rule or handler granted it — is the
+    /// rule label or a subject, so the reason a host shows is the same grammar
+    /// every other line Batten writes into a context takes. It names no remedy,
+    /// there being nothing to remedy, and its reader is the human the host would
+    /// have prompted, so it renders in full every time.
     ///
     /// Degrades to a plain allow wherever [`Capabilities::preapprove`] is
     /// unreachable, which is silence and is the host's ordinary flow.
-    Preapproved(String),
+    Preapproved(Refusal),
     /// The boundary ran a row's declared repair and it SUCCEEDED (CLOUD-1639).
     ///
     /// **An allow, on [`Decision::Waived`]'s reading and for the same reason**:
@@ -3157,20 +3160,23 @@ pub struct Repair {
     pub subject: Option<String>,
 }
 
-//MUTANT label-spelled-outside-projection|s@^        let rule = label(Label::Rule, \&self.rule);$@        let rule = format!("rule '{}'", self.rule);@|no_finding_label_is_spelled_outside_the_projection
+//MUTANT label-spelled-outside-projection|s@^        let head = head(Severity::Note, crate::verdict::Native::CallFixSilent.id());$@        let head = format!("verdict '{}'", crate::verdict::Native::CallFixSilent.id());@|no_finding_label_is_spelled_outside_the_projection
 impl Repair {
-    /// The record line, labelled so a reader can tell the class from the row
-    /// (CLOUD-2075): `verdict '<class>' rule '<id>'[ at <subject>] repaired
-    /// verdict '<repaired>'`.
+    /// The record line, in the finding grammar (CLOUD-2145): `batten note call
+    /// fix silent at <rule>[ <subject>] (repaired <class>)` — the class this
+    /// record is, the row whose fix ran and the key it ran for as the
+    /// subjects, and the class it spared as the parenthetical detail, the same
+    /// place a drain line's counts sit, so it cannot read as one more subject.
     #[must_use]
     pub fn line_text(&self) -> String {
-        use crate::refusal::{Label, label};
-        let class = label(Label::Verdict, crate::verdict::Native::CallFixSilent.id());
-        let rule = label(Label::Rule, &self.rule);
-        let repaired = label(Label::Verdict, &self.repaired);
+        use crate::refusal::{Severity, head};
+        let head = head(Severity::Note, crate::verdict::Native::CallFixSilent.id());
         match self.subject.as_deref() {
-            Some(subject) => format!("{class} {rule} at {subject} repaired {repaired}"),
-            None => format!("{class} {rule} repaired {repaired}"),
+            Some(subject) => format!(
+                "{head} at {} {subject} (repaired {})",
+                self.rule, self.repaired
+            ),
+            None => format!("{head} at {} (repaired {})", self.rule, self.repaired),
         }
     }
 }
@@ -4527,6 +4533,19 @@ fn event_decides(event: Event) -> Option<Decision> {
     }
 }
 
+/// The history gate (CLOUD-2144): a config row changed by a context that has
+/// not read why it exists. Resolved at the boundary, so this is a lookup; the
+/// fact is could-not-look for every call that is not a write to the authority,
+/// and that allows.
+fn history_gate(facts: &Facts<'_>) -> Option<Decision> {
+    match facts.unread_history {
+        crate::facts::Look::Is(unread) if !unread.is_empty() => {
+            Some(Decision::Deny(rule_read_missing_refusal(unread)))
+        }
+        _ => None,
+    }
+}
+
 /// The gate chain for a mediated call, in the order the chain has always run.
 ///
 /// Split from [`adjudicated_gates`] rather than reordered: every gate below
@@ -4587,6 +4606,10 @@ fn adjudicated_call_gates(policy: &Policy, envelope: &Envelope, facts: &Facts<'_
     // second predicate to drift.
     if let Some((task, holder)) = facts.singleton {
         return Decision::Deny(singleton_held_refusal(task, holder));
+    }
+    // THE HISTORY GATE (CLOUD-2144), in its place in the chain.
+    if let Some(denied) = history_gate(facts) {
+        return denied;
     }
     // The write gate, before the command gate and not inside it: a write tool
     // carries no command, so every path below this point used to return Allow
@@ -5001,6 +5024,11 @@ const MAX_PROSPECTIVE_BYTES: u64 = 1 << 20;
 /// One span for the single-edit shape, N for the batch shape. `None` is a
 /// payload carrying neither, which the caller answers as could-not-look: a write
 /// shape nothing here recognises must never read as inspected-and-clean.
+#[must_use]
+pub fn edit_spans_of(input: &Value) -> Option<Vec<(String, String, bool)>> {
+    edit_spans(input)
+}
+
 fn edit_spans(input: &Value) -> Option<Vec<(String, String, bool)>> {
     let replace_all = |value: &Value| {
         value
@@ -5090,6 +5118,13 @@ pub struct Facts<'a> {
     /// **Empty is a real answer and it allows**: every commit in range is on a
     /// remote, which is the ordinary undo the row insists must not be refused.
     pub discards: &'a crate::facts::Look<Vec<String>>,
+    /// The config rows this call's write touches whose current history this
+    /// context has not read (CLOUD-2144).
+    ///
+    /// **Resolved at the boundary** for `discards`' reason — it reads the HEAD
+    /// blob and the receipt store — and only for a write to the authority.
+    /// Could-not-look ALLOWS; empty is a real answer and allows.
+    pub unread_history: &'a crate::facts::Look<Vec<String>>,
     /// What the agent reported for each agent-sourced check.
     pub sourced: &'a AgentFacts,
     /// What this call's write would land, before it happens (CLOUD-758).
@@ -5166,6 +5201,9 @@ impl<'a> Facts<'a> {
             // is a claim about a repository's remotes, and a caller that resolved
             // nothing is not making it (CLOUD-462).
             discards: &crate::facts::Look::CouldNotLook,
+            // Could-not-look, never "every row read": a caller that resolved
+            // nothing has not established what this context read (CLOUD-2144).
+            unread_history: &crate::facts::Look::CouldNotLook,
             // Could-not-look, never "an empty write". A `Facts::none` caller has
             // resolved nothing, which is a different claim from having looked
             // and found no content.
@@ -6975,7 +7013,7 @@ pub fn policy_preapproval(
     policy: &Policy,
     envelope: &Envelope,
     facts: &Facts<'_>,
-) -> Option<String> {
+) -> Option<Refusal> {
     if envelope.event != Event::PreTool || policy.bundles.is_empty() {
         return None;
     }
@@ -6984,12 +7022,44 @@ pub fn policy_preapproval(
         if let crate::facts::Look::Is(ids) = crate::policy::preapprove(bundle, &input)
             && let Some(id) = ids.first()
         {
-            return Some(format!(
-                "pre-approved by batten rule `{id}`: a call the committed policy allows (CLOUD-1949)"
-            ));
+            return Some(preapproval_refusal(id));
         }
     }
     None
+}
+
+/// A module's grant as `call grant now`, under the rule id that granted it
+/// (CLOUD-2078): a module finding id `policy explain` resolves.
+//MUTANT preapproval-misclassed|s@^    let class = crate::verdict::Native::CallGrantNow;$@    let class = crate::verdict::Native::CallFixSilent;@|a_preapproval_reason_labels_its_rule_and_verdict
+fn preapproval_refusal(id: &str) -> Refusal {
+    let class = crate::verdict::Native::CallGrantNow;
+    Refusal::declared(id.to_owned(), class, &[], Fix::None)
+}
+
+/// The call's input as a pre-approval rewrites it, or `None` where no module
+/// asks for a rewrite (CLOUD-2157).
+///
+/// **Asked only beside a grant**: the caller holds a [`Decision::Preapproved`],
+/// so this never runs on a call any rule refused, and the host applies a
+/// rewritten input only beside a permission decision anyway. Every key other
+/// than the [`crate::policy::rewritable`] ones is the call's own, byte for byte.
+#[must_use]
+pub fn policy_rewrite(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Option<Value> {
+    if envelope.event != Event::PreTool || policy.bundles.is_empty() {
+        return None;
+    }
+    let mut updated = envelope.input.as_object()?.clone();
+    let input = call_document(envelope, facts).ok()?;
+    let mut changed = false;
+    for bundle in &policy.bundles {
+        if let crate::facts::Look::Is(rewrites) = crate::policy::rewrite(bundle, &input) {
+            for rewrite in rewrites {
+                updated.insert(rewrite.key, Value::from(rewrite.value));
+                changed = true;
+            }
+        }
+    }
+    changed.then_some(Value::Object(updated))
 }
 
 /// The input document a policy module decides over.
@@ -7451,6 +7521,10 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
             "run-in-background": Field::RunInBackground
                 .read(envelope)
                 .and_then(|text| text.parse::<bool>().ok()),
+            // THE CALL'S OWN TIMEOUT, in milliseconds, or `null` where it named
+            // none (CLOUD-2157). A number cannot carry a secret, and it is what
+            // tells a call that took the host's default from one that chose.
+            "timeout": envelope.input.get("timeout").and_then(Value::as_u64),
             // THE SEGMENTATION THE ENGINE ALREADY COMPUTES (CLOUD-857).
             //
             // `command` above is the line EXACTLY as written, and for two years
@@ -7581,6 +7655,46 @@ fn program_name(token: &str) -> &str {
 /// The day a second mediator exists this becomes a set and the key becomes a
 /// name rather than a boolean; spelling it now would be a vocabulary with one
 /// member and no consumer.
+/// The row ids a `batten policy explain … --history` call names, when the call
+/// is exactly that and nothing else (CLOUD-2144).
+///
+/// ONE segment on ONE line: a piped read (`… | head`) shows the agent a part of
+/// the history, and a list (`… && x`) could have its output buried, so neither
+/// mints a read. The program is resolved through [`effective_program`], so
+/// `mise exec -- batten` and an env prefix are the same call.
+#[must_use]
+pub fn history_read_ids(command: &str) -> Option<Vec<String>> {
+    let crate::facts::Look::Is(parsed) = segments(command) else {
+        return None;
+    };
+    let [segment] = parsed.as_slice() else {
+        return None;
+    };
+    let [line] = segment.lines.as_slice() else {
+        return None;
+    };
+    let tokens: Vec<&str> = line.words.iter().map(String::as_str).collect();
+    let index = effective_program(&tokens)?;
+    let program = program_token(tokens[index]);
+    if program.rsplit('/').next() != Some("batten") {
+        return None;
+    }
+    let rest = &tokens[index + 1..];
+    let explain = rest
+        .windows(2)
+        .position(|pair| pair == ["policy", "explain"])?;
+    let after = &rest[explain + 2..];
+    if !after.contains(&"--history") {
+        return None;
+    }
+    let ids: Vec<String> = after
+        .iter()
+        .filter(|word| !word.starts_with('-'))
+        .map(|word| (*word).to_owned())
+        .collect();
+    (!ids.is_empty()).then_some(ids)
+}
+
 fn program_reach(command: &str) -> Vec<serde_json::Value> {
     let crate::facts::Look::Is(parsed) = segments(command) else {
         return Vec::new();
@@ -7871,6 +7985,35 @@ pub const PROTECTED_MUTATION: &str = "protected-mutation";
 /// states: `forbid` matches a literal, and this predicate is over VCS state. The
 /// same reason `must_land_on` is a top-level key rather than a rule.
 pub const HISTORY_DROP: &str = "history-drop";
+
+/// The rule id the history gate refuses under (CLOUD-2144).
+pub const RULE_READ_MISSING: &str = "rule-history-unread";
+
+/// Refuse a write to config rows whose history this context has not read.
+///
+/// The subjects are the row ids — the exact names the remedy's
+/// `batten policy explain '<id>' --history` takes.
+fn rule_read_missing_refusal(ids: &[String]) -> Refusal {
+    let subjects: Vec<crate::verdict::Subject> = ids
+        .iter()
+        .map(|id| crate::verdict::Subject::Artifact {
+            artifact: id.clone(),
+        })
+        .collect();
+    let remedy = format!(
+        "batten policy explain {} --history",
+        ids.iter()
+            .map(|id| format!("'{id}'"))
+            .collect::<Vec<_>>()
+            .join(" ")
+    );
+    Refusal::declared(
+        RULE_READ_MISSING,
+        crate::verdict::Native::RuleReadMissing,
+        &subjects,
+        Fix::declared(Some(&remedy)),
+    )
+}
 
 /// The rule id the singleton gate refuses under (CLOUD-438).
 pub const SINGLETON_HELD: &str = "singleton-held";
@@ -8615,14 +8758,25 @@ fn blocks(severity: RuleSeverity, fail_on_warning: bool) -> bool {
 /// blank from rendering a fix clause that says nothing.
 ///
 /// [`RuleKind::Shape`]: crate::rules::RuleKind::Shape
+//MUTANT-SUITE crates/batten/src/hook.rs
+//MUTANT shape-subject-dropped|s@^    let shape = rule.pattern.as_deref().or(rule.tool.as_deref());$@    let shape: Option<\&str> = None;@|a_shape_refusal_names_the_shape_it_refused
+//MUTANT-SUITE crates/batten/tests/it/pipeline_shapes.rs
 fn shape_refusal(rule: &Rule) -> Refusal {
-    // NO SUBJECT, and that is rule 4 rather than an omission: the only thing this
-    // refusal could point at is the command itself, which is the caller's own
-    // text and could carry anything. The row id is the pointer.
+    // THE SHAPE THE ROW DECLARES IS THE SUBJECT (CLOUD-2185): its `pattern`
+    // (`cargo`, `gh pr merge`) or its `tool`. That is config, never the caller's
+    // text, so rule 4 holds — the mediated command, which could carry anything,
+    // is still never echoed — and the line says WHAT was refused. Because it
+    // reads nothing from the call, `bindable_subjects` still lists the binding
+    // from the row alone, and the admission binds the shape rather than the
+    // class's own words.
+    let shape = rule.pattern.as_deref().or(rule.tool.as_deref());
+    let mut subjects: Vec<crate::verdict::Subject> =
+        shape.map(crate::verdict::artifact).into_iter().collect();
+    subjects.extend(policy_url_subject(rule));
     Refusal::declared(
         &rule.id,
         crate::verdict::Native::ShapeRefused,
-        &policy_url_subject(rule),
+        &subjects,
         Fix::declared(rule.reason.as_deref()),
     )
 }
@@ -10084,6 +10238,11 @@ struct ClaudeVerdictInner<'a> {
     /// the new variant). So the two travel together, in this one object.
     #[serde(rename = "additionalContext", skip_serializing_if = "Option::is_none")]
     additional_context: Option<&'a str>,
+    /// The call's input as a module rewrote it, on a PRE-APPROVAL only
+    /// (CLOUD-2157). Absent on every other verdict, for `additional_context`'s
+    /// reason: the host applies it only beside a permission decision.
+    #[serde(rename = "updatedInput", skip_serializing_if = "Option::is_none")]
+    updated_input: Option<&'a Value>,
 }
 
 /// Encode one Claude Code verdict body, whatever the verdict word.
@@ -10099,6 +10258,7 @@ fn encode_claude_verdict(event: &str, verdict: &str, reason: &str) -> serde_json
             permission_decision: verdict,
             permission_decision_reason: reason,
             additional_context: None,
+            updated_input: None,
         },
     })
 }
@@ -10413,6 +10573,7 @@ pub fn encode_preapproval(
     event: &str,
     reason: &str,
     context: Option<&str>,
+    updated_input: Option<&Value>,
 ) -> serde_json::Result<Option<String>> {
     // The table, consulted before the shape, and asked about this event.
     if !harness.capabilities().preapprove_reachable(event) {
@@ -10428,6 +10589,7 @@ pub fn encode_preapproval(
                 permission_decision: "allow",
                 permission_decision_reason: reason,
                 additional_context: context,
+                updated_input,
             },
         })
         .map(Some),
@@ -10574,6 +10736,7 @@ mod tests {
         vec![crate::verdict::DeclaredVerdict {
             id: "branch write unsafe".to_owned(),
             gloss: "branch write unsafe".to_owned(),
+            doc: crate::doc::Doc::default(),
             class: "The long definition of the class.".to_owned(),
             routes: vec![
                 route(
@@ -10599,7 +10762,8 @@ mod tests {
     }
 
     /// CLOUD-2075: both arms carry EVERY route, the override included as the
-    /// ready request that admits; only the full arm adds the definition.
+    /// ready request that admits; only the full arm adds the definition. The
+    /// routes are how a finding is fixed, so the repeat keeps them (CLOUD-2145).
     ///
     /// Measured on `leased-push`, which declares the rebase first and the
     /// explicit `--force-with-lease=<ref>:<sha>` second — the second is the one
@@ -10707,6 +10871,7 @@ mod tests {
                 waived: &crate::waiver::Live::new(),
                 sourced: &None,
                 singleton: &None,
+                unread_history: &crate::facts::Look::CouldNotLook,
                 // Could-not-look: these unit cases resolve no repository, so
                 // they make no claim about what a reset would discard. The
                 // compiled tier `history_drop.rs` is where that fact is real.
@@ -11426,7 +11591,10 @@ mod tests {
         let line = suppressed.line_text();
         assert!(!line.contains("gh pr merge"), "{line}");
         assert!(!line.contains("42"), "{line}");
-        assert_eq!(line, "waived rule 'gh-pr-merge' (expires 2099-01-01)");
+        assert_eq!(
+            line,
+            "batten note gh-pr-merge at this call waived until 2099-01-01"
+        );
     }
 
     #[test]
@@ -12504,6 +12672,7 @@ mod tests {
             .map(|id| crate::verdict::DeclaredVerdict {
                 id: id.to_owned(),
                 gloss: format!("the fixture class {id}"),
+                doc: crate::doc::Doc::default(),
                 class: format!("What {id} means, at length."),
                 routes: vec![crate::verdict::Route {
                     id: "read the authority".to_owned(),
@@ -13864,6 +14033,10 @@ deny contains "refused by themodule" if {
                 None,
             );
         }
+        if class == crate::verdict::Native::RuleReadMissing.id() {
+            // A row id with spaces, which is what most `[[rule]]` ids are.
+            return rule_read_missing_refusal(&["tool pin other".to_owned()]);
+        }
         panic!(
             "{class} declares an override route and this table has no sample for it. \
              Add one built the way its deny site builds a refusal — do NOT relax the \
@@ -13928,7 +14101,10 @@ deny contains "refused by themodule" if {
             "the ceiling class keeps its hatch; if it gained an override route its \
              count binding would no longer be inert"
         );
-        let refusal = shape_refusal(&shape("r", "x", None));
+        // A row declaring no shape at all is the one that names nothing now.
+        let mut bare = shape("r", "x", None);
+        bare.pattern = None;
+        let refusal = shape_refusal(&bare);
         assert_eq!(
             refusal.bindings(),
             [crate::admission::subject_as_bound("call name refused")],
@@ -13936,6 +14112,32 @@ deny contains "refused by themodule" if {
             refusal.render_finding(crate::refusal::Arm::Full)
         );
         assert_eq!(refusal.bindings(), ["call,name,refused"]);
+    }
+
+    /// CLOUD-2185: a shape refusal names the shape its row declares — the
+    /// `pattern`, else the `tool` — so the line says what was refused, and the
+    /// admission binds that shape rather than the class's own words. Config,
+    /// never the caller's text: a call carrying more than the shape still
+    /// prints only the shape.
+    #[test]
+    fn a_shape_refusal_names_the_shape_it_refused() {
+        let refusal = shape_refusal(&shape("cargo run loose", "cargo", None));
+        assert_eq!(
+            refusal.render_finding(crate::refusal::Arm::Pointer),
+            "batten deny call name refused at cargo; admit with batten override request \
+             --rule 'cargo run loose' --verdict 'call name refused' --subject 'cargo'"
+        );
+        assert_eq!(refusal.bindings(), ["cargo"]);
+        let mut by_tool = shape("review watch refused", "x", None);
+        by_tool.pattern = None;
+        by_tool.tool = Some("subscribe_pr_activity".to_owned());
+        let by_tool = shape_refusal(&by_tool);
+        assert!(
+            by_tool
+                .render_finding(crate::refusal::Arm::Pointer)
+                .starts_with("batten deny call name refused at subscribe_pr_activity;")
+        );
+        assert_eq!(by_tool.bindings(), ["subscribe_pr_activity"]);
     }
 
     /// A receipt row's bindable subjects are listed per class, and its age
@@ -14278,8 +14480,8 @@ deny contains "refused by themodule" if {
         // is the token and the pointer and stops (CLOUD-1286), so the gloss's
         // opening parenthesis is the thing that must NOT be there.
         assert!(
-            reason.starts_with("verdict 'path write refused'"),
-            "the hot path leads with the labelled token: {reason}"
+            reason.starts_with("batten deny path write refused "),
+            "the hot path leads with the violation's class: {reason}"
         );
         assert!(
             !reason.contains("path write refused ("),
@@ -14308,10 +14510,168 @@ deny contains "refused by themodule" if {
                 .contains("\"fix\":null"),
             "the key is present and null"
         );
-        // The way out is the row's own hop (CLOUD-2075), never a bare "no".
+        // The row's own reason is its definition, never a bare "no".
         let line = refusal.render_finding(crate::refusal::Arm::Full);
-        assert!(line.contains("run batten policy rule 'some-row'"), "{line}");
+        assert!(line.starts_with("batten deny some-row — "), "{line}");
         assert!(line.contains("it fired"), "{line}");
+    }
+
+    /// CLOUD-2145: a finding is named by its VIOLATION CLASS, the name whose
+    /// definition a reader holds and looks up, on both arms — never by the row
+    /// that raised it, and with no lookup hop on the line.
+    #[test]
+    fn a_finding_is_named_by_its_violation_class() {
+        use crate::refusal::{Arm, Fix, Refusal};
+        let class = crate::verdict::Native::ProtectedMutation.id();
+        let split = Refusal::declared(
+            PROTECTED_MUTATION,
+            crate::verdict::Native::ProtectedMutation,
+            &[],
+            Fix::None,
+        );
+        for arm in [Arm::Pointer, Arm::Full] {
+            let line = split.render_finding(arm);
+            assert!(line.starts_with(&format!("batten deny {class};")), "{line}");
+            assert!(!line.contains("policy explain"), "{line}");
+            let parsed = crate::refusal::parse_finding(&line).expect("parses");
+            assert_eq!(parsed.verdict.as_deref(), Some(class), "{line}");
+        }
+    }
+
+    /// CLOUD-2145: the head's second word is how the finding bears on the call —
+    /// a refusal `deny`, an advisory its tier's word — so a reader can tell a
+    /// block from a nudge before reading on.
+    #[test]
+    fn an_advisory_finding_carries_its_severity() {
+        use crate::refusal::{Arm, Fix, Refusal, Severity};
+        let refusal = Refusal::declared(
+            PROTECTED_MUTATION,
+            crate::verdict::Native::ProtectedMutation,
+            &[],
+            Fix::None,
+        );
+        let class = crate::verdict::Native::ProtectedMutation.id();
+        for (severity, word) in [
+            (Severity::Deny, "deny"),
+            (Severity::Warn, "warn"),
+            (Severity::Note, "note"),
+        ] {
+            let line = refusal
+                .clone()
+                .with_severity(severity)
+                .render_finding(Arm::Pointer);
+            assert!(
+                line.starts_with(&format!("batten {word} {class}")),
+                "{line}"
+            );
+        }
+    }
+
+    /// CLOUD-1806: the row that raised a class is named ONCE, at the head of the
+    /// first firing's definition, so a reader can find it in the config; a row
+    /// whose id is its class names it once, as the class.
+    #[test]
+    fn a_first_sighting_names_the_row_that_raised_it() {
+        use crate::refusal::{Arm, Fix, Refusal};
+        let class = crate::verdict::Native::ProtectedMutation.id();
+        let split = Refusal::declared(
+            PROTECTED_MUTATION,
+            crate::verdict::Native::ProtectedMutation,
+            &[],
+            Fix::None,
+        );
+        let full = split.render_finding(Arm::Full);
+        assert!(
+            full.contains(&format!(" — {PROTECTED_MUTATION}: ")),
+            "{full}"
+        );
+        let collapsed = Refusal::declared(
+            class,
+            crate::verdict::Native::ProtectedMutation,
+            &[],
+            Fix::None,
+        )
+        .render_finding(Arm::Full);
+        assert!(
+            !collapsed.contains(&format!(" — {class}:")),
+            "a collapsed row names its one name once: {collapsed}"
+        );
+    }
+
+    /// CLOUD-2145: the repeat carries every pointer — name, subjects and every
+    /// route — and stops before the definition, a byte prefix of the full arm.
+    #[test]
+    fn the_repeat_carries_every_pointer_and_no_definition() {
+        use crate::refusal::{Arm, Fix, Refusal};
+        let refusal = Refusal::declared(
+            PROTECTED_MUTATION,
+            crate::verdict::Native::ProtectedMutation,
+            &[crate::verdict::artifact("src/a.rs")],
+            Fix::declared(Some("restore it with git")),
+        );
+        let repeat = refusal.render_finding(Arm::Pointer);
+        assert!(
+            repeat.starts_with("batten deny path write refused at src/a.rs; "),
+            "{repeat}"
+        );
+        assert!(repeat.contains("; read batten.toml"), "a route: {repeat}");
+        assert!(!repeat.contains(" —"), "no definition: {repeat}");
+        let full = refusal.render_finding(Arm::Full);
+        assert!(full.starts_with(&format!("{repeat} — ")), "{full}");
+        let collapsed = crate::refusal::collapse(&full, |_, _| false);
+        assert_eq!(collapsed, repeat, "a seen full arm collapses to the repeat");
+    }
+
+    /// CLOUD-2143: a first sighting carries the class's doc, and a row that
+    /// declares its own remedy puts it in place of the class's `do` — on the
+    /// full arm only.
+    #[test]
+    fn a_rule_reason_replaces_the_class_do() {
+        use crate::refusal::{Arm, Fix, Refusal};
+        let registry = vec![crate::verdict::DeclaredVerdict {
+            id: "task read first".to_owned(),
+            gloss: "a task was run before it was read".to_owned(),
+            doc: crate::doc::Doc {
+                why: Some("A task run blind changes what nobody checked".to_owned()),
+                act: vec!["read the class way out".to_owned()],
+                dont: vec!["retry it verbatim".to_owned()],
+            },
+            class: "The long definition.".to_owned(),
+            routes: vec![crate::verdict::Route {
+                id: "task read other".to_owned(),
+                kind: crate::verdict::RouteKind::Document,
+                target: "rules/tasks.md".to_owned(),
+                precondition: None,
+            }],
+            successor: None,
+            withdrawn: None,
+            applicability: crate::verdict::Applicability::Advice,
+        }];
+        let class_only = Refusal::from_class("row-a", &registry, "task read first", &[], Fix::None)
+            .render_finding(Arm::Full);
+        for part in [
+            "A task run blind changes what nobody checked.",
+            "Do: read the class way out.",
+            "Don't: retry it verbatim.",
+        ] {
+            assert!(class_only.contains(part), "`{part}` missing: {class_only}");
+        }
+        let row = Refusal::from_class(
+            "row-b",
+            &registry,
+            "task read first",
+            &[],
+            Fix::declared(Some("run the row's own way out")),
+        );
+        let full = row.render_finding(Arm::Full);
+        assert!(full.contains("Do: run the row's own way out."), "{full}");
+        assert!(!full.contains("read the class way out"), "{full}");
+        assert!(full.contains("Don't: retry it verbatim."), "{full}");
+        let pointer = row.render_finding(Arm::Pointer);
+        assert!(
+            !pointer.contains("Don't:"),
+            "the doc is the full arm's: {pointer}"
+        );
     }
 
     /// Adjudicate against the protected fixture with a declared redirect table.
@@ -15518,7 +15878,7 @@ deny contains "refused by themodule" if {
     #[test]
     fn the_tool_output_rewrite_is_emitted_only_where_measured() {
         let rewritten = serde_json::json!({
-            "stdout": "rule 'r'; run batten policy rule 'r'",
+            "stdout": "rule 'r'; run batten policy explain 'r'",
             "stderr": "",
             "interrupted": false,
         });
@@ -15543,9 +15903,15 @@ deny contains "refused by themodule" if {
             } else {
                 assert_eq!(encoded, None, "{harness:?} is not measured to rewrite");
             }
-            // No live probe has answered for any host yet, so every row is
-            // `Unknown` until one does — never a guessed `Yes` or `No`.
-            assert_eq!(declared, Declaration::Unknown, "{harness:?}");
+            // Only a live probe moves a row off `Unknown`, never a guess:
+            // Claude Code's answered `Yes` on 2026-10-08 (CLOUD-2171), and no
+            // other host's probe has run.
+            let measured = if *harness == Harness::ClaudeCode {
+                Declaration::Yes
+            } else {
+                Declaration::Unknown
+            };
+            assert_eq!(declared, measured, "{harness:?}");
         }
     }
 

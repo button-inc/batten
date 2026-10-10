@@ -2780,6 +2780,14 @@ expression: stdout_of(&output)
           "data_channel": true,
           "flags": [
             {
+              "name": "history",
+              "short": null,
+              "long": "history",
+              "takes_value": false,
+              "positional": false,
+              "help": "Print each named config row's history: the row at HEAD, then the commits that changed it"
+            },
+            {
               "name": "json",
               "short": "J",
               "long": "json",
@@ -2793,7 +2801,7 @@ expression: stdout_of(&output)
               "long": null,
               "takes_value": true,
               "positional": true,
-              "help": "The verdict token to resolve, e.g. task name undefined"
+              "help": "The names to resolve, as a finding line prints them: a rule, a class, an engine id"
             }
           ],
           "subcommands": []
@@ -4357,6 +4365,22 @@ expression: stdout_of(&output)
               "takes_value": false,
               "positional": false,
               "help": "Emit byte-stable JSON instead of pointer lines"
+            },
+            {
+              "name": "path",
+              "short": null,
+              "long": "path",
+              "takes_value": true,
+              "positional": false,
+              "help": "Only findings observed in this file"
+            },
+            {
+              "name": "rule",
+              "short": null,
+              "long": "rule",
+              "takes_value": true,
+              "positional": false,
+              "help": "Only findings of this rule"
             }
           ],
           "subcommands": []

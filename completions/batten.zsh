@@ -2694,6 +2694,7 @@ debug\:"Add resolution detail"
 trace\:"Add everything"))' \
 '-J[Emit byte-stable JSON instead of pointer lines]' \
 '--json[Emit byte-stable JSON instead of pointer lines]' \
+'--history[Print each named config row'\''s history\: the row at HEAD, then the commits that changed it]' \
 '--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
 '*--silent[Say nothing but a verdict or a usage error]' \
 '*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
@@ -2708,7 +2709,7 @@ trace\:"Add everything"))' \
 '--yes[Confirm a destructive operation that would otherwise refuse]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
-':token -- The verdict token to resolve, e.g. task name undefined:_default' \
+':token -- The names to resolve, as a finding line prints them\: a rule, a class, an engine id:_default' \
 && ret=0
 ;;
 (rule)
@@ -5918,6 +5919,8 @@ trace\:"Add everything"))' \
 ;;
 (list)
 _arguments "${_arguments_options[@]}" : \
+'--rule=[Only findings of this rule]:rule:_default' \
+'--path=[Only findings observed in this file]:path:_default' \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \

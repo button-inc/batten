@@ -1,4 +1,4 @@
 argv: check
 exit: 2
 stdout:
-notes.md:1 rule 'no-appeal-to-authority'
+batten deny no-appeal-to-authority at notes.md:1

@@ -343,14 +343,22 @@ fn a_depends_entry_naming_a_retired_file_task_is_refused() {
     // is the shell comment naming a task, which must not be reported.
     let text = said(&decided);
     assert!(
-        text.contains("mise.toml:5 "),
+        placed(&text, "mise.toml:5"),
         "the depends entry is placed\n{text}"
     );
-    assert!(text.contains("mise.toml:11 "), "and the body call\n{text}");
+    assert!(placed(&text, "mise.toml:11"), "and the body call\n{text}");
     assert!(
-        !text.contains("mise.toml:10 "),
+        !placed(&text, "mise.toml:10"),
         "a shell comment in a task body is not a caller\n{text}"
     );
+}
+
+/// Whether a report line places a finding at exactly `at` (`path:line`), the
+/// subject following ` at ` and ending the line or the location.
+fn placed(text: &str, at: &str) -> bool {
+    let subject = format!(" at {at}");
+    text.lines()
+        .any(|line| line.ends_with(&subject) || line.contains(&format!("{subject} ")))
 }
 
 #[test]
@@ -371,9 +379,9 @@ fn an_hk_step_naming_an_undefined_task_is_refused() {
     assert_eq!(decided.status.code(), Some(2), "{}", said(&decided));
     // Line 3 is the dangling step; line 1 is a `//` comment naming a task.
     let text = said(&decided);
-    assert!(text.contains("hk.pkl:3 "), "{text}");
+    assert!(placed(&text, "hk.pkl:3"), "{text}");
     assert!(
-        !text.contains("hk.pkl:1 "),
+        !placed(&text, "hk.pkl:1"),
         "a comment names no caller\n{text}"
     );
 }

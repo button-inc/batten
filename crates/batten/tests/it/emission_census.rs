@@ -272,6 +272,198 @@ fn the_label_census_discriminates() {
     );
 }
 
+// --- the explain-hop census (CLOUD-2142) ------------------------------------
+
+/// The constructors whose first argument is the rule id a line's hop names.
+const CONSTRUCTORS: &[&str] = &["Refusal::declared(", "Refusal::new(", "Refusal::unloaded("];
+
+/// The rule id an argument spells, where it is static: a literal, a constant
+/// (resolved in `consts`, keyed by its last path segment and preferring the
+/// module the path names), or a `format!` literal's prefix suffixed with `x`.
+/// `None` for a runtime value — a consumer row's own id, which its row answers.
+fn static_id(
+    argument: &str,
+    file: &str,
+    consts: &std::collections::BTreeMap<(String, String), String>,
+) -> Option<String> {
+    let argument = argument.trim().trim_start_matches('&');
+    if let Some(rest) = argument.strip_prefix('"') {
+        return rest.split('"').next().map(str::to_owned);
+    }
+    if let Some(rest) = argument.strip_prefix("format!(\"") {
+        let prefix = rest.split(['{', '"']).next().unwrap_or_default();
+        return Some(format!("{prefix}x"));
+    }
+    let segments: Vec<&str> = argument.split("::").collect();
+    let name = *segments.last()?;
+    if !name
+        .chars()
+        .all(|c| c.is_ascii_uppercase() || c == '_' || c.is_ascii_digit())
+        || !name.starts_with(|c: char| c.is_ascii_uppercase())
+    {
+        return None;
+    }
+    let module = segments
+        .len()
+        .checked_sub(2)
+        .map_or(file, |at| segments[at]);
+    consts
+        .get(&(module.to_owned(), name.to_owned()))
+        .or_else(|| {
+            consts
+                .iter()
+                .find(|((_, held), _)| held == name)
+                .map(|(_, value)| value)
+        })
+        .cloned()
+}
+
+/// Every constructor call's first argument in `source`'s production half.
+fn constructor_arguments(source: &str) -> Vec<String> {
+    let production: String = source
+        .split("#[cfg(test)]")
+        .next()
+        .unwrap_or(source)
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("//"))
+        .flat_map(|line| [line, "\n"])
+        .collect();
+    let production = production.as_str();
+    let mut found = Vec::new();
+    for constructor in CONSTRUCTORS {
+        for (at, _) in production.match_indices(constructor) {
+            let rest = &production[at + constructor.len()..];
+            // Up to the first comma at depth zero, which may sit lines later.
+            let mut depth = 0_i32;
+            let end = rest
+                .char_indices()
+                .find(|&(_, c)| {
+                    match c {
+                        '(' => depth += 1,
+                        ')' | ',' if depth == 0 => return true,
+                        ')' => depth -= 1,
+                        _ => {}
+                    }
+                    false
+                })
+                .map_or(rest.len(), |(end, _)| end);
+            found.push(rest[..end].trim().to_owned());
+        }
+    }
+    found
+}
+
+/// `const NAME: &str = "value";` in `source`.
+fn string_consts(source: &str) -> Vec<(String, String)> {
+    source
+        .lines()
+        .filter_map(|line| {
+            let rest = line
+                .trim()
+                .trim_start_matches("pub ")
+                .trim_start_matches("pub(crate) ");
+            let rest = rest.strip_prefix("const ")?;
+            let (name, value) = rest.split_once(": &str = \"")?;
+            Some((name.to_owned(), value.split('"').next()?.to_owned()))
+        })
+        .collect()
+}
+
+#[test]
+fn every_refusal_id_the_engine_raises_resolves() {
+    let mut files = Vec::new();
+    sources(&at_root("crates/batten/src"), &mut files);
+    let texts: Vec<(String, String)> = files
+        .iter()
+        .map(|path| {
+            let stem = path
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .unwrap_or_default();
+            // A `mod.rs` is its directory's module.
+            let module = if stem == "mod" {
+                path.parent()
+                    .and_then(|dir| dir.file_name())
+                    .and_then(|name| name.to_str())
+                    .unwrap_or_default()
+            } else {
+                stem
+            };
+            (
+                module.to_owned(),
+                fs::read_to_string(path).expect("a source file is readable"),
+            )
+        })
+        .collect();
+    let consts: std::collections::BTreeMap<(String, String), String> = texts
+        .iter()
+        .flat_map(|(module, source)| {
+            string_consts(source)
+                .into_iter()
+                .map(move |(name, value)| ((module.clone(), name), value))
+        })
+        .collect();
+    let mut names = std::collections::BTreeSet::new();
+    for (module, source) in &texts {
+        for argument in constructor_arguments(source) {
+            if let Some(id) = static_id(&argument, module, &consts) {
+                names.insert(id);
+            }
+        }
+    }
+    // Anti-vacuity: the engine's own ids are among what the scan read.
+    for known in [
+        "engine-cannot-adjudicate",
+        "protected-mutation",
+        "stop.unfinished",
+    ] {
+        assert!(names.contains(known), "the census found {known}: {names:?}");
+    }
+    let mut args = vec!["policy", "explain"];
+    args.extend(names.iter().map(String::as_str));
+    let explained = common::run(&at_root(""), &args);
+    assert!(
+        explained.status.success(),
+        "every engine-raised id resolves through `policy explain`: {}",
+        common::stderr(&explained)
+    );
+}
+
+#[test]
+fn the_refusal_id_census_discriminates() {
+    let consts = std::collections::BTreeMap::from([
+        (
+            ("hk".to_owned(), "DRIFT_RULE".to_owned()),
+            "hk-drift".to_owned(),
+        ),
+        (("stop".to_owned(), "RULE".to_owned()), "stop.x".to_owned()),
+        (
+            ("other".to_owned(), "RULE".to_owned()),
+            "other.x".to_owned(),
+        ),
+    ]);
+    let id = |argument: &str| static_id(argument, "other", &consts);
+    assert_eq!(id("\"engine-x\"").as_deref(), Some("engine-x"));
+    assert_eq!(id("hk::DRIFT_RULE").as_deref(), Some("hk-drift"));
+    assert_eq!(id("crate::stop::RULE").as_deref(), Some("stop.x"));
+    assert_eq!(
+        id("RULE").as_deref(),
+        Some("other.x"),
+        "the file's own first"
+    );
+    assert_eq!(
+        id("&format!(\"hook.handler.{id}\")").as_deref(),
+        Some("hook.handler.x")
+    );
+    assert_eq!(id("&rule.id"), None, "a runtime id is its row's to answer");
+    let arguments = constructor_arguments(
+        "/// Refusal::new(\"doc-only\", c)\n\
+         fn a() { Refusal::declared(\n    X,\n    y(1, 2),\n); Refusal::new(f(a, b), c) }\n\
+         #[cfg(test)]\nfn t() { Refusal::new(\"test-only\", c) }\n",
+    );
+    assert_eq!(arguments, vec!["X".to_owned(), "f(a, b)".to_owned()]);
+}
+
 #[test]
 fn every_hook_source_declares_its_finding_lifecycle() {
     use batten::hook::{HookSource, Lifecycle};
@@ -282,4 +474,65 @@ fn every_hook_source_declares_its_finding_lifecycle() {
         };
         assert_eq!(source.finding_lifecycle(), expected, "{}", source.as_str());
     }
+}
+
+// --- the advisory class census (CLOUD-2078) ---------------------------------
+
+/// Every raw `Advice::new(` in production code outside `advisory.rs`, which
+/// defines it: an advisory built from free text rather than from a classed
+/// finding through `push_finding` or `Advice::rendered`.
+fn unclassed_advice(source: &str) -> Vec<(usize, String)> {
+    let production = source.split("#[cfg(test)]").next().unwrap_or(source);
+    production
+        .lines()
+        .enumerate()
+        .filter(|(_, line)| !line.trim_start().starts_with("//"))
+        .filter(|(_, line)| line.contains("Advice::new("))
+        .map(|(index, line)| (index + 1, line.trim().to_owned()))
+        .collect()
+}
+
+/// EVERY ADVISORY NAMES ITS CLASS. A free-text advisory is a line a reader can
+/// look up nowhere, which is the gap CLOUD-2078 closed emitter by emitter; this
+/// keeps a new one from reopening it.
+///
+/// The suite `capture-notice-free-text` is killed in.
+#[test]
+fn every_advisory_push_carries_a_class() {
+    let mut files = Vec::new();
+    sources(&at_root("crates/batten/src"), &mut files);
+    assert!(files.len() > 10, "the census reads the source tree");
+    let mut found = Vec::new();
+    for path in &files {
+        if path.ends_with("advisory.rs") {
+            continue;
+        }
+        let source = fs::read_to_string(path).expect("a source file is readable");
+        for (line, text) in unclassed_advice(&source) {
+            found.push(format!("{}:{line} {text}", path.display()));
+        }
+    }
+    assert!(
+        found.is_empty(),
+        "push a classed finding through `push_finding`, never free text: {found:#?}"
+    );
+}
+
+#[test]
+fn the_advisory_census_discriminates() {
+    let seeded = "fn a() {\n    advice.push(advisory::Advice::new(tier, text));\n}\n";
+    assert_eq!(unclassed_advice(seeded).len(), 1, "a raw push is found");
+    assert!(
+        unclassed_advice("// advice.push(Advice::new(tier, text))\n").is_empty(),
+        "a comment is not an emission"
+    );
+    assert!(
+        unclassed_advice("fn a() {}\n#[cfg(test)]\nfn t() { Advice::new(tier, text); }\n")
+            .is_empty(),
+        "a test tail is not production"
+    );
+    assert!(
+        unclassed_advice("    push_finding(advice, tier, refusal);\n").is_empty(),
+        "the classed route is not flagged"
+    );
 }

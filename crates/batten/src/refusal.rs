@@ -233,6 +233,11 @@ pub struct Refusal {
     /// The id that refused: a `[[rule]]` row's id, or a derived gate's declared
     /// constant. What a reviewer greps for in `batten.toml`.
     rule: String,
+    /// How the finding bears on the call: the line's second word (CLOUD-2145).
+    /// `Deny` unless the channel that carries it says otherwise
+    /// ([`Refusal::with_severity`]). A rendering input, so not serialized.
+    #[serde(skip)]
+    severity: Severity,
     /// Every route the class declares, override routes included, unrendered
     /// (CLOUD-2075). [`finding_line`] renders them by kind on BOTH arms.
     ///
@@ -252,10 +257,6 @@ pub struct Refusal {
     /// ([`Refusal::read_through`]).
     #[serde(skip)]
     readers: std::collections::BTreeMap<String, String>,
-    /// Whether `batten policy rule '<id>'` resolves this refusal's row: false
-    /// only where the config did not load ([`Refusal::unloaded`]).
-    #[serde(skip)]
-    dereferenceable: bool,
     /// The one-line gloss of the declared class, for the first-sighting arm
     /// (CLOUD-1637).
     ///
@@ -269,6 +270,11 @@ pub struct Refusal {
     /// and so has no gloss to carry.
     #[serde(skip)]
     gloss: String,
+    /// The class's interaction doc, rendered on the full arm after the gloss
+    /// (CLOUD-2143). Skipped for [`Refusal::gloss`]'s reason: the `-J` payload
+    /// is unchanged. Empty for a refusal with no class.
+    #[serde(skip)]
+    doc: crate::doc::Doc,
     /// The declared class this refusal belongs to, when it has one (CLOUD-1050).
     ///
     /// `Some` for every one of Batten's OWN refusal sites, which name a
@@ -406,13 +412,15 @@ fn admission_bindings(token: &str, subjects: &[crate::verdict::Subject]) -> Vec<
 /// `$GIT_DIR/batten-sightings/<digest(context)>/<digest(key)>`, where the context
 /// is the session plus the agent id where a subagent is the reader — a
 /// subagent's first sighting used to come back compact because another context
-/// in the clone had already marked it. Each file holds the FULL arm's text, so a
-/// compaction can re-deliver it.
+/// in the clone had already marked it. Each file holds the full arm's text, for
+/// a reader of the store; nothing re-delivers it.
 ///
-/// **Compaction is a `SessionStart` with `source: compact`**, and it is visible:
-/// the boundary re-delivers every full arm this context holds on that event and
-/// keeps the marks, so the context holds exactly one copy at every moment. Any
-/// other source forgets this context alone.
+/// **A window is an epoch, and a new one starts empty (CLOUD-2145).** A
+/// `SessionStart` that loses the window — `compact`, `clear`, `startup` —
+/// forgets this context alone, and each gate's NEXT firing is full again; one
+/// that carries it over — `resume`, `fork` — keeps it. Nothing is pushed at the
+/// boundary: an eager re-delivery paid for every gate the previous window met,
+/// most of which never fire again, into one channel with a size cap.
 ///
 /// **A failure to read or write answers TRUE**, which is the direction that
 /// matters: an unreadable store means the class explains itself again, costing a
@@ -423,19 +431,40 @@ pub fn first_sighting(root: &Path, context: &str, key: &str, full: &str) -> bool
     let Some(dir) = context_dir(root, context) else {
         return true;
     };
-    // One file per key rather than a list: two refusals firing concurrently
-    // would otherwise read-modify-write the same document and one would lose its
-    // mark, which shows up as a rule explaining itself twice — cheap, but the
-    // kind of race that is easier to not have.
+    // One file per key, CREATED EXCLUSIVELY (CLOUD-2145): the existence test and
+    // the mark are one operation, so of a parallel batch of identical firings
+    // exactly one reads "first". A check-then-write let every one of them.
     let path = dir.join(crate::provision::digest(key.as_bytes()));
-    if path.exists() {
-        return false;
-    }
     let _ = std::fs::create_dir_all(&dir);
-    // Discarded deliberately: an unwritable store means the next firing explains
-    // itself again, which is the safe direction.
-    let _ = crate::durable::replace(&path, full);
-    true
+    // An error other than "already there" answers TRUE: an unwritable store
+    // means the next firing explains itself again, which is the safe direction.
+    crate::durable::create_exclusive(&path, full).unwrap_or(true)
+}
+
+/// The one sentence a finding cannot carry itself, delivered once per epoch
+/// ahead of the first finding that reaches a context (CLOUD-2145): where a
+/// definition no longer in context is looked up. The line's shape is NOT
+/// described here: it is the same every time, so the first finding shows it.
+pub const LEGEND: &str = "`batten policy explain <class>` prints any finding's definition.";
+
+/// The sighting key the legend is marked under: no class token has a space-free
+/// spelling, so it collides with none.
+const LEGEND_KEY: &str = "legend";
+
+/// Whether this context's epoch still owes the legend, marking it delivered.
+//MUTANT legend-every-firing|s@^    first_sighting(root, context, LEGEND_KEY, LEGEND)$@    true@|the_first_finding_of_an_epoch_carries_the_legend
+#[must_use]
+pub fn legend_due(root: &Path, context: &str) -> bool {
+    first_sighting(root, context, LEGEND_KEY, LEGEND)
+}
+
+/// `text` with the legend ahead of it if this context has not had it this epoch.
+#[must_use]
+pub fn with_legend(root: &Path, context: &str, text: &str) -> String {
+    if legend_due(root, context) {
+        return format!("{LEGEND}\n{text}");
+    }
+    text.to_owned()
 }
 
 /// The directory one context's sightings live in.
@@ -457,6 +486,24 @@ pub fn sight(root: &Path, context: &str, refusal: &Refusal) -> Arm {
     Arm::Full
 }
 
+/// Which arm `refusal` WOULD get in `context`, marking nothing (CLOUD-2175).
+///
+/// The advisory channel decides what fits by this, then marks only what it
+/// admits: a finding marked and then cut would read as delivered to a reader
+/// who never saw it, and its next firing would be the pointer alone.
+#[must_use]
+pub fn peek(root: &Path, context: &str, refusal: &Refusal) -> Arm {
+    let Some(dir) = context_dir(root, context) else {
+        return Arm::Full;
+    };
+    let key = refusal.sighting_key();
+    if dir.join(crate::provision::digest(key.as_bytes())).exists() {
+        Arm::Pointer
+    } else {
+        Arm::Full
+    }
+}
+
 /// Forget every item this ONE context has seen (CLOUD-2075). Other contexts in
 /// the clone are never touched.
 //MUTANT forget-sightings-noop|s@^        let _ = std::fs::remove_dir_all(dir);$@        let _ = dir;@|a_session_start_forgets_only_that_contexts_sightings
@@ -464,23 +511,6 @@ pub fn forget_sightings(root: &Path, context: &str) {
     if let Some(dir) = context_dir(root, context) {
         let _ = std::fs::remove_dir_all(dir);
     }
-}
-
-/// Every full arm this context has seen, sorted so re-delivery is byte-stable.
-#[must_use]
-pub fn sighted(root: &Path, context: &str) -> Vec<String> {
-    let Some(dir) = context_dir(root, context) else {
-        return Vec::new();
-    };
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return Vec::new();
-    };
-    let mut texts: Vec<String> = entries
-        .filter_map(Result::ok)
-        .filter_map(|entry| std::fs::read_to_string(entry.path()).ok())
-        .collect();
-    texts.sort_unstable();
-    texts
 }
 
 /// An item's identity: the rule, the class, and a digest of its DEFINITION, so
@@ -503,6 +533,10 @@ pub struct Parsed {
     pub arm: Arm,
     /// [`key_of`] over the line's definition.
     pub key: String,
+    /// The routes the line offered, each as printed (`run <command>`,
+    /// `read <path>[ via <tool>]`), override requests excluded: pointers, which
+    /// is what lets a census ask whether the next call took one (CLOUD-2141).
+    pub routes: Vec<String>,
 }
 
 /// Read one quoted name from the front of `text`, returning it and the rest.
@@ -524,21 +558,102 @@ fn unquote(text: &str) -> Option<(String, &str)> {
     }
 }
 
+/// The class a pre-CLOUD-2145 `rule` line names as its lookup hop's second name.
+fn named_class(line: &str, rule: &str) -> Option<String> {
+    let (_, after) = line.split_once("; run batten policy explain ")?;
+    let (first, rest) = unquote(after)?;
+    if first != rule {
+        return None;
+    }
+    let (class, _) = unquote(rest.strip_prefix(' ')?)?;
+    Some(class)
+}
+
 /// The ONE reader of the finding grammar
-/// `[verdict '<T>' ]rule '<R>'[ at <S>](; <route>)*[ — <tail>]`.
+/// `batten <severity> <name>[ at <S>](; <route>)*[ — <definition>]`, and of the
+/// labelled lines releases before CLOUD-2145 printed.
 ///
-/// `None` for a line that does not open with a label, which is every line that
-/// is not a finding.
+/// `None` for a line that does not open with the head, which is every line that
+/// is not a finding. The name is returned as `verdict` — on a headed line it is
+/// the class, or a classless row's id — and `rule` is empty: the line names the
+/// violation, not the row that raised it.
+///
+/// A CHANNEL PREFIX ending `: ` (`::error:: land: `) is read past rather than
+/// part of the grammar. Only a prefix ending `: ` qualifies, so prose that
+/// merely mentions a finding mid-sentence is never read as one.
 #[must_use]
 pub fn parse_finding(line: &str) -> Option<Parsed> {
-    let mut rest = line;
-    let mut verdict = None;
-    if let Some(after) = rest.strip_prefix("verdict ") {
-        let (name, tail) = unquote(after)?;
-        verdict = Some(name);
-        rest = tail.strip_prefix(' ')?;
+    parse_headed(line).or_else(|| parse_labelled(line))
+}
+
+/// The CLOUD-2145 line: `batten <severity> <name>[ at <S>](; <route>)*[ — …]`.
+///
+/// The head is the recogniser: no harness writes a line opening `batten deny `,
+/// `batten warn ` or `batten note `, so nothing else is read as a finding. The
+/// name runs to the first ` at `, `; ` or ` —`, which no name may contain.
+fn parse_headed(line: &str) -> Option<Parsed> {
+    let (opening, severity) = Severity::ALL
+        .iter()
+        .filter_map(|severity| {
+            line.find(&format!("{PROVENANCE} {} ", severity.word()))
+                .map(|at| (at, *severity))
+        })
+        .min_by_key(|(at, _)| *at)?;
+    let (prefix, line) = line.split_at(opening);
+    if !(prefix.is_empty() || prefix.ends_with(": ")) {
+        return None;
     }
-    let (rule, _) = unquote(rest.strip_prefix("rule ")?)?;
+    let after = &line[PROVENANCE.len() + severity.word().len() + 2..];
+    let end = [" at ", "; ", " —"]
+        .iter()
+        .filter_map(|delimiter| after.find(delimiter))
+        .min()
+        .unwrap_or(after.len());
+    let name = after[..end].to_owned();
+    if name.is_empty() {
+        return None;
+    }
+    Some(read_body(line, String::new(), Some(name)))
+}
+
+/// A line from a release before CLOUD-2145, opening with a quoted label:
+/// `[verdict '<T>' ]rule '<R>'…` or `verdict '<T>'…`. Read so a transcript a
+/// session wrote then still measures.
+fn parse_labelled(line: &str) -> Option<Parsed> {
+    let opening = ["verdict '", "rule '"]
+        .iter()
+        .filter_map(|label| line.find(label))
+        .min()?;
+    let (prefix, line) = line.split_at(opening);
+    if !(prefix.is_empty() || prefix.ends_with(": ")) {
+        return None;
+    }
+    // ONE LABEL, ONE NAME (CLOUD-2142). A `rule` line names its class, where it
+    // has a different one, as the hop's second name; a line from a release that
+    // still printed `verdict '<T>' rule '<R>'` reads the same way.
+    let (mut verdict, rest) = match line.strip_prefix("verdict ") {
+        Some(after) => {
+            let (name, tail) = unquote(after)?;
+            (Some(name), tail)
+        }
+        None => (None, line),
+    };
+    let rule = match rest
+        .strip_prefix(" rule ")
+        .or_else(|| rest.strip_prefix("rule "))
+    {
+        Some(after) => unquote(after)?.0,
+        None if verdict.is_some() => String::new(),
+        None => return None,
+    };
+    if verdict.is_none() {
+        verdict = named_class(line, &rule);
+    }
+    Some(read_body(line, rule, verdict))
+}
+
+/// The arm, routes and key of a finding line whose names were read.
+fn read_body(line: &str, rule: String, verdict: Option<String>) -> Parsed {
     let (head, tail) = match line.split_once(" —") {
         Some((head, tail)) => (head, Some(tail)),
         None => (line, None),
@@ -558,12 +673,14 @@ pub fn parse_finding(line: &str) -> Option<Parsed> {
         .collect();
     let definition = format!("{} —{}", routes.join("; "), tail.unwrap_or_default());
     let key = key_of(&rule, verdict.as_deref(), &definition);
-    Some(Parsed {
+    let routes = routes.iter().map(|route| (*route).to_owned()).collect();
+    Parsed {
         verdict,
         rule,
         arm,
         key,
-    })
+        routes,
+    }
 }
 
 /// Cut every full arm `mark` reports already seen to its pointer prefix,
@@ -605,13 +722,93 @@ pub enum Arm {
     Pointer,
 }
 
+/// The word every finding line opens with, naming the binary that raised it and
+/// that `policy explain` is run through (CLOUD-2145). No harness writes a line
+/// opening `batten <severity> `, so it is also what tells a finding apart from
+/// a host's own messages.
+pub const PROVENANCE: &str = "batten";
+
+/// What a line is, as its second word (CLOUD-2145): for a finding, how it
+/// bears on the call — `deny` refused it, `warn` must be answered soon, `note`
+/// eventually — and `remedy` for a line that is no finding at all but how a
+/// rule's findings are fixed. One ASCII token each, the shape of a compiler's
+/// `error`/`warning`/`help`.
+///
+/// THE WORD, NOT THE SHAPE, SAYS IT IS A REMEDY: a finding may name no subject
+/// (`batten deny plan write refused; run ExitPlanMode…`), so a missing ` at `
+/// cannot mark a remedy line, and a reader merging stdout and stderr would read
+/// `batten deny <rule> — …` as a second finding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Severity {
+    /// The call was refused.
+    #[default]
+    Deny,
+    /// An advisory to answer before the work goes much further.
+    Warn,
+    /// An advisory with no deadline.
+    Note,
+    /// Not a finding: how a rule's findings, each on its own line, are fixed.
+    Remedy,
+}
+
+impl Severity {
+    /// Every head word.
+    pub const ALL: [Severity; 4] = [
+        Severity::Deny,
+        Severity::Warn,
+        Severity::Note,
+        Severity::Remedy,
+    ];
+
+    /// The word the line carries.
+    #[must_use]
+    pub const fn word(self) -> &'static str {
+        match self {
+            Severity::Deny => "deny",
+            Severity::Warn => "warn",
+            Severity::Note => "note",
+            Severity::Remedy => "remedy",
+        }
+    }
+
+    /// The severity an advisory of `tier` is printed under.
+    #[must_use]
+    pub const fn of_tier(tier: crate::severity::AdvisoryTier) -> Severity {
+        match tier {
+            crate::severity::AdvisoryTier::Warning | crate::severity::AdvisoryTier::Caution => {
+                Severity::Warn
+            }
+            crate::severity::AdvisoryTier::Advisory => Severity::Note,
+        }
+    }
+}
+
+/// Whether `text` opens with a finding's head, `batten <severity> `.
+#[must_use]
+pub fn is_headed(text: &str) -> bool {
+    Severity::ALL.iter().any(|severity| {
+        text.strip_prefix(PROVENANCE)
+            .and_then(|rest| rest.strip_prefix(' '))
+            .and_then(|rest| rest.strip_prefix(severity.word()))
+            .is_some_and(|rest| rest.starts_with(' '))
+    })
+}
+
+/// The ONE spelling of a finding's head, `batten <severity> <name>`. Every line
+/// that reports a finding opens with this; `emission_census` refuses a
+/// hand-spelled one.
+#[must_use]
+pub fn head(severity: Severity, name: &str) -> String {
+    format!("{PROVENANCE} {} {}", severity.word(), plain(name))
+}
+
 /// The two names a finding line labels, so a reader can always tell a rule
 /// from a verdict (CLOUD-2075).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Label {
     /// A declared class, dereferenced by `batten policy explain`.
     Verdict,
-    /// A `[[rule]]` id, dereferenced by `batten policy rule`.
+    /// A `[[rule]]` id; `batten policy explain` dereferences both labels.
     Rule,
 }
 
@@ -652,49 +849,74 @@ const OVERRIDE_OPENER: &str = "admit with batten override request ";
 /// CLOUD-1806's class route. The hop [`finding_line`] appends names the same
 /// verb with the real id, so a route whose target is this placeholder is
 /// dropped at render rather than printed twice.
-pub(crate) const RULE_HOP_PLACEHOLDER: &str = "batten policy rule '<rule-id>'";
+pub(crate) const RULE_HOP_PLACEHOLDER: &str = "batten policy explain '<rule-id>'";
 
-/// The one projection every channel carries (CLOUD-2075):
-/// `[verdict '<T>' ]rule '<R>'[ at <S>](; <route>)*[; run batten policy rule '<R>'][ — <tail>]`.
+/// The one projection every channel carries (CLOUD-2075, CLOUD-2142):
+/// `<label> '<name>'[ at <S>](; <route>)*[ — ['<T>' ]<definition>]`,
+/// the label `rule` or, for an engine finding with no row, `verdict`.
 ///
-/// Both labels are printed even where the id equals the token, so a reader can
-/// always tell a rule from a verdict. Every route — override routes included,
-/// each a ready `override request` with the subject the refusal binds — is on
-/// BOTH arms, so the pointer arm sheds no way out. The full arm adds the
-/// definition: the class gloss (or the undeclared refusal's reason), the row's
-/// own remedy, each override's precondition, and the `explain` hop.
+/// **Every firing carries every pointer**: the name, the subjects, and every
+/// route — override routes included, each a ready `override request` with the
+/// subject the refusal binds. Those are how a finding is fixed.
+///
+/// **Only the definition is said once per window** (CLOUD-2145): the repeat is
+/// a byte prefix of the first firing, stopping before ` — `. The definition is
+/// the row that raised the class (`<rule>:`, where it is another name), the
+/// class gloss (or the undeclared refusal's reason), the row's own remedy, and
+/// each override's precondition. A compaction forgets the window, so the next firing after one
+/// is full again. No line carries a lookup hop: the legend says how to look up.
 ///
 /// Nothing is shed and no ceiling is consulted: `[refusal]`'s keys are
 /// measured by `refusal_ceiling`'s corpus case, which reports an over-ceiling
 /// line rather than truncating one.
-//MUTANT full-arm-reason-dropped|s@^    if let Some(remedy) = refusal.remedy() {$@    if let Some(remedy) = None::<\&str> {@|a_first_sighting_carries_the_rows_reason_and_both_labels
-//MUTANT pointer-arm-routes-dropped|s@^    for route in routes(refusal) {$@    for route in routes(refusal).into_iter().take(if arm == Arm::Full { usize::MAX } else { 0 }) {@|the_pointer_arm_carries_every_route_and_subject_the_full_arm_does
-//MUTANT collapsed-row-unlabelled|s@^    if let Some(token) = refusal.verdict() {$@    if let Some(token) = refusal.verdict() \&\& token != refusal.rule() {@|a_collapsed_row_still_labels_rule_and_verdict
+//MUTANT full-arm-reason-dropped|s@^    let remedy = refusal.remedy();$@    let remedy = None::<\&str>;@|a_first_sighting_carries_the_rows_reason_and_both_labels
+//MUTANT reason-replaces-do-dropped|s@^        Some(remedy) => vec!\[remedy\],$@        Some(_) => refusal.doc.act.iter().map(String::as_str).collect(),@|a_rule_reason_replaces_the_class_do
+//MUTANT repeat-carries-definition|s@^    let repeat = arm == Arm::Pointer;$@    let repeat = false;@|the_repeat_carries_every_pointer_and_no_definition
+//MUTANT repeat-drops-routes|s@^    for route in routes(refusal) {$@    for route in routes(refusal).into_iter().take(if arm == Arm::Full { usize::MAX } else { 0 }) {@|the_repeat_carries_every_pointer_and_no_definition
+//MUTANT named-by-rule|s@^    let name = refusal.verdict().unwrap_or(refusal.rule());$@    let name = if refusal.rule().is_empty() { refusal.verdict().unwrap_or_default() } else { refusal.rule() };@|a_finding_is_named_by_its_violation_class
 //MUTANT advice-routes-dropped|s@^    for route in routes(refusal) {$@    for route in routes(refusal).into_iter().take(0) {@|a_warn_advisory_carries_its_document_route_on_an_allowed_pre_tool_call
-//MUTANT rule-label-dropped|s@^    line.push_str(\&label(Label::Rule, refusal.rule()));$@    line.push_str(refusal.rule());@|every_hook_policy_table_deny_names_its_fix
+//MUTANT raising-row-dropped|s@^    if raised_by {$@    if false {@|a_first_sighting_names_the_row_that_raised_it
+//MUTANT severity-unprinted|s@^    let mut line = head(refusal.severity, name);$@    let mut line = head(Severity::Deny, name);@|an_advisory_finding_carries_its_severity
 fn finding_line(refusal: &Refusal, arm: Arm) -> String {
-    let mut line = String::new();
-    if let Some(token) = refusal.verdict() {
-        line.push_str(&label(Label::Verdict, token));
-        line.push(' ');
-    }
-    line.push_str(&label(Label::Rule, refusal.rule()));
+    // THE VIOLATION'S NAME (CLOUD-2145): the class, whose definition is the one
+    // a reader holds and looks up, and which explains the pointers below. Only a
+    // classless consumer row is named by its own id. The row that raised a class
+    // is named where a route needs it: the override request's `--rule`.
+    let name = refusal.verdict().unwrap_or(refusal.rule());
+    let mut line = head(refusal.severity, name);
     if !refusal.subjects.is_empty() {
         line.push_str(" at ");
         line.push_str(&plain(&refusal.subjects));
     }
+    // EVERY POINTER, ON EVERY FIRING (CLOUD-2145): the routes are how the
+    // finding is fixed, so a repeat that dropped them would say what is wrong
+    // and not what to do about it.
     for route in routes(refusal) {
         line.push_str("; ");
         line.push_str(&route);
     }
-    if refusal.dereferenceable {
-        line.push_str("; run batten policy rule ");
-        line.push_str(&quoted(refusal.rule()));
-    }
-    if arm == Arm::Pointer {
+    // THE REPEAT STOPS HERE: only the definition is said once per window.
+    let repeat = arm == Arm::Pointer;
+    if repeat {
         return line;
     }
+    // No per-line lookup hop: the legend says how to look a name up. The tail
+    // is built apart so a finding with nothing to define ends at its routes
+    // rather than at a dash promising a definition that never comes.
+    let head_len = line.len();
     line.push_str(" —");
+    let dash_len = line.len();
+    // THE ROW THAT RAISED IT, ONCE (CLOUD-1806): a reader can find it in the
+    // config, and two rows raising one class are two definitions, each with
+    // its own remedy. Not on the repeat: the class is what is looked up.
+    let raised_by = refusal
+        .verdict()
+        .is_some_and(|class| !refusal.rule().is_empty() && class != refusal.rule());
+    if raised_by {
+        line.push(' ');
+        line.push_str(&plain(refusal.rule()));
+        line.push(':');
+    }
     let definition = if refusal.verdict.is_some() {
         &refusal.gloss
     } else {
@@ -704,9 +926,18 @@ fn finding_line(refusal: &Refusal, arm: Arm) -> String {
         line.push(' ');
         line.push_str(&sentence(definition));
     }
-    if let Some(remedy) = refusal.remedy() {
+    // THE CLASS'S DOC (CLOUD-2143), with the firing row's own remedy in place
+    // of the class's `do` where it declares one: the row knows this
+    // repository's way out, the class only the general one.
+    let remedy = refusal.remedy();
+    let act: Vec<&str> = match remedy {
+        Some(remedy) => vec![remedy],
+        None => refusal.doc.act.iter().map(String::as_str).collect(),
+    };
+    let sections = crate::doc::render(&refusal.doc, &act);
+    if !sections.is_empty() {
         line.push(' ');
-        line.push_str(&sentence(remedy));
+        line.push_str(&plain(&sections));
     }
     for (id, precondition) in refusal.preconditions() {
         line.push_str(" Admissible as ");
@@ -714,10 +945,8 @@ fn finding_line(refusal: &Refusal, arm: Arm) -> String {
         line.push_str(" when ");
         line.push_str(&sentence(precondition));
     }
-    if let Some(class) = refusal.verdict() {
-        line.push_str(" Run batten policy explain ");
-        line.push_str(&quoted(class));
-        line.push('.');
+    if line.len() == dash_len {
+        line.truncate(head_len);
     }
     line
 }
@@ -760,11 +989,108 @@ fn route_text(refusal: &Refusal, route: &crate::verdict::Route) -> Option<String
     })
 }
 
+/// A CLI failure as one classed finding (CLOUD-2078), plus the diagnosis lines
+/// that follow it: `None` for a [`crate::error::Passthrough`] (no output of
+/// Batten's own) or a [`crate::error::Denial`] (already a rendered finding).
+///
+/// A [`crate::UsageError`] is its declared class, or `input parse refused`; any
+/// other error is `verb run broken` with its chain as subjects, outermost first.
+/// A finding is ONE line, so each message's first line is the subject and the
+/// rest — a TOML parse caret, a multi-line detail — is returned to print after it.
+//MUTANT usage-failure-misclassed|s@^        let class = usage.verdict.unwrap_or(Native::UsageRefused);$@        let class = usage.verdict.unwrap_or(Native::RunBroken);@|every_cli_failure_renders_its_verdict_label
+//MUTANT config-fault-class-dropped|s@^        let class = usage.verdict.unwrap_or(Native::UsageRefused);$@        let class = Native::UsageRefused;@|every_config_fault_names_its_table_s_declared_class
+#[must_use]
+pub fn of_failure(failure: &anyhow::Error) -> Option<(Refusal, String)> {
+    if failure
+        .downcast_ref::<crate::error::Passthrough>()
+        .is_some()
+        || failure.downcast_ref::<crate::error::Denial>().is_some()
+    {
+        return None;
+    }
+    let split = |text: &str| -> (String, String) {
+        let mut lines = text.lines();
+        let head = lines.next().unwrap_or_default().trim().to_owned();
+        (head, lines.collect::<Vec<_>>().join("\n"))
+    };
+    if let Some(usage) = failure.downcast_ref::<crate::UsageError>() {
+        use crate::verdict::Native;
+        let class = usage.verdict.unwrap_or(Native::UsageRefused);
+        let (head, rest) = split(&usage.message);
+        // ALREADY A FINDING: a raiser that rendered its own refusal (`check`'s
+        // spawning-kind refusal) is printed as it is, never wrapped as the
+        // subject of a second one.
+        if usage.verdict.is_none() && parse_finding(&head).is_some() {
+            return None;
+        }
+        let subjects = [crate::verdict::artifact(&head)];
+        return Some((Refusal::engine(class, &subjects, Fix::None), rest));
+    }
+    let mut subjects = Vec::new();
+    let mut rest = Vec::new();
+    for cause in failure.chain() {
+        let (head, tail) = split(&cause.to_string());
+        subjects.push(crate::verdict::artifact(&head));
+        if !tail.is_empty() {
+            rest.push(tail);
+        }
+    }
+    let refusal = Refusal::engine(crate::verdict::Native::RunBroken, &subjects, Fix::None);
+    Some((refusal, rest.join("\n")))
+}
+
+/// The remedy line for a `check` or drain rule (CLOUD-2078): once per rule,
+/// headed `remedy` rather than a severity because it refuses nothing, carrying
+/// the row's `fix` argv or its `no_fix_reason`.
+///
+/// A rule whose id is also a declared class renders that class; any other rule
+/// is a rule-only line whose definition is its `no_fix_reason`. It carries NO
+/// subject: every finding of the rule is already its own line, so a count here
+/// would say twice what the reader holds. `None` where the row declares neither
+/// a fix nor a reason and is no class: such a line would say nothing.
+//MUTANT rule-remedy-dropped|s@^        Some(crate::findings::Remediation::Fix(argv)) => Fix::Run(argv.join(" ")),$@        Some(crate::findings::Remediation::Fix(_)) => Fix::None,@|a_rules_fix_is_its_remedy_and_its_reason_its_definition
+//MUTANT fix-route-unrendered|s@^        Fix::Run(command) => refusal.with_command_route(\&command),$@        Fix::Run(_) => refusal,@|a_rules_fix_is_its_remedy_and_its_reason_its_definition
+#[must_use]
+pub fn of_rule(
+    rule: &str,
+    registry: &[crate::verdict::DeclaredVerdict],
+    remediation: Option<&crate::findings::Remediation>,
+) -> Option<Refusal> {
+    let severity = Severity::Remedy;
+    let fix = match remediation {
+        Some(crate::findings::Remediation::Fix(argv)) => Fix::Run(argv.join(" ")),
+        Some(crate::findings::Remediation::NoFix(_)) | None => Fix::None,
+    };
+    let refusal = if crate::verdict::resolve(registry, rule).is_some() {
+        Refusal::from_class(rule, registry, rule, &[], fix.clone())
+    } else {
+        let why = match remediation {
+            Some(crate::findings::Remediation::NoFix(why)) => why.as_str(),
+            Some(crate::findings::Remediation::Fix(_)) | None => "",
+        };
+        if why.is_empty() && matches!(fix, Fix::None) {
+            return None;
+        }
+        Refusal::new(rule, why, fix.clone())
+    };
+    // A RUNNABLE FIX IS A ROUTE: an argv the row declares is a command, so it
+    // rides the line's routes rather than its definition.
+    let refusal = refusal.with_severity(severity);
+    Some(match fix {
+        Fix::Run(command) => refusal.with_command_route(&command),
+        Fix::None => refusal,
+    })
+}
+
+//MUTANT-SUITE crates/batten/tests/it/advisory_drain.rs
+//MUTANT remedy-reranked|s@^        if self.severity != Severity::Remedy {$@        if true {@|a_drained_rules_remedy_rides_its_first_drain_only
+//MUTANT-SUITE crates/batten/src/hook.rs
 impl Refusal {
     /// Build a refusal. The [`Fix`] is required, which is the contract.
     pub fn new(rule: impl Into<String>, reason: impl Into<String>, fix: Fix) -> Refusal {
         Refusal {
             rule: rule.into(),
+            severity: Severity::Deny,
             // A consumer-composed refusal names no class, so there is no registry
             // row whose routes could be read. Empty rather than absent: the
             // rendering arm asks whether there is anything to say, not whether a
@@ -772,10 +1098,10 @@ impl Refusal {
             routes: Vec::new(),
             subjects: String::new(),
             readers: std::collections::BTreeMap::new(),
-            dereferenceable: true,
             // Likewise: no class, so no gloss. The undeclared arm's payload is
             // the consumer's own `reason`, which the full arm carries.
             gloss: String::new(),
+            doc: crate::doc::Doc::default(),
             verdict: None,
             reason: reason.into(),
             fix,
@@ -794,14 +1120,15 @@ impl Refusal {
         self
     }
 
-    /// The refusal for a config that did not load: no `policy rule` hop
-    /// resolves, so the line names none (CLOUD-2075).
+    /// The refusal for a config that did not load (CLOUD-2075).
+    ///
+    /// Identical to [`Refusal::new`] since CLOUD-2142: it used to drop the line's
+    /// hop because no `[[rule]]` row resolved without a config, and now
+    /// `policy explain` answers an engine id from [`crate::verdict::native_definition`]
+    /// with no config at all, so the hop resolves and stays.
     #[must_use]
     pub fn unloaded(rule: impl Into<String>, reason: impl Into<String>, fix: Fix) -> Refusal {
-        Refusal {
-            dereferenceable: false,
-            ..Refusal::new(rule, reason, fix)
-        }
+        Refusal::new(rule, reason, fix)
     }
 
     /// Name the reader each document route's target is read through, where the
@@ -814,6 +1141,30 @@ impl Refusal {
             {
                 self.readers.insert(route.target.clone(), reader.to_owned());
             }
+        }
+        self
+    }
+
+    /// The same finding with `command` as a way out it names on EVERY firing: a
+    /// row's runnable `fix` is a route, not prose for the definition the repeat
+    /// drops (CLOUD-2145). [`Refusal::remedy`] then does not say it twice.
+    #[must_use]
+    pub fn with_command_route(mut self, command: &str) -> Refusal {
+        self.routes.push(crate::verdict::Route {
+            id: "rule fix".to_owned(),
+            kind: crate::verdict::RouteKind::Command,
+            target: command.to_owned(),
+            precondition: None,
+        });
+        self
+    }
+
+    /// The same finding, printed under `severity` — an advisory channel's. A
+    /// remedy stays a remedy: it is no finding, so no channel re-ranks it.
+    #[must_use]
+    pub fn with_severity(mut self, severity: Severity) -> Refusal {
+        if self.severity != Severity::Remedy {
+            self.severity = severity;
         }
         self
     }
@@ -870,6 +1221,23 @@ impl Refusal {
         Refusal::from_class(rule, &registry, native.id(), subjects, fix)
     }
 
+    /// One of Batten's own refusals with NO `[[rule]]` row behind it
+    /// (CLOUD-2078): a CLI failure, a Stop rung, a handler's report, a capture
+    /// notice, a failing doctor check, a land stop.
+    ///
+    /// [`Refusal::declared`] with an empty rule, so the line prints the class
+    /// label alone and its one lookup hop names the class. The engine's own
+    /// discriminating id travels in `subjects` instead — a doctor check's name,
+    /// `hook.handler.<id>`, a capture reason.
+    #[must_use]
+    pub fn engine(
+        native: crate::verdict::Native,
+        subjects: &[crate::verdict::Subject],
+        fix: Fix,
+    ) -> Refusal {
+        Refusal::declared(String::new(), native, subjects, fix)
+    }
+
     /// The same constructor, over a registry and a token the caller resolved.
     ///
     /// **Not a third constructor** (CLOUD-1285 is explicit about not writing
@@ -894,6 +1262,7 @@ impl Refusal {
         };
         Refusal {
             rule: rule.into(),
+            severity: Severity::Deny,
             // Resolved here rather than at the boundary because the registry is
             // already in hand — a second lookup downstream would be a second
             // authority over which routes the class declares.
@@ -902,15 +1271,51 @@ impl Refusal {
                 .unwrap_or_default(),
             subjects: crate::verdict::render_subjects(subjects),
             readers: std::collections::BTreeMap::new(),
-            dereferenceable: true,
             gloss: crate::verdict::gloss_of(registry, token)
                 .unwrap_or_default()
                 .to_owned(),
+            doc: crate::verdict::resolve(registry, token)
+                .map(|(entry, _)| entry.doc.clone())
+                .unwrap_or_default(),
             verdict: Some(token.to_owned()),
             reason: crate::verdict::render_line(registry, token, subjects),
             fix,
             bindings: admission_bindings(token, subjects),
         }
+    }
+
+    /// The rendered subjects, as the ` at ` clause prints them.
+    #[must_use]
+    pub fn subjects_text(&self) -> &str {
+        &self.subjects
+    }
+
+    /// Fold `other` into this refusal when the two differ only in their subjects
+    /// (CLOUD-2175): one class raised over several subjects in one emission is
+    /// one line naming them all, so its label, routes and definition are paid
+    /// once. `false`, and nothing changed, for any other pair.
+    pub fn absorb(&mut self, other: &Refusal) -> bool {
+        let same = self.rule == other.rule
+            && self.verdict == other.verdict
+            && self.routes == other.routes
+            && self.fix == other.fix
+            && self.gloss == other.gloss
+            && self.readers == other.readers;
+        if !same || self.verdict.is_none() {
+            return false;
+        }
+        if other.subjects != self.subjects && !other.subjects.is_empty() {
+            if !self.subjects.is_empty() {
+                self.subjects.push_str(", ");
+            }
+            self.subjects.push_str(&other.subjects);
+            for binding in &other.bindings {
+                if !self.bindings.contains(binding) {
+                    self.bindings.push(binding.clone());
+                }
+            }
+        }
+        true
     }
 
     /// Every spelling a mediated admission binds to, printed spelling first
@@ -1027,6 +1432,102 @@ fn sentence(text: &str) -> String {
 mod tests {
     use super::*;
 
+    /// AN ENGINE FINDING NAMES ITS CLASS, NEVER A RULE NOTHING RESOLVES
+    /// (CLOUD-2078), and its first sighting names no raising row: it has none.
+    #[test]
+    fn an_engine_finding_carries_no_rule_label() {
+        let refusal = Refusal::engine(
+            crate::verdict::Native::RunBroken,
+            &[crate::verdict::artifact("disk full")],
+            Fix::None,
+        );
+        let class = crate::verdict::Native::RunBroken.id();
+        for arm in [Arm::Pointer, Arm::Full] {
+            let line = refusal.render_finding(arm);
+            assert!(
+                line.starts_with(&format!("batten deny {class} at disk full")),
+                "the class leads, then the subject: {line}"
+            );
+            if arm == Arm::Full {
+                assert!(!line.contains(" — :"), "no raising row: {line}");
+            }
+            let parsed = parse_finding(&line).expect("an engine line parses");
+            assert_eq!(parsed.verdict.as_deref(), Some(class), "{line}");
+            assert!(parsed.rule.is_empty(), "{line}");
+        }
+    }
+
+    /// A CLASSLESS ROW IS NAMED BY ITS OWN ID (CLOUD-2145): a consumer row with
+    /// no class has no other name, so its id stands where a class would.
+    #[test]
+    fn a_rule_finding_opens_with_its_rule_label() {
+        let refusal = Refusal::new("some-gate", "it fired", Fix::None);
+        for arm in [Arm::Pointer, Arm::Full] {
+            let line = refusal.render_finding(arm);
+            assert!(line.starts_with("batten deny some-gate"), "named: {line}");
+            let parsed = parse_finding(&line).expect("a headed line parses");
+            assert_eq!(parsed.verdict.as_deref(), Some("some-gate"), "{line}");
+        }
+    }
+
+    /// A FAILURE CHAIN IS ONE LINE (CLOUD-2078): every cause's first line is a
+    /// subject, outermost first, and what follows a first line is returned to
+    /// print after the finding rather than broken across it.
+    #[test]
+    fn a_failure_chain_renders_one_classed_line_and_returns_the_rest() {
+        let failure = anyhow::anyhow!("disk full\ncaret detail").context("write the store");
+        let (refusal, rest) = of_failure(&failure).expect("an internal failure renders");
+        assert_eq!(
+            refusal.verdict(),
+            Some(crate::verdict::Native::RunBroken.id())
+        );
+        let line = refusal.render_finding(Arm::Pointer);
+        let outer = line.find("write the store").expect("outer cause named");
+        let inner = line.find("disk full").expect("inner cause named");
+        assert!(outer < inner, "outermost first: {line}");
+        assert!(!line.contains('\n'), "one line: {line}");
+        assert_eq!(rest, "caret detail");
+    }
+
+    /// `of_rule` (CLOUD-2078): a row's `fix` is the remedy a full arm names, and
+    /// a row's `no_fix_reason` is its definition.
+    #[test]
+    fn a_rules_fix_is_its_remedy_and_its_reason_its_definition() {
+        let fix =
+            crate::findings::Remediation::Fix(vec!["mise".into(), "run".into(), "unban".into()]);
+        let fixed = of_rule("banned", &[], Some(&fix))
+            .expect("a fix is something to say")
+            .render_finding(Arm::Full);
+        assert_eq!(fixed, "batten remedy banned; run mise run unban");
+        let why = crate::findings::Remediation::NoFix("by hand".into());
+        let reasoned = of_rule("banned", &[], Some(&why))
+            .expect("a reason is something to say")
+            .render_finding(Arm::Full);
+        assert_eq!(reasoned, "batten remedy banned — by hand.");
+        // A row with neither says nothing, rather than a bare head and a dash.
+        assert!(of_rule("banned", &[], None).is_none());
+    }
+
+    /// A usage refusal whose message is ALREADY a rendered finding is printed
+    /// as it is, never nested as the subject of `input parse refused`.
+    #[test]
+    fn a_rendered_usage_refusal_is_not_wrapped_in_a_second_finding() {
+        let inner = Refusal::declared(
+            "banned",
+            crate::verdict::Native::SpawningRuleOnReadVerb,
+            &[crate::verdict::artifact("command")],
+            Fix::None,
+        )
+        .render_finding(Arm::Full);
+        let failure = crate::UsageError::raise(inner);
+        assert!(of_failure(&failure).is_none(), "printed as raised");
+        let plain = crate::UsageError::raise("unexpected argument");
+        assert!(
+            of_failure(&plain).is_some(),
+            "a prose refusal is still classed"
+        );
+    }
+
     #[test]
     fn the_payload_carries_an_explicit_null_rather_than_dropping_the_key() {
         // The acceptance's load-bearing half: a consumer cannot tell an omitted
@@ -1126,19 +1627,16 @@ mod tests {
 
     #[test]
     fn every_line_names_its_rule_hop_whatever_the_fix() {
-        // Both dispositions, because the one that matters is the one with nothing
-        // declared: the `policy rule` hop is the way out there (CLOUD-2075).
+        // NO LINE CARRIES A LOOKUP HOP (CLOUD-2145): the legend says once how a
+        // name is looked up, and the name itself is the argument. Both
+        // dispositions, and a config that did not load, keep the name.
         for fix in [Fix::None, Fix::Run("do this".to_owned())] {
             let full = Refusal::new("g", "why", fix).render_finding(Arm::Full);
-            assert!(full.contains("; run batten policy rule 'g'"), "{full}");
+            assert!(full.starts_with("batten deny g"), "{full}");
+            assert!(!full.contains("policy explain"), "{full}");
         }
-        assert!(
-            Refusal::unloaded("g", "why", Fix::None)
-                .render_finding(Arm::Full)
-                .find("policy rule")
-                .is_none(),
-            "a config that did not load resolves no rule hop"
-        );
+        let unloaded = Refusal::unloaded("g", "why", Fix::None).render_finding(Arm::Full);
+        assert!(unloaded.starts_with("batten deny g"), "{unloaded}");
     }
 
     #[test]
@@ -1149,12 +1647,12 @@ mod tests {
         let authored = Refusal::new("g", "Because it does.", Fix::Run("mise run x".to_owned()));
         assert_eq!(
             authored.render_finding(Arm::Full),
-            "rule 'g'; run batten policy rule 'g' — Because it does. mise run x."
+            "batten deny g — Because it does. Do: mise run x."
         );
         let bare = Refusal::new("g", "because it does", Fix::Run("mise run x.".to_owned()));
         assert_eq!(
             bare.render_finding(Arm::Full),
-            "rule 'g'; run batten policy rule 'g' — because it does. mise run x."
+            "batten deny g — because it does. Do: mise run x."
         );
     }
 
@@ -1173,12 +1671,11 @@ mod tests {
         assert!(full.starts_with(&pointer), "{pointer}\n{full}");
         assert!(!pointer.contains(" —"), "{pointer}");
         assert!(
-            pointer.starts_with("verdict 'path write refused' rule 'protected-mutation' at "),
+            pointer.starts_with("batten deny path write refused at "),
             "{pointer}"
         );
         let parsed = parse_finding(&full).expect("the full arm parses");
         assert_eq!(parsed.arm, Arm::Full);
-        assert_eq!(parsed.rule, "protected-mutation");
         assert_eq!(parsed.verdict.as_deref(), Some("path write refused"));
         assert_eq!(
             parse_finding(&pointer).expect("the pointer parses").arm,
@@ -1277,9 +1774,7 @@ mod sightings {
         assert!(first_sighting(&dir, "b", "branch write unsafe", "full"));
         assert!(!first_sighting(&dir, "a", "branch write unsafe", "full"));
 
-        assert_eq!(sighted(&dir, "a"), vec!["full".to_owned()]);
         forget_sightings(&dir, "a");
-        assert!(sighted(&dir, "a").is_empty());
         assert!(
             first_sighting(&dir, "a", "branch write unsafe", "full"),
             "session start forgets, so the next reader is told"
@@ -1288,6 +1783,22 @@ mod sightings {
             !first_sighting(&dir, "b", "branch write unsafe", "full"),
             "and another context keeps what it saw"
         );
+    }
+
+    /// The legend rides the first delivery of an epoch and no later one, and a
+    /// forgotten context hears it again (CLOUD-2145).
+    #[test]
+    fn the_legend_comes_once_per_epoch() {
+        let dir = repo("legend");
+        let first = with_legend(&dir, "s", "line one");
+        assert!(first.starts_with(LEGEND) && first.ends_with("line one"));
+        assert_eq!(with_legend(&dir, "s", "line two"), "line two");
+        assert!(
+            with_legend(&dir, "t", "other").starts_with(LEGEND),
+            "another context is its own epoch"
+        );
+        forget_sightings(&dir, "s");
+        assert!(with_legend(&dir, "s", "again").starts_with(LEGEND));
     }
 
     /// A TREE WITH NO GIT DIRECTORY ANSWERS TRUE, which is the safe direction:

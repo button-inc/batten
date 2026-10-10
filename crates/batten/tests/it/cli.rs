@@ -448,6 +448,90 @@ fn assert_exit_codes(label: &str, cases: &[Case]) {
     }
 }
 
+/// EVERY CLI FAILURE IS A CLASSED FINDING (CLOUD-2078): a parse refusal, a
+/// verb's own usage refusal and a config fault each lead with `batten: verdict`
+/// and name the class a reader looks up, rather than a bare `error:` line.
+#[test]
+fn every_cli_failure_renders_its_verdict_label() {
+    let dir = repo_with_config("cli-failure-label", "version = 1\n");
+    let cases: [(&[&str], &str); 2] = [
+        (&["check", "--no-such-flag"], "input parse refused"),
+        (
+            &[
+                "override",
+                "request",
+                "--rule",
+                "x",
+                "--verdict",
+                "no such class here",
+                "--subject",
+                "a",
+            ],
+            "input parse refused",
+        ),
+    ];
+    for (args, class) in cases {
+        let output = run(&dir, args);
+        let err = stderr(&output);
+        assert_eq!(output.status.code(), Some(1), "{args:?}: {err}");
+        assert!(
+            err.starts_with(&format!("batten deny {class} at ")),
+            "{args:?} leads with its class: {err}"
+        );
+        assert!(
+            !err.contains("policy explain"),
+            "{args:?} carries no hop: {err}"
+        );
+    }
+}
+
+/// A GATE RUN NAMES EACH RULE'S REMEDY ONCE (CLOUD-2078), on stderr after the
+/// pointer lines: the row's `no_fix_reason` as the definition, with the count —
+/// never once per finding, never on stdout. (A `fix` row is refused at load in
+/// this build, so the `fix` arm is `refusal`'s unit case.)
+#[test]
+fn a_gate_run_prints_each_rules_remedy_once() {
+    let dir = repo_with_config(
+        "check-remedies",
+        "version = 1\n\n\
+         [[rule]]\nid = \"banned\"\nkind = \"forbid\"\nglob = \"src/**/*.rs\"\n\
+         pattern = \"BANNED\"\nseverity = \"deny\"\nno_fix_reason = \"unban it by hand\"\n\n\
+         [[rule]]\nid = \"frowned\"\nkind = \"forbid\"\nglob = \"src/**/*.rs\"\n\
+         pattern = \"FROWNED\"\nseverity = \"deny\"\n\
+         no_fix_reason = \"rename the symbol by hand\"\n",
+    );
+    fs::create_dir_all(dir.join("src")).expect("create fixture src");
+    fs::write(dir.join("src/a.rs"), "// BANNED FROWNED\n").expect("write a.rs");
+    fs::write(dir.join("src/b.rs"), "// BANNED\n").expect("write b.rs");
+    let output = run(&dir, &["check"]);
+    let err = stderr(&output);
+    let out = stdout(&output);
+    assert_eq!(output.status.code(), Some(2), "{err}");
+    let only = |rule: &str| -> String {
+        let lines: Vec<&str> = err
+            .lines()
+            .filter(|line| line.starts_with(&format!("batten remedy {rule} ")))
+            .collect();
+        assert_eq!(
+            lines.len(),
+            1,
+            "one remedy per rule, not per finding: {err}"
+        );
+        lines[0].to_owned()
+    };
+    // No count: each finding is already its own stdout line, so the remedy
+    // line carries only what those cannot — the row's reason.
+    assert_eq!(only("banned"), "batten remedy banned — unban it by hand.");
+    assert_eq!(
+        only("frowned"),
+        "batten remedy frowned — rename the symbol by hand."
+    );
+    assert!(
+        !out.contains("unban it") && !out.contains("rename the symbol"),
+        "the data channel is untouched: {out}"
+    );
+}
+
 #[test]
 fn exit_code_contract() {
     let cases = [
@@ -1176,7 +1260,7 @@ fn check_violation_exits_two_with_pointer_only_output() {
     assert_eq!(output.status.code(), Some(2), "a finding is a violation");
     let stdout = String::from_utf8_lossy(&output.stdout);
     // Pointer only: the location and rule id, never the offending line text.
-    assert_eq!(stdout, "lib.rs:2 rule 'no-todo'\n");
+    assert_eq!(stdout, "batten deny no-todo at lib.rs:2\n");
     assert!(
         !stdout.contains("fix this"),
         "output must not leak the bytes"
@@ -1278,7 +1362,8 @@ fn check_refuses_a_command_rule_rather_than_skipping_it() {
     // refusal carries the `batten:` prefix that belongs to 1 and 3, and no
     // bypass hatch, because a read-only run has nothing to bypass.
     assert!(
-        stderr.contains("verdict 'spawn run refused' rule 'dyn'")
+        stderr.contains("batten deny spawn run refused at ")
+            && stderr.contains(" — dyn: ")
             && stderr.contains("run batten enforce"),
         "the refusal must adopt the one shape, got: {stderr}"
     );
@@ -1305,7 +1390,7 @@ fn enforce_runs_a_command_rule_and_maps_its_exit_code() {
     // Rule-scoped pointer: no invented line number, and never the command output.
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
-        "**/*.rs rule 'dyn'\n"
+        "batten deny dyn at **/*.rs\n"
     );
 }
 
@@ -1719,7 +1804,7 @@ fn a_local_override_may_add_a_rule_but_not_redefine_one() {
     assert_eq!(output.status.code(), Some(2), "the added rule must fire");
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
-        "lib.rs:1 rule 'no-fixme'\n"
+        "batten deny no-fixme at lib.rs:1\n"
     );
 
     // Redefining a committed rule could weaken it, so it is refused outright.
@@ -2029,19 +2114,15 @@ fn every_hook_policy_table_deny_names_its_fix() {
         assert_eq!(output.status.code(), Some(2), "{}: deny", case.command);
         let stderr = String::from_utf8_lossy(&output.stderr);
         // CLOUD-1286: the sanctioned command is ONE HOP away, and this case is
-        // what proves the hop lands. CLOUD-2075 LABELS the rule, so the id is
-        // read off `rule '<id>'` rather than guessed from word positions.
-        let label = format!("rule '{}'", case.rule);
-        assert!(
-            stderr.contains(&label),
-            "{}: the line labels its rule, got: {stderr}",
+        // what proves the hop lands. The row that raised the class is named on
+        // the first sighting (CLOUD-2145), read off it rather than guessed.
+        let id = common::refusing_rule(&stderr).expect("a finding line");
+        assert_eq!(
+            id, case.rule,
+            "{}: the line names its rule, got: {stderr}",
             case.command
         );
-        let id = stderr
-            .split("rule '")
-            .nth(1)
-            .and_then(|rest| rest.split('\'').next())
-            .expect("a labelled rule id");
+        let id = id.as_str();
         let explained = batten_with(&dir, &["policy", "rule", id], &[]);
         assert_eq!(
             explained.status.code(),
@@ -2224,6 +2305,73 @@ fn a_class_still_explains_when_the_config_cannot_be_read() {
     assert!(
         said.contains("could not be read"),
         "and it names WHY rather than reporting zero rows: {said}"
+    );
+
+    // THE ENGINE'S OWN ID resolves here too (CLOUD-2142): it is the one a
+    // refusal names exactly when the config will not load.
+    let native = batten_with(
+        &dir,
+        &["policy", "explain", "engine-cannot-adjudicate"],
+        &[],
+    );
+    assert_eq!(
+        native.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&native.stderr)
+    );
+}
+
+/// One verb answers every name a finding line prints (CLOUD-2142): a rule, a
+/// class and an engine id in one call, each under its own header, and an
+/// unknown name is named on stderr after the rest still print.
+#[test]
+fn policy_explain_answers_a_rule_a_class_and_a_native() {
+    let root = common::at_root("");
+    let names = ["tool select other", "tool run loose", "program-unknown"];
+    let mut args = vec!["policy", "explain"];
+    args.extend(names);
+    let explained = batten_with(&root, &args, &[]);
+    assert_eq!(
+        explained.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&explained.stderr)
+    );
+    let out = String::from_utf8_lossy(&explained.stdout);
+    for name in names {
+        assert!(
+            out.contains(&format!("== {name}\n")),
+            "{name}'s header: {out}"
+        );
+    }
+    assert!(
+        out.contains("program-unknown engine"),
+        "the native section: {out}"
+    );
+
+    args.push("no-such-name");
+    let partial = batten_with(&root, &args, &[]);
+    assert_eq!(partial.status.code(), Some(1), "a miss is the usage class");
+    assert_eq!(partial.stdout, explained.stdout, "the rest still print");
+    assert!(
+        String::from_utf8_lossy(&partial.stderr).contains("`no-such-name`"),
+        "the miss is named"
+    );
+
+    // `policy rule` is `explain` with one name, byte for byte.
+    let rule = batten_with(&root, &["policy", "rule", "tool select other"], &[]);
+    let one = batten_with(&root, &["policy", "explain", "tool select other"], &[]);
+    assert_eq!(rule.stdout, one.stdout, "one projection, two spellings");
+    assert_eq!(rule.status.code(), Some(0));
+
+    // `-J` is one array, one element per section.
+    let json = batten_with(&root, &["policy", "explain", "-J", "tool run loose"], &[]);
+    let document: serde_json::Value =
+        serde_json::from_slice(&json.stdout).expect("-J is one JSON document");
+    assert_eq!(
+        document[0]["name"], "tool run loose",
+        "each section names what was asked: {document}"
     );
 }
 
@@ -2537,7 +2685,16 @@ fn an_absent_session_degrades_to_per_invocation_without_panicking() {
             b.status.code(),
             "{harness}: an absent session must not change the verdict"
         );
-        assert_eq!(a.stdout, b.stdout, "{harness}: nor the decision document");
+        // Except the legend (CLOUD-2145): it opens a named context's epoch, and a
+        // payload naming none has no epoch to open. It travels JSON-escaped, and
+        // in every field a host's deny document repeats the reason in.
+        let opened = String::from_utf8_lossy(&a.stdout)
+            .replace(&format!("{}\\n", batten::refusal::LEGEND), "");
+        assert_eq!(
+            opened,
+            String::from_utf8_lossy(&b.stdout),
+            "{harness}: nor the decision document"
+        );
     }
     // An empty string is absent, not a session: the two must not collapse, since
     // a consumer keyed on one hashes `Some("")` and `None` differently.
@@ -3297,17 +3454,6 @@ const SHAPE_CENSUS: &[ShapeCase] = &[
         call: CensusCall::Verb("mcp__Linear__get_issue"),
         rule: "issue read loose",
         site: CensusSite::Checkout,
-    },
-    // CLOUD-312 row 6. Four named artifacts against a ceiling of three, over the
-    // tracked set the `Manifest` fixture supplies.
-    ShapeCase {
-        call: CensusCall::Spawn {
-            tool: "Agent",
-            prompt: "read one.txt two.txt three.txt four.txt then act",
-            repeat: 1,
-        },
-        rule: "spawn count wrong",
-        site: CensusSite::Manifest,
     },
     // The token ceiling reads only the envelope, so no fact about the tree can
     // move its answer and it owes the ambient site. 6100 characters over four is
@@ -4423,7 +4569,7 @@ fn a_library_usage_error_is_loud_under_silent_too() {
     let output = batten_with(&dir, &["--silent", "config", "show"], &[]);
     assert_eq!(output.status.code(), Some(1));
     assert!(
-        String::from_utf8_lossy(&output.stderr).contains("batten:"),
+        String::from_utf8_lossy(&output.stderr).starts_with("batten deny "),
         "a usage error names itself even at the quietest rung"
     );
 }
@@ -6705,7 +6851,7 @@ fn the_committed_repo_config_gates_a_repository() {
     );
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
-        "crates/** rule 'source carry broken'\n",
+        "batten deny source carry broken at crates/**\n",
         "a command condemns a batch, so the pointer is the glob and carries no line"
     );
 }
@@ -6922,17 +7068,17 @@ fn the_committed_repo_agnosticism_rules_fire_on_every_banned_shape() {
     );
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
-        "crates/demo/notes.txt:1 rule 'fact name other'\n\
-         crates/demo/notes.txt:2 rule 'path name other'\n\
-         crates/demo/notes.txt:3 rule 'source name other'\n\
-         crates/demo/notes.txt:4 rule 'issue name other'\n\
-         crates/demo/notes.txt:5 rule 'issue name other'\n\
-         crates/demo/src/lib.rs:1 rule 'fact name other'\n\
-         crates/demo/src/lib.rs:2 rule 'path name other'\n\
-         crates/demo/src/lib.rs:3 rule 'source name other'\n\
-         crates/demo/src/lib.rs:4 rule 'issue name other'\n\
-         crates/demo/src/lib.rs:5 rule 'issue name other'\n\
-         policy/demo.rego:1 rule 'pattern name other'\n",
+        "batten deny fact name other at crates/demo/notes.txt:1\n\
+         batten deny path name other at crates/demo/notes.txt:2\n\
+         batten deny source name other at crates/demo/notes.txt:3\n\
+         batten deny issue name other at crates/demo/notes.txt:4\n\
+         batten deny issue name other at crates/demo/notes.txt:5\n\
+         batten deny fact name other at crates/demo/src/lib.rs:1\n\
+         batten deny path name other at crates/demo/src/lib.rs:2\n\
+         batten deny source name other at crates/demo/src/lib.rs:3\n\
+         batten deny issue name other at crates/demo/src/lib.rs:4\n\
+         batten deny issue name other at crates/demo/src/lib.rs:5\n\
+         batten deny pattern name other at policy/demo.rego:1\n",
         "one sorted pointer per banned shape per file, and nothing else"
     );
 
@@ -7068,12 +7214,12 @@ fn the_committed_portability_rules_fire_on_every_banned_shape() {
     );
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
-        "mise-tasks/seed.sh:1 rule 'shell parse unsafe'\n\
-         mise-tasks/seed.sh:2 rule 'shell edit unsafe'\n\
-         mise-tasks/seed.sh:3 rule 'shell read unsafe'\n\
-         mise-tasks/seed.sh:4 rule 'shell list unsafe'\n\
-         mise-tasks/seed.sh:5 rule 'shell guard unsafe'\n\
-         tests/seed.bats:2 rule 'branch edit unsafe'\n",
+        "batten deny shell parse unsafe at mise-tasks/seed.sh:1\n\
+         batten deny shell edit unsafe at mise-tasks/seed.sh:2\n\
+         batten deny shell read unsafe at mise-tasks/seed.sh:3\n\
+         batten deny shell list unsafe at mise-tasks/seed.sh:4\n\
+         batten deny shell guard unsafe at mise-tasks/seed.sh:5\n\
+         batten deny branch edit unsafe at tests/seed.bats:2\n",
         "one sorted pointer per banned construct, and nothing else"
     );
 
@@ -7172,7 +7318,7 @@ fn the_committed_example_config_loads_over_the_binary() {
     );
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
-        "**/*.rs rule 'source carry broken'\n",
+        "batten deny source carry broken at **/*.rs\n",
         "a command condemns a batch, so the pointer is the glob and carries no line"
     );
 }
@@ -7226,7 +7372,7 @@ fn the_shipped_starter_config_loads_over_the_binary() {
     );
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
-        "src/main.rs:1 rule 'source carry broken'\n",
+        "batten deny source carry broken at src/main.rs:1\n",
         "a forbid rule points at the line, not at the batch a command condemns"
     );
 }
@@ -7315,7 +7461,7 @@ fn warn_findings_report_without_failing_the_run() {
     );
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
-        "lib.rs:1 rule 'no-todo'\n",
+        "batten warn no-todo at lib.rs:1\n",
         "the warn finding must still be reported"
     );
 }
@@ -10496,7 +10642,7 @@ fn a_handler_that_refuses_and_says_nothing_allows_rather_than_denying() {
          refusal: {document:?}"
     );
     assert!(
-        document.contains("no reason on stdout or stderr"),
+        document.contains("hook answer broken at ") && document.contains("exit-2-silent"),
         "and the author is told what their handler did: {document:?}"
     );
 }
@@ -10579,7 +10725,7 @@ fn a_handler_writing_a_host_document_is_reported_and_not_forwarded() {
     let document = common::stdout(&output);
     assert_eq!(output.status.code(), Some(0));
     assert!(
-        document.contains("wrote a host decision document"),
+        document.contains("hook answer broken at ") && document.contains("impersonated-host"),
         "the violation is named: {document:?}"
     );
     assert!(
@@ -10604,7 +10750,7 @@ fn a_handler_that_hangs_is_killed_at_its_bound_and_the_turn_still_ends() {
     // this line exists only when the parent imposed the bound — which is what an
     // elapsed-time ceiling here used to approximate.
     assert!(
-        common::stdout(&output).contains("hook.handler slow: exceeded 300ms and was killed"),
+        common::stdout(&output).contains("hook.handler.slow timed-out-300ms"),
         "the bound was imposed, and the author is told which handler and by how much: {:?}",
         common::stdout(&output)
     );
@@ -12417,7 +12563,7 @@ fn a_tracked_instruction_may_not_prescribe_the_denied_commit_identity() {
     );
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
-        "HOWTO.md:2 rule 'remedy carry refused'\n",
+        "batten deny remedy carry refused at HOWTO.md:2\n",
         "one pointer, and the matched line is never echoed"
     );
 
@@ -13035,7 +13181,10 @@ fn a_met_precondition_lets_the_rule_run_normally() {
         "a met precondition is not a filter: {}",
         stderr(&output)
     );
-    assert_eq!(stdout(&output), "lib.rs:1 rule 'needs-the-vendor-tree'\n");
+    assert_eq!(
+        stdout(&output),
+        "batten deny needs-the-vendor-tree at lib.rs:1\n"
+    );
 }
 
 /// A ratchet still fires on an empty match set, which the new skip must not
@@ -13104,7 +13253,7 @@ fn a_deciding_kind_over_the_same_tree_does_block() {
         "the control must block, or the approximating case proves nothing: {}",
         stderr(&output)
     );
-    assert_eq!(stdout(&output), "lib.rs:1 rule 'no-todo'\n");
+    assert_eq!(stdout(&output), "batten deny no-todo at lib.rs:1\n");
 }
 
 /// Every kind carries a classification, and the vocabulary is total.

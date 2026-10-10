@@ -139,12 +139,12 @@ fn a_seed_at_a_later_event_reports_the_unmediated_start() {
         .pipe_notice()
         .expect("a seed at PostToolBatch means SessionStart never ran");
     assert!(
-        told.contains("SessionStart registration did not run"),
-        "the notice names the condition rather than the symptom: {told}"
+        told.contains("hook run missing at SessionStart registration did not run"),
+        "the notice names its class and the condition rather than the symptom: {told}"
     );
     assert!(
-        told.contains("deps-install"),
-        "a missing binary is a PROVISIONING failure and the notice names the step: {told}"
+        told.contains("; run batten doctor"),
+        "a missing binary is a PROVISIONING failure and the notice names the check: {told}"
     );
     // Once per session. The write is the rate limit here exactly as it is for a
     // change-set, so the very next batch is silent — without this a session with
@@ -183,8 +183,11 @@ fn a_moved_contract_file_is_reported_in_band() {
     std::fs::write(dir.join("AGENTS.md"), "# the contract\nmore\n").unwrap();
 
     let told = drift(&dir, "s1").pipe_notice().expect("the surface moved");
-    assert!(told.contains("AGENTS.md"), "{told}");
-    assert!(told.contains("1 changed"), "{told}");
+    assert!(
+        told.contains("contract read stale at 1 changed"),
+        "the notice is a classed finding leading with the count: {told}"
+    );
+    assert!(told.contains("changed AGENTS.md"), "{told}");
 }
 
 /// CLOUD-490's discriminating pair, both halves in one case.
@@ -204,15 +207,19 @@ fn an_added_path_is_reported_apart_from_a_moved_one_and_says_something_different
     common::git_in(&dir, &["add", "-A"]);
 
     let told = drift(&dir, "s1").pipe_notice().expect("the surface moved");
-    assert!(told.contains("mise-tasks/alive"), "{told}");
-    assert!(told.contains("AGENTS.md"), "{told}");
     assert!(
-        told.contains("added — you could not have been doing these:"),
-        "the added path carries its own heading: {told}"
+        told.contains("added mise-tasks/alive"),
+        "the added path carries its own label: {told}"
+    );
+    assert!(told.contains("changed AGENTS.md"), "{told}");
+    assert!(
+        told.find("added mise-tasks/alive") < told.find("changed AGENTS.md"),
+        "added first, the half worth reading first: {told}"
     );
     assert!(
-        told.contains("new capability, not a changed rule"),
-        "and its own sentence, which is the substantive half: {told}"
+        told.contains("read each `added` path before judging it irrelevant")
+            && told.contains("treat an added path as a changed rule"),
+        "and the class says something different of it, the substantive half: {told}"
     );
     // The count is the whole change-set, not one partition of it.
     assert!(told.contains("2 changed"), "{told}");
@@ -233,18 +240,19 @@ fn a_change_set_with_nothing_added_carries_no_added_section() {
     std::fs::write(dir.join("AGENTS.md"), "# the contract\nmore\n").unwrap();
 
     let told = drift(&dir, "s1").pipe_notice().expect("the surface moved");
-    assert!(told.contains("changed:"), "{told}");
+    let line = told
+        .lines()
+        .find(|line| line.contains("contract read stale at "))
+        .unwrap_or_else(|| panic!("the drift finding: {told}"));
+    let pointer = line.split(" — ").next().unwrap_or(line);
+    assert!(pointer.contains("changed AGENTS.md"), "{line}");
     assert!(
-        !told.contains("added —"),
-        "absent rather than empty: {told}"
+        !pointer.contains("added"),
+        "no added subject when nothing was added: {line}"
     );
     assert!(
-        !told.contains("new capability"),
-        "and its sentence goes with it: {told}"
-    );
-    assert!(
-        told.contains("read the OLD ones at start"),
-        "the modified half keeps today's wording: {told}"
+        line.contains("re-read each `changed` path"),
+        "the modified half keeps its instruction: {line}"
     );
 }
 
@@ -301,8 +309,7 @@ fn a_newly_added_contract_file_is_drift_and_a_deleted_one_is_too() {
 
     std::fs::remove_file(dir.join(".claude/rules/rust.md")).unwrap();
     let gone = drift(&dir, "s1").pipe_notice().expect("a removal is drift");
-    assert!(gone.contains("no longer tracked"), "{gone}");
-    assert!(gone.contains(".claude/rules/rust.md"), "{gone}");
+    assert!(gone.contains("removed .claude/rules/rust.md"), "{gone}");
 }
 
 #[test]
@@ -397,7 +404,7 @@ fn a_moved_wiring_file_says_so_computably_and_claims_nothing_about_the_session()
     .unwrap();
 
     let told = drift(&dir, "s1").pipe_notice().expect("the wiring moved");
-    assert!(told.contains("The hook wiring is among them"), "{told}");
+    assert!(told.contains("hook wiring moved"), "{told}");
     assert!(told.contains("batten doctor hooks"), "{told}");
     assert!(
         !told.contains("self-enforced"),
@@ -407,7 +414,7 @@ fn a_moved_wiring_file_says_so_computably_and_claims_nothing_about_the_session()
     // And a change-set that did not touch the wiring says nothing about it.
     std::fs::write(dir.join("AGENTS.md"), "# the contract\nelsewhere\n").unwrap();
     let other = drift(&dir, "s1").pipe_notice().expect("something moved");
-    assert!(!other.contains("The hook wiring is among them"), "{other}");
+    assert!(!other.contains("hook wiring moved"), "{other}");
 }
 
 #[test]

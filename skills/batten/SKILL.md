@@ -118,40 +118,43 @@ One verdict, two channels, because hosts differ:
 Both are the same policy verdict. On the first kind of host, exit `0` from
 `batten adjudicate` does not mean allowed — read the decision.
 
-A real deny, in full:
+The first finding in a context window arrives after one line saying where to
+look up a definition no longer in context. That line, verbatim:
 
-```json
-{
-  "hookSpecificOutput": {
-    "hookEventName": "PreToolUse",
-    "permissionDecision": "deny",
-    "permissionDecisionReason": "Refused by gh-pr-merge: `gh pr merge` (like the merge button) rewrites commits under new SHAs, discarding the exact objects CI tested. Use `mise run land`, which comments /fast-forward so main advances to this branch's already-passed commits. Bypass with BATTEN_GH_GUARD_BYPASS=1."
-  }
-}
+<!-- legend: the text of `refusal::LEGEND`; `skill_contract.rs` fails on drift -->
+
+> `batten policy explain <class>` prints any finding's definition.
+
+A real deny reason, on its first firing in a window:
+
+```text
+batten deny tool run loose at batten.toml head; read rules/scanning.md — tool select other: a shell text utility stood in for the structured file surface. ... Do: ... Don't: ...
 ```
 
-The reason is the whole explanation, and it is doing three jobs at once:
+and on every later firing in that window:
 
-1. **naming the rule** (`gh-pr-merge`), so the verdict is traceable to committed
-   config rather than to a mood;
-2. **saying why**, in terms of the consequence, not the prohibition;
-3. **naming what to do instead** (`mise run land`).
+```text
+batten deny tool run loose at batten.toml head; read rules/scanning.md
+```
 
-That third part is the point. A deny is a linter result, not a closed door — it
-is designed to get you to right in one hop. **Read the reason and run the named
-command.** Do not retry the denied call with different spelling, and do not go
-looking for a way around it: the rule is committed config, and working around it
-is working around the repository's own stated policy.
+`batten` says the line is this gate's and not the host's; `deny`, `warn` or
+`note` says how it bears on the call, and `remedy` marks a line that is no
+finding but how a rule's findings are fixed. The name is the violation's class, the
+one `batten policy explain` defines. Then the subjects it fired on, and after
+the first `;` the routes to take. After `—`, on the first firing only, come the
+row that raised it, why the class exists, what to do, and what not to do. A
+later firing keeps every pointer and drops only that definition, because it is
+already above; a compaction forgets the window, so the next firing after one is
+full again. **Take the named route.** Do not retry the
+refused call with different spelling, and do not route around it through another
+program: the rule is committed config.
 
-## Bypass hatches
+## Overrides
 
-Every deny names its own bypass, in the form `BATTEN_<GUARD>_BYPASS=1`. It
-exists for the deliberate override — the case the rule's author did not foresee
-and a human has decided about.
-
-Reaching for the bypass before reading the fix pointer is the wrong first move,
-and it is the one the audit trail is designed to catch: taking a bypass writes an
-audit line. Use it when you mean it, and say why in the commit or the PR.
+A refusal that admits an override names it:
+`batten override request --rule '<id>' --verdict '<class>' --subject '<s>'`,
+under the admission the row declares. Use it only when the case is one the
+row's author did not foresee. A refusal that names no override admits none.
 
 ## Reading a receipt
 

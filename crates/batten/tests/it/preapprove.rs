@@ -22,13 +22,13 @@
 /*
 #MUTANT-SUITE crates/batten/tests/it/preapprove.rs
 #MUTANT preapprove-before-refusal|s@^            decided => decided,$@            decided => hook::policy_preapproval(policy, envelope, facts).map_or(decided, hook::Decision::Preapproved),@|a_refused_call_is_never_preapproved
-#MUTANT advice-beside-the-grant|s@^    let context = matches!(decision, hook::Decision::Preapproved(_)) \&\& !advice.is_empty();$@    let context = false;@|a_preapproval_carries_the_calls_advice_in_one_document
+#MUTANT advice-beside-the-grant|s@^    if !matches!(decision, hook::Decision::Preapproved(_)) || advice.is_empty() {$@    if true {@|a_preapproval_carries_the_calls_advice_in_one_document
 */
 // And the rows `write-is-preapproved.rego` declares (CLOUD-2002), mirrored for
 // the same reason:
 /*
 #MUTANT write-mode-unchecked|s@^\tinput.call\["permission-mode"\] == "auto"$@\ttrue@|an_edit_is_not_preapproved_in_default_mode
-#MUTANT write-destructive-granted|s@^\t\tnot destructive_program\(program\)$@\t\ttrue@|a_destructive_shell_write_is_left_to_the_host_in_auto
+#MUTANT write-destructive-granted|s@^\t\tnot destructive_program(program)$@\t\ttrue@|a_destructive_shell_write_is_left_to_the_host_in_auto
 */
 
 use crate::common;
@@ -116,6 +116,71 @@ fn assert_not_plan_refused(payload: &str) {
     }
 }
 
+/// The `updatedInput` the grant carries, or `None` where it carries none.
+fn updated_input(payload: &str) -> Option<serde_json::Value> {
+    documents(payload).into_iter().find_map(|document| {
+        document
+            .get("hookSpecificOutput")?
+            .get("updatedInput")
+            .cloned()
+    })
+}
+
+fn background(input: &serde_json::Value) -> String {
+    envelope("auto", "Bash", input)
+}
+
+/// A backgrounded call that names no timeout runs with the host's maximum, and
+/// every other key is the call's own (CLOUD-2157). Measured 2026-10-08: a mutant
+/// sweep backgrounded with no `timeout` was killed at the 30-minute default.
+#[test]
+fn a_backgrounded_call_without_a_timeout_is_rewritten_to_the_maximum() {
+    let payload = background(&serde_json::json!({
+        "command": "mise run mutant",
+        "run_in_background": true,
+        "description": "Run the mutant task",
+    }));
+    let (decision, _) = verdict(&payload).unwrap_or_default();
+    assert_eq!(decision, "allow", "the rewrite rides the grant: {payload}");
+    let updated = updated_input(&payload).expect("the grant carries the rewrite");
+    assert_eq!(updated["timeout"], 7_200_000, "{updated}");
+    assert_eq!(
+        updated["command"], "mise run mutant",
+        "the call is unchanged"
+    );
+    assert_eq!(updated["run_in_background"], true);
+    assert_eq!(updated["description"], "Run the mutant task");
+}
+
+#[test]
+fn an_explicit_timeout_is_left_alone() {
+    let payload = background(&serde_json::json!({
+        "command": "mise run mutant",
+        "run_in_background": true,
+        "timeout": 600_000,
+    }));
+    assert_eq!(
+        updated_input(&payload),
+        None,
+        "a chosen timeout is the caller's"
+    );
+}
+
+#[test]
+fn a_foreground_call_is_not_rewritten() {
+    // A GRANTED foreground call: the rewrite rides only a grant, so a call this
+    // repository refuses (a foreground `mise`) would pass whatever the module did.
+    for input in [
+        serde_json::json!({ "command": "git status", "run_in_background": false }),
+        serde_json::json!({ "command": "git status" }),
+    ] {
+        let payload = background(&input);
+        let (decision, _) = verdict(&payload).unwrap_or_default();
+        assert_eq!(decision, "allow", "the case needs a grant: {payload}");
+        assert_eq!(updated_input(&payload), None, "{payload}");
+    }
+}
+
 #[test]
 fn a_host_read_is_preapproved_in_every_mode() {
     for mode in ["default", "plan", "auto"] {
@@ -126,6 +191,67 @@ fn a_host_read_is_preapproved_in_every_mode() {
         );
         assert_granted_by(&read, "call read now");
     }
+}
+
+/// A GRANT SAYS ITS DEFINITION ONCE PER WINDOW (CLOUD-2145): no human is
+/// prompted on a pre-approved call, so its reason is read by the model, and a
+/// repeat is the head and its routes — like every other finding.
+#[test]
+fn a_grant_says_its_definition_once_per_window() {
+    let read = |session: &str| {
+        let payload = serde_json::json!({
+            "hook_event_name": "PreToolUse",
+            "session_id": session,
+            "permission_mode": "default",
+            "tool_name": "Read",
+            "tool_input": { "file_path": "README.md" },
+        })
+        .to_string();
+        verdict(&payload).unwrap_or_default()
+    };
+    let session = format!(
+        "grant-once-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |since| since.as_nanos())
+    );
+    let (first_decision, first) = read(&session);
+    let (second_decision, second) = read(&session);
+    assert_eq!(
+        (first_decision.as_str(), second_decision.as_str()),
+        ("allow", "allow")
+    );
+    assert!(
+        first.contains(" — "),
+        "the first carries the definition: {first}"
+    );
+    assert!(
+        first.starts_with(&second),
+        "the repeat is its prefix: {second} / {first}"
+    );
+    assert!(!second.contains(" — "), "the repeat drops it: {second}");
+}
+
+/// A GRANT'S REASON IS A FINDING (CLOUD-2078): the rule that granted and the
+/// class a reader looks up, rather than a bare module id.
+#[test]
+fn a_preapproval_reason_labels_its_rule_and_verdict() {
+    let read = envelope(
+        "default",
+        "Read",
+        &serde_json::json!({ "file_path": "README.md" }),
+    );
+    let (decision, reason) = verdict(&read).unwrap_or_default();
+    assert_eq!(decision, "allow", "{reason}");
+    assert!(
+        reason.starts_with("batten note call grant now — call read now: "),
+        "a grant is a note of its class, naming the rule that granted: {reason}"
+    );
+    assert!(
+        !reason.contains("policy explain"),
+        "and no lookup hop, the legend saying how: {reason}"
+    );
 }
 
 /// DROPPING A PR SUBSCRIPTION NEVER STOPS THE WORLD. The owner's ruling: the
@@ -249,13 +375,23 @@ fn a_linted_and_approved_dispatch_is_preapproved_in_auto() {
 }
 
 /// THE CASE `dispatch-uncleared` KILLS: linted but never approved — the owner
-/// rejected the bundle or has not answered — so the host keeps asking.
+/// rejected the bundle or has not answered — so the dispatch grant is not the
+/// one that answers.
+///
+/// IN AUTO MODE, the only mode the dispatch grant fires in: a default-mode
+/// case could not tell an approval check from its absence, because the mode
+/// check refuses first. In auto every call batten allows is granted by auto's
+/// own row (CLOUD-2125), so what is asserted is WHICH row granted: never the
+/// dispatch rule, which the grant's first sighting names.
 #[test]
 fn a_dispatch_without_approval_is_not_preapproved() {
     let fixture = Dispatch::new("unapproved");
     fixture.linted();
-    // Default mode, where the dispatch grant is the only route to an allow; in
-    // auto every call batten allows is granted (CLOUD-2125).
+    let (_, reason) = verdict(&Dispatch::call("auto", &fixture.prompt)).unwrap_or_default();
+    assert!(
+        !reason.contains("call open now"),
+        "an unapproved dispatch is not the dispatch grant's: {reason}"
+    );
     assert_not_granted(&Dispatch::call("default", &fixture.prompt));
 }
 
@@ -405,6 +541,16 @@ fn an_edit_is_not_preapproved_in_default_mode() {
 fn a_destructive_shell_write_is_left_to_the_host_in_auto() {
     // Outside auto mode, the narrow write grant still withholds it.
     assert_not_granted(&shell("default", "python3 tools/x.py && rm -rf build"));
+    // In auto mode CLOUD-2125's mode grant answers the call under the same
+    // class, so only the row named as raising it tells whether the write grant
+    // withheld itself.
+    let (decision, reason) =
+        verdict(&shell("auto", "python3 tools/x.py && rm -rf build")).unwrap_or_default();
+    assert_eq!(decision, "allow", "the mode grant answers it: {reason}");
+    assert!(
+        reason.contains(" — mode grant now: "),
+        "the write grant must withhold a line carrying rm: {reason}"
+    );
 }
 
 /// THE OWNER'S RULE (CLOUD-2125): in auto mode, a call no gate refuses is

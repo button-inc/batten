@@ -609,6 +609,10 @@ fn a_done_pr_record_without_its_census_is_torn() {
     record_raw(&dir, "done-pr", "issue\tCLOUD-1\t0\n");
     let (code, text) = decide(&dir);
     assert_eq!(code, Some(2), "{text}");
+    // The torn verdict, not the no-pull-request one this same row would raise
+    // were the record read as whole: both exit 2 under one rule, so only the
+    // subject tells them apart — the census count, never the issue.
+    assert!(!text.contains("CLOUD-1"), "torn, not judged: {text}");
 }
 
 // ---------------------------------------------------------------------------

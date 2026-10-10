@@ -160,23 +160,48 @@ fn scan_declared_patterns() -> String {
 ///
 /// When no line carries the class, naming what was said.
 pub(crate) fn printed_pointers(said: &str, class: &str, rule: &str) -> String {
-    // CLOUD-2075's grammar: `verdict '<class>' rule '<rule>' at <subjects>; …`.
-    let opener = format!("verdict '{class}' rule '{rule}' at ");
+    // CLOUD-2145's grammar: `batten <severity> <class> at <subjects>; …`, the
+    // class read by the engine's own reader and the row by `raised_by`.
+    let opener = " at ";
     said.lines()
         .find_map(|line| {
-            let rest = line.split(opener.as_str()).nth(1)?;
+            let parsed = batten::refusal::parse_finding(line)?;
+            if parsed.verdict.as_deref() != Some(class) || raised_by(line) != rule {
+                return None;
+            }
+            let rest = line.split_once(opener)?.1;
             let pointers = rest.split("; ").next()?.split(" —").next()?;
             Some(pointers.trim().to_owned())
         })
         .unwrap_or_else(|| panic!("no line refuses as `{class}`: {said}"))
 }
 
-/// The rule that refused, read off the labelled finding line through the
-/// engine's own reader (CLOUD-2075) — never guessed from word positions.
+/// The row a headed finding line names as having raised it: its override
+/// route's `--rule`, else the first sighting's `— <rule>:`, else — a row whose
+/// id is its class, or a classless row — the line's own name.
+fn raised_by(line: &str) -> String {
+    if let Some((_, rest)) = line.split_once("--rule '")
+        && let Some((rule, _)) = rest.split_once('\'')
+    {
+        return rule.to_owned();
+    }
+    if let Some((_, tail)) = line.split_once(" — ")
+        && let Some((rule, _)) = tail.split_once(": ")
+        && !rule.contains(['.', ',', ';'])
+    {
+        return rule.to_owned();
+    }
+    batten::refusal::parse_finding(line)
+        .and_then(|parsed| parsed.verdict)
+        .unwrap_or_default()
+}
+
+/// The rule that refused, read off the finding line (CLOUD-2145): see
+/// [`raised_by`]. Never guessed from word positions.
 pub(crate) fn refusing_rule(said: &str) -> Option<String> {
     said.lines()
-        .find_map(batten::refusal::parse_finding)
-        .map(|parsed| parsed.rule)
+        .find(|line| batten::refusal::parse_finding(line).is_some())
+        .map(raised_by)
 }
 
 pub(crate) fn at_root(name: &str) -> PathBuf {
@@ -1448,6 +1473,40 @@ pub(crate) fn run_with_stdin(dir: &Path, args: &[&str], input: &str) -> Output {
     stdin_run(&mut batten(), dir, args, input)
 }
 
+/// The authority minus its `session-start` handler rows.
+///
+/// A CASE THAT SENDS A REAL `SessionStart` over the committed authority runs this
+/// repository's own session setup from the fixture: a toolchain install, a
+/// release build and a target prune that deletes the scratch directory the
+/// fixture lives in. Measured: five minutes, then a spawn into a directory that
+/// no longer existed. What such a case judges is the engine's lifecycle, not a
+/// handler's, so the rows are dropped rather than run.
+pub(crate) fn without_session_handlers(config: &str) -> String {
+    let mut out = String::with_capacity(config.len());
+    let mut block: Vec<&str> = Vec::new();
+    let flush = |block: &mut Vec<&str>, out: &mut String| {
+        let session = block.first() == Some(&"[[hook.handler]]")
+            && block
+                .iter()
+                .any(|line| line.trim() == "on = \"session-start\"");
+        if !session {
+            for line in block.iter() {
+                out.push_str(line);
+                out.push('\n');
+            }
+        }
+        block.clear();
+    };
+    for line in config.lines() {
+        if line.starts_with('[') {
+            flush(&mut block, &mut out);
+        }
+        block.push(line);
+    }
+    flush(&mut block, &mut out);
+    out
+}
+
 /// Run `command` in `dir` with `args`, writing `input` to its stdin and closing
 /// it, and capture its output. Refuses a fall-through BEFORE the spawn, since it
 /// runs below `Batten`'s own methods.
@@ -2298,6 +2357,7 @@ pub(crate) fn verdicts(ids: &[&str]) -> Vec<batten::verdict::DeclaredVerdict> {
         .map(|id| batten::verdict::DeclaredVerdict {
             id: (*id).to_owned(),
             gloss: format!("the fixture class {id}"),
+            doc: batten::doc::Doc::default(),
             class: format!("What {id} means, at the length `batten policy explain` answers with."),
             // Advice, which is the default and what every fixture class wants:
             // a repairing class would make the boundary spawn this row's `fix`

@@ -271,10 +271,8 @@ fn task_names(lines: &[String]) -> Vec<String> {
 //MUTANT-SUITE crates/batten/tests/it/mutate.rs
 //MUTANT task-block-unscoped|s@        Some(task) if task_manifest().as_deref() == Some(source) => task_block(&lines, task),@        Some(_) if task_manifest().as_deref() == Some(source) => Some(lines),@|a_task_gate_sweeps_only_its_own_block
 //MUTANT suite-first-only|s@own_suites.get(&row.source)@own_suites.get(\&row.slug)@|each_preset_module_row_runs_under_its_own_declared_suite
-//MUTANT source-change-ignored|s@^                let by_source = .*;$@                let by_source = false;@|a_change_to_one_gate_sweeps_only_that_gate
-//MUTANT suite-change-ignored|s@^                let by_suite = .*;$@                let by_suite = false;@|a_change_to_a_suite_sweeps_its_gate
-//MUTANT deleted-module-ignored|s@^                let by_preset = .*;$@                let by_preset = false;@|a_deleted_preset_module_sweeps_its_gate
-//MUTANT rust-rows-swept-by-hand|s@^                if gate.rows.iter().all(cargo_mutants_owns) .*$@                if false {@|a_change_to_a_rust_gate_is_left_to_cargo_mutants
+//MUTANT registered-rows-swept-by-hand|s@^                if !gate.rows.is_empty() \&\& !gate.rows.iter().any(|row| registry.declares(row)) {$@                if false {@|a_change_to_a_rust_gate_is_judged_by_its_registered_runner
+//MUTANT registered-row-judged-twice|s@^        for row in gate.rows.iter().filter(|row| registry.declares(row)) {$@        for row in \&gate.rows {@|a_registered_runners_rows_are_never_swept_by_the_declared_runner
 //MUTANT every-gate-touched|s@^        \.filter(\x7cname\x7c {$@        .filter(\x7cname\x7c { true \x7c\x7c@|a_change_touching_no_gate_sweeps_nothing
 fn declaring_lines(root: &Path, name: &str, source: &str) -> Option<Vec<String>> {
     let lines = lines_of(root, source)?;
@@ -536,6 +534,10 @@ pub enum Verdict {
     /// matches its own row, so the gate's behaviour is untouched and the
     /// mutation survives every run while reading as enforced coverage.
     SelfMutatingRow,
+    /// A registered runner's program does not answer here (CLOUD-1746).
+    RunnerAbsent,
+    /// Two registered runners claim one source, so which judged it is unknown.
+    RunnerOverlap,
 }
 
 impl Verdict {
@@ -564,6 +566,8 @@ impl Verdict {
                 | Verdict::CaseErrored { .. }
                 | Verdict::CaseAlreadyRed { .. }
                 | Verdict::UnappliableMutation
+                | Verdict::RunnerAbsent
+                | Verdict::RunnerOverlap
         )
     }
 }
@@ -592,6 +596,8 @@ impl fmt::Display for Verdict {
             Verdict::UnappliableMutation => write!(out, "unappliable-mutation"),
             Verdict::InertMutation => write!(out, "inert-mutation"),
             Verdict::SelfMutatingRow => write!(out, "self-mutating-row"),
+            Verdict::RunnerAbsent => write!(out, "runner-absent"),
+            Verdict::RunnerOverlap => write!(out, "runner-overlap"),
         }
     }
 }
@@ -995,16 +1001,6 @@ fn subject_name(root: &Path, path: &str) -> String {
 // Narrowing the set to a change (CLOUD-2072).
 // ---------------------------------------------------------------------------
 
-/// Whether `row` mutates Rust, which at admission is cargo-mutants' to decide
-/// rather than this runner's (CLOUD-1746). Decided by the row's own source, not
-/// the gate's suite: a Rego gate whose suite is a Rust test still mutates Rego.
-#[must_use]
-pub fn cargo_mutants_owns(row: &Row) -> bool {
-    Path::new(&row.source)
-        .extension()
-        .is_some_and(|ext| ext == "rs")
-}
-
 /// The enforced gates a change can move, so a sweep can run at admission over
 /// the gates a pull request touched rather than on a schedule over all of them.
 ///
@@ -1017,10 +1013,10 @@ pub fn cargo_mutants_owns(row: &Row) -> bool {
 /// so a module the change removed is no longer among the gate's sources, and a
 /// match on sources alone let the deletion pass unswept (review of #1099).
 ///
-/// A gate whose every row mutates Rust is NOT touched, whatever changed: Rust
-/// mutation at admission is `cargo mutants --in-diff` (CLOUD-1746), and sweeping those rows by hand here too would be the second,
-/// hand-rolled Rust mutation system the owner refused. They stay in the whole
-/// sweep until cargo-mutants gates, and are retired then.
+/// A gate none of whose rows the DECLARED runner owns is not touched: another
+/// registered runner owns every source it mutates ([`Registry::owner`]) and
+/// judges the change itself ([`run_registered`]). A row is never judged by two
+/// runners, and never by none.
 ///
 /// A name that resolves to nothing is KEPT. Narrowing it away would turn the
 /// sweep's `no-such-gate` report into silence; could-not-look widens here as it
@@ -1030,23 +1026,579 @@ pub fn touched(
     root: &Path,
     names: &[String],
     changed: &std::collections::BTreeSet<String>,
+    registry: &Registry,
 ) -> Vec<String> {
     names
         .iter()
         .filter(|name| {
             resolve(root, name).is_none_or(|gate| {
-                if gate.rows.iter().all(cargo_mutants_owns) && !gate.rows.is_empty() {
+                if !gate.rows.is_empty() && !gate.rows.iter().any(|row| registry.declares(row)) {
                     return false;
                 }
-                let by_source = gate.sources.iter().any(|path| changed.contains(path));
-                let by_suite = gate.suites().iter().any(|s| changed.contains(s.path()));
-                let dir = format!("{PRESETS}/{name}/");
-                let by_preset = changed.iter().any(|path| path.starts_with(&dir));
-                by_source || by_suite || by_preset
+                changed_by(&gate, name, changed)
             })
         })
         .cloned()
         .collect()
+}
+
+/// Whether `changed` moves `gate`: a changed path is one of its sources, one of
+/// [`Gate::suites`], or inside its preset directory ([`touched`]'s three arms).
+//MUTANT source-change-ignored|s@^    let by_source = .*;$@    let by_source = false;@|a_change_to_one_gate_sweeps_only_that_gate
+//MUTANT suite-change-ignored|s@^    let by_suite = .*;$@    let by_suite = false;@|a_change_to_a_suite_sweeps_its_gate
+//MUTANT deleted-module-ignored|s@^    let by_preset = .*;$@    let by_preset = false;@|a_deleted_preset_module_sweeps_its_gate
+fn changed_by(gate: &Gate, name: &str, changed: &std::collections::BTreeSet<String>) -> bool {
+    let by_source = gate.sources.iter().any(|path| changed.contains(path));
+    let by_suite = gate.suites().iter().any(|s| changed.contains(s.path()));
+    let dir = format!("{PRESETS}/{name}/");
+    let by_preset = changed.iter().any(|path| path.starts_with(&dir));
+    by_source || by_suite || by_preset
+}
+
+// ---------------------------------------------------------------------------
+// The runner registry (CLOUD-1746).
+// ---------------------------------------------------------------------------
+
+/// The registry's declaration: `<runner>=<glob>[,<glob>…]`, entries split by `;`.
+///
+/// AN ENVIRONMENT VALUE, BESIDE `$MUTANT_GATES`, for `task_manifest`'s reason:
+/// the sweep's whole scope is declared there today, and CLOUD-2010 moves the set
+/// into config together rather than one key at a time.
+pub const RUNNERS: &str = "MUTANT_RUNNERS";
+
+/// Which registered runner this invocation runs, by its id. Unset runs the
+/// declared runner, which is what `verify` does; a CI job sets it per shard.
+pub const RUNNER: &str = "MUTANT_RUNNER";
+
+/// The shard a registered runner takes, as `k/n` with `k` counted from zero.
+pub const SHARD: &str = "MUTANT_SHARD";
+
+/// A mutation runner the registry can name.
+///
+/// CLOSED, for [`Program`]'s reason (CLOUD-1924): a runner is a program this
+/// module spawns and an outcome format it reads, so a new one is a variant a
+/// reviewer reads rather than an argv a consumer types.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum RunnerKind {
+    /// The hand-rolled runner: applies each declared `MUTANT` row's sed script
+    /// and requires the case the row names to go red. It owns every source no
+    /// other runner is registered for, so no source is ever owned by none.
+    Declared,
+    /// `cargo mutants --in-diff`: generates its own mutants over the changed
+    /// functions of the Rust sources it owns, and runs against each the suites
+    /// that source declares beside its own unit tests.
+    CargoMutants,
+}
+
+impl RunnerKind {
+    /// The id the registry and `$MUTANT_RUNNER` spell.
+    #[must_use]
+    pub const fn id(self) -> &'static str {
+        match self {
+            RunnerKind::Declared => "declared",
+            RunnerKind::CargoMutants => "cargo-mutants",
+        }
+    }
+
+    /// The runner an id names, or `None` for an id no runner carries.
+    #[must_use]
+    pub fn parse(id: &str) -> Option<Self> {
+        [RunnerKind::Declared, RunnerKind::CargoMutants]
+            .into_iter()
+            .find(|kind| kind.id() == id)
+    }
+}
+
+//MUTANT-SUITE crates/batten/src/mutate.rs
+//MUTANT registry-owns-nothing|s@^            .filter(|(_, glob)| crate::rules::glob_match(glob, path))$@            .filter(|_| false)@|a_registered_glob_owns_its_sources_and_the_declared_runner_the_rest
+//MUTANT overlap-picks-one|s@^        let mut owners = owners.into_iter();$@        let mut owners = owners.into_iter().take(1);@|a_source_two_runners_claim_has_no_owner
+//MUTANT declared-runner-takes-globs|s@^            if kind == RunnerKind::Declared {$@            if false {@|a_registry_naming_no_runner_or_giving_the_declared_one_globs_is_refused
+//MUTANT declared-suites-unscoped|s@^        if has_extension(suite, "rs")$@        if false@|a_sources_scope_is_its_own_tests_and_every_suite_it_declares
+//MUTANT missed-unread|s@^    let missed: Vec<String> = lines("missed.txt")@    let missed: Vec<String> = lines("absent.txt")@|a_missed_mutant_is_a_survivor_named_by_pointer_alone
+//MUTANT failed-run-reads-caught|s@^        } else if !ran.ok \&\& found.is_empty() {$@        } else if false {@|a_failed_run_with_nothing_missed_is_never_every_mutant_caught
+//MUTANT-SUITE crates/batten/tests/it/mutate.rs
+/// Which registered runner owns which sources.
+///
+/// Every source has exactly one owner: the first registered runner whose glob
+/// matches it, else [`RunnerKind::Declared`]. Two runners matching one source is
+/// [`Registry::owner`]'s error, because a source judged twice is a second
+/// mutation system and a source judged by the wrong one is a silent gap.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Registry {
+    owns: Vec<(RunnerKind, String)>,
+}
+
+impl Registry {
+    /// Read a declaration (see [`RUNNERS`]).
+    ///
+    /// # Errors
+    ///
+    /// An entry with no `=`, a runner id no variant carries, or a glob given to
+    /// the declared runner, which owns by default and takes none.
+    pub fn parse(raw: &str) -> Result<Self> {
+        let mut owns = Vec::new();
+        for entry in raw
+            .split(';')
+            .map(str::trim)
+            .filter(|entry| !entry.is_empty())
+        {
+            let Some((id, globs)) = entry.split_once('=') else {
+                bail!("{RUNNERS} entry `{entry}` is not `<runner>=<glob>[,<glob>]`");
+            };
+            let Some(kind) = RunnerKind::parse(id.trim()) else {
+                bail!(
+                    "{RUNNERS} names `{}`, which is no runner: the runners are `declared` and \
+                     `cargo-mutants`",
+                    id.trim()
+                );
+            };
+            if kind == RunnerKind::Declared {
+                bail!(
+                    "{RUNNERS} gives `declared` globs, but it owns every source no other runner \
+                     is registered for and takes none"
+                );
+            }
+            for glob in globs
+                .split(',')
+                .map(str::trim)
+                .filter(|glob| !glob.is_empty())
+            {
+                owns.push((kind, glob.to_owned()));
+            }
+        }
+        Ok(Self { owns })
+    }
+
+    /// The registry `$MUTANT_RUNNERS` declares; unset is the empty registry, in
+    /// which the declared runner owns everything.
+    ///
+    /// # Errors
+    ///
+    /// [`Registry::parse`]'s.
+    pub fn from_env() -> Result<Self> {
+        Self::parse(&std::env::var(RUNNERS).unwrap_or_default())
+    }
+
+    /// The runner that owns `path`.
+    ///
+    /// # Errors
+    ///
+    /// Two different runners register a glob matching it.
+    pub fn owner(&self, path: &str) -> Result<RunnerKind> {
+        let owners: std::collections::BTreeSet<RunnerKind> = self
+            .owns
+            .iter()
+            .filter(|(_, glob)| crate::rules::glob_match(glob, path))
+            .map(|(kind, _)| *kind)
+            .collect();
+        let mut owners = owners.into_iter();
+        match (owners.next(), owners.next()) {
+            (None, _) => Ok(RunnerKind::Declared),
+            (Some(kind), None) => Ok(kind),
+            (Some(first), Some(second)) => bail!(
+                "{RUNNERS} registers both `{}` and `{}` for {path}; a source has one owner",
+                first.id(),
+                second.id()
+            ),
+        }
+    }
+
+    /// Whether the declared runner judges `row`. An overlap answers yes, so
+    /// the row is still judged by someone while [`run_registered`] reports it.
+    #[must_use]
+    pub fn declares(&self, row: &Row) -> bool {
+        self.owner(&row.source)
+            .map_or(true, |kind| kind == RunnerKind::Declared)
+    }
+
+    /// Every runner the registry names besides the declared one, each once.
+    #[must_use]
+    pub fn registered(&self) -> Vec<RunnerKind> {
+        let kinds: std::collections::BTreeSet<RunnerKind> =
+            self.owns.iter().map(|(kind, _)| *kind).collect();
+        kinds.into_iter().collect()
+    }
+}
+
+/// What a registered runner decided about a change.
+#[derive(Debug, Clone, Default)]
+pub struct Registered {
+    /// Every finding, a pointer each: the source and line of a missed mutant,
+    /// or a source the runner could not judge.
+    pub findings: Vec<Finding>,
+    /// How many mutants the runner generated and ran.
+    pub mutants: usize,
+    /// How many changed sources it owned.
+    pub sources: usize,
+}
+
+/// The changed sources `kind` owns: present in the tree, so a deleted file,
+/// which has nothing left to mutate, is not one.
+#[must_use]
+pub fn owned_changes(
+    root: &Path,
+    changed: &std::collections::BTreeSet<String>,
+    registry: &Registry,
+    kind: RunnerKind,
+) -> Vec<String> {
+    changed
+        .iter()
+        .filter(|path| root.join(path).is_file())
+        .filter(|path| registry.owner(path).is_ok_and(|owner| owner == kind))
+        .cloned()
+        .collect()
+}
+
+/// Whether each registered runner's program answers in `root`, as a finding per
+/// runner that does not (`runner-absent`, could-not-look).
+///
+/// THE LOCAL HALF OF A RUNNER THAT RUNS ELSEWHERE. `verify` does not run
+/// cargo-mutants (a branch's mutants cost about 40s each, measured, and a CI
+/// matrix shards them); what it CAN decide is that the runner the registry
+/// names is pinned and resolves, so the CI job is not the first to find out.
+#[must_use]
+pub fn unresolvable(root: &Path, registry: &Registry) -> Vec<Finding> {
+    registry
+        .registered()
+        .into_iter()
+        .filter(|kind| {
+            let args: Vec<String> = match kind {
+                RunnerKind::Declared => return false,
+                RunnerKind::CargoMutants => {
+                    vec![String::from("mutants"), String::from("--version")]
+                }
+            };
+            !spawn(root, Program::Cargo, &args, &[], HOUSEKEEPING_BOUND).is_ok_and(|ran| ran.ok)
+        })
+        .map(|kind| Finding {
+            gate: kind.id().to_owned(),
+            slug: None,
+            verdict: Verdict::RunnerAbsent,
+            owner: None,
+        })
+        .collect()
+}
+
+/// Run `kind` over the sources it owns that changed since `base`.
+///
+/// For cargo-mutants, one invocation per source, `--in-diff` over the change
+/// and `--in-place` in the staged copy (the book's CI recipe; the copy is a
+/// repository, so a suite asking git about its tree is answered). Each run's
+/// tests are that source's own unit tests plus every suite it declares with
+/// `MUTANT-SUITE` ([`test_scope`]), so the obligation a row already states is
+/// what bounds the cost.
+///
+/// # Errors
+///
+/// A tree that cannot be staged, or a diff that cannot be written.
+pub fn run_registered(
+    root: &Path,
+    base: &str,
+    changed: &std::collections::BTreeSet<String>,
+    registry: &Registry,
+    kind: RunnerKind,
+    shard: Option<&str>,
+    work: &Path,
+) -> Result<Registered> {
+    let mut result = Registered::default();
+    for path in changed {
+        if let Err(reason) = registry.owner(path) {
+            let _ = reason;
+            result.findings.push(Finding {
+                gate: kind.id().to_owned(),
+                slug: Some(path.clone()),
+                verdict: Verdict::RunnerOverlap,
+                owner: None,
+            });
+        }
+    }
+    let sources = owned_changes(root, changed, registry, kind);
+    result.sources = sources.len();
+    if kind == RunnerKind::Declared || sources.is_empty() {
+        return Ok(result);
+    }
+    let diff = spawn(
+        root,
+        Program::Git,
+        &[
+            String::from("diff"),
+            String::from("--no-color"),
+            String::from("--no-ext-diff"),
+            base.to_owned(),
+            String::from("--"),
+        ]
+        .into_iter()
+        .chain(sources.iter().cloned())
+        .collect::<Vec<_>>(),
+        &[],
+        HOUSEKEEPING_BOUND,
+    )?;
+    if !diff.ok {
+        bail!("mutate: `git diff {base}` failed, so the change cannot be named to cargo-mutants");
+    }
+    let staged = Staged::new(root, work.to_path_buf())?;
+    let runs = work.join("cargo-mutants");
+    fs::create_dir_all(&runs)
+        .with_context(|| format!("mutate: could not create {}", runs.display()))?;
+    let patch = runs.join("change.diff");
+    crate::durable::replace(&patch, diff.output)
+        .with_context(|| format!("mutate: could not write {}", patch.display()))?;
+    for (index, source) in sources.iter().enumerate() {
+        let Some(scope) = test_scope(root, source) else {
+            result.findings.push(Finding {
+                gate: kind.id().to_owned(),
+                slug: Some(source.clone()),
+                verdict: Verdict::NoSuite {
+                    suite: String::from("no cargo target compiles it"),
+                },
+                owner: None,
+            });
+            continue;
+        };
+        let output = runs.join(index.to_string());
+        let _ = fs::remove_dir_all(&output);
+        let mut args = vec![
+            String::from("mutants"),
+            String::from("--in-place"),
+            String::from("--no-shuffle"),
+            String::from("--in-diff"),
+            patch.to_string_lossy().into_owned(),
+            String::from("--file"),
+            source.clone(),
+            String::from("--test-tool"),
+            String::from("nextest"),
+            String::from("--output"),
+            output.to_string_lossy().into_owned(),
+        ];
+        if let Some(shard) = shard {
+            args.extend([String::from("--shard"), shard.to_owned()]);
+        }
+        args.extend([String::from("--"), String::from("-E"), scope]);
+        let ran = spawn(
+            staged.dir(),
+            Program::Cargo,
+            &args,
+            &suite_env(root),
+            runner_bound(),
+        )?;
+        let outcome = read_outcomes(&output.join("mutants.out"));
+        result.mutants += outcome.ran;
+        result.findings.extend(outcome.findings(kind, source, &ran));
+    }
+    Ok(result)
+}
+
+/// How long one registered run over one source may take: a build per mutant.
+fn runner_bound() -> std::time::Duration {
+    std::time::Duration::from_secs(
+        std::env::var("BATTEN_MUTATE_RUNNER_TIMEOUT")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .filter(|seconds| *seconds > 0)
+            .unwrap_or(21_600),
+    )
+}
+
+/// What one cargo-mutants run wrote to its `mutants.out`.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct Outcomes {
+    /// Every mutant it ran, whatever became of it.
+    ran: usize,
+    /// `path:line:col` of each mutant no test caught.
+    missed: Vec<String>,
+    /// `path:line:col` of each mutant whose tests ran out of time.
+    timeout: Vec<String>,
+    /// Whether the unmutated baseline failed, so no catch means anything.
+    baseline_failed: bool,
+}
+
+/// The pointer of one `mutants.out` line, `path:line:col`, never the mutation's
+/// text, which quotes the source (rule 4).
+fn pointer_of(line: &str) -> Option<String> {
+    let mut fields = line.splitn(4, ':');
+    let path = fields.next()?;
+    let row = fields.next()?;
+    let column = fields.next()?;
+    (row.parse::<u32>().is_ok() && column.parse::<u32>().is_ok())
+        .then(|| format!("{path}:{row}:{column}"))
+}
+
+/// Read a run's outcome files. Absent files are empty: a run that never got as
+/// far as writing them is told apart by [`Outcomes::findings`] from its exit.
+fn read_outcomes(dir: &Path) -> Outcomes {
+    let lines = |name: &str| -> Vec<String> {
+        fs::read_to_string(dir.join(name))
+            .unwrap_or_default()
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(str::to_owned)
+            .collect()
+    };
+    let caught = lines("caught.txt").len();
+    let unviable = lines("unviable.txt").len();
+    let missed: Vec<String> = lines("missed.txt")
+        .iter()
+        .filter_map(|l| pointer_of(l))
+        .collect();
+    let timeout: Vec<String> = lines("timeout.txt")
+        .iter()
+        .filter_map(|l| pointer_of(l))
+        .collect();
+    let baseline_failed = fs::read_to_string(dir.join("outcomes.json"))
+        .ok()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .and_then(|json| {
+            json.get("outcomes")?.as_array().map(|outcomes| {
+                outcomes.iter().any(|outcome| {
+                    outcome.get("scenario").and_then(serde_json::Value::as_str) == Some("Baseline")
+                        && outcome.get("summary").and_then(serde_json::Value::as_str)
+                            != Some("Success")
+                })
+            })
+        })
+        .unwrap_or(false);
+    Outcomes {
+        ran: caught + unviable + missed.len() + timeout.len(),
+        missed,
+        timeout,
+        baseline_failed,
+    }
+}
+
+impl Outcomes {
+    /// The findings one run over `source` amounts to.
+    ///
+    /// A run that failed with nothing missed and nothing timed out decided
+    /// nothing: a failed baseline is `case-already-red`, anything else is
+    /// `suite-did-not-run`. Neither may read as every mutant caught.
+    fn findings(&self, kind: RunnerKind, source: &str, ran: &Ran) -> Vec<Finding> {
+        let at = |slug: &str, verdict: Verdict| Finding {
+            gate: kind.id().to_owned(),
+            slug: Some(slug.to_owned()),
+            verdict,
+            owner: None,
+        };
+        let mut found: Vec<Finding> = self
+            .missed
+            .iter()
+            .map(|pointer| {
+                at(
+                    pointer,
+                    Verdict::Survived {
+                        want: String::from("in-diff"),
+                    },
+                )
+            })
+            .chain(
+                self.timeout
+                    .iter()
+                    .map(|pointer| at(pointer, Verdict::SuiteTimedOut { seconds: 0 })),
+            )
+            .collect();
+        if ran.timed_out {
+            found.push(at(
+                source,
+                Verdict::SuiteTimedOut {
+                    seconds: runner_bound().as_secs(),
+                },
+            ));
+        } else if !ran.ok && found.is_empty() {
+            found.push(at(
+                source,
+                if self.baseline_failed {
+                    Verdict::CaseAlreadyRed {
+                        want: String::from("baseline"),
+                    }
+                } else {
+                    Verdict::SuiteDidNotRun {
+                        want: String::from("cargo mutants"),
+                    }
+                },
+            ));
+        }
+        found
+    }
+}
+
+/// The nextest filterset of the tests that judge `source`: its own tests, and
+/// every Rust suite it declares with `MUTANT-SUITE`, each inside its package.
+///
+/// `None` when no cargo target compiles the source, so nothing could be named.
+#[must_use]
+pub fn test_scope(root: &Path, source: &str) -> Option<String> {
+    let mut terms = vec![tests_of(root, source)?];
+    for line in lines_of(root, source).unwrap_or_default() {
+        let Some(suite) = strip_marker(&line, SUITE) else {
+            continue;
+        };
+        let suite = suite.trim();
+        if has_extension(suite, "rs")
+            && let Some(term) = tests_of(root, suite)
+            && !terms.contains(&term)
+        {
+            terms.push(term);
+        }
+    }
+    Some(terms.join(" | "))
+}
+
+/// The filterset term naming the tests compiled from `path`, inside its package.
+///
+/// Cargo's own layout decides it, never this repository's: `src/lib.rs` is the
+/// library's whole unit-test set and `src/a/b.rs` its `a::b::` module;
+/// `tests/<t>.rs` and `tests/<t>/main.rs` are the target `<t>`, and
+/// `tests/<t>/<m>.rs` its `<m>::` module.
+fn tests_of(root: &Path, path: &str) -> Option<String> {
+    let (package, dir) = package_of(root, path)?;
+    let relative = Path::new(path)
+        .strip_prefix(&dir)
+        .ok()?
+        .to_string_lossy()
+        .replace('\\', "/");
+    let stem = relative.strip_suffix(".rs")?;
+    let term = if let Some(module) = stem.strip_prefix("src/") {
+        let module = module.strip_suffix("/mod").unwrap_or(module);
+        match module {
+            "lib" => String::from("kind(lib)"),
+            "main" => String::from("kind(bin)"),
+            _ => match module.strip_prefix("bin/") {
+                Some(binary) => format!("binary({binary})"),
+                None => format!("kind(lib) & test(/^{}::/)", module.replace('/', "::")),
+            },
+        }
+    } else {
+        let test = stem.strip_prefix("tests/")?;
+        match test.split_once('/') {
+            None => format!("binary({test})"),
+            Some((target, "main")) => format!("binary({target})"),
+            Some((target, module)) => {
+                format!(
+                    "binary({target}) & test(/^{}::/)",
+                    module.replace('/', "::")
+                )
+            }
+        }
+    };
+    Some(format!("(package({package}) & {term})"))
+}
+
+/// The package whose manifest is nearest above `path`, and that manifest's
+/// directory, repo-relative.
+fn package_of(root: &Path, path: &str) -> Option<(String, PathBuf)> {
+    let mut dir = Path::new(path).parent();
+    while let Some(candidate) = dir {
+        if let Ok(text) = fs::read_to_string(root.join(candidate).join("Cargo.toml"))
+            && let Ok(manifest) = text.parse::<toml::Table>()
+            && let Some(name) = manifest
+                .get("package")
+                .and_then(|package| package.get("name"))
+                .and_then(toml::Value::as_str)
+        {
+            return Some((name.to_owned(), candidate.to_path_buf()));
+        }
+        dir = candidate.parent();
+    }
+    None
 }
 
 // ---------------------------------------------------------------------------
@@ -1272,6 +1824,10 @@ enum Program<'a> {
     Cargo,
     /// The consumer's declared suite runner, re-run against the mutant: the verb.
     Suite(&'a str),
+    /// Writes the unified diff `cargo mutants --in-diff` reads (CLOUD-1746).
+    /// `gix` computes a tree delta but writes no unified patch, and a second
+    /// patch writer would be a second reading of what changed.
+    Git,
 }
 
 impl Program<'_> {
@@ -1279,6 +1835,7 @@ impl Program<'_> {
         match self {
             Program::Sed => "sed",
             Program::Cargo => "cargo",
+            Program::Git => "git",
             Program::Suite(program) => program,
         }
     }
@@ -2314,6 +2871,21 @@ fn unreported(run: &Selection, suite: &Suite, row: &Row) -> Option<Verdict> {
 ///
 /// A tree that cannot be staged is could-not-look (→ exit `3`).
 pub fn sweep(root: &Path, names: &[String], work: PathBuf) -> Result<Sweep> {
+    sweep_owned(root, names, work, &Registry::default())
+}
+
+/// [`sweep`], judging only the rows the declared runner owns under `registry`;
+/// a row another runner owns is that runner's ([`run_registered`]).
+///
+/// # Errors
+///
+/// [`sweep`]'s.
+pub fn sweep_owned(
+    root: &Path,
+    names: &[String],
+    work: PathBuf,
+    registry: &Registry,
+) -> Result<Sweep> {
     let mut staged = Staged::new(root, work)?;
     // BUILD ONCE, BEFORE ANY ROW IS TIMED (CLOUD-1910). Best effort: a build that
     // fails leaves every Cargo row to report `suite-did-not-run` on its own, which
@@ -2383,7 +2955,7 @@ pub fn sweep(root: &Path, names: &[String], work: PathBuf) -> Result<Sweep> {
             });
             continue;
         }
-        for row in &gate.rows {
+        for row in gate.rows.iter().filter(|row| registry.declares(row)) {
             declared += 1;
             let verdict = judge_row(root, &mut staged, &gate, row)?;
             if verdict.is_finding() {
@@ -2721,8 +3293,149 @@ fn engine_undeclared(root: &Path, censused: &BTreeMap<String, String>) -> usize 
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    fn row_from(source: &str) -> Row {
+        Row {
+            slug: String::from("s"),
+            script: String::from("s@a@b@"),
+            want: String::from("w"),
+            source: source.to_owned(),
+        }
+    }
+
+    #[test]
+    fn a_registered_glob_owns_its_sources_and_the_declared_runner_the_rest() {
+        let registry = Registry::parse("cargo-mutants=crates/**/*.rs").expect("parses");
+        assert_eq!(
+            registry
+                .owner("crates/batten/src/drain.rs")
+                .expect("one owner"),
+            RunnerKind::CargoMutants
+        );
+        assert_eq!(
+            registry.owner("policy/filed-here.rego").expect("one owner"),
+            RunnerKind::Declared
+        );
+        assert!(!registry.declares(&row_from("crates/batten/src/drain.rs")));
+        assert!(registry.declares(&row_from("policy/filed-here.rego")));
+        assert!(Registry::default().declares(&row_from("crates/batten/src/drain.rs")));
+    }
+
+    #[test]
+    fn a_registry_naming_no_runner_or_giving_the_declared_one_globs_is_refused() {
+        assert!(Registry::parse("mutmut=**/*.py").is_err());
+        assert!(Registry::parse("declared=**/*.rego").is_err());
+        assert!(Registry::parse("cargo-mutants").is_err());
+    }
+
+    #[test]
+    fn a_source_two_runners_claim_has_no_owner() {
+        let registry = Registry {
+            owns: vec![
+                (RunnerKind::CargoMutants, String::from("**/*.rs")),
+                (RunnerKind::Declared, String::from("crates/**")),
+            ],
+        };
+        assert!(registry.owner("crates/a/src/lib.rs").is_err());
+        assert!(registry.declares(&row_from("crates/a/src/lib.rs")));
+    }
+
+    #[test]
+    fn a_sources_scope_is_its_own_tests_and_every_suite_it_declares() {
+        let root = std::env::temp_dir().join(format!("batten-scope-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("crates/k/src/a")).expect("dirs");
+        fs::create_dir_all(root.join("crates/k/tests/it")).expect("dirs");
+        fs::write(
+            root.join("crates/k/Cargo.toml"),
+            "[package]\nname = \"k\"\n",
+        )
+        .expect("manifest");
+        fs::write(
+            root.join("crates/k/src/a/b.rs"),
+            "//MUTANT-SUITE crates/k/tests/it/flows.rs\n//MUTANT-SUITE tests/x.bats\n",
+        )
+        .expect("source");
+        fs::write(root.join("crates/k/src/lib.rs"), "").expect("lib");
+        assert_eq!(
+            test_scope(&root, "crates/k/src/a/b.rs").as_deref(),
+            Some(
+                "(package(k) & kind(lib) & test(/^a::b::/)) | (package(k) & binary(it) & \
+                 test(/^flows::/))"
+            )
+        );
+        assert_eq!(
+            test_scope(&root, "crates/k/src/lib.rs").as_deref(),
+            Some("(package(k) & kind(lib))")
+        );
+        assert_eq!(test_scope(&root, "elsewhere/x.rs"), None);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    fn ran(ok: bool) -> Ran {
+        Ran {
+            ok,
+            output: String::new(),
+            timed_out: false,
+        }
+    }
+
+    #[test]
+    fn a_missed_mutant_is_a_survivor_named_by_pointer_alone() {
+        let dir = std::env::temp_dir().join(format!("batten-outcomes-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("dir");
+        fs::write(
+            dir.join("caught.txt"),
+            "src/a.rs:3:5: replace f -> bool with true\n",
+        )
+        .expect("caught");
+        fs::write(dir.join("missed.txt"), "src/a.rs:9:1: replace g with ()\n").expect("missed");
+        let outcomes = read_outcomes(&dir);
+        assert_eq!(outcomes.ran, 2);
+        let found = outcomes.findings(RunnerKind::CargoMutants, "src/a.rs", &ran(false));
+        assert_eq!(found.len(), 1);
+        assert_eq!(
+            found[0].to_string(),
+            "cargo-mutants/src/a.rs:9:1 SURVIVED (in-diff)"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_failed_run_with_nothing_missed_is_never_every_mutant_caught() {
+        let dir = std::env::temp_dir().join(format!("batten-baseline-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("dir");
+        fs::write(
+            dir.join("outcomes.json"),
+            r#"{"outcomes":[{"scenario":"Baseline","summary":"Failure"}]}"#,
+        )
+        .expect("outcomes");
+        let found = read_outcomes(&dir).findings(RunnerKind::CargoMutants, "src/a.rs", &ran(false));
+        assert_eq!(found.len(), 1);
+        assert!(found[0].verdict.could_not_look(), "{}", found[0]);
+        assert_eq!(
+            found[0].to_string(),
+            "cargo-mutants/src/a.rs case-already-red (baseline)"
+        );
+        let none = std::env::temp_dir().join(format!("batten-nothing-{}", std::process::id()));
+        let found =
+            read_outcomes(&none).findings(RunnerKind::CargoMutants, "src/a.rs", &ran(false));
+        assert_eq!(
+            found[0].to_string(),
+            "cargo-mutants/src/a.rs suite-did-not-run (cargo mutants)"
+        );
+        assert!(
+            read_outcomes(&none)
+                .findings(RunnerKind::CargoMutants, "src/a.rs", &ran(true))
+                .is_empty()
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
 
     /// The sweep's cargo cache is not the repository's, and this is the gate on
     /// it rather than the doc comment above `suite_env`.

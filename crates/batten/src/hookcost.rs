@@ -388,8 +388,8 @@ impl Follow {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 #[non_exhaustive]
 pub struct Window {
-    /// Distinct finding keys the window carried — the number a per-gate doc
-    /// budget is divided by.
+    /// Distinct gates the window carried, a gate's full arm and its addresses
+    /// counted once — the number a per-gate doc budget is divided by.
     pub distinct: usize,
     /// Tokens of emissions carrying at least one full arm.
     pub full_tokens: usize,
@@ -421,9 +421,54 @@ fn command_of(name: &str, input: &serde_json::Value) -> String {
     }
 }
 
+/// Whether a call named `name` running `command` takes `route`, one a finding
+/// line printed (CLOUD-2141).
+///
+/// `run <command>`: the call opens with the route's words up to its first
+/// `<placeholder>`, and carries every literal word after it — so a route
+/// `batten policy explain '<id>' --history` is taken by the history read and
+/// not by a bare lookup. `read <path>[ via <tool>]`: the call names the path,
+/// or is the tool the route reads it through.
+fn takes(route: &str, name: &str, command: &str) -> bool {
+    if let Some(run) = route.strip_prefix("run ") {
+        // The lookup hop every line prints is a dereference, not a remedy: the
+        // history read is the one lookup a route asks for as its remedy.
+        let lookup =
+            run.starts_with("batten policy explain") || run.starts_with("batten policy rule");
+        if lookup && !run.contains("--history") {
+            return false;
+        }
+        let words: Vec<&str> = run.split_whitespace().collect();
+        let opening = words.iter().take_while(|word| !word.contains('<')).count();
+        // PER SEGMENT, NOT PER LINE: `cd <dir> && mise run land` takes the
+        // route `mise run land`, and a prefix test of the whole line never saw
+        // it. Measured: every Bash call of the census's own session opened
+        // with a `cd`.
+        return opening > 0
+            && command.split(['&', ';', '|']).any(|segment| {
+                let said: Vec<&str> = segment.split_whitespace().collect();
+                said.starts_with(&words[..opening])
+                    && words[opening..]
+                        .iter()
+                        .filter(|word| !word.contains('<'))
+                        .all(|word| said.contains(word))
+            });
+    }
+    if let Some(read) = route.strip_prefix("read ") {
+        let (path, via) = match read.split_once(" via ") {
+            Some((path, via)) => (path, Some(via)),
+            None => (read, None),
+        };
+        return command.contains(path) || via.is_some_and(|tool| name.ends_with(tool));
+    }
+    false
+}
+
 /// The bucket a refusal of `call` falls in, given the call after it.
+//MUTANT offered-routes-unread|s@^    if offered.iter().any(|route| takes(route, name, \&command)) {$@    if false {@|a_route_the_refusal_printed_is_followed
 fn follow(
     findings: &[(String, crate::refusal::Arm)],
+    offered: &[String],
     refused: Option<(&str, &serde_json::Value)>,
     next: Option<(&str, &serde_json::Value)>,
     routes: &BTreeMap<String, Vec<String>>,
@@ -432,6 +477,13 @@ fn follow(
         return Follow::Ended;
     };
     let command = command_of(name, input);
+    // A ROUTE THE LINE PRINTED, FIRST: the refusal's own pointers are what it
+    // asked for, and a class's declared routes are only the ones every row of
+    // it shares. Measured over 81 refusals: counting only the latter bucketed
+    // the `--history` read the history gate names as "other".
+    if offered.iter().any(|route| takes(route, name, &command)) {
+        return Follow::Followed;
+    }
     if command.starts_with("batten policy explain") || command.starts_with("batten policy rule") {
         return Follow::Dereferenced;
     }
@@ -475,13 +527,17 @@ pub fn windows(stream: &Stream, routes: &BTreeMap<String, Vec<String>>) -> Windo
         .collect();
     let mut segments = Vec::new();
     let mut window = Window::default();
-    let mut keys: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+    let mut keys: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    // What each gate's full arm told this window, by name: a repeat is only the
+    // address (CLOUD-2145), so its class and routes are the ones already shown.
+    let mut told: BTreeMap<String, (String, Vec<String>)> = BTreeMap::new();
     for (index, record) in stream.records.iter().enumerate() {
         let findings =
             match &record.event {
                 Event::SessionBoundary => {
                     window.distinct = keys.len();
                     keys.clear();
+                    told.clear();
                     segments.push(std::mem::take(&mut window));
                     continue;
                 }
@@ -489,18 +545,22 @@ pub fn windows(stream: &Stream, routes: &BTreeMap<String, Vec<String>>) -> Windo
                     tokens, findings, ..
                 } => {
                     charge(&mut window, *tokens, findings);
+                    remember(&mut told, findings, &[]);
                     findings
                 }
                 Event::Refused {
                     call,
                     tokens,
                     findings,
+                    routes: offered,
                 } => {
                     charge(&mut window, *tokens, findings);
                     window.refusals += 1;
                     if findings.is_empty() {
                         window.unlabelled_refusals += 1;
                     }
+                    remember(&mut told, findings, offered);
+                    let (findings_seen, offered_seen) = recalled(&told, findings, offered);
                     let next =
                         stream.records.iter().skip(index + 1).find_map(|later| {
                             match &later.event {
@@ -508,7 +568,13 @@ pub fn windows(stream: &Stream, routes: &BTreeMap<String, Vec<String>>) -> Windo
                                 _ => None,
                             }
                         });
-                    let bucket = follow(findings, calls.get(call.as_str()).copied(), next, routes);
+                    let bucket = follow(
+                        &findings_seen,
+                        &offered_seen,
+                        calls.get(call.as_str()).copied(),
+                        next,
+                        routes,
+                    );
                     for (slot, candidate) in window.buckets.iter_mut().zip(Follow::ALL) {
                         if candidate == bucket {
                             *slot += 1;
@@ -518,11 +584,80 @@ pub fn windows(stream: &Stream, routes: &BTreeMap<String, Vec<String>>) -> Windo
                 }
                 _ => continue,
             };
-        keys.extend(findings.iter().map(|(key, _)| key.as_str()));
+        keys.extend(findings.iter().map(|(key, _)| gate_name(key).to_owned()));
     }
     window.distinct = keys.len();
     segments.push(window);
     Windows { segments }
+}
+
+/// The gate a finding key names: its rule, or its class where it has no rule.
+/// The same gate's two arms key differently — the address carries no class and
+/// no definition — and are one gate.
+fn gate_name(key: &str) -> &str {
+    let mut fields = key.split('\u{1f}');
+    let rule = fields.next().unwrap_or_default();
+    if rule.is_empty() {
+        fields.next().unwrap_or_default()
+    } else {
+        rule
+    }
+}
+
+/// Record what each FULL arm in `findings` told the window: its class and the
+/// routes its emission printed.
+fn remember(
+    told: &mut BTreeMap<String, (String, Vec<String>)>,
+    findings: &[(String, crate::refusal::Arm)],
+    offered: &[String],
+) {
+    for (key, arm) in findings {
+        if *arm != crate::refusal::Arm::Full {
+            continue;
+        }
+        let class = key.split('\u{1f}').nth(1).unwrap_or_default().to_owned();
+        let entry = told
+            .entry(gate_name(key).to_owned())
+            .or_insert_with(|| (class.clone(), Vec::new()));
+        if entry.0.is_empty() {
+            entry.0 = class;
+        }
+        for route in offered {
+            if !entry.1.contains(route) {
+                entry.1.push(route.clone());
+            }
+        }
+    }
+}
+
+/// A refusal's findings and routes with each ADDRESS filled in from what its
+/// gate's full arm told the window: the class into its key, its routes into the
+/// offered set. A gate the window never saw in full is left as it is.
+//MUTANT address-recall-skipped|s@^        let Some((class, earlier)) = told.get(gate_name(key)) else {$@        let Some((class, earlier)) = None::<\&(String, Vec<String>)> else {@|a_repeat_is_bucketed_by_what_its_full_arm_offered
+fn recalled(
+    told: &BTreeMap<String, (String, Vec<String>)>,
+    findings: &[(String, crate::refusal::Arm)],
+    offered: &[String],
+) -> (Vec<(String, crate::refusal::Arm)>, Vec<String>) {
+    let mut keys = Vec::new();
+    let mut routes = offered.to_vec();
+    for (key, arm) in findings {
+        let Some((class, earlier)) = told.get(gate_name(key)) else {
+            keys.push((key.clone(), *arm));
+            continue;
+        };
+        let mut fields: Vec<&str> = key.split('\u{1f}').collect();
+        if fields.len() > 1 && fields[1].is_empty() {
+            fields[1] = class;
+        }
+        keys.push((fields.join("\u{1f}"), *arm));
+        for route in earlier {
+            if !routes.contains(route) {
+                routes.push(route.clone());
+            }
+        }
+    }
+    (keys, routes)
 }
 
 /// Charge one emission's tokens to the class its findings put it in.
@@ -592,8 +727,87 @@ mod tests {
                 findings: key
                     .map(|key| vec![(key.to_owned(), crate::refusal::Arm::Full)])
                     .unwrap_or_default(),
+                routes: Vec::new(),
             },
         }
+    }
+
+    /// A refusal of `call` whose line offered `routes`.
+    fn refused_offering(line: usize, call: &str, routes: &[&str]) -> Record {
+        let mut record = refused_at(line, call, Some("r\u{1f}c9\u{1f}d"));
+        if let Event::Refused {
+            routes: offered, ..
+        } = &mut record.event
+        {
+            *offered = routes.iter().map(|route| (*route).to_owned()).collect();
+        }
+        record
+    }
+
+    /// A route the refusal's own line printed is followed when the next call
+    /// takes it, and the lookup hop every line prints is still a dereference
+    /// (CLOUD-2141). Measured before this: 0 of 81 refusals bucketed as
+    /// followed, the history read the history gate names among them.
+    ///
+    /// The suite `offered-routes-unread` is killed in.
+    #[test]
+    fn a_route_the_refusal_printed_is_followed() {
+        let history = "run batten policy explain '<id>' --history";
+        let lookup = "run batten policy explain 'r' 'c9'";
+        let read = "read rules/scanning.md";
+        let records = vec![
+            // followed: the history read, placeholder filled.
+            call_at(1, "a", "Edit", "batten.toml"),
+            refused_offering(2, "a", &[history, lookup]),
+            call_at(
+                3,
+                "b",
+                "Bash",
+                "batten policy explain 'tool pin other' --history",
+            ),
+            // dereferenced: the bare lookup the same line printed.
+            refused_offering(4, "b", &[history, lookup]),
+            call_at(5, "c", "Bash", "batten policy explain 'r' 'c9'"),
+            // followed: the document route, read.
+            refused_offering(6, "c", &[read, lookup]),
+            call_at(7, "d", "Read", "/home/x/rules/scanning.md"),
+            // other: a route's opening words without its literal tail.
+            refused_offering(8, "d", &["run mise exec -- <program> --pinned"]),
+            call_at(9, "e", "Bash", "mise exec -- cargo build"),
+            // followed: the route as the second segment of a compound line.
+            refused_offering(10, "e", &["run mise run land"]),
+            call_at(11, "f", "Bash", "cd /x && mise run land"),
+        ];
+        let census = windows(&session(records, 4_000), &BTreeMap::new());
+        assert_eq!(census.segments[0].buckets, [3, 0, 1, 1, 0]);
+    }
+
+    /// A REPEAT IS ONLY THE ADDRESS (CLOUD-2145), so the route a window's full
+    /// arm offered is the one a repeat's follow-up is judged against, and the
+    /// gate's two arms are one gate. The suite `address-recall-skipped` is
+    /// killed in.
+    #[test]
+    fn a_repeat_is_bucketed_by_what_its_full_arm_offered() {
+        use crate::refusal::Arm;
+        // The full arm keys `rule, class, digest`; the address keys `rule`
+        // alone, since it carries neither class nor definition.
+        let mut repeat = refused_at(4, "b", Some("r\u{1f}\u{1f}d2"));
+        if let Event::Refused { findings, .. } = &mut repeat.event {
+            findings[0].1 = Arm::Pointer;
+        }
+        let records = vec![
+            call_at(1, "a", "Bash", "head -40 batten.toml"),
+            refused_offering(2, "a", &["run mise run land"]),
+            call_at(3, "b", "Bash", "head -40 batten.toml"),
+            repeat,
+            call_at(5, "c", "Bash", "mise run land"),
+        ];
+        let census = windows(&session(records, 4_000), &BTreeMap::new());
+        let window = &census.segments[0];
+        assert_eq!(window.distinct, 1, "one gate, two arms");
+        // The full arm's next call repeats it; the address's takes the route
+        // only the full arm printed.
+        assert_eq!(window.buckets, [1, 1, 0, 0, 0]);
     }
 
     #[test]

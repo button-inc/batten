@@ -511,7 +511,7 @@ fn the_measured_shape_a_head_carrying_unresolved_threads_is_refused_naming_the_c
     // number is the same and it is now a decoded subject, and since CLOUD-1286
     // the gloss that used to sit between them is one hop away.
     assert!(
-        decision.contains("rule 'review answer missing' at 4"),
+        decision.contains("batten deny review answer missing at 4"),
         "{decision}"
     );
     // Pointer-only (non-negotiable rule 4): the ids are not in the engine, so a
@@ -549,11 +549,11 @@ fn the_discriminating_pair_two_matching_beside_three_that_do_not_records_two() {
     let decision = ready(&dir);
     denied(&decision);
     assert!(
-        decision.contains("rule 'review answer missing' at 2"),
+        decision.contains("batten deny review answer missing at 2"),
         "{decision}"
     );
     assert!(
-        !decision.contains("rule 'review answer missing' at 5"),
+        !decision.contains("batten deny review answer missing at 5"),
         "{decision}"
     );
 }
@@ -579,7 +579,7 @@ fn the_page_guard_an_unread_page_refuses_where_a_full_page_of_the_same_threads_a
     let decision = ready(&truncated);
     denied(&decision);
     assert!(
-        decision.contains("rule 'review answer missing' at 1"),
+        decision.contains("batten deny review answer missing at 1"),
         "{decision}"
     );
 }
@@ -597,7 +597,7 @@ fn the_page_guard_adds_to_the_thread_count_rather_than_replacing_it() {
     let decision = ready(&dir);
     denied(&decision);
     assert!(
-        decision.contains("rule 'review answer missing' at 3"),
+        decision.contains("batten deny review answer missing at 3"),
         "{decision}"
     );
 }
@@ -807,7 +807,7 @@ fn the_bypass_a_compound_command_is_still_a_ready() {
     let decision = call(&dir, "cd /repo && gh pr ready 702");
     denied(&decision);
     assert!(
-        decision.contains("rule 'review answer missing' at 2"),
+        decision.contains("batten deny review answer missing at 2"),
         "{decision}"
     );
 }
@@ -899,7 +899,7 @@ fn an_undeclared_class_refuses_with_the_token_and_says_the_registry_is_silent() 
     // The count still travels: a subject is decoded from the violation, never
     // from the registry, which is what makes the undeclared case still useful.
     assert!(
-        decision.contains("rule 'review answer missing' at 3"),
+        decision.contains("batten deny review answer missing at 3"),
         "{decision}"
     );
 }

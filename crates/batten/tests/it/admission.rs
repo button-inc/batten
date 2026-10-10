@@ -533,6 +533,39 @@ fn an_unanswered_question_yields_no_admission_and_prints_what_to_answer() {
     );
 }
 
+/// AN ISSUED ADMISSION NAMES THE SPEND IT STILL NEEDS (CLOUD-2078).
+///
+/// Only a spent record admits, and no refusal line says `spend`: measured, a
+/// request answered in full left the gate refusing with nothing saying why. The
+/// address stays alone on stdout; the route rides stderr.
+#[test]
+fn an_issued_admission_names_the_spend_it_still_needs() {
+    let root = fixture("issued-names-spend");
+    let output = common::run_with_stdin(
+        &root,
+        &[
+            "override",
+            "request",
+            "--rule",
+            "diff ship early",
+            "--verdict",
+            "diff ship early",
+            "--subject",
+            "a.rs",
+        ],
+        "precondition=x\nlost=y\nrejected-route=z\n",
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    assert_eq!(output.status.code(), Some(0), "issued: {stderr}");
+    assert_eq!(stdout.len(), 64, "the address alone on stdout: {stdout}");
+    assert!(
+        stderr.contains(&format!("run batten override spend --admission {stdout}"))
+            && stderr.contains("--subject 'a.rs'"),
+        "the spend that makes it admit is named with its terms: {stderr}"
+    );
+}
+
 #[test]
 fn a_class_declaring_no_override_route_cannot_be_overridden() {
     // The right default, and it composes with `verdict::validate`'s refusal of a
@@ -1478,10 +1511,12 @@ fn twin_findings_on_one_path_are_each_admitted_by_fingerprint() {
         common::stderr(&refused)
     );
     let said = common::stderr(&refused);
+    // By shape rather than by position: the message is a classed finding's
+    // subject (CLOUD-2078), so its routes follow it on the line.
     let fingerprints: Vec<&str> = said
-        .rsplit_once(": ")
-        .map(|(_, listed)| listed.trim().split(", ").collect())
-        .unwrap_or_default();
+        .split(|c: char| !c.is_ascii_hexdigit())
+        .filter(|word| word.len() == 64)
+        .collect();
     assert_eq!(fingerprints.len(), 2, "the refusal names both: {said}");
 
     for (spent, fingerprint) in fingerprints.iter().enumerate() {

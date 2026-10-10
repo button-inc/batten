@@ -495,6 +495,10 @@ pub fn message(
     if !mode.verbosity.admits(rung) {
         return Ok(());
     }
+    // A finding already opens with `batten <severity>` (CLOUD-2145).
+    if crate::refusal::is_headed(text) {
+        return writeln!(err, "{text}");
+    }
     writeln!(err, "batten: {text}")
 }
 
@@ -509,6 +513,11 @@ pub fn message(
 ///
 /// Propagates the writer's error.
 pub fn error(mode: Mode, err: &mut dyn Write, text: &str) -> std::io::Result<()> {
+    // A finding already opens with `batten <severity>`: a second `batten:` in
+    // front of it would be the channel naming itself twice.
+    if crate::refusal::is_headed(text) {
+        return writeln!(err, "{text}");
+    }
     if mode.color {
         writeln!(err, "\x1b[31mbatten:\x1b[0m {text}")
     } else {

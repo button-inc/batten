@@ -1146,13 +1146,41 @@ fn a_change_to_a_suite_sweeps_its_gate() {
     assert!(out.contains("other/pipefail-dropped SURVIVED"), "{out}");
 }
 
-/// A change to a gate whose rows mutate Rust sweeps nothing here: Rust mutation
-/// at admission is `cargo mutants --in-diff` (CLOUD-1746). Its one row could
-/// never be caught, so a sweep that reached it would fail.
+/// `sweep_since` with a runner registry declared, and optionally the registered
+/// runner to run instead of the declared one.
 #[cfg(unix)]
-#[test]
-fn a_change_to_a_rust_gate_is_left_to_cargo_mutants() {
-    let root = two_gate_repo("since-rust");
+fn sweep_registered(
+    root: &Path,
+    gates: &str,
+    base: &str,
+    runners: &str,
+    runner: Option<&str>,
+) -> (i32, String, String) {
+    let mut command = common::batten();
+    command
+        .args(["mutate", "sweep"])
+        .current_dir(root)
+        .env("MUTANT_GATES", gates)
+        .env("MUTANT_CHANGED_SINCE", base)
+        .env("MUTANT_TASKS", "mise.toml")
+        .env("MUTANT_RUNNERS", runners);
+    match runner {
+        Some(runner) => command.env("MUTANT_RUNNER", runner),
+        None => command.env_remove("MUTANT_RUNNER"),
+    };
+    let answer = command.output().expect("run batten mutate");
+    (
+        answer.status.code().unwrap_or(-1),
+        stdout(&answer),
+        stderr(&answer),
+    )
+}
+
+/// The Rust gate both cases below change: one row that can never apply, so a
+/// sweep that reaches it with the declared runner fails.
+#[cfg(unix)]
+fn rust_gate_repo(name: &str) -> PathBuf {
+    let root = two_gate_repo(name);
     let rusty = "//MUTANT-SUITE tests/other.rs\n//MUTANT never-applies|s@^absent$@gone@|no_case\n";
     write(&root, "crates/batten/src/rusty.rs", rusty);
     track(&root);
@@ -1162,12 +1190,105 @@ fn a_change_to_a_rust_gate_is_left_to_cargo_mutants() {
         "crates/batten/src/rusty.rs",
         &format!("{rusty}// edited\n"),
     );
-    let (code, out, err) = sweep_since(&root, "toy,other,engine-rusty", "HEAD");
+    root
+}
+
+/// A change to a Rust gate whose source a registered runner owns is that
+/// runner's, never the declared runner's (CLOUD-1746): the declared sweep does
+/// not reach the row, and says which runner judges the change.
+#[cfg(unix)]
+#[test]
+fn a_change_to_a_rust_gate_is_judged_by_its_registered_runner() {
+    let root = rust_gate_repo("since-rust");
+    let (code, out, err) = sweep_registered(
+        &root,
+        "toy,other,engine-rusty",
+        "HEAD",
+        "cargo-mutants=crates/**/*.rs",
+        None,
+    );
+    assert!(
+        out.contains("1 changed source(s) owned by cargo-mutants"),
+        "{out}{err}"
+    );
+    assert!(
+        !out.contains("never-applies"),
+        "the declared runner reached a row cargo-mutants owns: {out}"
+    );
     assert_eq!(code, 0, "{out}{err}");
     assert!(
         out.contains("no enforced gate's source or suite changed since HEAD"),
-        "{out}"
+        "{out}{err}"
     );
+}
+
+/// With no runner registered, the declared runner owns every source, Rust
+/// included, so the same change reaches the row and its failure is reported.
+#[cfg(unix)]
+#[test]
+fn a_rust_gate_with_no_registered_runner_is_swept_by_the_declared_one() {
+    let root = rust_gate_repo("since-rust-declared");
+    let (code, out, err) = sweep_registered(&root, "toy,other,engine-rusty", "HEAD", "", None);
+    assert_ne!(code, 0, "{out}{err}");
+    assert!(out.contains("engine-rusty/never-applies"), "{out}{err}");
+}
+
+/// The registered runner, asked to run where its program does not resolve, is
+/// could-not-look (`runner-absent`, exit 3) and never every mutant caught.
+/// `PATH` holds only the directory of the `cargo` running this suite, which
+/// carries no `cargo-mutants`, so the case does not depend on what the host
+/// installed.
+#[cfg(unix)]
+#[test]
+fn a_registered_runner_that_does_not_resolve_cannot_look() {
+    let root = rust_gate_repo("since-rust-runner");
+    let cargo = PathBuf::from(env!("CARGO"));
+    let only_cargo = cargo.parent().expect("cargo lives in a directory");
+    let answer = common::batten()
+        .args(["mutate", "sweep"])
+        .current_dir(&root)
+        .env("PATH", only_cargo)
+        .env("MUTANT_GATES", "toy,other,engine-rusty")
+        .env("MUTANT_CHANGED_SINCE", "HEAD")
+        .env("MUTANT_TASKS", "mise.toml")
+        .env("MUTANT_RUNNERS", "cargo-mutants=crates/**/*.rs")
+        .env("MUTANT_RUNNER", "cargo-mutants")
+        .output()
+        .expect("run batten mutate");
+    let (out, err) = (stdout(&answer), stderr(&answer));
+    assert_eq!(answer.status.code(), Some(3), "{out}{err}");
+    assert!(out.contains("cargo-mutants runner-absent"), "{out}{err}");
+}
+
+/// A WHOLE sweep with a runner registered still leaves that runner's rows alone:
+/// no change narrows anything here, so only the row filter keeps the declared
+/// runner off the Rust row it cannot apply.
+#[cfg(unix)]
+#[test]
+fn a_registered_runners_rows_are_never_swept_by_the_declared_runner() {
+    let root = rust_gate_repo("whole-rust-registered");
+    let answer = common::batten()
+        .args(["mutate", "sweep"])
+        .current_dir(&root)
+        .env("MUTANT_GATES", "toy,engine-rusty")
+        .env_remove("MUTANT_CHANGED_SINCE")
+        .env("MUTANT_TASKS", "mise.toml")
+        .env("MUTANT_RUNNERS", "cargo-mutants=crates/**/*.rs")
+        .env_remove("MUTANT_RUNNER")
+        .output()
+        .expect("run batten mutate");
+    let out = stdout(&answer);
+    assert!(!out.contains("never-applies"), "{out}{}", stderr(&answer));
+}
+
+/// An id no runner carries is a usage error, never an empty registry.
+#[cfg(unix)]
+#[test]
+fn an_unknown_runner_is_refused() {
+    let root = rust_gate_repo("since-rust-unknown");
+    let (code, out, err) = sweep_registered(&root, "toy,other", "HEAD", "mutmut=**/*.py", None);
+    assert_eq!(code, 1, "{out}{err}");
+    assert!(err.contains("`mutmut`, which is no runner"), "{err}");
 }
 
 #[cfg(unix)]

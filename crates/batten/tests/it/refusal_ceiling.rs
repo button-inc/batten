@@ -218,11 +218,16 @@ fn a_routed_read_of_every_committed_memory_is_within_the_declared_ceiling() {
     for entry in std::fs::read_dir(&memories).expect("the committed memories are listable") {
         let name = entry.expect("a memory entry").file_name();
         let path = format!(".serena/memories/{}", name.to_string_lossy());
-        let encoded = serde_json::to_string(&path).expect("a path is encodable");
-        let read = format!(
-            "{{\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"Read\",\
-             \"tool_input\":{{\"file_path\":{encoded}}}}}"
-        );
+        // IN THE SUITE'S SESSION, like every Bash payload here: sightings are kept
+        // per context, so a payload naming none is a first sighting every time and
+        // the "repeat" this measures would be the full arm.
+        let read = serde_json::json!({
+            "hook_event_name": "PreToolUse",
+            "session_id": SUITE_SESSION,
+            "tool_name": "Read",
+            "tool_input": {"file_path": path},
+        })
+        .to_string();
         let Some(line) = repeat_refusal(&read) else {
             panic!("a generic read of a memory must refuse, or this measures nothing: {path}");
         };
@@ -246,8 +251,8 @@ fn a_declared_refusal_emits_its_class_and_its_pointers_and_stops() {
     // hatch sentence. Each of the four was a copy of something declared once.
     let line = refusal("sed -n '1,40p' AGENTS.md").expect("the row refuses");
     assert!(
-        line.starts_with("verdict 'tool run loose' rule 'tool select other'"),
-        "the labelled class leads the line: {line}"
+        line.starts_with("batten deny tool run loose"),
+        "the violation's class leads the line: {line}"
     );
     for wrapper in ["Refused by", "Fix:", "Bypass with", " ("] {
         assert!(
@@ -280,7 +285,7 @@ fn no_refusal_lost_its_pointer() {
 /// stated reason: naming a consumer's policy filenames inside `crates/**` is
 /// non-negotiable rule 1, and `source name other` computes that.
 fn fixture(name: &str) -> PathBuf {
-    stage(name, COMMITTED)
+    stage(name, &common::without_session_handlers(COMMITTED))
 }
 
 /// The committed config, as every fixture here stages it.
@@ -365,8 +370,19 @@ fn fires(repo: &Path, command: &str) -> String {
     fires_in(repo, Some("s1"), None, command)
 }
 
-/// One firing in a fixture in `session` (plus `agent`), returning the line.
+/// One firing in a fixture in `session` (plus `agent`), returning the line
+/// without the epoch's legend, which [`delivered_in`] keeps and is measured
+/// against its own ceiling (CLOUD-2145).
 fn fires_in(repo: &Path, session: Option<&str>, agent: Option<&str>, command: &str) -> String {
+    let delivered = delivered_in(repo, session, agent, command);
+    delivered
+        .strip_prefix(batten::refusal::LEGEND)
+        .map_or(delivered.as_str(), str::trim_start)
+        .to_owned()
+}
+
+/// One firing in a fixture, returning everything the reader was handed.
+fn delivered_in(repo: &Path, session: Option<&str>, agent: Option<&str>, command: &str) -> String {
     let run = run_with_stdin(
         repo,
         &["adjudicate", "--harness", "exit-code"],
@@ -378,6 +394,19 @@ fn fires_in(repo: &Path, session: Option<&str>, agent: Option<&str>, command: &s
         "the corpus must refuse, or it measures nothing: {command}"
     );
     stderr(&run).trim().to_owned()
+}
+
+/// A `SessionStart` of `source` for session `A`, through the Claude Code adapter.
+fn starts(repo: &Path, source: &str) {
+    let started = hook(
+        repo,
+        &serde_json::json!({
+            "hook_event_name": "SessionStart",
+            "session_id": "A",
+            "source": source,
+        }),
+    );
+    assert_eq!(started.status.code(), Some(0), "{}", stderr(&started));
 }
 
 /// A hook event other than a Bash call, through the Claude Code adapter.
@@ -408,8 +437,12 @@ fn a_first_sighting_carries_the_gloss_and_its_route_by_kind() {
     let repo = fixture("first-sighting-document-route");
     let line = fires(&repo, "head -40 batten.toml");
     assert!(
-        line.starts_with("verdict 'tool run loose'"),
-        "the class still leads the line: {line}"
+        line.starts_with("batten deny tool run loose"),
+        "the violation's class leads the line: {line}"
+    );
+    assert!(
+        line.contains(" — tool select other: "),
+        "the row that raised it heads the definition: {line}"
     );
     assert!(
         line.contains("batten.toml"),
@@ -448,11 +481,7 @@ fn a_first_sighting_carries_the_gloss_and_its_route_by_kind() {
 fn a_shape_first_sighting_names_the_rows_remedy_verb() {
     let repo = fixture("shape-first-sighting-remedy");
     let line = fires(&repo, "gh pr merge 5");
-    for needle in [
-        "call name refused",
-        "commit ship other",
-        "batten policy rule '",
-    ] {
+    for needle in ["call name refused", "commit ship other"] {
         assert!(line.contains(needle), "{needle} missing: {line}");
     }
     assert!(
@@ -474,9 +503,10 @@ fn a_shape_first_sighting_names_the_rows_remedy_verb() {
 /// The pointer arm is a byte PREFIX of the full arm, and sheds no pointer
 /// (CLOUD-2075 §7 case 2).
 ///
-/// This reverses the repeat that dropped its routes: everything the pointer arm
-/// says, the full arm said first and in the same order, and the subjects and
-/// routes — every way out — are the same set on both.
+/// Everything the pointer arm says, the full arm said first and in the same
+/// order, and the subjects and routes — every way out — are the same set on
+/// both: the routes are how a finding is fixed, so the repeat keeps them, and
+/// only the definition is said once (CLOUD-2145).
 #[test]
 fn the_pointer_arm_carries_every_route_and_subject_the_full_arm_does() {
     let repo = fixture("pointer-carries-routes");
@@ -491,10 +521,9 @@ fn the_pointer_arm_carries_every_route_and_subject_the_full_arm_does() {
     let head = first.split(FULL).next().expect("a head");
     assert_eq!(head, repeat, "the full arm's pointers ARE the pointer arm");
     for kept in [
-        "rule 'tool select other'",
+        "batten deny tool run loose",
         "batten.toml",
         "read rules/scanning.md",
-        "run batten policy rule 'tool select other'",
     ] {
         assert!(
             repeat.contains(kept),
@@ -503,38 +532,129 @@ fn the_pointer_arm_carries_every_route_and_subject_the_full_arm_does() {
     }
 }
 
-/// The full arm carries the row's own reason and both labels (CLOUD-2075 §7
-/// case 1), reversing the first sighting that left the reason out.
+/// The full arm carries the row's own reason, its one name, and the class in
+/// its hop (CLOUD-2075 §7 case 1, CLOUD-2142).
 #[test]
 fn a_first_sighting_carries_the_rows_reason_and_both_labels() {
     let repo = fixture("first-sighting-reason");
     let line = fires(&repo, "head -40 batten.toml");
     let reason = rule_reason("tool select other");
     let opening: String = reason.chars().take(40).collect();
+    assert!(
+        line.starts_with("batten deny tool run loose at "),
+        "the violation's class opens the line: {line}"
+    );
+    assert!(
+        line.contains(" — tool select other: "),
+        "the row that raised it heads the definition: {line}"
+    );
     for needle in [
-        "verdict 'tool run loose'",
-        "rule 'tool select other'",
         "a shell text utility stood in for the structured file surface",
         opening.as_str(),
         "read rules/scanning.md",
-        "run batten policy rule 'tool select other'",
-        "Run batten policy explain 'tool run loose'.",
     ] {
         assert!(line.contains(needle), "`{needle}` missing: {line}");
     }
+    // NO HOP (CLOUD-2145): the legend says once how a name is looked up.
+    assert!(
+        !line.contains("batten policy"),
+        "no lookup on the line: {line}"
+    );
 }
 
-/// A collapsed row — id equal to its class — still labels both (CLOUD-2075 §7
-/// case 3), on both arms.
+/// A live class carrying `doc`, over the real load-time validator (CLOUD-2143).
+fn documented(why: Option<&str>, act: &[&str]) -> batten::verdict::DeclaredVerdict {
+    let mut class = batten::verdict::vendored()
+        .into_iter()
+        .find(|class| class.id == "tool run loose")
+        .expect("a vendored class to dress");
+    class.doc = batten::doc::Doc {
+        why: why.map(str::to_owned),
+        act: act.iter().map(|item| (*item).to_owned()).collect(),
+        dont: Vec::new(),
+    };
+    class
+}
+
+fn loads(class: batten::verdict::DeclaredVerdict) -> Result<(), String> {
+    batten::verdict::validate(&[class], &batten::verdict::Vocabulary::default())
+        .map_err(|error| error.to_string())
+}
+
+/// The load tier of the first sighting's budget (CLOUD-2143): over 640 bytes
+/// does not load, and the same class under it does — the anti-vacuity half.
 #[test]
-fn a_collapsed_row_still_labels_rule_and_verdict() {
+fn a_class_doc_over_640_bytes_does_not_load() {
+    let small = documented(Some("A short reason"), &["do the one thing"]);
+    assert_eq!(loads(small), Ok(()), "a doc within budget loads");
+    let item = "x".repeat(200);
+    let big = documented(Some("A short reason"), &[&item, &item, &item]);
+    let refused = loads(big).expect_err("a 640-byte-plus doc is refused at load");
+    assert!(refused.contains("640"), "{refused}");
+}
+
+#[test]
+fn a_class_doc_citing_an_issue_key_does_not_load() {
+    let cited = documented(Some("Measured on ABC-123"), &["do the one thing"]);
+    let refused = loads(cited).expect_err("an issue key in a doc is refused");
+    assert!(refused.contains("issue key"), "{refused}");
+}
+
+#[test]
+fn a_class_doc_with_two_sentence_why_does_not_load() {
+    let two = documented(Some("One thing. Another thing"), &["do the one thing"]);
+    assert!(loads(two).is_err(), "`why` is one sentence");
+}
+
+/// Every id the engine raises with no `[[rule]]` row resolves to a definition
+/// compiled into the binary (CLOUD-2142), and an unknown name to none.
+///
+/// The suite [`batten::verdict`]'s `native-table-empty` mutant is killed in.
+#[test]
+fn a_native_rule_id_has_a_definition() {
+    for name in [
+        "engine-cannot-adjudicate",
+        "program-unknown",
+        "stop.unfinished",
+        "hook.handler.some-id",
+    ] {
+        let definition = batten::verdict::native_definition(name)
+            .unwrap_or_else(|| panic!("{name} resolves to nothing"));
+        assert!(!definition.trim().is_empty(), "{name}: empty definition");
+    }
+    for unknown in ["hook.handler.", "no-such-engine-id", ""] {
+        assert_eq!(
+            batten::verdict::native_definition(unknown),
+            None,
+            "{unknown}"
+        );
+    }
+}
+
+/// A collapsed row — id equal to its class — is named ONCE (CLOUD-2142), on
+/// both arms and in its hop. This replaces CLOUD-2075 §7 case 3, which printed
+/// `verdict 'X' rule 'X'` so a reader could tell the two apart: one `policy
+/// explain` resolves either, so the second copy told the reader nothing.
+#[test]
+fn a_collapsed_row_is_named_once() {
     let repo = fixture("collapsed-row-labels");
     let command = "git push --force-with-lease origin main";
-    let both = "verdict 'branch write unsafe' rule 'branch write unsafe'";
     let first = fires(&repo, command);
     let repeat = fires(&repo, command);
-    assert!(first.starts_with(both), "{first}");
-    assert!(repeat.starts_with(both), "{repeat}");
+    assert!(
+        repeat.starts_with("batten deny branch write unsafe; "),
+        "named once, its routes after: {repeat}"
+    );
+    assert!(first.starts_with(&format!("{repeat} — ")), "{first}");
+    assert_eq!(
+        repeat.matches("branch write unsafe").count(),
+        3,
+        "the name, and the override's --rule and --verdict: {repeat}"
+    );
+    assert!(
+        !first.contains(" — branch write unsafe:"),
+        "a row whose id is its class names no raising row: {first}"
+    );
 }
 
 /// Two contexts in one clone never consume each other's sighting (CLOUD-2075
@@ -606,14 +726,20 @@ fn a_session_start_forgets_only_that_contexts_sightings() {
     assert!(!b.contains(FULL), "B was not touched: {b}");
 }
 
-/// A compaction re-delivers every item the cycle saw, at once (CLOUD-2075 §7
-/// case 6), and keeps it marked.
+/// A compaction closes the epoch and pushes nothing; the gate's next firing is
+/// full again, legend and all (CLOUD-2145).
+///
+/// The suite `compact-keeps-window` is killed in.
 #[test]
-fn a_compaction_redelivers_every_seen_item_once_at_session_start() {
-    let repo = session_fixture("compaction-redelivers");
+fn a_compaction_forgets_and_the_next_firing_is_full() {
+    let repo = session_fixture("compaction-forgets");
     let command = "head -40 batten.toml";
-    let full = fires_in(&repo, Some("A"), None, command);
-    assert!(full.contains(FULL), "{full}");
+    assert!(fires_in(&repo, Some("A"), None, command).contains(FULL));
+    let repeat = fires_in(&repo, Some("A"), None, command);
+    assert!(
+        !repeat.contains(FULL),
+        "the premise: a repeat is the pointer: {repeat}"
+    );
     let compacted = hook(
         &repo,
         &serde_json::json!({
@@ -623,19 +749,180 @@ fn a_compaction_redelivers_every_seen_item_once_at_session_start() {
         }),
     );
     assert_eq!(compacted.status.code(), Some(0), "{}", stderr(&compacted));
-    let document: serde_json::Value = String::from_utf8_lossy(&compacted.stdout)
-        .lines()
-        .find_map(|line| serde_json::from_str(line).ok())
-        .expect("the session start emits its advisory document");
-    let context = document["hookSpecificOutput"]["additionalContext"]
-        .as_str()
-        .expect("an additionalContext string");
     assert!(
-        context.contains(&full),
-        "the full arm is re-delivered byte for byte: {context}"
+        !String::from_utf8_lossy(&compacted.stdout).contains(&repeat),
+        "nothing is re-delivered eagerly at the boundary"
     );
-    let next = fires_in(&repo, Some("A"), None, command);
-    assert!(!next.contains(FULL), "and stays marked: {next}");
+    let next = delivered_in(&repo, Some("A"), None, command);
+    assert!(next.contains(FULL), "the next firing is full: {next}");
+    // THE NEW EPOCH OPENS WITH THE LEGEND, on whichever finding reaches the
+    // context first: a session start that reports its own findings (a fixture
+    // container with programs off `PATH`) carries it, and the firing after it
+    // then does not need to.
+    let started = String::from_utf8_lossy(&compacted.stdout);
+    assert!(
+        started.contains(batten::refusal::LEGEND) || next.starts_with(batten::refusal::LEGEND),
+        "the new epoch opens with the legend: {started}\n---\n{next}"
+    );
+}
+
+/// A CAPTURE NOTICE IS A FINDING (CLOUD-2078): `output write missing` with its
+/// reason id, where it used to be a free-text line. At `PostToolUse` this host
+/// declares no reachable advisory channel, so the notice reaches the operator's
+/// stream in full on every call and marks nothing (CLOUD-2145's delivery rule).
+///
+/// The suite `capture-notice-misclassed` is killed in.
+#[test]
+fn a_capture_notice_is_a_classed_finding() {
+    let repo = fixture("capture-notice");
+    let unreadable = serde_json::json!({
+        "hook_event_name": "PostToolUse",
+        "session_id": "cap",
+        "tool_name": "Read",
+        "tool_input": { "file_path": "README.md" },
+        "tool_response": [{ "not-text": 1 }],
+    });
+    let notice = |output: &std::process::Output| -> String {
+        let text = stderr(output);
+        text.lines()
+            .find(|line| line.contains("output write missing"))
+            .unwrap_or_else(|| panic!("the notice is classed: {text}"))
+            .to_owned()
+    };
+    let first = notice(&hook(&repo, &unreadable));
+    assert!(
+        first.starts_with("batten note output write missing at capture-response-shape-unreadable")
+            && first.contains(FULL),
+        "the notice names its class and reason and carries the definition: {first}"
+    );
+    let second = notice(&hook(&repo, &unreadable));
+    assert!(
+        second.contains(FULL),
+        "an undelivered channel marks nothing, so the next is full too: {second}"
+    );
+}
+
+/// A resume carries the window over, so the epoch is kept (CLOUD-2145).
+///
+/// The suite `resume-forgets-window` is killed in.
+#[test]
+fn a_resume_keeps_the_window() {
+    let repo = session_fixture("resume-keeps");
+    let command = "head -40 batten.toml";
+    assert!(fires_in(&repo, Some("A"), None, command).contains(FULL));
+    starts(&repo, "resume");
+    let next = delivered_in(&repo, Some("A"), None, command);
+    assert!(
+        !next.contains(FULL),
+        "a resumed window keeps its pointer: {next}"
+    );
+    assert!(
+        !next.contains(batten::refusal::LEGEND),
+        "and does not re-read the legend: {next}"
+    );
+    starts(&repo, "fork");
+    let forked = fires_in(&repo, Some("A"), None, command);
+    assert!(!forked.contains(FULL), "nor does a fork: {forked}");
+}
+
+/// The first finding of an epoch carries the legend and a later one does not
+/// (CLOUD-2145); a different gate in the same epoch does not repeat it either.
+///
+/// The suite `legend-every-firing` is killed in.
+#[test]
+fn the_first_finding_of_an_epoch_carries_the_legend() {
+    let repo = fixture("legend-once");
+    let first = delivered_in(&repo, Some("A"), None, "head -40 batten.toml");
+    assert!(first.starts_with(batten::refusal::LEGEND), "{first}");
+    let other = delivered_in(
+        &repo,
+        Some("A"),
+        None,
+        "git push --force-with-lease origin main",
+    );
+    assert!(
+        other.contains(FULL),
+        "another gate's first sighting is full: {other}"
+    );
+    assert!(
+        !other.contains(batten::refusal::LEGEND),
+        "the legend is once per epoch, not per gate: {other}"
+    );
+    let session_less = delivered_in(&repo, None, None, "head -40 batten.toml");
+    assert!(
+        !session_less.contains(batten::refusal::LEGEND),
+        "a reader that cannot be named has no epoch to open: {session_less}"
+    );
+}
+
+/// The legend is within the ceiling the design gives it: 96 tokens (CLOUD-2145).
+#[test]
+fn the_legend_is_within_its_ceiling() {
+    let cost = estimated_tokens(batten::refusal::LEGEND);
+    assert!(cost <= 96, "the legend costs {cost} tokens");
+}
+
+/// Parallel identical denials in one batch deliver ONE full copy (CLOUD-2145):
+/// the mark is an exclusive create, so the existence test and the write are a
+/// single operation and exactly one firing reads "first".
+#[test]
+fn parallel_denials_deliver_one_full_copy() {
+    let repo = fixture("parallel-denials");
+    let command = "head -40 batten.toml";
+    let lines: Vec<String> = std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..8)
+            .map(|_| scope.spawn(|| fires_in(&repo, Some("A"), None, command)))
+            .collect();
+        handles
+            .into_iter()
+            .map(|handle| handle.join().expect("a firing thread"))
+            .collect()
+    });
+    let full = lines.iter().filter(|line| line.contains(FULL)).count();
+    assert_eq!(full, 1, "exactly one full arm in the batch: {lines:#?}");
+}
+
+/// An advisory finding on an event the host does not deliver advice through
+/// renders full and marks nothing (CLOUD-2145): the text went to the
+/// operator's stream, so the model has still never seen it.
+///
+/// The suite `delivery-marks-on-emit` is killed in.
+#[test]
+fn an_undelivered_channel_marks_nothing() {
+    let repo = fixture("undelivered-marks-nothing");
+    assert!(
+        !batten::hook::Harness::ExitCode
+            .capabilities()
+            .advisory_reachable("PreToolUse"),
+        "the premise: the exit-code contract has no advisory channel to the model"
+    );
+    // `forge read first` is a warn-severity advisory on a code-host call.
+    let payload = payload_in(Some("A"), None, "gh pr view 1");
+    let advised = |harness: &str| {
+        let run = run_with_stdin(&repo, &["adjudicate", "--harness", harness], &payload);
+        assert_eq!(run.status.code(), Some(0), "{}", stderr(&run));
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&run.stdout),
+            String::from_utf8_lossy(&run.stderr)
+        )
+    };
+    let unreached = advised("exit-code");
+    assert!(
+        unreached.contains("forge read first") && unreached.contains(FULL),
+        "the premise: the advisory fired, in full: {unreached}"
+    );
+    let reached = advised("claude-code");
+    assert!(
+        reached.contains(FULL),
+        "the first DELIVERED firing is full, because the undelivered one marked nothing: \
+         {reached}"
+    );
+    let repeat = advised("claude-code");
+    assert!(
+        repeat.contains("forge read first") && !repeat.contains(FULL),
+        "the anti-vacuity half: a delivered firing does mark: {repeat}"
+    );
 }
 
 /// An edit to a definition mid-cycle is a new item (CLOUD-2075 §7 case 7,

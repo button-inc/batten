@@ -136,7 +136,16 @@ fn the_committed_policy_hands_a_gh_read_its_memory() {
             && table.contains(".serena/memories/github-access.md"),
         "the class declares the memory route: {table}"
     );
-    let (code, said) = adjudicate(&root(), &bash("gh pr view 1"));
+    // A session no earlier run used: the checkout's sighting store persists,
+    // and a context that already held the memory would get only the address.
+    let session = format!(
+        "committed-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |since| since.as_nanos())
+    );
+    let (code, said) = adjudicate(&root(), &bash_in(&session, "gh pr view 1"));
     assert_eq!(code, Some(0), "a gh read is allowed here: {said}");
     assert!(said.contains(POINTER), "{said}");
     assert!(
@@ -153,7 +162,7 @@ fn a_warn_advisory_is_full_once_then_a_pointer() {
     let (first_code, first) = adjudicate(&dir, &bash_in("s1", "gh pr view 1"));
     let (second_code, second) = adjudicate(&dir, &bash_in("s1", "gh pr view 1"));
     assert_eq!((first_code, second_code), (Some(0), Some(0)));
-    let labels = "verdict 'forge read first' rule 'forge read first'";
+    let labels = "batten warn forge read first";
     assert!(first.contains(labels) && first.contains(" —"), "{first}");
     assert!(
         first.contains("code-host call"),

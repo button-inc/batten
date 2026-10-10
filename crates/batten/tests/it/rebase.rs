@@ -75,7 +75,7 @@
 #MUTANT-SUITE crates/batten/tests/it/rebase.rs
 #MUTANT same-path-offer-collapses|s@        *used.entry(path).or_insert(0) += 1;@        *used.entry(path).or_insert(0) += 0;@|a_chain_of_conflicts_at_the_same_path_resolves_with_one_entry_each
 #MUTANT use-now-local-or-utc-in-gitwrite|s@        time: crate::git::utc_at(who.time.seconds),@        time: who.time,@|a_replayed_committer_is_stamped_in_utc
-#MUTANT conflict-stop-names-no-route|s@        said.push(format!("land: {path}"));@        let _ = path;@|the_conflict_stop_names_every_path_and_the_route_out
+#MUTANT conflict-stop-names-no-route|s@    subjects.extend(named.iter().map@    subjects.extend(named.iter().take(1).map@|the_conflict_stop_names_every_path_and_the_route_out
 #MUTANT merge-range-refused|s@    replay_range(dir, branch, onto, onto, resolutions, None, true)@    replay_range(dir, branch, onto, onto, resolutions, None, false)@|a_merge_carrying_branch_over_a_moved_trunk_lands_as_a_merge
 #MUTANT merge-conflict-taken|s@    if let Settled::Conflicted(paths, candidates) = settled {@    if let Settled::Conflicted(paths, candidates) = Settled::Clean(Vec::new()) {@|a_merge_carrying_branch_that_conflicts_with_trunk_moves_nothing
 #MUTANT merge-path-open-to-every-caller|s@    replay_range(dir, branch, upstream, onto, &\[\], None, false)@    replay_range(dir, branch, upstream, onto, \&[], None, true)@|a_plain_rebase_still_refuses_a_merge_carrying_range
@@ -339,7 +339,7 @@ fn offset_in(raw: &str, field: &str) -> String {
 /// fixture.** `batten land replay` fetches the base reference before it can
 /// conflict, and the fetch path speaks the wire protocol — a local repository
 /// named as a `file://` remote is refused, measured here. So the binary route
-/// cannot produce this text in a suite at all, and `land::conflict_stop` is the
+/// cannot produce this text in a suite at all, and `land_conflict_stop` is the
 /// decision extracted to where a case can reach it, exactly as `rules/rust.md`
 /// prescribes where the environment cannot create the condition.
 ///
@@ -354,8 +354,13 @@ fn offset_in(raw: &str, field: &str) -> String {
 #[test]
 fn the_conflict_stop_names_every_path_and_the_route_out() {
     let paths = vec![String::from("beta.txt"), String::from("alpha.txt")];
-    let said = batten::land::conflict_stop("work", "refs/heads/main", "abc1234", &paths);
-    let whole = said.join("\n");
+    let said = batten::land_conflict_stop("work", "refs/heads/main", "abc1234", &paths);
+    let whole = said.render_finding(batten::refusal::Arm::Full);
+    // ONE CLASSED LINE (CLOUD-2078), with no rule label behind it.
+    assert!(
+        whole.contains("batten deny commit port blocked at ") && !whole.contains("rule '"),
+        "{whole}"
+    );
 
     assert!(
         whole.contains("alpha.txt") && whole.contains("beta.txt"),
@@ -384,7 +389,8 @@ fn the_conflict_stop_names_every_path_and_the_route_out() {
 
     // ANTI-VACUITY: a conflict with no paths still says what happened, and names
     // no route it cannot spell.
-    let empty = batten::land::conflict_stop("work", "refs/heads/main", "abc1234", &[]).join("\n");
+    let empty = batten::land_conflict_stop("work", "refs/heads/main", "abc1234", &[])
+        .render_finding(batten::refusal::Arm::Full);
     assert!(
         empty.contains("0 path(s)") && !empty.contains("--resolve"),
         "a pathless conflict names no route\n{empty}"

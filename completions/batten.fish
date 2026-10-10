@@ -1728,6 +1728,7 @@ verbose\t'Explain what is being checked'
 debug\t'Add resolution detail'
 trace\t'Add everything'"
 complete -c batten -n "__fish_batten_using_subcommand policy; and __fish_seen_subcommand_from explain" -s J -l json -d 'Emit byte-stable JSON instead of pointer lines'
+complete -c batten -n "__fish_batten_using_subcommand policy; and __fish_seen_subcommand_from explain" -l history -d 'Print each named config row\'s history: the row at HEAD, then the commits that changed it'
 complete -c batten -n "__fish_batten_using_subcommand policy; and __fish_seen_subcommand_from explain" -l fail-on-warning -d 'Promote a warn-severity finding to a violation (an override may only turn this on)'
 complete -c batten -n "__fish_batten_using_subcommand policy; and __fish_seen_subcommand_from explain" -l silent -d 'Say nothing but a verdict or a usage error'
 complete -c batten -n "__fish_batten_using_subcommand policy; and __fish_seen_subcommand_from explain" -s q -l quiet -d 'Suppress ordinary progress (repeatable: -qq is silent)'
@@ -3604,6 +3605,8 @@ complete -c batten -n "__fish_batten_using_subcommand state; and __fish_seen_sub
 complete -c batten -n "__fish_batten_using_subcommand state; and __fish_seen_subcommand_from settle" -l no-input -d 'Never prompt; treat the run as unattended'
 complete -c batten -n "__fish_batten_using_subcommand state; and __fish_seen_subcommand_from settle" -s y -l yes -d 'Confirm a destructive operation that would otherwise refuse'
 complete -c batten -n "__fish_batten_using_subcommand state; and __fish_seen_subcommand_from settle" -s h -l help -d 'Print help (see more with \'--help\')'
+complete -c batten -n "__fish_batten_using_subcommand state; and __fish_seen_subcommand_from list" -l rule -d 'Only findings of this rule' -r
+complete -c batten -n "__fish_batten_using_subcommand state; and __fish_seen_subcommand_from list" -l path -d 'Only findings observed in this file' -r
 complete -c batten -n "__fish_batten_using_subcommand state; and __fish_seen_subcommand_from list" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"

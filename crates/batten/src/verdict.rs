@@ -325,8 +325,12 @@ pub struct DeclaredVerdict {
     /// a column that carries no information 99% of the time.
     #[serde(default, skip_serializing_if = "Applicability::is_default")]
     pub applicability: Applicability,
-    /// One line, the hot path's whole payload.
+    /// One line, the hot path's whole payload, and a first sighting's `what`.
     pub gloss: String,
+    /// How to deal with a refusal of this class, delivered once per context
+    /// window beside the gloss (CLOUD-2143). See [`crate::doc`].
+    #[serde(default, skip_serializing_if = "crate::doc::Doc::is_empty")]
+    pub doc: crate::doc::Doc,
     /// What the class means, at length. `batten policy explain`'s payload, and
     /// the **deliberate exception** to pointer-only output (house style §6):
     /// `explain` is local documentation rather than a finding, and carrying the
@@ -377,6 +381,30 @@ impl DeclaredVerdict {
     pub fn retired(&self) -> bool {
         self.successor.is_some() || self.withdrawn.is_some()
     }
+
+    /// What a first sighting of this class carries after its pointers: the
+    /// gloss, the doc's sections and each override's admissible precondition
+    /// (CLOUD-2143). The one text both budget tiers measure.
+    #[must_use]
+    pub fn first_sighting(&self) -> String {
+        let act: Vec<&str> = self.doc.act.iter().map(String::as_str).collect();
+        let mut body = self.gloss.trim().to_owned();
+        let sections = crate::doc::render(&self.doc, &act);
+        if !sections.is_empty() {
+            body.push_str(". ");
+            body.push_str(&sections);
+        }
+        for route in &self.routes {
+            if let (RouteKind::Override, Some(precondition)) =
+                (route.kind, route.precondition.as_deref())
+            {
+                for part in [" Admissible as '", &route.id, "' when ", precondition, "."] {
+                    body.push_str(part);
+                }
+            }
+        }
+        body
+    }
 }
 
 /// One pointer a refusal carries.
@@ -411,6 +439,16 @@ pub enum Subject {
         /// The name.
         artifact: String,
     },
+}
+
+/// A named thing as a subject: how an engine emitter's own words travel on a
+/// class's line (CLOUD-2078), the handler-deny precedent of text Batten does
+/// not class being a subject of a class Batten does.
+#[must_use]
+pub fn artifact(name: &str) -> Subject {
+    Subject::Artifact {
+        artifact: name.to_owned(),
+    }
 }
 
 impl Subject {
@@ -873,6 +911,14 @@ fn check_name(
             words.len()
         )));
     }
+    // ARM 1b. `at` opens a finding line's subjects (CLOUD-2145), so a name
+    // holding it would end where the reader reads it as starting a pointer.
+    if words.contains(&"at") {
+        return Err(UsageError::raise(format!(
+            "{kind} `{name}`: `at` is the word a finding line opens its subjects with, \
+             so a name cannot carry it"
+        )));
+    }
     // ARM 2.
     for (slot, word) in words.iter().enumerate() {
         let declared = vocabulary
@@ -930,6 +976,9 @@ pub fn check_rule_id(id: &str, vocabulary: &Vocabulary) -> anyhow::Result<String
 }
 
 /// The per-entry half of [`validate`].
+//MUTANT-SUITE crates/batten/src/verdict.rs
+//MUTANT route-check-dropped|s@^    if verdict.routes.is_empty() \&\& id != Native::CallGrantNow.id() {$@    if false {@|a_class_with_no_route_is_refused_unless_it_is_the_grant
+//MUTANT-SUITE crates/batten/tests/it/refusal_ceiling.rs
 fn validate_one(
     verdict: &DeclaredVerdict,
     grammar: Option<&Vocabulary>,
@@ -957,16 +1006,22 @@ fn validate_one(
              a token with no definition is a worse string than the prose it replaced"
         )));
     }
-    if verdict.routes.is_empty() {
+    // THE GRANT IS THE ONE CLASS THAT NEVER REFUSES (CLOUD-2145): it allows
+    // the call, so it asks nothing of its reader and a route would point at
+    // nothing. Every other class may refuse, and owes a way out.
+    if verdict.routes.is_empty() && id != Native::CallGrantNow.id() {
         return Err(UsageError::raise(format!(
             "verdict `{id}` declares no route — a refusal owes its reader a way out, \
              which is the contract `Fix` has carried since CLOUD-122"
         )));
     }
-    if verdict
-        .routes
-        .iter()
-        .all(|route| route.kind == RouteKind::Override)
+    // Only a class WITH routes can have an override as its only one: `all`
+    // over none is vacuously true, and the grant declares none.
+    if !verdict.routes.is_empty()
+        && verdict
+            .routes
+            .iter()
+            .all(|route| route.kind == RouteKind::Override)
     {
         return Err(UsageError::raise(format!(
             "verdict `{id}`'s only route is an override — \"ask for it to be waived\" \
@@ -1022,6 +1077,16 @@ fn validate_one(
             "verdict `{id}`: `withdrawn` is empty — this arm exists to carry the reason a \
              successor cannot name, so a blank one retires the token while explaining nothing"
         )));
+    }
+    // THE FIRST SIGHTING'S BUDGET (CLOUD-2143): the gloss, the doc and every
+    // admissible precondition together, because that is what a reader is handed
+    // once per window. Checked on what IS declared; a class with no doc still
+    // loads, and this repository's own registry is held to carrying one by
+    // `every_vendored_and_declared_doc_is_within_160_o200k_tokens`.
+    if !verdict.retired()
+        && let Some(why) = crate::doc::violation(&verdict.doc, &verdict.first_sighting())
+    {
+        return Err(UsageError::raise(format!("verdict `{id}`'s doc {why}")));
     }
     let mut route_ids: BTreeSet<&str> = BTreeSet::new();
     for route in &verdict.routes {
@@ -1450,6 +1515,62 @@ pub enum Native {
     /// variant inserted mid-enum moves every later discriminant, which
     /// `semver` refuses. A config fault, so it is in [`Native::CONFIG_FAULTS`].
     RegisterTableRefused,
+    /// A config row was changed by a context that has not read its history
+    /// (CLOUD-2144).
+    ///
+    /// **APPENDED LAST**, for [`Native::ProseColumnRefused`]'s reason.
+    RuleReadMissing,
+    // ── the unclassed emitters' classes (CLOUD-2078) ───────────────────────
+    // One class per emitter FAMILY, never one per site (CLOUD-1313's rule):
+    // the site's own message travels as a subject. APPENDED LAST, for
+    // [`Native::ProseColumnRefused`]'s reason.
+    /// A CLI invocation refused before it ran: a classless `UsageError` or a
+    /// clap usage error.
+    UsageRefused,
+    /// Any other CLI failure: a diagnosis of Batten, not a verdict on the work.
+    RunBroken,
+    /// `pr derive` cannot derive the row a bot PR implies.
+    IssueFileRefused,
+    /// An ingested layer would replace a committed value it may only tighten.
+    LayerCarryRefused,
+    /// A fetched provision does not match its pin.
+    ProvisionPinOther,
+    /// The Stop ladder's unlanded rung.
+    CommitShipMissing,
+    /// The Stop ladder's filed-set rung.
+    IssueListUnclear,
+    /// A `[[hook.handler]]` reported on this call.
+    HookReportNow,
+    /// A `[[hook.handler]]` broke its contract.
+    HookAnswerBroken,
+    /// A response this call should have captured was not.
+    OutputWriteMissing,
+    /// A failing doctor check or startup row.
+    WorkspaceStateBroken,
+    /// A call a declared rule or handler pre-approved.
+    CallGrantNow,
+    /// A land replay conflicted and stopped.
+    CommitPortBlocked,
+    /// The configured gate refused the head `land` verified.
+    CheckRunRed,
+    /// A required CI check failed on the head `land` waited on.
+    JobRunRed,
+    /// `land` spent every lap without landing.
+    LaneCountSpent,
+    /// A declared contract file moved under a running session.
+    ContractReadStale,
+    /// The engine did not run at this session's start.
+    HookRunMissing,
+    /// A drain's delta did not fit its token budget, so the relief valve cut
+    /// it (CLOUD-2175).
+    DrainFitBroken,
+    /// An issue fails a checkable Ready clause (`ready lint`).
+    IssueGradeRefused,
+    /// `ready lint` could not judge an issue's relations: the fetch lacked them.
+    IssueGradePartial,
+    /// `claim check` refused to mint the claim: someone holds it, or the
+    /// refinement sequence was not followed.
+    ClaimMintRefused,
 }
 
 impl Native {
@@ -1519,6 +1640,29 @@ impl Native {
         Native::TaggerUnannotated,
         Native::ProseColumnRefused,
         Native::RegisterTableRefused,
+        Native::RuleReadMissing,
+        Native::UsageRefused,
+        Native::RunBroken,
+        Native::IssueFileRefused,
+        Native::LayerCarryRefused,
+        Native::ProvisionPinOther,
+        Native::CommitShipMissing,
+        Native::IssueListUnclear,
+        Native::HookReportNow,
+        Native::HookAnswerBroken,
+        Native::OutputWriteMissing,
+        Native::WorkspaceStateBroken,
+        Native::CallGrantNow,
+        Native::CommitPortBlocked,
+        Native::CheckRunRed,
+        Native::JobRunRed,
+        Native::LaneCountSpent,
+        Native::ContractReadStale,
+        Native::HookRunMissing,
+        Native::DrainFitBroken,
+        Native::IssueGradeRefused,
+        Native::IssueGradePartial,
+        Native::ClaimMintRefused,
     ];
 
     /// The classes the CONFIG LOADER raises, in `parse_ungated` order.
@@ -1595,6 +1739,7 @@ impl Native {
             Native::PatternTableRefused => "pattern declare refused",
             Native::TraversalTableRefused => "traversal declare refused",
             Native::RegisterTableRefused => "register declare refused",
+            Native::RuleReadMissing => "rule read missing",
             Native::VerdictTableRefused => "verdict declare refused",
             Native::RedirectTableRefused => "redirect declare refused",
             Native::DeferralTableRefused => "deferral declare refused",
@@ -1622,6 +1767,28 @@ impl Native {
             Native::TaggerUnaccountable => "tag own refused",
             Native::TaggerUnannotated => "tag own unnamed",
             Native::ProseColumnRefused => "prose declare refused",
+            Native::UsageRefused => "input parse refused",
+            Native::RunBroken => "verb run broken",
+            Native::IssueFileRefused => "issue file refused",
+            Native::LayerCarryRefused => "layer carry refused",
+            Native::ProvisionPinOther => "provision pin other",
+            Native::CommitShipMissing => "commit ship missing",
+            Native::IssueListUnclear => "issue list unclear",
+            Native::HookReportNow => "hook report now",
+            Native::HookAnswerBroken => "hook answer broken",
+            Native::OutputWriteMissing => "output write missing",
+            Native::WorkspaceStateBroken => "workspace state broken",
+            Native::CallGrantNow => "call grant now",
+            Native::CommitPortBlocked => "commit port blocked",
+            Native::CheckRunRed => "check run red",
+            Native::JobRunRed => "job run red",
+            Native::LaneCountSpent => "lane run spent",
+            Native::ContractReadStale => "contract read stale",
+            Native::HookRunMissing => "hook run missing",
+            Native::DrainFitBroken => "drain fit broken",
+            Native::IssueGradeRefused => "issue grade refused",
+            Native::IssueGradePartial => "issue grade partial",
+            Native::ClaimMintRefused => "claim mint refused",
         }
     }
 }
@@ -1728,7 +1895,7 @@ pushed",
 //MUTANT shape-route-circular|s@^            run("rule read first", crate::refusal::RULE_HOP_PLACEHOLDER),$@            read("config read first", "batten.toml"),@|a_shape_first_sighting_names_the_rows_remedy_verb
 const SHAPE_ADMIT_ROUTE: VendoredRoute = admit(
     "articulate the call",
-    "the remedy `batten policy rule` prints for this row cannot perform the change this call \
+    "the remedy `batten policy explain` prints for this row cannot perform the change this call \
 makes, and you can name what the call changes and where a reviewer will see its effect",
 );
 
@@ -1808,6 +1975,26 @@ it, so this can fire in a repository whose `protected` set is empty.",
         routes: &[
             read("config read first", "batten.toml"),
             run("readers declared", "batten config show"),
+        ],
+        applicability: Applicability::Advice,
+    },
+    VendoredVerdict {
+        id: "rule read missing",
+        gloss: "a config row changed by a context that has not read why it exists",
+        class: "A rule's reasons live in the comment block above its row, its class \
+paragraph and the commits that shaped it, and nothing checked that a context changing the \
+row had read any of them -- which is how a gate's prose decays into a gloss nobody can act \
+on. So a write to a `[[rule]]` or `[[verdict]]` row of the committed authority needs this \
+context to have read that row's history, as it stands at HEAD: a commit to the row voids \
+the read, and so does a compaction, because what was read left the window with it. A new \
+row has no history and needs none.",
+        routes: &[
+            run("rule read first", "batten policy explain '<id>' --history"),
+            admit(
+                "articulate the sweep",
+                "the write is one mechanical change applied across many rows, named in full, \
+whose every row would need the same history read for no different decision",
+            ),
         ],
         applicability: Applicability::Advice,
     },
@@ -2152,7 +2339,7 @@ non-negotiable rule 4 decided at the composer rather than at the report.",
         class: "A `shape` row declares a command spelling that is refused outright. The \
 refusal names the row rather than echoing the command, because the command is the caller's \
 own text and could carry anything. What to run instead is the row's declared remedy, which \
-`batten policy rule` prints; where that remedy cannot perform the change, the class is \
+`batten policy explain` prints; where that remedy cannot perform the change, the class is \
 admissible through a recorded admission bound to the row id at the current commit.",
         routes: &[
             run("rule read first", crate::refusal::RULE_HOP_PLACEHOLDER),
@@ -2598,8 +2785,8 @@ would pass. Replace it with an annotated tag cut under the accountable identity.
     VendoredVerdict {
         id: "prose declare refused",
         gloss: "a config column's text is longer than the cap its column declares",
-        class: "Batten echoes config prose back -- `batten policy explain` prints a class, \
-`batten policy rule` prints a row's reason, and a first sighting renders the reason in full -- \
+        class: "Batten echoes config prose back -- `batten policy explain` prints a class \
+and a row's reason, and a first sighting renders the reason in full -- \
 so the length of every string a config declares is paid in every reader's context. Each \
 column is held to a cap at load: one line for a gloss, a sentence for a route, a remedy or a \
 note, a paragraph for a class or a reason, and the paragraph ceiling for any column not listed \
@@ -2608,6 +2795,218 @@ remedy missing its second half. The refusal names the column, the row index, the
 the cap, never the text. Shorten the value; provenance and evidence belong in a TOML comment \
 beside the row, which is never parsed or emitted.",
         routes: &[read("config read first", "batten.toml")],
+        applicability: Applicability::Advice,
+    },
+    // ── the unclassed emitters' classes (CLOUD-2078) ─────────────────────────
+    // One class per emitter FAMILY: the site's own message travels as a subject,
+    // so it rides both arms and nothing per-site is withheld.
+    VendoredVerdict {
+        id: "input parse refused",
+        gloss: "the invocation was refused before it ran; the subject says why",
+        class: "A verb that refuses its own input -- an unknown flag, a missing argument, a \
+value it cannot use -- has decided nothing about the work. The subject is the verb's own \
+sentence, and `batten --help` lists every verb and flag this build carries.",
+        routes: &[run("verb help first", "batten --help")],
+        applicability: Applicability::Advice,
+    },
+    VendoredVerdict {
+        id: "verb run broken",
+        gloss: "the verb could not complete; the chain is a diagnosis of Batten, not a verdict",
+        class: "An internal failure is exit 3: the verb could not look, so it decided \
+nothing. The subjects are the error chain, outermost first. A failure that repeats on an \
+unchanged tree is a defect in Batten to file with that chain; `batten doctor` checks the \
+environment the verb ran in.",
+        routes: &[run("doctor run first", "batten doctor")],
+        applicability: Applicability::Advice,
+    },
+    VendoredVerdict {
+        id: "issue file refused",
+        gloss: "the row a bot pull request implies cannot be derived, so none is filed",
+        class: "`pr derive` files the tracker row a bot's pull request stands for, and \
+refuses when the author, the owned manifest or the subject cannot be read as one. The \
+subjects name which.",
+        routes: &[read("config read first", "batten.toml")],
+        applicability: Applicability::Advice,
+    },
+    VendoredVerdict {
+        id: "layer carry refused",
+        gloss: "an ingested layer would replace a committed value it may only tighten",
+        class: "Configuration is one committed authority plus raise-only overrides. A layer \
+that would loosen a committed value is refused whole rather than applied in part; the \
+subjects name the first key, the layer and how many keys it touched.",
+        routes: &[read("config read first", "batten.toml")],
+        applicability: Applicability::Advice,
+    },
+    VendoredVerdict {
+        id: "provision pin other",
+        gloss: "the fetched artifact does not match its pin, so nothing was installed",
+        class: "A provision is installed only when its bytes hash to the pinned digest. A \
+mismatch means the pin is stale or the source changed under it; nothing was installed, and \
+the subjects carry both digests.",
+        routes: &[run("check run first", "batten provision apply")],
+        applicability: Applicability::Advice,
+    },
+    VendoredVerdict {
+        id: "commit ship missing",
+        gloss: "the turn declared a stopping point and its commits are not on the landing target",
+        class: "Work that is committed and not landed is in no state anyone else can see, \
+and a container reclaim loses it. The subjects count the commits not on the landing target. \
+Land them, or say in the turn what blocks it.",
+        routes: &[run("land run first", "batten land lap")],
+        applicability: Applicability::Advice,
+    },
+    VendoredVerdict {
+        id: "issue list unclear",
+        gloss: "every row this branch filed, for a by-number answer: independent, or a punt",
+        class: "A row filed while doing a task is either independent work or part of the \
+task deferred. The subjects list every row this branch filed; answer each by number, and \
+close the ones that are this task's here.",
+        routes: &[run("ready lint first", "batten ready lint")],
+        applicability: Applicability::Advice,
+    },
+    VendoredVerdict {
+        id: "hook report now",
+        gloss: "a declared hook handler reported on this call; its words are the subject",
+        class: "A `[[hook.handler]]` row dispatches a program on an event, and its report \
+travels as the subject: `hook.handler.<id>` names the row, the rest is what it said. Its row \
+in the config says what it guards.",
+        routes: &[read("config read first", "batten.toml")],
+        applicability: Applicability::Advice,
+    },
+    VendoredVerdict {
+        id: "hook answer broken",
+        gloss: "a declared hook handler broke its contract, so its answer was not used",
+        class: "A handler answers by exit status and output within its declared timeout. One \
+that could not spawn, timed out, exited outside its contract, said nothing on a refusal, \
+died on a signal or wrote a host decision document of its own broke that contract; the \
+subjects name the row and which.",
+        routes: &[read("config read first", "batten.toml")],
+        applicability: Applicability::Advice,
+    },
+    VendoredVerdict {
+        id: "output write missing",
+        gloss: "this call's response was not captured; the reason id says why",
+        class: "A mediated call's response is captured so a later remedy can hand over its \
+bytes without them entering the context. When the capture is skipped, the subject is the \
+reason id, and the capture is absent for that call only.",
+        routes: &[run("doctor run first", "batten doctor")],
+        applicability: Applicability::Advice,
+    },
+    VendoredVerdict {
+        id: "workspace state broken",
+        gloss: "this environment does not match what the tree declares",
+        class: "A failing doctor check or startup row means a program, pin or provision the \
+tree declares is not present or not reachable here, so gates that need it cannot run. The \
+subjects name the check or row and its reason. `batten startup --repair` runs the declared \
+repairs; `batten doctor` reports what is left.",
+        routes: &[
+            run("doctor run first", "batten doctor"),
+            run("startup repair first", "batten startup --repair"),
+        ],
+        applicability: Applicability::Advice,
+    },
+    VendoredVerdict {
+        id: "call grant now",
+        gloss: "the call was pre-approved by a declared rule or handler",
+        class: "A pre-approval tells the host not to prompt for a call the policy already \
+admits. It is never a refusal and never outranks one: a call any gate refuses is not \
+pre-approved. The rule or handler that granted it is on the line.",
+        // NO ROUTE: a grant asks nothing of its reader, so a way out would be a
+        // pointer with nothing to point the reader at (CLOUD-2145).
+        routes: &[],
+        applicability: Applicability::Advice,
+    },
+    VendoredVerdict {
+        id: "commit port blocked",
+        gloss: "a replay onto the landing target conflicted and stopped",
+        class: "The replay is stateless: nothing is half-replayed, so there is no rebase to \
+continue or abort. Merge each conflicted path in the worktree, then name it to `land \
+replay --resolve`, which re-runs the replay from its base with your bytes for that path.",
+        // THE PLAIN REPLAY, NOT ITS `--resolve` SPELLING: a route rides every
+        // line, and a pathless conflict has no path to name. The stop's own
+        // remedy carries `--resolve <first>` when there is one.
+        routes: &[run("replay run first", "batten land replay <base>")],
+        applicability: Applicability::Advice,
+    },
+    VendoredVerdict {
+        id: "check run red",
+        gloss: "the configured gate refused this head",
+        class: "`land` verifies a head before it pushes, with the gate the repository \
+declares. A refusal names its cause; nothing was pushed.",
+        routes: &[run("land verify first", "batten land verify")],
+        applicability: Applicability::Advice,
+    },
+    VendoredVerdict {
+        id: "job run red",
+        gloss: "a required CI check failed on this head",
+        class: "`land` waits on the required checks of the head it pushed, and stops on the \
+first failure. The subjects name the head and each failing check; the same checks run \
+locally.",
+        routes: &[run("land verify first", "batten land verify")],
+        applicability: Applicability::Advice,
+    },
+    VendoredVerdict {
+        id: "lane run spent",
+        gloss: "every lap was spent without a landing",
+        class: "`land` bounds its laps so a moving target cannot keep it running forever. \
+The subjects count the laps, the CI matrices they spent and the lease waits among them.",
+        routes: &[run("land run first", "batten land lap")],
+        applicability: Applicability::Advice,
+    },
+    VendoredVerdict {
+        id: "contract read stale",
+        gloss: "a declared contract file moved after this session read it",
+        class: "The files a repository declares as a session's contract are read once, at \
+start. A `changed` subject is one this session holds in its old form, an `added` one is new \
+capability it never read, a `removed` one is no longer tracked. A `hook wiring moved` subject \
+means what this session runs may differ from what the tree declares.",
+        routes: &[read("config read first", "batten.toml")],
+        applicability: Applicability::Advice,
+    },
+    VendoredVerdict {
+        id: "hook run missing",
+        gloss: "the engine did not run at this session's start, so earlier calls went unmediated",
+        class: "Hosts register the engine by bare name, so a session whose start event found no \
+binary on `PATH` ran every call before this one unmediated. It is a provisioning failure, not a \
+policy one, and which calls preceded this is not answerable from here.",
+        routes: &[run("doctor run first", "batten doctor")],
+        applicability: Applicability::Advice,
+    },
+    VendoredVerdict {
+        id: "drain fit broken",
+        gloss: "a drain's delta did not fit its token budget, so whole rule lines were cut",
+        class: "A drain carries what is new since the session was last told, a capped number of \
+locations per rule, so its size follows one turn's work and the budget is a relief valve. A cut \
+means one turn produced more new findings across more rules than that shape holds; the cut lines \
+are in the journal and the subjects count them.",
+        routes: &[run("state list first", "batten state list")],
+        applicability: Applicability::Advice,
+    },
+    VendoredVerdict {
+        id: "issue grade refused",
+        gloss: "the issue fails a checkable Ready clause, named in the subject beside its line",
+        class: "`ready lint` holds an issue's description to the checkable half of the Definition \
+of Ready. Each subject is the issue, the description line, and the clause it fails; the line is \
+where the edit goes. Nothing the issue says is echoed.",
+        routes: &[run("ready lint first", "batten ready lint")],
+        applicability: Applicability::Advice,
+    },
+    VendoredVerdict {
+        id: "issue grade partial",
+        gloss: "the issue's relations were not in the fetch, so its citations could not be judged",
+        class: "A citation is judged against the issue's relations. A payload fetched without \
+them cannot be judged either way, which is could-not-look rather than a pass; the subject is \
+the first citation that hit the gap.",
+        routes: &[run("ready lint first", "batten ready lint")],
+        applicability: Applicability::Advice,
+    },
+    VendoredVerdict {
+        id: "claim mint refused",
+        gloss: "the claim was not minted: the issue is held by another, or was not refined first",
+        class: "`claim check` mints the claim receipt only for an issue nobody else holds and \
+whose refinement came before this session. The subject is the issue and the reason: a holder \
+(`assigned`, a competing branch or PR) or the refinement sequence (`not-ready`).",
+        routes: &[run("claim check first", "batten claim check")],
         applicability: Applicability::Advice,
     },
 ];
@@ -2630,6 +3029,95 @@ pub fn vendored() -> Vec<DeclaredVerdict> {
         .collect()
 }
 
+/// The rule ids the ENGINE raises under, which no `[[rule]]` row declares
+/// (CLOUD-2142), each with the one sentence `policy explain` answers for it.
+///
+/// Every finding line hops to `batten policy explain '<rule>'`, so a rule id
+/// nothing resolves is a hop to nowhere. A consumer's ids resolve through its own
+/// rows; these are the engine's, declared beside the code that raises them and
+/// answered here so they resolve with no config at all — `engine-cannot-adjudicate`
+/// fires precisely when the config will not load. Where the line also names a
+/// class, the class carries the definition and routes; this says what raised it.
+///
+/// `tests/it/emission_census.rs` keeps the table whole: every production
+/// `Refusal` built from a literal or constant id must resolve, so a new engine id
+/// is a red test rather than an unresolvable name.
+const NATIVE_RULES: &[(&str, &str)] = &[
+    (
+        "engine-cannot-adjudicate",
+        "This build could not load the rules it is registered to enforce, so nothing judged \
+         the call. A Read still answers and an Edit or Write of batten.toml or \
+         batten.local.toml still lands: repair the file with those, or run `batten engine \
+         update` when the config pins a different engine.",
+    ),
+    (
+        "program-unknown",
+        "The mediated-call boundary could not classify the program a shell call names, so \
+         it refused rather than guess what the call changes; the class on the line carries \
+         the routes.",
+    ),
+    (
+        "history-drop",
+        "The destructive-reset gate: this reset would leave the commits the line counts \
+         referenced by nothing and on no remote; `git reflog` still holds them, so push or \
+         branch them before resetting.",
+    ),
+    (
+        "rule-history-unread",
+        "The history gate: a write changes a config row this context has not read the \
+         history of at its current digest; `batten policy explain '<id>' --history`, one \
+         call naming every row, mints the read.",
+    ),
+    (
+        "singleton-held",
+        "The singleton gate: a live process already holds this task's lock, and a second run \
+         would race it; `batten task alive` reports what the holder is doing.",
+    ),
+    (
+        "stop.unfinished",
+        "The stop gate: the turn tried to end while work it declared is still unfinished; \
+         the class on the line names what remains.",
+    ),
+    (
+        "ripsecrets",
+        "The secret scanner, which the engine declares rather than a row: its `[[provision]]` \
+         entry is unpinned or not provisioned, so no scan ran; the class on the line routes \
+         the repair.",
+    ),
+    (
+        "init.config-exists",
+        "`batten init` found a config already present and refused to overwrite it.",
+    ),
+    (
+        "hk-contract-drift",
+        "The committed hk plan artifact the line names no longer matches what this engine \
+         generates from the config; regenerate it, as the class on the line routes.",
+    ),
+];
+
+/// Engine rule ids minted from a prefix and a consumer's name (CLOUD-2142).
+const NATIVE_RULE_PREFIXES: &[(&str, &str)] = &[(
+    "hook.handler.",
+    "A `[[hook.handler]]` row's program refused the call; its own words travel as the \
+     line's subject, and its row in batten.toml says what it guards.",
+)];
+
+/// The sentence `policy explain` answers for an engine rule id, or `None` where
+/// the name is not one (CLOUD-2142).
+//MUTANT native-table-empty|s@^    NATIVE_RULES$@    [("", ""); 0]@|a_native_rule_id_has_a_definition
+#[must_use]
+pub fn native_definition(name: &str) -> Option<&'static str> {
+    NATIVE_RULES
+        .iter()
+        .find(|(id, _)| *id == name)
+        .or_else(|| {
+            NATIVE_RULE_PREFIXES
+                .iter()
+                .find(|(prefix, _)| name.starts_with(prefix) && name.len() > prefix.len())
+        })
+        .map(|(_, definition)| *definition)
+}
+
 /// One vendored row, as the registry carries it.
 ///
 /// Shared with [`crate::preset`] so the two halves of the vendored registry
@@ -2640,6 +3128,9 @@ pub fn declared_from(entry: &VendoredVerdict) -> DeclaredVerdict {
     DeclaredVerdict {
         id: entry.id.to_owned(),
         gloss: entry.gloss.to_owned(),
+        // Joined by id from the one doc table (CLOUD-2143), so the vendored and
+        // preset halves are documented in one place.
+        doc: crate::doc::vendored(entry.id),
         class: entry.class.to_owned(),
         // Carried rather than defaulted (CLOUD-1639): this is the one projection
         // between the two tables, so a vendored class that declares a repairing
@@ -2738,6 +3229,7 @@ mod tests {
         DeclaredVerdict {
             id: id.to_owned(),
             gloss: "a short line".to_owned(),
+            doc: crate::doc::Doc::default(),
             class: "the long definition".to_owned(),
             routes: vec![route("do the thing")],
             successor: None,
@@ -3054,6 +3546,29 @@ mod tests {
                 | Native::PatternTableRefused
                 | Native::TraversalTableRefused
                 | Native::RegisterTableRefused
+                | Native::RuleReadMissing
+                | Native::UsageRefused
+                | Native::RunBroken
+                | Native::IssueFileRefused
+                | Native::LayerCarryRefused
+                | Native::ProvisionPinOther
+                | Native::CommitShipMissing
+                | Native::IssueListUnclear
+                | Native::HookReportNow
+                | Native::HookAnswerBroken
+                | Native::OutputWriteMissing
+                | Native::WorkspaceStateBroken
+                | Native::CallGrantNow
+                | Native::CommitPortBlocked
+                | Native::CheckRunRed
+                | Native::JobRunRed
+                | Native::LaneCountSpent
+                | Native::ContractReadStale
+                | Native::HookRunMissing
+                | Native::DrainFitBroken
+                | Native::IssueGradeRefused
+                | Native::IssueGradePartial
+                | Native::ClaimMintRefused
                 | Native::VerdictTableRefused
                 | Native::RedirectTableRefused
                 | Native::DeferralTableRefused
@@ -3106,6 +3621,31 @@ mod tests {
     /// Non-negotiable rule 2: the refusals `validate` states are worth nothing
     /// over the one table nobody applies them to, and this is the table that
     /// ships to every consumer.
+    #[test]
+    fn a_class_with_no_route_is_refused_unless_it_is_the_grant() {
+        let stripped = |token: &str| -> Vec<DeclaredVerdict> {
+            vendored()
+                .into_iter()
+                .map(|mut entry| {
+                    if entry.id == token {
+                        entry.routes.clear();
+                    }
+                    entry
+                })
+                .collect()
+        };
+        validate(&stripped(Native::CallGrantNow.id()), &Vocabulary::default())
+            .expect("the grant refuses nothing, so it owes no way out");
+        assert!(
+            validate(
+                &stripped(Native::DrainFitBroken.id()),
+                &Vocabulary::default()
+            )
+            .is_err(),
+            "any other class may refuse, and must name a way out"
+        );
+    }
+
     #[test]
     fn the_vendored_table_validates() {
         let table = vendored();

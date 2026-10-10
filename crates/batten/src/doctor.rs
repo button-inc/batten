@@ -122,6 +122,42 @@ impl Check {
             None => format!("{} ok", self.name),
         }
     }
+
+    /// This check as the class a failing one belongs to, or `None` when it
+    /// passed (CLOUD-2078): its name, its reason and its subjects as pointers.
+    #[must_use]
+    pub fn finding(&self) -> Option<crate::refusal::Refusal> {
+        let reason = self.reason?;
+        let subjects = finding_subjects(self.name, reason, &self.subjects);
+        Some(workspace_refusal(&subjects))
+    }
+}
+
+/// The subjects a failing doctor check or startup row carries, in that order.
+#[must_use]
+pub fn finding_subjects(
+    name: &str,
+    reason: &str,
+    declared: &[String],
+) -> Vec<crate::verdict::Subject> {
+    let mut subjects = vec![
+        crate::verdict::artifact(name),
+        crate::verdict::artifact(reason),
+    ];
+    subjects.extend(
+        declared
+            .iter()
+            .map(|subject| crate::verdict::artifact(subject)),
+    );
+    subjects
+}
+
+/// `workspace state broken` over `subjects` (CLOUD-2078).
+//MUTANT container-health-misclassed|s@^    let class = crate::verdict::Native::WorkspaceStateBroken;$@    let class = crate::verdict::Native::RunBroken;@|a_declared_program_nothing_can_reach_is_reported_at_session_start
+#[must_use]
+pub fn workspace_refusal(subjects: &[crate::verdict::Subject]) -> crate::refusal::Refusal {
+    let class = crate::verdict::Native::WorkspaceStateBroken;
+    crate::refusal::Refusal::engine(class, subjects, crate::refusal::Fix::None)
 }
 
 /// One `diagnose` check. A stable reason id, never the error text, so the

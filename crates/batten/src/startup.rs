@@ -215,6 +215,18 @@ impl Outcome {
         }
     }
 
+    /// This row as the class a failing one belongs to, or `None` when it
+    /// passed (CLOUD-2078).
+    #[must_use]
+    pub fn finding(&self) -> Option<crate::refusal::Refusal> {
+        if self.ok {
+            return None;
+        }
+        let subjects =
+            crate::doctor::finding_subjects(&self.id, self.reason.unwrap_or("failed"), &[]);
+        Some(crate::doctor::workspace_refusal(&subjects))
+    }
+
     fn passed(id: &str) -> Self {
         Self {
             id: id.to_owned(),

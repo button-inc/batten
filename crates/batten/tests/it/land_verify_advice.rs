@@ -434,6 +434,32 @@ fn a_gate_exiting_2_over_an_unmoved_base_is_a_refusal_of_the_tree() {
     );
 }
 
+/// **A REFUSED GATE IS ONE CLASSED FINDING WITH ITS CAUSE** (CLOUD-2078).
+///
+/// The stop used to print "was refused" on stdout and its advice as loose prose
+/// beside it; now it is `check run red` on the error channel, carrying the
+/// classified cause as its remedy, so a reader looks up one name.
+#[test]
+fn a_refused_gate_renders_its_verdict_with_its_cause() {
+    let dir = repo("verify-advice-verdict", true);
+    let gate = failing_gate(&dir, "'tests/primitives.rs:1171 a real finding'");
+    let (code, said) = verify(&dir, &gate);
+
+    assert_eq!(code, 2, "{said}");
+    let line = said
+        .lines()
+        .find(|line| line.contains("batten deny check run red"))
+        .unwrap_or_else(|| panic!("the stop names its class: {said}"));
+    assert!(
+        line.contains("reproduce and fix locally"),
+        "the cause rides the same line: {line}"
+    );
+    assert!(
+        !said.contains("was refused"),
+        "the free-text stop line is gone: {said}"
+    );
+}
+
 /// **THE GATE'S OWN OUTPUT REACHES THE OPERATOR.**
 ///
 /// `land::verify` ran through `exec::run_in_env`, whose `ExecConfig::DEFAULT`

@@ -180,9 +180,14 @@ fn the_refusal_names_the_key_and_the_class_and_never_a_value() {
             (Source::RepoConfig, Origin::Ingested),
         ],
     ));
-    let text = authority_refusal(&violations)
-        .expect("a violation earns a refusal")
-        .to_string();
+    let refused = authority_refusal(&violations).expect("a violation earns a refusal");
+    let text = refused.to_string();
+    // CLASSED (CLOUD-2078): raised already rendered as `layer carry refused`, a
+    // name a reader can look up, rather than `verb run broken`.
+    assert!(
+        text.starts_with("batten deny layer carry refused at must_land_on"),
+        "{text}"
+    );
     assert!(text.contains("must_land_on"), "names the key: {text}");
     assert!(text.contains("ingested"), "names the class: {text}");
     for leaked in ["origin/main", "/home/", "batten.local.toml"] {
