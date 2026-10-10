@@ -255,6 +255,11 @@ zig = "0.16" # the linker for the macOS release build and the darwin-link gate: 
 # fewer is the failure this swap could hide, and it is asserted rather than
 # eyeballed.
 "github:nextest-rs/nextest" = "cargo-nextest-0.9.104"
+# The registered Rust mutation runner (CLOUD-1746). `github:` for nextest's
+# reason above: a checksummed release asset, never a compile per CI shard.
+# Measured 2026-10-10 on this workspace: about 40s a mutant, an incremental
+# build plus the source's declared suites.
+"github:sourcefrog/cargo-mutants" = "27.1.0"
 # The binary-level SBOM's producer (CLOUD-263). `batten sbom` inventories the
 # repository at the tag; syft against a plain Rust binary recovers ZERO
 # rust-crate packages, because a Rust binary carries no dependency metadata unless
@@ -1715,7 +1720,20 @@ description = "Gate: every enforced gate this branch touched since origin/main h
 #
 # `origin/main` IS A TIP DIFF, for `git::base_delta`'s stated reason: `verify`
 # asserts the branch is rebased on it, and CI's `ci` job fetches it first.
-env = { MUTANT_CHANGED_SINCE = "origin/main" }
+#
+# THE RUNNER REGISTRY (CLOUD-1746). `MUTANT_RUNNERS` gives every Rust source to
+# cargo-mutants, so the declared runner here judges the Rego, Pkl and manifest
+# rows and resolves cargo-mutants; `mutant:changed:cargo` runs it, one CI shard
+# each. It is not run here: this branch's change measured 743 mutants at about
+# 40s each, which a local gate cannot hold, and the owner ruled it a CI matrix.
+env = { MUTANT_CHANGED_SINCE = "origin/main", MUTANT_RUNNERS = "cargo-mutants=crates/**/*.rs" }
+run = "cargo run --quiet -p batten -- mutate sweep"
+
+[tasks."mutant:changed:cargo"]
+description = "Gate: cargo-mutants over the Rust sources this branch changed since origin/main, one MUTANT_SHARD of them (CLOUD-1746)"
+# The registered runner's half of `mutant:changed`, run by `ci.yml`'s `mutants`
+# matrix with `MUTANT_SHARD=<k>/<n>`; unset, it runs every mutant in one go.
+env = { MUTANT_CHANGED_SINCE = "origin/main", MUTANT_RUNNERS = "cargo-mutants=crates/**/*.rs", MUTANT_RUNNER = "cargo-mutants" }
 run = "cargo run --quiet -p batten -- mutate sweep"
 
 [tasks."mutant-census"]
