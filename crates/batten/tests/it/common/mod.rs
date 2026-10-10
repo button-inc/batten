@@ -2081,6 +2081,9 @@ pub(crate) fn pin_origin_main(dir: &Path) {
 /// copies.
 pub(crate) struct Fixture {
     dir: PathBuf,
+    /// Set by [`Fixture::undeclared_trunk`]: [`Fixture::base_commit`] leaves
+    /// `batten.toml` exactly as written.
+    undeclared_trunk: bool,
 }
 
 impl Fixture {
@@ -2096,7 +2099,10 @@ impl Fixture {
     pub(crate) fn new(name: &str) -> Self {
         let dir = scratch(name);
         init_repo(&dir);
-        Fixture { dir }
+        Fixture {
+            dir,
+            undeclared_trunk: false,
+        }
     }
 
     /// A fixture at an explicit directory, wiped first, and NOT a repository
@@ -2106,7 +2112,17 @@ impl Fixture {
     pub(crate) fn at(dir: PathBuf) -> Self {
         Fixture {
             dir: make_empty(dir),
+            undeclared_trunk: false,
         }
+    }
+
+    /// Keep [`Fixture::base_commit`] from declaring the pinned base the trunk,
+    /// for a case whose SUBJECT is the config as written — a trunk nobody
+    /// declared, or a base config compared byte-for-byte against a working one.
+    #[must_use]
+    pub(crate) fn undeclared_trunk(mut self) -> Self {
+        self.undeclared_trunk = true;
+        self
     }
 
     /// Write `batten.toml`.
@@ -2204,11 +2220,13 @@ impl Fixture {
     /// and no recorded remote HEAD is could-not-look — correctly, which is
     /// `trunk_name.rs`'s third case. A committed `batten.toml` that names no
     /// trunk gets `must_land_on = "origin/main"` prepended (a top-level key is
-    /// valid TOML at the head of any document); one that names its own keeps it.
+    /// valid TOML at the head of any document); one that names its own keeps it,
+    /// and [`Fixture::undeclared_trunk`] opts a case out.
     #[must_use]
     pub(crate) fn base_commit(self) -> Self {
         let config = self.dir.join("batten.toml");
-        if let Ok(text) = fs::read_to_string(&config)
+        if !self.undeclared_trunk
+            && let Ok(text) = fs::read_to_string(&config)
             && !text.contains("must_land_on")
         {
             fs::write(&config, format!("must_land_on = \"origin/main\"\n{text}"))

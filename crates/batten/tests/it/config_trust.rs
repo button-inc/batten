@@ -37,6 +37,7 @@ fn pr_fixture(name: &str, base: &str, working: &str, files: &[(&str, &str)]) -> 
         .git()
         // Pin origin/main to the base commit: the trusted ref a PR is judged
         // against.
+        .undeclared_trunk()
         .base_commit()
         .config(working)
         .files(files)

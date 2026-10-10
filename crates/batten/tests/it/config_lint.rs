@@ -158,6 +158,7 @@ fn pr_fixture(name: &str, base: &str, working: &str) -> PathBuf {
     Fixture::new(name)
         .config(base)
         .git()
+        .undeclared_trunk()
         .base_commit()
         .config(working)
         .work_commit()
@@ -185,6 +186,7 @@ fn weakening_pr(name: &str, trailer: Option<&str>) -> PathBuf {
     let dir = Fixture::new(name)
         .config(base)
         .git()
+        .undeclared_trunk()
         .base_commit()
         .config(&working)
         .build();
@@ -408,6 +410,7 @@ fn the_claim_armed_run_admits_what_was_answered_before_any_commit_exists() {
     let dir = Fixture::new("lint-admit-precommit")
         .config(base)
         .git()
+        .undeclared_trunk()
         .base_commit()
         .config(&base.replace("\"deny\"", "\"warn\""))
         .build();
@@ -469,6 +472,7 @@ fn the_claim_armed_run_does_not_charge_the_branch_for_trunk_changes() {
     let dir = Fixture::new("lint-admit-trunk-moved")
         .config(forked)
         .git()
+        .undeclared_trunk()
         .base_commit()
         .build();
     // Advance the trunk alone: commit the tightening, point the remote at it,

@@ -9688,12 +9688,11 @@ fn land_reference(root: &Path, named: Option<&str>, err: &mut dyn Write) -> Resu
         return Ok(Some(named.to_owned()));
     }
     let authority = git::worktree_root(root).unwrap_or_else(|_| root.to_path_buf());
-    match worktree::declared_trunk(&authority)? {
-        Some(trunk) => Ok(Some(trunk.short)),
-        None => {
-            writeln!(err, "::error:: land: {}", worktree::NO_TRUNK)?;
-            Ok(None)
-        }
+    if let Some(trunk) = worktree::declared_trunk(&authority)? {
+        Ok(Some(trunk.short))
+    } else {
+        writeln!(err, "::error:: land: {}", worktree::NO_TRUNK)?;
+        Ok(None)
     }
 }
 
@@ -15094,20 +15093,19 @@ fn run_semver_check(
     let root = &hook_authority_root();
     // The declared trunk when no rev is named (CLOUD-2188), and the same
     // checkout-problem answer as a missing toolchain when none resolves.
-    let trunk = match baseline {
-        Some(named) => named.to_owned(),
-        None => match worktree::declared_trunk(root)? {
-            Some(trunk) => trunk.tracking,
-            None => {
-                output::message(
-                    mode,
-                    Verbosity::Normal,
-                    err,
-                    &format!("semver: {}", worktree::NO_TRUNK),
-                )?;
-                return Ok(ExitCode::Usage);
-            }
-        },
+    let trunk = if let Some(named) = baseline {
+        named.to_owned()
+    } else {
+        let Some(trunk) = worktree::declared_trunk(root)? else {
+            output::message(
+                mode,
+                Verbosity::Normal,
+                err,
+                &format!("semver: {}", worktree::NO_TRUNK),
+            )?;
+            return Ok(ExitCode::Usage);
+        };
+        trunk.tracking
     };
     let baseline = trunk.as_str();
     let release_type = release_type.unwrap_or("patch");

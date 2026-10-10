@@ -1,6 +1,6 @@
 //! A consumer whose trunk is not named `main` (CLOUD-2188).
 //!
-//! Measured on `button-inc/gke-platform`, whose default branch is `trunk`:
+//! Measured on a consumer whose default branch is `trunk`:
 //! `claim`, `land`, `lease`, receipt currency and `perf` each read `origin/main`
 //! by name, so a repository that never had a `main` could not land. The owner's
 //! rule is that the consumer never renames its branch to suit Batten — so every

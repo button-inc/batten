@@ -316,6 +316,7 @@ fn a_repo_with_no_landing_target_cannot_be_baselined() {
         )
         .file("lib.rs", "fine\nTODO fix this\n")
         .git()
+        .undeclared_trunk()
         .base_commit()
         .build();
     let home = Fixture::at(root.join("home")).build();
