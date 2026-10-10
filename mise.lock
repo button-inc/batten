@@ -572,10 +572,6 @@ url_api = "https://api.github.com/repos/tamasfe/taplo/releases/assets/257323116"
 url = "https://github.com/tamasfe/taplo/releases/download/0.10.0/taplo-windows-x86_64.zip"
 url_api = "https://api.github.com/repos/tamasfe/taplo/releases/assets/257323062"
 
-[[tools."cargo:cargo-mutants"]]
-version = "27.1.0"
-backend = "cargo:cargo-mutants"
-
 [[tools.deno]]
 version = "2.9.6"
 backend = "core:deno"

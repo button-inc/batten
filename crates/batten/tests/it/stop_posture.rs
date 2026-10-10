@@ -1383,8 +1383,10 @@ severity = "deny"
 /// reached a turn. The fixture carries the real row id, which is the whole case.
 #[test]
 fn a_filed_row_naming_the_diff_is_pointed_at_under_its_real_row_id() {
-    let dir = scratch("filed-row-real-id");
-    fs::write(dir.join("batten.toml"), format!("{CONFIG}{FILED_ROWS}")).expect("write config");
+    let dir = common::Fixture::new("filed-row-real-id")
+        .config(&format!("{CONFIG}{FILED_ROWS}"))
+        .build();
+    common::pin_origin_main(&dir);
     fs::create_dir_all(dir.join("policy")).expect("policy dir");
     install_modules(&dir);
     fs::copy(
@@ -1392,22 +1394,11 @@ fn a_filed_row_naming_the_diff_is_pointed_at_under_its_real_row_id() {
         dir.join("policy/filed-here.rego"),
     )
     .expect("install the filed-here module");
-    common::write(&dir, "seed.txt", "seed\n");
-    common::git_in(&dir, &["init", "-q", "-b", "work", "."]);
-    common::git_in(&dir, &["config", "user.name", "Fixture Author"]);
-    common::git_in(&dir, &["config", "user.email", "fixture@example.com"]);
-    common::git_in(&dir, &["add", "-A"]);
-    common::git_in(&dir, &["commit", "-q", "-m", "chore: base"]);
-    let base = common::git_in(&dir, &["rev-parse", "HEAD"]);
-    common::git_in(
-        &dir,
-        &["update-ref", "refs/remotes/origin/main", base.trim()],
-    );
     common::write(&dir, "src/a.rs", "fn main() {}\n");
     let receipts = dir.join(".git/batten-receipts");
     fs::create_dir_all(&receipts).expect("receipts dir");
     fs::write(
-        receipts.join("board-writes.work"),
+        receipts.join("board-writes.main"),
         "issue CLOUD-1 2099-01-01T00:00:00Z ready 1,src/a.rs - 1,src/a.rs\n",
     )
     .expect("write the board record");

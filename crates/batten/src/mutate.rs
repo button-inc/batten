@@ -1341,7 +1341,7 @@ pub fn run_registered(
     fs::create_dir_all(&runs)
         .with_context(|| format!("mutate: could not create {}", runs.display()))?;
     let patch = runs.join("change.diff");
-    fs::write(&patch, diff.output)
+    crate::durable::replace(&patch, diff.output)
         .with_context(|| format!("mutate: could not write {}", patch.display()))?;
     for (index, source) in sources.iter().enumerate() {
         let Some(scope) = test_scope(root, source) else {

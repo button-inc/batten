@@ -15042,11 +15042,18 @@ fn run_registered_runner(
     let Some((base, changed)) = change else {
         writeln!(
             err,
-            "::error:: mutate: `{id}` judges a change, and {} names no base that resolves",
-            "MUTANT_CHANGED_SINCE"
+            "::error:: mutate: `{id}` judges a change, and MUTANT_CHANGED_SINCE names no base \
+             that resolves"
         )?;
         return Ok(ExitCode::Internal);
     };
+    let absent = mutate::unresolvable(root, registry);
+    if !absent.is_empty() {
+        for finding in &absent {
+            writeln!(out, "{finding}")?;
+        }
+        return Ok(ExitCode::Internal);
+    }
     let shard = std::env::var(mutate::SHARD)
         .ok()
         .filter(|shard| !shard.trim().is_empty());
@@ -15230,14 +15237,10 @@ fn run_mutate(
                     err,
                 );
             }
-            // THE REGISTERED RUNNERS' HALF, NAMED AND RESOLVED HERE, RUN ELSEWHERE
-            // (CLOUD-1746). Each runner the registry names must answer in this
-            // tree, and the sources it owns in this change are counted, so the
-            // declared sweep below can never read as the whole verdict.
-            let absent = mutate::unresolvable(root, &registry);
-            for finding in &absent {
-                writeln!(out, "{finding}")?;
-            }
+            // THE REGISTERED RUNNERS' HALF, COUNTED HERE, RUN WHERE THEY ARE
+            // INSTALLED (CLOUD-1746). The sources each owns in this change are
+            // counted, so the declared sweep below never reads as the whole
+            // verdict; the runner itself is resolved by the run that uses it.
             if let Some((_, changed)) = &narrowed.change {
                 for kind in registry.registered() {
                     let owned = mutate::owned_changes(root, changed, &registry, kind);
@@ -15252,9 +15255,6 @@ fn run_mutate(
                         )?;
                     }
                 }
-            }
-            if !absent.is_empty() {
-                return Ok(ExitCode::Internal);
             }
             if narrowed.change.is_some() && narrowed.names.is_empty() {
                 let base = narrowed
