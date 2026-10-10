@@ -51,8 +51,8 @@ const BASE: &str = "tool/runner-action@aaa\tMIT\tCopyright (c) 2018 A Holder\n";
 
 /// A checkout on `feature/claim` whose base commit is the remote trunk.
 ///
-/// The local trunk branch is renamed too, so `perf record` has a `trunk` to
-/// stand on; under [`Recorded::Nowhere`] the tracking ref stays `origin/main`.
+/// The local trunk branch is named `trunk` too, so `perf record` has one to
+/// stand on; under [`Recorded::Nowhere`] the tracking ref is `origin/main`.
 fn repo(name: &str, recorded: Recorded) -> PathBuf {
     let declared = match recorded {
         Recorded::Declared(spelling) => format!("must_land_on = \"{spelling}\"\n"),
@@ -65,25 +65,27 @@ fn repo(name: &str, recorded: Recorded) -> PathBuf {
             declared_patterns()
         ))
         .file(TABLE, BASE)
+        // `claim check` reads the workspace version §6's arrows key on.
+        .file(
+            "Cargo.toml",
+            "[workspace.package]\nversion = \"0.0.125\"\n",
+        )
         .git()
-        .base_commit()
         .build();
+    // COMMITTED BY HAND, NOT `base_commit()`: that helper declares the pinned
+    // `origin/main` the trunk, and what is declared here is the subject.
+    git_in(&dir, &["add", "-A"]);
+    git_in(&dir, &["commit", "-q", "-m", "base policy"]);
     git_in(&dir, &["branch", "-q", "-m", "main", "trunk"]);
     git_in(
         &dir,
         &["remote", "add", "origin", "http://127.0.0.1:9/nothing.git"],
     );
-    if !matches!(recorded, Recorded::Nowhere) {
-        git_in(
-            &dir,
-            &[
-                "update-ref",
-                "refs/remotes/origin/trunk",
-                "refs/remotes/origin/main",
-            ],
-        );
-        git_in(&dir, &["update-ref", "-d", "refs/remotes/origin/main"]);
-    }
+    let tracking = match recorded {
+        Recorded::Nowhere => "refs/remotes/origin/main",
+        Recorded::OriginHead | Recorded::Declared(_) => "refs/remotes/origin/trunk",
+    };
+    git_in(&dir, &["update-ref", tracking, "HEAD"]);
     if matches!(recorded, Recorded::OriginHead) {
         git_in(
             &dir,

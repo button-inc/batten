@@ -4,7 +4,7 @@
 .SH NAME
 batten\-land\-wait \- Ask whether this head is green and whether its base still holds; the first answer decides
 .SH SYNOPSIS
-\fBbatten land wait\fR [\fB\-h\fR|\fB\-\-help\fR] <\fIreference\fR> 
+\fBbatten land wait\fR [\fB\-h\fR|\fB\-\-help\fR] [\fIreference\fR] 
 .SH DESCRIPTION
 Ask whether this head is green and whether its base still holds; the first answer decides
 .SH OPTIONS
@@ -12,5 +12,5 @@ Ask whether this head is green and whether its base still holds; the first answe
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .TP
-<\fIreference\fR>
-The remote reference to replay onto
+[\fIreference\fR]
+The remote reference to land onto (default: the trunk — `must_land_on`, else the remote\*(Aqs default branch)

@@ -16,7 +16,7 @@ expression: stdout_of(&output)
       "long": "config-from",
       "takes_value": true,
       "positional": false,
-      "help": "Read the committed config from a git ref (e.g. origin/main) instead of the working tree"
+      "help": "Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree"
     },
     {
       "name": "config_in",
@@ -1906,7 +1906,7 @@ expression: stdout_of(&output)
               "long": null,
               "takes_value": true,
               "positional": true,
-              "help": "The remote reference to replay onto"
+              "help": "The remote reference to land onto (default: the trunk — `must_land_on`, else the remote's default branch)"
             }
           ],
           "subcommands": []
@@ -1924,7 +1924,7 @@ expression: stdout_of(&output)
               "long": null,
               "takes_value": true,
               "positional": true,
-              "help": "The remote reference to replay onto"
+              "help": "The remote reference to land onto (default: the trunk — `must_land_on`, else the remote's default branch)"
             }
           ],
           "subcommands": []
@@ -1959,7 +1959,7 @@ expression: stdout_of(&output)
               "long": null,
               "takes_value": true,
               "positional": true,
-              "help": "The remote reference to replay onto"
+              "help": "The remote reference to land onto (default: the trunk — `must_land_on`, else the remote's default branch)"
             },
             {
               "name": "resolve",
@@ -1994,7 +1994,7 @@ expression: stdout_of(&output)
               "long": null,
               "takes_value": true,
               "positional": true,
-              "help": "The remote reference to replay onto"
+              "help": "The remote reference to land onto (default: the trunk — `must_land_on`, else the remote's default branch)"
             }
           ],
           "subcommands": []
@@ -2022,7 +2022,7 @@ expression: stdout_of(&output)
               "long": "claimed",
               "takes_value": true,
               "positional": false,
-              "help": "`<CLOUD-id>` lines a commit on origin/main closes, from `claimed-keys --closing-only`"
+              "help": "`<CLOUD-id>` lines a commit on the trunk (`must_land_on`, else the remote's default branch) closes, from `claimed-keys --closing-only`"
             },
             {
               "name": "gather",
@@ -2088,7 +2088,7 @@ expression: stdout_of(&output)
               "long": "claimed",
               "takes_value": true,
               "positional": false,
-              "help": "`<CLOUD-id>` lines a commit on origin/main closes, from `claimed-keys --closing-only`"
+              "help": "`<CLOUD-id>` lines a commit on the trunk (`must_land_on`, else the remote's default branch) closes, from `claimed-keys --closing-only`"
             },
             {
               "name": "declined",
@@ -3272,7 +3272,7 @@ expression: stdout_of(&output)
         {
           "path": "receipt status",
           "id": "receipt.status",
-          "about": "Judge the named check's recorded receipt against HEAD and origin/main",
+          "about": "Judge the named check's recorded receipt against HEAD and the trunk (`must_land_on`, else the remote's default branch)",
           "effect": "read",
           "data_channel": true,
           "flags": [
@@ -4102,7 +4102,7 @@ expression: stdout_of(&output)
               "long": "baseline",
               "takes_value": true,
               "positional": false,
-              "help": "The rev to measure the API delta against (default: origin/main)"
+              "help": "The rev to measure the API delta against (default: the trunk (`must_land_on`, else the remote's default branch))"
             },
             {
               "name": "package",

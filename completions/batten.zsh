@@ -18,7 +18,7 @@ _batten() {
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -56,7 +56,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -93,7 +93,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -153,7 +153,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -186,7 +186,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -234,7 +234,7 @@ silent\:"Nobody speaks"))' \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -267,7 +267,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -307,7 +307,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -342,7 +342,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -376,7 +376,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -408,7 +408,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -479,7 +479,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -516,7 +516,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -548,7 +548,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -581,7 +581,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -617,7 +617,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -686,7 +686,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -724,7 +724,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -783,7 +783,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -822,7 +822,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -852,7 +852,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -889,7 +889,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -956,7 +956,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -993,7 +993,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -1024,7 +1024,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -1061,7 +1061,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -1127,7 +1127,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -1164,7 +1164,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -1195,7 +1195,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -1227,7 +1227,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -1260,7 +1260,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -1331,7 +1331,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -1368,7 +1368,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -1429,7 +1429,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -1458,7 +1458,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -1497,7 +1497,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -1527,7 +1527,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -1558,7 +1558,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -1589,7 +1589,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -1618,7 +1618,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -1649,7 +1649,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -1680,7 +1680,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -1712,7 +1712,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -1743,7 +1743,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -1834,7 +1834,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -1865,7 +1865,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -1897,7 +1897,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -1935,7 +1935,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -1970,7 +1970,7 @@ exit-code\:"The neutral core contract\: envelope in, decision as exit code out �
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -1999,7 +1999,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -2029,7 +2029,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -2062,7 +2062,7 @@ policy-call\:"The \`input\` document a \`scope = "mediated_call"\` Rego module r
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -2135,7 +2135,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -2172,7 +2172,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -2202,7 +2202,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -2231,7 +2231,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -2260,7 +2260,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -2289,7 +2289,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -2319,7 +2319,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -2396,7 +2396,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -2433,7 +2433,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -2462,7 +2462,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -2523,7 +2523,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -2560,7 +2560,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -2591,7 +2591,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -2622,7 +2622,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -2653,7 +2653,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -2684,7 +2684,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -2716,7 +2716,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -2798,7 +2798,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -2827,7 +2827,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -2865,7 +2865,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -2925,7 +2925,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -2963,7 +2963,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -3022,7 +3022,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -3056,14 +3056,14 @@ trace\:"Add everything"))' \
         case $line[1] in
             (check)
 _arguments "${_arguments_options[@]}" : \
-'--claimed=[\`<CLOUD-id>\` lines a commit on origin/main closes, from \`claimed-keys --closing-only\`]:claimed:_default' \
+'--claimed=[\`<CLOUD-id>\` lines a commit on the trunk (\`must_land_on\`, else the remote'\''s default branch) closes, from \`claimed-keys --closing-only\`]:claimed:_default' \
 '--merged-prs=[\`<CLOUD-id><TAB><pr-number>\` lines, one per closing key in a MERGED pull request]:merged_prs:_default' \
 '--landed-by=[\`<CLOUD-id><TAB><ref>\` lines the caller asserts carry the work]:landed_by:_default' \
 '--declined=[\`<CLOUD-id>\` lines a pull request body declined with DO-NOT-CLOSE]:declined:_default' \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -3089,7 +3089,7 @@ trace\:"Add everything"))' \
 ;;
 (abandoned)
 _arguments "${_arguments_options[@]}" : \
-'--claimed=[\`<CLOUD-id>\` lines a commit on origin/main closes, from \`claimed-keys --closing-only\`]:claimed:_default' \
+'--claimed=[\`<CLOUD-id>\` lines a commit on the trunk (\`must_land_on\`, else the remote'\''s default branch) closes, from \`claimed-keys --closing-only\`]:claimed:_default' \
 '--merged-prs=[\`<CLOUD-id><TAB><pr-number>\` lines, one per closing key in a MERGED pull request]:merged_prs:_default' \
 '--landed-by=[\`<CLOUD-id><TAB><ref>\` lines the caller asserts carry the work]:landed_by:_default' \
 '--refs=[Branch names the remote carries, one per line]:refs:_default' \
@@ -3098,7 +3098,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -3160,7 +3160,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -3197,7 +3197,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -3227,7 +3227,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -3256,7 +3256,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -3321,7 +3321,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -3364,7 +3364,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -3423,7 +3423,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -3469,7 +3469,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -3498,7 +3498,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -3528,7 +3528,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -3558,7 +3558,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -3589,7 +3589,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -3619,7 +3619,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -3656,7 +3656,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -3739,7 +3739,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -3776,7 +3776,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -3808,7 +3808,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -3839,7 +3839,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -3870,7 +3870,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -3901,7 +3901,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -3931,7 +3931,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -3964,7 +3964,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -4045,7 +4045,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -4083,7 +4083,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -4114,7 +4114,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -4147,7 +4147,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -4215,7 +4215,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -4253,7 +4253,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -4285,7 +4285,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -4318,7 +4318,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -4352,7 +4352,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -4381,7 +4381,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -4410,7 +4410,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -4489,7 +4489,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -4523,13 +4523,13 @@ trace\:"Add everything"))' \
         case $line[1] in
             (check)
 _arguments "${_arguments_options[@]}" : \
-'--baseline=[The rev to measure the API delta against (default\: origin/main)]:baseline:_default' \
+'--baseline=[The rev to measure the API delta against (default\: the trunk (\`must_land_on\`, else the remote'\''s default branch))]:baseline:_default' \
 '--release-type=[The bump being claimed, which is what the delta is judged against]:release_type:_default' \
 '--package=[The package whose public API is compared (default\: batten)]:package:_default' \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -4586,7 +4586,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -4630,7 +4630,7 @@ exit-code\:"The neutral core contract\: envelope in, decision as exit code out �
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -4662,7 +4662,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -4694,7 +4694,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -4723,7 +4723,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -4792,7 +4792,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -4829,7 +4829,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -4888,7 +4888,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -4928,7 +4928,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -4961,7 +4961,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -5022,7 +5022,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -5059,7 +5059,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -5090,7 +5090,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -5153,7 +5153,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -5192,7 +5192,7 @@ exit-code\:"The neutral core contract\: envelope in, decision as exit code out �
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -5221,7 +5221,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -5276,7 +5276,7 @@ input-state\:"The \`state\` a structured call moves its subject to (CLOUD-987)")
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -5333,7 +5333,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -5370,7 +5370,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -5399,7 +5399,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -5434,7 +5434,7 @@ delta\:"Keyed to the identity of the branch'\''s whole CHANGE against \[\`Rule\:
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -5466,7 +5466,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -5535,7 +5535,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -5574,7 +5574,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -5606,7 +5606,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -5669,7 +5669,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -5706,7 +5706,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -5765,7 +5765,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -5802,7 +5802,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -5832,7 +5832,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -5861,7 +5861,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -5890,7 +5890,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -5921,7 +5921,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -5996,7 +5996,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -6033,7 +6033,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -6064,7 +6064,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -6096,7 +6096,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -6127,7 +6127,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -6157,7 +6157,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -6188,7 +6188,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -6218,7 +6218,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -6249,7 +6249,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -6279,7 +6279,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -6310,7 +6310,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -6340,7 +6340,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -6369,7 +6369,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -6399,7 +6399,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -6430,7 +6430,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -6463,7 +6463,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -6497,7 +6497,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -6530,7 +6530,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -6561,7 +6561,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -6591,7 +6591,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -6628,7 +6628,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -6659,7 +6659,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -6688,7 +6688,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -6718,7 +6718,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -6788,7 +6788,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -6950,7 +6950,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -6987,7 +6987,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -7046,7 +7046,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -7083,7 +7083,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -7115,7 +7115,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -7145,7 +7145,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -7211,7 +7211,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -7248,7 +7248,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -7278,7 +7278,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -7308,7 +7308,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -7340,7 +7340,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -7369,7 +7369,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -7400,7 +7400,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -7430,7 +7430,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -7459,7 +7459,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -7489,7 +7489,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -7518,7 +7518,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -7547,7 +7547,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -7576,7 +7576,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -7678,7 +7678,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -7716,7 +7716,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -7739,7 +7739,7 @@ trace\:"Add everything"))' \
 '--yes[Confirm a destructive operation that would otherwise refuse]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
-':reference -- The remote reference to replay onto:_default' \
+'::reference -- The remote reference to land onto (default\: the trunk — `must_land_on`, else the remote'\''s default branch):_default' \
 && ret=0
 ;;
 (wait)
@@ -7747,7 +7747,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -7769,7 +7769,7 @@ trace\:"Add everything"))' \
 '--yes[Confirm a destructive operation that would otherwise refuse]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
-':reference -- The remote reference to replay onto:_default' \
+'::reference -- The remote reference to land onto (default\: the trunk — `must_land_on`, else the remote'\''s default branch):_default' \
 && ret=0
 ;;
 (push)
@@ -7777,7 +7777,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -7806,7 +7806,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -7835,7 +7835,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -7864,7 +7864,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -7886,7 +7886,7 @@ trace\:"Add everything"))' \
 '--yes[Confirm a destructive operation that would otherwise refuse]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
-':reference -- The remote reference to replay onto:_default' \
+'::reference -- The remote reference to land onto (default\: the trunk — `must_land_on`, else the remote'\''s default branch):_default' \
 && ret=0
 ;;
 (linear)
@@ -7894,7 +7894,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -7916,7 +7916,7 @@ trace\:"Add everything"))' \
 '--yes[Confirm a destructive operation that would otherwise refuse]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
-':reference -- The remote reference to replay onto:_default' \
+'::reference -- The remote reference to land onto (default\: the trunk — `must_land_on`, else the remote'\''s default branch):_default' \
 && ret=0
 ;;
 (help)
@@ -7976,7 +7976,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -8014,7 +8014,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -8045,7 +8045,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -8076,7 +8076,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -8146,7 +8146,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -8179,7 +8179,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -8210,7 +8210,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -8248,7 +8248,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -8280,7 +8280,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -8341,7 +8341,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -8378,7 +8378,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -8437,7 +8437,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -8474,7 +8474,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -8503,7 +8503,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -8532,7 +8532,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -8561,7 +8561,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -8593,7 +8593,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -8666,7 +8666,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -8704,7 +8704,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -8763,7 +8763,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -8804,7 +8804,7 @@ _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]:config_from:_default' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
 '--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
@@ -12194,7 +12194,7 @@ _batten__subcmd__help__subcmd__receipt_commands() {
     local commands; commands=(
 'clean:Refuse when the working tree differs from HEAD, so a receipt keyed to HEAD would attest bytes no commit contains' \
 'record:Record that the named check concluded pass against the current HEAD' \
-'status:Judge the named check'\''s recorded receipt against HEAD and origin/main' \
+'status:Judge the named check'\''s recorded receipt against HEAD and the trunk (\`must_land_on\`, else the remote'\''s default branch)' \
 'verified:Is HEAD verified — every declared check'\''s receipt valid against this commit?' \
     )
     _describe -t commands 'batten help receipt commands' commands "$@"
@@ -13578,7 +13578,7 @@ _batten__subcmd__receipt_commands() {
     local commands; commands=(
 'clean:Refuse when the working tree differs from HEAD, so a receipt keyed to HEAD would attest bytes no commit contains' \
 'record:Record that the named check concluded pass against the current HEAD' \
-'status:Judge the named check'\''s recorded receipt against HEAD and origin/main' \
+'status:Judge the named check'\''s recorded receipt against HEAD and the trunk (\`must_land_on\`, else the remote'\''s default branch)' \
 'verified:Is HEAD verified — every declared check'\''s receipt valid against this commit?' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
@@ -13594,7 +13594,7 @@ _batten__subcmd__receipt__subcmd__help_commands() {
     local commands; commands=(
 'clean:Refuse when the working tree differs from HEAD, so a receipt keyed to HEAD would attest bytes no commit contains' \
 'record:Record that the named check concluded pass against the current HEAD' \
-'status:Judge the named check'\''s recorded receipt against HEAD and origin/main' \
+'status:Judge the named check'\''s recorded receipt against HEAD and the trunk (\`must_land_on\`, else the remote'\''s default branch)' \
 'verified:Is HEAD verified — every declared check'\''s receipt valid against this commit?' \
 'help:Print this message or the help of the given subcommand(s)' \
     )

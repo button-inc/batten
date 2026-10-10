@@ -187,7 +187,9 @@ fn repo_with_worktree(name: &str, main_set: &str, worktree_set: &str) -> std::pa
     common::write(
         &linked,
         "batten.toml",
-        &format!("version = 1\n\n[receipt]\nverified_by = {worktree_set}\n"),
+        &format!(
+            "version = 1\nmust_land_on = \"origin/main\"\n\n[receipt]\nverified_by = {worktree_set}\n"
+        ),
     );
     git_in(&linked, &["add", "-A"]);
     git_in(&linked, &["commit", "-q", "-m", "this branch's own set"]);

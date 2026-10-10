@@ -4,7 +4,7 @@
 .SH NAME
 batten\-land\-lap \- Drive the whole lap and lap again on any refusal a rebase would clear
 .SH SYNOPSIS
-\fBbatten land lap\fR [\fB\-h\fR|\fB\-\-help\fR] <\fIreference\fR> 
+\fBbatten land lap\fR [\fB\-h\fR|\fB\-\-help\fR] [\fIreference\fR] 
 .SH DESCRIPTION
 Drive the whole lap and lap again on any refusal a rebase would clear
 .SH OPTIONS
@@ -12,5 +12,5 @@ Drive the whole lap and lap again on any refusal a rebase would clear
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .TP
-<\fIreference\fR>
-The remote reference to replay onto
+[\fIreference\fR]
+The remote reference to land onto (default: the trunk — `must_land_on`, else the remote\*(Aqs default branch)

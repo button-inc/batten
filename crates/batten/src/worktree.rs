@@ -220,7 +220,14 @@ impl AtRisk {
 /// Propagates a `git` failure. Not being inside a repository raises a
 /// [`crate::UsageError`] (→ exit `1`).
 pub fn land_target(repo: &Path, must_land_on: Option<&str>) -> Result<Option<String>> {
-    Ok(land_trunk(repo, must_land_on)?.map(|trunk| trunk.tracking))
+    // THE DECLARED ARM IS VERBATIM, and that is what keeps this wrapper's
+    // callers untouched (CLOUD-2188): landedness compares content against
+    // whatever rev the consumer named, and a local `main` is a rev a landing
+    // check can answer about. Only the undeclared arm goes through the trunk.
+    match must_land_on {
+        Some(declared) => Ok(Some(declared.to_owned())),
+        None => Ok(land_trunk(repo, None)?.map(|trunk| trunk.tracking)),
+    }
 }
 
 /// The one line every caller prints when [`land_trunk`] answers `None`.

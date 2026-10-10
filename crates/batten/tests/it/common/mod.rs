@@ -2197,8 +2197,23 @@ impl Fixture {
     /// here, which is a third git implementation — and [`git_command`]'s own
     /// annotation forbids exactly that: fixtures are built by the reference
     /// implementation on purpose.
+    ///
+    /// **AND IT DECLARES THAT BASE THE TRUNK** (CLOUD-2188). Pinning
+    /// `origin/main` was enough while every verb read `origin/main` by name;
+    /// since they ask `worktree::land_trunk`, a fixture with no `must_land_on`
+    /// and no recorded remote HEAD is could-not-look — correctly, which is
+    /// `trunk_name.rs`'s third case. A committed `batten.toml` that names no
+    /// trunk gets `must_land_on = "origin/main"` prepended (a top-level key is
+    /// valid TOML at the head of any document); one that names its own keeps it.
     #[must_use]
     pub(crate) fn base_commit(self) -> Self {
+        let config = self.dir.join("batten.toml");
+        if let Ok(text) = fs::read_to_string(&config)
+            && !text.contains("must_land_on")
+        {
+            fs::write(&config, format!("must_land_on = \"origin/main\"\n{text}"))
+                .expect("declare the pinned base as the trunk");
+        }
         git_in(&self.dir, &["add", "-A"]);
         git_in(&self.dir, &["commit", "-q", "-m", "base policy"]);
         pin_origin_main(&self.dir);

@@ -4,7 +4,7 @@
 .SH NAME
 batten\-land\-replay \- Advance the base and replay this branch onto it, recording the outcome
 .SH SYNOPSIS
-\fBbatten land replay\fR [\fB\-\-resolve\fR] [\fB\-\-propose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIreference\fR> 
+\fBbatten land replay\fR [\fB\-\-resolve\fR] [\fB\-\-propose\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIreference\fR] 
 .SH DESCRIPTION
 Advance the base and replay this branch onto it, recording the outcome
 .SH OPTIONS
@@ -18,5 +18,5 @@ On a conflict, write a candidate merge for each path a known shape covers
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .TP
-<\fIreference\fR>
-The remote reference to replay onto
+[\fIreference\fR]
+The remote reference to land onto (default: the trunk — `must_land_on`, else the remote\*(Aqs default branch)

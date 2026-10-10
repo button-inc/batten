@@ -112,11 +112,9 @@ fn pair(path: &str, base: f64, head: f64) -> String {
 /// A checkout whose authority declares `rows` under `[perf]`.
 fn repo(name: &str, rows: &str) -> std::path::PathBuf {
     Fixture::new(name)
-        // `version = 1` is load-bearing here in a way it is not in `perf_pair.rs`
-        // next door, whose fixture omits it: `pair` skips before it ever loads an
-        // authority, while every case here reaches the config to read `[perf]`. A
-        // fixture missing it answers `Usage` for a reason that has nothing to do
-        // with the verdict under test.
+        // `version = 1` is load-bearing: every case here reaches the config to
+        // read `[perf]`, and a fixture missing it answers `Usage` for a reason
+        // that has nothing to do with the verdict under test.
         .config(&format!(
             "version = 1\n\n[[rule]]\nid = \"noop\"\nkind = \"forbid\"\nglob = \"*.nothing\"\n\
              pattern = \"x\"\nseverity = \"warn\"\nscope = \"tree\"\n{rows}"

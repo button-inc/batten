@@ -61,7 +61,14 @@ const RECORDS: &str = "path=noop p50=4.6 p95=4.9 mean=4.6 runs=5\n\
 /// A repository whose trunk is named `main` and which carries one commit.
 fn repo(name: &str) -> PathBuf {
     let dir = scratch(&format!("perf-series-{name}"));
-    write(&dir, "batten.toml", "version = 1\n");
+    // The trunk is DECLARED, not assumed (CLOUD-2188): `perf record` asks
+    // `must_land_on` which branch is the trunk, and this fixture has no remote
+    // whose recorded HEAD could answer instead.
+    write(
+        &dir,
+        "batten.toml",
+        "version = 1\nmust_land_on = \"origin/main\"\n",
+    );
     // THE TEMPLATE, NOT A FORK. `common/mod.rs` owns the one `git init` this
     // suite pays and every other fixture copies it; `policy/fixture-forks.rego`
     // refuses a second one. It initialises on `main` already — `git_in` passes

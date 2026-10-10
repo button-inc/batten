@@ -27,7 +27,7 @@ end
 complete -c batten -n "__fish_batten_needs_command" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_needs_command" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_needs_command" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_needs_command" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_needs_command" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -104,7 +104,7 @@ complete -c batten -n "__fish_batten_needs_command" -f -a "help" -d 'Print this 
 complete -c batten -n "__fish_batten_using_subcommand bench; and not __fish_seen_subcommand_from tokens help" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand bench; and not __fish_seen_subcommand_from tokens help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand bench; and not __fish_seen_subcommand_from tokens help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand bench; and not __fish_seen_subcommand_from tokens help" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand bench; and not __fish_seen_subcommand_from tokens help" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -127,7 +127,7 @@ complete -c batten -n "__fish_batten_using_subcommand bench; and not __fish_seen
 complete -c batten -n "__fish_batten_using_subcommand bench; and __fish_seen_subcommand_from tokens" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand bench; and __fish_seen_subcommand_from tokens" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand bench; and __fish_seen_subcommand_from tokens" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand bench; and __fish_seen_subcommand_from tokens" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand bench; and __fish_seen_subcommand_from tokens" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -153,7 +153,7 @@ complete -c batten -n "__fish_batten_using_subcommand check" -l since -d 'Judge 
 complete -c batten -n "__fish_batten_using_subcommand check" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand check" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand check" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand check" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand check" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -177,7 +177,7 @@ complete -c batten -n "__fish_batten_using_subcommand enforce" -l rule -d 'Run o
 complete -c batten -n "__fish_batten_using_subcommand enforce" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand enforce" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand enforce" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand enforce" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand enforce" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -216,7 +216,7 @@ silent\t'Nobody speaks'"
 complete -c batten -n "__fish_batten_using_subcommand exec" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand exec" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand exec" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand exec" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand exec" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -240,7 +240,7 @@ complete -c batten -n "__fish_batten_using_subcommand exec" -s h -l help -d 'Pri
 complete -c batten -n "__fish_batten_using_subcommand capture; and not __fish_seen_subcommand_from show find list prune help" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand capture; and not __fish_seen_subcommand_from show find list prune help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand capture; and not __fish_seen_subcommand_from show find list prune help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand capture; and not __fish_seen_subcommand_from show find list prune help" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand capture; and not __fish_seen_subcommand_from show find list prune help" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -269,7 +269,7 @@ complete -c batten -n "__fish_batten_using_subcommand capture; and __fish_seen_s
 complete -c batten -n "__fish_batten_using_subcommand capture; and __fish_seen_subcommand_from show" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand capture; and __fish_seen_subcommand_from show" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand capture; and __fish_seen_subcommand_from show" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand capture; and __fish_seen_subcommand_from show" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand capture; and __fish_seen_subcommand_from show" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -294,7 +294,7 @@ complete -c batten -n "__fish_batten_using_subcommand capture; and __fish_seen_s
 complete -c batten -n "__fish_batten_using_subcommand capture; and __fish_seen_subcommand_from find" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand capture; and __fish_seen_subcommand_from find" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand capture; and __fish_seen_subcommand_from find" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand capture; and __fish_seen_subcommand_from find" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand capture; and __fish_seen_subcommand_from find" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -318,7 +318,7 @@ complete -c batten -n "__fish_batten_using_subcommand capture; and __fish_seen_s
 complete -c batten -n "__fish_batten_using_subcommand capture; and __fish_seen_subcommand_from list" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand capture; and __fish_seen_subcommand_from list" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand capture; and __fish_seen_subcommand_from list" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand capture; and __fish_seen_subcommand_from list" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand capture; and __fish_seen_subcommand_from list" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -341,7 +341,7 @@ complete -c batten -n "__fish_batten_using_subcommand capture; and __fish_seen_s
 complete -c batten -n "__fish_batten_using_subcommand capture; and __fish_seen_subcommand_from prune" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand capture; and __fish_seen_subcommand_from prune" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand capture; and __fish_seen_subcommand_from prune" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand capture; and __fish_seen_subcommand_from prune" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand capture; and __fish_seen_subcommand_from prune" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -368,7 +368,7 @@ complete -c batten -n "__fish_batten_using_subcommand capture; and __fish_seen_s
 complete -c batten -n "__fish_batten_using_subcommand mcp; and not __fish_seen_subcommand_from call spawn grant posture help" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand mcp; and not __fish_seen_subcommand_from call spawn grant posture help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand mcp; and not __fish_seen_subcommand_from call spawn grant posture help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand mcp; and not __fish_seen_subcommand_from call spawn grant posture help" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand mcp; and not __fish_seen_subcommand_from call spawn grant posture help" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -394,7 +394,7 @@ complete -c batten -n "__fish_batten_using_subcommand mcp; and not __fish_seen_s
 complete -c batten -n "__fish_batten_using_subcommand mcp; and __fish_seen_subcommand_from call" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand mcp; and __fish_seen_subcommand_from call" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand mcp; and __fish_seen_subcommand_from call" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand mcp; and __fish_seen_subcommand_from call" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand mcp; and __fish_seen_subcommand_from call" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -415,7 +415,7 @@ complete -c batten -n "__fish_batten_using_subcommand mcp; and __fish_seen_subco
 complete -c batten -n "__fish_batten_using_subcommand mcp; and __fish_seen_subcommand_from spawn" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand mcp; and __fish_seen_subcommand_from spawn" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand mcp; and __fish_seen_subcommand_from spawn" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand mcp; and __fish_seen_subcommand_from spawn" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand mcp; and __fish_seen_subcommand_from spawn" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -438,7 +438,7 @@ complete -c batten -n "__fish_batten_using_subcommand mcp; and __fish_seen_subco
 complete -c batten -n "__fish_batten_using_subcommand mcp; and __fish_seen_subcommand_from grant" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand mcp; and __fish_seen_subcommand_from grant" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand mcp; and __fish_seen_subcommand_from grant" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand mcp; and __fish_seen_subcommand_from grant" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand mcp; and __fish_seen_subcommand_from grant" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -465,7 +465,7 @@ complete -c batten -n "__fish_batten_using_subcommand mcp; and __fish_seen_subco
 complete -c batten -n "__fish_batten_using_subcommand mcp; and __fish_seen_subcommand_from posture" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand mcp; and __fish_seen_subcommand_from posture" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand mcp; and __fish_seen_subcommand_from posture" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand mcp; and __fish_seen_subcommand_from posture" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand mcp; and __fish_seen_subcommand_from posture" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -491,7 +491,7 @@ complete -c batten -n "__fish_batten_using_subcommand mcp; and __fish_seen_subco
 complete -c batten -n "__fish_batten_using_subcommand target; and not __fish_seen_subcommand_from prune help" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand target; and not __fish_seen_subcommand_from prune help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand target; and not __fish_seen_subcommand_from prune help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand target; and not __fish_seen_subcommand_from prune help" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand target; and not __fish_seen_subcommand_from prune help" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -515,7 +515,7 @@ complete -c batten -n "__fish_batten_using_subcommand target; and __fish_seen_su
 complete -c batten -n "__fish_batten_using_subcommand target; and __fish_seen_subcommand_from prune" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand target; and __fish_seen_subcommand_from prune" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand target; and __fish_seen_subcommand_from prune" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand target; and __fish_seen_subcommand_from prune" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand target; and __fish_seen_subcommand_from prune" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -539,7 +539,7 @@ complete -c batten -n "__fish_batten_using_subcommand target; and __fish_seen_su
 complete -c batten -n "__fish_batten_using_subcommand ci; and not __fish_seen_subcommand_from slow-needed suites step help" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand ci; and not __fish_seen_subcommand_from slow-needed suites step help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand ci; and not __fish_seen_subcommand_from slow-needed suites step help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand ci; and not __fish_seen_subcommand_from slow-needed suites step help" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand ci; and not __fish_seen_subcommand_from slow-needed suites step help" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -566,7 +566,7 @@ complete -c batten -n "__fish_batten_using_subcommand ci; and __fish_seen_subcom
 complete -c batten -n "__fish_batten_using_subcommand ci; and __fish_seen_subcommand_from slow-needed" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand ci; and __fish_seen_subcommand_from slow-needed" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand ci; and __fish_seen_subcommand_from slow-needed" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand ci; and __fish_seen_subcommand_from slow-needed" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand ci; and __fish_seen_subcommand_from slow-needed" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -588,7 +588,7 @@ complete -c batten -n "__fish_batten_using_subcommand ci; and __fish_seen_subcom
 complete -c batten -n "__fish_batten_using_subcommand ci; and __fish_seen_subcommand_from suites" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand ci; and __fish_seen_subcommand_from suites" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand ci; and __fish_seen_subcommand_from suites" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand ci; and __fish_seen_subcommand_from suites" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand ci; and __fish_seen_subcommand_from suites" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -617,7 +617,7 @@ complete -c batten -n "__fish_batten_using_subcommand ci; and __fish_seen_subcom
 complete -c batten -n "__fish_batten_using_subcommand ci; and __fish_seen_subcommand_from step" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand ci; and __fish_seen_subcommand_from step" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand ci; and __fish_seen_subcommand_from step" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand ci; and __fish_seen_subcommand_from step" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand ci; and __fish_seen_subcommand_from step" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -643,7 +643,7 @@ complete -c batten -n "__fish_batten_using_subcommand ci; and __fish_seen_subcom
 complete -c batten -n "__fish_batten_using_subcommand release; and not __fish_seen_subcommand_from install sums backfill help" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand release; and not __fish_seen_subcommand_from install sums backfill help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand release; and not __fish_seen_subcommand_from install sums backfill help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand release; and not __fish_seen_subcommand_from install sums backfill help" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand release; and not __fish_seen_subcommand_from install sums backfill help" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -668,7 +668,7 @@ complete -c batten -n "__fish_batten_using_subcommand release; and not __fish_se
 complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from install" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from install" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from install" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from install" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from install" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -691,7 +691,7 @@ complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_s
 complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from sums" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from sums" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from sums" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from sums" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from sums" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -719,7 +719,7 @@ complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_s
 complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from backfill" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from backfill" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from backfill" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from backfill" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from backfill" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -745,7 +745,7 @@ complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_s
 complete -c batten -n "__fish_batten_using_subcommand config; and not __fish_seen_subcommand_from show epoch deprecations lint help" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand config; and not __fish_seen_subcommand_from show epoch deprecations lint help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand config; and not __fish_seen_subcommand_from show epoch deprecations lint help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand config; and not __fish_seen_subcommand_from show epoch deprecations lint help" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand config; and not __fish_seen_subcommand_from show epoch deprecations lint help" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -771,7 +771,7 @@ complete -c batten -n "__fish_batten_using_subcommand config; and not __fish_see
 complete -c batten -n "__fish_batten_using_subcommand config; and __fish_seen_subcommand_from show" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand config; and __fish_seen_subcommand_from show" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand config; and __fish_seen_subcommand_from show" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand config; and __fish_seen_subcommand_from show" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand config; and __fish_seen_subcommand_from show" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -793,7 +793,7 @@ complete -c batten -n "__fish_batten_using_subcommand config; and __fish_seen_su
 complete -c batten -n "__fish_batten_using_subcommand config; and __fish_seen_subcommand_from epoch" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand config; and __fish_seen_subcommand_from epoch" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand config; and __fish_seen_subcommand_from epoch" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand config; and __fish_seen_subcommand_from epoch" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand config; and __fish_seen_subcommand_from epoch" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -816,7 +816,7 @@ complete -c batten -n "__fish_batten_using_subcommand config; and __fish_seen_su
 complete -c batten -n "__fish_batten_using_subcommand config; and __fish_seen_subcommand_from deprecations" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand config; and __fish_seen_subcommand_from deprecations" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand config; and __fish_seen_subcommand_from deprecations" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand config; and __fish_seen_subcommand_from deprecations" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand config; and __fish_seen_subcommand_from deprecations" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -839,7 +839,7 @@ complete -c batten -n "__fish_batten_using_subcommand config; and __fish_seen_su
 complete -c batten -n "__fish_batten_using_subcommand config; and __fish_seen_subcommand_from lint" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand config; and __fish_seen_subcommand_from lint" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand config; and __fish_seen_subcommand_from lint" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand config; and __fish_seen_subcommand_from lint" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand config; and __fish_seen_subcommand_from lint" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -866,7 +866,7 @@ complete -c batten -n "__fish_batten_using_subcommand config; and __fish_seen_su
 complete -c batten -n "__fish_batten_using_subcommand lint; and not __fish_seen_subcommand_from brief help" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand lint; and not __fish_seen_subcommand_from brief help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand lint; and not __fish_seen_subcommand_from brief help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand lint; and not __fish_seen_subcommand_from brief help" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand lint; and not __fish_seen_subcommand_from brief help" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -889,7 +889,7 @@ complete -c batten -n "__fish_batten_using_subcommand lint; and not __fish_seen_
 complete -c batten -n "__fish_batten_using_subcommand lint; and __fish_seen_subcommand_from brief" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand lint; and __fish_seen_subcommand_from brief" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand lint; and __fish_seen_subcommand_from brief" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand lint; and __fish_seen_subcommand_from brief" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand lint; and __fish_seen_subcommand_from brief" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -914,7 +914,7 @@ complete -c batten -n "__fish_batten_using_subcommand spec" -l format -d 'The ou
 complete -c batten -n "__fish_batten_using_subcommand spec" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand spec" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand spec" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand spec" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand spec" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -935,7 +935,7 @@ complete -c batten -n "__fish_batten_using_subcommand spec" -s h -l help -d 'Pri
 complete -c batten -n "__fish_batten_using_subcommand doctor; and not __fish_seen_subcommand_from target mediator egress forge config gate toolchain hooks session help" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand doctor; and not __fish_seen_subcommand_from target mediator egress forge config gate toolchain hooks session help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand doctor; and not __fish_seen_subcommand_from target mediator egress forge config gate toolchain hooks session help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand doctor; and not __fish_seen_subcommand_from target mediator egress forge config gate toolchain hooks session help" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand doctor; and not __fish_seen_subcommand_from target mediator egress forge config gate toolchain hooks session help" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -967,7 +967,7 @@ complete -c batten -n "__fish_batten_using_subcommand doctor; and not __fish_see
 complete -c batten -n "__fish_batten_using_subcommand doctor; and __fish_seen_subcommand_from target" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand doctor; and __fish_seen_subcommand_from target" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand doctor; and __fish_seen_subcommand_from target" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand doctor; and __fish_seen_subcommand_from target" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand doctor; and __fish_seen_subcommand_from target" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -988,7 +988,7 @@ complete -c batten -n "__fish_batten_using_subcommand doctor; and __fish_seen_su
 complete -c batten -n "__fish_batten_using_subcommand doctor; and __fish_seen_subcommand_from mediator" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand doctor; and __fish_seen_subcommand_from mediator" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand doctor; and __fish_seen_subcommand_from mediator" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand doctor; and __fish_seen_subcommand_from mediator" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand doctor; and __fish_seen_subcommand_from mediator" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -1010,7 +1010,7 @@ complete -c batten -n "__fish_batten_using_subcommand doctor; and __fish_seen_su
 complete -c batten -n "__fish_batten_using_subcommand doctor; and __fish_seen_subcommand_from egress" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand doctor; and __fish_seen_subcommand_from egress" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand doctor; and __fish_seen_subcommand_from egress" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand doctor; and __fish_seen_subcommand_from egress" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand doctor; and __fish_seen_subcommand_from egress" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -1032,7 +1032,7 @@ complete -c batten -n "__fish_batten_using_subcommand doctor; and __fish_seen_su
 complete -c batten -n "__fish_batten_using_subcommand doctor; and __fish_seen_subcommand_from forge" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand doctor; and __fish_seen_subcommand_from forge" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand doctor; and __fish_seen_subcommand_from forge" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand doctor; and __fish_seen_subcommand_from forge" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand doctor; and __fish_seen_subcommand_from forge" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -1053,7 +1053,7 @@ complete -c batten -n "__fish_batten_using_subcommand doctor; and __fish_seen_su
 complete -c batten -n "__fish_batten_using_subcommand doctor; and __fish_seen_subcommand_from config" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand doctor; and __fish_seen_subcommand_from config" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand doctor; and __fish_seen_subcommand_from config" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand doctor; and __fish_seen_subcommand_from config" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand doctor; and __fish_seen_subcommand_from config" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -1075,7 +1075,7 @@ complete -c batten -n "__fish_batten_using_subcommand doctor; and __fish_seen_su
 complete -c batten -n "__fish_batten_using_subcommand doctor; and __fish_seen_subcommand_from gate" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand doctor; and __fish_seen_subcommand_from gate" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand doctor; and __fish_seen_subcommand_from gate" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand doctor; and __fish_seen_subcommand_from gate" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand doctor; and __fish_seen_subcommand_from gate" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -1097,7 +1097,7 @@ complete -c batten -n "__fish_batten_using_subcommand doctor; and __fish_seen_su
 complete -c batten -n "__fish_batten_using_subcommand doctor; and __fish_seen_subcommand_from toolchain" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand doctor; and __fish_seen_subcommand_from toolchain" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand doctor; and __fish_seen_subcommand_from toolchain" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand doctor; and __fish_seen_subcommand_from toolchain" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand doctor; and __fish_seen_subcommand_from toolchain" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -1119,7 +1119,7 @@ complete -c batten -n "__fish_batten_using_subcommand doctor; and __fish_seen_su
 complete -c batten -n "__fish_batten_using_subcommand doctor; and __fish_seen_subcommand_from hooks" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand doctor; and __fish_seen_subcommand_from hooks" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand doctor; and __fish_seen_subcommand_from hooks" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand doctor; and __fish_seen_subcommand_from hooks" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand doctor; and __fish_seen_subcommand_from hooks" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -1141,7 +1141,7 @@ complete -c batten -n "__fish_batten_using_subcommand doctor; and __fish_seen_su
 complete -c batten -n "__fish_batten_using_subcommand doctor; and __fish_seen_subcommand_from session" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand doctor; and __fish_seen_subcommand_from session" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand doctor; and __fish_seen_subcommand_from session" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand doctor; and __fish_seen_subcommand_from session" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand doctor; and __fish_seen_subcommand_from session" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -1173,7 +1173,7 @@ complete -c batten -n "__fish_batten_using_subcommand doctor; and __fish_seen_su
 complete -c batten -n "__fish_batten_using_subcommand init" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand init" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand init" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand init" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand init" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -1195,7 +1195,7 @@ complete -c batten -n "__fish_batten_using_subcommand init" -s h -l help -d 'Pri
 complete -c batten -n "__fish_batten_using_subcommand baseline" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand baseline" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand baseline" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand baseline" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand baseline" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -1218,7 +1218,7 @@ complete -c batten -n "__fish_batten_using_subcommand baseline" -s h -l help -d 
 complete -c batten -n "__fish_batten_using_subcommand generate; and not __fish_seen_subcommand_from completions hooks man markdown schema help" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand generate; and not __fish_seen_subcommand_from completions hooks man markdown schema help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand generate; and not __fish_seen_subcommand_from completions hooks man markdown schema help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand generate; and not __fish_seen_subcommand_from completions hooks man markdown schema help" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand generate; and not __fish_seen_subcommand_from completions hooks man markdown schema help" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -1250,7 +1250,7 @@ zsh\t''"
 complete -c batten -n "__fish_batten_using_subcommand generate; and __fish_seen_subcommand_from completions" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand generate; and __fish_seen_subcommand_from completions" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand generate; and __fish_seen_subcommand_from completions" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand generate; and __fish_seen_subcommand_from completions" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand generate; and __fish_seen_subcommand_from completions" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -1277,7 +1277,7 @@ exit-code\t'The neutral core contract: envelope in, decision as exit code out â€
 complete -c batten -n "__fish_batten_using_subcommand generate; and __fish_seen_subcommand_from hooks" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand generate; and __fish_seen_subcommand_from hooks" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand generate; and __fish_seen_subcommand_from hooks" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand generate; and __fish_seen_subcommand_from hooks" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand generate; and __fish_seen_subcommand_from hooks" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -1298,7 +1298,7 @@ complete -c batten -n "__fish_batten_using_subcommand generate; and __fish_seen_
 complete -c batten -n "__fish_batten_using_subcommand generate; and __fish_seen_subcommand_from man" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand generate; and __fish_seen_subcommand_from man" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand generate; and __fish_seen_subcommand_from man" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand generate; and __fish_seen_subcommand_from man" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand generate; and __fish_seen_subcommand_from man" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -1319,7 +1319,7 @@ complete -c batten -n "__fish_batten_using_subcommand generate; and __fish_seen_
 complete -c batten -n "__fish_batten_using_subcommand generate; and __fish_seen_subcommand_from markdown" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand generate; and __fish_seen_subcommand_from markdown" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand generate; and __fish_seen_subcommand_from markdown" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand generate; and __fish_seen_subcommand_from markdown" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand generate; and __fish_seen_subcommand_from markdown" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -1344,7 +1344,7 @@ policy-call\t'The `input` document a `scope = "mediated_call"` Rego module reads
 complete -c batten -n "__fish_batten_using_subcommand generate; and __fish_seen_subcommand_from schema" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand generate; and __fish_seen_subcommand_from schema" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand generate; and __fish_seen_subcommand_from schema" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand generate; and __fish_seen_subcommand_from schema" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand generate; and __fish_seen_subcommand_from schema" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -1371,7 +1371,7 @@ complete -c batten -n "__fish_batten_using_subcommand generate; and __fish_seen_
 complete -c batten -n "__fish_batten_using_subcommand perf; and not __fish_seen_subcommand_from pair measure record compare gate latency help" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand perf; and not __fish_seen_subcommand_from pair measure record compare gate latency help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand perf; and not __fish_seen_subcommand_from pair measure record compare gate latency help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand perf; and not __fish_seen_subcommand_from pair measure record compare gate latency help" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand perf; and not __fish_seen_subcommand_from pair measure record compare gate latency help" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -1399,7 +1399,7 @@ complete -c batten -n "__fish_batten_using_subcommand perf; and not __fish_seen_
 complete -c batten -n "__fish_batten_using_subcommand perf; and __fish_seen_subcommand_from pair" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand perf; and __fish_seen_subcommand_from pair" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand perf; and __fish_seen_subcommand_from pair" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand perf; and __fish_seen_subcommand_from pair" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand perf; and __fish_seen_subcommand_from pair" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -1421,7 +1421,7 @@ complete -c batten -n "__fish_batten_using_subcommand perf; and __fish_seen_subc
 complete -c batten -n "__fish_batten_using_subcommand perf; and __fish_seen_subcommand_from measure" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand perf; and __fish_seen_subcommand_from measure" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand perf; and __fish_seen_subcommand_from measure" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand perf; and __fish_seen_subcommand_from measure" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand perf; and __fish_seen_subcommand_from measure" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -1442,7 +1442,7 @@ complete -c batten -n "__fish_batten_using_subcommand perf; and __fish_seen_subc
 complete -c batten -n "__fish_batten_using_subcommand perf; and __fish_seen_subcommand_from record" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand perf; and __fish_seen_subcommand_from record" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand perf; and __fish_seen_subcommand_from record" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand perf; and __fish_seen_subcommand_from record" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand perf; and __fish_seen_subcommand_from record" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -1463,7 +1463,7 @@ complete -c batten -n "__fish_batten_using_subcommand perf; and __fish_seen_subc
 complete -c batten -n "__fish_batten_using_subcommand perf; and __fish_seen_subcommand_from compare" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand perf; and __fish_seen_subcommand_from compare" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand perf; and __fish_seen_subcommand_from compare" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand perf; and __fish_seen_subcommand_from compare" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand perf; and __fish_seen_subcommand_from compare" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -1484,7 +1484,7 @@ complete -c batten -n "__fish_batten_using_subcommand perf; and __fish_seen_subc
 complete -c batten -n "__fish_batten_using_subcommand perf; and __fish_seen_subcommand_from gate" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand perf; and __fish_seen_subcommand_from gate" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand perf; and __fish_seen_subcommand_from gate" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand perf; and __fish_seen_subcommand_from gate" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand perf; and __fish_seen_subcommand_from gate" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -1506,7 +1506,7 @@ complete -c batten -n "__fish_batten_using_subcommand perf; and __fish_seen_subc
 complete -c batten -n "__fish_batten_using_subcommand perf; and __fish_seen_subcommand_from latency" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand perf; and __fish_seen_subcommand_from latency" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand perf; and __fish_seen_subcommand_from latency" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand perf; and __fish_seen_subcommand_from latency" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand perf; and __fish_seen_subcommand_from latency" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -1534,7 +1534,7 @@ complete -c batten -n "__fish_batten_using_subcommand perf; and __fish_seen_subc
 complete -c batten -n "__fish_batten_using_subcommand mutate; and not __fish_seen_subcommand_from sweep census help" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand mutate; and not __fish_seen_subcommand_from sweep census help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand mutate; and not __fish_seen_subcommand_from sweep census help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand mutate; and not __fish_seen_subcommand_from sweep census help" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand mutate; and not __fish_seen_subcommand_from sweep census help" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -1558,7 +1558,7 @@ complete -c batten -n "__fish_batten_using_subcommand mutate; and not __fish_see
 complete -c batten -n "__fish_batten_using_subcommand mutate; and __fish_seen_subcommand_from sweep" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand mutate; and __fish_seen_subcommand_from sweep" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand mutate; and __fish_seen_subcommand_from sweep" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand mutate; and __fish_seen_subcommand_from sweep" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand mutate; and __fish_seen_subcommand_from sweep" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -1579,7 +1579,7 @@ complete -c batten -n "__fish_batten_using_subcommand mutate; and __fish_seen_su
 complete -c batten -n "__fish_batten_using_subcommand mutate; and __fish_seen_subcommand_from census" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand mutate; and __fish_seen_subcommand_from census" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand mutate; and __fish_seen_subcommand_from census" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand mutate; and __fish_seen_subcommand_from census" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand mutate; and __fish_seen_subcommand_from census" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -1603,7 +1603,7 @@ complete -c batten -n "__fish_batten_using_subcommand mutate; and __fish_seen_su
 complete -c batten -n "__fish_batten_using_subcommand policy; and not __fish_seen_subcommand_from budget hooks test tools explain rule help" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand policy; and not __fish_seen_subcommand_from budget hooks test tools explain rule help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand policy; and not __fish_seen_subcommand_from budget hooks test tools explain rule help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand policy; and not __fish_seen_subcommand_from budget hooks test tools explain rule help" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand policy; and not __fish_seen_subcommand_from budget hooks test tools explain rule help" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -1631,7 +1631,7 @@ complete -c batten -n "__fish_batten_using_subcommand policy; and not __fish_see
 complete -c batten -n "__fish_batten_using_subcommand policy; and __fish_seen_subcommand_from budget" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand policy; and __fish_seen_subcommand_from budget" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand policy; and __fish_seen_subcommand_from budget" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand policy; and __fish_seen_subcommand_from budget" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand policy; and __fish_seen_subcommand_from budget" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -1653,7 +1653,7 @@ complete -c batten -n "__fish_batten_using_subcommand policy; and __fish_seen_su
 complete -c batten -n "__fish_batten_using_subcommand policy; and __fish_seen_subcommand_from hooks" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand policy; and __fish_seen_subcommand_from hooks" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand policy; and __fish_seen_subcommand_from hooks" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand policy; and __fish_seen_subcommand_from hooks" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand policy; and __fish_seen_subcommand_from hooks" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -1675,7 +1675,7 @@ complete -c batten -n "__fish_batten_using_subcommand policy; and __fish_seen_su
 complete -c batten -n "__fish_batten_using_subcommand policy; and __fish_seen_subcommand_from test" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand policy; and __fish_seen_subcommand_from test" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand policy; and __fish_seen_subcommand_from test" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand policy; and __fish_seen_subcommand_from test" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand policy; and __fish_seen_subcommand_from test" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -1697,7 +1697,7 @@ complete -c batten -n "__fish_batten_using_subcommand policy; and __fish_seen_su
 complete -c batten -n "__fish_batten_using_subcommand policy; and __fish_seen_subcommand_from tools" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand policy; and __fish_seen_subcommand_from tools" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand policy; and __fish_seen_subcommand_from tools" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand policy; and __fish_seen_subcommand_from tools" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand policy; and __fish_seen_subcommand_from tools" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -1719,7 +1719,7 @@ complete -c batten -n "__fish_batten_using_subcommand policy; and __fish_seen_su
 complete -c batten -n "__fish_batten_using_subcommand policy; and __fish_seen_subcommand_from explain" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand policy; and __fish_seen_subcommand_from explain" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand policy; and __fish_seen_subcommand_from explain" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand policy; and __fish_seen_subcommand_from explain" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand policy; and __fish_seen_subcommand_from explain" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -1741,7 +1741,7 @@ complete -c batten -n "__fish_batten_using_subcommand policy; and __fish_seen_su
 complete -c batten -n "__fish_batten_using_subcommand policy; and __fish_seen_subcommand_from rule" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand policy; and __fish_seen_subcommand_from rule" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand policy; and __fish_seen_subcommand_from rule" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand policy; and __fish_seen_subcommand_from rule" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand policy; and __fish_seen_subcommand_from rule" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -1772,7 +1772,7 @@ complete -c batten -n "__fish_batten_using_subcommand verdict" -l unjudgeable -d
 complete -c batten -n "__fish_batten_using_subcommand verdict" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand verdict" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand verdict" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand verdict" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand verdict" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -1793,7 +1793,7 @@ complete -c batten -n "__fish_batten_using_subcommand verdict" -s h -l help -d '
 complete -c batten -n "__fish_batten_using_subcommand commit; and not __fish_seen_subcommand_from check help" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand commit; and not __fish_seen_subcommand_from check help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand commit; and not __fish_seen_subcommand_from check help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand commit; and not __fish_seen_subcommand_from check help" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand commit; and not __fish_seen_subcommand_from check help" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -1817,7 +1817,7 @@ complete -c batten -n "__fish_batten_using_subcommand commit; and __fish_seen_su
 complete -c batten -n "__fish_batten_using_subcommand commit; and __fish_seen_subcommand_from check" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand commit; and __fish_seen_subcommand_from check" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand commit; and __fish_seen_subcommand_from check" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand commit; and __fish_seen_subcommand_from check" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand commit; and __fish_seen_subcommand_from check" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -1841,7 +1841,7 @@ complete -c batten -n "__fish_batten_using_subcommand commit; and __fish_seen_su
 complete -c batten -n "__fish_batten_using_subcommand ready; and not __fish_seen_subcommand_from lint help" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand ready; and not __fish_seen_subcommand_from lint help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand ready; and not __fish_seen_subcommand_from lint help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand ready; and not __fish_seen_subcommand_from lint help" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand ready; and not __fish_seen_subcommand_from lint help" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -1865,7 +1865,7 @@ complete -c batten -n "__fish_batten_using_subcommand ready; and __fish_seen_sub
 complete -c batten -n "__fish_batten_using_subcommand ready; and __fish_seen_subcommand_from lint" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand ready; and __fish_seen_subcommand_from lint" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand ready; and __fish_seen_subcommand_from lint" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand ready; and __fish_seen_subcommand_from lint" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand ready; and __fish_seen_subcommand_from lint" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -1889,7 +1889,7 @@ complete -c batten -n "__fish_batten_using_subcommand ready; and __fish_seen_sub
 complete -c batten -n "__fish_batten_using_subcommand landed; and not __fish_seen_subcommand_from check abandoned help" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand landed; and not __fish_seen_subcommand_from check abandoned help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand landed; and not __fish_seen_subcommand_from check abandoned help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand landed; and not __fish_seen_subcommand_from check abandoned help" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand landed; and not __fish_seen_subcommand_from check abandoned help" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -1910,14 +1910,14 @@ complete -c batten -n "__fish_batten_using_subcommand landed; and not __fish_see
 complete -c batten -n "__fish_batten_using_subcommand landed; and not __fish_seen_subcommand_from check abandoned help" -f -a "check" -d 'Refuse a board column that contradicts main\'s history or a declined key'
 complete -c batten -n "__fish_batten_using_subcommand landed; and not __fish_seen_subcommand_from check abandoned help" -f -a "abandoned" -d 'Refuse an In Progress claim with no landing, no pull request, no branch and no recent touch'
 complete -c batten -n "__fish_batten_using_subcommand landed; and not __fish_seen_subcommand_from check abandoned help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
-complete -c batten -n "__fish_batten_using_subcommand landed; and __fish_seen_subcommand_from check" -l claimed -d '`<CLOUD-id>` lines a commit on origin/main closes, from `claimed-keys --closing-only`' -r
+complete -c batten -n "__fish_batten_using_subcommand landed; and __fish_seen_subcommand_from check" -l claimed -d '`<CLOUD-id>` lines a commit on the trunk (`must_land_on`, else the remote\'s default branch) closes, from `claimed-keys --closing-only`' -r
 complete -c batten -n "__fish_batten_using_subcommand landed; and __fish_seen_subcommand_from check" -l merged-prs -d '`<CLOUD-id><TAB><pr-number>` lines, one per closing key in a MERGED pull request' -r
 complete -c batten -n "__fish_batten_using_subcommand landed; and __fish_seen_subcommand_from check" -l landed-by -d '`<CLOUD-id><TAB><ref>` lines the caller asserts carry the work' -r
 complete -c batten -n "__fish_batten_using_subcommand landed; and __fish_seen_subcommand_from check" -l declined -d '`<CLOUD-id>` lines a pull request body declined with DO-NOT-CLOSE' -r
 complete -c batten -n "__fish_batten_using_subcommand landed; and __fish_seen_subcommand_from check" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand landed; and __fish_seen_subcommand_from check" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand landed; and __fish_seen_subcommand_from check" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand landed; and __fish_seen_subcommand_from check" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand landed; and __fish_seen_subcommand_from check" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -1935,7 +1935,7 @@ complete -c batten -n "__fish_batten_using_subcommand landed; and __fish_seen_su
 complete -c batten -n "__fish_batten_using_subcommand landed; and __fish_seen_subcommand_from check" -l no-input -d 'Never prompt; treat the run as unattended'
 complete -c batten -n "__fish_batten_using_subcommand landed; and __fish_seen_subcommand_from check" -s y -l yes -d 'Confirm a destructive operation that would otherwise refuse'
 complete -c batten -n "__fish_batten_using_subcommand landed; and __fish_seen_subcommand_from check" -s h -l help -d 'Print help (see more with \'--help\')'
-complete -c batten -n "__fish_batten_using_subcommand landed; and __fish_seen_subcommand_from abandoned" -l claimed -d '`<CLOUD-id>` lines a commit on origin/main closes, from `claimed-keys --closing-only`' -r
+complete -c batten -n "__fish_batten_using_subcommand landed; and __fish_seen_subcommand_from abandoned" -l claimed -d '`<CLOUD-id>` lines a commit on the trunk (`must_land_on`, else the remote\'s default branch) closes, from `claimed-keys --closing-only`' -r
 complete -c batten -n "__fish_batten_using_subcommand landed; and __fish_seen_subcommand_from abandoned" -l merged-prs -d '`<CLOUD-id><TAB><pr-number>` lines, one per closing key in a MERGED pull request' -r
 complete -c batten -n "__fish_batten_using_subcommand landed; and __fish_seen_subcommand_from abandoned" -l landed-by -d '`<CLOUD-id><TAB><ref>` lines the caller asserts carry the work' -r
 complete -c batten -n "__fish_batten_using_subcommand landed; and __fish_seen_subcommand_from abandoned" -l refs -d 'Branch names the remote carries, one per line' -r
@@ -1944,7 +1944,7 @@ complete -c batten -n "__fish_batten_using_subcommand landed; and __fish_seen_su
 complete -c batten -n "__fish_batten_using_subcommand landed; and __fish_seen_subcommand_from abandoned" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand landed; and __fish_seen_subcommand_from abandoned" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand landed; and __fish_seen_subcommand_from abandoned" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand landed; and __fish_seen_subcommand_from abandoned" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand landed; and __fish_seen_subcommand_from abandoned" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -1969,7 +1969,7 @@ complete -c batten -n "__fish_batten_using_subcommand landed; and __fish_seen_su
 complete -c batten -n "__fish_batten_using_subcommand hk; and not __fish_seen_subcommand_from contract observe drift help" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand hk; and not __fish_seen_subcommand_from contract observe drift help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand hk; and not __fish_seen_subcommand_from contract observe drift help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand hk; and not __fish_seen_subcommand_from contract observe drift help" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand hk; and not __fish_seen_subcommand_from contract observe drift help" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -1994,7 +1994,7 @@ complete -c batten -n "__fish_batten_using_subcommand hk; and not __fish_seen_su
 complete -c batten -n "__fish_batten_using_subcommand hk; and __fish_seen_subcommand_from contract" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand hk; and __fish_seen_subcommand_from contract" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand hk; and __fish_seen_subcommand_from contract" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand hk; and __fish_seen_subcommand_from contract" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand hk; and __fish_seen_subcommand_from contract" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -2016,7 +2016,7 @@ complete -c batten -n "__fish_batten_using_subcommand hk; and __fish_seen_subcom
 complete -c batten -n "__fish_batten_using_subcommand hk; and __fish_seen_subcommand_from observe" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand hk; and __fish_seen_subcommand_from observe" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand hk; and __fish_seen_subcommand_from observe" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand hk; and __fish_seen_subcommand_from observe" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand hk; and __fish_seen_subcommand_from observe" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -2037,7 +2037,7 @@ complete -c batten -n "__fish_batten_using_subcommand hk; and __fish_seen_subcom
 complete -c batten -n "__fish_batten_using_subcommand hk; and __fish_seen_subcommand_from drift" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand hk; and __fish_seen_subcommand_from drift" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand hk; and __fish_seen_subcommand_from drift" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand hk; and __fish_seen_subcommand_from drift" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand hk; and __fish_seen_subcommand_from drift" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -2062,7 +2062,7 @@ complete -c batten -n "__fish_batten_using_subcommand hk; and __fish_seen_subcom
 complete -c batten -n "__fish_batten_using_subcommand checks; and not __fish_seen_subcommand_from green help" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand checks; and not __fish_seen_subcommand_from green help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand checks; and not __fish_seen_subcommand_from green help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand checks; and not __fish_seen_subcommand_from green help" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand checks; and not __fish_seen_subcommand_from green help" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -2091,7 +2091,7 @@ complete -c batten -n "__fish_batten_using_subcommand checks; and __fish_seen_su
 complete -c batten -n "__fish_batten_using_subcommand checks; and __fish_seen_subcommand_from green" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand checks; and __fish_seen_subcommand_from green" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand checks; and __fish_seen_subcommand_from green" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand checks; and __fish_seen_subcommand_from green" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand checks; and __fish_seen_subcommand_from green" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -2115,7 +2115,7 @@ complete -c batten -n "__fish_batten_using_subcommand checks; and __fish_seen_su
 complete -c batten -n "__fish_batten_using_subcommand pr; and not __fish_seen_subcommand_from watch derive file link ensure closes unsubscribed help" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand pr; and not __fish_seen_subcommand_from watch derive file link ensure closes unsubscribed help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand pr; and not __fish_seen_subcommand_from watch derive file link ensure closes unsubscribed help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand pr; and not __fish_seen_subcommand_from watch derive file link ensure closes unsubscribed help" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand pr; and not __fish_seen_subcommand_from watch derive file link ensure closes unsubscribed help" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -2153,7 +2153,7 @@ complete -c batten -n "__fish_batten_using_subcommand pr; and __fish_seen_subcom
 complete -c batten -n "__fish_batten_using_subcommand pr; and __fish_seen_subcommand_from watch" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand pr; and __fish_seen_subcommand_from watch" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand pr; and __fish_seen_subcommand_from watch" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand pr; and __fish_seen_subcommand_from watch" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand pr; and __fish_seen_subcommand_from watch" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -2174,7 +2174,7 @@ complete -c batten -n "__fish_batten_using_subcommand pr; and __fish_seen_subcom
 complete -c batten -n "__fish_batten_using_subcommand pr; and __fish_seen_subcommand_from derive" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand pr; and __fish_seen_subcommand_from derive" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand pr; and __fish_seen_subcommand_from derive" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand pr; and __fish_seen_subcommand_from derive" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand pr; and __fish_seen_subcommand_from derive" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -2195,7 +2195,7 @@ complete -c batten -n "__fish_batten_using_subcommand pr; and __fish_seen_subcom
 complete -c batten -n "__fish_batten_using_subcommand pr; and __fish_seen_subcommand_from file" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand pr; and __fish_seen_subcommand_from file" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand pr; and __fish_seen_subcommand_from file" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand pr; and __fish_seen_subcommand_from file" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand pr; and __fish_seen_subcommand_from file" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -2216,7 +2216,7 @@ complete -c batten -n "__fish_batten_using_subcommand pr; and __fish_seen_subcom
 complete -c batten -n "__fish_batten_using_subcommand pr; and __fish_seen_subcommand_from link" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand pr; and __fish_seen_subcommand_from link" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand pr; and __fish_seen_subcommand_from link" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand pr; and __fish_seen_subcommand_from link" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand pr; and __fish_seen_subcommand_from link" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -2237,7 +2237,7 @@ complete -c batten -n "__fish_batten_using_subcommand pr; and __fish_seen_subcom
 complete -c batten -n "__fish_batten_using_subcommand pr; and __fish_seen_subcommand_from ensure" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand pr; and __fish_seen_subcommand_from ensure" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand pr; and __fish_seen_subcommand_from ensure" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand pr; and __fish_seen_subcommand_from ensure" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand pr; and __fish_seen_subcommand_from ensure" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -2258,7 +2258,7 @@ complete -c batten -n "__fish_batten_using_subcommand pr; and __fish_seen_subcom
 complete -c batten -n "__fish_batten_using_subcommand pr; and __fish_seen_subcommand_from closes" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand pr; and __fish_seen_subcommand_from closes" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand pr; and __fish_seen_subcommand_from closes" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand pr; and __fish_seen_subcommand_from closes" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand pr; and __fish_seen_subcommand_from closes" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -2286,7 +2286,7 @@ complete -c batten -n "__fish_batten_using_subcommand pr; and __fish_seen_subcom
 complete -c batten -n "__fish_batten_using_subcommand pr; and __fish_seen_subcommand_from unsubscribed" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand pr; and __fish_seen_subcommand_from unsubscribed" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand pr; and __fish_seen_subcommand_from unsubscribed" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand pr; and __fish_seen_subcommand_from unsubscribed" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand pr; and __fish_seen_subcommand_from unsubscribed" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -2315,7 +2315,7 @@ complete -c batten -n "__fish_batten_using_subcommand pr; and __fish_seen_subcom
 complete -c batten -n "__fish_batten_using_subcommand task; and not __fish_seen_subcommand_from register phase tick sig unregister read alive help" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand task; and not __fish_seen_subcommand_from register phase tick sig unregister read alive help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand task; and not __fish_seen_subcommand_from register phase tick sig unregister read alive help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand task; and not __fish_seen_subcommand_from register phase tick sig unregister read alive help" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand task; and not __fish_seen_subcommand_from register phase tick sig unregister read alive help" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -2344,7 +2344,7 @@ complete -c batten -n "__fish_batten_using_subcommand task; and not __fish_seen_
 complete -c batten -n "__fish_batten_using_subcommand task; and __fish_seen_subcommand_from register" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand task; and __fish_seen_subcommand_from register" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand task; and __fish_seen_subcommand_from register" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand task; and __fish_seen_subcommand_from register" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand task; and __fish_seen_subcommand_from register" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -2365,7 +2365,7 @@ complete -c batten -n "__fish_batten_using_subcommand task; and __fish_seen_subc
 complete -c batten -n "__fish_batten_using_subcommand task; and __fish_seen_subcommand_from phase" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand task; and __fish_seen_subcommand_from phase" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand task; and __fish_seen_subcommand_from phase" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand task; and __fish_seen_subcommand_from phase" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand task; and __fish_seen_subcommand_from phase" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -2386,7 +2386,7 @@ complete -c batten -n "__fish_batten_using_subcommand task; and __fish_seen_subc
 complete -c batten -n "__fish_batten_using_subcommand task; and __fish_seen_subcommand_from tick" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand task; and __fish_seen_subcommand_from tick" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand task; and __fish_seen_subcommand_from tick" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand task; and __fish_seen_subcommand_from tick" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand task; and __fish_seen_subcommand_from tick" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -2407,7 +2407,7 @@ complete -c batten -n "__fish_batten_using_subcommand task; and __fish_seen_subc
 complete -c batten -n "__fish_batten_using_subcommand task; and __fish_seen_subcommand_from sig" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand task; and __fish_seen_subcommand_from sig" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand task; and __fish_seen_subcommand_from sig" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand task; and __fish_seen_subcommand_from sig" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand task; and __fish_seen_subcommand_from sig" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -2428,7 +2428,7 @@ complete -c batten -n "__fish_batten_using_subcommand task; and __fish_seen_subc
 complete -c batten -n "__fish_batten_using_subcommand task; and __fish_seen_subcommand_from unregister" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand task; and __fish_seen_subcommand_from unregister" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand task; and __fish_seen_subcommand_from unregister" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand task; and __fish_seen_subcommand_from unregister" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand task; and __fish_seen_subcommand_from unregister" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -2449,7 +2449,7 @@ complete -c batten -n "__fish_batten_using_subcommand task; and __fish_seen_subc
 complete -c batten -n "__fish_batten_using_subcommand task; and __fish_seen_subcommand_from read" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand task; and __fish_seen_subcommand_from read" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand task; and __fish_seen_subcommand_from read" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand task; and __fish_seen_subcommand_from read" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand task; and __fish_seen_subcommand_from read" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -2472,7 +2472,7 @@ complete -c batten -n "__fish_batten_using_subcommand task; and __fish_seen_subc
 complete -c batten -n "__fish_batten_using_subcommand task; and __fish_seen_subcommand_from alive" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand task; and __fish_seen_subcommand_from alive" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand task; and __fish_seen_subcommand_from alive" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand task; and __fish_seen_subcommand_from alive" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand task; and __fish_seen_subcommand_from alive" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -2501,7 +2501,7 @@ complete -c batten -n "__fish_batten_using_subcommand task; and __fish_seen_subc
 complete -c batten -n "__fish_batten_using_subcommand singleton; and not __fish_seen_subcommand_from acquire release detach help" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand singleton; and not __fish_seen_subcommand_from acquire release detach help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand singleton; and not __fish_seen_subcommand_from acquire release detach help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand singleton; and not __fish_seen_subcommand_from acquire release detach help" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand singleton; and not __fish_seen_subcommand_from acquire release detach help" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -2527,7 +2527,7 @@ complete -c batten -n "__fish_batten_using_subcommand singleton; and __fish_seen
 complete -c batten -n "__fish_batten_using_subcommand singleton; and __fish_seen_subcommand_from acquire" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand singleton; and __fish_seen_subcommand_from acquire" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand singleton; and __fish_seen_subcommand_from acquire" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand singleton; and __fish_seen_subcommand_from acquire" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand singleton; and __fish_seen_subcommand_from acquire" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -2548,7 +2548,7 @@ complete -c batten -n "__fish_batten_using_subcommand singleton; and __fish_seen
 complete -c batten -n "__fish_batten_using_subcommand singleton; and __fish_seen_subcommand_from release" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand singleton; and __fish_seen_subcommand_from release" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand singleton; and __fish_seen_subcommand_from release" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand singleton; and __fish_seen_subcommand_from release" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand singleton; and __fish_seen_subcommand_from release" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -2572,7 +2572,7 @@ complete -c batten -n "__fish_batten_using_subcommand singleton; and __fish_seen
 complete -c batten -n "__fish_batten_using_subcommand singleton; and __fish_seen_subcommand_from detach" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand singleton; and __fish_seen_subcommand_from detach" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand singleton; and __fish_seen_subcommand_from detach" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand singleton; and __fish_seen_subcommand_from detach" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand singleton; and __fish_seen_subcommand_from detach" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -2598,7 +2598,7 @@ complete -c batten -n "__fish_batten_using_subcommand singleton; and __fish_seen
 complete -c batten -n "__fish_batten_using_subcommand claim; and not __fish_seen_subcommand_from merged keys check bot race carry help" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand claim; and not __fish_seen_subcommand_from merged keys check bot race carry help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand claim; and not __fish_seen_subcommand_from merged keys check bot race carry help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand claim; and not __fish_seen_subcommand_from merged keys check bot race carry help" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand claim; and not __fish_seen_subcommand_from merged keys check bot race carry help" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -2627,7 +2627,7 @@ complete -c batten -n "__fish_batten_using_subcommand claim; and __fish_seen_sub
 complete -c batten -n "__fish_batten_using_subcommand claim; and __fish_seen_subcommand_from merged" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand claim; and __fish_seen_subcommand_from merged" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand claim; and __fish_seen_subcommand_from merged" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand claim; and __fish_seen_subcommand_from merged" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand claim; and __fish_seen_subcommand_from merged" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -2651,7 +2651,7 @@ complete -c batten -n "__fish_batten_using_subcommand claim; and __fish_seen_sub
 complete -c batten -n "__fish_batten_using_subcommand claim; and __fish_seen_subcommand_from keys" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand claim; and __fish_seen_subcommand_from keys" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand claim; and __fish_seen_subcommand_from keys" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand claim; and __fish_seen_subcommand_from keys" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand claim; and __fish_seen_subcommand_from keys" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -2676,7 +2676,7 @@ complete -c batten -n "__fish_batten_using_subcommand claim; and __fish_seen_sub
 complete -c batten -n "__fish_batten_using_subcommand claim; and __fish_seen_subcommand_from check" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand claim; and __fish_seen_subcommand_from check" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand claim; and __fish_seen_subcommand_from check" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand claim; and __fish_seen_subcommand_from check" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand claim; and __fish_seen_subcommand_from check" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -2701,7 +2701,7 @@ complete -c batten -n "__fish_batten_using_subcommand claim; and __fish_seen_sub
 complete -c batten -n "__fish_batten_using_subcommand claim; and __fish_seen_subcommand_from bot" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand claim; and __fish_seen_subcommand_from bot" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand claim; and __fish_seen_subcommand_from bot" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand claim; and __fish_seen_subcommand_from bot" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand claim; and __fish_seen_subcommand_from bot" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -2722,7 +2722,7 @@ complete -c batten -n "__fish_batten_using_subcommand claim; and __fish_seen_sub
 complete -c batten -n "__fish_batten_using_subcommand claim; and __fish_seen_subcommand_from race" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand claim; and __fish_seen_subcommand_from race" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand claim; and __fish_seen_subcommand_from race" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand claim; and __fish_seen_subcommand_from race" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand claim; and __fish_seen_subcommand_from race" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -2743,7 +2743,7 @@ complete -c batten -n "__fish_batten_using_subcommand claim; and __fish_seen_sub
 complete -c batten -n "__fish_batten_using_subcommand claim; and __fish_seen_subcommand_from carry" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand claim; and __fish_seen_subcommand_from carry" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand claim; and __fish_seen_subcommand_from carry" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand claim; and __fish_seen_subcommand_from carry" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand claim; and __fish_seen_subcommand_from carry" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -2772,7 +2772,7 @@ complete -c batten -n "__fish_batten_using_subcommand claim; and __fish_seen_sub
 complete -c batten -n "__fish_batten_using_subcommand semver; and not __fish_seen_subcommand_from check help" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand semver; and not __fish_seen_subcommand_from check help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand semver; and not __fish_seen_subcommand_from check help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand semver; and not __fish_seen_subcommand_from check help" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand semver; and not __fish_seen_subcommand_from check help" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -2792,13 +2792,13 @@ complete -c batten -n "__fish_batten_using_subcommand semver; and not __fish_see
 complete -c batten -n "__fish_batten_using_subcommand semver; and not __fish_seen_subcommand_from check help" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c batten -n "__fish_batten_using_subcommand semver; and not __fish_seen_subcommand_from check help" -f -a "check" -d 'Refuse an API break this branch\'s commits do not declare'
 complete -c batten -n "__fish_batten_using_subcommand semver; and not __fish_seen_subcommand_from check help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
-complete -c batten -n "__fish_batten_using_subcommand semver; and __fish_seen_subcommand_from check" -l baseline -d 'The rev to measure the API delta against (default: origin/main)' -r
+complete -c batten -n "__fish_batten_using_subcommand semver; and __fish_seen_subcommand_from check" -l baseline -d 'The rev to measure the API delta against (default: the trunk (`must_land_on`, else the remote\'s default branch))' -r
 complete -c batten -n "__fish_batten_using_subcommand semver; and __fish_seen_subcommand_from check" -l release-type -d 'The bump being claimed, which is what the delta is judged against' -r
 complete -c batten -n "__fish_batten_using_subcommand semver; and __fish_seen_subcommand_from check" -l package -d 'The package whose public API is compared (default: batten)' -r
 complete -c batten -n "__fish_batten_using_subcommand semver; and __fish_seen_subcommand_from check" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand semver; and __fish_seen_subcommand_from check" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand semver; and __fish_seen_subcommand_from check" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand semver; and __fish_seen_subcommand_from check" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand semver; and __fish_seen_subcommand_from check" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -2821,7 +2821,7 @@ complete -c batten -n "__fish_batten_using_subcommand semver; and __fish_seen_su
 complete -c batten -n "__fish_batten_using_subcommand attribution; and not __fish_seen_subcommand_from check tagger identity signing help" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand attribution; and not __fish_seen_subcommand_from check tagger identity signing help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand attribution; and not __fish_seen_subcommand_from check tagger identity signing help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand attribution; and not __fish_seen_subcommand_from check tagger identity signing help" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand attribution; and not __fish_seen_subcommand_from check tagger identity signing help" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -2854,7 +2854,7 @@ exit-code\t'The neutral core contract: envelope in, decision as exit code out â€
 complete -c batten -n "__fish_batten_using_subcommand attribution; and __fish_seen_subcommand_from check" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand attribution; and __fish_seen_subcommand_from check" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand attribution; and __fish_seen_subcommand_from check" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand attribution; and __fish_seen_subcommand_from check" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand attribution; and __fish_seen_subcommand_from check" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -2876,7 +2876,7 @@ complete -c batten -n "__fish_batten_using_subcommand attribution; and __fish_se
 complete -c batten -n "__fish_batten_using_subcommand attribution; and __fish_seen_subcommand_from tagger" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand attribution; and __fish_seen_subcommand_from tagger" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand attribution; and __fish_seen_subcommand_from tagger" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand attribution; and __fish_seen_subcommand_from tagger" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand attribution; and __fish_seen_subcommand_from tagger" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -2898,7 +2898,7 @@ complete -c batten -n "__fish_batten_using_subcommand attribution; and __fish_se
 complete -c batten -n "__fish_batten_using_subcommand attribution; and __fish_seen_subcommand_from identity" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand attribution; and __fish_seen_subcommand_from identity" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand attribution; and __fish_seen_subcommand_from identity" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand attribution; and __fish_seen_subcommand_from identity" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand attribution; and __fish_seen_subcommand_from identity" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -2919,7 +2919,7 @@ complete -c batten -n "__fish_batten_using_subcommand attribution; and __fish_se
 complete -c batten -n "__fish_batten_using_subcommand attribution; and __fish_seen_subcommand_from signing" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand attribution; and __fish_seen_subcommand_from signing" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand attribution; and __fish_seen_subcommand_from signing" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand attribution; and __fish_seen_subcommand_from signing" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand attribution; and __fish_seen_subcommand_from signing" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -2945,7 +2945,7 @@ complete -c batten -n "__fish_batten_using_subcommand attribution; and __fish_se
 complete -c batten -n "__fish_batten_using_subcommand worktree; and not __fish_seen_subcommand_from status help" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand worktree; and not __fish_seen_subcommand_from status help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand worktree; and not __fish_seen_subcommand_from status help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand worktree; and not __fish_seen_subcommand_from status help" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand worktree; and not __fish_seen_subcommand_from status help" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -2968,7 +2968,7 @@ complete -c batten -n "__fish_batten_using_subcommand worktree; and not __fish_s
 complete -c batten -n "__fish_batten_using_subcommand worktree; and __fish_seen_subcommand_from status" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand worktree; and __fish_seen_subcommand_from status" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand worktree; and __fish_seen_subcommand_from status" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand worktree; and __fish_seen_subcommand_from status" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand worktree; and __fish_seen_subcommand_from status" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -2992,7 +2992,7 @@ complete -c batten -n "__fish_batten_using_subcommand worktree; and __fish_seen_
 complete -c batten -n "__fish_batten_using_subcommand override; and not __fish_seen_subcommand_from request spend help" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand override; and not __fish_seen_subcommand_from request spend help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand override; and not __fish_seen_subcommand_from request spend help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand override; and not __fish_seen_subcommand_from request spend help" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand override; and not __fish_seen_subcommand_from request spend help" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -3019,7 +3019,7 @@ complete -c batten -n "__fish_batten_using_subcommand override; and __fish_seen_
 complete -c batten -n "__fish_batten_using_subcommand override; and __fish_seen_subcommand_from request" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand override; and __fish_seen_subcommand_from request" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand override; and __fish_seen_subcommand_from request" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand override; and __fish_seen_subcommand_from request" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand override; and __fish_seen_subcommand_from request" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -3044,7 +3044,7 @@ complete -c batten -n "__fish_batten_using_subcommand override; and __fish_seen_
 complete -c batten -n "__fish_batten_using_subcommand override; and __fish_seen_subcommand_from spend" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand override; and __fish_seen_subcommand_from spend" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand override; and __fish_seen_subcommand_from spend" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand override; and __fish_seen_subcommand_from spend" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand override; and __fish_seen_subcommand_from spend" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -3068,7 +3068,7 @@ complete -c batten -n "__fish_batten_using_subcommand override; and __fish_seen_
 complete -c batten -n "__fish_batten_using_subcommand provision; and not __fish_seen_subcommand_from status apply help" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand provision; and not __fish_seen_subcommand_from status apply help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand provision; and not __fish_seen_subcommand_from status apply help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand provision; and not __fish_seen_subcommand_from status apply help" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand provision; and not __fish_seen_subcommand_from status apply help" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -3092,7 +3092,7 @@ complete -c batten -n "__fish_batten_using_subcommand provision; and not __fish_
 complete -c batten -n "__fish_batten_using_subcommand provision; and __fish_seen_subcommand_from status" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand provision; and __fish_seen_subcommand_from status" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand provision; and __fish_seen_subcommand_from status" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand provision; and __fish_seen_subcommand_from status" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand provision; and __fish_seen_subcommand_from status" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -3114,7 +3114,7 @@ complete -c batten -n "__fish_batten_using_subcommand provision; and __fish_seen
 complete -c batten -n "__fish_batten_using_subcommand provision; and __fish_seen_subcommand_from apply" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand provision; and __fish_seen_subcommand_from apply" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand provision; and __fish_seen_subcommand_from apply" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand provision; and __fish_seen_subcommand_from apply" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand provision; and __fish_seen_subcommand_from apply" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -3139,7 +3139,7 @@ complete -c batten -n "__fish_batten_using_subcommand provision; and __fish_seen
 complete -c batten -n "__fish_batten_using_subcommand startup" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand startup" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand startup" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand startup" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand startup" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -3169,7 +3169,7 @@ exit-code\t'The neutral core contract: envelope in, decision as exit code out â€
 complete -c batten -n "__fish_batten_using_subcommand adjudicate" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand adjudicate" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand adjudicate" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand adjudicate" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand adjudicate" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -3190,7 +3190,7 @@ complete -c batten -n "__fish_batten_using_subcommand adjudicate" -s h -l help -
 complete -c batten -n "__fish_batten_using_subcommand payload; and not __fish_seen_subcommand_from field help" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand payload; and not __fish_seen_subcommand_from field help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand payload; and not __fish_seen_subcommand_from field help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand payload; and not __fish_seen_subcommand_from field help" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand payload; and not __fish_seen_subcommand_from field help" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -3231,7 +3231,7 @@ input-state\t'The `state` a structured call moves its subject to (CLOUD-987)'"
 complete -c batten -n "__fish_batten_using_subcommand payload; and __fish_seen_subcommand_from field" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand payload; and __fish_seen_subcommand_from field" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand payload; and __fish_seen_subcommand_from field" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand payload; and __fish_seen_subcommand_from field" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand payload; and __fish_seen_subcommand_from field" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -3254,7 +3254,7 @@ complete -c batten -n "__fish_batten_using_subcommand payload; and __fish_seen_s
 complete -c batten -n "__fish_batten_using_subcommand receipt; and not __fish_seen_subcommand_from clean record status verified help" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand receipt; and not __fish_seen_subcommand_from clean record status verified help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand receipt; and not __fish_seen_subcommand_from clean record status verified help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand receipt; and not __fish_seen_subcommand_from clean record status verified help" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand receipt; and not __fish_seen_subcommand_from clean record status verified help" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -3274,13 +3274,13 @@ complete -c batten -n "__fish_batten_using_subcommand receipt; and not __fish_se
 complete -c batten -n "__fish_batten_using_subcommand receipt; and not __fish_seen_subcommand_from clean record status verified help" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c batten -n "__fish_batten_using_subcommand receipt; and not __fish_seen_subcommand_from clean record status verified help" -f -a "clean" -d 'Refuse when the working tree differs from HEAD, so a receipt keyed to HEAD would attest bytes no commit contains'
 complete -c batten -n "__fish_batten_using_subcommand receipt; and not __fish_seen_subcommand_from clean record status verified help" -f -a "record" -d 'Record that the named check concluded pass against the current HEAD'
-complete -c batten -n "__fish_batten_using_subcommand receipt; and not __fish_seen_subcommand_from clean record status verified help" -f -a "status" -d 'Judge the named check\'s recorded receipt against HEAD and origin/main'
+complete -c batten -n "__fish_batten_using_subcommand receipt; and not __fish_seen_subcommand_from clean record status verified help" -f -a "status" -d 'Judge the named check\'s recorded receipt against HEAD and the trunk (`must_land_on`, else the remote\'s default branch)'
 complete -c batten -n "__fish_batten_using_subcommand receipt; and not __fish_seen_subcommand_from clean record status verified help" -f -a "verified" -d 'Is HEAD verified â€” every declared check\'s receipt valid against this commit?'
 complete -c batten -n "__fish_batten_using_subcommand receipt; and not __fish_seen_subcommand_from clean record status verified help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
 complete -c batten -n "__fish_batten_using_subcommand receipt; and __fish_seen_subcommand_from clean" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand receipt; and __fish_seen_subcommand_from clean" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand receipt; and __fish_seen_subcommand_from clean" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand receipt; and __fish_seen_subcommand_from clean" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand receipt; and __fish_seen_subcommand_from clean" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -3301,7 +3301,7 @@ complete -c batten -n "__fish_batten_using_subcommand receipt; and __fish_seen_s
 complete -c batten -n "__fish_batten_using_subcommand receipt; and __fish_seen_subcommand_from record" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand receipt; and __fish_seen_subcommand_from record" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand receipt; and __fish_seen_subcommand_from record" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand receipt; and __fish_seen_subcommand_from record" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand receipt; and __fish_seen_subcommand_from record" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -3327,7 +3327,7 @@ delta\t'Keyed to the identity of the branch\'s whole CHANGE against [`Rule::key_
 complete -c batten -n "__fish_batten_using_subcommand receipt; and __fish_seen_subcommand_from status" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand receipt; and __fish_seen_subcommand_from status" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand receipt; and __fish_seen_subcommand_from status" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand receipt; and __fish_seen_subcommand_from status" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand receipt; and __fish_seen_subcommand_from status" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -3349,7 +3349,7 @@ complete -c batten -n "__fish_batten_using_subcommand receipt; and __fish_seen_s
 complete -c batten -n "__fish_batten_using_subcommand receipt; and __fish_seen_subcommand_from verified" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand receipt; and __fish_seen_subcommand_from verified" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand receipt; and __fish_seen_subcommand_from verified" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand receipt; and __fish_seen_subcommand_from verified" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand receipt; and __fish_seen_subcommand_from verified" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -3369,13 +3369,13 @@ complete -c batten -n "__fish_batten_using_subcommand receipt; and __fish_seen_s
 complete -c batten -n "__fish_batten_using_subcommand receipt; and __fish_seen_subcommand_from verified" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c batten -n "__fish_batten_using_subcommand receipt; and __fish_seen_subcommand_from help" -f -a "clean" -d 'Refuse when the working tree differs from HEAD, so a receipt keyed to HEAD would attest bytes no commit contains'
 complete -c batten -n "__fish_batten_using_subcommand receipt; and __fish_seen_subcommand_from help" -f -a "record" -d 'Record that the named check concluded pass against the current HEAD'
-complete -c batten -n "__fish_batten_using_subcommand receipt; and __fish_seen_subcommand_from help" -f -a "status" -d 'Judge the named check\'s recorded receipt against HEAD and origin/main'
+complete -c batten -n "__fish_batten_using_subcommand receipt; and __fish_seen_subcommand_from help" -f -a "status" -d 'Judge the named check\'s recorded receipt against HEAD and the trunk (`must_land_on`, else the remote\'s default branch)'
 complete -c batten -n "__fish_batten_using_subcommand receipt; and __fish_seen_subcommand_from help" -f -a "verified" -d 'Is HEAD verified â€” every declared check\'s receipt valid against this commit?'
 complete -c batten -n "__fish_batten_using_subcommand receipt; and __fish_seen_subcommand_from help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
 complete -c batten -n "__fish_batten_using_subcommand defects; and not __fish_seen_subcommand_from query add help" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand defects; and not __fish_seen_subcommand_from query add help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand defects; and not __fish_seen_subcommand_from query add help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand defects; and not __fish_seen_subcommand_from query add help" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand defects; and not __fish_seen_subcommand_from query add help" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -3401,7 +3401,7 @@ complete -c batten -n "__fish_batten_using_subcommand defects; and __fish_seen_s
 complete -c batten -n "__fish_batten_using_subcommand defects; and __fish_seen_subcommand_from query" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand defects; and __fish_seen_subcommand_from query" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand defects; and __fish_seen_subcommand_from query" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand defects; and __fish_seen_subcommand_from query" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand defects; and __fish_seen_subcommand_from query" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -3424,7 +3424,7 @@ complete -c batten -n "__fish_batten_using_subcommand defects; and __fish_seen_s
 complete -c batten -n "__fish_batten_using_subcommand defects; and __fish_seen_subcommand_from add" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand defects; and __fish_seen_subcommand_from add" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand defects; and __fish_seen_subcommand_from add" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand defects; and __fish_seen_subcommand_from add" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand defects; and __fish_seen_subcommand_from add" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -3449,7 +3449,7 @@ complete -c batten -n "__fish_batten_using_subcommand defects; and __fish_seen_s
 complete -c batten -n "__fish_batten_using_subcommand design; and not __fish_seen_subcommand_from audit help" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand design; and not __fish_seen_subcommand_from audit help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand design; and not __fish_seen_subcommand_from audit help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand design; and not __fish_seen_subcommand_from audit help" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand design; and not __fish_seen_subcommand_from audit help" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -3472,7 +3472,7 @@ complete -c batten -n "__fish_batten_using_subcommand design; and not __fish_see
 complete -c batten -n "__fish_batten_using_subcommand design; and __fish_seen_subcommand_from audit" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand design; and __fish_seen_subcommand_from audit" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand design; and __fish_seen_subcommand_from audit" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand design; and __fish_seen_subcommand_from audit" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand design; and __fish_seen_subcommand_from audit" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -3496,7 +3496,7 @@ complete -c batten -n "__fish_batten_using_subcommand design; and __fish_seen_su
 complete -c batten -n "__fish_batten_using_subcommand state; and not __fish_seen_subcommand_from adopt record migrate settle list help" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand state; and not __fish_seen_subcommand_from adopt record migrate settle list help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand state; and not __fish_seen_subcommand_from adopt record migrate settle list help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand state; and not __fish_seen_subcommand_from adopt record migrate settle list help" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand state; and not __fish_seen_subcommand_from adopt record migrate settle list help" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -3523,7 +3523,7 @@ complete -c batten -n "__fish_batten_using_subcommand state; and not __fish_seen
 complete -c batten -n "__fish_batten_using_subcommand state; and __fish_seen_subcommand_from adopt" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand state; and __fish_seen_subcommand_from adopt" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand state; and __fish_seen_subcommand_from adopt" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand state; and __fish_seen_subcommand_from adopt" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand state; and __fish_seen_subcommand_from adopt" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -3544,7 +3544,7 @@ complete -c batten -n "__fish_batten_using_subcommand state; and __fish_seen_sub
 complete -c batten -n "__fish_batten_using_subcommand state; and __fish_seen_subcommand_from record" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand state; and __fish_seen_subcommand_from record" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand state; and __fish_seen_subcommand_from record" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand state; and __fish_seen_subcommand_from record" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand state; and __fish_seen_subcommand_from record" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -3565,7 +3565,7 @@ complete -c batten -n "__fish_batten_using_subcommand state; and __fish_seen_sub
 complete -c batten -n "__fish_batten_using_subcommand state; and __fish_seen_subcommand_from migrate" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand state; and __fish_seen_subcommand_from migrate" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand state; and __fish_seen_subcommand_from migrate" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand state; and __fish_seen_subcommand_from migrate" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand state; and __fish_seen_subcommand_from migrate" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -3586,7 +3586,7 @@ complete -c batten -n "__fish_batten_using_subcommand state; and __fish_seen_sub
 complete -c batten -n "__fish_batten_using_subcommand state; and __fish_seen_subcommand_from settle" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand state; and __fish_seen_subcommand_from settle" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand state; and __fish_seen_subcommand_from settle" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand state; and __fish_seen_subcommand_from settle" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand state; and __fish_seen_subcommand_from settle" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -3607,7 +3607,7 @@ complete -c batten -n "__fish_batten_using_subcommand state; and __fish_seen_sub
 complete -c batten -n "__fish_batten_using_subcommand state; and __fish_seen_subcommand_from list" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand state; and __fish_seen_subcommand_from list" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand state; and __fish_seen_subcommand_from list" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand state; and __fish_seen_subcommand_from list" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand state; and __fish_seen_subcommand_from list" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -3635,7 +3635,7 @@ complete -c batten -n "__fish_batten_using_subcommand state; and __fish_seen_sub
 complete -c batten -n "__fish_batten_using_subcommand record; and not __fish_seen_subcommand_from suites tool forge validate named derive keyed journal show fold plan closes query probe decide divergence nonverdict attestation census release help" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand record; and not __fish_seen_subcommand_from suites tool forge validate named derive keyed journal show fold plan closes query probe decide divergence nonverdict attestation census release help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand record; and not __fish_seen_subcommand_from suites tool forge validate named derive keyed journal show fold plan closes query probe decide divergence nonverdict attestation census release help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand record; and not __fish_seen_subcommand_from suites tool forge validate named derive keyed journal show fold plan closes query probe decide divergence nonverdict attestation census release help" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand record; and not __fish_seen_subcommand_from suites tool forge validate named derive keyed journal show fold plan closes query probe decide divergence nonverdict attestation census release help" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -3677,7 +3677,7 @@ complete -c batten -n "__fish_batten_using_subcommand record; and not __fish_see
 complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from suites" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from suites" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from suites" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from suites" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from suites" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -3700,7 +3700,7 @@ complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_su
 complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from tool" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from tool" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from tool" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from tool" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from tool" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -3723,7 +3723,7 @@ complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_su
 complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from forge" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from forge" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from forge" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from forge" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from forge" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -3745,7 +3745,7 @@ complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_su
 complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from validate" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from validate" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from validate" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from validate" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from validate" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -3766,7 +3766,7 @@ complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_su
 complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from named" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from named" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from named" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from named" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from named" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -3788,7 +3788,7 @@ complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_su
 complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from derive" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from derive" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from derive" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from derive" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from derive" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -3809,7 +3809,7 @@ complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_su
 complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from keyed" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from keyed" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from keyed" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from keyed" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from keyed" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -3830,7 +3830,7 @@ complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_su
 complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from journal" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from journal" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from journal" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from journal" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from journal" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -3851,7 +3851,7 @@ complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_su
 complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from show" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from show" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from show" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from show" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from show" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -3872,7 +3872,7 @@ complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_su
 complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from fold" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from fold" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from fold" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from fold" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from fold" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -3893,7 +3893,7 @@ complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_su
 complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from plan" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from plan" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from plan" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from plan" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from plan" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -3914,7 +3914,7 @@ complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_su
 complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from closes" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from closes" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from closes" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from closes" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from closes" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -3936,7 +3936,7 @@ complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_su
 complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from query" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from query" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from query" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from query" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from query" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -3958,7 +3958,7 @@ complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_su
 complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from probe" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from probe" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from probe" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from probe" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from probe" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -3981,7 +3981,7 @@ complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_su
 complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from decide" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from decide" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from decide" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from decide" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from decide" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -4006,7 +4006,7 @@ complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_su
 complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from divergence" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from divergence" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from divergence" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from divergence" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from divergence" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -4031,7 +4031,7 @@ complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_su
 complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from nonverdict" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from nonverdict" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from nonverdict" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from nonverdict" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from nonverdict" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -4054,7 +4054,7 @@ complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_su
 complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from attestation" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from attestation" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from attestation" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from attestation" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from attestation" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -4075,7 +4075,7 @@ complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_su
 complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from census" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from census" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from census" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from census" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from census" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -4102,7 +4102,7 @@ complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_su
 complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from release" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from release" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from release" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from release" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_subcommand_from release" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -4144,7 +4144,7 @@ complete -c batten -n "__fish_batten_using_subcommand record; and __fish_seen_su
 complete -c batten -n "__fish_batten_using_subcommand show; and not __fish_seen_subcommand_from agent help" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand show; and not __fish_seen_subcommand_from agent help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand show; and not __fish_seen_subcommand_from agent help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand show; and not __fish_seen_subcommand_from agent help" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand show; and not __fish_seen_subcommand_from agent help" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -4167,7 +4167,7 @@ complete -c batten -n "__fish_batten_using_subcommand show; and not __fish_seen_
 complete -c batten -n "__fish_batten_using_subcommand show; and __fish_seen_subcommand_from agent" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand show; and __fish_seen_subcommand_from agent" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand show; and __fish_seen_subcommand_from agent" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand show; and __fish_seen_subcommand_from agent" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand show; and __fish_seen_subcommand_from agent" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -4191,7 +4191,7 @@ complete -c batten -n "__fish_batten_using_subcommand show; and __fish_seen_subc
 complete -c batten -n "__fish_batten_using_subcommand wiring; and not __fish_seen_subcommand_from reclaim register gate help" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand wiring; and not __fish_seen_subcommand_from reclaim register gate help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand wiring; and not __fish_seen_subcommand_from reclaim register gate help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand wiring; and not __fish_seen_subcommand_from reclaim register gate help" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand wiring; and not __fish_seen_subcommand_from reclaim register gate help" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -4216,7 +4216,7 @@ complete -c batten -n "__fish_batten_using_subcommand wiring; and not __fish_see
 complete -c batten -n "__fish_batten_using_subcommand wiring; and __fish_seen_subcommand_from reclaim" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand wiring; and __fish_seen_subcommand_from reclaim" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand wiring; and __fish_seen_subcommand_from reclaim" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand wiring; and __fish_seen_subcommand_from reclaim" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand wiring; and __fish_seen_subcommand_from reclaim" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -4239,7 +4239,7 @@ complete -c batten -n "__fish_batten_using_subcommand wiring; and __fish_seen_su
 complete -c batten -n "__fish_batten_using_subcommand wiring; and __fish_seen_subcommand_from register" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand wiring; and __fish_seen_subcommand_from register" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand wiring; and __fish_seen_subcommand_from register" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand wiring; and __fish_seen_subcommand_from register" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand wiring; and __fish_seen_subcommand_from register" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -4261,7 +4261,7 @@ complete -c batten -n "__fish_batten_using_subcommand wiring; and __fish_seen_su
 complete -c batten -n "__fish_batten_using_subcommand wiring; and __fish_seen_subcommand_from gate" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand wiring; and __fish_seen_subcommand_from gate" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand wiring; and __fish_seen_subcommand_from gate" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand wiring; and __fish_seen_subcommand_from gate" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand wiring; and __fish_seen_subcommand_from gate" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -4286,7 +4286,7 @@ complete -c batten -n "__fish_batten_using_subcommand wiring; and __fish_seen_su
 complete -c batten -n "__fish_batten_using_subcommand lease; and not __fish_seen_subcommand_from authorises carries guard check status peek held acquire renew hold release reserve help" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand lease; and not __fish_seen_subcommand_from authorises carries guard check status peek held acquire renew hold release reserve help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand lease; and not __fish_seen_subcommand_from authorises carries guard check status peek held acquire renew hold release reserve help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand lease; and not __fish_seen_subcommand_from authorises carries guard check status peek held acquire renew hold release reserve help" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand lease; and not __fish_seen_subcommand_from authorises carries guard check status peek held acquire renew hold release reserve help" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -4320,7 +4320,7 @@ complete -c batten -n "__fish_batten_using_subcommand lease; and not __fish_seen
 complete -c batten -n "__fish_batten_using_subcommand lease; and __fish_seen_subcommand_from authorises" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand lease; and __fish_seen_subcommand_from authorises" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand lease; and __fish_seen_subcommand_from authorises" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand lease; and __fish_seen_subcommand_from authorises" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand lease; and __fish_seen_subcommand_from authorises" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -4341,7 +4341,7 @@ complete -c batten -n "__fish_batten_using_subcommand lease; and __fish_seen_sub
 complete -c batten -n "__fish_batten_using_subcommand lease; and __fish_seen_subcommand_from carries" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand lease; and __fish_seen_subcommand_from carries" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand lease; and __fish_seen_subcommand_from carries" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand lease; and __fish_seen_subcommand_from carries" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand lease; and __fish_seen_subcommand_from carries" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -4362,7 +4362,7 @@ complete -c batten -n "__fish_batten_using_subcommand lease; and __fish_seen_sub
 complete -c batten -n "__fish_batten_using_subcommand lease; and __fish_seen_subcommand_from guard" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand lease; and __fish_seen_subcommand_from guard" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand lease; and __fish_seen_subcommand_from guard" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand lease; and __fish_seen_subcommand_from guard" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand lease; and __fish_seen_subcommand_from guard" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -4383,7 +4383,7 @@ complete -c batten -n "__fish_batten_using_subcommand lease; and __fish_seen_sub
 complete -c batten -n "__fish_batten_using_subcommand lease; and __fish_seen_subcommand_from check" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand lease; and __fish_seen_subcommand_from check" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand lease; and __fish_seen_subcommand_from check" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand lease; and __fish_seen_subcommand_from check" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand lease; and __fish_seen_subcommand_from check" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -4404,7 +4404,7 @@ complete -c batten -n "__fish_batten_using_subcommand lease; and __fish_seen_sub
 complete -c batten -n "__fish_batten_using_subcommand lease; and __fish_seen_subcommand_from status" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand lease; and __fish_seen_subcommand_from status" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand lease; and __fish_seen_subcommand_from status" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand lease; and __fish_seen_subcommand_from status" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand lease; and __fish_seen_subcommand_from status" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -4426,7 +4426,7 @@ complete -c batten -n "__fish_batten_using_subcommand lease; and __fish_seen_sub
 complete -c batten -n "__fish_batten_using_subcommand lease; and __fish_seen_subcommand_from peek" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand lease; and __fish_seen_subcommand_from peek" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand lease; and __fish_seen_subcommand_from peek" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand lease; and __fish_seen_subcommand_from peek" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand lease; and __fish_seen_subcommand_from peek" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -4447,7 +4447,7 @@ complete -c batten -n "__fish_batten_using_subcommand lease; and __fish_seen_sub
 complete -c batten -n "__fish_batten_using_subcommand lease; and __fish_seen_subcommand_from held" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand lease; and __fish_seen_subcommand_from held" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand lease; and __fish_seen_subcommand_from held" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand lease; and __fish_seen_subcommand_from held" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand lease; and __fish_seen_subcommand_from held" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -4468,7 +4468,7 @@ complete -c batten -n "__fish_batten_using_subcommand lease; and __fish_seen_sub
 complete -c batten -n "__fish_batten_using_subcommand lease; and __fish_seen_subcommand_from acquire" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand lease; and __fish_seen_subcommand_from acquire" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand lease; and __fish_seen_subcommand_from acquire" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand lease; and __fish_seen_subcommand_from acquire" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand lease; and __fish_seen_subcommand_from acquire" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -4489,7 +4489,7 @@ complete -c batten -n "__fish_batten_using_subcommand lease; and __fish_seen_sub
 complete -c batten -n "__fish_batten_using_subcommand lease; and __fish_seen_subcommand_from renew" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand lease; and __fish_seen_subcommand_from renew" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand lease; and __fish_seen_subcommand_from renew" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand lease; and __fish_seen_subcommand_from renew" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand lease; and __fish_seen_subcommand_from renew" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -4510,7 +4510,7 @@ complete -c batten -n "__fish_batten_using_subcommand lease; and __fish_seen_sub
 complete -c batten -n "__fish_batten_using_subcommand lease; and __fish_seen_subcommand_from hold" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand lease; and __fish_seen_subcommand_from hold" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand lease; and __fish_seen_subcommand_from hold" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand lease; and __fish_seen_subcommand_from hold" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand lease; and __fish_seen_subcommand_from hold" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -4531,7 +4531,7 @@ complete -c batten -n "__fish_batten_using_subcommand lease; and __fish_seen_sub
 complete -c batten -n "__fish_batten_using_subcommand lease; and __fish_seen_subcommand_from release" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand lease; and __fish_seen_subcommand_from release" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand lease; and __fish_seen_subcommand_from release" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand lease; and __fish_seen_subcommand_from release" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand lease; and __fish_seen_subcommand_from release" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -4552,7 +4552,7 @@ complete -c batten -n "__fish_batten_using_subcommand lease; and __fish_seen_sub
 complete -c batten -n "__fish_batten_using_subcommand lease; and __fish_seen_subcommand_from reserve" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand lease; and __fish_seen_subcommand_from reserve" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand lease; and __fish_seen_subcommand_from reserve" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand lease; and __fish_seen_subcommand_from reserve" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand lease; and __fish_seen_subcommand_from reserve" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -4586,7 +4586,7 @@ complete -c batten -n "__fish_batten_using_subcommand lease; and __fish_seen_sub
 complete -c batten -n "__fish_batten_using_subcommand land; and not __fish_seen_subcommand_from replay wait push verify fast-forward lap linear help" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand land; and not __fish_seen_subcommand_from replay wait push verify fast-forward lap linear help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand land; and not __fish_seen_subcommand_from replay wait push verify fast-forward lap linear help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand land; and not __fish_seen_subcommand_from replay wait push verify fast-forward lap linear help" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand land; and not __fish_seen_subcommand_from replay wait push verify fast-forward lap linear help" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -4616,7 +4616,7 @@ complete -c batten -n "__fish_batten_using_subcommand land; and __fish_seen_subc
 complete -c batten -n "__fish_batten_using_subcommand land; and __fish_seen_subcommand_from replay" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand land; and __fish_seen_subcommand_from replay" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand land; and __fish_seen_subcommand_from replay" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand land; and __fish_seen_subcommand_from replay" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand land; and __fish_seen_subcommand_from replay" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -4638,7 +4638,7 @@ complete -c batten -n "__fish_batten_using_subcommand land; and __fish_seen_subc
 complete -c batten -n "__fish_batten_using_subcommand land; and __fish_seen_subcommand_from wait" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand land; and __fish_seen_subcommand_from wait" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand land; and __fish_seen_subcommand_from wait" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand land; and __fish_seen_subcommand_from wait" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand land; and __fish_seen_subcommand_from wait" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -4659,7 +4659,7 @@ complete -c batten -n "__fish_batten_using_subcommand land; and __fish_seen_subc
 complete -c batten -n "__fish_batten_using_subcommand land; and __fish_seen_subcommand_from push" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand land; and __fish_seen_subcommand_from push" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand land; and __fish_seen_subcommand_from push" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand land; and __fish_seen_subcommand_from push" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand land; and __fish_seen_subcommand_from push" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -4680,7 +4680,7 @@ complete -c batten -n "__fish_batten_using_subcommand land; and __fish_seen_subc
 complete -c batten -n "__fish_batten_using_subcommand land; and __fish_seen_subcommand_from verify" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand land; and __fish_seen_subcommand_from verify" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand land; and __fish_seen_subcommand_from verify" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand land; and __fish_seen_subcommand_from verify" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand land; and __fish_seen_subcommand_from verify" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -4701,7 +4701,7 @@ complete -c batten -n "__fish_batten_using_subcommand land; and __fish_seen_subc
 complete -c batten -n "__fish_batten_using_subcommand land; and __fish_seen_subcommand_from fast-forward" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand land; and __fish_seen_subcommand_from fast-forward" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand land; and __fish_seen_subcommand_from fast-forward" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand land; and __fish_seen_subcommand_from fast-forward" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand land; and __fish_seen_subcommand_from fast-forward" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -4722,7 +4722,7 @@ complete -c batten -n "__fish_batten_using_subcommand land; and __fish_seen_subc
 complete -c batten -n "__fish_batten_using_subcommand land; and __fish_seen_subcommand_from lap" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand land; and __fish_seen_subcommand_from lap" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand land; and __fish_seen_subcommand_from lap" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand land; and __fish_seen_subcommand_from lap" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand land; and __fish_seen_subcommand_from lap" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -4743,7 +4743,7 @@ complete -c batten -n "__fish_batten_using_subcommand land; and __fish_seen_subc
 complete -c batten -n "__fish_batten_using_subcommand land; and __fish_seen_subcommand_from linear" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand land; and __fish_seen_subcommand_from linear" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand land; and __fish_seen_subcommand_from linear" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand land; and __fish_seen_subcommand_from linear" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand land; and __fish_seen_subcommand_from linear" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -4772,7 +4772,7 @@ complete -c batten -n "__fish_batten_using_subcommand land; and __fish_seen_subc
 complete -c batten -n "__fish_batten_using_subcommand step; and not __fish_seen_subcommand_from check record run help" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand step; and not __fish_seen_subcommand_from check record run help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand step; and not __fish_seen_subcommand_from check record run help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand step; and not __fish_seen_subcommand_from check record run help" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand step; and not __fish_seen_subcommand_from check record run help" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -4798,7 +4798,7 @@ complete -c batten -n "__fish_batten_using_subcommand step; and __fish_seen_subc
 complete -c batten -n "__fish_batten_using_subcommand step; and __fish_seen_subcommand_from check" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand step; and __fish_seen_subcommand_from check" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand step; and __fish_seen_subcommand_from check" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand step; and __fish_seen_subcommand_from check" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand step; and __fish_seen_subcommand_from check" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -4820,7 +4820,7 @@ complete -c batten -n "__fish_batten_using_subcommand step; and __fish_seen_subc
 complete -c batten -n "__fish_batten_using_subcommand step; and __fish_seen_subcommand_from record" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand step; and __fish_seen_subcommand_from record" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand step; and __fish_seen_subcommand_from record" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand step; and __fish_seen_subcommand_from record" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand step; and __fish_seen_subcommand_from record" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -4842,7 +4842,7 @@ complete -c batten -n "__fish_batten_using_subcommand step; and __fish_seen_subc
 complete -c batten -n "__fish_batten_using_subcommand step; and __fish_seen_subcommand_from run" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand step; and __fish_seen_subcommand_from run" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand step; and __fish_seen_subcommand_from run" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand step; and __fish_seen_subcommand_from run" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand step; and __fish_seen_subcommand_from run" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -4870,7 +4870,7 @@ complete -c batten -n "__fish_batten_using_subcommand sbom" -l out-dir -d 'Write
 complete -c batten -n "__fish_batten_using_subcommand sbom" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand sbom" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand sbom" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand sbom" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand sbom" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -4895,7 +4895,7 @@ complete -c batten -n "__fish_batten_using_subcommand dist" -l build-tool -d 'Ho
 complete -c batten -n "__fish_batten_using_subcommand dist" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand dist" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand dist" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand dist" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand dist" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -4917,7 +4917,7 @@ complete -c batten -n "__fish_batten_using_subcommand dist" -s h -l help -d 'Pri
 complete -c batten -n "__fish_batten_using_subcommand board; and not __fish_seen_subcommand_from check sweep help" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand board; and not __fish_seen_subcommand_from check sweep help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand board; and not __fish_seen_subcommand_from check sweep help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand board; and not __fish_seen_subcommand_from check sweep help" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand board; and not __fish_seen_subcommand_from check sweep help" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -4942,7 +4942,7 @@ complete -c batten -n "__fish_batten_using_subcommand board; and __fish_seen_sub
 complete -c batten -n "__fish_batten_using_subcommand board; and __fish_seen_subcommand_from check" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand board; and __fish_seen_subcommand_from check" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand board; and __fish_seen_subcommand_from check" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand board; and __fish_seen_subcommand_from check" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand board; and __fish_seen_subcommand_from check" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -4966,7 +4966,7 @@ complete -c batten -n "__fish_batten_using_subcommand board; and __fish_seen_sub
 complete -c batten -n "__fish_batten_using_subcommand board; and __fish_seen_subcommand_from sweep" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand board; and __fish_seen_subcommand_from sweep" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand board; and __fish_seen_subcommand_from sweep" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand board; and __fish_seen_subcommand_from sweep" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand board; and __fish_seen_subcommand_from sweep" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -4990,7 +4990,7 @@ complete -c batten -n "__fish_batten_using_subcommand board; and __fish_seen_sub
 complete -c batten -n "__fish_batten_using_subcommand census; and not __fish_seen_subcommand_from shell help" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand census; and not __fish_seen_subcommand_from shell help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand census; and not __fish_seen_subcommand_from shell help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand census; and not __fish_seen_subcommand_from shell help" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand census; and not __fish_seen_subcommand_from shell help" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -5013,7 +5013,7 @@ complete -c batten -n "__fish_batten_using_subcommand census; and not __fish_see
 complete -c batten -n "__fish_batten_using_subcommand census; and __fish_seen_subcommand_from shell" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand census; and __fish_seen_subcommand_from shell" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand census; and __fish_seen_subcommand_from shell" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand census; and __fish_seen_subcommand_from shell" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand census; and __fish_seen_subcommand_from shell" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -5037,7 +5037,7 @@ complete -c batten -n "__fish_batten_using_subcommand census; and __fish_seen_su
 complete -c batten -n "__fish_batten_using_subcommand engine; and not __fish_seen_subcommand_from digest stamp update pin gate help" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand engine; and not __fish_seen_subcommand_from digest stamp update pin gate help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand engine; and not __fish_seen_subcommand_from digest stamp update pin gate help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand engine; and not __fish_seen_subcommand_from digest stamp update pin gate help" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand engine; and not __fish_seen_subcommand_from digest stamp update pin gate help" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -5064,7 +5064,7 @@ complete -c batten -n "__fish_batten_using_subcommand engine; and not __fish_see
 complete -c batten -n "__fish_batten_using_subcommand engine; and __fish_seen_subcommand_from digest" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand engine; and __fish_seen_subcommand_from digest" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand engine; and __fish_seen_subcommand_from digest" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand engine; and __fish_seen_subcommand_from digest" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand engine; and __fish_seen_subcommand_from digest" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -5085,7 +5085,7 @@ complete -c batten -n "__fish_batten_using_subcommand engine; and __fish_seen_su
 complete -c batten -n "__fish_batten_using_subcommand engine; and __fish_seen_subcommand_from stamp" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand engine; and __fish_seen_subcommand_from stamp" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand engine; and __fish_seen_subcommand_from stamp" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand engine; and __fish_seen_subcommand_from stamp" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand engine; and __fish_seen_subcommand_from stamp" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -5106,7 +5106,7 @@ complete -c batten -n "__fish_batten_using_subcommand engine; and __fish_seen_su
 complete -c batten -n "__fish_batten_using_subcommand engine; and __fish_seen_subcommand_from update" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand engine; and __fish_seen_subcommand_from update" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand engine; and __fish_seen_subcommand_from update" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand engine; and __fish_seen_subcommand_from update" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand engine; and __fish_seen_subcommand_from update" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -5127,7 +5127,7 @@ complete -c batten -n "__fish_batten_using_subcommand engine; and __fish_seen_su
 complete -c batten -n "__fish_batten_using_subcommand engine; and __fish_seen_subcommand_from pin" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand engine; and __fish_seen_subcommand_from pin" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand engine; and __fish_seen_subcommand_from pin" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand engine; and __fish_seen_subcommand_from pin" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand engine; and __fish_seen_subcommand_from pin" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -5150,7 +5150,7 @@ complete -c batten -n "__fish_batten_using_subcommand engine; and __fish_seen_su
 complete -c batten -n "__fish_batten_using_subcommand engine; and __fish_seen_subcommand_from gate" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand engine; and __fish_seen_subcommand_from gate" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand engine; and __fish_seen_subcommand_from gate" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand engine; and __fish_seen_subcommand_from gate" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand engine; and __fish_seen_subcommand_from gate" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -5177,7 +5177,7 @@ complete -c batten -n "__fish_batten_using_subcommand engine; and __fish_seen_su
 complete -c batten -n "__fish_batten_using_subcommand test; and not __fish_seen_subcommand_from replay help" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand test; and not __fish_seen_subcommand_from replay help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand test; and not __fish_seen_subcommand_from replay help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand test; and not __fish_seen_subcommand_from replay help" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand test; and not __fish_seen_subcommand_from replay help" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -5201,7 +5201,7 @@ complete -c batten -n "__fish_batten_using_subcommand test; and __fish_seen_subc
 complete -c batten -n "__fish_batten_using_subcommand test; and __fish_seen_subcommand_from replay" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand test; and __fish_seen_subcommand_from replay" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand test; and __fish_seen_subcommand_from replay" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand test; and __fish_seen_subcommand_from replay" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand test; and __fish_seen_subcommand_from replay" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -5225,7 +5225,7 @@ complete -c batten -n "__fish_batten_using_subcommand test; and __fish_seen_subc
 complete -c batten -n "__fish_batten_using_subcommand artifacts; and not __fish_seen_subcommand_from write help" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand artifacts; and not __fish_seen_subcommand_from write help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand artifacts; and not __fish_seen_subcommand_from write help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand artifacts; and not __fish_seen_subcommand_from write help" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand artifacts; and not __fish_seen_subcommand_from write help" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -5252,7 +5252,7 @@ complete -c batten -n "__fish_batten_using_subcommand artifacts; and __fish_seen
 complete -c batten -n "__fish_batten_using_subcommand artifacts; and __fish_seen_subcommand_from write" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand artifacts; and __fish_seen_subcommand_from write" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand artifacts; and __fish_seen_subcommand_from write" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand artifacts; and __fish_seen_subcommand_from write" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
 complete -c batten -n "__fish_batten_using_subcommand artifacts; and __fish_seen_subcommand_from write" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
@@ -5420,7 +5420,7 @@ complete -c batten -n "__fish_batten_using_subcommand help; and __fish_seen_subc
 complete -c batten -n "__fish_batten_using_subcommand help; and __fish_seen_subcommand_from payload" -f -a "field" -d 'Print one field of a hook payload read from stdin, for a shell hook that must not depend on jq'
 complete -c batten -n "__fish_batten_using_subcommand help; and __fish_seen_subcommand_from receipt" -f -a "clean" -d 'Refuse when the working tree differs from HEAD, so a receipt keyed to HEAD would attest bytes no commit contains'
 complete -c batten -n "__fish_batten_using_subcommand help; and __fish_seen_subcommand_from receipt" -f -a "record" -d 'Record that the named check concluded pass against the current HEAD'
-complete -c batten -n "__fish_batten_using_subcommand help; and __fish_seen_subcommand_from receipt" -f -a "status" -d 'Judge the named check\'s recorded receipt against HEAD and origin/main'
+complete -c batten -n "__fish_batten_using_subcommand help; and __fish_seen_subcommand_from receipt" -f -a "status" -d 'Judge the named check\'s recorded receipt against HEAD and the trunk (`must_land_on`, else the remote\'s default branch)'
 complete -c batten -n "__fish_batten_using_subcommand help; and __fish_seen_subcommand_from receipt" -f -a "verified" -d 'Is HEAD verified â€” every declared check\'s receipt valid against this commit?'
 complete -c batten -n "__fish_batten_using_subcommand help; and __fish_seen_subcommand_from defects" -f -a "query" -d 'List recorded defects, as pointers'
 complete -c batten -n "__fish_batten_using_subcommand help; and __fish_seen_subcommand_from defects" -f -a "add" -d 'Append defect records read as JSONL on stdin'

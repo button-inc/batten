@@ -101,7 +101,9 @@ use common::{Fixture, run, stdout};
 /// base — the one skip path reachable without a network or a second commit.
 fn repo(name: &str) -> std::path::PathBuf {
     Fixture::new(name)
-        .config("[[rule]]\nid = \"noop\"\nkind = \"forbid\"\nglob = \"*.nothing\"\npattern = \"x\"\nseverity = \"warn\"\nscope = \"tree\"\n")
+        // `version = 1` since CLOUD-2188: the base ref defaults to the declared
+        // trunk, so `pair` reads the authority before it can skip.
+        .config("version = 1\n\n[[rule]]\nid = \"noop\"\nkind = \"forbid\"\nglob = \"*.nothing\"\npattern = \"x\"\nseverity = \"warn\"\nscope = \"tree\"\n")
         .git()
         .base_commit()
         .build()

@@ -4,7 +4,7 @@
 .SH NAME
 batten\-land\-linear \- Whether this head is built on the reference\*(Aqs current tip, so it can fast\-forward
 .SH SYNOPSIS
-\fBbatten land linear\fR [\fB\-h\fR|\fB\-\-help\fR] <\fIreference\fR> 
+\fBbatten land linear\fR [\fB\-h\fR|\fB\-\-help\fR] [\fIreference\fR] 
 .SH DESCRIPTION
 Whether this head is built on the reference\*(Aqs current tip, so it can fast\-forward
 .SH OPTIONS
@@ -12,5 +12,5 @@ Whether this head is built on the reference\*(Aqs current tip, so it can fast\-f
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .TP
-<\fIreference\fR>
-The remote reference to replay onto
+[\fIreference\fR]
+The remote reference to land onto (default: the trunk — `must_land_on`, else the remote\*(Aqs default branch)

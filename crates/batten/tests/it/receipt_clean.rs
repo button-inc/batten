@@ -69,7 +69,13 @@ use common::{batten, stdout};
 fn repo(name: &str) -> PathBuf {
     let dir = common::scratch_outside_tree("batten-receipt-clean", name);
     common::init_repo(&dir);
-    common::write(&dir, "batten.toml", "version = 1\n");
+    // The trunk is declared, because the pinned `origin/main` below is only a
+    // trunk once something names it one (CLOUD-2188).
+    common::write(
+        &dir,
+        "batten.toml",
+        "version = 1\nmust_land_on = \"origin/main\"\n",
+    );
     common::git_in(&dir, &["add", "-A"]);
     common::git_in(&dir, &["commit", "-qm", "seed"]);
     // `receipt record` names the trunk its receipt was taken against, so the case
