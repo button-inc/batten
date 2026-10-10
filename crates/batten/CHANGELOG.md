@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.211](https://github.com/button-inc/batten/compare/v0.0.210...v0.0.211) - 2026-10-10
+
+### Added
+
+- *(mutate)* [**breaking**] read the enforced set from a committed [mutate] table
+- *(mutate)* [**breaking**] retire the bats arm and add tofu, kyverno, conftest and pytest suites
+
+### Fixed
+
+- *(worktree)* resolve the consumer's trunk instead of assuming `main`
+- *(mutate)* put two declared mutation rows at column zero
+
+### Other
+
+- *(trunk)* opt config-subject fixtures out of the trunk declaration
+- *(trunk)* declare the trunk in fixtures and regenerate the surface
+- *(mutate)* read the committed [mutate] table outside run_mutate
+
 ## [0.0.210](https://github.com/button-inc/batten/compare/v0.0.209...v0.0.210) - 2026-10-09
 
 ### Added
