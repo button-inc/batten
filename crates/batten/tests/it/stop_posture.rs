@@ -1310,3 +1310,110 @@ fn a_stop_whose_store_lock_is_held_elsewhere_still_speaks() {
          {stdout}\n--- stderr ---\n{stderr}"
     );
 }
+
+/// The filed-here rows, as a consumer declares them: the row keeps its real
+/// id, `issue file other`, which is not the name of any predicate it publishes.
+const FILED_ROWS: &str = r#"
+[[pattern]]
+id = "positive-count"
+regex = '^[1-9][0-9]*$'
+
+[[verdict]]
+id = "issue file unclear"
+gloss = "a row this branch created was never groomed to Ready"
+class = """
+A filed row costs a Ready block.
+"""
+
+[[verdict.route]]
+id = "groom it"
+kind = "command"
+target = "batten ready lint --issue <key>"
+
+[[verdict]]
+id = "issue file same"
+gloss = "a row this branch filed names a file this branch is changing"
+class = """
+Fix it in this diff rather than filing it.
+"""
+
+[[verdict.route]]
+id = "fix it here"
+kind = "issue"
+target = "close the row you filed and fix it in this diff"
+
+[[verdict]]
+id = "issue file held"
+gloss = "a row this branch filed was left open"
+class = """
+Close it in the PR body or groom it.
+"""
+
+[[verdict.route]]
+id = "close it"
+kind = "issue"
+target = "name it in closing form in the PR body"
+
+[[recorder]]
+name = "board-issue-created"
+record = "board-writes"
+tool = "save_issue"
+key = "branch"
+
+[[recorder.columns]]
+name = "kind"
+value = { literal = "issue" }
+
+[[rule]]
+id = "issue file other"
+kind = "policy"
+scope = "tree"
+base = "origin/main"
+delta_sources = ["**"]
+module = "policy/filed-here.rego"
+severity = "deny"
+"#;
+
+/// Rung 3 finds the filed-here row by the predicate it publishes, so a row
+/// declared under its own id still speaks at Stop.
+///
+/// The rung once selected the literal id `filed-here`, which the row stopped
+/// carrying when ids took the space form: the selection was refused, read as
+/// could-not-look, and the "finish it now while the file is open" pointer never
+/// reached a turn. The fixture carries the real row id, which is the whole case.
+#[test]
+fn a_filed_row_naming_the_diff_is_pointed_at_under_its_real_row_id() {
+    let dir = scratch("filed-row-real-id");
+    fs::write(dir.join("batten.toml"), format!("{CONFIG}{FILED_ROWS}")).expect("write config");
+    fs::create_dir_all(dir.join("policy")).expect("policy dir");
+    install_modules(&dir);
+    fs::copy(
+        common::at_root("policy/filed-here.rego"),
+        dir.join("policy/filed-here.rego"),
+    )
+    .expect("install the filed-here module");
+    common::write(&dir, "seed.txt", "seed\n");
+    common::git_in(&dir, &["init", "-q", "-b", "work", "."]);
+    common::git_in(&dir, &["config", "user.name", "Fixture Author"]);
+    common::git_in(&dir, &["config", "user.email", "fixture@example.com"]);
+    common::git_in(&dir, &["add", "-A"]);
+    common::git_in(&dir, &["commit", "-q", "-m", "chore: base"]);
+    let base = common::git_in(&dir, &["rev-parse", "HEAD"]);
+    common::git_in(
+        &dir,
+        &["update-ref", "refs/remotes/origin/main", base.trim()],
+    );
+    common::write(&dir, "src/a.rs", "fn main() {}\n");
+    let receipts = dir.join(".git/batten-receipts");
+    fs::create_dir_all(&receipts).expect("receipts dir");
+    fs::write(
+        receipts.join("board-writes.work"),
+        "issue CLOUD-1 2099-01-01T00:00:00Z ready 1,src/a.rs - 1,src/a.rs\n",
+    )
+    .expect("write the board record");
+    let stdout = stdout_of(&hook(&dir, &stop_payload("Done.", false)));
+    assert!(
+        stdout.contains("issue file same") && stdout.contains("src/a.rs"),
+        "the filed row over this diff is pointed at on Stop: {stdout}"
+    );
+}

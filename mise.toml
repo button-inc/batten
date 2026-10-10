@@ -1824,6 +1824,14 @@ description = "Gate: every row this branch put on the board was refined at creat
 # module, so there is still exactly one implementation of the intersection.
 run = "cargo run --quiet -p batten -- check --rule 'issue file other'"
 
+[tasks."filed-here:guard"]
+description = "The decision behind the filed-row-settled handler: refuse an edit while a row this branch filed is unrefined, over its diff, or left open"
+# The pinned `batten`, not `cargo run`: this runs before every Edit and Write, and
+# a build there is a turn-length stall. The row and module are this tree's either
+# way. Findings go to stderr because the handler door reads a refusal's reason
+# there and would take the first stderr line, the transcript notice, otherwise.
+run = "batten check --rule 'issue file other' -q 1>&2"
+
 [tasks.claim-race]
 description = "Gate: no other OPEN pull request already claims a key this branch claims (asks the forge; pointer-only)"
 # CLOUD-446's duplicate-claim half, ported off `mise-tasks/claim-race-check.sh`
