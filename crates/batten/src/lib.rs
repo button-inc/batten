@@ -15151,7 +15151,7 @@ fn run_registered_runner(
         registry,
         kind,
         shard.as_deref(),
-        work,
+        &work,
     ) {
         Ok(run) => run,
         Err(reason) => {
