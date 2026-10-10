@@ -1550,6 +1550,38 @@ fn an_errored_tofu_run_is_could_not_look() {
     assert_errored(&TOFU);
 }
 
+/// THE STAGED TREE IS INITIALISED BEFORE `tofu test` (CLOUD-2190). It carries
+/// tracked files only and `.terraform/` never is, so a module calling a module
+/// errored `Module not installed` on every row. The stub models exactly that:
+/// `init -backend=false` makes `.terraform/` in its working directory, and
+/// `test` replays the recorded error unless one is there — so an init in the
+/// wrong directory, or with a backend, still reads as could-not-look.
+#[cfg(unix)]
+#[test]
+fn a_tofu_suite_is_initialised_before_it_runs() {
+    const NESTED: Native = Native {
+        subject: "infra/main.tf",
+        suite: "infra/tests/main.tftest.hcl",
+        ..TOFU
+    };
+    let (root, bin) = native_repo(&NESTED, Mutant::Kill, "initialised");
+    let stub = native_stub(&NESTED).replacen(
+        "state=pass\n",
+        "case \"$1\" in init) [ \"$2\" = -backend=false ] && mkdir -p .terraform; exit 0 ;; esac\n\
+         state=pass\n\
+         if [ ! -d .terraform ]; then tail -n +2 \"$(dirname \"$0\")/error\"; exit 1; fi\n",
+        1,
+    )
+    // The stub runs in the module's root, where the subject is `main.tf`.
+    .replace("'infra/main.tf'", "'main.tf'");
+    write_program(&bin, NESTED.arm, &stub);
+    let fixtures = common::at_root("crates/batten/tests/fixtures/mutate/tofu");
+    fs::copy(fixtures.join("error"), bin.join("error")).expect("stage the recorded error");
+    let (code, out, err) = sweep_with(&root, NESTED.subject, &bin);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(out.contains("every one caught"), "{out}");
+}
+
 #[cfg(unix)]
 #[test]
 fn a_kyverno_mutant_its_test_case_fails_on_is_caught() {
