@@ -14962,9 +14962,16 @@ fn lease_receipt_path(root: &Path, branch: &str) -> Option<std::path::PathBuf> {
     )
 }
 
+/// What a sweep narrowed to: the declared runner's gates, and the change they
+/// were narrowed against, if there was one.
+struct Narrowed {
+    names: Vec<String>,
+    change: Option<(String, std::collections::BTreeSet<String>)>,
+}
+
 /// The enforced set narrowed to what changed since `$MUTANT_CHANGED_SINCE`
-/// (CLOUD-2072), or `None` where the change touched no gate and that has been
-/// said on `out`.
+/// (CLOUD-2072), with the change itself so a registered runner can judge its
+/// own half (CLOUD-1746).
 ///
 /// Could-not-look WIDENS, as `ci suites` does: a base that cannot be diffed
 /// sweeps the whole set, because a sweep that is too wide shows up in the bill
@@ -14978,11 +14985,14 @@ fn lease_receipt_path(root: &Path, branch: &str) -> Option<std::path::PathBuf> {
 fn narrow_to_change(
     root: &Path,
     names: Vec<String>,
-    out: &mut dyn Write,
+    registry: &mutate::Registry,
     err: &mut dyn Write,
-) -> Result<Option<Vec<String>>> {
+) -> Result<Narrowed> {
     let Some(base) = mutate::changed_since() else {
-        return Ok(Some(names));
+        return Ok(Narrowed {
+            names,
+            change: None,
+        });
     };
     let Ok(Some(delta)) = git::base_delta(root, &base, &[String::from("**")], false) else {
         writeln!(
@@ -14990,7 +15000,10 @@ fn narrow_to_change(
             "mutate sweep: sweeping every enforced gate — no {base} to compare against, so \
              the changed set is unknowable"
         )?;
-        return Ok(Some(names));
+        return Ok(Narrowed {
+            names,
+            change: None,
+        });
     };
     let changed: std::collections::BTreeSet<String> = delta
         .added
@@ -14999,23 +15012,89 @@ fn narrow_to_change(
         .chain(delta.deleted.iter())
         .cloned()
         .collect();
-    let narrowed = mutate::touched(root, &names, &changed);
-    let (gates, rows) = mutate::deferred_rust(root, &names, &changed);
-    if rows > 0 {
+    Ok(Narrowed {
+        names: mutate::touched(root, &names, &changed, registry),
+        change: Some((base, changed)),
+    })
+}
+
+/// `MUTANT_RUNNER=<id>`: run that registered runner over its half of the change,
+/// optionally one `$MUTANT_SHARD` of it, and report as the sweep does.
+fn run_registered_runner(
+    root: &Path,
+    id: &str,
+    registry: &mutate::Registry,
+    change: Option<(String, std::collections::BTreeSet<String>)>,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let Some(kind) =
+        mutate::RunnerKind::parse(id).filter(|kind| registry.registered().contains(kind))
+    else {
+        writeln!(
+            err,
+            "::error:: mutate: {} names `{id}`, which {} registers no source for",
+            mutate::RUNNER,
+            mutate::RUNNERS
+        )?;
+        return Ok(ExitCode::Usage);
+    };
+    let Some((base, changed)) = change else {
+        writeln!(
+            err,
+            "::error:: mutate: `{id}` judges a change, and {} names no base that resolves",
+            "MUTANT_CHANGED_SINCE"
+        )?;
+        return Ok(ExitCode::Internal);
+    };
+    let shard = std::env::var(mutate::SHARD)
+        .ok()
+        .filter(|shard| !shard.trim().is_empty());
+    let work = root.join("target").join("mutate");
+    std::fs::create_dir_all(&work)?;
+    let run = match mutate::run_registered(
+        root,
+        &base,
+        &changed,
+        registry,
+        kind,
+        shard.as_deref(),
+        work,
+    ) {
+        Ok(run) => run,
+        Err(reason) => {
+            writeln!(err, "::error:: mutate: {reason}")?;
+            return Ok(ExitCode::Internal);
+        }
+    };
+    for finding in &run.findings {
+        writeln!(out, "{finding}")?;
+    }
+    let sweep = mutate::Sweep {
+        findings: run.findings,
+        declared: run.mutants,
+        gates: run.sources,
+    };
+    let code = sweep.code();
+    if code == ExitCode::Success {
         writeln!(
             out,
-            "mutate sweep: {rows} Rust row(s) across {gates} changed gate(s) NOT swept — left \
-             to cargo-mutants, which no runner runs yet (CLOUD-1746)"
+            "mutate sweep: {} mutant(s) across {} changed source(s) by {id}{}, every one caught",
+            run.mutants,
+            run.sources,
+            shard
+                .map(|shard| format!(" (shard {shard})"))
+                .unwrap_or_default()
         )?;
-    }
-    if narrowed.is_empty() {
+    } else {
         writeln!(
-            out,
-            "mutate sweep: no enforced gate's source or suite changed since {base}"
+            err,
+            "::error:: mutate sweep: {} finding(s) from {id} over {} changed source(s)",
+            sweep.findings.len(),
+            run.sources
         )?;
-        return Ok(None);
     }
-    Ok(Some(narrowed))
+    Ok(code)
 }
 
 /// The committed `[mutate]` table `batten mutate` judges by, or the exit code a
@@ -15130,9 +15209,66 @@ fn run_mutate(
             Ok(ExitCode::Violation)
         }
         cli::MutateCommand::Sweep => {
-            let Some(names) = narrow_to_change(root, names, out, err)? else {
-                return Ok(ExitCode::Success);
+            let registry = match mutate::Registry::from_env() {
+                Ok(registry) => registry,
+                Err(reason) => {
+                    writeln!(err, "::error:: mutate: {reason}")?;
+                    return Ok(ExitCode::Usage);
+                }
             };
+            let narrowed = narrow_to_change(root, names, &registry, err)?;
+            if let Some(id) = std::env::var(mutate::RUNNER)
+                .ok()
+                .filter(|id| !id.trim().is_empty())
+            {
+                return run_registered_runner(
+                    root,
+                    id.trim(),
+                    &registry,
+                    narrowed.change,
+                    out,
+                    err,
+                );
+            }
+            // THE REGISTERED RUNNERS' HALF, NAMED AND RESOLVED HERE, RUN ELSEWHERE
+            // (CLOUD-1746). Each runner the registry names must answer in this
+            // tree, and the sources it owns in this change are counted, so the
+            // declared sweep below can never read as the whole verdict.
+            let absent = mutate::unresolvable(root, &registry);
+            for finding in &absent {
+                writeln!(out, "{finding}")?;
+            }
+            if let Some((_, changed)) = &narrowed.change {
+                for kind in registry.registered() {
+                    let owned = mutate::owned_changes(root, changed, &registry, kind);
+                    if !owned.is_empty() {
+                        writeln!(
+                            out,
+                            "mutate sweep: {} changed source(s) owned by {} — judged by `{}={}`",
+                            owned.len(),
+                            kind.id(),
+                            mutate::RUNNER,
+                            kind.id()
+                        )?;
+                    }
+                }
+            }
+            if !absent.is_empty() {
+                return Ok(ExitCode::Internal);
+            }
+            if narrowed.change.is_some() && narrowed.names.is_empty() {
+                let base = narrowed
+                    .change
+                    .as_ref()
+                    .map(|(base, _)| base.as_str())
+                    .unwrap_or_default();
+                writeln!(
+                    out,
+                    "mutate sweep: no enforced gate's source or suite changed since {base}"
+                )?;
+                return Ok(ExitCode::Success);
+            }
+            let names = narrowed.names;
             // The staged tree lives beside the build artefacts rather than in
             // the system temporary directory, and it PERSISTS between runs. Both
             // are the same economy: a declared suite can be a compiled tier, and
@@ -15142,7 +15278,7 @@ fn run_mutate(
             // still carries exactly the tracked bytes.
             let work = root.join("target").join("mutate");
             std::fs::create_dir_all(&work)?;
-            let sweep = match mutate::sweep(root, &names, work) {
+            let sweep = match mutate::sweep_owned(root, &names, work, &registry) {
                 Ok(sweep) => sweep,
                 Err(reason) => {
                     writeln!(err, "::error:: mutate: {reason}")?;
