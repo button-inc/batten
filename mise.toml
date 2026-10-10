@@ -255,11 +255,12 @@ zig = "0.16" # the linker for the macOS release build and the darwin-link gate: 
 # fewer is the failure this swap could hide, and it is asserted rather than
 # eyeballed.
 "github:nextest-rs/nextest" = "cargo-nextest-0.9.104"
-# The registered Rust mutation runner (CLOUD-1746). `github:` for nextest's
-# reason above: a checksummed release asset, never a compile per CI shard.
-# Measured 2026-10-10 on this workspace: about 40s a mutant, an incremental
-# build plus the source's declared suites.
-"github:sourcefrog/cargo-mutants" = "27.1.0"
+# The registered Rust mutation runner (CLOUD-1746). `cargo:`, not `github:`:
+# the 27.1.0 release publishes x86_64 assets only, so a release pin cannot lock
+# `linux-arm64` or `macos-arm64`, which `lock-complete` requires; the crate
+# builds from source on every platform. Measured 2026-10-10 on this workspace:
+# about 40s a mutant, an incremental build plus the source's declared suites.
+"cargo:cargo-mutants" = "27.1.0"
 # The binary-level SBOM's producer (CLOUD-263). `batten sbom` inventories the
 # repository at the tag; syft against a plain Rust binary recovers ZERO
 # rust-crate packages, because a Rust binary carries no dependency metadata unless

@@ -1148,6 +1148,7 @@ fn a_change_to_a_suite_sweeps_its_gate() {
 
 /// `sweep_since` with a runner registry declared, and optionally the registered
 /// runner to run instead of the declared one.
+#[cfg(unix)]
 fn sweep_registered(
     root: &Path,
     gates: &str,
@@ -1177,6 +1178,7 @@ fn sweep_registered(
 
 /// The Rust gate both cases below change: one row that can never apply, so a
 /// sweep that reaches it with the declared runner fails.
+#[cfg(unix)]
 fn rust_gate_repo(name: &str) -> PathBuf {
     let root = two_gate_repo(name);
     let rusty = "//MUTANT-SUITE tests/other.rs\n//MUTANT never-applies|s@^absent$@gone@|no_case\n";
