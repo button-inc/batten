@@ -1302,7 +1302,7 @@ pub fn run_registered(
     registry: &Registry,
     kind: RunnerKind,
     shard: Option<&str>,
-    work: PathBuf,
+    work: &Path,
 ) -> Result<Registered> {
     let mut result = Registered::default();
     for path in changed {
@@ -1340,7 +1340,7 @@ pub fn run_registered(
     if !diff.ok {
         bail!("mutate: `git diff {base}` failed, so the change cannot be named to cargo-mutants");
     }
-    let staged = Staged::new(root, work.clone())?;
+    let staged = Staged::new(root, work.to_path_buf())?;
     let runs = work.join("cargo-mutants");
     fs::create_dir_all(&runs)
         .with_context(|| format!("mutate: could not create {}", runs.display()))?;
@@ -1570,7 +1570,8 @@ fn tests_of(root: &Path, path: &str) -> Option<String> {
                 None => format!("kind(lib) & test(/^{}::/)", module.replace('/', "::")),
             },
         }
-    } else if let Some(test) = stem.strip_prefix("tests/") {
+    } else {
+        let test = stem.strip_prefix("tests/")?;
         match test.split_once('/') {
             None => format!("binary({test})"),
             Some((target, "main")) => format!("binary({target})"),
@@ -1581,8 +1582,6 @@ fn tests_of(root: &Path, path: &str) -> Option<String> {
                 )
             }
         }
-    } else {
-        return None;
     };
     Some(format!("(package({package}) & {term})"))
 }
@@ -3367,6 +3366,7 @@ fn engine_undeclared(root: &Path, censused: &BTreeMap<String, String>) -> usize 
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 
