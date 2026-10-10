@@ -1258,6 +1258,27 @@ fn a_registered_runner_over_a_source_no_target_compiles_cannot_look() {
     );
 }
 
+/// A WHOLE sweep with a runner registered still leaves that runner's rows alone:
+/// no change narrows anything here, so only the row filter keeps the declared
+/// runner off the Rust row it cannot apply.
+#[cfg(unix)]
+#[test]
+fn a_registered_runners_rows_are_never_swept_by_the_declared_runner() {
+    let root = rust_gate_repo("whole-rust-registered");
+    let answer = common::batten()
+        .args(["mutate", "sweep"])
+        .current_dir(&root)
+        .env("MUTANT_GATES", "toy,engine-rusty")
+        .env_remove("MUTANT_CHANGED_SINCE")
+        .env("MUTANT_TASKS", "mise.toml")
+        .env("MUTANT_RUNNERS", "cargo-mutants=crates/**/*.rs")
+        .env_remove("MUTANT_RUNNER")
+        .output()
+        .expect("run batten mutate");
+    let out = stdout(&answer);
+    assert!(!out.contains("never-applies"), "{out}{}", stderr(&answer));
+}
+
 /// An id no runner carries is a usage error, never an empty registry.
 #[cfg(unix)]
 #[test]
