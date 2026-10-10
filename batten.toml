@@ -10018,6 +10018,17 @@ path = ".github/workflows/release-plz.yml"
 reason = "ripsecrets reads the Actions secret expression inside the `GIT_CONFIG_KEY_0` insteadOf URL as an embedded credential; it is expanded by the runner from `secrets.*`, so nothing is committed. Re-check against the pinned scanner's next version."
 expires = "2026-11-14"
 
+# CLOUD-1746's admission matrix. A job is steps, and a step that runs a task is
+# a `run:` line: the `mutants` job adds two, the base fetch `bats` already
+# spells and the one `mise run mutant:changed` that hands the work to the
+# engine. No action or reusable workflow runs a mise task, so there is no
+# shell-free spelling. `base = "origin/main"` floors the count on landing.
+[[waiver]]
+rule = "shell write other"
+path = ".github/workflows/ci.yml"
+reason = "CLOUD-1746's `mutants` matrix: two `run:` lines, a base fetch and one `mise run mutant:changed`, the engine doing the work; no action runs a mise task, so no shell-free spelling exists. Floors on landing."
+expires = "2026-11-14"
+
 # CLOUD-1265's producer task, taken through the second of the two dispositions
 # `inline-task-bodies-not-growing`'s own `no_fix_reason` names — "migrate the
 # predicate onto a rule kind, or waive the increase deliberately with a reason and
@@ -12140,7 +12151,9 @@ expires = "2027-02-28"
 [[hook.handler]]
 id = "filed-row-settled"
 on = "pre-tool"
-run = ["mise", "run", "-q", "filed-here:guard"]
+# `MISE_TASK_TIMINGS=0` because this checkout turns `task.timings` on, and mise
+# writes the timing line to stderr, which the door reads as a refusal's reason.
+run = ["env", "MISE_TASK_TIMINGS=0", "mise", "run", "-q", "filed-here:guard"]
 matcher = "^(Edit|Write|MultiEdit|NotebookEdit)$"
 timeout_ms = 10000
 owner = "CLOUD-514"

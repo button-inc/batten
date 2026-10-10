@@ -400,7 +400,7 @@ _.path = ["target/release"]
 # alone — the fan-in. This roster is what `ci-wait` WAITS ON before landing, and
 # waiting only on `final` would strand every landing on a check that fans in from
 # eighteen. Two sets, two purposes; neither derives the other.
-CI_REQUIRED_CHECKS = "ci,batten-check,bats,cross,musl,commit-lint,zizmor,darwin-link (aarch64-apple-darwin),darwin-link (x86_64-apple-darwin),semver,perf,windows,macos,final,action (ubuntu-latest),action (macos-latest),action (windows-latest),action-violation,action-deny,action-usage,action-internal (ubuntu-latest),action-internal (macos-latest),action-final"
+CI_REQUIRED_CHECKS = "ci,batten-check,bats,mutants (0),mutants (1),mutants (2),mutants (3),mutants (4),mutants (5),mutants (6),mutants (7),mutants (8),mutants (9),mutants (10),mutants (11),mutants (12),mutants (13),mutants (14),mutants (15),cross,musl,commit-lint,zizmor,darwin-link (aarch64-apple-darwin),darwin-link (x86_64-apple-darwin),semver,perf,windows,macos,final,action (ubuntu-latest),action (macos-latest),action (windows-latest),action-violation,action-deny,action-usage,action-internal (ubuntu-latest),action-internal (macos-latest),action-final"
 
 # ─── THE LAP'S READY PHASE (CLOUD-1148) ───────────────────────────────────────
 #
@@ -1723,17 +1723,10 @@ description = "Gate: every enforced gate this branch touched since origin/main h
 #
 # THE RUNNER REGISTRY (CLOUD-1746). `MUTANT_RUNNERS` gives every Rust source to
 # cargo-mutants, so the declared runner here judges the Rego, Pkl and manifest
-# rows and resolves cargo-mutants; `mutant:changed:cargo` runs it, one CI shard
-# each. It is not run here: this branch's change measured 743 mutants at about
+# rows and resolves cargo-mutants; `ci.yml`'s `mutants` matrix runs this same
+# task with `MUTANT_RUNNER=cargo-mutants` and one `MUTANT_SHARD` each. It is not run here: this branch's change measured 743 mutants at about
 # 40s each, which a local gate cannot hold, and the owner ruled it a CI matrix.
 env = { MUTANT_CHANGED_SINCE = "origin/main", MUTANT_RUNNERS = "cargo-mutants=crates/**/*.rs" }
-run = "cargo run --quiet -p batten -- mutate sweep"
-
-[tasks."mutant:changed:cargo"]
-description = "Gate: cargo-mutants over the Rust sources this branch changed since origin/main, one MUTANT_SHARD of them (CLOUD-1746)"
-# The registered runner's half of `mutant:changed`, run by `ci.yml`'s `mutants`
-# matrix with `MUTANT_SHARD=<k>/<n>`; unset, it runs every mutant in one go.
-env = { MUTANT_CHANGED_SINCE = "origin/main", MUTANT_RUNNERS = "cargo-mutants=crates/**/*.rs", MUTANT_RUNNER = "cargo-mutants" }
 run = "cargo run --quiet -p batten -- mutate sweep"
 
 [tasks."mutant-census"]
@@ -1846,9 +1839,9 @@ run = "cargo run --quiet -p batten -- check --rule 'issue file other'"
 description = "The decision behind the filed-row-settled handler: refuse an edit while a row this branch filed is unrefined, over its diff, or left open"
 # The pinned `batten`, not `cargo run`: this runs before every Edit and Write, and
 # a build there is a turn-length stall. The row and module are this tree's either
-# way. Findings go to stderr because the handler door reads a refusal's reason
-# there and would take the first stderr line, the transcript notice, otherwise.
-run = "batten check --rule 'issue file other' -q 1>&2"
+# way. `-q` keeps stderr empty, so the handler door takes the finding on stdout
+# as the refusal's reason.
+run = "batten check --rule 'issue file other' -q"
 
 [tasks.claim-race]
 description = "Gate: no other OPEN pull request already claims a key this branch claims (asks the forge; pointer-only)"
