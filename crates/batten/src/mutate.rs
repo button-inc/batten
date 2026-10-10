@@ -1758,6 +1758,7 @@ fn spawn_arm(
     spawn(&arm.cwd, Program::Suite(program), args, env, bound)
 }
 
+//MUTANT tofu-arm-never-initialises|s@^        let _ = spawn(&module, Program::Suite("tofu"), &init, &env, build_bound());$@        let _ = (module, init);@|a_tofu_suite_is_initialised_before_it_runs
 /// Run a gate's suite against the staged tree, filtered to `want` where its
 /// harness can filter, and read the named case's own verdict back.
 ///
@@ -1795,7 +1796,6 @@ fn run_suite(staged: &Staged, root: &Path, suite: &Suite, want: &str) -> Selecti
         // remote one would ask for credentials. The staged tree persists, so
         // later inits find `.terraform/` in place. A failed init is left for the
         // timed run to report.
-        //MUTANT tofu-arm-never-initialises|s@^        let _ = spawn(&module, Program::Suite("tofu"), &init, &env, build_bound());$@        let _ = (module, init);@|a_tofu_suite_is_initialised_before_it_runs
         let module = dir.join(tofu_module(path).0);
         let init = ["init", "-backend=false", "-input=false", "-no-color"].map(String::from);
         let _ = spawn(&module, Program::Suite("tofu"), &init, &env, build_bound());
