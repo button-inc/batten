@@ -1411,9 +1411,11 @@ fn a_filed_row_naming_the_diff_is_pointed_at_under_its_real_row_id() {
         "issue CLOUD-1 2099-01-01T00:00:00Z ready 1,src/a.rs - 1,src/a.rs\n",
     )
     .expect("write the board record");
-    let stdout = stdout_of(&hook(&dir, &stop_payload("Done.", false)));
+    let output = hook(&dir, &stop_payload("Done.", false));
+    let stdout = stdout_of(&output);
     assert!(
         stdout.contains("issue file same") && stdout.contains("src/a.rs"),
-        "the filed row over this diff is pointed at on Stop: {stdout}"
+        "the filed row over this diff is pointed at on Stop: {stdout}\nstderr: {}",
+        String::from_utf8_lossy(&output.stderr)
     );
 }
