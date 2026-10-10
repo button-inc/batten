@@ -20031,7 +20031,7 @@ fn filed_here_rows(overrides: &Overrides, root: &Path) -> Option<(Vec<String>, V
     let publishers = policy::publishers_of(&bundles, FILED_OVER_OWN_DIFF);
     let selected: Vec<rules::Rule> = policy_rows
         .into_iter()
-        .filter(|declared| declared.id == "filed-here")
+        .filter(|declared| publishers.contains(declared.id.as_str()))
         .collect();
     if selected.is_empty() {
         return None;
