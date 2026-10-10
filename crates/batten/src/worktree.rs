@@ -220,10 +220,127 @@ impl AtRisk {
 /// Propagates a `git` failure. Not being inside a repository raises a
 /// [`crate::UsageError`] (→ exit `1`).
 pub fn land_target(repo: &Path, must_land_on: Option<&str>) -> Result<Option<String>> {
-    match must_land_on {
-        Some(declared) => Ok(Some(declared.to_owned())),
-        None => git::remote_default_branch(repo),
+    Ok(land_trunk(repo, must_land_on)?.map(|trunk| trunk.tracking))
+}
+
+/// The one line every caller prints when [`land_trunk`] answers `None`.
+///
+/// One spelling, because the remedy is the same wherever the trunk was needed:
+/// the consumer names it, or the clone records the remote's default. What it
+/// never says is `main` — a guess that resolves would answer about the wrong
+/// trunk silently (CLOUD-2188).
+pub const NO_TRUNK: &str = "no trunk: set `must_land_on`, or set the remote's HEAD \
+                            (`git remote set-head origin --auto`)";
+
+/// The trunk, in each spelling a reader needs (CLOUD-2188).
+///
+/// `land` fetches by the SHORT name, a receipt resolves the TRACKING ref, and a
+/// forge endpoint names the short one again. Each reader deriving these from one
+/// string of its own is how `main` came to be hardcoded in six places, so they
+/// are derived once, here.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct Trunk {
+    /// The remote the trunk lives on — `origin` unless a declaration names another.
+    pub remote: String,
+    /// `refs/remotes/<remote>/<short>`, the ref a local read resolves.
+    pub tracking: String,
+    /// The branch name on the remote, slashes included: `trunk`, `release/1.x`.
+    pub short: String,
+}
+
+/// The trunk work in `repo` lands on: the declared `must_land_on`, else the
+/// remote's recorded default branch — [`land_target`]'s ladder, in [`Trunk`]'s
+/// three spellings.
+///
+/// `None` is could-not-look, and every caller keeps the could-not-look path it
+/// already had, printing [`NO_TRUNK`]. It is never `main`: a repository whose
+/// trunk is `trunk` and which happens to carry a stale `origin/main` would
+/// otherwise be judged against the wrong branch with nothing said.
+///
+/// # Errors
+///
+/// Propagates a `git` failure reading the remotes or the remote's HEAD.
+//MUTANT-SUITE crates/batten/tests/it/trunk_name.rs
+//MUTANT trunk-name-falls-back-to-main|s@^            None => return Ok(None),$@            None => String::from("refs/remotes/origin/main"),@|an_unresolvable_trunk_is_refused_not_assumed
+//MUTANT must-land-on-ignored|s@^    let declared = match must_land_on {$@    let declared = match None::<\&str> {@|must_land_on_names_the_trunk_when_origin_head_is_unset
+pub fn land_trunk(repo: &Path, must_land_on: Option<&str>) -> Result<Option<Trunk>> {
+    let declared = match must_land_on {
+        Some(declared) => declared.to_owned(),
+        None => match git::remote_default_branch(repo)? {
+            Some(found) => found,
+            None => return Ok(None),
+        },
+    };
+    let remotes: Vec<String> = git::remotes(repo)?
+        .into_iter()
+        .map(|(name, _)| name)
+        .collect();
+    Ok(normalise(&declared, &remotes))
+}
+
+/// [`land_trunk`] with `must_land_on` read from the committed authority at
+/// `root` — for a verb that has no resolved config in hand.
+///
+/// Through [`crate::config::authority_site`] rather than a walk: `must_land_on`
+/// is an authority-only key, so no override layer could change the answer, and
+/// an absent `batten.toml` is the undeclared case rather than an error.
+///
+/// # Errors
+///
+/// Propagates a present `batten.toml` that will not load, and [`land_trunk`]'s.
+pub fn declared_trunk(root: &Path) -> Result<Option<Trunk>> {
+    let site = crate::config::authority_site(root, None);
+    let declared = if site.path.is_file() {
+        crate::config::load_site(&site)?.0.must_land_on
+    } else {
+        None
+    };
+    land_trunk(root, declared.as_deref())
+}
+
+/// One spelling of a trunk, in any of the four forms a consumer writes, as a
+/// [`Trunk`].
+///
+/// `b`, `<remote>/b`, `refs/remotes/<remote>/b` and `refs/heads/b`. The remote
+/// is the one named, else `origin` when it is configured, else the first
+/// configured remote — the order [`git::remote_default_branch`] reads in — else
+/// `origin`, so a clone with no remotes still names a ref that then fails to
+/// resolve, which is its caller's could-not-look. `land::short_ref` strips only
+/// `refs/heads/`, which is why this is a function of its own.
+///
+/// `None` only for a spelling that names no branch at all (`origin/`).
+fn normalise(declared: &str, remotes: &[String]) -> Option<Trunk> {
+    let fallback = match remotes.first() {
+        Some(first) if !remotes.iter().any(|name| name == "origin") => first.as_str(),
+        _ => "origin",
+    };
+    // A configured remote's prefix, longest first, so `up/stream` beats `up`.
+    let mut candidates: Vec<&str> = remotes.iter().map(String::as_str).collect();
+    candidates.push(fallback);
+    candidates.sort_by_key(|name| std::cmp::Reverse(name.len()));
+    let named = |rest: &str| {
+        candidates.iter().find_map(|remote| {
+            rest.strip_prefix(remote)
+                .and_then(|tail| tail.strip_prefix('/'))
+                .map(|short| ((*remote).to_owned(), short.to_owned()))
+        })
+    };
+    let (remote, short) = if let Some(rest) = declared.strip_prefix("refs/remotes/") {
+        named(rest)?
+    } else if let Some(short) = declared.strip_prefix("refs/heads/") {
+        (fallback.to_owned(), short.to_owned())
+    } else {
+        named(declared).unwrap_or_else(|| (fallback.to_owned(), declared.to_owned()))
+    };
+    if short.is_empty() {
+        return None;
     }
+    Some(Trunk {
+        tracking: format!("refs/remotes/{remote}/{short}"),
+        remote,
+        short,
+    })
 }
 
 /// Judge the work in `repo` against `must_land_on`.
@@ -317,6 +434,43 @@ mod tests {
             sha: "a".repeat(40),
             truncated,
         }
+    }
+
+    fn names(remotes: &[&str]) -> Vec<String> {
+        remotes.iter().map(|name| (*name).to_owned()).collect()
+    }
+
+    /// All four spellings of one trunk name the same three refs — the
+    /// discriminating half is `release/1.x`, whose LEAF is not the branch.
+    #[test]
+    fn every_spelling_of_a_trunk_normalises_to_one_trunk() {
+        let remotes = names(&["origin", "upstream"]);
+        for spelling in [
+            "trunk",
+            "origin/trunk",
+            "refs/remotes/origin/trunk",
+            "refs/heads/trunk",
+        ] {
+            let trunk = normalise(spelling, &remotes).expect(spelling);
+            assert_eq!(trunk.remote, "origin", "{spelling}");
+            assert_eq!(trunk.short, "trunk", "{spelling}");
+            assert_eq!(trunk.tracking, "refs/remotes/origin/trunk", "{spelling}");
+        }
+        let slashed = normalise("origin/release/1.x", &remotes).expect("slashed");
+        assert_eq!(slashed.short, "release/1.x");
+        let other = normalise("upstream/trunk", &remotes).expect("named remote");
+        assert_eq!(other.tracking, "refs/remotes/upstream/trunk");
+    }
+
+    /// No `origin` configured: the first remote is the default, as
+    /// `remote_default_branch` reads it; no remote at all still names `origin`.
+    #[test]
+    fn the_remote_falls_back_to_origin_then_the_first_configured() {
+        let trunk = normalise("trunk", &names(&["fork"])).expect("first remote");
+        assert_eq!(trunk.tracking, "refs/remotes/fork/trunk");
+        let bare = normalise("origin/trunk", &[]).expect("no remotes");
+        assert_eq!(bare.tracking, "refs/remotes/origin/trunk");
+        assert_eq!(normalise("origin/", &names(&["origin"])), None);
     }
 
     #[test]

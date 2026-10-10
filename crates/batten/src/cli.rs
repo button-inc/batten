@@ -768,8 +768,8 @@ pub enum SingletonCommand {
 pub enum LandCommand {
     /// Advance the base and replay this branch onto it, recording the outcome.
     Replay {
-        /// The remote reference to replay onto, e.g. `refs/heads/main`.
-        reference: String,
+        /// The remote reference to replay onto; `None` is the declared trunk.
+        reference: Option<String>,
         /// Paths whose conflict is resolved in the WORKTREE (CLOUD-1586).
         ///
         /// **On this verb and never on `lap`.** A lap runs unattended, so a
@@ -785,8 +785,9 @@ pub enum LandCommand {
     /// Ask whether this head is green and whether its base still holds, and act
     /// on whichever answers first.
     Wait {
-        /// The remote reference whose movement makes this head stale.
-        reference: String,
+        /// The remote reference whose movement makes this head stale; `None` is
+        /// the declared trunk.
+        reference: Option<String>,
     },
     /// Push this branch to its own ref under receive-pack's compare-and-swap.
     ///
@@ -827,8 +828,8 @@ pub enum LandCommand {
     /// cost without the rebase that earns it. Measured on the predecessor, trunk
     /// advanced 27 commits during one hand-run `verify`.
     Lap {
-        /// The remote reference this lap lands onto, e.g. `refs/heads/main`.
-        reference: String,
+        /// The remote reference this lap lands onto; `None` is the declared trunk.
+        reference: Option<String>,
     },
     /// Is this head built on the CURRENT tip of the reference, so its pull
     /// request can fast-forward-land (CLOUD-1991)?
@@ -837,8 +838,9 @@ pub enum LandCommand {
     /// `linear-check` task body asked in shell — fetch the trunk, compare the
     /// merge base — asked through the fetch a lap already makes.
     Linear {
-        /// The remote reference the head must be built on, e.g. `main`.
-        reference: String,
+        /// The remote reference the head must be built on; `None` is the declared
+        /// trunk.
+        reference: Option<String>,
     },
 }
 
@@ -1008,7 +1010,7 @@ pub enum ChecksCommand {
 pub enum LandedCommand {
     /// Sweep a board for columns that contradict git and the forge.
     Check {
-        /// `<CLOUD-id>` lines a commit on `origin/main` CLOSES.
+        /// `<CLOUD-id>` lines a commit on the trunk CLOSES.
         ///
         /// The first arm of the landedness disjunction, and the one this verb
         /// shipped unable to receive (CLOUD-1458). The caller runs
@@ -1044,7 +1046,7 @@ pub enum LandedCommand {
     /// comment gives: the crate has no `repr`, so a shifted discriminant is a
     /// break `batten semver check` reads as one.
     Abandoned {
-        /// `<CLOUD-id>` lines a commit on `origin/main` CLOSES.
+        /// `<CLOUD-id>` lines a commit on the trunk CLOSES.
         claimed: Option<String>,
         /// `<CLOUD-id><TAB><pr-number>` lines, one per key a MERGED PR closed.
         merged_prs: Option<String>,
@@ -1156,7 +1158,7 @@ pub enum ClaimCommand {
 pub enum SemverCommand {
     /// Compare this branch's public API against a baseline.
     Check {
-        /// The rev to measure against. `None` is `origin/main`.
+        /// The rev to measure against. `None` is the declared trunk.
         baseline: Option<String>,
         /// The bump being claimed. `None` is `patch`, which is the honest claim
         /// below `0.1.0` because release-plz bumps the patch whatever the commit
@@ -2025,7 +2027,7 @@ pub enum ReceiptCommand {
         /// The check whose conclusion is being recorded.
         check: String,
     },
-    /// Judge the named check's recorded receipt against HEAD and origin/main.
+    /// Judge the named check's recorded receipt against HEAD and the trunk.
     Status {
         /// The check whose receipt is judged.
         check: String,
@@ -2778,10 +2780,11 @@ fn worktree_of(matches: &ArgMatches) -> Option<WorktreeCommand> {
 
 /// `land`'s four sub-verbs, read the way [`lease_of`] reads its own.
 ///
-/// The two positionals are `required` on their surface rows, so `clap` refuses an
-/// absent one before this runs and the defaults below are unreachable — which
-/// matters here for the reason it matters there: an empty reference would be
-/// replayed against, rather than reported as unanswerable.
+/// The reference is OPTIONAL since CLOUD-2188: absent, the verb lands onto the
+/// declared trunk (`must_land_on`, else the remote's default branch), so a
+/// consumer's task carries no `main` to copy. An EMPTY reference is `None` too —
+/// a task that forwards an unset argument hands over `""`, and an empty
+/// reference would be replayed against rather than resolved.
 ///
 /// `push` and `verify` take none, each for its own reason recorded on the
 /// variant.
@@ -2789,8 +2792,8 @@ fn land_of(matches: &ArgMatches) -> Option<LandCommand> {
     let reference_of = |matches: &ArgMatches| {
         matches
             .get_one::<String>("reference")
+            .filter(|named| !named.is_empty())
             .cloned()
-            .unwrap_or_default()
     };
     match matches.subcommand()? {
         ("replay", matches) => Some(LandCommand::Replay {

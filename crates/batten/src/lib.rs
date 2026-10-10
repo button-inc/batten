@@ -5658,6 +5658,34 @@ fn refuse_claim_bot(err: &mut dyn Write, text: &str) -> Result<ExitCode> {
     Ok(ExitCode::Violation)
 }
 
+/// The trunk tip a claim receipt records as its base (CLOUD-2188).
+///
+/// Both claim verbs read `origin/main` by name and `.ok().flatten()`ed the
+/// miss, so on a repository whose trunk is `trunk` they minted a receipt with
+/// NO base — which the receipt's own currency check reads as "minted against
+/// nothing", a fail-open. A trunk that cannot be named, or names a ref that
+/// does not resolve, is could-not-look instead, and no receipt is minted.
+///
+/// # Errors
+///
+/// [`UsageError`] carrying [`worktree::NO_TRUNK`], or naming the unresolved
+/// ref; a broken `batten.toml` propagates.
+fn claim_base(repo: &Path, verb: &str) -> Result<String> {
+    let Some(trunk) = worktree::declared_trunk(repo)? else {
+        return Err(UsageError::raise(format!(
+            "{verb}: {} — no receipt minted",
+            worktree::NO_TRUNK
+        )));
+    };
+    git::resolve_ref(repo, &trunk.tracking)?.ok_or_else(|| {
+        UsageError::raise(format!(
+            "{verb}: the trunk {} does not resolve, so the receipt has no base to record — \
+             fetch it; no receipt minted",
+            trunk.tracking
+        ))
+    })
+}
+
 /// `batten claim bot`: attest a bot branch from the lane's public facts.
 ///
 /// THE SECOND RECEIPT KIND, AND IT IS SECOND BECAUSE THE TWO ATTEST DIFFERENT
@@ -5744,7 +5772,11 @@ fn run_claim_keys(
         let Some(head) = git::current_branch(repo).ok().flatten() else {
             return Ok(ExitCode::Success);
         };
-        (head, race::authored_log(repo, "origin/main"))
+        // THE DECLARED TRUNK, never `origin/main` (CLOUD-2188). An unresolvable
+        // one reads no authored commits, the same empty log a missing ref gave.
+        let trunk = worktree::declared_trunk(repo).ok().flatten();
+        let base = trunk.as_ref().map_or("", |trunk| trunk.tracking.as_str());
+        (head, race::authored_log(repo, base))
     };
     let grammar = board_grammar(overrides)?;
 
@@ -5990,12 +6022,12 @@ fn run_claim_bot(
         pr: number,
     };
     let receipts = git::git_dir(repo)?.join("batten-receipts");
-    let base = git::resolve_ref(repo, "origin/main").ok().flatten();
+    let base = claim_base(repo, "claim bot")?;
     bot::mint(
         &receipts,
         &branch,
         &attested,
-        base.as_deref(),
+        Some(base.as_str()),
         &receipt::rfc3339_utc(now_unix()),
     )?;
     output::message(
@@ -6702,14 +6734,14 @@ fn run_claim_check(
     // stands and only the side effect is skipped: a caller inspecting the board
     // from anywhere still deserves the answer.
     if let (Some(receipts), Ok(Some(branch))) = (receipts.as_deref(), git::current_branch(repo)) {
-        let base = git::resolve_ref(repo, "origin/main").ok().flatten();
+        let base = claim_base(repo, "claim check")?;
         claim::mint(
             receipts,
             &branch,
             &issues,
             &verdict,
             request,
-            base.as_deref(),
+            Some(base.as_str()),
             &receipt::rfc3339_utc(now_unix()),
         )?;
     }
@@ -6775,11 +6807,17 @@ fn run_claim_carry(
             "claim carry: a detached HEAD carries no branch to key a receipt to".to_owned(),
         ));
     };
-    let Some(base) = git::merge_base(repo, "origin/main")? else {
-        return Err(UsageError::raise(
-            "claim carry: no merge base with origin/main, so there is nothing to carry against"
-                .to_owned(),
-        ));
+    let Some(trunk) = worktree::declared_trunk(repo)? else {
+        return Err(UsageError::raise(format!(
+            "claim carry: {}",
+            worktree::NO_TRUNK
+        )));
+    };
+    let Some(base) = git::merge_base(repo, &trunk.tracking)? else {
+        return Err(UsageError::raise(format!(
+            "claim carry: no merge base with {}, so there is nothing to carry against",
+            trunk.tracking
+        )));
     };
 
     // The table on each side. An absent base copy reads as empty, which the
@@ -9590,7 +9628,10 @@ fn run_land(
             let Some(url) = land_remote(root, err)? else {
                 return Ok(ExitCode::Internal);
             };
-            run_land_replay(root, &url, reference, &branch, resolve, *propose, out)
+            let Some(reference) = land_reference(root, reference.as_deref(), err)? else {
+                return Ok(ExitCode::Internal);
+            };
+            run_land_replay(root, &url, &reference, &branch, resolve, *propose, out)
         }
         // NO REMOTE RESOLVED HERE ANY MORE. The staleness arm asks the FORGE
         // through its conditional endpoint rather than the git remote, so this
@@ -9599,7 +9640,10 @@ fn run_land(
         // The verdict is the LAP's to read; a hand-driven wait reports the code
         // and nothing else, exactly as it did before the tap needed one.
         cli::LandCommand::Wait { reference } => {
-            run_land_wait(root, reference, &branch, false, out, err).map(|(code, _, _)| code)
+            let Some(reference) = land_reference(root, reference.as_deref(), err)? else {
+                return Ok(ExitCode::Internal);
+            };
+            run_land_wait(root, &reference, &branch, false, out, err).map(|(code, _, _)| code)
         }
         cli::LandCommand::Push => {
             let Some(url) = land_remote(root, err)? else {
@@ -9611,13 +9655,44 @@ fn run_land(
             let Some(url) = land_remote(root, err)? else {
                 return Ok(ExitCode::Internal);
             };
-            run_land_lap(root, &url, reference, &branch, out, err)
+            let Some(reference) = land_reference(root, reference.as_deref(), err)? else {
+                return Ok(ExitCode::Internal);
+            };
+            run_land_lap(root, &url, &reference, &branch, out, err)
         }
         cli::LandCommand::Linear { reference } => {
             let Some(url) = land_remote(root, err)? else {
                 return Ok(ExitCode::Internal);
             };
-            run_land_linear(root, &url, reference, out, err)
+            let Some(reference) = land_reference(root, reference.as_deref(), err)? else {
+                return Ok(ExitCode::Internal);
+            };
+            run_land_linear(root, &url, &reference, out, err)
+        }
+    }
+}
+
+/// The reference a ref-shaped `land` arm lands onto: the one named, else the
+/// declared trunk's SHORT name (CLOUD-2188) — the spelling `land::tracking_ref`
+/// and the forge endpoint both take, so a defaulted run and one handed `main`
+/// read identically.
+///
+/// `None` is could-not-look, on `land_remote`'s shape: the line is written
+/// here and the arm answers `3`. Never `main`.
+///
+/// # Errors
+///
+/// A write failure, or a present `batten.toml` that will not load.
+fn land_reference(root: &Path, named: Option<&str>, err: &mut dyn Write) -> Result<Option<String>> {
+    if let Some(named) = named {
+        return Ok(Some(named.to_owned()));
+    }
+    let authority = git::worktree_root(root).unwrap_or_else(|_| root.to_path_buf());
+    match worktree::declared_trunk(&authority)? {
+        Some(trunk) => Ok(Some(trunk.short)),
+        None => {
+            writeln!(err, "::error:: land: {}", worktree::NO_TRUNK)?;
+            Ok(None)
         }
     }
 }
@@ -12113,11 +12188,11 @@ fn run_land_verify(
     // FAIL OPEN TO THE UNRACED GATE, never to a refusal. A clone whose slug this
     // engine cannot read has no forge to watch, so the honest answer is the gate
     // alone — the same reading `base_moved` takes for the same missing fact.
-    let raced = repo_slug(root).map(|slug| trunk_watch(reference.unwrap_or("main"), "", &slug, 1));
-    let trunk = match (raced.as_ref(), reference) {
-        (Some(trunk), Some(reference)) => Some((trunk, reference)),
-        _ => None,
-    };
+    // NO REFERENCE, NO RACE — and no `main` guessed to watch either: the watch
+    // was always discarded without one (CLOUD-2188).
+    let raced = reference
+        .and_then(|reference| repo_slug(root).map(|slug| trunk_watch(reference, "", &slug, 1)));
+    let trunk = raced.as_ref().zip(reference);
     let prune_rules = resolve::resolve(root, &Overrides::default())
         .ok()
         .and_then(|resolved| resolved.prune);
@@ -12545,8 +12620,30 @@ fn lease_staleness(
     let paths = lease_config(root, overrides)
         .map(|lease| lease.landing_paths)
         .unwrap_or_default();
-    let trunk = std::env::var("LEASE_TRUNK").unwrap_or_else(|_| String::from("main"));
-    lease::carries(repo, &trunk, head, &paths)
+    lease_trunk(root).map_or_else(no_lease_trunk, |trunk| {
+        lease::carries(repo, &trunk, head, &paths)
+    })
+}
+
+/// The trunk a lease reading compares against, by its SHORT name — the forge
+/// endpoint's spelling: `$LEASE_TRUNK`, else the declared trunk (CLOUD-2188).
+///
+/// `None` is never `main`. Both readers turn it into [`no_lease_trunk`], which
+/// is could-not-look, which is exit `3`, which the caller reads as run — the
+/// direction this gate already takes for every reading it cannot make.
+fn lease_trunk(root: &Path) -> Option<String> {
+    std::env::var("LEASE_TRUNK").ok().or_else(|| {
+        worktree::declared_trunk(root)
+            .ok()
+            .flatten()
+            .map(|trunk| trunk.short)
+    })
+}
+
+fn no_lease_trunk() -> lease::Carries {
+    lease::Carries::Unknown {
+        because: worktree::NO_TRUNK.to_owned(),
+    }
 }
 
 /// `batten lease carries` (CLOUD-1148 §2): does this head carry the landing
@@ -12585,9 +12682,13 @@ fn run_lease_carries(
         .map(|lease| lease.landing_paths)
         .unwrap_or_default();
     let repo = repo_or_placeholder(root);
-    let trunk = std::env::var("LEASE_TRUNK").unwrap_or_else(|_| String::from("main"));
+    let trunk = lease_trunk(root);
+    let reading = trunk.as_deref().map_or_else(no_lease_trunk, |trunk| {
+        lease::carries(&repo, trunk, head, &paths)
+    });
+    let trunk = trunk.unwrap_or_default();
 
-    match lease::carries(&repo, &trunk, head, &paths) {
+    match reading {
         lease::Carries::Current => {
             writeln!(
                 out,
@@ -14991,7 +15092,24 @@ fn run_semver_check(
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
     let root = &hook_authority_root();
-    let baseline = baseline.unwrap_or("origin/main");
+    // The declared trunk when no rev is named (CLOUD-2188), and the same
+    // checkout-problem answer as a missing toolchain when none resolves.
+    let trunk = match baseline {
+        Some(named) => named.to_owned(),
+        None => match worktree::declared_trunk(root)? {
+            Some(trunk) => trunk.tracking,
+            None => {
+                output::message(
+                    mode,
+                    Verbosity::Normal,
+                    err,
+                    &format!("semver: {}", worktree::NO_TRUNK),
+                )?;
+                return Ok(ExitCode::Usage);
+            }
+        },
+    };
+    let baseline = trunk.as_str();
     let release_type = release_type.unwrap_or("patch");
     let package = package.unwrap_or("batten");
     let Some(toolchain) = semver::toolchain(root) else {
@@ -21576,7 +21694,7 @@ fn register_completion(
     // fail a scan whose verdict never depended on it.
     let landing = match signal {
         None => None,
-        Some(_) => match resolve_landing_target(repo, config)? {
+        Some(_) => match worktree::land_target(repo, config.must_land_on.as_deref())? {
             Some(target) => Some((
                 git::landing(repo, &target, "HEAD", git::Window::DEFAULT)?,
                 target,
@@ -21746,21 +21864,6 @@ fn register_bypass(
         )?;
     }
     Ok(())
-}
-
-/// The ref landedness is judged against: the declared key, else the remote's
-/// recorded default.
-///
-/// The same ladder [`worktree::status`] walks, and deliberately the same one
-/// rather than a second: `must_land_on` is the one key that names a landing
-/// target, and a detector that resolved its own would be a second authority on
-/// where work is supposed to go. `None` is "nobody could ask", which the caller
-/// reads as not-computable and never as landed.
-fn resolve_landing_target(repo: &Path, config: &resolve::Resolved) -> Result<Option<String>> {
-    match config.must_land_on.as_deref() {
-        Some(declared) => Ok(Some(declared.to_owned())),
-        None => git::remote_default_branch(repo),
-    }
 }
 
 /// The human half of the transcript report, for both states that could not be

@@ -240,7 +240,8 @@ impl Problem {
 
 /// The revisions the append-only half compares against.
 ///
-/// `HEAD` plus the remote's recorded default branch when both resolve. **Two
+/// `HEAD` plus the trunk (`must_land_on`, else the remote's recorded default
+/// branch) when both resolve. **Two
 /// bases, not one**, because either alone has a hole: `HEAD` alone passes a
 /// branch that rewrote a row and committed it, and the remote default alone
 /// passes a working tree that rewrote a row the branch already committed.
@@ -254,8 +255,12 @@ fn bases(repo: &Path) -> Result<Vec<String>> {
     if crate::git::resolve_ref(repo, "HEAD")?.is_some() {
         bases.push("HEAD".to_owned());
     }
-    if let Some(reference) = crate::git::remote_default_branch(repo)? {
-        bases.push(reference);
+    // The declared trunk, through the one resolver (CLOUD-2188) — and dropped
+    // when it does not resolve, as the doc above promises.
+    if let Some(trunk) = crate::worktree::declared_trunk(repo)?
+        && crate::git::resolve_ref(repo, &trunk.tracking)?.is_some()
+    {
+        bases.push(trunk.tracking);
     }
     Ok(bases)
 }

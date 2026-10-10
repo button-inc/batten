@@ -86,8 +86,6 @@ const RUNS_VAR: &str = "BENCH_RUNS";
 const WARMUP_VAR: &str = "BENCH_WARMUP";
 const OUT_DIR_VAR: &str = "BENCH_OUT_DIR";
 
-const DEFAULT_BASE_REF: &str = "origin/main";
-
 /// The sample size, **measured against this comparison's own null** (CLOUD-1803).
 ///
 /// [`REGRESSION_RATIO`] records the 2026-08-11 null — 100 runs after 10 warmups,
@@ -398,7 +396,13 @@ pub fn pair(repo: &Path, options: Options) -> Result<Outcome> {
         .with_context(|| format!("perf-pair: could not resolve {}", repo.display()))?;
 
     let head_sha = crate::git::head_commit(repo)?;
-    let base_ref = env_or(BASE_REF_VAR, DEFAULT_BASE_REF);
+    // `$BENCH_BASE_REF`, else the declared trunk — never `origin/main` by name
+    // (CLOUD-2188). No trunk is could-not-look, which this gate already answers
+    // for every setup failure rather than measuring against the wrong base.
+    let base_ref = match std::env::var(BASE_REF_VAR) {
+        Ok(named) => named,
+        Err(_) => trunk(repo, "perf-pair")?.tracking,
+    };
 
     let base_sha = if options.null {
         head_sha.clone()
@@ -473,6 +477,12 @@ fn changed_between(repo: &Path, base: &str) -> Result<BTreeSet<String>> {
         .chain(delta.edited)
         .chain(delta.deleted)
         .collect())
+}
+
+/// The declared trunk, or the could-not-look naming why there is none.
+fn trunk(repo: &Path, verb: &str) -> Result<crate::worktree::Trunk> {
+    crate::worktree::declared_trunk(repo)?
+        .ok_or_else(|| UsageError::raise(format!("{verb}: {}", crate::worktree::NO_TRUNK)))
 }
 
 fn env_or(var: &str, fallback: &str) -> String {
@@ -1440,7 +1450,7 @@ const RUNNER_VAR: &str = "BENCH_RUNNER";
 
 /// Whether a measurement may be recorded from this checkout.
 ///
-/// # MAIN ONLY, and this is a refusal rather than a convention
+/// # TRUNK ONLY, and this is a refusal rather than a convention
 ///
 /// A branch's numbers are not the trunk's: a branch may be mid-rebase, carrying
 /// unlanded work, or built from a different base entirely, and a series mixing
@@ -1449,9 +1459,13 @@ const RUNNER_VAR: &str = "BENCH_RUNNER";
 ///
 /// # Errors
 ///
-/// A checkout whose branch cannot be resolved.
+/// A checkout whose branch cannot be resolved, or with no trunk to compare it to.
 pub fn on_trunk(repo: &Path) -> Result<Option<String>> {
-    let trunk = env_or(TRUNK_VAR, "main");
+    // `$BENCH_TRUNK`, else the declared trunk's short name (CLOUD-2188).
+    let trunk = match std::env::var(TRUNK_VAR) {
+        Ok(named) => named,
+        Err(_) => trunk(repo, "perf record")?.short,
+    };
     let branch = crate::git::current_branch(repo)?;
     Ok(match branch {
         Some(ref name) if *name == trunk => None,

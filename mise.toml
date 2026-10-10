@@ -4216,18 +4216,21 @@ run = "cargo run --quiet -p batten -- receipt verified"
 # codes pass straight through and a wrapper case statement would be a second
 # authority over them.
 #
-# THE BASE IS A POSITIONAL WITH A DEFAULT, because `batten land lap` requires one
-# and the predecessor read `origin/main` throughout. The default is spelled here
-# rather than compiled in: which ref is trunk is this repository's own fact, and
-# `crates/batten` refusing to guess it is non-negotiable rule 1 (see
-# `run_land_fast_forward`'s `$LAND_WORKFLOW` refusal for the same shape).
+# THE BASE IS AN OPTIONAL POSITIONAL WITH NO TRUNK IN IT (CLOUD-2188). It
+# defaulted to `main` here because `batten land lap` once required one; a
+# consumer copying this task copied the `main`, and a repository whose trunk is
+# `trunk` could not land. Unnamed, the verb lands onto the DECLARED trunk —
+# `must_land_on` in `batten.toml`, else the remote's default branch — so which
+# ref is trunk stays this repository's own fact without being spelled twice.
+# The empty default is the verb's "unnamed": it reads an empty reference as
+# none rather than as a ref.
 #
 # DECLARED IN `usage`, NOT CALLED AS A TEMPLATE FUNCTION (CLOUD-1991): the inline
 # `arg(...)` call made the body read as shell, and the usage spec declares the
-# same optional positional with the same default, which mise then binds.
+# same optional positional, which mise then binds.
 [tasks.land]
 description = "Land this branch's PR: rebase, verify, push, wait for CI, /fast-forward — lapping until it merges or a rebase conflicts"
-usage = 'arg "[reference]" default="main" help="the trunk to land onto"'
+usage = 'arg "[reference]" default="" help="the trunk to land onto (default: the declared trunk)"'
 run = 'cargo run --quiet -p batten -- land lap "{{usage.reference}}"'
 
 # Is HEAD linear on the CURRENT origin/main, so the PR can fast-forward-land?
@@ -4256,7 +4259,7 @@ description = "Gate: HEAD is linear on the current origin/main, so the PR can fa
 # will not write fails the task — the two properties the body's `set -uo
 # pipefail` and `|| { …; exit 1; }` were carrying.
 run = [
-  "cargo run --quiet -p batten -- land linear main",
+  "cargo run --quiet -p batten -- land linear",
   "cargo run --quiet -p batten -- receipt record linear-check",
 ]
 

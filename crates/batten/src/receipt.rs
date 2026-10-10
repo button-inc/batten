@@ -432,7 +432,8 @@ pub fn validity(
 struct RepoFacts {
     /// Full SHA of HEAD.
     head: String,
-    /// Full SHA of the local `origin/main` ref.
+    /// Full SHA of the local trunk's tracking ref (`must_land_on`, else the
+    /// remote's default branch).
     main: String,
     /// The absolute git dir — per-worktree by construction.
     git_dir: String,
@@ -459,13 +460,26 @@ fn repo_facts() -> Result<RepoFacts> {
     let head = git::head_commit(Path::new(".")).map_err(|_| {
         UsageError::raise("HEAD does not resolve, so there is no commit to key a receipt to")
     })?;
+    // THE DECLARED TRUNK, NEVER `origin/main` BY NAME (CLOUD-2188, CLOUD-1795):
+    // a consumer whose trunk is `trunk` had every head refused here. Read from
+    // the WORKING TREE's committed authority, for the reason `run_verified`
+    // records at length — config is the working tree's, state the repository's.
+    let authority =
+        git::worktree_root(Path::new(".")).unwrap_or_else(|_| std::path::PathBuf::from(&repo_root));
+    let trunk = crate::worktree::declared_trunk(&authority)?.ok_or_else(|| {
+        UsageError::raise(format!(
+            "{}, so currency cannot be judged. This is a checkout problem, not a verification failure",
+            crate::worktree::NO_TRUNK
+        ))
+    })?;
     // `resolve_ref` answers `None` for a ref that is simply not there, and this
-    // caller owes that case its own reading (CLOUD-51): a missing `origin/main`
-    // is a checkout that cannot be judged, never a checkout that is current.
-    let main = git::resolve_ref(Path::new("."), "origin/main")?.ok_or_else(|| {
-        UsageError::raise(
-            "origin/main does not resolve, so currency cannot be judged. This is a checkout problem, not a verification failure",
-        )
+    // caller owes that case its own reading (CLOUD-51): a missing trunk is a
+    // checkout that cannot be judged, never a checkout that is current.
+    let main = git::resolve_ref(Path::new("."), &trunk.tracking)?.ok_or_else(|| {
+        UsageError::raise(format!(
+            "{} does not resolve, so currency cannot be judged. This is a checkout problem, not a verification failure",
+            trunk.tracking
+        ))
     })?;
     Ok(RepoFacts {
         head,

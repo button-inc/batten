@@ -1271,7 +1271,7 @@ fn check_replay(
     report.findings.push(Finding {
         line: line_of(&grammar.gate_intro_line),
         rule: "deny-without-replay (a deny gate reports its firing rate first: replay the \
-               predicate over `git rev-list origin/main` and record commits examined, times \
+               predicate over `git rev-list <trunk>` and record commits examined, times \
                fired, and how many were false positives)"
             .to_owned(),
     });

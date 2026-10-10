@@ -650,7 +650,7 @@ const SEMVER_BASELINE: FlagDecl = FlagDecl {
     id: "baseline",
     long: Some("baseline"),
     short: None,
-    help: "The rev to measure the API delta against (default: origin/main)",
+    help: "The rev to measure the API delta against (default: the trunk (`must_land_on`, else the remote's default branch))",
     env: EnvDecl::None,
     global: false,
     positional: false,
@@ -781,7 +781,7 @@ const CONFIG_FROM: FlagDecl = FlagDecl {
     id: "config_from",
     long: Some("config-from"),
     short: None,
-    help: "Read the committed config from a git ref (e.g. origin/main) instead of the working tree",
+    help: "Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree",
     env: EnvDecl::Clap("BATTEN_CONFIG_FROM"),
     global: true,
     positional: false,
@@ -1802,15 +1802,19 @@ const LEASE_HEAD: FlagDecl = FlagDecl::positional("head", "The head commit being
 /// would be worse than one that cancelled none.
 const LEASE_RUN: FlagDecl = FlagDecl::positional("run", "The run to cancel on a stop");
 
-/// `<reference>`: the remote reference `land replay` replays onto.
+/// `<reference>`: the remote reference a `land` sub-verb lands onto.
 ///
-/// **Positional and REQUIRED, for [`LEASE_BRANCH`]'s reason and one more.**
-/// Defaulting to the remote's own default branch would make the verb guess which
-/// trunk this consumer lands on, and a wrong guess replays the branch onto the
-/// wrong base and mints a head nobody asked for — a write, not a report. The
-/// caller knows; the engine does not.
-const LAND_REFERENCE: FlagDecl =
-    FlagDecl::positional("reference", "The remote reference to replay onto");
+/// **OPTIONAL SINCE CLOUD-2188, AND STILL NEVER A GUESS.** It was required
+/// because a default would have made the verb guess the trunk, and a wrong guess
+/// replays onto the wrong base — a write, not a report. The required positional
+/// did not stop the guess; it moved it into every consumer's task as a copied
+/// `main`. Absent now, it is the DECLARED trunk — `must_land_on`, else the
+/// remote's recorded default branch, both read rather than assumed — and with
+/// neither the verb refuses with `worktree::NO_TRUNK` instead of picking one.
+const LAND_REFERENCE: FlagDecl = FlagDecl::positional_optional(
+    "reference",
+    "The remote reference to land onto (default: the trunk — `must_land_on`, else the remote's default branch)",
+);
 
 /// `--resolve <path>`: a path whose conflict the caller merged in the worktree.
 ///
@@ -2302,7 +2306,7 @@ const LANDED_BY: FlagDecl = FlagDecl {
 
 /// `--claimed <file>` on `landed check` (CLOUD-186, repaired by CLOUD-1458).
 ///
-/// The keys a commit reachable from `origin/main` CLOSES — claiming, never
+/// The keys a commit reachable from the trunk CLOSES — claiming, never
 /// merely mentioning. This is the first arm of the landedness disjunction, and
 /// the caller supplies it rather than the engine reading it, for the reason
 /// `mise-tasks/landed-check.sh` gives at its own call site: `claimed-keys` is
@@ -2376,7 +2380,7 @@ const CLAIMED: FlagDecl = FlagDecl {
     id: "claimed",
     long: Some("claimed"),
     short: None,
-    help: "`<CLOUD-id>` lines a commit on origin/main closes, from `claimed-keys --closing-only`",
+    help: "`<CLOUD-id>` lines a commit on the trunk (`must_land_on`, else the remote's default branch) closes, from `claimed-keys --closing-only`",
     env: EnvDecl::None,
     global: false,
     positional: false,
@@ -6178,7 +6182,7 @@ pub const SURFACE: &[CommandDecl] = &[
     CommandDecl {
         path: "receipt status",
         id: "receipt.status",
-        about: "Judge the named check's recorded receipt against HEAD and origin/main",
+        about: "Judge the named check's recorded receipt against HEAD and the trunk (`must_land_on`, else the remote's default branch)",
         data_channel: true,
         exits: EXITS_VERDICT,
         effect: Effect::Read,
