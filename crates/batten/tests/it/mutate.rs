@@ -1215,18 +1215,11 @@ fn a_change_to_a_rust_gate_is_judged_by_its_registered_runner() {
         !out.contains("never-applies"),
         "the declared runner reached a row cargo-mutants owns: {out}"
     );
-    // The runner is resolved here, not run: answered or absent, never silent.
-    if code == 0 {
-        assert!(
-            out.contains("no enforced gate's source or suite changed since HEAD"),
-            "{out}{err}"
-        );
-    } else {
-        assert!(
-            out.contains("cargo-mutants runner-absent"),
-            "{code} {out}{err}"
-        );
-    }
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(
+        out.contains("no enforced gate's source or suite changed since HEAD"),
+        "{out}{err}"
+    );
 }
 
 /// With no runner registered, the declared runner owns every source, Rust
