@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.212](https://github.com/button-inc/batten/compare/v0.0.211...v0.0.212) - 2026-10-10
+
+### Fixed
+
+- *(mutate)* declare the tofu init row at column zero
+- *(mutate)* initialise the staged tree before a tofu suite runs
+
 ## [0.0.211](https://github.com/button-inc/batten/compare/v0.0.210...v0.0.211) - 2026-10-10
 
 ### Added
