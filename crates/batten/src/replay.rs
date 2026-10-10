@@ -363,32 +363,47 @@ fn replay(
             said(outcome.as_ref())
         ),
     }
+    // ONE RUN, EVERY MODIFIED TEST (CLOUD-2090). A call per test rebuilt the
+    // spliced tree before each one, because a replayed case that spawns cargo
+    // leaves the shared target dir's fingerprints moved; measured 2026-10-10,
+    // 159 modified tests ran past a two-hour bound. One union filter builds once
+    // and each test is judged off its own result lines, so the verdicts are the
+    // ones the per-test calls gave.
+    let tests: Vec<&str> = splices
+        .values()
+        .flat_map(|(_, modified)| modified.iter().map(|test| test.inner.as_str()))
+        .collect();
+    if tests.is_empty() {
+        return Ok(Vec::new());
+    }
+    let filter = tests
+        .iter()
+        .map(|inner| format!("test(/(^|::){inner}$/)"))
+        .collect::<Vec<_>>()
+        .join(" | ");
+    let argv: Vec<String> = [
+        "cargo",
+        "nextest",
+        "run",
+        "--workspace",
+        "--no-fail-fast",
+        "--no-tests=fail",
+        "--color",
+        "never",
+        "-E",
+        &filter,
+    ]
+    .iter()
+    .map(|word| (*word).to_owned())
+    .collect();
+    // `piped_argv` because it runs the child IN `tree`: `run_in_env`'s root
+    // names only where a capture is stored, and the child inherits this
+    // process's directory — the checkout, whose HEAD test passes.
+    let outcome =
+        crate::exec::piped_argv(&tree, &argv, "", crate::exec::Diagnostics::Keep, &published);
     let mut findings = Vec::new();
     for (path, (_, modified)) in splices {
         for test in modified {
-            let filter = format!("test(/(^|::){}$/)", test.inner);
-            let argv: Vec<String> = [
-                "cargo",
-                "nextest",
-                "run",
-                "--workspace",
-                "--no-tests=fail",
-                "-E",
-                &filter,
-            ]
-            .iter()
-            .map(|word| (*word).to_owned())
-            .collect();
-            // `piped_argv` because it runs the child IN `tree`: `run_in_env`'s
-            // root names only where a capture is stored, and the child inherits
-            // this process's directory — the checkout, whose HEAD test passes.
-            let outcome = crate::exec::piped_argv(
-                &tree,
-                &argv,
-                "",
-                crate::exec::Diagnostics::Keep,
-                &published,
-            );
             if !passes(outcome.as_ref(), &test.inner)? {
                 findings.push(Finding {
                     key: format!("{path}::{}", test.inner),
@@ -407,26 +422,62 @@ const TEST_RUN_FAILED: i32 = 100;
 /// `nextest`'s exit when the build failed. `cargo` uses it for its own setup
 /// failures too, so it is a finding only beside [`COMPILE_FAILED`].
 const BUILD_FAILED: i32 = 101;
+/// The result words `nextest` ends a test's run with. `SLOW`, `START`, `TRY` and
+/// `SETUP` lines name a test too and decide nothing, so only these are read.
+const TERMINAL: &[&str] = &[
+    "PASS",
+    "FAIL",
+    "TIMEOUT",
+    "ABORT",
+    "SIGSEGV",
+    "SIGABRT",
+    "SIGKILL",
+    "SIGTERM",
+    "LEAK-FAIL",
+];
 /// What `cargo` prints when rustc refused the crate: a base body HEAD's code
 /// cannot compile, as opposed to a build that never reached rustc.
 const COMPILE_FAILED: &str = "could not compile";
 
-/// Whether a replay passed. Exit 0 passes. A failed test, or a base body rustc
-/// refused, is a base expectation HEAD did not meet. Anything else is
-/// could-not-look, never a finding: a refusal the replay never measured would
-/// read as one it did.
+/// Whether one test passed in the shared run.
+///
+/// Judged from the test's OWN result lines (`PASS`, `FAIL`, `TIMEOUT`, …, then
+/// the binary and the test's path), so one failing case never reads as another
+/// failing. Every line naming the test must be `PASS`, as the per-test run's
+/// exit 0 required of every case its filter matched. A rustc refusal fails
+/// every test, as it failed every per-test build of the one spliced tree. A run
+/// that named the test nowhere and did not fail to compile is could-not-look,
+/// never a finding: a refusal the replay never measured would read as one it did.
 //MUTANT-SUITE crates/batten/tests/it/test_replay.rs
-//MUTANT expectation-unchecked|s@^        Some((0, _)) => Ok(true),$@        Some(_) => Ok(true),@|a_narrowed_expectation_is_refused_by_name
+//MUTANT expectation-unchecked|s@^    let failed = statuses.iter().any(|status| \*status != "PASS");$@    let failed = false;@|a_narrowed_expectation_is_refused_by_name
 fn passes(outcome: Option<&(i32, String)>, test: &str) -> Result<bool> {
-    match outcome {
-        Some((0, _)) => Ok(true),
-        Some((TEST_RUN_FAILED, _)) => Ok(false),
-        Some((BUILD_FAILED, said)) if said.contains(COMPILE_FAILED) => Ok(false),
-        outcome => bail!("test replay: could not replay {test}: {}", said(outcome)),
+    let Some((code, output)) = outcome else {
+        bail!("test replay: could not replay {test}: {}", said(outcome));
+    };
+    if *code == BUILD_FAILED && output.contains(COMPILE_FAILED) {
+        return Ok(false);
     }
+    let suffix = format!("::{test}");
+    let statuses: Vec<&str> = output
+        .lines()
+        .filter_map(|line| {
+            let mut words = line.split_whitespace();
+            let status = words.next()?;
+            let name = words.last()?;
+            let named = name == test || name.ends_with(&suffix);
+            (named && TERMINAL.contains(&status)).then_some(status)
+        })
+        .collect();
+    if statuses.is_empty() {
+        bail!("test replay: could not replay {test}: {}", said(outcome));
+    }
+    let failed = statuses.iter().any(|status| *status != "PASS");
+    if failed && *code != TEST_RUN_FAILED && *code != 0 {
+        bail!("test replay: could not replay {test}: {}", said(outcome));
+    }
+    Ok(!failed)
 }
 
-/// What a child said, for a could-not-look error: its exit and its last lines.
 fn said(outcome: Option<&(i32, String)>) -> String {
     let Some((code, output)) = outcome else {
         return String::from("it could not be spawned");
@@ -518,8 +569,17 @@ mod tests {
     #[test]
     fn only_a_measured_failure_is_a_finding() {
         let said = |code: i32, text: &str| Some((code, text.to_owned()));
-        assert!(passes(said(0, "").as_ref(), "t").unwrap());
-        assert!(!passes(said(100, "").as_ref(), "t").unwrap());
+        let pass = "        PASS [   0.010s] batten::it m::t\n";
+        let fail = "        FAIL [   0.010s] batten::it m::t\n";
+        assert!(passes(said(0, pass).as_ref(), "t").unwrap());
+        assert!(!passes(said(100, fail).as_ref(), "t").unwrap());
+        // ONE RUN JUDGES EVERY TEST: another case failing in the same run is
+        // not this one failing, and a SLOW line is not a result.
+        let shared = "        SLOW [> 60s] batten::it m::t\n        PASS [  61.0s] batten::it m::t\n        FAIL [   0.010s] batten::it m::other\n";
+        assert!(passes(said(100, shared).as_ref(), "t").unwrap());
+        assert!(!passes(said(100, shared).as_ref(), "other").unwrap());
+        // A run that names the test nowhere measured nothing about it.
+        assert!(passes(said(0, pass).as_ref(), "absent").is_err());
         assert!(
             !passes(
                 said(101, "error: could not compile `replayed`").as_ref(),
