@@ -225,14 +225,28 @@ fn resolve(path: &Path) -> PathBuf {
 
 /// A temp name in the target's own directory, unique to this process and moment,
 /// so a rename never crosses a filesystem and two writers never share a temp.
+///
+/// The per-process sequence is what makes it unique within a process. The clock
+/// alone did not: macOS `SystemTime` ticks in microseconds, so two threads of one
+/// process drew the same name, and one writer's `create_new` or cleanup hit the
+/// other's temp — `exactly_one_of_many_concurrent_creators_wins` red on macOS CI.
 fn temp_beside(target: &Path) -> PathBuf {
-    let name = target
-        .file_name()
-        .map_or_else(|| "file".into(), |name| name.to_string_lossy().into_owned());
+    static SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |since| since.as_nanos());
-    target.with_file_name(format!(".{name}.{}.{nanos}.tmp", std::process::id()))
+    let sequence = SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    temp_name(target, std::process::id(), nanos, sequence)
+}
+
+/// The temp name for one draw: process, instant and sequence, so a name repeats
+/// only if all three do.
+//MUTANT temp-name-ignores-sequence|s@^    target.with_file_name(format!(".{name}.{pid}.{nanos}.{sequence}.tmp"))$@    target.with_file_name(format!(".{name}.{pid}.{nanos}.tmp"))@|two_draws_in_one_instant_get_two_names
+fn temp_name(target: &Path, pid: u32, nanos: u128, sequence: u64) -> PathBuf {
+    let name = target
+        .file_name()
+        .map_or_else(|| "file".into(), |name| name.to_string_lossy().into_owned());
+    target.with_file_name(format!(".{name}.{pid}.{nanos}.{sequence}.tmp"))
 }
 
 fn write_temp(temp: &Path, target: &Path, contents: &[u8]) -> std::io::Result<()> {
@@ -335,6 +349,18 @@ mod tests {
             std::fs::read_dir(&dir).expect("list").count(),
             1,
             "no temp file survives"
+        );
+    }
+
+    /// The macOS case, made deterministic: one process, one clock reading, two
+    /// draws. Only the sequence can tell them apart.
+    #[test]
+    fn two_draws_in_one_instant_get_two_names() {
+        let target = Path::new("dir/mark");
+        assert_ne!(
+            temp_name(target, 7, 1_000, 0),
+            temp_name(target, 7, 1_000, 1),
+            "same process, same instant, different draw"
         );
     }
 
