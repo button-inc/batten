@@ -120,6 +120,22 @@ fn main() {
         generate(bytes, &args[3]).expect("generate");
         return;
     }
+    if mode == "o200k-load" {
+        // The one-off cost a hook process pays to load the table, and then to
+        // count one ordinary 4 KiB result, which is what a lazy load buys back.
+        let started = std::time::Instant::now();
+        let bpe = tiktoken_rs::o200k_base().expect("table");
+        let loaded = started.elapsed().as_secs_f64() * 1000.0;
+        let text = "payload line of a large log, with some text\n".repeat(93);
+        let counted_at = std::time::Instant::now();
+        let tokens = bpe.encode_ordinary(&text).len();
+        let counted = counted_at.elapsed().as_secs_f64() * 1000.0;
+        println!(
+            "o200k-load\t{loaded:.1}ms load\t{counted:.2}ms for {tokens} tokens\t{}KiB",
+            peak_rss_kib()
+        );
+        return;
+    }
     let path = args.get(2).expect("payload path");
     let started = std::time::Instant::now();
     let (len, digest) = match mode {
