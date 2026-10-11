@@ -167,8 +167,12 @@ fn row(id: &str, column: &str, hold: &str) -> String {
 /// Which kind it is — held or refused, and the board gate's rule — is the
 /// record's `issue` and `refusal` lines, echoed above it.
 fn refusal(text: &str, pointer: &str) -> bool {
+    // The pointer, then any subject the module carried after it (CLOUD-2213).
     let line = format!("batten deny {RULE} at {pointer}");
-    text.lines().any(|said| said.trim() == line)
+    let carried = format!("{line} ");
+    text.lines()
+        .map(str::trim)
+        .any(|said| said == line || said.starts_with(&carried))
 }
 
 /// Whether any refusal names `id`, whichever kind.

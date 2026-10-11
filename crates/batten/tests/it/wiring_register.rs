@@ -24,14 +24,14 @@ use crate::common;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
-use common::{StateHome as _, git_in, scratch, stderr};
+use common::{StateHome as _, scratch, stderr};
 
 /// `<home>/sessions/clones/repo`: a clone two directories below the home.
 fn layout(name: &str) -> (PathBuf, PathBuf) {
     let home = scratch(name);
     let repo = home.join("sessions").join("clones").join("repo");
     std::fs::create_dir_all(&repo).expect("the fixture clone");
-    git_in(&repo, &["init", "-q", "-b", "main", "."]);
+    common::init_repo(&repo);
     common::write(&repo, "batten.toml", "version = 1\n");
     (home, repo)
 }
