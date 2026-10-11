@@ -1756,6 +1756,16 @@ const CENSUS: &[Verb] = &[
         ),
     },
     Verb {
+        path: "generate installer",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::Echoes(
+            "the bootstrap is rendered from Batten's own target table, asset naming and \
+             repository URL; it reads no repository content at all",
+            Echoed::Surface,
+        ),
+    },
+    Verb {
         path: "generate schema",
         args: &[],
         stdin: Stdin::Nothing,
@@ -2153,6 +2163,14 @@ const CENSUS: &[Verb] = &[
     // CLOUD-2062: with no pin in the corpus it is a no-op that prints nothing.
     Verb {
         path: "engine update",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    // CLOUD-2203: KEY=VALUE pointers — the path it placed the binary at, the
+    // tag, the target — and no byte of any file.
+    Verb {
+        path: "engine install",
         args: &[],
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
@@ -2972,6 +2990,12 @@ fn run_in(corpus: &Corpus, args: &[&str], stdin: Stdin) -> Run {
         // which a macOS leg has not got — and `record-boot` there answers
         // could-not-look for the platform, not for anything this census asks.
         .env("BATTEN_BOOT_TIME", "1700000000")
+        // AND `engine install` PLACES A BINARY (CLOUD-2203). With the ambient
+        // PATH a root host's writable `/usr/local/bin` is where it would go, so
+        // the corpus names its own directory and admits it off PATH. Only that
+        // verb reads either variable.
+        .env("BATTEN_INSTALL_DIR", corpus.home.join("bin"))
+        .env("BATTEN_ALLOW_OFF_PATH", "1")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());

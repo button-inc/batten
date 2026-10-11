@@ -312,6 +312,28 @@ pub fn fetch_release(repository: &str, tag: &str) -> Result<Vec<u8>> {
     extract(&archive.body, &crate::dist::binary_file("batten", &target))
 }
 
+/// The release tag `reference`'s workspace manifest names, read off the
+/// repository's raw-file host — never the API, whose anonymous budget a shared
+/// egress address spends (CLOUD-2203). `None` when it cannot be read.
+#[must_use]
+pub fn ref_release(repository: &str, reference: &str) -> Option<String> {
+    let raw = repository.trim_end_matches('/').replacen(
+        "https://github.com/",
+        "https://raw.githubusercontent.com/",
+        1,
+    );
+    let answer = crate::fetch::get(&format!("{raw}/{reference}/Cargo.toml"), &[]).ok()?;
+    if answer.status != 200 {
+        return None;
+    }
+    String::from_utf8_lossy(&answer.body)
+        .lines()
+        .find_map(|line| {
+            let version = line.strip_prefix("version = \"")?.strip_suffix('"')?;
+            Some(format!("v{version}"))
+        })
+}
+
 /// The `bin` entry at the root of a `.tar.gz` release archive.
 ///
 /// # Errors

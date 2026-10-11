@@ -595,7 +595,7 @@ fs4 = "1.1"
 # transitively under `fs4` above, so the direct declaration vendors nothing new —
 # it only stops the version being decided by a transitive edge. `process` is the
 # one feature this needs; the default `std`/`use-libc-auxv` come with it.
-rustix = { version = "1.1", features = ["process"] }
+rustix = { version = "1.1", features = ["fs", "process"] }
 # `signal-hook` receives. Installing a disposition is `sigaction(2)`, which
 # `unsafe_code = "forbid"` puts out of reach, and rustix's own spelling lives
 # behind its private `runtime` feature — so a safe registry is not a convenience

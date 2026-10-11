@@ -4633,6 +4633,7 @@ pub const SURFACE: &[CommandDecl] = &[
     },
     // CLOUD-2203. `install.sh` is this output and nothing else: the bootstrap
     // that fetches, verifies and runs the release binary, drift-checked.
+    // unreached: "generate installer" CLOUD-2203 the committed install.sh becomes this output, and its drift case runs it, once a release carries `engine install`
     CommandDecl {
         path: "generate installer",
         id: "generate.installer",
@@ -7631,6 +7632,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // `write`: the one binary it places, in the first directory `PATH` finds
     // (CLOUD-2203). The generated bootstrap's last step, so it runs outside any
     // repository and reads no config.
+    // unreached: "engine install" CLOUD-2203 the generated install.sh runs it; the committed script is swapped once a release carries this verb
     CommandDecl {
         path: "engine install",
         id: "engine.install",

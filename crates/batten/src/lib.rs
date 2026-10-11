@@ -761,20 +761,19 @@ fn engine_install(out: &mut dyn Write) -> Result<ExitCode> {
     let repository = env!("CARGO_PKG_REPOSITORY");
     let mut tag = format!("v{}", env!("CARGO_PKG_VERSION"));
     let mut bytes = std::fs::read(std::env::current_exe()?)?;
-    if let Some(reference) = var("BATTEN_VERSION_FROM_REF") {
-        if let Some(wanted) = ref_release(repository, &reference) {
-            if wanted != tag {
-                match engine::fetch_release(repository, &wanted) {
-                    Ok(fetched) => {
-                        bytes = fetched;
-                        tag = wanted;
-                    }
-                    // Unpublished yet: release-plz bumps the manifest before it
-                    // tags, so trunk routinely names a release that does not
-                    // exist. This binary is the latest that does.
-                    Err(_) => writeln!(out, "unpublished={wanted}")?,
-                }
+    let wanted = var("BATTEN_VERSION_FROM_REF")
+        .and_then(|reference| engine::ref_release(repository, &reference))
+        .filter(|wanted| *wanted != tag);
+    if let Some(wanted) = wanted {
+        match engine::fetch_release(repository, &wanted) {
+            Ok(fetched) => {
+                bytes = fetched;
+                tag = wanted;
             }
+            // Unpublished yet: release-plz bumps the manifest before it tags,
+            // so trunk routinely names a release that does not exist. This
+            // binary is the latest that does.
+            Err(_) => writeln!(out, "unpublished={wanted}")?,
         }
     }
     std::fs::create_dir_all(&dest).map_err(|why| {
@@ -818,32 +817,15 @@ fn engine_install(out: &mut dyn Write) -> Result<ExitCode> {
     Ok(ExitCode::Success)
 }
 
-/// Whether a directory accepts a new file, asked by making one.
+/// Whether a directory accepts a new file, asked of the kernel rather than by
+/// writing one.
 fn writable_dir(dir: &Path) -> bool {
-    let probe = dir.join(format!(".batten-install-probe-{}", std::process::id()));
-    let made = std::fs::File::create(&probe).is_ok();
-    let _ = std::fs::remove_file(&probe);
-    made
-}
-
-/// The release tag `reference`'s workspace manifest names, read off the
-/// repository's raw-file host — never the API (CLOUD-2203).
-fn ref_release(repository: &str, reference: &str) -> Option<String> {
-    let raw = repository.trim_end_matches('/').replacen(
-        "https://github.com/",
-        "https://raw.githubusercontent.com/",
-        1,
-    );
-    let answer = fetch::get(&format!("{raw}/{reference}/Cargo.toml"), &[]).ok()?;
-    if answer.status != 200 {
-        return None;
-    }
-    String::from_utf8_lossy(&answer.body)
-        .lines()
-        .find_map(|line| {
-            let version = line.strip_prefix("version = \"")?.strip_suffix('"')?;
-            Some(format!("v{version}"))
-        })
+    #[cfg(unix)]
+    return rustix::fs::access(dir, rustix::fs::Access::WRITE_OK).is_ok();
+    // No `access(2)` off Unix; a read-only directory is the one answer
+    // metadata gives honestly.
+    #[cfg(not(unix))]
+    return std::fs::metadata(dir).is_ok_and(|meta| !meta.permissions().readonly());
 }
 
 /// `batten engine digest|stamp` (CLOUD-2061).

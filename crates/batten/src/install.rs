@@ -485,10 +485,11 @@ pub fn programs_in(script: &str) -> BTreeSet<String> {
         let mut line = line.trim();
         // A case pattern carries no program: `amd64)` alone, or the pattern in
         // front of the arm's command (`Darwin) target=…`), which is stripped.
-        if let Some(at) = line.find(") ") {
-            if !line[..at].contains('(') && !line[..at].contains('$') {
-                line = &line[at + 2..];
-            }
+        if let Some(at) = line.find(") ")
+            && !line[..at].contains('(')
+            && !line[..at].contains('$')
+        {
+            line = &line[at + 2..];
         }
         let is_bare_pattern = line.ends_with(')') && !line.contains('(') && !line.contains('$');
         // `name() {` defines a function; its name is not a program.
