@@ -739,7 +739,7 @@ fn mode_verdict(name: &str, payload: &serde_json::Value) -> Option<(String, Stri
     );
     let output = run_with_stdin(
         &dir,
-        &["hook", "--harness", "claude-code"],
+        &["adjudicate", "--harness", "claude-code"],
         &payload.to_string(),
     );
     String::from_utf8_lossy(&output.stdout)
