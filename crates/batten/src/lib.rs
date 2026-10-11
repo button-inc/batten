@@ -18557,6 +18557,30 @@ fn expire_history_reads(envelope: &hook::Envelope) {
     let _ = history::forget_context(&git_dir, &context);
 }
 
+/// Whether a shell command runs the engine (CLOUD-2215): a pipeline segment
+/// whose program is `batten`, by name or path, directly or after
+/// `mise exec --`, or a task runner (`mise run`/`mise r`, `hk`) whose output
+/// carries the engine's nested lines.
+//MUTANT data-output-collapsed|s@\.rsplit('/')\.next() == Some("batten")@.rsplit('/').next().is_some()@|only_a_call_that_runs_the_engine_has_its_output_collapsed
+fn runs_engine(command: &str) -> bool {
+    command
+        .split(['|', ';', '&', '\n'])
+        .map(|segment| {
+            let words: Vec<&str> = segment.split_whitespace().collect();
+            match words.as_slice() {
+                ["mise", "exec", rest @ ..] => rest
+                    .iter()
+                    .skip_while(|word| **word != "--")
+                    .nth(1)
+                    .copied(),
+                ["mise", "run" | "r", ..] | ["hk", ..] => Some("batten"),
+                [program, ..] => Some(*program),
+                [] => None,
+            }
+        })
+        .any(|program| program.is_some_and(|program| program.rsplit('/').next() == Some("batten")))
+}
+
 /// Mark every finding a tool's output carries as seen in this context, and cut
 /// the ones it had already seen to their pointer (CLOUD-2075 §D).
 ///
@@ -18573,6 +18597,12 @@ fn collapse_seen_output(
     let Some(context) = envelope.context() else {
         return Ok(());
     };
+    // DATA IS NEVER REWRITTEN (CLOUD-2215): a `gh pr view` or a `cat` quoting a
+    // finding is a document, and cutting its lines handed the model an altered
+    // copy it could write back. Only a call that ran the engine collapses.
+    if !runs_engine(&envelope.command) {
+        return Ok(());
+    }
     let root = hook_authority_root();
     let mut rewritten = envelope.result.clone();
     let mut changed = false;
@@ -25658,6 +25688,30 @@ mod tests {
 
     /// CLOUD-2207: the line a reduced read leaves names every indexed field
     /// with its view lines and size, then the routes to read one.
+    /// CLOUD-2215: the collapse rewrites what the engine printed, never a
+    /// document another program printed that happens to quote a finding.
+    #[test]
+    fn only_a_call_that_runs_the_engine_has_its_output_collapsed() {
+        for command in [
+            "batten check",
+            "mise run verify",
+            "mise exec -- batten ready lint",
+            "./target/debug/batten x | head",
+            "cd /r && batten land lap",
+        ] {
+            assert!(runs_engine(command), "{command}");
+        }
+        for command in [
+            "mise exec -- gh pr view --json body",
+            "cat notes.md",
+            "git log",
+            "grep batten notes.md",
+            "",
+        ] {
+            assert!(!runs_engine(command), "{command}");
+        }
+    }
+
     #[test]
     fn the_view_pointer_names_each_field_and_the_view() {
         let index = [
