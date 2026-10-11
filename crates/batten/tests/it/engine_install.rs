@@ -46,7 +46,7 @@ fn the_binary_lands_in_the_per_user_directory_when_path_finds_it() {
     let home = common::scratch_repo("engine-install-user");
     let user = home.join(".local/bin");
     std::fs::create_dir_all(&user).unwrap();
-    let output = install(&home, &[user.clone()], &[]);
+    let output = install(&home, std::slice::from_ref(&user), &[]);
     assert!(
         output.status.success(),
         "{}{}",
@@ -68,7 +68,7 @@ fn a_named_directory_wins() {
     let named_str = named.display().to_string();
     let output = install(
         &home,
-        &[named.clone()],
+        std::slice::from_ref(&named),
         &[("BATTEN_INSTALL_DIR", &named_str)],
     );
     assert!(
