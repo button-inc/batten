@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.213](https://github.com/button-inc/batten/compare/v0.0.212...v0.0.213) - 2026-10-11
+
+### Fixed
+
+- *(hook)* apply the host's mode policy where no authority governs
+
+### Other
+
+- *(hook)* drive the no-authority mode cases through adjudicate
+
 ## [0.0.212](https://github.com/button-inc/batten/compare/v0.0.211...v0.0.212) - 2026-10-10
 
 ### Fixed
