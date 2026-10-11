@@ -132,6 +132,23 @@ fn main() {
         println!("o200k-longest\t{longest} bytes");
         return;
     }
+    if mode == "bpe-load" {
+        // GitHub's prebuilt encoder: the same two numbers as `o200k-load`, plus
+        // whether its count agrees with tiktoken-rs on the same text.
+        let text = "payload line of a large log, with some text\n".repeat(93);
+        let started = std::time::Instant::now();
+        let tokenizer = bpe_openai::o200k_base();
+        let first = tokenizer.count(&text);
+        let loaded = started.elapsed().as_secs_f64() * 1000.0;
+        let counted_at = std::time::Instant::now();
+        let tokens = tokenizer.count(&text);
+        let counted = counted_at.elapsed().as_secs_f64() * 1000.0;
+        println!(
+            "bpe-load\t{loaded:.1}ms load+first count\t{counted:.2}ms for {tokens} tokens\t{}KiB\tfirst={first}",
+            peak_rss_kib()
+        );
+        return;
+    }
     if mode == "o200k-load" {
         // The one-off cost a hook process pays to load the table, and then to
         // count one ordinary 4 KiB result, which is what a lazy load buys back.

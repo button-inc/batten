@@ -227,6 +227,10 @@ tiktoken-rs = "0.12"
 # leaf streams in chunks instead of being held whole, which serde's data model
 # cannot do (a visitor receives each string whole).
 struson = "0.7"
+# Candidate o200k counter for the hook path (CLOUD-2224): GitHub's prebuilt
+# encoders, measured against tiktoken-rs's 120-150 ms / 53 MB table load in
+# `examples/hook-read-bench.rs` before either is chosen.
+bpe-openai = "0.3"
 # The allocation counter the cost cases assert with (CLOUD-2022). DEV-ONLY, for
 # `tiktoken-rs`'s reason: it is the `it` binary's `#[global_allocator]`, and the
 # shipped binary keeps the system allocator untouched.

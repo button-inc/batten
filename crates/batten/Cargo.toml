@@ -166,6 +166,7 @@ rustix.workspace = true
 tiktoken-rs.workspace = true
 # CLOUD-2224: the hook reads its stdin streaming; see the workspace manifest.
 struson.workspace = true
+bpe-openai.workspace = true
 signal-hook.workspace = true
 
 [dev-dependencies]
