@@ -528,6 +528,9 @@ pub enum EngineCommand {
         /// Workflows whose command lines run the released binary.
         lanes: Vec<String>,
     },
+    /// Place this binary where `PATH` finds it: the generated bootstrap's last
+    /// step (CLOUD-2203).
+    Install,
 }
 
 /// Subcommands of `artifacts` (CLOUD-1991).
@@ -2340,6 +2343,8 @@ pub enum GenerateCommand {
         /// The harness whose wiring to emit.
         harness: crate::hook::Harness,
     },
+    /// Emit the committed `install.sh` bootstrap (CLOUD-2203).
+    Installer,
 }
 
 /// The formats `batten spec` can emit.
@@ -2942,6 +2947,7 @@ fn generate_of(matches: &ArgMatches) -> Option<GenerateCommand> {
             command: matches.get_one::<String>("command").cloned(),
         }),
         ("markdown", _) => Some(GenerateCommand::Markdown),
+        ("installer", _) => Some(GenerateCommand::Installer),
         ("hooks", matches) => matches
             .get_one::<crate::hook::Harness>("harness")
             .map(|harness| GenerateCommand::Hooks { harness: *harness }),
@@ -3463,6 +3469,7 @@ fn engine_of(matches: &ArgMatches) -> Option<EngineCommand> {
         ("digest", _) => Some(EngineCommand::Digest),
         ("stamp", _) => Some(EngineCommand::Stamp),
         ("update", _) => Some(EngineCommand::Update),
+        ("install", _) => Some(EngineCommand::Install),
         ("pin", matches) => Some(EngineCommand::Pin {
             value: matches.get_one::<String>("value").cloned(),
             check: flag(matches, "check"),

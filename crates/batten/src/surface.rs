@@ -4631,6 +4631,17 @@ pub const SURFACE: &[CommandDecl] = &[
             harness_parser,
         )],
     },
+    // CLOUD-2203. `install.sh` is this output and nothing else: the bootstrap
+    // that fetches, verifies and runs the release binary, drift-checked.
+    CommandDecl {
+        path: "generate installer",
+        id: "generate.installer",
+        about: "Emit the install.sh bootstrap, on stdout",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Read,
+        flags: &[],
+    },
     CommandDecl {
         path: "generate man",
         id: "generate.man",
@@ -7617,6 +7628,18 @@ pub const SURFACE: &[CommandDecl] = &[
     // kept under git's common directory, then run over this tree (CLOUD-2063).
     // The verdict is the gate's: a source pin never lands, and a release pin
     // must load this config and carry every verb the released lanes invoke.
+    // `write`: the one binary it places, in the first directory `PATH` finds
+    // (CLOUD-2203). The generated bootstrap's last step, so it runs outside any
+    // repository and reads no config.
+    CommandDecl {
+        path: "engine install",
+        id: "engine.install",
+        about: "Place this binary in a directory on PATH: the generated install.sh's last step",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Write,
+        flags: &[],
+    },
     CommandDecl {
         path: "engine gate",
         id: "engine.gate",

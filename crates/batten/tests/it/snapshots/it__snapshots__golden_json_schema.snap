@@ -1562,6 +1562,15 @@ expression: stdout_of(&output)
           "subcommands": []
         },
         {
+          "path": "engine install",
+          "id": "engine.install",
+          "about": "Place this binary in a directory on PATH: the generated install.sh's last step",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [],
+          "subcommands": []
+        },
+        {
           "path": "engine pin",
           "id": "engine.pin",
           "about": "Set the config's engine pin, or refresh a declared source pin to this tree's digest",
@@ -1763,6 +1772,15 @@ expression: stdout_of(&output)
               "help": "The harness whose hook registrations to emit"
             }
           ],
+          "subcommands": []
+        },
+        {
+          "path": "generate installer",
+          "id": "generate.installer",
+          "about": "Emit the install.sh bootstrap, on stdout",
+          "effect": "read",
+          "data_channel": false,
+          "flags": [],
           "subcommands": []
         },
         {
@@ -5038,6 +5056,10 @@ expression: stdout_of(&output)
     {
       "id": "generate.hooks",
       "path": "generate hooks"
+    },
+    {
+      "id": "generate.installer",
+      "path": "generate installer"
     },
     {
       "id": "generate.man",

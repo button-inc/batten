@@ -452,14 +452,14 @@ pub fn pinned_release(state_dir: &Path, repository: &str, tag: &str) -> Result<P
 }
 
 #[cfg(unix)]
-fn make_executable(path: &Path) -> Result<()> {
+pub(crate) fn make_executable(path: &Path) -> Result<()> {
     use std::os::unix::fs::PermissionsExt as _;
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))?;
     Ok(())
 }
 
 #[cfg(not(unix))]
-fn make_executable(_path: &Path) -> Result<()> {
+pub(crate) fn make_executable(_path: &Path) -> Result<()> {
     // Windows has no executable bit; the extension carries it.
     Ok(())
 }

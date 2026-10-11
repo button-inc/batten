@@ -725,11 +725,136 @@ fn engine_update(root: &Path, out: &mut dyn Write) -> Result<ExitCode> {
     Ok(ExitCode::Success)
 }
 
+/// `batten engine install` (CLOUD-2203): the generated `install.sh`'s last step.
+///
+/// The bootstrap has fetched this binary and checked its digest; everything
+/// after that is here, in tested Rust, rather than in the script. The binary is
+/// placed where [`install::destination`] says, and the knobs the workflows
+/// already pass keep their meaning: `BATTEN_INSTALL_DIR` names the directory,
+/// `BATTEN_ALLOW_OFF_PATH=1` admits one `PATH` does not reach,
+/// `BATTEN_VERSION_FROM_REF` installs the release a ref's manifest names (this
+/// binary when that release is not published yet), and `BATTEN_REQUIRE` refuses
+/// a binary that lacks the verb its caller is about to run.
+///
+/// Off `PATH` is a refusal, as it always was: every hook registration names
+/// `batten` bare, so a binary the shell cannot resolve is not installed.
+fn engine_install(out: &mut dyn Write) -> Result<ExitCode> {
+    let var = |name: &str| std::env::var(name).ok().filter(|value| !value.is_empty());
+    let on_path: Vec<std::path::PathBuf> = std::env::var_os("PATH")
+        .map(|path| std::env::split_paths(&path).collect())
+        .unwrap_or_default();
+    let user = var("XDG_BIN_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| var("HOME").map(|home| Path::new(&home).join(".local").join("bin")))
+        .ok_or_else(|| {
+            UsageError::raise(String::from(
+                "engine install: neither XDG_BIN_HOME nor HOME is set, so there is no \
+                 per-user directory to fall back to; set BATTEN_INSTALL_DIR",
+            ))
+        })?;
+    let dest = install::destination(
+        var("BATTEN_INSTALL_DIR").map(std::path::PathBuf::from),
+        user,
+        &on_path,
+        writable_dir,
+    );
+    let repository = env!("CARGO_PKG_REPOSITORY");
+    let mut tag = format!("v{}", env!("CARGO_PKG_VERSION"));
+    let mut bytes = std::fs::read(std::env::current_exe()?)?;
+    if let Some(reference) = var("BATTEN_VERSION_FROM_REF") {
+        if let Some(wanted) = ref_release(repository, &reference) {
+            if wanted != tag {
+                match engine::fetch_release(repository, &wanted) {
+                    Ok(fetched) => {
+                        bytes = fetched;
+                        tag = wanted;
+                    }
+                    // Unpublished yet: release-plz bumps the manifest before it
+                    // tags, so trunk routinely names a release that does not
+                    // exist. This binary is the latest that does.
+                    Err(_) => writeln!(out, "unpublished={wanted}")?,
+                }
+            }
+        }
+    }
+    std::fs::create_dir_all(&dest).map_err(|why| {
+        UsageError::raise(format!(
+            "engine install: cannot create {} ({why}); set BATTEN_INSTALL_DIR to a writable directory",
+            dest.display()
+        ))
+    })?;
+    let binary = dest.join(dist::binary_file(
+        env!("CARGO_PKG_NAME"),
+        &engine::running_target(),
+    ));
+    durable::replace(&binary, &bytes)?;
+    engine::make_executable(&binary)?;
+    writeln!(out, "installed={}", binary.display())?;
+    writeln!(out, "version={tag}")?;
+    writeln!(out, "target={}", engine::running_target())?;
+    writeln!(out, "verified=sha256")?;
+    if !on_path.contains(&dest) {
+        if var("BATTEN_ALLOW_OFF_PATH").as_deref() == Some("1") {
+            writeln!(out, "off-path={}", dest.display())?;
+        } else {
+            return Err(UsageError::raise(format!(
+                "engine install: installed to {}, which is not on PATH, so `batten` does not \
+                 resolve by name. Add it to PATH, set BATTEN_INSTALL_DIR to a directory already \
+                 on it, or set BATTEN_ALLOW_OFF_PATH=1 if that is deliberate.",
+                dest.display()
+            )));
+        }
+    }
+    if let Some(verb) = var("BATTEN_REQUIRE") {
+        let mut args: Vec<String> = verb.split_whitespace().map(ToOwned::to_owned).collect();
+        args.push(String::from("--help"));
+        let carries = exec::piped(&dest, &binary, &args, "").is_some_and(|(code, _)| code == 0);
+        if !carries {
+            return Err(UsageError::raise(format!(
+                "engine install: installed {tag}, which does not carry `batten {verb}`"
+            )));
+        }
+    }
+    Ok(ExitCode::Success)
+}
+
+/// Whether a directory accepts a new file, asked by making one.
+fn writable_dir(dir: &Path) -> bool {
+    let probe = dir.join(format!(".batten-install-probe-{}", std::process::id()));
+    let made = std::fs::File::create(&probe).is_ok();
+    let _ = std::fs::remove_file(&probe);
+    made
+}
+
+/// The release tag `reference`'s workspace manifest names, read off the
+/// repository's raw-file host — never the API (CLOUD-2203).
+fn ref_release(repository: &str, reference: &str) -> Option<String> {
+    let raw = repository.trim_end_matches('/').replacen(
+        "https://github.com/",
+        "https://raw.githubusercontent.com/",
+        1,
+    );
+    let answer = fetch::get(&format!("{raw}/{reference}/Cargo.toml"), &[]).ok()?;
+    if answer.status != 200 {
+        return None;
+    }
+    String::from_utf8_lossy(&answer.body)
+        .lines()
+        .find_map(|line| {
+            let version = line.strip_prefix("version = \"")?.strip_suffix('"')?;
+            Some(format!("v{version}"))
+        })
+}
+
 /// `batten engine digest|stamp` (CLOUD-2061).
 ///
 /// The tree is the WORKTREE's, `census`' reasoning: what a branch's engine is
 /// built from is what that checkout carries.
 fn run_engine(command: cli::EngineCommand, out: &mut dyn Write) -> Result<ExitCode> {
+    // BEFORE THE ROOT: the bootstrap runs it on a host with no repository.
+    if matches!(command, cli::EngineCommand::Install) {
+        return engine_install(out);
+    }
     let root = git::worktree_root(Path::new("."))?;
     let digest = engine::digest(&root)?;
     match command {
@@ -744,6 +869,7 @@ fn run_engine(command: cli::EngineCommand, out: &mut dyn Write) -> Result<ExitCo
             return engine_pin(&root, &digest, value.as_deref(), check, out);
         }
         cli::EngineCommand::Gate { lanes } => return engine_gate(&root, &lanes, out),
+        cli::EngineCommand::Install => return engine_install(out),
     }
     Ok(ExitCode::Success)
 }
@@ -24470,6 +24596,11 @@ fn run_generate(command: &GenerateCommand, out: &mut dyn Write) -> Result<ExitCo
         // nothing", which is a different claim from "there is nothing to
         // register with". `UsageError` is exit 1 — the caller named something
         // that cannot be asked for, which is a statement about the invocation.
+        GenerateCommand::Installer => write!(
+            out,
+            "{}",
+            install::render_bootstrap(env!("CARGO_PKG_NAME"), env!("CARGO_PKG_REPOSITORY"))
+        )?,
         GenerateCommand::Hooks { harness } => {
             let wiring = harness.wiring().ok_or_else(|| {
                 UsageError::raise(format!(
