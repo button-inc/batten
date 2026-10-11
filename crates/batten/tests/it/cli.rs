@@ -11150,7 +11150,6 @@ fn the_document_is_byte_identical_across_two_runs() {
 // as happily if the command ran twice and printed nothing the second time.
 
 /// A repo with a counter script, plus an isolated store.
-#[cfg(unix)]
 fn capture_repo(name: &str) -> (PathBuf, PathBuf) {
     let root = scratch(name);
     let repo = Fixture::at(root.join("repo"))
@@ -11186,7 +11185,6 @@ fn runs(repo: &std::path::Path) -> usize {
 }
 
 /// `batten capture …` against the same isolated store.
-#[cfg(unix)]
 fn run_capture(repo: &std::path::Path, home: &std::path::Path, args: &[&str]) -> Output {
     batten()
         .arg("capture")
@@ -11198,7 +11196,6 @@ fn run_capture(repo: &std::path::Path, home: &std::path::Path, args: &[&str]) ->
 }
 
 /// The stdout handle of the one capture in the store.
-#[cfg(unix)]
 fn stdout_handle(repo: &std::path::Path, home: &std::path::Path) -> String {
     let listed = run_capture(repo, home, &["list", "--stream", "stdout"]);
     assert_eq!(listed.status.code(), Some(0));
@@ -13655,12 +13652,23 @@ fn a_misspelled_rule_is_still_refused_under_the_spelling_it_was_given() {
 }
 
 /// Capture one line of JSON shaped like a tracker response (CLOUD-2207).
-#[cfg(unix)]
 fn json_capture(name: &str) -> (PathBuf, PathBuf, String) {
     let (repo, home) = capture_repo(name);
     let document = r###"{"id":"CLOUD-1","title":"t","description":"## Context\nfirst line\nthe needle is here\nlast line","labels":["a"]}"###;
+    // `git cat-file` rather than `printf`: git runs on every leg, so the case
+    // is not narrowed to unix to silence one (cfg-gated-test.rego).
+    std::fs::write(repo.join("doc.json"), document).expect("the document");
+    let blob = common::git_in(&repo, &["hash-object", "-w", "doc.json"]);
     let output = batten()
-        .args(["exec", "--capture-only", "--", "printf", "%s", document])
+        .args([
+            "exec",
+            "--capture-only",
+            "--",
+            "git",
+            "cat-file",
+            "blob",
+            blob.trim(),
+        ])
         .current_dir(&repo)
         .state_home(&home)
         .output()
@@ -13670,7 +13678,6 @@ fn json_capture(name: &str) -> (PathBuf, PathBuf, String) {
     (repo, home, handle)
 }
 
-#[cfg(unix)]
 #[test]
 fn a_json_field_is_addressable_by_line() {
     // THE REGRESSION. A stored tracker response is ONE line, so `--grep`
@@ -13704,7 +13711,6 @@ fn a_json_field_is_addressable_by_line() {
     );
 }
 
-#[cfg(unix)]
 #[test]
 fn a_non_string_field_reads_as_pretty_json() {
     let (repo, home, handle) = json_capture("capture-field-array");
@@ -13717,7 +13723,6 @@ fn a_non_string_field_reads_as_pretty_json() {
     assert_eq!(stdout(&field), "stdout:1 [\nstdout:2   \"a\"\nstdout:3 ]\n");
 }
 
-#[cfg(unix)]
 #[test]
 fn a_field_that_names_nothing_is_a_usage_error() {
     let (repo, home, handle) = json_capture("capture-field-missing");
