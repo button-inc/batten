@@ -78,12 +78,17 @@ refused contains id if {
 	filed == false
 }
 
+# THE SUBJECT IS THE ROW, NEVER A COUNT. `at 1` sent the reader hunting for which
+# row a gate meant; the declared id is the pointer, so it is the subject, sorted
+# for byte-stable output (§6). A consumer whose id is the tracker key gets a line
+# naming the row outright.
 violation contains {
 	"rule": "claim mint absent",
 	"verdict": "claim mint absent",
-	"subjects": [{"count": count(refused)}],
+	"subjects": named,
 } if {
 	count(refused) > 0
+	named := [{"artifact": id} | some id in sort(refused)]
 }
 
 # --- the load-time tier ------------------------------------------------------
@@ -107,6 +112,11 @@ test_an_unfiled_row_is_refused if {
 	v.verdict == "claim mint absent"
 }
 
+test_the_refusal_names_the_row if {
+	some v in violation with input as reduced(false)
+	v.subjects == [{"artifact": "this-row"}]
+}
+
 # NOTHING WAS CAPTURED about this key is not a verdict. The id is absent from the
 # map, so there is nothing to refuse — the distinction the fact keeps, and the one
 # a board gate reading a store nobody filled would destroy.
@@ -127,4 +137,5 @@ test_could_not_look_does_not_fault if {
 }
 
 #MUTANT-SUITE crates/batten/tests/it/captured_facts.rs
+#MUTANT subject-counts-rows|s@^\t"subjects": named,$@\t"subjects": [{"count": count(refused)}],@|the_shipped_module_refuses_a_captured_row_with_no_project
 #MUTANT refusal-unread|s@^\tcount(refused) > 0$@\tfalse@|the_shipped_module_refuses_a_captured_row_with_no_project

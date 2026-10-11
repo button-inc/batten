@@ -556,7 +556,7 @@ module = "claim-before-code.rego"
 severity = "deny"
 
 [[rule.captured]]
-id = "this-row"
+id = "{DECLARED_KEY}"
 key = "{DECLARED_KEY}"
 key_at = "id"
 node = "project"
@@ -601,8 +601,9 @@ fn the_shipped_module_refuses_a_captured_row_with_no_project() {
         &serde_json::json!({"id": DECLARED_KEY, "status": "unstarted"}),
     );
     assert!(
-        answer.contains("claim mint absent"),
-        "a captured row carrying no project is unfiled and must be refused\n{answer}{cause}"
+        answer.contains(&format!("claim mint absent at {DECLARED_KEY}")),
+        "a captured row carrying no project is unfiled and must be refused, NAMING the \
+         row rather than counting rows\n{answer}{cause}"
     );
 }
 

@@ -8175,8 +8175,15 @@ scope = "tree"
 module = "policy/claim-before-code.rego"
 severity = "deny"
 [[rule.captured]]
-id = "this-row"
+# THE ID IS THE KEY, so the refusal names the row (`at CLOUD-1188`), never a
+# placeholder the reader has to look up.
+id = "CLOUD-1188"
 key = "CLOUD-1188"
+# THE RECORD ABOUT THE KEY, NOT ONE MENTIONING IT (CLOUD-2177). Without it a
+# stored response that merely cites the key answered, and a bundle read that
+# cited CLOUD-1188 refused a whole `land` lap on 2026-10-11. v0.0.212, the pin,
+# reads the key.
+key_at = "id"
 node = "project"
 reduce = "present"
 
