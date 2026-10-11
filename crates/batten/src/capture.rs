@@ -1337,7 +1337,9 @@ pub fn view(
         // RFC 6901 escaping, so the pointer the index prints is one `--field`
         // resolves even for a key carrying `/` or `~`.
         let pointer = format!("/{}", key.replace('~', "~0").replace('/', "~1"));
-        text.push_str(&format!("## {pointer}\n"));
+        text.push_str("## ");
+        text.push_str(&pointer);
+        text.push('\n');
         line += 1;
         // The lines the body OCCUPIES once the closing newline is written: one
         // more than the newlines it carries, so a string ending in `\n` holds

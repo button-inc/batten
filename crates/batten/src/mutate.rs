@@ -1399,6 +1399,24 @@ fn command_verdict(ran: &Ran) -> Verdict {
     }
 }
 
+/// The `command` runner (CLOUD-2211): the committed argv once, over every owned
+/// source, in the checkout. The tool owns its own staging, and `$MUTANT_SHARD`
+/// reaches it through the inherited environment unchanged.
+fn run_command(root: &Path, registry: &Registry, sources: &[String]) -> Result<Option<Finding>> {
+    let Some((program, args)) = registry.command.split_first() else {
+        bail!("mutate: `command` is registered and `[mutate] command` declares no argv");
+    };
+    let args: Vec<String> = args.iter().chain(sources).cloned().collect();
+    let ran = spawn(root, Program::Command(program), &args, &[], runner_bound())?;
+    let verdict = command_verdict(&ran);
+    Ok(verdict.is_finding().then(|| Finding {
+        gate: RunnerKind::Command.id().to_owned(),
+        slug: None,
+        verdict,
+        owner: None,
+    }))
+}
+
 /// Run `kind` over the sources it owns that changed since `base`.
 ///
 /// For cargo-mutants, one invocation per source, `--in-diff` over the change
@@ -1438,23 +1456,9 @@ pub fn run_registered(
         return Ok(result);
     }
     if kind == RunnerKind::Command {
-        // ONCE, OVER EVERY OWNED SOURCE, in the checkout: the tool owns its own
-        // staging, and `$MUTANT_SHARD` reaches it through the inherited
-        // environment unchanged.
-        let Some((program, args)) = registry.command.split_first() else {
-            bail!("mutate: `command` is registered and `[mutate] command` declares no argv");
-        };
-        let args: Vec<String> = args.iter().chain(&sources).cloned().collect();
-        let ran = spawn(root, Program::Command(program), &args, &[], runner_bound())?;
-        let verdict = command_verdict(&ran);
-        if verdict.is_finding() {
-            result.findings.push(Finding {
-                gate: kind.id().to_owned(),
-                slug: None,
-                verdict,
-                owner: None,
-            });
-        }
+        result
+            .findings
+            .extend(run_command(root, registry, &sources)?);
         return Ok(result);
     }
     let diff = spawn(

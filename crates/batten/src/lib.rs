@@ -3676,6 +3676,40 @@ fn field_text(parsed: &capture::Handle, bytes: &[u8], pointer: &str) -> Result<V
     })
 }
 
+/// The `capture show` flag combinations refused before anything is read, and
+/// refused rather than resolved (CLOUD-918). `--raw` and `--json` are two
+/// encodings of one selection, and a combination that had to pick between them
+/// silently is how a caller ends up with base64 where it wanted bytes. `--lines`
+/// and `--grep` are line views, which a byte stream is not.
+fn refuse_show_combinations(asked: &ShowRequest<'_>) -> Result<()> {
+    let line_view = asked.lines.is_some() || asked.grep.is_some();
+    if asked.raw && asked.json {
+        return Err(UsageError::raise(
+            "capture show: --raw and --json are two encodings of the same selection; pass one. \
+             --raw writes bytes, --json writes a byte-stable document",
+        ));
+    }
+    if asked.raw && line_view {
+        return Err(UsageError::raise(
+            "capture show: --raw writes bytes and --lines/--grep select decoded lines; pass \
+             --bytes to narrow a raw read",
+        ));
+    }
+    if asked.field.is_some() && (asked.raw || asked.byte_range.is_some()) {
+        return Err(UsageError::raise(
+            "capture show: --field selects decoded text from a JSON document; --raw and --bytes \
+             read the stored bytes, so pass one or the other",
+        ));
+    }
+    if asked.byte_range.is_some() && line_view {
+        return Err(UsageError::raise(
+            "capture show: --bytes and --lines/--grep select differently; a byte range is not a \
+             line range",
+        ));
+    }
+    Ok(())
+}
+
 /// Read a frozen capture, with no second run of the command that made it.
 ///
 /// **Always [`ExitCode::Success`]**, for the same reason [`run_state_list`] is:
@@ -3705,36 +3739,7 @@ fn run_capture_show(
         json,
     } = *asked;
     let parsed = capture::Handle::parse(handle)?;
-    // REFUSED BEFORE ANYTHING IS READ, and refused rather than resolved
-    // (CLOUD-918). `--raw` and `--json` are two encodings of one selection, and a
-    // combination that had to pick between them silently is how a caller ends up
-    // with base64 where it wanted bytes. `--lines` and `--grep` are line views,
-    // which a byte stream is not — pairing either with `--raw` asks for two
-    // different products at once.
-    if raw && json {
-        return Err(UsageError::raise(
-            "capture show: --raw and --json are two encodings of the same selection; pass one. \
-             --raw writes bytes, --json writes a byte-stable document",
-        ));
-    }
-    if raw && (lines.is_some() || grep.is_some()) {
-        return Err(UsageError::raise(
-            "capture show: --raw writes bytes and --lines/--grep select decoded lines; pass \
-             --bytes to narrow a raw read",
-        ));
-    }
-    if field.is_some() && (raw || byte_range.is_some()) {
-        return Err(UsageError::raise(
-            "capture show: --field selects decoded text from a JSON document; --raw and --bytes \
-             read the stored bytes, so pass one or the other",
-        ));
-    }
-    if byte_range.is_some() && (lines.is_some() || grep.is_some()) {
-        return Err(UsageError::raise(
-            "capture show: --bytes and --lines/--grep select differently; a byte range is not a \
-             line range",
-        ));
-    }
+    refuse_show_combinations(asked)?;
     // A byte range is its own selection, so it is resolved ahead of the line
     // selectors rather than folded into their match — the two are not alternatives
     // over one axis.
@@ -15435,7 +15440,7 @@ fn run_mutate(
             Ok(ExitCode::Violation)
         }
         cli::MutateCommand::Sweep => {
-            let command = table.map(|table| table.command.as_slice()).unwrap_or(&[]);
+            let command = table.map_or(&[][..], |table| table.command.as_slice());
             run_mutate_sweep(root, names, command, out, err)
         }
     }
@@ -16817,7 +16822,6 @@ fn run_hook(
     let Some((raw, mut envelope)) = read_envelope(harness, mode, err)? else {
         return Ok(ExitCode::Success);
     };
-    seed_hook_authority(&envelope);
     // THE WRITE TARGET IS READ AS THE REPOSITORY READS IT (CLOUD-1133), and this
     // is the one place that can do it: `decode` is pure and has no repository,
     // and the readers below — the protected gate, and any module over
@@ -16825,7 +16829,8 @@ fn run_hook(
     // sends an absolute `file_path`, so before this line every one of those
     // comparisons was against a string that could not match, and a live `Write`
     // to a protected path was allowed. A target outside the tree is untouched.
-    envelope.relativise_writes(hook_authority_root());
+    // Seeded from this session's authority first (CLOUD-2204).
+    envelope.relativise_writes(seed_hook_authority(&envelope));
     // The capability table, consulted before anything keys on the event
     // (CLOUD-45). A host that does not declare this event fires nothing and
     // allows — never an error, never a deny: an absent capability is a statement
@@ -21316,9 +21321,9 @@ static HOOK_AUTHORITY_ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::
 /// A session that never stood in a Batten repository stays fail-open (CLOUD-70).
 //MUTANT-SUITE crates/batten/tests/it/hook_worktree_root.rs
 //MUTANT session-authority-ignored|s@^    if let Some(root) = state::recorded_session_authority(session, config::CONFIG_FILE) {$@    if let Some(root) = None::<PathBuf> {@|a_call_outside_the_repository_is_judged_by_the_session_authority
-fn seed_hook_authority(envelope: &hook::Envelope) {
+fn seed_hook_authority(envelope: &hook::Envelope) -> &'static Path {
     let Some(session) = envelope.session.as_deref() else {
-        return;
+        return hook_authority_root();
     };
     let here = anchor();
     if here.join(config::CONFIG_FILE).is_file() {
@@ -21326,11 +21331,12 @@ fn seed_hook_authority(envelope: &hook::Envelope) {
         // Pinned here too, so the readers below do not resolve `anchor` again:
         // a second git spawn on the hottest path for an answer already in hand.
         let _ = HOOK_AUTHORITY_ROOT.set(here);
-        return;
+        return hook_authority_root();
     }
     if let Some(root) = state::recorded_session_authority(session, config::CONFIG_FILE) {
         let _ = HOOK_AUTHORITY_ROOT.set(root);
     }
+    hook_authority_root()
 }
 
 //MUTANT no-config-mode-bundle-dropped|s@^        return Ok((hook::Policy::mode_default(harness)?, Vec::new()));$@        return Ok((hook::Policy::declaring_nothing(harness), Vec::new()));@|an_auto_mode_call_is_granted_where_no_authority_governs
