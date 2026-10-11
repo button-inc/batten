@@ -6766,6 +6766,7 @@ mod tests {
             key: crate::recorder::RecordKey::Branch,
             requires: vec!["id".to_owned()],
             refused_when_input: Vec::new(),
+            refused_when_result: Vec::new(),
             requires_input_matching: std::collections::BTreeMap::new(),
             columns: vec![crate::recorder::Column {
                 name: "verdict".to_owned(),

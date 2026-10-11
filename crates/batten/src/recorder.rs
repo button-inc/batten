@@ -115,6 +115,15 @@ pub struct Declared {
     /// language.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub refused_when_input: Vec<String>,
+    /// Paths into the RESULT that must NOT resolve for anything to be written
+    /// (CLOUD-2214).
+    ///
+    /// The censused use is a backgrounded runner call: its result carries
+    /// `backgroundTaskId`, and its `stdout` is the host's placeholder rather than
+    /// the command's output, so reading it records a measurement of nothing — a
+    /// `closes 0` over a PR body nobody saw.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub refused_when_result: Vec<String>,
     /// Input paths whose value must MATCH a declared pattern, by pattern id.
     ///
     /// **The selector a tool name cannot express.** [`Declared::tool`] narrows to
@@ -504,12 +513,17 @@ pub fn satisfied(declared: &Declared, context: &Context<'_>) -> bool {
 /// which tool names are runners, and that is a consumer fact — a core carrying
 /// the list would violate rule 1. The declaration a consumer CAN make is
 /// `requires_input_matching`, and every row here over a runner carries one.
+//MUTANT background-result-recorded|s@^            .refused_when_result$@            .refused_when_input@|a_backgrounded_result_is_not_recorded
 #[must_use]
 pub fn outcome(declared: &Declared, context: &Context<'_>) -> Outcome {
     let selected = declared
         .refused_when_input
         .iter()
         .all(|path| scalar(context.input, path).is_none())
+        && declared
+            .refused_when_result
+            .iter()
+            .all(|path| scalar(context.result, path).is_none())
         && declared
             .requires_input_matching
             .iter()
@@ -1277,6 +1291,7 @@ mod outcome_tests {
             key: RecordKey::Branch,
             requires: requires.iter().map(|path| (*path).to_owned()).collect(),
             refused_when_input: Vec::new(),
+            refused_when_result: Vec::new(),
             requires_input_matching: matching
                 .iter()
                 .map(|(path, pattern)| ((*path).to_owned(), (*pattern).to_owned()))
@@ -1370,5 +1385,37 @@ mod outcome_tests {
         assert_eq!(outcome(&row, &applies), Outcome::Applies);
         assert!(satisfied(&row, &applies));
         assert!(!satisfied(&row, &blocked));
+    }
+
+    /// CLOUD-2214: a backgrounded call's `stdout` is the host's placeholder, so
+    /// a row refusing `backgroundTaskId` does not read it as the command's.
+    #[test]
+    fn a_backgrounded_result_is_not_recorded() {
+        let mut patterns = std::collections::BTreeMap::new();
+        patterns.insert(
+            "fetch".to_owned(),
+            regex::Regex::new("gh pr view").expect("a test literal compiles"),
+        );
+        let programs = std::collections::BTreeMap::new();
+        let input = serde_json::json!({"command": "gh pr view --json body"});
+        let backgrounded = serde_json::json!({
+            "stdout": "Command running in background with ID: b1.",
+            "backgroundTaskId": "b1",
+        });
+        let foreground = serde_json::json!({"stdout": "Closes CLOUD-1"});
+        let mut row = declared(&["stdout"], &[("command", "fetch")]);
+        row.refused_when_result = vec!["backgroundTaskId".to_owned()];
+        let context = |result| Context {
+            input: &input,
+            result,
+            branch: Some("work"),
+            root: Path::new("."),
+            patterns: &patterns,
+            programs: &programs,
+            grammar: None,
+            now: 0,
+        };
+        assert_eq!(outcome(&row, &context(&backgrounded)), Outcome::NotSelected);
+        assert_eq!(outcome(&row, &context(&foreground)), Outcome::Applies);
     }
 }

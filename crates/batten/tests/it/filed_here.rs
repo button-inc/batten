@@ -219,6 +219,7 @@ fn recorders() -> Vec<batten::recorder::Declared> {
             key: batten::recorder::RecordKey::Branch,
             requires: Vec::new(),
             refused_when_input: Vec::new(),
+            refused_when_result: Vec::new(),
             requires_input_matching: std::collections::BTreeMap::new(),
             requires_recorded: None,
             columns: vec![batten::recorder::Column {
