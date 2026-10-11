@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.214](https://github.com/button-inc/batten/compare/v0.0.213...v0.0.214) - 2026-10-11
+
+### Fixed
+
+- *(install)* register engine install and generate installer with the surface gates
+- *(install)* add `engine install` and `generate installer` for a generated bootstrap
+
+### Other
+
+- *(install)* build the per-user directory from components (CLOUD-2203)
+- *(install)* name the placed binary with the platform's executable suffix (CLOUD-2203)
+- *(install)* drop the generate installer verb (CLOUD-2203)
+- *(install)* borrow the PATH entry rather than cloning it
+
 ## [0.0.213](https://github.com/button-inc/batten/compare/v0.0.212...v0.0.213) - 2026-10-11
 
 ### Fixed
