@@ -37,6 +37,11 @@ fn install(home: &Path, path: &[PathBuf], env: &[(&str, &str)]) -> std::process:
     command.output().expect("run batten engine install")
 }
 
+/// The file `engine install` places: `batten.exe` on Windows.
+fn binary() -> String {
+    format!("batten{}", std::env::consts::EXE_SUFFIX)
+}
+
 fn stdout(output: &std::process::Output) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
 }
@@ -54,11 +59,11 @@ fn the_binary_lands_in_the_per_user_directory_when_path_finds_it() {
         common::stderr(&output)
     );
     assert!(
-        stdout(&output).contains(&format!("installed={}/batten", user.display())),
+        stdout(&output).contains(&format!("installed={}", user.join(binary()).display())),
         "{}",
         stdout(&output)
     );
-    assert!(user.join("batten").is_file());
+    assert!(user.join(binary()).is_file());
 }
 
 #[test]
@@ -77,7 +82,7 @@ fn a_named_directory_wins() {
         stdout(&output),
         common::stderr(&output)
     );
-    assert!(named.join("batten").is_file());
+    assert!(named.join(binary()).is_file());
 }
 
 #[test]
@@ -105,5 +110,5 @@ fn an_off_path_destination_declared_deliberate_is_admitted() {
         common::stderr(&output)
     );
     assert!(stdout(&output).contains("off-path="), "{}", stdout(&output));
-    assert!(home.join(".local/bin/batten").is_file());
+    assert!(home.join(".local").join("bin").join(binary()).is_file());
 }
