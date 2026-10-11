@@ -2649,6 +2649,7 @@ fn warm_floor_in_force(config: &Prune, journal: &LapJournal) -> u64 {
 /// removal rather than about a state: `incremental` is simply absent on a tree
 /// that has never built incrementally, and reading that absence as cold would
 /// judge every CI lap against a full rebuild's floor.
+//MUTANT build-scripts-unread|s@^                \&\& (!compiled_a_build_script(fingerprint)$@                \&\& (true@|a_built_profile_whose_build_scripts_are_gone_is_cold
 fn basis_of(root: &Path) -> Basis {
     let built_profiles = cargo_owned(root, directories_named(root, ".fingerprint"));
     if built_profiles.is_empty() {
@@ -2661,16 +2662,40 @@ fn basis_of(root: &Path) -> Basis {
     // the profile directory `.fingerprint` sits in, so its sibling `deps` is the
     // one that profile's next build reads — and a profile whose `deps` was removed
     // answers here rather than vanishing from the walk.
+    //
+    // AND EVERY PROFILE THAT COMPILED A BUILD SCRIPT STILL HAS `build` (CLOUD-2222).
+    // `build` holds the compiled scripts themselves, so a profile without it
+    // rebuilds its whole graph however full `deps` is — CLOUD-2192 measured it, and
+    // made the root `cold`. Read only through `deps`, the tree could not show that
+    // drop, so a lap opening after it recorded a WARM tree, and its close was held
+    // to the cold floor by `floor_basis` whatever the lap rebuilt: every lap after a
+    // cold escalation refused at its close, the unreachable floor that function's
+    // own comment measured, reached through `build` instead of `deps`.
     let every_profile_ready = built_profiles.iter().all(|fingerprint| {
-        fingerprint
-            .parent()
-            .is_some_and(|profile| populated_directory(&profile.join("deps")))
+        fingerprint.parent().is_some_and(|profile| {
+            populated_directory(&profile.join("deps"))
+                && (!compiled_a_build_script(fingerprint)
+                    || populated_directory(&profile.join("build")))
+        })
     });
     if every_profile_ready {
         Basis::Warm
     } else {
         Basis::Cold
     }
+}
+
+/// Whether a profile's `.fingerprint` records a compiled build script: cargo
+/// names that unit's file `build-script-build-script-build`, and its binary
+/// lives under the sibling `build` directory.
+fn compiled_a_build_script(fingerprint: &Path) -> bool {
+    std::fs::read_dir(fingerprint).is_ok_and(|units| {
+        units.filter_map(Result::ok).any(|unit| {
+            unit.path()
+                .join("build-script-build-script-build")
+                .is_file()
+        })
+    })
 }
 
 /// The build directories cargo itself owns, from every directory of that name
@@ -3060,7 +3085,7 @@ fn directories_named(root: &Path, name: &str) -> Vec<PathBuf> {
 
 /// [`directories_named`], never descending into a directory that one of
 /// `shielded` names — a root a later `[[prune.regrowable]]` row owns whole.
-//MUTANT later-root-unshielded|s@^            if shielded.iter().any(\x7cother\x7c name_matches(\&entry_name, other)) {$@            if false {@|an_earlier_row_never_reaches_inside_a_later_rows_root
+//MUTANT later-root-unshielded|s@^                .any(\x7cother\x7c name_matches(\&entry_name, other))$@                .any(\x7c_\x7c false)@|an_earlier_row_never_reaches_inside_a_later_rows_root
 fn directories_named_outside(root: &Path, name: &str, shielded: &[&str]) -> Vec<PathBuf> {
     let mut found = Vec::new();
     let mut stack = vec![root.to_path_buf()];

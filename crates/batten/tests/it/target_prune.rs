@@ -433,6 +433,36 @@ fn a_profile_whose_deps_was_removed_is_cold_though_another_profile_is_built() {
 }
 
 #[test]
+fn a_built_profile_whose_build_scripts_are_gone_is_cold() {
+    // CLOUD-2222. `build` holds the compiled build scripts, so a profile that
+    // compiled one and lost `build` rebuilds its whole graph (CLOUD-2192's
+    // measurement). Read only through `deps` that tree was warm, so the lap
+    // opening on it recorded a warm tree and its close was held to the cold floor
+    // whatever it rebuilt.
+    let repo = repo("target-prune-build-scripts-gone");
+    built_profile(&repo, "debug");
+    let unit = repo.join("target/debug/.fingerprint/serde-0123456789abcdef");
+    std::fs::create_dir_all(&unit).unwrap();
+    std::fs::write(unit.join("build-script-build-script-build"), b"fp").unwrap();
+    let script = repo.join("target/debug/build/serde-0123456789abcdef");
+    std::fs::create_dir_all(&script).unwrap();
+    std::fs::write(
+        script.join("build_script_build-0123456789abcdef"),
+        vec![0_u8; 1024],
+    )
+    .unwrap();
+    let warm = said(&prune(&repo, "20000", &["-y"]));
+    assert!(warm.contains("warm floor"), "scripts present: {warm}");
+
+    std::fs::remove_dir_all(repo.join("target/debug/build")).unwrap();
+    let cold = said(&prune(&repo, "20000", &["-y"]));
+    assert!(
+        cold.contains("cold floor"),
+        "a profile whose compiled build scripts are gone rebuilds from nothing: {cold}"
+    );
+}
+
+#[test]
 fn every_built_profile_intact_is_still_warm() {
     // ANTI-VACUITY. Without this the repair is satisfied by calling every tree
     // cold, which raises the COLD floor instead and fails the same way one bucket
