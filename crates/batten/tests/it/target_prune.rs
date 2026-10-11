@@ -2711,3 +2711,26 @@ fn a_table_read_alone_still_refuses_below_its_floor() {
     let output = prune(&repo, "1000", &["-y"]);
     assert_eq!(output.status.code(), Some(2), "{}", said(&output));
 }
+
+/// `target/<profile>/build` holds the COMPILED build scripts, so dropping it is
+/// basis-moving (CLOUD-2192). Measured 2026-10-11 under
+/// `CARGO_LOG=cargo::core::compiler::fingerprint=info` after an escalation took
+/// the root as `cold = false`: 170 crates compiled, every root
+/// `FailedToReadMetadata` on a `build_script_build` binary under it, for a
+/// directory of 20 MB. A row declaring it warm lets the escalation print "the
+/// next build is still warm" over a full rebuild.
+#[test]
+fn the_committed_build_root_is_basis_moving() {
+    let prune = batten::prune::declared_alone(&common::at_root("."))
+        .expect("this repository's committed [prune] table loads");
+    let build: Vec<_> = prune
+        .regrowable
+        .iter()
+        .filter(|row| row.name == "build")
+        .collect();
+    assert_eq!(build.len(), 1, "the `build` root is declared once");
+    assert!(
+        build[0].cold,
+        "dropping `build` makes the next cargo build cold"
+    );
+}

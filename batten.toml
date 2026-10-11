@@ -11047,12 +11047,19 @@ cold = false
 name = "flycheck*"
 cold = false
 
-# Build-script output, and `false` for `incremental`'s reason above: losing it
-# reruns the build scripts and rebuilds what depended on them, which is a fraction
-# of the artifact set rather than all of it.
+# THE COMPILED BUILD SCRIPTS, AND THEREFORE BASIS-MOVING (CLOUD-2192). This row
+# said `false`, reading the directory as build-script OUTPUT whose loss rebuilds
+# "a fraction of the artifact set". Measured 2026-10-11 under
+# `CARGO_LOG=cargo::core::compiler::fingerprint=info` after an escalation took
+# it: 170 crates compiled, every root `FailedToReadMetadata` on
+# `target/debug/build/<crate>-<hash>/build_script_build-<hash>`, and 166 of them
+# dirty only as `UnitDependencyInfoChanged` downstream. The directory held 20 MB;
+# the lap that rebuilt it consumed 17532 MB and ran the volume out. `true` puts it
+# in the basis-moving pass, taken only once every warm root failed to recover the
+# floor, and an escalation that takes it now says the next build is cold.
 [[prune.regrowable]]
 name = "build"
-cold = false
+cold = true
 
 # `CARGO_TARGET_TMPDIR` — the integration suite's fixture scratch, and the root
 # whose absence from this table was measured rather than guessed (CLOUD-1274).
