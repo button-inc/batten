@@ -1050,6 +1050,11 @@ pub struct Mutate {
     /// carries, so there is no population to bound by default.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub scope: Vec<String>,
+    /// The `command` mutation runner's argv (CLOUD-2211): a TOML array, never
+    /// word-split, run once with the changed sources it owns appended. Its exit
+    /// is the contract: 0 caught, 2 survived, anything else could-not-look.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub command: Vec<String>,
 }
 
 /// The `[receipt]` table: which receipts a head must carry to be called verified.

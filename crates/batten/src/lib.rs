@@ -15296,15 +15296,21 @@ fn run_registered_runner(
         gates: run.sources,
     };
     let code = sweep.code();
-    if code == ExitCode::Success {
+    let shard = shard
+        .map(|shard| format!(" (shard {shard})"))
+        .unwrap_or_default();
+    if code == ExitCode::Success && kind == mutate::RunnerKind::Command {
+        // A command runner reports no count, so none is printed (CLOUD-2211).
         writeln!(
             out,
-            "mutate sweep: {} mutant(s) across {} changed source(s) by {id}{}, every one caught",
-            run.mutants,
-            run.sources,
-            shard
-                .map(|shard| format!(" (shard {shard})"))
-                .unwrap_or_default()
+            "mutate sweep: {} changed source(s) by {id}{shard}, every one caught",
+            run.sources
+        )?;
+    } else if code == ExitCode::Success {
+        writeln!(
+            out,
+            "mutate sweep: {} mutant(s) across {} changed source(s) by {id}{shard}, every one caught",
+            run.mutants, run.sources
         )?;
     } else {
         writeln!(
@@ -15428,7 +15434,10 @@ fn run_mutate(
             )?;
             Ok(ExitCode::Violation)
         }
-        cli::MutateCommand::Sweep => run_mutate_sweep(root, names, out, err),
+        cli::MutateCommand::Sweep => {
+            let command = table.map(|table| table.command.as_slice()).unwrap_or(&[]);
+            run_mutate_sweep(root, names, command, out, err)
+        }
     }
 }
 
@@ -15437,16 +15446,18 @@ fn run_mutate(
 fn run_mutate_sweep(
     root: &Path,
     names: Vec<String>,
+    command: &[String],
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
-    let registry = match mutate::Registry::from_env() {
-        Ok(registry) => registry,
-        Err(reason) => {
-            writeln!(err, "::error:: mutate: {reason}")?;
-            return Ok(ExitCode::Usage);
-        }
-    };
+    let registry =
+        match mutate::Registry::from_env().and_then(|registry| registry.with_command(command)) {
+            Ok(registry) => registry,
+            Err(reason) => {
+                writeln!(err, "::error:: mutate: {reason}")?;
+                return Ok(ExitCode::Usage);
+            }
+        };
     let narrowed = narrow_to_change(root, names, &registry, err)?;
     // ONE SHARD IS A SLICE OF BOTH HALVES (CLOUD-1746). The declared runner's
     // gates cost a suite build per mutant, and 94 of them across 14 touched gates

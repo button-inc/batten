@@ -540,6 +540,14 @@ pub enum Verdict {
     RunnerAbsent,
     /// Two registered runners claim one source, so which judged it is unknown.
     RunnerOverlap,
+    /// A `command` runner exited with neither 0 (caught) nor 2 (survived), or
+    /// ran out of time, so it said nothing about the mutants (CLOUD-2211).
+    ///
+    /// NOT 1 FOR A SURVIVOR, because 1 is what an uncaught exception or a
+    /// crashed wrapper exits with: reading it as a survivor would report a
+    /// broken runner as a coverage gap, and reading it as caught would report it
+    /// as coverage.
+    RunnerErrored { code: Option<i32> },
 }
 
 impl Verdict {
@@ -570,6 +578,7 @@ impl Verdict {
                 | Verdict::UnappliableMutation
                 | Verdict::RunnerAbsent
                 | Verdict::RunnerOverlap
+                | Verdict::RunnerErrored { .. }
         )
     }
 }
@@ -600,6 +609,10 @@ impl fmt::Display for Verdict {
             Verdict::SelfMutatingRow => write!(out, "self-mutating-row"),
             Verdict::RunnerAbsent => write!(out, "runner-absent"),
             Verdict::RunnerOverlap => write!(out, "runner-overlap"),
+            Verdict::RunnerErrored { code: Some(code) } => {
+                write!(out, "runner-errored (exit {code})")
+            }
+            Verdict::RunnerErrored { code: None } => write!(out, "runner-errored (no exit)"),
         }
     }
 }
@@ -1125,6 +1138,12 @@ pub enum RunnerKind {
     /// functions of the Rust sources it owns, and runs against each the suites
     /// that source declares beside its own unit tests.
     CargoMutants,
+    /// The consumer's own mutation tool (CLOUD-2211), run once over the sources
+    /// it owns. Its argv is committed `[mutate] command`, so the CLOSED principle
+    /// above still holds: the program is one a reviewer reads in the authority,
+    /// and only its exit code is read — 0 caught, 2 survived, anything else
+    /// [`Verdict::RunnerErrored`].
+    Command,
 }
 
 impl RunnerKind {
@@ -1134,15 +1153,20 @@ impl RunnerKind {
         match self {
             RunnerKind::Declared => "declared",
             RunnerKind::CargoMutants => "cargo-mutants",
+            RunnerKind::Command => "command",
         }
     }
 
     /// The runner an id names, or `None` for an id no runner carries.
     #[must_use]
     pub fn parse(id: &str) -> Option<Self> {
-        [RunnerKind::Declared, RunnerKind::CargoMutants]
-            .into_iter()
-            .find(|kind| kind.id() == id)
+        [
+            RunnerKind::Declared,
+            RunnerKind::CargoMutants,
+            RunnerKind::Command,
+        ]
+        .into_iter()
+        .find(|kind| kind.id() == id)
     }
 }
 
@@ -1163,6 +1187,8 @@ impl RunnerKind {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Registry {
     owns: Vec<(RunnerKind, String)>,
+    /// The `command` runner's argv, from committed `[mutate] command`.
+    command: Vec<String>,
 }
 
 impl Registry {
@@ -1184,8 +1210,8 @@ impl Registry {
             };
             let Some(kind) = RunnerKind::parse(id.trim()) else {
                 bail!(
-                    "{RUNNERS} names `{}`, which is no runner: the runners are `declared` and \
-                     `cargo-mutants`",
+                    "{RUNNERS} names `{}`, which is no runner: the runners are `declared`, \
+                     `cargo-mutants` and `command`",
                     id.trim()
                 );
             };
@@ -1203,7 +1229,28 @@ impl Registry {
                 owns.push((kind, glob.to_owned()));
             }
         }
-        Ok(Self { owns })
+        Ok(Self {
+            owns,
+            command: Vec::new(),
+        })
+    }
+
+    /// Attach the `command` runner's committed argv (CLOUD-2211).
+    ///
+    /// # Errors
+    ///
+    /// The registry registers `command` and `[mutate] command` declares no argv:
+    /// a runner with nothing to run would otherwise be found absent only where it
+    /// runs, as a could-not-look, rather than here as the usage error it is.
+    pub fn with_command(mut self, argv: &[String]) -> Result<Self> {
+        if argv.is_empty() && self.registered().contains(&RunnerKind::Command) {
+            bail!(
+                "{RUNNERS} registers `command`, and `[mutate] command` in batten.toml declares no \
+                 argv for it to run"
+            );
+        }
+        self.command = argv.to_vec();
+        Ok(self)
     }
 
     /// The registry `$MUTANT_RUNNERS` declares; unset is the empty registry, in
@@ -1304,6 +1351,14 @@ pub fn unresolvable(root: &Path, registry: &Registry) -> Vec<Finding> {
                 RunnerKind::CargoMutants => {
                     vec![String::from("mutants"), String::from("--version")]
                 }
+                // A LOOKUP, NEVER A PROBE RUN: the consumer's program has no
+                // `--version` contract, and running it would be the sweep itself.
+                RunnerKind::Command => {
+                    return !registry
+                        .command
+                        .first()
+                        .is_some_and(|program| resolves(root, program));
+                }
             };
             !spawn(root, Program::Cargo, &args, &[], HOUSEKEEPING_BOUND).is_ok_and(|ran| ran.ok)
         })
@@ -1314,6 +1369,34 @@ pub fn unresolvable(root: &Path, registry: &Registry) -> Vec<Finding> {
             owner: None,
         })
         .collect()
+}
+
+/// Whether `program` names something runnable from `root`: a path (any name
+/// with a separator) that is a file, or a bare name found on `PATH`.
+fn resolves(root: &Path, program: &str) -> bool {
+    if program.contains('/') {
+        return root.join(program).is_file();
+    }
+    std::env::var_os("PATH")
+        .is_some_and(|path| std::env::split_paths(&path).any(|dir| dir.join(program).is_file()))
+}
+
+/// What a `command` runner's exit says (CLOUD-2211): 0 caught, 2 survived, and
+/// anything else — 1 included, which is a crash's code — could-not-look.
+//MUTANT command-exit-unread|s@^    match ran.code {$@    match Some(0) {@|a_command_runner_exit_two_is_survived
+//MUTANT command-error-read-as-caught|s@^        code => Verdict::RunnerErrored { code },$@        _ => Verdict::Caught,@|a_command_runner_that_errors_cannot_look
+#[must_use]
+fn command_verdict(ran: &Ran) -> Verdict {
+    if ran.timed_out {
+        return Verdict::RunnerErrored { code: None };
+    }
+    match ran.code {
+        Some(0) => Verdict::Caught,
+        Some(2) => Verdict::Survived {
+            want: String::from("exit 2"),
+        },
+        code => Verdict::RunnerErrored { code },
+    }
 }
 
 /// Run `kind` over the sources it owns that changed since `base`.
@@ -1352,6 +1435,26 @@ pub fn run_registered(
     let sources = owned_changes(root, changed, registry, kind);
     result.sources = sources.len();
     if kind == RunnerKind::Declared || sources.is_empty() {
+        return Ok(result);
+    }
+    if kind == RunnerKind::Command {
+        // ONCE, OVER EVERY OWNED SOURCE, in the checkout: the tool owns its own
+        // staging, and `$MUTANT_SHARD` reaches it through the inherited
+        // environment unchanged.
+        let Some((program, args)) = registry.command.split_first() else {
+            bail!("mutate: `command` is registered and `[mutate] command` declares no argv");
+        };
+        let args: Vec<String> = args.iter().chain(&sources).cloned().collect();
+        let ran = spawn(root, Program::Command(program), &args, &[], runner_bound())?;
+        let verdict = command_verdict(&ran);
+        if verdict.is_finding() {
+            result.findings.push(Finding {
+                gate: kind.id().to_owned(),
+                slug: None,
+                verdict,
+                owner: None,
+            });
+        }
         return Ok(result);
     }
     let diff = spawn(
@@ -1829,6 +1932,9 @@ fn reconcile(dir: &Path, tracked: &std::collections::BTreeSet<String>) -> Result
 pub struct Ran {
     /// Whether it exited zero.
     pub ok: bool,
+    /// Its exit code, `None` for a child ended by a signal. Read by the
+    /// `command` runner, whose whole contract is the code (CLOUD-2211).
+    pub code: Option<i32>,
     /// Its combined output, which is scanned for case lines and never reported.
     pub output: String,
     /// Whether [`suite_bound`] expired and this process killed the child
@@ -1865,6 +1971,9 @@ enum Program<'a> {
     /// `gix` computes a tree delta but writes no unified patch, and a second
     /// patch writer would be a second reading of what changed.
     Git,
+    /// The consumer's own mutation tool, `[mutate] command`'s first element
+    /// (CLOUD-2211): committed in the reviewed authority, like a suite runner.
+    Command(&'a str),
 }
 
 impl Program<'_> {
@@ -1873,7 +1982,7 @@ impl Program<'_> {
             Program::Sed => "sed",
             Program::Cargo => "cargo",
             Program::Git => "git",
-            Program::Suite(program) => program,
+            Program::Suite(program) | Program::Command(program) => program,
         }
     }
 }
@@ -2122,6 +2231,7 @@ fn finish(
     let _ = fs::remove_dir_all(capture);
     Ran {
         ok: status.success(),
+        code: status.code(),
         output,
         // The ordinary path. The hang path above overrides it, and it is the ONE
         // caller that may: a `Ran` built anywhere else describes a child that
@@ -3474,6 +3584,7 @@ mod tests {
                 (RunnerKind::CargoMutants, String::from("**/*.rs")),
                 (RunnerKind::Declared, String::from("crates/**")),
             ],
+            command: Vec::new(),
         };
         assert!(registry.owner("crates/a/src/lib.rs").is_err());
         assert!(registry.declares(&row_from("crates/a/src/lib.rs")));
@@ -3514,6 +3625,7 @@ mod tests {
     fn ran(ok: bool) -> Ran {
         Ran {
             ok,
+            code: Some(i32::from(!ok)),
             output: String::new(),
             timed_out: false,
         }

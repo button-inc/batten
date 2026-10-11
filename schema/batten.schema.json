@@ -1758,6 +1758,14 @@
             "maxLength": 1536
           }
         },
+        "refused-when-result": {
+          "description": "Paths into the RESULT that must NOT resolve for anything to be written\n(CLOUD-2214).\n\nThe censused use is a backgrounded runner call: its result carries\n`backgroundTaskId`, and its `stdout` is the host's placeholder rather than\nthe command's output, so reading it records a measurement of nothing — a\n`closes 0` over a PR body nobody saw.",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 1536
+          }
+        },
         "requires": {
           "description": "Paths into the RESULT that must resolve for anything to be written.\n\nThe success predicate, exactly as [`crate::mint::satisfied`] is: a result\nthat does not carry these is a call that did not do the thing, and\nrecording it would put a row in the journal for work nobody did.",
           "type": "array",
@@ -3295,6 +3303,14 @@
       "description": "The `[mutate]` table: which gates `batten mutate` must show able to fail\n(CLOUD-2010).\n\n# Why a committed table, and why the variable only raises it\n\nThe enforced set was an environment variable that only this repository's own\ntask runner set, so every consumer's `mutate census` refused with\n`MUTANT_GATES is unset` and a consumer's suite could be shown to pass but\nnever shown able to fail. House-style §8 is the shape: ONE committed\nauthority, plus raise-only overrides. `$MUTANT_GATES` still adds names; it\ncan never remove one this table declares.\n\nThe `#MUTANT` rows themselves stay beside the code (`mutate.rs`'s `ROW`):\nthis table names WHICH gates are enforced, never how one is mutated, so it\nis not the second authority a manifest of mutations would be.",
       "type": "object",
       "properties": {
+        "command": {
+          "description": "The `command` mutation runner's argv (CLOUD-2211): a TOML array, never\nword-split, run once with the changed sources it owns appended. Its exit\nis the contract: 0 caught, 2 survived, anything else could-not-look.",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 1536
+          }
+        },
         "gates": {
           "description": "The enforced gates. Each entry is a gate name exactly as `$MUTANT_GATES`\ncarries one, or — when it contains `*` — a glob over tracked paths,\nexpanded sorted to the name each matched file already has as a subject\n(`X` for `policy/X.rego`, the task name for `mise-tasks/X.sh`) and to the\nfile's own path only where no other arm names it. A glob matching\nnothing is kept as written, so the census reports it `names-no-subject`.",
           "type": "array",

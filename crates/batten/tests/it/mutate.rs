@@ -1260,6 +1260,83 @@ fn a_registered_runner_that_does_not_resolve_cannot_look() {
     assert!(out.contains("cargo-mutants runner-absent"), "{out}{err}");
 }
 
+/// A `command` runner (CLOUD-2211) over the changed Rust gate: `[mutate]
+/// command` names a stub that records its argv and exits `code`.
+#[cfg(unix)]
+fn sweep_command(name: &str, code: i32) -> (PathBuf, i32, String, String) {
+    let root = rust_gate_repo(name);
+    write(
+        &root,
+        "batten.toml",
+        "version = 1\n\n[mutate]\ncommand = [\"./mutscore.sh\", \"--fail-over\", \"0\"]\n",
+    );
+    write_program(
+        &root,
+        "mutscore.sh",
+        &format!("#!/bin/sh\nprintf '%s\\n' \"$@\" > argv.txt\nexit {code}\n"),
+    );
+    let (status, out, err) = sweep_registered(
+        &root,
+        "toy,other,engine-rusty",
+        "HEAD",
+        "command=crates/**/*.rs",
+        Some("command"),
+    );
+    (root, status, out, err)
+}
+
+#[cfg(unix)]
+#[test]
+fn a_command_runner_exit_zero_is_caught() {
+    let (root, code, out, err) = sweep_command("command-caught", 0);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(
+        out.contains("1 changed source(s) by command, every one caught"),
+        "{out}{err}"
+    );
+    let argv = fs::read_to_string(root.join("argv.txt")).expect("the stub ran");
+    assert_eq!(
+        argv, "--fail-over\n0\ncrates/batten/src/rusty.rs\n",
+        "the declared argv, then the owned sources"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_command_runner_exit_two_is_survived() {
+    let (_, code, out, err) = sweep_command("command-survived", 2);
+    assert_eq!(code, 2, "{out}{err}");
+    assert!(out.contains("command SURVIVED (exit 2)"), "{out}{err}");
+}
+
+/// Exit 1 is a crash's code (an uncaught exception), never a survivor and
+/// never every mutant caught.
+#[cfg(unix)]
+#[test]
+fn a_command_runner_that_errors_cannot_look() {
+    let (_, code, out, err) = sweep_command("command-errored", 1);
+    assert_eq!(code, 3, "{out}{err}");
+    assert!(
+        out.contains("command runner-errored (exit 1)"),
+        "{out}{err}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_command_entry_without_a_declared_argv_is_refused() {
+    let root = rust_gate_repo("command-undeclared");
+    let (code, out, err) = sweep_registered(
+        &root,
+        "toy,other,engine-rusty",
+        "HEAD",
+        "command=crates/**/*.rs",
+        Some("command"),
+    );
+    assert_eq!(code, 1, "{out}{err}");
+    assert!(err.contains("[mutate] command"), "{err}");
+}
+
 /// A WHOLE sweep with a runner registered still leaves that runner's rows alone:
 /// no change narrows anything here, so only the row filter keeps the declared
 /// runner off the Rust row it cannot apply.
