@@ -49,7 +49,7 @@ fn stdout(output: &std::process::Output) -> String {
 #[test]
 fn the_binary_lands_in_the_per_user_directory_when_path_finds_it() {
     let home = common::scratch_repo("engine-install-user");
-    let user = home.join(".local/bin");
+    let user = home.join(".local").join("bin");
     std::fs::create_dir_all(&user).unwrap();
     let output = install(&home, std::slice::from_ref(&user), &[]);
     assert!(
