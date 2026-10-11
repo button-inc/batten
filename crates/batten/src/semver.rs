@@ -615,7 +615,7 @@ pub fn current_rustdoc(
 /// The FIRST `error` line of a child's stderr, else its last line (CLOUD-2221).
 ///
 /// Still one line, for [`last_line`]'s reason, but the right one: cargo ends a
-/// failed build with its summary, `error: could not document \`batten\``,
+/// failed build with its summary, "error: could not document `batten`",
 /// and the cause is the first diagnostic above it. Measured on a land lap: the
 /// gate refused with the summary alone, and the reason was nowhere to read.
 //MUTANT build-cause-dropped|s@^        .find(\x7cline\x7c line.trim_start().starts_with("error"))$@        .find(\x7c_\x7c false)@|a_failed_build_names_its_first_error_not_its_summary
