@@ -78,6 +78,18 @@ fn report(failure: &anyhow::Error, mode: Mode, err: &mut dyn Write) -> ExitCode 
         let _ = output::verdict(err, &denial.to_string());
         return batten::ExitCode::Violation.into();
     }
+    // A READER THAT HUNG UP IS NOT A BATTEN FAULT. `batten capture list | head`
+    // closes stdout once it has its lines, and the next write fails `EPIPE`.
+    // The run did not complete, so the code stays `Internal` — success would
+    // claim a verdict it never finished printing — but a finding and a
+    // backtrace would diagnose a defect that does not exist.
+    if failure.chain().any(|cause| {
+        cause
+            .downcast_ref::<io::Error>()
+            .is_some_and(|error| error.kind() == io::ErrorKind::BrokenPipe)
+    }) {
+        return batten::ExitCode::Internal.into();
+    }
     let code = if failure.downcast_ref::<batten::UsageError>().is_some() {
         batten::ExitCode::Usage
     } else {

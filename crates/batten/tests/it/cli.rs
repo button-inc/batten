@@ -13731,3 +13731,28 @@ fn a_field_that_names_nothing_is_a_usage_error() {
     let raw = run_capture(&repo, &home, &["show", &handle, "--field", "/id", "--raw"]);
     assert_eq!(raw.status.code(), Some(1), "--field with --raw is refused");
 }
+
+#[test]
+fn a_reader_that_hangs_up_ends_the_run_without_a_diagnosis() {
+    // `batten capture list | head` closed stdout once `head` had its lines,
+    // and the next write's `EPIPE` printed a `verb run broken` finding and a
+    // whole backtrace, diagnosing a defect that did not exist. The run did not
+    // finish, so the code stays `3`; stderr says nothing.
+    let dir = scratch("cli-reader-hung-up");
+    let (reader, writer) = std::io::pipe().expect("a pipe");
+    drop(reader);
+    let output = batten()
+        .args(["policy", "explain", "input parse refused"])
+        .current_dir(&dir)
+        .env("RUST_BACKTRACE", "1")
+        .stdout(Stdio::from(writer))
+        .stderr(Stdio::piped())
+        .output()
+        .expect("run batten");
+    assert_eq!(output.status.code(), Some(3));
+    assert!(
+        output.stderr.is_empty(),
+        "a closed reader is not diagnosed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
