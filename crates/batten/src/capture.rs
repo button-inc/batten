@@ -401,14 +401,18 @@ pub struct Decoded {
 ///   rather than of map iteration.
 /// * a bare string.
 ///
-/// Anything else is [`RESPONSE_SHAPE_UNREADABLE`] rather than zero bytes.
+/// **Any other shape is stored as the value's canonical JSON** (CLOUD-2223),
+/// still [`Fidelity::DecodedContent`]: exact for the content, and not a
+/// reproduction of the host's framing, which is what that arm already says. It
+/// used to be [`RESPONSE_SHAPE_UNREADABLE`], and measured over 300 rows of one
+/// session that dropped every `Read`, `Grep`, `Edit`, `Glob`, `ToolSearch` and
+/// `WebFetch` result: the store held Bash and MCP output only, so "every
+/// response is captured" was false for most of the tool surface.
 ///
 /// # Errors
 ///
-/// Returns [`RESPONSE_SHAPE_UNREADABLE`] when the member is in none of the three
-/// shapes above. **Could-not-look, never zero bytes** — recording an unread shape
-/// as an empty response would make "the tool said nothing" and "we could not read
-/// what it said" one record, which is `facts::rows_in`'s own distinction.
+/// None today; the signature keeps the could-not-look channel for a host whose
+/// member cannot be serialized at all.
 pub fn decode_response(result: &serde_json::Value) -> Result<Decoded, &'static str> {
     match result {
         serde_json::Value::String(text) => Ok(Decoded {
@@ -430,7 +434,7 @@ pub fn decode_response(result: &serde_json::Value) -> Result<Decoded, &'static s
             // An EMPTY array is a real response of zero bytes — `[]` is a host
             // saying "nothing", which is not the same as a shape we cannot read.
             if blocks == 0 && !items.is_empty() {
-                return Err(RESPONSE_SHAPE_UNREADABLE);
+                return structured(result);
             }
             Ok(Decoded {
                 bytes,
@@ -453,7 +457,7 @@ pub fn decode_response(result: &serde_json::Value) -> Result<Decoded, &'static s
             // An empty object is zero bytes, for the empty array's reason. An
             // object with members but none we read is a shape, not an absence.
             if blocks == 0 && !map.is_empty() {
-                return Err(RESPONSE_SHAPE_UNREADABLE);
+                return structured(result);
             }
             Ok(Decoded {
                 bytes,
@@ -463,8 +467,21 @@ pub fn decode_response(result: &serde_json::Value) -> Result<Decoded, &'static s
         }
         // `Null` never reaches here: the caller gates on the member being
         // present, because absent and empty are two records.
-        _ => Err(RESPONSE_SHAPE_UNREADABLE),
+        _ => structured(result),
     }
+}
+
+/// A response in no text shape, stored as its canonical JSON (CLOUD-2223).
+//MUTANT-SUITE crates/batten/tests/it/result_bound.rs
+//MUTANT structured-result-dropped|s@^    serde_json::to_vec(result)$@    Err::<Vec<u8>, ()>(())@|a_structured_tool_result_is_stored
+fn structured(result: &serde_json::Value) -> Result<Decoded, &'static str> {
+    serde_json::to_vec(result)
+        .map(|bytes| Decoded {
+            bytes,
+            blocks: 1,
+            fidelity: Fidelity::DecodedContent,
+        })
+        .map_err(|_| RESPONSE_SHAPE_UNREADABLE)
 }
 
 /// A pointer to captured bytes: which stream, how many bytes, and their digest.
@@ -1376,6 +1393,80 @@ pub fn view(
     Ok(Some((path, index)))
 }
 
+/// Write the view of a TOOL RESULT and index its text leaves (CLOUD-2223).
+///
+/// [`view`]'s shape, one level deeper where it matters: a result nests its text
+/// (`/file/content` for a read, `/stdout` for a shell), and a nested object
+/// printed as JSON puts the whole text on one escaped line no line range can
+/// address. So objects are walked to their leaves, and each leaf is a section
+/// whose lines are the text's own.
+///
+/// # Errors
+///
+/// When the state root cannot be resolved or the view cannot be written.
+//MUTANT-SUITE crates/batten/tests/it/result_bound.rs
+//MUTANT result-view-unflattened|s@^            serde_json::Value::Object(fields) if !fields.is_empty() => {$@            serde_json::Value::Object(fields) if fields.is_empty() => {@|an_oversized_result_becomes_a_pointer_to_a_view_of_its_text
+pub fn result_view(
+    repo_root: &Path,
+    capture: &Capture,
+    result: &serde_json::Value,
+) -> Result<(PathBuf, Vec<ViewField>)> {
+    fn walk(
+        pointer: &str,
+        value: &serde_json::Value,
+        text: &mut String,
+        index: &mut Vec<ViewField>,
+        line: &mut usize,
+    ) -> Result<()> {
+        match value {
+            serde_json::Value::Object(fields) if !fields.is_empty() => {
+                for (key, child) in fields {
+                    let escaped = key.replace('~', "~0").replace('/', "~1");
+                    walk(&format!("{pointer}/{escaped}"), child, text, index, line)?;
+                }
+                return Ok(());
+            }
+            serde_json::Value::Null => return Ok(()),
+            _ => {}
+        }
+        let body = match value {
+            serde_json::Value::String(content) => content.clone(),
+            other => serde_json::to_string_pretty(other)?,
+        };
+        if body.is_empty() {
+            return Ok(());
+        }
+        let pointer = if pointer.is_empty() { "/" } else { pointer };
+        text.push_str("## ");
+        text.push_str(pointer);
+        text.push('\n');
+        *line += 1;
+        let lines = body.matches('\n').count() + 1;
+        index.push(ViewField {
+            pointer: pointer.to_owned(),
+            from: *line + 1,
+            to: *line + lines,
+            bytes: body.len(),
+        });
+        text.push_str(&body);
+        text.push('\n');
+        *line += lines;
+        Ok(())
+    }
+    let mut text = String::new();
+    let mut index = Vec::new();
+    let mut line = 0usize;
+    walk("", result, &mut text, &mut index, &mut line)?;
+    let dir = captures_dir(repo_root)?;
+    let path = view_path_in(&dir, &capture.digest);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
+    }
+    crate::durable::replace(&path, text.as_bytes())
+        .with_context(|| format!("write the view {}", path.display()))?;
+    Ok((path, index))
+}
+
 /// Where the view of the capture `digest` lives in the store `dir`.
 fn view_path_in(dir: &Path, digest: &str) -> PathBuf {
     dir.join("views").join(format!("{digest}.md"))
@@ -1797,6 +1888,110 @@ pub struct CaptureConfig {
     /// deciding what may leave the process.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inline_max_bytes: Option<u64>,
+    /// The `o200k` token count over which ANY tool's result reaches the model as
+    /// a pointer to its stored view rather than as its text (CLOUD-2223).
+    /// Absent means [`DEFAULT_RESULT_MAX_TOKENS`].
+    ///
+    /// Tokens, because the window is spent in tokens: a byte or line count is a
+    /// proxy that is 3-4x out on code and worse on dense text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result_max_tokens: Option<u64>,
+}
+
+/// The default bound on a tool result the model reads whole (CLOUD-2223), in
+/// `o200k` tokens. Measured on PR #1132: one task log read whole was 57,764
+/// tokens, and two of its lines were the verdict.
+pub const DEFAULT_RESULT_MAX_TOKENS: u64 = 2000;
+
+/// The result bound `config` declares, or the default.
+#[must_use]
+pub fn result_max_tokens(config: Option<&CaptureConfig>) -> u64 {
+    config
+        .and_then(|it| it.result_max_tokens)
+        .unwrap_or(DEFAULT_RESULT_MAX_TOKENS)
+}
+
+/// Whether `texts` exceed `bound` `o200k` tokens (CLOUD-2223).
+///
+/// **It stops counting at `bound + 1`.** The question is "over or not", so the
+/// count is accumulated chunk by chunk and returns the moment it passes the
+/// bound: a 57k-token log costs about `bound` tokens of encoding, not 57k.
+///
+/// Chunks end at a newline, which `o200k`'s pre-tokenizer already treats as a
+/// piece boundary, so splitting there changes the count by at most a merge per
+/// chunk; a chunk with no newline in reach is cut at a char boundary.
+///
+/// The table loads once per process and only when asked: the caller asks only
+/// for a result whose BYTES exceed the bound (every `o200k` token is at least one
+/// byte), so the hook's ordinary path never loads it. A table that cannot load
+/// counts bytes, an over-count, so that failure yields a pointer, never an
+/// unbounded read.
+#[must_use]
+pub fn exceeds_o200k(texts: &[&str], bound: u64) -> bool {
+    static BPE: std::sync::OnceLock<Option<tiktoken_rs::CoreBPE>> = std::sync::OnceLock::new();
+    let bpe = BPE.get_or_init(|| tiktoken_rs::o200k_base().ok()).as_ref();
+    exceeds_counting(texts, bound, |chunk| {
+        bpe.map_or(chunk.len() as u64, |bpe| {
+            bpe.encode_ordinary(chunk).len() as u64
+        })
+    })
+}
+
+/// [`exceeds_o200k`]'s walk over any counter, so the case proving it stops can
+/// count what it was asked to encode.
+//MUTANT-SUITE crates/batten/src/capture.rs
+//MUTANT token-count-never-stops|s@^            if counted > bound {$@            if false {@|counting_stops_once_the_bound_is_passed
+fn exceeds_counting(texts: &[&str], bound: u64, mut count: impl FnMut(&str) -> u64) -> bool {
+    const CHUNK: usize = 16 * 1024;
+    let mut counted: u64 = 0;
+    for text in texts {
+        let mut rest = *text;
+        while !rest.is_empty() {
+            let mut end = rest.len().min(CHUNK);
+            while !rest.is_char_boundary(end) {
+                end -= 1;
+            }
+            if end < rest.len()
+                && let Some(newline) = rest[..end].rfind('\n')
+            {
+                end = newline + 1;
+            }
+            let (chunk, tail) = rest.split_at(end);
+            counted += count(chunk);
+            if counted > bound {
+                return true;
+            }
+            rest = tail;
+        }
+    }
+    false
+}
+
+#[cfg(test)]
+mod exceeds_tests {
+    #[test]
+    fn counting_stops_once_the_bound_is_passed() {
+        // 64 chunks of text, each counted as 100: the bound is passed on the
+        // second, so nothing after it is encoded.
+        let line = "x".repeat(1023) + "\n";
+        let text = line.repeat(16 * 64);
+        let mut asked = 0usize;
+        let over = super::exceeds_counting(&[text.as_str()], 150, |_| {
+            asked += 1;
+            100
+        });
+        assert!(over);
+        assert_eq!(
+            asked, 2,
+            "the count stops at the first chunk past the bound"
+        );
+        let mut all = 0usize;
+        assert!(!super::exceeds_counting(&[text.as_str()], u64::MAX, |_| {
+            all += 1;
+            1
+        }));
+        assert_eq!(all, 64, "under the bound, every chunk is counted once");
+    }
 }
 
 /// How a response renders: the bytes themselves, or an address for them.
@@ -2661,6 +2856,7 @@ mod tests {
         }
         let tight = CaptureConfig {
             inline_max_bytes: None,
+            result_max_tokens: None,
             max_bytes: Some(1),
             max_records: Some(1),
         };
@@ -2686,6 +2882,7 @@ mod tests {
         }
         let two = CaptureConfig {
             inline_max_bytes: None,
+            result_max_tokens: None,
             max_bytes: None,
             max_records: Some(2),
         };
@@ -2718,6 +2915,7 @@ mod tests {
         // could never do.
         let one = CaptureConfig {
             inline_max_bytes: None,
+            result_max_tokens: None,
             max_bytes: None,
             max_records: Some(0),
         };
@@ -2742,6 +2940,7 @@ mod tests {
         record_call_in(&root, &row("aaa", Some(&new.digest), None)).unwrap();
         let one = CaptureConfig {
             inline_max_bytes: None,
+            result_max_tokens: None,
             max_bytes: None,
             max_records: Some(1),
         };
@@ -2774,6 +2973,7 @@ mod tests {
         let stored = store_in(&root, Stream::Response, b"same").unwrap();
         let one = CaptureConfig {
             inline_max_bytes: None,
+            result_max_tokens: None,
             max_bytes: None,
             max_records: Some(1),
         };

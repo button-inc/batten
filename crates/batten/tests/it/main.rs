@@ -369,6 +369,7 @@ mod render_cli;
 mod repaired_arms;
 mod repetition;
 mod report_only;
+mod result_bound;
 mod retirement_doctrine;
 mod review_answered;
 mod review_dispatched;

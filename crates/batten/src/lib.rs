@@ -3630,6 +3630,12 @@ struct ShowRequest<'a> {
 //MUTANT-SUITE crates/batten/src/lib.rs
 //MUTANT view-route-dropped|s@^    \.with_document_route(&path\.display()\.to_string())$@    .with_severity(refusal::Severity::Note)@|the_view_pointer_names_each_field_and_the_view
 fn view_pointer(path: &Path, index: &[capture::ViewField]) -> String {
+    view_refusal(path, index).render_finding(refusal::Arm::Pointer)
+}
+
+/// The `output point now` finding [`view_pointer`] renders, for a channel that
+/// carries findings rather than lines.
+fn view_refusal(path: &Path, index: &[capture::ViewField]) -> refusal::Refusal {
     let subjects: Vec<verdict::Subject> = index
         .iter()
         .map(|field| {
@@ -3646,7 +3652,6 @@ fn view_pointer(path: &Path, index: &[capture::ViewField]) -> String {
     )
     .with_document_route(&path.display().to_string())
     .with_severity(refusal::Severity::Note)
-    .render_finding(refusal::Arm::Pointer)
 }
 
 /// The text of one field of a stored JSON document, named by an RFC 6901 JSON
@@ -16907,7 +16912,7 @@ fn run_hook(
     // same `Fix::Run`, which is the safe direction and a visible one.
     if envelope.event == hook::Event::PostTool {
         record_post_tool(overrides, &envelope, harness, &mut advice);
-        collapse_seen_output(harness, &envelope, out)?;
+        rewrite_post_tool(harness, &envelope, out, &mut advice)?;
     }
     // THE SAME CORRECTION AGAIN, ONE SELECTOR LATER (CLOUD-924). The paragraph
     // above records CLOUD-312 finding that "command-less" had stopped meaning
@@ -18594,6 +18599,42 @@ fn runs_engine(command: &str) -> bool {
         .any(|program| program.is_some_and(|program| program.rsplit('/').next() == Some("batten")))
 }
 
+/// What the model reads of a post-tool result: the seen-finding collapse and
+/// the result bound (CLOUD-2223), emitted as ONE document.
+//MUTANT-SUITE crates/batten/tests/it/result_bound.rs
+//MUTANT unrewritten-pointer-dropped|s@^            push_finding(advice, severity::AdvisoryTier::Advisory, pointer);$@            drop(pointer);@|a_host_that_cannot_rewrite_still_gets_the_pointer
+fn rewrite_post_tool(
+    harness: hook::Harness,
+    envelope: &hook::Envelope,
+    out: &mut dyn Write,
+    advice: &mut Vec<advisory::Advice>,
+) -> Result<()> {
+    // ONE DOCUMENT FOR BOTH REWRITES: the seen-finding collapse and the
+    // result bound each change what the model reads, and the host reads the
+    // first JSON document on stdout and drops the rest.
+    let collapsed = collapse_seen_output(envelope);
+    let current = collapsed.as_ref().unwrap_or(&envelope.result);
+    let bounded = bound_result(current);
+    let rewritten = bounded
+        .as_ref()
+        .map(|(result, _)| result)
+        .or(collapsed.as_ref());
+    let emitted = match rewritten {
+        Some(result) => hook::encode_tool_output(harness, &envelope.raw_event, result)?,
+        None => None,
+    };
+    match (emitted, bounded) {
+        (Some(body), _) => writeln!(out, "{body}")?,
+        // A HOST NOT MEASURED TO HONOUR A REWRITE still gets the pointer,
+        // as advisory context beside the result it could not replace.
+        (None, Some((_, pointer))) => {
+            push_finding(advice, severity::AdvisoryTier::Advisory, pointer);
+        }
+        (None, None) => {}
+    }
+    Ok(())
+}
+
 /// Mark every finding a tool's output carries as seen in this context, and cut
 /// the ones it had already seen to their pointer (CLOUD-2075 §D).
 ///
@@ -18602,19 +18643,13 @@ fn runs_engine(command: &str) -> bool {
 /// same lifecycle as a hook one. The rewrite document is emitted only where the
 /// host is measured to honour it ([`hook::encode_tool_output`]) and only when a
 /// line changed. A session-less payload marks nothing.
-fn collapse_seen_output(
-    harness: hook::Harness,
-    envelope: &hook::Envelope,
-    out: &mut dyn Write,
-) -> Result<()> {
-    let Some(context) = envelope.context() else {
-        return Ok(());
-    };
+fn collapse_seen_output(envelope: &hook::Envelope) -> Option<serde_json::Value> {
+    let context = envelope.context()?;
     // DATA IS NEVER REWRITTEN (CLOUD-2215): a `gh pr view` or a `cat` quoting a
     // finding is a document, and cutting its lines handed the model an altered
     // copy it could write back. Only a call that ran the engine collapses.
     if !runs_engine(&envelope.command) {
-        return Ok(());
+        return None;
     }
     let root = hook_authority_root();
     let mut rewritten = envelope.result.clone();
@@ -18631,12 +18666,94 @@ fn collapse_seen_output(
             rewritten[stream] = serde_json::Value::String(cut);
         }
     }
-    if changed
-        && let Some(body) = hook::encode_tool_output(harness, &envelope.raw_event, &rewritten)?
-    {
-        writeln!(out, "{body}")?;
+    changed.then_some(rewritten)
+}
+
+/// Bound what the model reads of ANY tool's result (CLOUD-2223).
+///
+/// The hook mediates every call, so every result passes here. One at or under
+/// the `[capture] result_max_tokens` bound, in `o200k` tokens, is untouched. One over it is stored
+/// whole, its text leaves are written to a view, and every text leaf that
+/// carried the bulk is replaced by the `output point now` line naming each
+/// leaf's view lines and the view: the result keeps the host's own shape and
+/// loses only its payload (rule 4). Returns the bounded result and the pointer.
+///
+/// Measured before this existed, PR #1132: one task log read whole was 57,764
+/// tokens, of which two lines were the verdict, and wide-context searches went
+/// the same way, because the only reductions were `mcp call`'s and the engine
+/// output collapse — none at the boundary every result crosses.
+///
+/// CHEAP WHEN SMALL: the size is read before config, and only a result over the
+/// inline threshold pays for reading the declared bound.
+//MUTANT-SUITE crates/batten/tests/it/result_bound.rs
+//MUTANT result-bound-ignored|s@^    if size <= bound {$@    if size <= u64::MAX {@|an_oversized_result_becomes_a_pointer_to_a_view_of_its_text
+//MUTANT small-result-rewritten|s@^    if size <= bound {$@    if size == 0 {@|a_result_within_the_bound_is_left_alone
+fn bound_result(result: &serde_json::Value) -> Option<(serde_json::Value, refusal::Refusal)> {
+    fn texts<'a>(value: &'a serde_json::Value, into: &mut Vec<&'a str>) {
+        match value {
+            serde_json::Value::String(text) => into.push(text),
+            serde_json::Value::Array(items) => {
+                for item in items {
+                    texts(item, into);
+                }
+            }
+            serde_json::Value::Object(fields) => {
+                for field in fields.values() {
+                    texts(field, into);
+                }
+            }
+            _ => {}
+        }
     }
-    Ok(())
+    // A leaf at or under this stays: a path, a count or a mode is the result's
+    // shape, not its payload.
+    const LEAF_KEEP_BYTES: usize = 256;
+    fn replace_bulk(value: &mut serde_json::Value, pointer: &str) {
+        match value {
+            serde_json::Value::String(text) if text.len() > LEAF_KEEP_BYTES => {
+                pointer.clone_into(text);
+            }
+            serde_json::Value::Array(items) => {
+                for item in items {
+                    replace_bulk(item, pointer);
+                }
+            }
+            serde_json::Value::Object(fields) => {
+                for field in fields.values_mut() {
+                    replace_bulk(field, pointer);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut leaves = Vec::new();
+    texts(result, &mut leaves);
+    let bytes: u64 = leaves.iter().map(|text| text.len() as u64).sum();
+    // EXACT AND FREE: an `o200k` token is at least one byte, so a result with no
+    // more bytes than the smallest bound anyone declares cheaply is under it,
+    // and config is not read on the ordinary path.
+    if bytes <= capture::DEFAULT_INLINE_MAX_BYTES {
+        return None;
+    }
+    let bound = capture::result_max_tokens(capture_budget().as_ref());
+    if bytes <= bound {
+        return None;
+    }
+    if !capture::exceeds_o200k(&leaves, bound) {
+        return None;
+    }
+    // No repository, no store: the bound needs somewhere to put the bytes it
+    // takes out of the window, and minting a state root under the cwd is what
+    // `capture_response` refuses for the same reason.
+    let root = git::repo_root(hook_authority_root()).ok()?;
+    let bytes = serde_json::to_vec(result).ok()?;
+    let stored = capture::store(&root, capture::Stream::Response, &bytes).ok()?;
+    let (path, index) = capture::result_view(&root, &stored, result).ok()?;
+    let pointer = view_refusal(&path, &index);
+    let line = pointer.render_finding(refusal::Arm::Pointer);
+    let mut bounded = result.clone();
+    replace_bulk(&mut bounded, &line);
+    Some((bounded, pointer))
 }
 
 /// Clear the drain's `unchanged` watermark for this session's lineage, so the

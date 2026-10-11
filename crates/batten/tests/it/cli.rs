@@ -12332,15 +12332,15 @@ fn an_mcp_content_block_response_is_captured_at_the_fidelity_it_declares() {
     );
 }
 
-/// A shape the decoder cannot read is COULD-NOT-LOOK, never zero bytes.
+/// A shape in none of the text forms is STORED as its canonical JSON, never
+/// dropped and never zero bytes (CLOUD-2223).
 ///
-/// `facts::rows_in`'s own distinction, on the capture surface: recording an
-/// unreadable shape as an empty response would make "the tool said nothing" and
-/// "we could not read what it said" one record — and the empty case is a real
-/// record of zero bytes, so the collapse would be silent.
+/// It used to be could-not-look, and that dropped every built-in tool's result
+/// from the store: measured over 300 rows of one session, every `Read`, `Grep`,
+/// `Edit`, `Glob`, `ToolSearch` and `WebFetch` response was absent.
 #[cfg(unix)]
 #[test]
-fn a_response_shape_the_decoder_cannot_read_is_recorded_as_such() {
+fn a_response_shape_in_no_text_form_is_stored_as_json() {
     let root = scratch("capture-unreadable-shape");
     let dir = common::Fixture::at(root.join("repo"))
         .config(AGENT_FACT_CONFIG)
@@ -12370,14 +12370,16 @@ fn a_response_shape_the_decoder_cannot_read_is_recorded_as_such() {
     let rows: serde_json::Value =
         serde_json::from_slice(&calls.stdout).expect("the call view is JSON");
     let row = &rows.as_array().expect("a calls array")[0];
-    assert_eq!(row["fidelity"], "unavailable");
-    assert_eq!(row["absent"], "capture-response-shape-unreadable");
+    // STORED, NOT DROPPED (CLOUD-2223): a shape in none of the text forms is
+    // its canonical JSON, at the fidelity that says it is decoded content.
+    assert_eq!(row["fidelity"], "decoded-content");
+    assert!(row.get("absent").is_none(), "{row}");
     assert!(
-        row.get("digest").is_none(),
-        "an unread shape must not claim a capture"
+        row.get("digest").is_some(),
+        "every response the host sends is in the store: {row}"
     );
-    // And no blob was minted, which is what "never zero bytes" means here.
-    assert!(stdout(&run_capture(&dir, &home, &["list", "--stream", "response"])).is_empty());
+    // And a blob was minted: the response is in the store, not only its row.
+    assert!(!stdout(&run_capture(&dir, &home, &["list", "--stream", "response"])).is_empty());
 }
 
 /// A store that cannot be written leaves the hook at exit 0 with a reason id.

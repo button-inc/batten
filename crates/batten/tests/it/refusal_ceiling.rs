@@ -774,7 +774,35 @@ fn a_compaction_forgets_and_the_next_firing_is_full() {
 /// The suite `capture-notice-misclassed` is killed in.
 #[test]
 fn a_capture_notice_is_a_classed_finding() {
+    // A STORE THAT CANNOT BE WRITTEN: every response shape is stored now
+    // (CLOUD-2223), so the notice comes from the store failing, driven through
+    // the state-root seam as `cli.rs`'s unwritable-store case does (the sandbox
+    // runs as root, so mode bits prove nothing; a FILE where the state dir goes
+    // fails `create_dir_all` with `ENOTDIR` for root too).
     let repo = fixture("capture-notice");
+    let home = common::scratch("capture-notice-home");
+    std::fs::write(home.join("data"), b"not a directory").unwrap();
+    let hook = |repo: &Path, value: &serde_json::Value| -> std::process::Output {
+        use common::StateHome as _;
+        use std::io::Write as _;
+        let mut command = common::batten();
+        command.state_home(&home);
+        let mut child = command
+            .args(["adjudicate", "--harness", "claude-code"])
+            .current_dir(repo)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(value.to_string().as_bytes())
+            .unwrap();
+        child.wait_with_output().unwrap()
+    };
     let unreadable = serde_json::json!({
         "hook_event_name": "PostToolUse",
         "session_id": "cap",
@@ -791,7 +819,7 @@ fn a_capture_notice_is_a_classed_finding() {
     };
     let first = notice(&hook(&repo, &unreadable));
     assert!(
-        first.starts_with("batten note output write missing at capture-response-shape-unreadable")
+        first.starts_with("batten note output write missing at capture-store-unwritable")
             && first.contains(FULL),
         "the notice names its class and reason and carries the definition: {first}"
     );

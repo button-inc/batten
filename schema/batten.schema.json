@@ -1056,6 +1056,15 @@
           ],
           "format": "uint64",
           "minimum": 0
+        },
+        "result_max_tokens": {
+          "description": "The `o200k` token count over which ANY tool's result reaches the model as\na pointer to its stored view rather than as its text (CLOUD-2223).\nAbsent means [`DEFAULT_RESULT_MAX_TOKENS`].\n\nTokens, because the window is spent in tokens: a byte or line count is a\nproxy that is 3-4x out on code and worse on dense text.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
         }
       },
       "additionalProperties": false

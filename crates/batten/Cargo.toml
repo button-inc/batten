@@ -159,6 +159,11 @@ yaml-rust2.workspace = true
 # crate, which is what keeps the topology there exactly what it is today.
 [target.'cfg(unix)'.dependencies]
 rustix.workspace = true
+# CLOUD-2223: every tool result is bounded in `o200k` tokens, the unit the
+# window is spent in. Loaded lazily and only for a result whose bytes already
+# exceed the bound, so the hook's ordinary path never touches the table. The
+# test binary's vocabulary check (CLOUD-1284 arm 4) uses the same crate.
+tiktoken-rs.workspace = true
 signal-hook.workspace = true
 
 [dev-dependencies]
@@ -174,11 +179,6 @@ jsonschema.workspace = true
 # reviewed diff. Never hand-edit a `.snap`.
 insta.workspace = true
 indoc.workspace = true
-# CLOUD-1284 arm 4: every `[verdict.vocabulary]` word is ONE token under the
-# declared pin. The shipped binary must not link a tokenizer (the workspace
-# manifest carries why), and this table is exactly the place a crate the binary
-# does not link belongs.
-tiktoken-rs.workspace = true
 # CLOUD-2022: the counter the cost cases assert with, instead of a clock.
 stats_alloc.workspace = true
 

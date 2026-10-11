@@ -17,6 +17,7 @@ fn declaring(bytes: u64) -> CaptureConfig {
         max_bytes: None,
         max_records: None,
         inline_max_bytes: Some(bytes),
+        result_max_tokens: None,
     }
 }
 
