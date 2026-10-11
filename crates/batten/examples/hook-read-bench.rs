@@ -120,6 +120,18 @@ fn main() {
         generate(bytes, &args[3]).expect("generate");
         return;
     }
+    if mode == "o200k-longest" {
+        // The longest token's byte length: a result over `bound * longest`
+        // bytes is over the bound with no count at all.
+        let bpe = tiktoken_rs::o200k_base().expect("table");
+        let longest = (0..200_019_u32)
+            .filter_map(|rank| bpe.decode_bytes(&[rank]).ok())
+            .map(|bytes| bytes.len())
+            .max()
+            .unwrap_or(0);
+        println!("o200k-longest\t{longest} bytes");
+        return;
+    }
     if mode == "o200k-load" {
         // The one-off cost a hook process pays to load the table, and then to
         // count one ordinary 4 KiB result, which is what a lazy load buys back.
