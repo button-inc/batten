@@ -318,6 +318,7 @@ pub fn run(root: &Path, base: &str, json: bool, out: &mut dyn Write) -> Result<E
     })
 }
 
+//MUTANT replay-target-outside-the-checkout|s@^    let target = root.join("target").join("replay");$@    let target = state.join("target");@|a_replay_builds_where_the_prune_can_reach_it
 /// Materialise HEAD under the repository's state directory, splice each base
 /// body in, and run each modified test there. A test that fails, or a tree that
 /// will not build, is `test-expectation-changed`.
@@ -340,9 +341,21 @@ fn replay(
         crate::durable::replace(tree.join(path), splice(head_text, modified))
             .with_context(|| format!("test replay: splice {path}"))?;
     }
+    // THE BUILD LIVES UNDER THE CHECKOUT'S `target/`, THE TREE OUTSIDE IT (CLOUD-2196).
+    // CLOUD-2096 moved the tree out because a checkout's scans walk it; the build
+    // cache went with it, and there no reclaim could reach it: measured on #1132,
+    // 5308 MB under the state directory while every lap closed below the warm
+    // floor and ran the volume out. `target/replay` is a nested build tree the
+    // prune derives, exactly as `mutate`'s `target/mutate` is.
+    let target = root.join("target").join("replay");
+    let retired = state.join("target");
+    if retired.exists() {
+        std::fs::remove_dir_all(&retired)
+            .with_context(|| format!("test replay: retire {}", retired.display()))?;
+    }
     let published = [(
         String::from("CARGO_TARGET_DIR"),
-        Some(state.join("target").to_string_lossy().into_owned()),
+        Some(target.to_string_lossy().into_owned()),
     )];
     // THE TOOL IS PROBED BEFORE ANY ANSWER IS READ. `cargo` exits 101 both for a
     // build that failed and for a subcommand it cannot find, so without this a

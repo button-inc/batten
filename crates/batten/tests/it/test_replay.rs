@@ -191,3 +191,42 @@ fn a_removed_test_is_refused_by_name() {
         text(&output)
     );
 }
+
+/// Whether `root` holds a directory named `name` at any depth.
+fn holds_directory_named(root: &Path, name: &str) -> bool {
+    std::fs::read_dir(root)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .any(|entry| {
+            let path = entry.path();
+            path.is_dir() && (entry.file_name() == name || holds_directory_named(&path, name))
+        })
+}
+
+/// The replay's build lives under the checkout's `target/`, where the prune
+/// derives it as a nested build tree, and never in the state directory, where
+/// no reclaim reaches it (CLOUD-2196: 5308 MB there on #1132).
+#[test]
+fn a_replay_builds_where_the_prune_can_reach_it() {
+    let (dir, base) = repo("replay-placed");
+    head(
+        &dir,
+        &BASE.replace(
+            "assert_eq!(super::add(2, 2), 4);",
+            "let four = super::add(2, 2);\n        assert_eq!(four, 4);",
+        ),
+    );
+    let output = replay(&dir, &base);
+    assert!(output.status.success(), "{}", text(&output));
+    assert!(
+        dir.join("target").join("replay").join("debug").is_dir(),
+        "the replay builds under the checkout's target/"
+    );
+    assert!(
+        // `debug`, not `target`: the throwaway tree carries nextest's own run
+        // store at `tree/target/nextest`, which is no build and goes with it.
+        !holds_directory_named(&data_dir(&dir), "debug"),
+        "no build tree is left under the state directory"
+    );
+}
