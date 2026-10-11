@@ -153,9 +153,50 @@ pub const REPAIR_PINNED: &str = "mise exec -- batten engine update";
 
 /// Whether `command` is one of the repair's two whole spellings: equality, so
 /// no shell composition rides either.
+//MUTANT floor-admits-a-carried-repair|s@^    command == REPAIR \x7c\x7c command == REPAIR_PINNED$@    command.contains(REPAIR)@|a_command_carrying_the_repair_verb_is_still_refused
 #[must_use]
 pub fn is_repair(command: &str) -> bool {
     command == REPAIR || command == REPAIR_PINNED
+}
+
+/// [`REPAIR`] spelled to run from wherever the shell stands (CLOUD-2218).
+///
+/// The hook judges by the session's recorded authority when the shell stands
+/// outside it (CLOUD-2204), but the verb anchors on its cwd. Measured
+/// 2026-10-11: the shell snapped back to the checkouts' parent, the refusal
+/// named the bare verb as the one command admitted, and that verb answered
+/// "not inside a git repository" — a floor whose only exit could not run.
+/// So the refusal names the repair prefixed with the `cd` into the authority
+/// it judged by, which also leaves the shell there for the calls after it.
+#[must_use]
+pub fn repair_at(root: &std::path::Path, repair: &str) -> String {
+    format!("cd {} && {repair}", shell_word(&root.to_string_lossy()))
+}
+
+/// Whether `command` is a repair spelled whole, bare or rooted at `root`:
+/// equality against strings built from the authority, so the `&&` admitted is
+/// the one this engine wrote and no other composition rides it.
+//MUTANT rooted-repair-refused|s@^            .any(\x7crepair\x7c command == repair_at(root, repair))$@            .any(\x7c_\x7c false)@|a_repair_rooted_at_the_authority_reaches_a_shell_standing_outside_it
+#[must_use]
+pub fn is_repair_at(command: &str, root: &std::path::Path) -> bool {
+    is_repair(command)
+        || [REPAIR, REPAIR_PINNED]
+            .iter()
+            .any(|repair| command == repair_at(root, repair))
+}
+
+/// `word` as one POSIX shell word: bare where it carries nothing the shell
+/// reads, single-quoted otherwise.
+fn shell_word(word: &str) -> String {
+    if !word.is_empty()
+        && word
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "/._-+@%:,".contains(c))
+    {
+        word.to_owned()
+    } else {
+        format!("'{}'", word.replace('\'', "'\\''"))
+    }
 }
 
 //MUTANT-SUITE crates/batten/tests/it/engine_pin.rs

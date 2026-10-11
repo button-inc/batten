@@ -17478,8 +17478,7 @@ fn read_envelope(
 //MUTANT floor-admits-an-unclassified-call|s@        (hook::Operation::Read, None) => true,@        (_, None) => true,@|a_mutating_mcp_call_is_still_refused_over_a_config_that_will_not_load
 //MUTANT floor-refuses-inert-tools|s@        (hook::Operation::Other(name), None) if hook::INERT_TOOLS.contains(\&name.as_str()) => true,@@|a_search_still_answers_over_a_config_that_will_not_load
 //MUTANT floor-admits-any-write|s@        (hook::Operation::Write, Some(path)) => names_the_config_authority(path),@        (hook::Operation::Write, Some(_)) => true,@|a_write_to_another_path_is_still_refused_over_a_config_that_will_not_load
-//MUTANT floor-refuses-engine-repair|s@        (hook::Operation::Execute, None) => engine::is_repair(envelope.command.trim()),@@|the_engine_repair_verb_reaches_a_skewed_pin
-//MUTANT floor-admits-a-carried-repair|s@engine::is_repair(envelope.command.trim()),@envelope.command.contains(engine::REPAIR),@|a_command_carrying_the_repair_verb_is_still_refused
+//MUTANT floor-refuses-engine-repair|s@^        (hook::Operation::Execute, None) => engine::is_repair_at($@        (hook::Operation::Execute, None) => false \&\& engine::is_repair_at(@|the_engine_repair_verb_reaches_a_skewed_pin
 fn recoverable_without_rules(envelope: &hook::Envelope) -> bool {
     // NO `command.is_empty()` GUARD, AND ITS ABSENCE IS THE DECISION. A `Bash`
     // envelope is `Operation::Execute` with no write, so it lands on `_ => false`
@@ -17504,7 +17503,12 @@ fn recoverable_without_rules(envelope: &hook::Envelope) -> bool {
         // the pin, never by lowering it, so a floor of read-and-edit bricked the
         // container on exactly the remedy its own refusal named. The engine's
         // own verb, spelled whole: equality, so no shell composition rides it.
-        (hook::Operation::Execute, None) => engine::is_repair(envelope.command.trim()),
+        // Rooted at the authority too (CLOUD-2218): the shell may stand outside
+        // the repository the hook judged by, where the bare verb cannot run.
+        (hook::Operation::Execute, None) => engine::is_repair_at(
+            envelope.command.trim(),
+            &git::canonical(hook_authority_root()),
+        ),
         // EVERY OTHER SHAPE REFUSES, `Execute`, `Mcp`, `Subagent` and `Other`
         // among them. An operation this build could not classify is
         // could-not-look, and a could-not-look that mutates is the one thing
@@ -17601,7 +17605,11 @@ fn is_source_excerpt(line: &str) -> bool {
 /// consumer's.
 //MUTANT-SUITE crates/batten/tests/it/adjudicate_absent.rs
 //MUTANT unadjudicable-remedy-unnamed|s@repair the file with those@restore it with git@|the_refusal_names_the_repair_floor_it_admits
+//MUTANT remedy-names-the-bare-repair|s@^    let root = git::canonical(hook_authority_root());$@    let root = std::path::PathBuf::from(".");@|a_repair_rooted_at_the_authority_reaches_a_shell_standing_outside_it
 fn unadjudicable_remedy() -> Fix {
+    // ROOTED AT THE AUTHORITY JUDGED BY (CLOUD-2218), so the named command runs
+    // from wherever the shell stands; the floor admits exactly these strings.
+    let root = git::canonical(hook_authority_root());
     Fix::Run(format!(
         "a `Read` still answers and an `Edit` or `Write` of `{}` or `{}` still lands — \
          repair the file with those; where the config is newer than this binary, \
@@ -17609,8 +17617,8 @@ fn unadjudicable_remedy() -> Fix {
          those two are the commands admitted",
         config::CONFIG_FILE,
         resolve::LOCAL_CONFIG_FILE,
-        engine::REPAIR,
-        engine::REPAIR_PINNED,
+        engine::repair_at(&root, engine::REPAIR),
+        engine::repair_at(&root, engine::REPAIR_PINNED),
     ))
 }
 

@@ -372,6 +372,43 @@ fn the_engine_repair_verb_reaches_a_skewed_pin() {
 }
 
 #[test]
+fn a_repair_rooted_at_the_authority_reaches_a_shell_standing_outside_it() {
+    // CLOUD-2218's brick: the hook judged by the session's recorded authority
+    // while the shell stood in the checkouts' parent, named the bare verb as the
+    // one command admitted, and that verb answered "not inside a git
+    // repository". The refusal names the repair rooted at the authority, and
+    // the floor admits exactly that string — and no other root.
+    let dir = fixture("adjudicate-floor-engine-rooted", PINS_ANOTHER_RELEASE);
+    let root = dir.canonicalize().expect("a canonical fixture root");
+    let rooted = format!("cd {} && batten engine update", root.display());
+    let refused = run_with_stdin(
+        &dir,
+        &["adjudicate", "--harness", "exit-code"],
+        &command_envelope("git push"),
+    );
+    assert!(
+        String::from_utf8_lossy(&refused.stderr).contains(&rooted),
+        "the refusal names the repair that runs from anywhere: {}",
+        String::from_utf8_lossy(&refused.stderr)
+    );
+    for repair in [
+        rooted.clone(),
+        format!("cd {} && mise exec -- batten engine update", root.display()),
+    ] {
+        assert_eq!(
+            code_for(&dir, &command_envelope(&repair)),
+            Some(0),
+            "the rooted repair is admitted: {repair}"
+        );
+    }
+    assert_eq!(
+        code_for(&dir, &command_envelope("cd /tmp && batten engine update")),
+        Some(2),
+        "a repair rooted anywhere but the authority is a composition, refused"
+    );
+}
+
+#[test]
 fn a_command_carrying_the_repair_verb_is_still_refused() {
     // THE MIRROR. Admitting by containment would let any command ride the
     // repair's spelling past a build that judges nothing.
