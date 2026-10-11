@@ -2343,8 +2343,6 @@ pub enum GenerateCommand {
         /// The harness whose wiring to emit.
         harness: crate::hook::Harness,
     },
-    /// Emit the committed `install.sh` bootstrap (CLOUD-2203).
-    Installer,
 }
 
 /// The formats `batten spec` can emit.
@@ -2947,7 +2945,6 @@ fn generate_of(matches: &ArgMatches) -> Option<GenerateCommand> {
             command: matches.get_one::<String>("command").cloned(),
         }),
         ("markdown", _) => Some(GenerateCommand::Markdown),
-        ("installer", _) => Some(GenerateCommand::Installer),
         ("hooks", matches) => matches
             .get_one::<crate::hook::Harness>("harness")
             .map(|harness| GenerateCommand::Hooks { harness: *harness }),

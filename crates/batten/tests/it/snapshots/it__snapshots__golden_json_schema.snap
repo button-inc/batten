@@ -1775,15 +1775,6 @@ expression: stdout_of(&output)
           "subcommands": []
         },
         {
-          "path": "generate installer",
-          "id": "generate.installer",
-          "about": "Emit the install.sh bootstrap, on stdout",
-          "effect": "read",
-          "data_channel": false,
-          "flags": [],
-          "subcommands": []
-        },
-        {
           "path": "generate man",
           "id": "generate.man",
           "about": "Emit the roff man page for one command, on stdout",
@@ -5056,10 +5047,6 @@ expression: stdout_of(&output)
     {
       "id": "generate.hooks",
       "path": "generate hooks"
-    },
-    {
-      "id": "generate.installer",
-      "path": "generate installer"
     },
     {
       "id": "generate.man",

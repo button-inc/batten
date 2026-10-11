@@ -1756,16 +1756,6 @@ const CENSUS: &[Verb] = &[
         ),
     },
     Verb {
-        path: "generate installer",
-        args: &[],
-        stdin: Stdin::Nothing,
-        disposition: Disposition::Echoes(
-            "the bootstrap is rendered from Batten's own target table, asset naming and \
-             repository URL; it reads no repository content at all",
-            Echoed::Surface,
-        ),
-    },
-    Verb {
         path: "generate schema",
         args: &[],
         stdin: Stdin::Nothing,

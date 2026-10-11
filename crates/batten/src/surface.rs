@@ -4631,18 +4631,6 @@ pub const SURFACE: &[CommandDecl] = &[
             harness_parser,
         )],
     },
-    // CLOUD-2203. `install.sh` is this output and nothing else: the bootstrap
-    // that fetches, verifies and runs the release binary, drift-checked.
-    // unreached: "generate installer" CLOUD-2203 the committed install.sh becomes this output, and its drift case runs it, once a release carries `engine install`
-    CommandDecl {
-        path: "generate installer",
-        id: "generate.installer",
-        about: "Emit the install.sh bootstrap, on stdout",
-        data_channel: false,
-        exits: EXITS_STANDARD,
-        effect: Effect::Read,
-        flags: &[],
-    },
     CommandDecl {
         path: "generate man",
         id: "generate.man",

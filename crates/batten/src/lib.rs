@@ -24578,11 +24578,6 @@ fn run_generate(command: &GenerateCommand, out: &mut dyn Write) -> Result<ExitCo
         // nothing", which is a different claim from "there is nothing to
         // register with". `UsageError` is exit 1 — the caller named something
         // that cannot be asked for, which is a statement about the invocation.
-        GenerateCommand::Installer => write!(
-            out,
-            "{}",
-            install::render_bootstrap(env!("CARGO_PKG_NAME"), env!("CARGO_PKG_REPOSITORY"))
-        )?,
         GenerateCommand::Hooks { harness } => {
             let wiring = harness.wiring().ok_or_else(|| {
                 UsageError::raise(format!(

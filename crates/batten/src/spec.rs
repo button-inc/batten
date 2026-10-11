@@ -557,9 +557,6 @@ mod tests {
                 // the verb that installs them: `generate` stays stdout-only,
                 // and the install surface is `init`'s.
                 "generate hooks".to_owned(),
-                // The bootstrap (CLOUD-2203): bytes on stdout, nothing written —
-                // the committed `install.sh` is the caller's redirect.
-                "generate installer".to_owned(),
                 // The two human renderings (CLOUD-69) are on the list for the
                 // same structural reason the shell one is: they return bytes
                 // and write nothing.
@@ -778,7 +775,6 @@ mod tests {
             "generate",
             "generate completions",
             "generate hooks",
-            "generate installer",
             "generate man",
             "generate markdown",
             "generate schema",
@@ -958,8 +954,6 @@ mod tests {
             "generate completions".to_owned(),
             // §11's third derivation, the hook wiring (CLOUD-62).
             "generate hooks".to_owned(),
-            // The `install.sh` bootstrap (CLOUD-2203).
-            "generate installer".to_owned(),
             // §11's other two derivations, landed together (CLOUD-69): the
             // document has named man pages and markdown as derivations of
             // this spec since the spine, and until now only the shell one
