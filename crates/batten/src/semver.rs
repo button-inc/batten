@@ -495,7 +495,7 @@ pub fn baseline_rustdoc(
     if !built.status.success() {
         return Err(format!(
             "the baseline doc build failed: {}",
-            last_line(&built.stderr)
+            cause_line(&built.stderr)
         ));
     }
     let json = target.join("doc").join(format!("{package}.json"));
@@ -592,7 +592,7 @@ pub fn current_rustdoc(
     if !built.status.success() {
         return Err(format!(
             "the current doc build failed: {}",
-            last_line(&built.stderr)
+            cause_line(&built.stderr)
         ));
     }
     let json = target.join("doc").join(format!("{package}.json"));
@@ -612,6 +612,36 @@ pub fn current_rustdoc(
 /// A POINTER rather than the payload (non-negotiable rule 4): one line names why
 /// the gate could not look, and the whole stream is a build log nobody asked to
 /// have quoted back at them.
+/// The FIRST `error` line of a child's stderr, else its last line (CLOUD-2221).
+///
+/// Still one line, for [`last_line`]'s reason, but the right one: cargo ends a
+/// failed build with its summary, `error: could not document \`batten\``,
+/// and the cause is the first diagnostic above it. Measured on a land lap: the
+/// gate refused with the summary alone, and the reason was nowhere to read.
+//MUTANT build-cause-dropped|s@^        .find(\x7cline\x7c line.trim_start().starts_with("error"))$@        .find(\x7c_\x7c false)@|a_failed_build_names_its_first_error_not_its_summary
+fn cause_line(stream: &[u8]) -> String {
+    String::from_utf8_lossy(stream)
+        .lines()
+        .find(|line| line.trim_start().starts_with("error"))
+        .map_or_else(|| last_line(stream), |line| line.trim().to_owned())
+}
+
+#[cfg(test)]
+mod cause_tests {
+    #[test]
+    fn a_failed_build_names_its_first_error_not_its_summary() {
+        let stderr = b"   Compiling batten v0.0.214\n\
+error[E0425]: cannot find value `x` in this scope\n\
+ --> src/lib.rs:1:1\n\
+error: could not document `batten`\n";
+        assert_eq!(
+            super::cause_line(stderr),
+            "error[E0425]: cannot find value `x` in this scope"
+        );
+        assert_eq!(super::cause_line(b"just noise\n"), "just noise");
+    }
+}
+
 fn last_line(stream: &[u8]) -> String {
     String::from_utf8_lossy(stream)
         .lines()
