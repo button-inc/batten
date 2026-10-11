@@ -18700,6 +18700,7 @@ fn dispatch_handlers(
     // otherwise match every `Read` in the session.
     let command = Some(envelope.command.as_str()).filter(|text| !text.is_empty());
     let dispatched = handler::dispatch(
+        hook_authority_root(),
         &hook_config.handlers,
         envelope.event,
         &envelope.raw_tool,
@@ -20564,7 +20565,14 @@ fn stop_handler_advice(overrides: &Overrides, raw: &str) -> Vec<refusal::Refusal
     let Some(table) = hook_table(overrides) else {
         return Vec::new();
     };
-    let dispatched = handler::dispatch(&table.handlers, hook::Event::Stop, "", None, raw);
+    let dispatched = handler::dispatch(
+        hook_authority_root(),
+        &table.handlers,
+        hook::Event::Stop,
+        "",
+        None,
+        raw,
+    );
     // EVERY ROW THAT SPOKE, classed (CLOUD-2078): a report as `hook report now`,
     // a refusal demoted at `Stop` as the class the dispatch door demotes it to.
     dispatched

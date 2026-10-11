@@ -884,8 +884,13 @@ fn impersonates_host(stdout: &str) -> bool {
 /// and its answer is interpreted under the contract in the module docs. Nothing
 /// here can fail the call: a handler that cannot run, hangs, or answers outside
 /// the contract yields [`Outcome::Broke`], which allows.
+///
+/// `root` is the directory holding the `batten.toml` that declared `handlers`,
+/// and every handler runs there (CLOUD-2050): a row's relative paths are the
+/// repository's, whatever directory the host's shell stands in.
 #[must_use]
 pub fn dispatch(
+    root: &Path,
     handlers: &[Handler],
     event: Event,
     raw_tool: &str,
@@ -913,7 +918,7 @@ pub fn dispatch(
             continue;
         }
         let started = Instant::now();
-        let outcome = run_one(handler, payload);
+        let outcome = run_one(root, handler, payload);
         // THE ROW'S DECLARATION APPLIED EXACTLY ONCE, here, where the row and the
         // outcome are both in hand. Reading `preapproves` anywhere downstream
         // would mean carrying the handler table alongside the results and joining
@@ -945,7 +950,8 @@ pub fn dispatch(
 //MUTANT handler-bound-never-fires|s@^        if Instant::now() >= deadline {$@        if Instant::now() >= deadline + Duration::from_secs(3600) {@|a_handler_that_hangs_is_killed_at_its_bound_and_the_turn_still_ends
 //MUTANT step-bound-never-fires|s@^        if Instant::now() >= deadline {$@        if Instant::now() >= deadline + Duration::from_secs(3600) {@|a_step_that_hangs_is_killed_at_its_declared_bound
 //MUTANT payload-written-before-the-bound|s@^    let deadline = Instant::now() + bound;$@    let _ = child.stdin.as_mut().map(\x7cpipe\x7c std::io::Write::write_all(pipe, payload.as_bytes())); let deadline = Instant::now() + bound;@|a_handler_that_never_reads_stdin_cannot_wedge_the_parent
-fn run_one(handler: &Handler, payload: &str) -> Outcome {
+//MUTANT handler-cwd-inherited|s@^            .current_dir(root)$@            .current_dir(".")@|a_handler_runs_from_the_declaring_root_whatever_the_cwd
+fn run_one(root: &Path, handler: &Handler, payload: &str) -> Outcome {
     let Some((program, args)) = handler.run.split_first() else {
         return Outcome::Broke(Violation::NotSpawnable);
     };
@@ -977,19 +983,25 @@ fn run_one(handler: &Handler, payload: &str) -> Outcome {
         Some(Some(image)) if program == crate::surface::BINARY => image,
         _ => program,
     };
+    // A RELATIVE PATH IN A ROW IS THE REPOSITORY'S (CLOUD-2050). The host's
+    // shell can stand anywhere — a sibling checkout, `$HOME` — and a row's
+    // `scripts/guard.py` read from there names a file that does not exist, which
+    // an interpreter reports as exit 2 and the contract then reads as a DENY on
+    // every call. So the child runs in the declaring root, never in the
+    // inherited directory, and a relative name resolves there.
     // THE SAME RESOLUTION EVERY SPAWNING KIND GETS (CLOUD-617). A handler is a
     // program a config names, so it meets Windows' two refusals as a `command`
-    // row does. `.` is where a relative name resolves, no `current_dir` being
-    // set — the host has already put the process in the right directory.
+    // row does.
     #[expect(
         clippy::disallowed_types,
         reason = "stays: this IS the dispatch — a handler is a declared program and running it is the module's whole purpose (CLOUD-898)"
     )]
-    let spawned = crate::rules::spawn_resolving(Some(Path::new(".")), program, |program, extra| {
+    let spawned = crate::rules::spawn_resolving(Some(root), program, |program, extra| {
         let mut builder = Command::new(program);
         builder
             .args(extra)
             .args(args)
+            .current_dir(root)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -1449,7 +1461,7 @@ mod tests {
         // an elapsed-time ceiling only restated it, and added a way to flake.
         let mut deaf = handler("deaf", "stop", &["sh", "-c", "sleep 30"]);
         deaf.timeout_ms = Some(300);
-        let outcome = run_one(&deaf, &oversized());
+        let outcome = run_one(Path::new("."), &deaf, &oversized());
         assert_eq!(
             outcome,
             Outcome::Broke(Violation::TimedOut(Duration::from_millis(300))),
@@ -1472,7 +1484,11 @@ mod tests {
         // default bound, or the test would pass for the wrong reason on a slow box.
         let big = 200 * 1024;
         let script = format!("head -c {big} /dev/zero | tr '\\0' a");
-        let outcome = run_one(&handler("loud", "stop", &["sh", "-c", &script]), "{}");
+        let outcome = run_one(
+            Path::new("."),
+            &handler("loud", "stop", &["sh", "-c", &script]),
+            "{}",
+        );
         match outcome {
             Outcome::Advise(said) => assert_eq!(
                 said.len(),
@@ -1652,6 +1668,7 @@ mod tests {
         let mut row = handler("g", Event::PreTool.as_str(), &["sh", "-c", "echo granted"]);
 
         let dispatched = dispatch(
+            Path::new("."),
             std::slice::from_ref(&row),
             Event::PreTool,
             "mcp__x__y",
@@ -1671,6 +1688,7 @@ mod tests {
 
         row.preapproves = true;
         let dispatched = dispatch(
+            Path::new("."),
             std::slice::from_ref(&row),
             Event::PreTool,
             "mcp__x__y",
@@ -1702,6 +1720,7 @@ mod tests {
         );
         row.preapproves = true;
         let dispatched = dispatch(
+            Path::new("."),
             std::slice::from_ref(&row),
             Event::PreTool,
             "mcp__x__y",
@@ -1776,7 +1795,14 @@ mod tests {
         let mut second = handler("b", Event::PreTool.as_str(), &["sh", "-c", "echo two"]);
         second.preapproves = true;
         let rows = vec![first, second.clone()];
-        let dispatched = dispatch(&rows, Event::PreTool, "mcp__x__y", None, "{}");
+        let dispatched = dispatch(
+            Path::new("."),
+            &rows,
+            Event::PreTool,
+            "mcp__x__y",
+            None,
+            "{}",
+        );
         assert_eq!(dispatched.preapproval(), Some(("a", "one")));
 
         let denier = handler(
@@ -1785,7 +1811,14 @@ mod tests {
             &["sh", "-c", "echo nope >&2; exit 2"],
         );
         let rows = vec![second, denier];
-        let dispatched = dispatch(&rows, Event::PreTool, "mcp__x__y", None, "{}");
+        let dispatched = dispatch(
+            Path::new("."),
+            &rows,
+            Event::PreTool,
+            "mcp__x__y",
+            None,
+            "{}",
+        );
         assert_eq!(dispatched.refusal(), Some(("d", "nope")));
         assert_eq!(
             dispatched.preapproval(),
@@ -1812,6 +1845,7 @@ mod tests {
         );
         row.preapproves = true;
         let dispatched = dispatch(
+            Path::new("."),
             std::slice::from_ref(&row),
             Event::PreTool,
             "mcp__x__y",
@@ -1822,6 +1856,43 @@ mod tests {
         assert_eq!(
             dispatched.violations(),
             vec![violation_refusal("g", &Violation::ImpersonatedHost)]
+        );
+    }
+
+    #[test]
+    fn a_handler_runs_from_the_declaring_root_whatever_the_cwd() {
+        // CLOUD-2050's reproduction: the host's shell stood in a sibling checkout,
+        // a row's `scripts/guard.py` resolved there, the interpreter exited 2 on a
+        // missing file, and the contract read that as a deny on every call. The
+        // test process's cwd is the crate; the declaring root is elsewhere, and a
+        // root-relative program must be found there and run there.
+        let root = std::env::temp_dir()
+            .join(format!("batten-handler-root-{}", std::process::id()))
+            .join("repo");
+        std::fs::create_dir_all(root.join("scripts")).expect("root");
+        let root = root.canonicalize().expect("canonical root");
+        let script = root.join("scripts").join("where.sh");
+        std::fs::write(&script, "#!/bin/sh\npwd\n").expect("script");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))
+                .expect("executable");
+        }
+        let row = handler("w", Event::PreTool.as_str(), &["scripts/where.sh"]);
+        let dispatched = dispatch(
+            &root,
+            std::slice::from_ref(&row),
+            Event::PreTool,
+            "mcp__x__y",
+            None,
+            "{}",
+        );
+        let _ = std::fs::remove_dir_all(root.parent().unwrap_or(&root));
+        assert_eq!(
+            dispatched.ran.first().map(|ran| ran.outcome.clone()),
+            Some(Outcome::Advise(root.display().to_string())),
+            "found under the root, and run with the root as its directory"
         );
     }
 
