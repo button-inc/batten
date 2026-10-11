@@ -1922,6 +1922,33 @@ pub fn find(name: &str) -> Option<&'static Manifest> {
     MANIFESTS.iter().find(|manifest| manifest.name == name)
 }
 
+/// The `claude-code-cloud` modules that read the host's permission mode, as
+/// `(pointer, source)` pairs `policy::compile` takes (CLOUD-2201).
+///
+/// Selected out of the preset by name rather than re-included, so a session with
+/// no authority judges a call by the same bytes a consumer enabling the preset
+/// does. `unwatch-is-preapproved` rides along because the plan rule reads its
+/// `unwatch_method`.
+#[must_use]
+pub fn mode_sources() -> Vec<(String, String)> {
+    const MODE: [&str; 4] = [
+        "read-only-is-preapproved.rego",
+        "unwatch-is-preapproved.rego",
+        "plan-mode-refuses-writes.rego",
+        "auto-mode-is-preapproved.rego",
+    ];
+    find("claude-code-cloud")
+        .map(|manifest| {
+            manifest
+                .modules
+                .iter()
+                .filter(|module| MODE.iter().any(|name| module.pointer.ends_with(name)))
+                .map(|module| (module.pointer.to_owned(), module.source.to_owned()))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// Every verdict row the vendored presets declare, as the registry carries them.
 ///
 /// Chained onto the native rows by [`crate::verdict::vendored`]. Derived rather

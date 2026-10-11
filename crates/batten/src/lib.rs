@@ -20301,6 +20301,7 @@ fn hook_authority_root() -> &'static Path {
     ROOT.get_or_init(anchor)
 }
 
+//MUTANT no-config-mode-bundle-dropped|s@^        return Ok((hook::Policy::mode_default(harness)?, Vec::new()));$@        return Ok((hook::Policy::declaring_nothing(harness), Vec::new()));@|an_auto_mode_call_is_granted_where_no_authority_governs
 fn load_policy(
     overrides: &Overrides,
     harness: hook::Harness,
@@ -20320,8 +20321,11 @@ fn load_policy(
     // stops the call. `resolve` already reads the ref and never touches the
     // working tree when one is named (`resolve::authority`), so consulting the
     // flag is all this needs.
+    // NO AUTHORITY STILL HAS THE HOST'S MODE (CLOUD-2201): rules stay fail-open,
+    // and the mode modules alone load, so auto mode grants and plan mode refuses
+    // writes wherever the session's shell happens to stand.
     if overrides.config_from.is_none() && !here.join(config::CONFIG_FILE).exists() {
-        return Ok((hook::Policy::declaring_nothing(harness), Vec::new()));
+        return Ok((hook::Policy::mode_default(harness)?, Vec::new()));
     }
     // The waivers travel beside the policy rather than inside it (CLOUD-610).
     // `Policy` is what `adjudicate` decides against and is resolved without a

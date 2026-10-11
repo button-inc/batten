@@ -726,3 +726,90 @@ fn a_search_still_answers_over_a_config_that_will_not_load() {
         );
     }
 }
+
+// --- no authority still has the host's mode (CLOUD-2201) ------------------
+
+/// The one `permissionDecision` a no-authority directory answers `payload` with,
+/// beside its reason, or `None` when the hook said nothing verdict-shaped.
+fn mode_verdict(name: &str, payload: &serde_json::Value) -> Option<(String, String)> {
+    let dir = common::scratch_repo(name);
+    assert!(
+        !dir.join("batten.toml").exists(),
+        "the fixture is only a fixture if no authority governs it"
+    );
+    let output = run_with_stdin(
+        &dir,
+        &["hook", "--harness", "claude-code"],
+        &payload.to_string(),
+    );
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .find_map(|document| {
+            let inner = document.get("hookSpecificOutput")?;
+            Some((
+                inner.get("permissionDecision")?.as_str()?.to_owned(),
+                inner
+                    .get("permissionDecisionReason")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned(),
+            ))
+        })
+}
+
+fn mode_call(mode: &str, tool: &str, input: &serde_json::Value) -> serde_json::Value {
+    serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "permission_mode": mode,
+        "tool_name": tool,
+        "tool_input": input,
+    })
+}
+
+#[test]
+fn an_auto_mode_call_is_granted_where_no_authority_governs() {
+    // The measured refusal: an install the host classifier called persistence,
+    // made from a session root carrying no `batten.toml`.
+    let call = mode_call(
+        "auto",
+        "Bash",
+        &serde_json::json!({"command": "./nix-installer install linux --init none --no-confirm"}),
+    );
+    let (decision, reason) = mode_verdict("mode-default-auto", &call).unwrap_or_default();
+    assert_eq!(decision, "allow", "auto mode grants what no rule denied");
+    assert!(reason.contains("mode grant now"), "{reason}");
+}
+
+#[test]
+fn a_plan_mode_write_is_refused_and_a_read_granted_where_no_authority_governs() {
+    let write = mode_call(
+        "plan",
+        "Write",
+        &serde_json::json!({"file_path": "/tmp/notes.md", "content": "x"}),
+    );
+    let (decision, reason) = mode_verdict("mode-default-plan-write", &write).unwrap_or_default();
+    assert_eq!(decision, "deny", "plan mode refuses a write");
+    assert!(reason.contains("plan write refused"), "{reason}");
+    let read = mode_call(
+        "plan",
+        "Read",
+        &serde_json::json!({"file_path": "/tmp/notes.md"}),
+    );
+    let (decision, _) = mode_verdict("mode-default-plan-read", &read).unwrap_or_default();
+    assert_eq!(decision, "allow", "plan mode grants a read");
+}
+
+#[test]
+fn default_mode_is_left_to_the_host_where_no_authority_governs() {
+    let call = mode_call(
+        "default",
+        "Bash",
+        &serde_json::json!({"command": "touch x"}),
+    );
+    assert_eq!(
+        mode_verdict("mode-default-default", &call),
+        None,
+        "a mode the operator chose to be asked in stays the host's"
+    );
+}

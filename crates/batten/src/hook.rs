@@ -3589,6 +3589,41 @@ impl Policy {
         }
     }
 
+    /// The policy a session gets where no authority governs (CLOUD-2201).
+    ///
+    /// **The operator's rule, wherever the call is made:** in auto mode every
+    /// call is granted unless a rule denies it, and in plan mode a call either
+    /// reads or is refused. The `claude-code-cloud` preset already says exactly
+    /// that, but only inside a repository enabling it — so a multi-repository
+    /// session whose shell sits at its root sent every call to the host's
+    /// classifier, which refused a container-local install as persistence.
+    ///
+    /// **ONLY THE MODE MODULES, never the preset.** CLOUD-70's fail-open stands
+    /// for rules: nothing a consumer declares loads here, because nothing was
+    /// declared. What loads is the four modules that read the host's own mode,
+    /// byte for byte from the preset, so the two cannot drift. Every other
+    /// harness keeps [`Policy::declaring_nothing`]: the modules read Claude
+    /// Code's mode vocabulary and no other host's.
+    ///
+    /// # Errors
+    ///
+    /// A module that does not compile, which the preset's own load-time tier
+    /// already refuses — so this is a build defect, never a consumer's.
+    pub fn mode_default(harness: Harness) -> anyhow::Result<Policy> {
+        let mut policy = Policy::declaring_nothing(harness);
+        if harness != Harness::ClaudeCode {
+            return Ok(policy);
+        }
+        let sources = crate::preset::mode_sources();
+        policy.bundles = vec![crate::policy::compile(
+            "<mode-default>",
+            &sources,
+            &crate::pattern::data_document(&[]),
+        )?];
+        policy.verdicts = crate::policy::registry_for(&[])?;
+        Ok(policy)
+    }
+
     /// Take the mediated-call rules out of a resolved config.
     ///
     /// Filters on `scope`, so the tree engine's rules are simply absent here
