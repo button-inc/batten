@@ -203,6 +203,24 @@ fn shell_word(word: &str) -> String {
 //MUTANT pin-unread|s@^    let Some(pin) = declared(text) else {$@    let Some(pin) = None::<Pin> else {@|a_release_pin_naming_another_build_is_refused_with_its_install
 //MUTANT stamp-trusted-when-absent|s@^            if stamp.as_deref() != Some(digest) {$@            if stamp.is_some() \&\& stamp.as_deref() != Some(digest) {@|a_source_pin_without_a_stamp_is_refused
 
+/// The repair for a stale build of the checkout it judges: the build itself,
+/// under the project's toolchain for [`REPAIR_PINNED`]'s reason.
+pub const REBUILD: &str = "mise exec -- cargo build --release -p batten";
+
+/// Whether the running binary lives inside the tree holding `source`, the
+/// config it was refused over — that tree's own build, not an installed engine.
+//MUTANT in-tree-build-updated|s@^        .is_some_and(\x7croot\x7c exe.starts_with(root))$@        .is_some_and(\x7c_\x7c false)@|a_stale_build_of_the_checkout_names_the_rebuild
+fn built_in(source: &str) -> bool {
+    let Ok(exe) = std::env::current_exe().and_then(std::fs::canonicalize) else {
+        return false;
+    };
+    std::fs::canonicalize(source)
+        .ok()
+        .as_deref()
+        .and_then(std::path::Path::parent)
+        .is_some_and(|root| exe.starts_with(root))
+}
+
 /// Refuse a config whose pin this engine does not satisfy.
 ///
 /// `stamp` yields this binary's recorded source digest, or `None` when it has
@@ -222,9 +240,15 @@ pub fn check(text: &str, source: &str, stamp: impl FnOnce() -> Option<String>) -
         (Some(tag), None) => {
             let running = release();
             if tag != running {
+                // A BUILD OF THIS CHECKOUT IS REBUILT, NEVER UPDATED (CLOUD-2220).
+                // `follow_pin` leaves an in-tree binary alone (CLOUD-2063), so
+                // naming the update here sent a session to a verb that runs the
+                // same stale build: measured, `mise exec -- batten` resolved
+                // `target/release` at 0.0.213 under a 0.0.214 pin.
+                let repair = if built_in(source) { REBUILD } else { REPAIR };
                 return Err(UsageError::raise(format!(
                     "{source} pins batten {tag} and this engine is {running}: install the pin \
-                     with `{REPAIR}`"
+                     with `{repair}`"
                 )));
             }
             Ok(())

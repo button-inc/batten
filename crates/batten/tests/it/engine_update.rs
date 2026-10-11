@@ -168,6 +168,26 @@ fn a_build_inside_the_checkout_is_never_replaced() {
     );
 }
 
+/// CLOUD-2220: a stale build of the checkout was told to `batten engine update`,
+/// which leaves an in-tree binary alone, so `mise exec -- batten` (resolving
+/// `target/release`) stayed refused. It is told to rebuild instead.
+#[test]
+fn a_stale_build_of_the_checkout_names_the_rebuild() {
+    let dir = repo("engine-update-stale-checkout-build");
+    let binary = private_binary(&dir);
+    common::write(
+        &dir,
+        "batten.toml",
+        "version = 1\nengine = { release = \"v9.9.9\" }\n",
+    );
+    let output = run(&binary, &dir, &["config", "show"], "");
+    assert!(
+        text(&output).contains("mise exec -- cargo build --release -p batten"),
+        "the checkout's own build is rebuilt, not updated: {}",
+        text(&output)
+    );
+}
+
 /// The pinned release, as its per-tag cache holds it: a stand-in that names
 /// itself and its arguments, so a case can see which engine decided.
 fn seed_release(dir: &Path, tag: &str) {
