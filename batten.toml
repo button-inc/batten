@@ -11057,6 +11057,8 @@ cold = false
 # the lap that rebuilt it consumed 17532 MB and ran the volume out. `true` puts it
 # in the basis-moving pass, taken only once every warm root failed to recover the
 # floor, and an escalation that takes it now says the next build is cold.
+#MUTANT-SUITE crates/batten/tests/it/target_prune.rs
+#MUTANT build-root-declared-warm|s@^cold = true$@cold = false@|the_committed_build_root_is_basis_moving
 [[prune.regrowable]]
 name = "build"
 cold = true
