@@ -939,3 +939,71 @@ fn sources(root: &Path) -> Vec<PathBuf> {
     }
     found
 }
+
+#[test]
+fn a_reduced_read_points_at_a_view_whose_lines_hold_each_field() {
+    // CLOUD-2207. A stored tracker response is one JSON line, so the handle
+    // `mcp call` printed named bytes no line read could slice, and the reader
+    // re-fetched the row through the raw connector. The view lays each field out
+    // on its own lines, and the index must name exactly the lines that hold it —
+    // an off-by-one hands the reader the heading or the next field instead.
+    common::scratch_state_root();
+    let repo = Fixture::new("mcp-view")
+        .config("version = 1\n")
+        .git()
+        .build();
+    let description = "## Context\nfirst\nthe needle\nlast";
+    let document = serde_json::json!({
+        "id": "KEY-1",
+        "description": description,
+        "labels": ["a", "b"],
+        "archivedAt": null,
+        "a/b": "ends in a newline\n",
+        "b": "after the newline",
+        "c": "null",
+    });
+    let bytes = document.to_string().into_bytes();
+    let stored = batten::capture::store(&repo, batten::capture::Stream::Response, &bytes)
+        .expect("store the response");
+    let (path, index) = batten::capture::view(&repo, &stored, &bytes)
+        .expect("write the view")
+        .expect("a JSON object has a view");
+    let lines: Vec<String> = std::fs::read_to_string(&path)
+        .expect("the view is a readable file")
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    let field = |pointer: &str| {
+        let found = index
+            .iter()
+            .find(|field| field.pointer == pointer)
+            .unwrap_or_else(|| panic!("{pointer} is indexed"));
+        lines[found.from - 1..found.to].join("\n")
+    };
+    assert_eq!(
+        field("/description"),
+        description,
+        "a string is its own text, by line"
+    );
+    assert_eq!(field("/id"), "KEY-1");
+    assert_eq!(field("/labels"), "[\n  \"a\",\n  \"b\"\n]");
+    assert!(
+        index.iter().all(|field| field.pointer != "/archivedAt"),
+        "an empty field is not worth a pointer"
+    );
+    assert_eq!(
+        field("/a~1b"),
+        "ends in a newline\n",
+        "a key with `/` is escaped per RFC 6901, and a trailing newline is the field's own"
+    );
+    assert_eq!(
+        field("/b"),
+        "after the newline",
+        "a trailing newline shifts nothing after it"
+    );
+    assert_eq!(
+        field("/c"),
+        "null",
+        "a string whose text is `null` is content, not emptiness"
+    );
+}

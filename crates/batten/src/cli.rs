@@ -1614,6 +1614,8 @@ pub enum CaptureCommand {
         lines: Option<String>,
         /// A case-sensitive literal substring; only lines containing it.
         grep: Option<String>,
+        /// An RFC 6901 JSON Pointer naming one field of a stored JSON document.
+        field: Option<String>,
         /// Write the selected bytes to stdout verbatim, with no decode.
         raw: bool,
         /// A 0-indexed half-open `FROM:TO` byte range, clamped to the capture.
@@ -3280,6 +3282,7 @@ fn capture_of(matches: &ArgMatches) -> Option<CaptureCommand> {
             handle: matches.get_one::<String>("handle").cloned()?,
             lines: matches.get_one::<String>("lines").cloned(),
             grep: matches.get_one::<String>("grep").cloned(),
+            field: matches.get_one::<String>("field").cloned(),
             raw: flag(matches, "raw"),
             bytes: matches.get_one::<String>("bytes").cloned(),
             json: flag(matches, "json"),

@@ -2133,6 +2133,31 @@ const GREP: FlagDecl = FlagDecl {
     value: ValueDecl::Str,
 };
 
+/// `--field <pointer>` on `capture show`: one field of a stored JSON document
+/// (CLOUD-2207).
+///
+/// A tracker response is stored as one line of JSON, so `--lines` and `--grep`
+/// — line selectors — could only ever return the whole body: the pointer
+/// `mcp call` prints led nowhere a reader could navigate, and the measured
+/// response was a second, raw fetch of the same row. An RFC 6901 JSON Pointer
+/// names the field; a string field is read as its own text, newlines restored,
+/// and every other value as pretty-printed JSON, so the line selectors then
+/// address the field rather than the document.
+const FIELD: FlagDecl = FlagDecl {
+    id: "field",
+    long: Some("field"),
+    short: None,
+    help: "Read one field of a stored JSON document, named by an RFC 6901 JSON Pointer \
+           (`/description`); --lines and --grep then select within it",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
 /// `--raw` on `capture show`: the selected bytes, verbatim (CLOUD-918).
 ///
 /// **The one operation in this binary whose output is not text**, and therefore
@@ -3867,6 +3892,7 @@ pub const SURFACE: &[CommandDecl] = &[
             FlagDecl::positional("handle", "The `<stream>:<digest>` handle to read"),
             LINES,
             GREP,
+            FIELD,
             RAW,
             BYTES,
             JSON,

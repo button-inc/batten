@@ -465,6 +465,7 @@ mod walker;
 mod wall_clock;
 mod wiring_disarm;
 mod wiring_reclaim;
+mod wiring_register;
 mod workflow_shell_census;
 mod worktree_registration;
 mod zero_config;

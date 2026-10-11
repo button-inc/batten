@@ -1284,6 +1284,101 @@ pub fn read(repo_root: &Path, capture: &Capture) -> Result<Vec<u8>> {
     std::fs::read(&path).with_context(|| format!("read the capture {}", path.display()))
 }
 
+/// One top-level field of a stored JSON document, located in its view.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ViewField {
+    /// The field's RFC 6901 pointer, `/<key>`.
+    pub pointer: String,
+    /// The view's first line holding the field's content, 1-indexed.
+    pub from: usize,
+    /// The view's last line holding it, inclusive.
+    pub to: usize,
+    /// The content's length in bytes.
+    pub bytes: usize,
+}
+
+/// Write a line-addressable view of a stored JSON object beside the store, and
+/// say where each field sits in it (CLOUD-2207).
+///
+/// **A STORED RESPONSE IS ONE LINE, SO A POINTER TO IT LED NOWHERE A READER
+/// COULD NAVIGATE.** Measured 2026-10-11: `mcp call … get_issue` printed a
+/// handle and two byte counts, the 11,810-byte body behind the handle was a
+/// single JSON line, and every line selector returned all of it — so the reader
+/// re-fetched the row through the raw connector, paying the window twice. The
+/// view lays each top-level field out under its own `## /<key>` heading — a
+/// string as its own text with its newlines restored, anything else as
+/// pretty-printed JSON — so a plain file read with an offset and a limit takes
+/// exactly the field it wants.
+///
+/// `None` when the bytes are not a JSON object. Fields with no content (`null`,
+/// `""`, `[]`, `{}`) are listed in the view and omitted from the index.
+///
+/// # Errors
+///
+/// When the state root cannot be resolved or the view cannot be written.
+//MUTANT-SUITE crates/batten/tests/it/mcp_dispatch.rs
+//MUTANT view-index-off-by-one|s@^                from: line + 1,$@                from: line,@|a_reduced_read_points_at_a_view_whose_lines_hold_each_field
+pub fn view(
+    repo_root: &Path,
+    capture: &Capture,
+    bytes: &[u8],
+) -> Result<Option<(PathBuf, Vec<ViewField>)>> {
+    let Ok(serde_json::Value::Object(document)) = serde_json::from_slice(bytes) else {
+        return Ok(None);
+    };
+    let mut text = String::new();
+    let mut index = Vec::new();
+    let mut line = 0usize;
+    for (key, value) in &document {
+        let body = match value {
+            serde_json::Value::String(content) => content.clone(),
+            other => serde_json::to_string_pretty(other)?,
+        };
+        // RFC 6901 escaping, so the pointer the index prints is one `--field`
+        // resolves even for a key carrying `/` or `~`.
+        let pointer = format!("/{}", key.replace('~', "~0").replace('/', "~1"));
+        text.push_str(&format!("## {pointer}\n"));
+        line += 1;
+        // The lines the body OCCUPIES once the closing newline is written: one
+        // more than the newlines it carries, so a string ending in `\n` holds
+        // the blank line it leaves and shifts nothing after it.
+        let lines = body.matches('\n').count() + 1;
+        // Emptiness is a property of the VALUE, never of its rendering: a string
+        // whose text is `null` or `[]` is content.
+        let empty = match value {
+            serde_json::Value::Null => true,
+            serde_json::Value::String(content) => content.is_empty(),
+            serde_json::Value::Array(items) => items.is_empty(),
+            serde_json::Value::Object(fields) => fields.is_empty(),
+            _ => false,
+        };
+        if !empty {
+            index.push(ViewField {
+                pointer,
+                from: line + 1,
+                to: line + lines,
+                bytes: body.len(),
+            });
+        }
+        text.push_str(&body);
+        text.push('\n');
+        line += lines;
+    }
+    let dir = captures_dir(repo_root)?;
+    let path = view_path_in(&dir, &capture.digest);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
+    }
+    crate::durable::replace(&path, text.as_bytes())
+        .with_context(|| format!("write the view {}", path.display()))?;
+    Ok(Some((path, index)))
+}
+
+/// Where the view of the capture `digest` lives in the store `dir`.
+fn view_path_in(dir: &Path, digest: &str) -> PathBuf {
+    dir.join("views").join(format!("{digest}.md"))
+}
+
 // --- navigation (CLOUD-121) --------------------------------------------------
 //
 // The half that deletes the re-run. `cmd | tail -N` re-executes a possibly
@@ -1847,6 +1942,9 @@ pub fn evict_to_budget_in(dir: &Path, config: Option<&CaptureConfig>) -> Result<
         }
         let path = dir.join(format!("{}-{}", record.stream, record.digest));
         if std::fs::remove_file(&path).is_ok() {
+            // A view is derived from its capture and outlives it never
+            // (CLOUD-2207): absent is fine, it was only written for JSON.
+            let _ = std::fs::remove_file(view_path_in(dir, &record.digest));
             total = total.saturating_sub(record.bytes);
             count = count.saturating_sub(1);
             removed += 1;

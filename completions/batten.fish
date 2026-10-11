@@ -265,6 +265,7 @@ complete -c batten -n "__fish_batten_using_subcommand capture; and not __fish_se
 complete -c batten -n "__fish_batten_using_subcommand capture; and not __fish_seen_subcommand_from show find list prune help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
 complete -c batten -n "__fish_batten_using_subcommand capture; and __fish_seen_subcommand_from show" -l lines -d 'A 1-indexed inclusive line range, `FROM:TO`, clamped to the capture' -r
 complete -c batten -n "__fish_batten_using_subcommand capture; and __fish_seen_subcommand_from show" -l grep -d 'Only lines containing this literal substring' -r
+complete -c batten -n "__fish_batten_using_subcommand capture; and __fish_seen_subcommand_from show" -l field -d 'Read one field of a stored JSON document, named by an RFC 6901 JSON Pointer (`/description`); --lines and --grep then select within it' -r
 complete -c batten -n "__fish_batten_using_subcommand capture; and __fish_seen_subcommand_from show" -l bytes -d 'A 0-indexed half-open byte range, `FROM:TO`, either side omittable, clamped to the capture' -r
 complete -c batten -n "__fish_batten_using_subcommand capture; and __fish_seen_subcommand_from show" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'

@@ -208,3 +208,80 @@ fn outside_a_repository_the_call_is_allowed_rather_than_refused() {
         common::stderr(&output)
     );
 }
+
+/// The same refused call, carrying the session it belongs to (CLOUD-2204).
+fn hook_in_session(dir: &Path, session: &str) -> Output {
+    let payload = serde_json::json!({
+        "session_id": session,
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Bash",
+        "tool_input": { "command": "gh pr merge 42" }
+    })
+    .to_string();
+    let mut command = common::batten();
+    command
+        .current_dir(dir)
+        .args(["adjudicate", "--harness", "claude-code"])
+        .env_remove("CLAUDE_PROJECT_DIR")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command.spawn().expect("spawn batten hook");
+    child
+        .stdin
+        .take()
+        .expect("piped stdin")
+        .write_all(payload.as_bytes())
+        .expect("write payload");
+    child.wait_with_output().expect("run batten hook")
+}
+
+#[test]
+fn a_call_outside_the_repository_is_judged_by_the_session_authority() {
+    // THE REGRESSION, measured 2026-10-11. A host launched above its checkouts
+    // snaps the shell back to that parent after a `cd` leaves a working
+    // directory; from there the cwd resolves no authority, and every later call
+    // in the session was allowed by a policy declaring nothing, silently.
+    let (main, _linked) = repo_with_bare_worktree("hook-root-session");
+    let parent = common::scratch_outside_tree("hook-root", "session-parent");
+    let session = "cloud-2204-sticky";
+    assert!(
+        denied(&hook_in_session(&main, session)),
+        "the session first stands in the repository and is judged there"
+    );
+    let output = hook_in_session(&parent, session);
+    assert!(
+        denied(&output),
+        "a later call from outside any repository is judged by the authority \
+         its session last stood in, not by none: {:?} {:?}",
+        output.status.code(),
+        common::stderr(&output)
+    );
+}
+
+#[test]
+fn a_session_that_never_stood_in_a_repository_stays_fail_open() {
+    // CLOUD-70 preserved: the record is a fact about THIS session, so another
+    // session's authority never reaches a call it did not make.
+    let (main, _linked) = repo_with_bare_worktree("hook-root-other-session");
+    let parent = common::scratch_outside_tree("hook-root", "other-session-parent");
+    assert!(denied(&hook_in_session(&main, "cloud-2204-resident")));
+    assert!(
+        !denied(&hook_in_session(&parent, "cloud-2204-stranger")),
+        "a session that never resolved an authority must not inherit another's"
+    );
+}
+
+#[test]
+fn a_recorded_root_that_lost_its_authority_is_not_used() {
+    // A deleted or moved checkout is never answered for by its ghost.
+    let (main, _linked) = repo_with_bare_worktree("hook-root-ghost");
+    let parent = common::scratch_outside_tree("hook-root", "ghost-parent");
+    let session = "cloud-2204-ghost";
+    assert!(denied(&hook_in_session(&main, session)));
+    std::fs::remove_file(main.join("batten.toml")).expect("remove the authority");
+    assert!(
+        !denied(&hook_in_session(&parent, session)),
+        "a recorded root no longer carrying `batten.toml` must not be used"
+    );
+}

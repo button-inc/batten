@@ -1571,6 +1571,9 @@ pub enum Native {
     /// `claim check` refused to mint the claim: someone holds it, or the
     /// refinement sequence was not followed.
     ClaimMintRefused,
+    /// A reduced read stored the whole response and points at a view of it,
+    /// field by field (CLOUD-2207).
+    OutputPointNow,
 }
 
 impl Native {
@@ -1663,6 +1666,7 @@ impl Native {
         Native::IssueGradeRefused,
         Native::IssueGradePartial,
         Native::ClaimMintRefused,
+        Native::OutputPointNow,
     ];
 
     /// The classes the CONFIG LOADER raises, in `parse_ungated` order.
@@ -1789,6 +1793,7 @@ impl Native {
             Native::IssueGradeRefused => "issue grade refused",
             Native::IssueGradePartial => "issue grade partial",
             Native::ClaimMintRefused => "claim mint refused",
+            Native::OutputPointNow => "output point now",
         }
     }
 }
@@ -2983,6 +2988,19 @@ are in the journal and the subjects count them.",
         applicability: Applicability::Advice,
     },
     VendoredVerdict {
+        id: "output point now",
+        gloss: "a reduced read stored the whole response; each subject is a field and its lines",
+        class: "A reduction hands back a few declared fields and stores the response whole. The \
+store is one line of JSON, so the read route is the view: the same document laid out field by \
+field, each subject naming a field, the view lines holding it and its size. Read only the lines \
+you need; the raw connector returns the same bytes into the window again.",
+        routes: &[run(
+            "field show first",
+            "batten capture show <handle> --field /<name>",
+        )],
+        applicability: Applicability::Advice,
+    },
+    VendoredVerdict {
         id: "issue grade refused",
         gloss: "the issue fails a checkable Ready clause, named in the subject beside its line",
         class: "`ready lint` holds an issue's description to the checkable half of the Definition \
@@ -3569,6 +3587,7 @@ mod tests {
                 | Native::IssueGradeRefused
                 | Native::IssueGradePartial
                 | Native::ClaimMintRefused
+                | Native::OutputPointNow
                 | Native::VerdictTableRefused
                 | Native::RedirectTableRefused
                 | Native::DeferralTableRefused

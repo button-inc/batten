@@ -150,10 +150,95 @@ pub fn derive_repo_name(repo_root: &Path) -> Result<String> {
     Ok(format!("{name}-{}", &digest[..CHECKOUT_DIGEST_LEN]))
 }
 
+/// The file recording the authority root a session last stood in (CLOUD-2204),
+/// under the state root `state`.
+///
+/// Keyed by a fingerprint of the session id rather than the id itself, for
+/// `drain::wake_path`'s reason: the id is host-chosen and must not choose where
+/// this writes. Under the state root, never under a checkout, because the whole
+/// point is to be readable from a cwd that resolves no checkout.
+fn session_authority_file(state: &Path, session: &str) -> PathBuf {
+    let key = crate::identity::store_fingerprint(&[session]).to_hex();
+    state.join("sessions").join(key).join("authority")
+}
+
+/// Record `root` as the authority this session last resolved.
+///
+/// Written only when it differs from what is recorded, so the hottest path in
+/// the binary pays one small read per call and a write only when the session
+/// moves between repositories.
+///
+/// # Errors
+///
+/// Returns an error when the state root cannot be resolved or the record cannot
+/// be written.
+pub fn record_session_authority(session: &str, root: &Path) -> Result<()> {
+    let path = session_authority_file(&state_root()?, session);
+    let text = root.to_string_lossy();
+    if std::fs::read_to_string(&path).is_ok_and(|held| held == text) {
+        return Ok(());
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
+    }
+    crate::durable::replace(&path, text.as_bytes())
+        .with_context(|| format!("write {}", path.display()))
+}
+
+/// The authority root this session last resolved, if it still carries one.
+#[must_use]
+pub fn recorded_session_authority(session: &str, file: &str) -> Option<PathBuf> {
+    recorded_session_authority_in(&state_root().ok()?, session, file)
+}
+
+/// [`recorded_session_authority`] under the state root `state`.
+///
+/// `None` when nothing is recorded, the record is unreadable, or the recorded
+/// root no longer holds `file` — a deleted or moved checkout is never answered
+/// for by its ghost. The check is here rather than left to the policy loader's
+/// own absence test because every other reader of the authority root (receipts,
+/// the capture store, the sighting record) would otherwise write under a
+/// directory that no longer governs anything.
+//MUTANT-SUITE crates/batten/src/state.rs
+//MUTANT session-authority-ghost-admitted|s@^    (root\.is_absolute() && root\.join(file)\.is_file())\.then_some(root)$@    root.is_absolute().then_some(root)@|a_recorded_root_that_lost_its_authority_is_not_used
+#[must_use]
+pub fn recorded_session_authority_in(state: &Path, session: &str, file: &str) -> Option<PathBuf> {
+    let root = PathBuf::from(std::fs::read_to_string(session_authority_file(state, session)).ok()?);
+    (root.is_absolute() && root.join(file).is_file()).then_some(root)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_recorded_root_that_lost_its_authority_is_not_used() {
+        // CLOUD-2204: a ghost root is never handed back as the session's
+        // authority, so nothing downstream writes under a dead checkout.
+        let base = std::env::temp_dir().join(format!("batten-ghost-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let (state, root) = (base.join("state"), base.join("repo"));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("batten.toml"), "version = 1\n").unwrap();
+        let file = session_authority_file(&state, "s");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, root.to_string_lossy().as_bytes()).unwrap();
+        assert_eq!(
+            recorded_session_authority_in(&state, "s", "batten.toml"),
+            Some(root.clone())
+        );
+        std::fs::remove_file(root.join("batten.toml")).unwrap();
+        assert_eq!(
+            recorded_session_authority_in(&state, "s", "batten.toml"),
+            None
+        );
+        assert_eq!(
+            recorded_session_authority_in(&state, "other", "batten.toml"),
+            None
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
 
     #[test]
     fn repo_name_leads_with_the_final_path_component() {

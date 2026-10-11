@@ -532,6 +532,14 @@ expression: stdout_of(&output)
               "help": "A 0-indexed half-open byte range, `FROM:TO`, either side omittable, clamped to the capture"
             },
             {
+              "name": "field",
+              "short": null,
+              "long": "field",
+              "takes_value": true,
+              "positional": false,
+              "help": "Read one field of a stored JSON document, named by an RFC 6901 JSON Pointer (`/description`); --lines and --grep then select within it"
+            },
+            {
               "name": "grep",
               "short": null,
               "long": "grep",

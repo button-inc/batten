@@ -1159,6 +1159,20 @@ impl Refusal {
         self
     }
 
+    /// The same finding with `path` as a document it names on every firing: the
+    /// file a pointer leads to, when the file is only known at emission
+    /// (CLOUD-2207's view of a stored response).
+    #[must_use]
+    pub fn with_document_route(mut self, path: &str) -> Refusal {
+        self.routes.push(crate::verdict::Route {
+            id: "view read first".to_owned(),
+            kind: crate::verdict::RouteKind::Document,
+            target: path.to_owned(),
+            precondition: None,
+        });
+        self
+    }
+
     /// The same finding, printed under `severity` — an advisory channel's. A
     /// remedy stays a remedy: it is no finding, so no channel re-ranks it.
     #[must_use]

@@ -303,6 +303,7 @@ trace\:"Add everything"))' \
 _arguments "${_arguments_options[@]}" : \
 '--lines=[A 1-indexed inclusive line range, \`FROM\:TO\`, clamped to the capture]:lines:_default' \
 '--grep=[Only lines containing this literal substring]:grep:_default' \
+'--field=[Read one field of a stored JSON document, named by an RFC 6901 JSON Pointer (\`/description\`); --lines and --grep then select within it]:field:_default' \
 '--bytes=[A 0-indexed half-open byte range, \`FROM\:TO\`, either side omittable, clamped to the capture]:bytes:_default' \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"

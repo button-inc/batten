@@ -11025,9 +11025,11 @@ tolerance = 10
 # inferred from a removal: `basis_of` reports `Cold` when `deps` is empty or absent,
 # which is the state a full rebuild actually follows from, and it is true whoever
 # emptied it — this reclaim, a `cargo clean`, a fresh clone, or a human freeing
-# space by hand. The `cold` flag stays in the schema because a consumer whose
-# reclaim really does destroy the artifact set needs it; on THIS tree no declared
-# root does.
+# space by hand. The `cold` flag stays in the schema because a reclaim that really
+# does destroy the artifact set needs it, and on THIS tree one root does: `build`,
+# below (CLOUD-2192). That also orders the escalation: `build` is taken only in the
+# basis-moving pass, after `tmp`, `perf*` and retention tightening, because losing
+# it rebuilt 170 crates (17532 MB) where `perf*` costs one release closure.
 [[prune.regrowable]]
 name = "incremental"
 cold = false

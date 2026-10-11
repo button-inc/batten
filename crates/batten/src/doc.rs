@@ -1395,6 +1395,17 @@ pub const VENDORED_DOCS: &[VendoredDoc] = &[
         dont: &["raise the token budget to make the cut go away"],
     },
     VendoredDoc {
+        id: "output point now",
+        why: Some(
+            "A pointer the reader cannot slice sends them around it, paying the window twice",
+        ),
+        act: &[
+            "read the view at the lines the subject names, with an offset and a limit",
+            "or `batten capture show <handle> --field /<name>` for one field",
+        ],
+        dont: &["re-fetch the row through the raw connector"],
+    },
+    VendoredDoc {
         id: "issue grade refused",
         why: Some("An issue that fails a Ready clause is pulled before it can be done"),
         act: &[

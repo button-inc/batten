@@ -2892,6 +2892,7 @@ fn run_capture(
             handle,
             lines,
             grep,
+            field,
             raw,
             bytes,
             json,
@@ -2901,6 +2902,7 @@ fn run_capture(
             &ShowRequest {
                 lines: lines.as_deref(),
                 grep: grep.as_deref(),
+                field: field.as_deref(),
                 raw: *raw,
                 byte_range: bytes.as_deref(),
                 json: *json,
@@ -3415,6 +3417,17 @@ fn file_and_report(
          {emitted}",
         stored.handle(),
     )?;
+    // THE POINTER HAS TO LEAD SOMEWHERE A READER CAN NAVIGATE (CLOUD-2207). The
+    // stored body is one JSON line, so the handle above names bytes no line read
+    // can slice. The view is the same document laid out field by field, and the
+    // index says which lines hold which field — a plain file read with an offset
+    // and a limit then takes exactly what the reader chose, never the whole body
+    // and never a second fetch through the raw connector.
+    if reduced.is_some()
+        && let Ok(Some((path, index))) = capture::view(repo, &stored, &whole)
+    {
+        writeln!(err, "{}", view_pointer(&path, &index))?;
+    }
     writeln!(out, "{rendered}")?;
     // THE EXIT CODE IS THE ANSWER, AND UNTIL CLOUD-1645 IT WAS NOT ONE. This
     // returned `Ok(ExitCode::Success)` unconditionally, so a refused tool call, a
@@ -3601,12 +3614,66 @@ struct ShowRequest<'a> {
     lines: Option<&'a str>,
     /// A literal substring.
     grep: Option<&'a str>,
+    /// An RFC 6901 JSON Pointer into a stored JSON document.
+    field: Option<&'a str>,
     /// Write the selected bytes verbatim.
     raw: bool,
     /// A 0-indexed half-open byte range.
     byte_range: Option<&'a str>,
     /// Emit a byte-stable document.
     json: bool,
+}
+
+/// The `output point now` finding for a stored response's view (CLOUD-2207):
+/// one subject per indexed field, naming its view lines and size, and the view
+/// itself as a document route — a pointer, never a byte of content (rule 4).
+//MUTANT-SUITE crates/batten/src/lib.rs
+//MUTANT view-route-dropped|s@^    \.with_document_route(&path\.display()\.to_string())$@    .with_severity(refusal::Severity::Note)@|the_view_pointer_names_each_field_and_the_view
+fn view_pointer(path: &Path, index: &[capture::ViewField]) -> String {
+    let subjects: Vec<verdict::Subject> = index
+        .iter()
+        .map(|field| {
+            verdict::artifact(&format!(
+                "{}:{}-{}({}B)",
+                field.pointer, field.from, field.to, field.bytes
+            ))
+        })
+        .collect();
+    refusal::Refusal::engine(
+        verdict::Native::OutputPointNow,
+        &subjects,
+        refusal::Fix::None,
+    )
+    .with_document_route(&path.display().to_string())
+    .with_severity(refusal::Severity::Note)
+    .render_finding(refusal::Arm::Pointer)
+}
+
+/// The text of one field of a stored JSON document, named by an RFC 6901 JSON
+/// Pointer (CLOUD-2207).
+///
+/// A string is its own text — its newlines restored, which is what makes the
+/// line selectors address it — and any other value is pretty-printed JSON. A
+/// capture that is not JSON, or a pointer that names nothing, is a usage error:
+/// the caller asked about a field that is not there.
+//MUTANT-SUITE crates/batten/tests/it/cli.rs
+//MUTANT field-string-as-json|s@^        serde_json::Value::String(text) => text.clone().into_bytes(),$@        serde_json::Value::String(text) => serde_json::to_vec(text)?,@|a_json_field_is_addressable_by_line
+fn field_text(parsed: &capture::Handle, bytes: &[u8], pointer: &str) -> Result<Vec<u8>> {
+    let document: serde_json::Value = serde_json::from_slice(bytes).map_err(|_| {
+        UsageError::raise(format!(
+            "capture show: {parsed} is not a JSON document, so --field has nothing to name"
+        ))
+    })?;
+    let value = document.pointer(pointer).ok_or_else(|| {
+        UsageError::raise(format!(
+            "capture show: {parsed} has no field at `{pointer}` — a pointer starts with `/`, \
+             e.g. `/description`"
+        ))
+    })?;
+    Ok(match value {
+        serde_json::Value::String(text) => text.clone().into_bytes(),
+        other => serde_json::to_vec_pretty(other)?,
+    })
 }
 
 /// Read a frozen capture, with no second run of the command that made it.
@@ -3632,6 +3699,7 @@ fn run_capture_show(
     let ShowRequest {
         lines,
         grep,
+        field,
         raw,
         byte_range,
         json,
@@ -3653,6 +3721,12 @@ fn run_capture_show(
         return Err(UsageError::raise(
             "capture show: --raw writes bytes and --lines/--grep select decoded lines; pass \
              --bytes to narrow a raw read",
+        ));
+    }
+    if field.is_some() && (raw || byte_range.is_some()) {
+        return Err(UsageError::raise(
+            "capture show: --field selects decoded text from a JSON document; --raw and --bytes \
+             read the stored bytes, so pass one or the other",
         ));
     }
     if byte_range.is_some() && (lines.is_some() || grep.is_some()) {
@@ -3711,6 +3785,10 @@ fn run_capture_show(
              repository holds"
         ))
     })?;
+    let bytes = match field {
+        Some(pointer) => field_text(&parsed, &bytes, pointer)?,
+        None => bytes,
+    };
     let answer = capture::select(&parsed, &bytes, &selection);
     if json {
         writeln!(out, "{}", serde_json::to_string_pretty(&answer)?)?;
@@ -7303,12 +7381,26 @@ fn run_wiring(
 /// Register batten on the session root's project surface when the session is
 /// rooted above this repository (CLOUD-2111).
 ///
-/// The root is the harness process's working directory, which is the one fact
-/// that names it: nothing in a tool call's environment does. Outside a Claude
-/// Code session there is no root to read and nothing is owed.
+/// **INSIDE A SESSION THE ROOT IS THE HARNESS PROCESS'S CWD; OUTSIDE ONE, IT IS
+/// EVERY ROOT A SESSION COULD HAVE** (CLOUD-2205). Until 2026-10-11 the
+/// no-session arm answered "nothing is owed" and exited clean, and that arm is
+/// exactly the one the container's setup script runs in — the only step that
+/// executes before a session exists. The registration therefore never reached a
+/// fresh container; the `SessionStart` that would have run this row is itself
+/// one of the hooks it registers; and a whole session ran unmediated — raw
+/// tracker reads, bare proxied forge writes, every deny permitted — while this
+/// row read green.
 ///
-/// `--check` exits `1` when a registration is owed, so a `[[startup]]` row can
-/// decide on it. The repair says when a home that is not declared disposable
+/// So with no session to name the root, every strict ancestor of the repository
+/// is a candidate, stopping short of `$HOME` and everything above it: the
+/// project surface AT `$HOME` is the user-level one, which a session rooted at
+/// the repository also loads, and registering there is the double authority
+/// [`wiring::register`]'s own header refuses. A session rooted at the repository
+/// loads none of these files; one rooted above it, however deep the clone sits,
+/// loads exactly its own root's.
+///
+/// `--check` exits `2` (a violation) when a registration is owed, so a
+/// `[[startup]]` row can decide on it. The repair says when a home that is not declared disposable
 /// refused the write, because a repair that silently wrote nothing is a false
 /// green.
 ///
@@ -7316,42 +7408,78 @@ fn run_wiring(
 ///
 /// Whatever [`wiring::register`] could not write.
 fn run_wiring_register(check: bool, mode: Mode, err: &mut dyn Write) -> Result<ExitCode> {
-    let Some(root) = std::env::var("CLAUDE_PID")
+    let repo = git::canonical(hook_authority_root());
+    let roots = match std::env::var("CLAUDE_PID")
         .ok()
         .and_then(|pid| std::fs::read_link(format!("/proc/{pid}/cwd")).ok())
-    else {
-        output::message(
-            mode,
-            output::Verbosity::Normal,
-            err,
-            "wiring register: no session root resolves, so no registration is owed",
-        )?;
-        return Ok(ExitCode::Success);
+    {
+        Some(root) => vec![root],
+        // Only where the environment says the home is disposable: that is the
+        // container a setup script provisions, and the only place a write would
+        // be allowed anyway. A developer machine or a CI runner outside a
+        // session owes nothing, as before — reporting a registration nobody may
+        // write would turn every `startup` there red over a non-defect.
+        None if crate::environment::disposable() => {
+            candidate_session_roots(&repo, std::env::var_os("HOME").map(PathBuf::from))
+        }
+        None => {
+            output::message(
+                mode,
+                output::Verbosity::Normal,
+                err,
+                "wiring register: no session root resolves, so no registration is owed",
+            )?;
+            return Ok(ExitCode::Success);
+        }
     };
-    let done = wiring::register(&root, hook_authority_root(), check)?;
-    let verb = if done.written { "registered" } else { "owed" };
-    for event in &done.events {
-        output::message(
-            mode,
-            output::Verbosity::Normal,
-            err,
-            &format!("wiring register: claude-code:{event} {verb}"),
-        )?;
+    let mut owed = false;
+    for root in &roots {
+        let done = wiring::register(root, &repo, check)?;
+        let verb = if done.written { "registered" } else { "owed" };
+        for event in &done.events {
+            output::message(
+                mode,
+                output::Verbosity::Normal,
+                err,
+                &format!(
+                    "wiring register: claude-code:{event} {verb} at {}",
+                    root.display()
+                ),
+            )?;
+        }
+        if !check && !done.authoritative && !done.events.is_empty() {
+            output::message(
+                mode,
+                output::Verbosity::Normal,
+                err,
+                "wiring register: this environment is not declared disposable, so nothing was \
+                 written. Set BATTEN_ENVIRONMENT=disposable where the home directory is \
+                 provisioned per session and may be taken.",
+            )?;
+        }
+        owed |= !done.events.is_empty();
     }
-    if !check && !done.authoritative && !done.events.is_empty() {
-        output::message(
-            mode,
-            output::Verbosity::Normal,
-            err,
-            "wiring register: this environment is not declared disposable, so nothing was \
-             written. Set BATTEN_ENVIRONMENT=disposable where the home directory is \
-             provisioned per session and may be taken.",
-        )?;
-    }
-    if check && !done.events.is_empty() {
+    if check && owed {
         return Ok(ExitCode::Violation);
     }
     Ok(ExitCode::Success)
+}
+
+/// Every directory a session could be rooted at above `repo` without loading
+/// the user-level surface: each strict ancestor, nearest first, skipping `home`
+/// and every ancestor of it (CLOUD-2205).
+//MUTANT-SUITE crates/batten/src/lib.rs
+//MUTANT session-roots-include-home|s@^        if matches!(home.as_deref(), Some(home) if home.starts_with(ancestor)) {$@        if false {@|candidate_roots_stop_short_of_home_and_everything_above_it
+fn candidate_session_roots(repo: &Path, home: Option<PathBuf>) -> Vec<PathBuf> {
+    let home = home.map(|home| git::canonical(&home));
+    let mut roots = Vec::new();
+    for ancestor in repo.ancestors().skip(1) {
+        if matches!(home.as_deref(), Some(home) if home.starts_with(ancestor)) {
+            continue;
+        }
+        roots.push(ancestor.to_path_buf());
+    }
+    roots
 }
 
 /// Remove every non-batten hook registration from this host's merged surfaces.
@@ -16678,6 +16806,7 @@ fn run_hook(
     let Some((raw, mut envelope)) = read_envelope(harness, mode, err)? else {
         return Ok(ExitCode::Success);
     };
+    seed_hook_authority(&envelope);
     // THE WRITE TARGET IS READ AS THE REPOSITORY READS IT (CLOUD-1133), and this
     // is the one place that can do it: `decode` is pure and has no repository,
     // and the readers below — the protected gate, and any module over
@@ -21122,8 +21251,45 @@ fn capture_budget() -> Option<capture::CaptureConfig> {
 /// the reason ordinary work stops (CLOUD-70) — the same fail-open posture the
 /// launcher had at this exact point (`|| exit 0`), and [`anchor`]'s own fallback.
 fn hook_authority_root() -> &'static Path {
-    static ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
-    ROOT.get_or_init(anchor)
+    HOOK_AUTHORITY_ROOT.get_or_init(anchor)
+}
+
+static HOOK_AUTHORITY_ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// Pin [`hook_authority_root`] for this call from the session, before any reader
+/// asks (CLOUD-2204).
+///
+/// **The cwd is where the shell happens to stand, not which repository governs
+/// the session.** A host launched above its checkouts (`/home/user` holding
+/// `batten/` and `marketing/`, the ordinary multi-repository cloud session)
+/// snaps the shell back to that parent whenever a `cd` leaves a working
+/// directory, and from there [`anchor`] resolves no authority. Measured
+/// 2026-10-11: every call after that point was judged by
+/// `Policy::declaring_nothing` — `forge read first` never routed a bare,
+/// proxied `gh api` write to the memory saying why it 403s — and nothing said
+/// the gates had gone dark.
+///
+/// So a call whose cwd resolves an authority records it for its session, and a
+/// call whose cwd resolves none is judged by the one its session last stood in.
+/// A recorded fact, never a search, so no directory is walked (house-style §8).
+/// A session that never stood in a Batten repository stays fail-open (CLOUD-70).
+//MUTANT-SUITE crates/batten/tests/it/hook_worktree_root.rs
+//MUTANT session-authority-ignored|s@^    if let Some(root) = state::recorded_session_authority(session, config::CONFIG_FILE) {$@    if let Some(root) = None::<PathBuf> {@|a_call_outside_the_repository_is_judged_by_the_session_authority
+fn seed_hook_authority(envelope: &hook::Envelope) {
+    let Some(session) = envelope.session.as_deref() else {
+        return;
+    };
+    let here = anchor();
+    if here.join(config::CONFIG_FILE).is_file() {
+        let _ = state::record_session_authority(session, &git::canonical(&here));
+        // Pinned here too, so the readers below do not resolve `anchor` again:
+        // a second git spawn on the hottest path for an answer already in hand.
+        let _ = HOOK_AUTHORITY_ROOT.set(here);
+        return;
+    }
+    if let Some(root) = state::recorded_session_authority(session, config::CONFIG_FILE) {
+        let _ = HOOK_AUTHORITY_ROOT.set(root);
+    }
 }
 
 //MUTANT no-config-mode-bundle-dropped|s@^        return Ok((hook::Policy::mode_default(harness)?, Vec::new()));$@        return Ok((hook::Policy::declaring_nothing(harness), Vec::new()));@|an_auto_mode_call_is_granted_where_no_authority_governs
@@ -25478,6 +25644,62 @@ pub fn land_spent_refusal(laps: u32, ledger: &land::Ledger) -> crate::refusal::R
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// CLOUD-2207: the line a reduced read leaves names every indexed field
+    /// with its view lines and size, then the routes to read one.
+    #[test]
+    fn the_view_pointer_names_each_field_and_the_view() {
+        let index = [
+            capture::ViewField {
+                pointer: "/id".to_owned(),
+                from: 2,
+                to: 2,
+                bytes: 5,
+            },
+            capture::ViewField {
+                pointer: "/description".to_owned(),
+                from: 4,
+                to: 7,
+                bytes: 40,
+            },
+        ];
+        let line = view_pointer(Path::new("/s/views/d.md"), &index);
+        assert!(
+            line.starts_with("batten note output point now at /id:2-2(5B) /description:4-7(40B);"),
+            "{line}"
+        );
+        assert!(
+            line.contains("; run batten capture show <handle> --field /<name>"),
+            "{line}"
+        );
+        assert!(line.ends_with("; read /s/views/d.md"), "{line}");
+    }
+
+    /// CLOUD-2205's bound, as a pure function over fabricated paths, so the
+    /// mutation that drops it writes nothing: driven through the binary, the
+    /// unbounded arm would register on every real ancestor of the fixture.
+    #[test]
+    fn candidate_roots_stop_short_of_home_and_everything_above_it() {
+        let repo = Path::new("/h/u/sessions/clones/repo");
+        assert_eq!(
+            candidate_session_roots(repo, Some(PathBuf::from("/h/u"))),
+            vec![
+                PathBuf::from("/h/u/sessions/clones"),
+                PathBuf::from("/h/u/sessions")
+            ],
+            "home itself is the user-level surface, and /h and / contain it"
+        );
+        assert_eq!(
+            candidate_session_roots(repo, Some(PathBuf::from("/root"))),
+            vec![
+                PathBuf::from("/h/u/sessions/clones"),
+                PathBuf::from("/h/u/sessions"),
+                PathBuf::from("/h/u"),
+                PathBuf::from("/h"),
+            ],
+            "a home beside the clones bounds nothing but `/`, which contains it"
+        );
+    }
 
     /// RED CI AND A SPENT BUDGET ARE CLASSED FINDINGS (CLOUD-2078), each
     /// naming its counts as subjects and its advice as the remedy.

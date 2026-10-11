@@ -13653,3 +13653,76 @@ fn a_misspelled_rule_is_still_refused_under_the_spelling_it_was_given() {
         stderr(&output)
     );
 }
+
+/// Capture one line of JSON shaped like a tracker response (CLOUD-2207).
+#[cfg(unix)]
+fn json_capture(name: &str) -> (PathBuf, PathBuf, String) {
+    let (repo, home) = capture_repo(name);
+    let document = r###"{"id":"CLOUD-1","title":"t","description":"## Context\nfirst line\nthe needle is here\nlast line","labels":["a"]}"###;
+    let output = batten()
+        .args(["exec", "--capture-only", "--", "printf", "%s", document])
+        .current_dir(&repo)
+        .state_home(&home)
+        .output()
+        .expect("run batten exec");
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let handle = stdout_handle(&repo, &home);
+    (repo, home, handle)
+}
+
+#[cfg(unix)]
+#[test]
+fn a_json_field_is_addressable_by_line() {
+    // THE REGRESSION. A stored tracker response is ONE line, so `--grep`
+    // matched the whole document and the pointer `mcp call` printed led nowhere
+    // a reader could navigate. `--field` reads the string as its own text.
+    let (repo, home, handle) = json_capture("capture-field-grep");
+    let whole = run_capture(&repo, &home, &["show", &handle, "--grep", "needle"]);
+    assert!(
+        stdout(&whole).contains("\"id\":\"CLOUD-1\""),
+        "the premise: without --field a grep returns the whole one-line document"
+    );
+    let field = run_capture(
+        &repo,
+        &home,
+        &[
+            "show",
+            &handle,
+            "--field",
+            "/description",
+            "--grep",
+            "needle",
+        ],
+    );
+    assert_eq!(field.status.code(), Some(0), "{}", stderr(&field));
+    assert_eq!(stdout(&field), "stdout:3 the needle is here\n");
+    let summary = run_capture(&repo, &home, &["show", &handle, "--field", "/description"]);
+    assert!(
+        stdout(&summary).ends_with(" 4 lines\n"),
+        "the field's own line count, not the document's: {}",
+        stdout(&summary)
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_non_string_field_reads_as_pretty_json() {
+    let (repo, home, handle) = json_capture("capture-field-array");
+    let field = run_capture(
+        &repo,
+        &home,
+        &["show", &handle, "--field", "/labels", "--lines", "1:3"],
+    );
+    assert_eq!(field.status.code(), Some(0), "{}", stderr(&field));
+    assert_eq!(stdout(&field), "stdout:1 [\nstdout:2   \"a\"\nstdout:3 ]\n");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_field_that_names_nothing_is_a_usage_error() {
+    let (repo, home, handle) = json_capture("capture-field-missing");
+    let missing = run_capture(&repo, &home, &["show", &handle, "--field", "/nope"]);
+    assert_eq!(missing.status.code(), Some(1), "{}", stderr(&missing));
+    let raw = run_capture(&repo, &home, &["show", &handle, "--field", "/id", "--raw"]);
+    assert_eq!(raw.status.code(), Some(1), "--field with --raw is refused");
+}

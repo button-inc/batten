@@ -3035,7 +3035,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__capture__subcmd__show)
-            opts="-J -q -v -y -h --lines --grep --raw --bytes --json --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
+            opts="-J -q -v -y -h --lines --grep --field --raw --bytes --json --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -3046,6 +3046,10 @@ _batten() {
                     return 0
                     ;;
                 --grep)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --field)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
