@@ -1182,6 +1182,7 @@ mod tests {
 
     fn finding_for(severity: RuleSeverity) -> Finding {
         Finding {
+            carried: Vec::new(),
             owner: None,
             rule: "r".to_owned(),
             severity,

@@ -362,6 +362,7 @@ impl Problem {
             crate::identity::scope_fingerprint(&rule, &self.claim),
         );
         Finding {
+            carried: Vec::new(),
             owner: None,
             rule,
             severity: self.severity(),

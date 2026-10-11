@@ -254,6 +254,7 @@ impl Report {
             .iter()
             .filter(|file| over_file_ceiling(file.bytes, ceiling))
             .map(|file| Finding {
+                carried: Vec::new(),
                 owner: None,
                 rule: rule.clone(),
                 severity: RuleSeverity::Deny,
@@ -326,6 +327,7 @@ impl Report {
             identity::scope_fingerprint(&rule, &self.name),
         );
         Some(Finding {
+            carried: Vec::new(),
             owner: None,
             rule,
             severity: RuleSeverity::Deny,

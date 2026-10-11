@@ -220,6 +220,7 @@ impl Problem {
             crate::identity::scope_fingerprint(&rule, path),
         );
         Finding {
+            carried: Vec::new(),
             owner: None,
             rule,
             severity: RuleSeverity::Deny,

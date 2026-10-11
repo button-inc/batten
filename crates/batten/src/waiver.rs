@@ -621,6 +621,7 @@ mod tests {
 
     fn finding(rule: &str, path: &str) -> Finding {
         Finding {
+            carried: Vec::new(),
             owner: None,
             rule: rule.to_owned(),
             severity: RuleSeverity::Deny,

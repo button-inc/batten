@@ -6286,6 +6286,15 @@ pub struct Finding {
     /// gained the field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<&'static str>,
+    /// A policy finding's subjects other than the one [`Finding::path`] holds,
+    /// rendered, in the module's order (CLOUD-2213).
+    ///
+    /// `path` is one slot, so `issue file same` printed `at batten.toml` and
+    /// dropped the row id it judged. These ride the line after the pointer;
+    /// identity, admission and baseline still key on `path` alone, so nothing
+    /// already recorded moves.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub carried: Vec<String>,
 }
 
 /// The renderer this type went without (CLOUD-371).
@@ -6311,10 +6320,14 @@ pub struct Finding {
 impl crate::output::Line for Finding {
     fn line(&self) -> String {
         let head = crate::refusal::head(self.severity.finding_severity(), &self.rule);
-        let at = match self.line {
+        let mut at = match self.line {
             Some(line) => format!("{head} at {}:{line}", self.path),
             None => format!("{head} at {}", self.path),
         };
+        for subject in &self.carried {
+            at.push(' ');
+            at.push_str(subject);
+        }
         match self.reason {
             Some(reason) => format!("{at} {reason}"),
             None => at,
@@ -10232,6 +10245,7 @@ fn policy_rule(
             remediation: policy_remediation(registry, &violation.verdict),
             identity,
             reason: None,
+            carried: carried_subjects(&violation.subjects),
         });
     }
     None
@@ -10333,6 +10347,32 @@ fn first_pointer(subjects: &[crate::verdict::Subject]) -> (Option<String>, Optio
         Some(subject) => (Some(subject.render()), None),
         None => (None, None),
     }
+}
+
+/// Every subject but the one [`first_pointer`] chose, rendered (CLOUD-2213).
+//MUTANT carried-subjects-dropped|s@^        .filter(|(index, _)| Some(\*index) != skip)$@        .filter(|(index, _)| Some(*index) != skip \&\& false)@|a_policy_findings_other_subjects_ride_its_line
+fn carried_subjects(subjects: &[crate::verdict::Subject]) -> Vec<String> {
+    let skip = pointer_index(subjects);
+    subjects
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| Some(*index) != skip)
+        .map(|(_, subject)| subject.render())
+        .collect()
+}
+
+/// The index [`first_pointer`] takes its pointer from: the first path-bearing
+/// subject, else the first subject.
+fn pointer_index(subjects: &[crate::verdict::Subject]) -> Option<usize> {
+    subjects
+        .iter()
+        .position(|subject| {
+            matches!(
+                subject,
+                crate::verdict::Subject::Line { .. } | crate::verdict::Subject::Path { .. }
+            )
+        })
+        .or_else(|| (!subjects.is_empty()).then_some(0))
 }
 
 /// The identity ingredient a policy finding is keyed on: its class and its
@@ -10784,6 +10824,7 @@ fn ratchet_finding(
     findings: &mut Vec<Finding>,
 ) {
     findings.push(Finding {
+        carried: Vec::new(),
         owner: None,
         // The plain rule id, deliberately: `waiver::apply` matches on this
         // field, so decorating it would make a ratchet the one finding kind
@@ -11544,6 +11585,7 @@ fn push_case_finding(
         return;
     };
     findings.push(Finding {
+        carried: Vec::new(),
         owner: None,
         rule: rule.id.clone(),
         severity: rule.severity(),
@@ -11652,6 +11694,7 @@ fn unresolved_subject(
         return;
     };
     findings.push(Finding {
+        carried: Vec::new(),
         owner: None,
         rule: rule.id.clone(),
         severity: rule.severity(),
@@ -12297,6 +12340,7 @@ fn run_once(
         let scope_key = rule.glob.as_deref().unwrap_or(&rule.id);
         let default = identity::scope_fingerprint(&rule.id, scope_key);
         findings.push(Finding {
+            carried: Vec::new(),
             owner: None,
             rule: rule.id.clone(),
             severity: rule.severity(),
@@ -12491,6 +12535,7 @@ fn forbid_in_files(
                 // engine picks the same span.
                 let default = identity::code_fingerprint(&rule.id, rel_path, line, mode)?;
                 findings.push(Finding {
+                    carried: Vec::new(),
                     owner: None,
                     rule: rule.id.clone(),
                     severity: rule.severity(),
@@ -12638,6 +12683,7 @@ fn document_in_file(
         identity::SpanNormalization::Verbatim,
     )?;
     findings.push(Finding {
+        carried: Vec::new(),
         owner: None,
         rule: rule.id.clone(),
         severity: rule.severity(),
@@ -12761,6 +12807,7 @@ fn reference_rule(
             identity::SpanNormalization::Verbatim,
         )?;
         findings.push(Finding {
+            carried: Vec::new(),
             owner: None,
             rule: rule.id.clone(),
             severity: rule.severity(),
@@ -13074,6 +13121,7 @@ fn unreadable_document(rule: &Rule, rel_path: &str, node_path: &str) -> anyhow::
         identity::SpanNormalization::Verbatim,
     )?;
     Ok(Finding {
+        carried: Vec::new(),
         owner: None,
         rule: rule.id.clone(),
         severity: rule.severity(),
@@ -13701,6 +13749,7 @@ mod tests {
     fn a_check_finding_line_labels_its_rule() {
         use crate::output::Line as _;
         let finding = super::Finding {
+            carried: Vec::new(),
             owner: None,
             rule: "r".to_owned(),
             severity: super::RuleSeverity::Deny,
@@ -13715,6 +13764,40 @@ mod tests {
             reason: None,
         };
         assert_eq!(finding.line(), "batten deny r at src/a.rs:3");
+    }
+
+    /// CLOUD-2213: the row id `issue file same` carries after its path reaches
+    /// the line, so the refusal names the row it judged.
+    #[test]
+    fn a_policy_findings_other_subjects_ride_its_line() {
+        use crate::output::Line as _;
+        let subjects = [
+            crate::verdict::Subject::Path {
+                path: "src/a.rs".to_owned(),
+            },
+            crate::verdict::Subject::Artifact {
+                artifact: "CLOUD-1".to_owned(),
+            },
+        ];
+        let finding = super::Finding {
+            owner: None,
+            rule: "issue file same".to_owned(),
+            severity: RuleSeverity::Deny,
+            path: "src/a.rs".to_owned(),
+            line: None,
+            identity: crate::identity::StoredIdentity::new(
+                crate::identity::FindingKind::Scope,
+                crate::identity::scope_fingerprint("r", "src/a.rs"),
+            ),
+            check: crate::findings::Check::Reevaluate,
+            remediation: None,
+            reason: None,
+            carried: super::carried_subjects(&subjects),
+        };
+        assert_eq!(
+            finding.line(),
+            "batten deny issue file same at src/a.rs CLOUD-1"
+        );
     }
 
     /// CLOUD-609's guard on the change itself: `contains` still means MEMBERSHIP.

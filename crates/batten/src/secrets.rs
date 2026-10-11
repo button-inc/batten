@@ -1063,6 +1063,7 @@ pub fn scan(
             )?;
         }
         findings.push(Finding {
+            carried: Vec::new(),
             owner: None,
             rule: rule.id.clone(),
             severity: rule.severity(),

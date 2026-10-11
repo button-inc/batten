@@ -523,6 +523,7 @@ impl Drifted {
             identity::scope_fingerprint(&rule, &scope),
         );
         Some(Finding {
+            carried: Vec::new(),
             owner: None,
             rule,
             severity: RuleSeverity::Deny,
@@ -702,6 +703,7 @@ mod tests {
             identity::code_fingerprint(rule, path, span, identity::SpanNormalization::Collapsed)
                 .expect("mint a code identity");
         Finding {
+            carried: Vec::new(),
             owner: None,
             rule: rule.to_owned(),
             severity: RuleSeverity::Deny,
