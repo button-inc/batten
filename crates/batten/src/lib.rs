@@ -181,6 +181,7 @@ pub mod step;
 pub mod step_table;
 pub mod stop;
 pub mod store;
+pub mod stream_input;
 /// The per-suite cost corpus, derived from the report the runner already wrote.
 pub mod suites;
 pub mod surface;
@@ -18705,12 +18706,9 @@ fn bound_result(result: &serde_json::Value) -> Option<(serde_json::Value, refusa
             _ => {}
         }
     }
-    // A leaf at or under this stays: a path, a count or a mode is the result's
-    // shape, not its payload.
-    const LEAF_KEEP_BYTES: usize = 256;
     fn replace_bulk(value: &mut serde_json::Value, pointer: &str) {
         match value {
-            serde_json::Value::String(text) if text.len() > LEAF_KEEP_BYTES => {
+            serde_json::Value::String(text) if text.len() > capture::LEAF_KEEP_BYTES => {
                 pointer.clone_into(text);
             }
             serde_json::Value::Array(items) => {

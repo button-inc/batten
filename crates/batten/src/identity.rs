@@ -1243,6 +1243,49 @@ pub fn capture_fingerprint(stream: &str, bytes: &[u8]) -> Fingerprint {
     tagged_fingerprint(CAPTURE_TAG, &[stream.as_bytes(), bytes])
 }
 
+/// [`capture_fingerprint`] over `len` bytes read from `reader`, in fixed chunks
+/// and never held whole (CLOUD-2224). The same digest: the framing's length
+/// prefix is known before the bytes, so a reader whose length is known up front
+/// (a file) hashes in one pass. Every byte read is also handed to `sink`, so a
+/// caller copies and hashes in the same pass.
+///
+/// # Errors
+///
+/// When the reader fails, the sink fails, or it yields a different count than
+/// `len` — a digest over a length the bytes do not have would name nothing.
+//MUTANT-SUITE crates/batten/src/identity.rs
+//MUTANT streamed-capture-unframed|s@^    write_field(\&mut hasher, CAPTURE_TAG.as_bytes());$@@|a_streamed_capture_fingerprint_equals_the_buffered_one
+pub fn capture_fingerprint_streamed(
+    stream: &str,
+    len: u64,
+    reader: &mut dyn std::io::Read,
+    sink: &mut dyn std::io::Write,
+) -> std::io::Result<Fingerprint> {
+    let mut hasher = Sha256::new();
+    write_field(&mut hasher, CAPTURE_TAG.as_bytes());
+    write_field(&mut hasher, stream.as_bytes());
+    hasher.update(len.to_le_bytes());
+    let mut chunk = vec![0_u8; 64 * 1024];
+    let mut seen: u64 = 0;
+    loop {
+        let read = reader.read(&mut chunk)?;
+        if read == 0 {
+            break;
+        }
+        let bytes = chunk.get(..read).unwrap_or_default();
+        hasher.update(bytes);
+        sink.write_all(bytes)?;
+        seen += read as u64;
+    }
+    if seen != len {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::UnexpectedEof,
+            format!("read {seen} bytes of a declared {len}"),
+        ));
+    }
+    Ok(Fingerprint(hasher.finalize().into()))
+}
+
 /// The identity of a **judge payload** entry: its class and the bytes it stands
 /// for (CLOUD-135).
 ///
@@ -1553,6 +1596,28 @@ mod tests {
             *slot = u8::try_from(i).unwrap_or(0);
         }
         IdentityKey::new("vector", bytes)
+    }
+
+    #[test]
+    fn a_streamed_capture_fingerprint_equals_the_buffered_one() {
+        // CLOUD-2224: one digest whichever way the bytes arrive, so a streamed
+        // record is the same content address as a buffered one of the same bytes.
+        let bytes: Vec<u8> = (0..200_000_u32).map(|n| (n % 251) as u8).collect();
+        let mut copied = Vec::new();
+        let streamed = capture_fingerprint_streamed(
+            "response",
+            bytes.len() as u64,
+            &mut bytes.as_slice(),
+            &mut copied,
+        )
+        .expect("streams");
+        assert_eq!(streamed, capture_fingerprint("response", &bytes));
+        assert_eq!(copied, bytes, "every byte read reaches the sink");
+        assert!(
+            capture_fingerprint_streamed("response", 1, &mut bytes.as_slice(), &mut Vec::new())
+                .is_err(),
+            "a length the bytes do not have is refused, not hashed"
+        );
     }
 
     #[test]

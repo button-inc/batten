@@ -923,16 +923,32 @@ pub fn store_in(dir: &Path, stream: Stream, bytes: &[u8]) -> Result<Capture> {
     // the fix — the loop is bounded, because a directory that refuses every name
     // is a storage failure rather than a collision. Caught in review; the
     // predecessor used `File::create`, which truncated the stale file instead.
+    let (mut file, staging) = open_staging(&dir, &format!("{}-{digest}", stream.as_str()))?;
+    file.write_all(bytes)
+        .with_context(|| format!("write the capture {}", staging.display()))?;
+    file.sync_all()
+        .with_context(|| format!("sync the capture {}", staging.display()))?;
+    drop(file);
+    std::fs::rename(&staging, &path)
+        .with_context(|| format!("publish the capture {}", path.display()))?;
+
+    Ok(Capture {
+        stream: stream.as_str(),
+        bytes: bytes.len() as u64,
+        digest,
+    })
+}
+
+/// Create a fresh staging file in `dir` for a record labelled `label`, at the
+/// store's mode, retrying on a name collision (see [`store_in`] for why each of
+/// those choices is load-bearing). Shared by the buffered and streamed writers.
+fn open_staging(dir: &Path, label: &str) -> Result<(std::fs::File, PathBuf)> {
     let mut file = None;
     let mut staging = PathBuf::new();
     let mut last: Option<std::io::Error> = None;
     for _ in 0..STAGING_ATTEMPTS {
         let attempt = STAGING_ATTEMPT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        staging = dir.join(format!(
-            "{}-{digest}.{}.{attempt}.tmp",
-            stream.as_str(),
-            std::process::id()
-        ));
+        staging = dir.join(format!("{label}.{}.{attempt}.tmp", std::process::id()));
         let mut options = std::fs::OpenOptions::new();
         options.write(true).create_new(true);
         #[cfg(unix)]
@@ -953,7 +969,7 @@ pub fn store_in(dir: &Path, stream: Stream, bytes: &[u8]) -> Result<Capture> {
             }
         }
     }
-    let Some(mut file) = file else {
+    let Some(file) = file else {
         let err = last.unwrap_or_else(|| {
             std::io::Error::new(
                 std::io::ErrorKind::AlreadyExists,
@@ -963,19 +979,49 @@ pub fn store_in(dir: &Path, stream: Stream, bytes: &[u8]) -> Result<Capture> {
         return Err(anyhow::Error::from(err))
             .with_context(|| format!("write the capture {}", staging.display()));
     };
-    file.write_all(bytes)
-        .with_context(|| format!("write the capture {}", staging.display()))?;
+    Ok((file, staging))
+}
+
+/// Store the file at `source` as a capture of `stream`, streamed: hashed and
+/// copied in one pass in fixed chunks, never held whole (CLOUD-2224). The same
+/// digest and the same published record as [`store_in`] over its bytes.
+///
+/// # Errors
+///
+/// When the source cannot be read, or the record cannot be staged or published.
+pub fn store_file_in(dir: &Path, stream: Stream, source: &Path) -> Result<Capture> {
+    create_store_dir(dir)?;
+    let mut input = std::fs::File::open(source)
+        .with_context(|| format!("read the spilled bytes {}", source.display()))?;
+    let len = input
+        .metadata()
+        .with_context(|| format!("stat {}", source.display()))?
+        .len();
+    let (mut file, staging) = open_staging(dir, &format!("{}-pending", stream.as_str()))?;
+    let digest =
+        identity::capture_fingerprint_streamed(stream.as_str(), len, &mut input, &mut file)
+            .with_context(|| format!("write the capture {}", staging.display()))?
+            .to_hex();
     file.sync_all()
         .with_context(|| format!("sync the capture {}", staging.display()))?;
     drop(file);
+    let path = dir.join(format!("{}-{digest}", stream.as_str()));
     std::fs::rename(&staging, &path)
         .with_context(|| format!("publish the capture {}", path.display()))?;
-
     Ok(Capture {
         stream: stream.as_str(),
-        bytes: bytes.len() as u64,
+        bytes: len,
         digest,
     })
+}
+
+/// [`store_file_in`] into this repository's store.
+///
+/// # Errors
+///
+/// As [`store_file_in`].
+pub fn store_file(repo_root: &Path, stream: Stream, source: &Path) -> Result<Capture> {
+    store_file_in(&captures_dir(repo_root)?, stream, source)
 }
 
 /// The directory a still-running capture spools into.
@@ -1897,6 +1943,11 @@ pub struct CaptureConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub result_max_tokens: Option<u64>,
 }
+
+/// A result leaf at or under this many bytes is the result's SHAPE (a path, a
+/// count, a mode), never its payload, so it stays in place when a result is
+/// bounded (CLOUD-2223, CLOUD-2224).
+pub const LEAF_KEEP_BYTES: usize = 256;
 
 /// The default bound on a tool result the model reads whole (CLOUD-2223), in
 /// `o200k` tokens. Measured on PR #1132: one task log read whole was 57,764
