@@ -55,9 +55,12 @@ fn post_tool_on(dir: &Path, harness: &str, result: &serde_json::Value) -> std::p
 
 /// Lines distinct enough that one of them found in the output is the payload.
 fn payload(lines: usize) -> String {
-    (0..lines)
-        .map(|n| format!("payload line {n:05} of the log\n"))
-        .collect()
+    use std::fmt::Write as _;
+    let mut text = String::new();
+    for n in 0..lines {
+        let _ = writeln!(text, "payload line {n:05} of the log");
+    }
+    text
 }
 
 #[test]

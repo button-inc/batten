@@ -164,6 +164,8 @@ rustix.workspace = true
 # exceed the bound, so the hook's ordinary path never touches the table. The
 # test binary's vocabulary check (CLOUD-1284 arm 4) uses the same crate.
 tiktoken-rs.workspace = true
+# CLOUD-2224: the hook reads its stdin streaming; see the workspace manifest.
+struson.workspace = true
 signal-hook.workspace = true
 
 [dev-dependencies]

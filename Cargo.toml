@@ -222,6 +222,11 @@ indoc = "2"
 # CLOUD-2223, where every tool result is bounded in tokens; `budget.rs` still
 # estimates bytes/4 and is CLOUD-1691's to move.
 tiktoken-rs = "0.12"
+# The hook's streaming JSON reader (CLOUD-2224): a pull parser whose
+# `next_string_reader` is an `io::Read` over ONE string value, so a tool result
+# leaf streams in chunks instead of being held whole, which serde's data model
+# cannot do (a visitor receives each string whole).
+struson = "0.7"
 # The allocation counter the cost cases assert with (CLOUD-2022). DEV-ONLY, for
 # `tiktoken-rs`'s reason: it is the `it` binary's `#[global_allocator]`, and the
 # shipped binary keeps the system allocator untouched.
