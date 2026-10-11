@@ -1457,6 +1457,46 @@ mod tests {
         }
     }
 
+    /// ONE CLASS OVER SEVERAL SUBJECTS IS ONE LINE (CLOUD-2175): a second subject
+    /// joins the first behind one separator and brings its bindings with it,
+    /// while the same subject absorbed twice changes nothing.
+    #[test]
+    fn absorbing_joins_a_new_subject_and_its_bindings_once() {
+        let refusal = |subject: &str| {
+            Refusal::engine(
+                crate::verdict::Native::RunBroken,
+                &[crate::verdict::artifact(subject)],
+                Fix::None,
+            )
+        };
+        let mut held = refusal("first");
+        let second = refusal("second");
+        assert!(
+            second
+                .bindings()
+                .iter()
+                .any(|binding| !held.bindings().contains(binding)),
+            "the premise: the second subject binds a spelling the first does not"
+        );
+        assert!(held.absorb(&second));
+        assert_eq!(held.subjects_text(), "first, second");
+        for binding in second.bindings() {
+            assert!(
+                held.bindings().contains(binding),
+                "the absorbed subject's binding {binding} is kept"
+            );
+        }
+        let mut same = refusal("first");
+        let bound = same.bindings().len();
+        assert!(same.absorb(&refusal("first")));
+        assert_eq!(
+            same.subjects_text(),
+            "first",
+            "an identical subject is not repeated"
+        );
+        assert_eq!(same.bindings().len(), bound, "nor are its bindings");
+    }
+
     /// A CLASSLESS ROW IS NAMED BY ITS OWN ID (CLOUD-2145): a consumer row with
     /// no class has no other name, so its id stands where a class would.
     #[test]

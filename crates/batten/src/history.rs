@@ -29,6 +29,14 @@ use std::path::{Path, PathBuf};
 /// The most bytes `--history` prints for one row: about 2,000 tokens at bytes/4.
 pub const HISTORY_BYTES: usize = 8_000;
 
+/// Whether an entry of `entry` bytes still fits after `used` bytes of the
+/// change list: the one comparison both the full-message choice and the cut
+/// make, so the two can never disagree about where the cap falls.
+#[must_use]
+pub const fn within_cap(used: usize, entry: usize) -> bool {
+    used + entry <= HISTORY_BYTES
+}
+
 /// How many commits that changed a row a history read walks back to.
 const CHANGES_MAX: usize = 12;
 
@@ -406,7 +414,7 @@ impl<'a> Assembler<'a> {
             // A FULL MESSAGE THAT WOULD NOT FIT FALLS BACK TO ITS SUBJECT rather than
             // ending the list: a row whose newest change is one long squash would
             // otherwise print no change at all.
-            let fits = |entry_len: usize| out.len() - row + entry_len <= HISTORY_BYTES;
+            let fits = |entry_len: usize| within_cap(out.len() - row, entry_len);
             let message = (!self.shown.contains(sha) && index < FULL_MESSAGES).then(|| {
                 crate::git::message_of(self.root, sha).unwrap_or_else(|_| subject.clone())
             });
@@ -420,7 +428,7 @@ impl<'a> Assembler<'a> {
             } else {
                 format!("{short} {subject}\n")
             };
-            if out.len() - row + entry.len() > HISTORY_BYTES {
+            if !fits(entry.len()) {
                 let unshown = changes.len() - index;
                 out.push_str("… ");
                 out.push_str(&unshown.to_string());
@@ -436,15 +444,6 @@ impl<'a> Assembler<'a> {
         }
         Some(out)
     }
-}
-
-/// The history `batten policy explain <id> --history` prints for one row.
-///
-/// # Errors
-///
-/// As [`Assembler::new`].
-pub fn assemble(root: &Path, config: &str, id: &str) -> anyhow::Result<Option<String>> {
-    Ok(Assembler::new(root, config)?.assemble(id))
 }
 
 #[cfg(test)]
@@ -477,6 +476,16 @@ id = \"r\"
 
     fn at(text: &str) -> usize {
         CONFIG.find(text).expect("the fixture carries it")
+    }
+
+    /// The cap is inclusive: an entry ending exactly on it is printed, and one
+    /// byte past it is the first that is not.
+    #[test]
+    fn an_entry_ending_on_the_cap_fits_and_one_byte_more_does_not() {
+        assert!(within_cap(HISTORY_BYTES - 5, 5));
+        assert!(within_cap(0, HISTORY_BYTES));
+        assert!(!within_cap(HISTORY_BYTES - 5, 6));
+        assert!(!within_cap(1, HISTORY_BYTES));
     }
 
     #[test]

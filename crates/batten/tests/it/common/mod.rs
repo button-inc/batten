@@ -474,6 +474,23 @@ pub(crate) fn batten() -> Batten {
     for name in bypass_env_vars() {
         command.env_remove(name);
     }
+    // NOR THE SWEEP'S OWN SELECTION. The CI `mutants` job runs this suite as a
+    // registered runner's baseline from inside `mutant:changed`, which exports
+    // the variables below, so every case that drives `batten mutate sweep`
+    // inherited the job's slice: measured on #1132, shard 15/16 sliced each
+    // case's one gate away and the `mutate.rs` baseline came back red. They are
+    // not surface flags, so the derivation above cannot see them; a case that
+    // wants one sets it after this.
+    for name in [
+        "MUTANT_GATES",
+        "MUTANT_TASKS",
+        "MUTANT_CHANGED_SINCE",
+        batten::mutate::RUNNERS,
+        batten::mutate::RUNNER,
+        batten::mutate::SHARD,
+    ] {
+        command.env_remove(name);
+    }
     command.env("BATTEN_BIN", env!("CARGO_BIN_EXE_batten"));
     // NO `batten` RESOLVABLE BY NAME from anything the binary under test starts
     // (CLOUD-1951) — see [`ambient_path`].
