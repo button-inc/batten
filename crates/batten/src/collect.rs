@@ -77,7 +77,8 @@ pub fn engine_paths() -> Vec<PathBuf> {
     running
         .into_iter()
         .chain(installed)
-        .filter_map(|path| path.canonicalize().ok())
+        .filter(|path| path.exists())
+        .map(|path| crate::git::canonical(&path))
         .collect()
 }
 
@@ -387,6 +388,8 @@ pub fn collect_if_pressed(
 /// may still sit above the minimum (CLOUD-1937's linker writes gigabytes between
 /// two samples); the hook calls it through [`collect_if_pressed`]. `None` where
 /// the band is undeclared.
+//MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
+//MUTANT worktree-targets-unseen|s@^        .chain(crate::git::linked_worktree_dirs(repo))$@        .chain(Vec::<PathBuf>::new())@|a_sibling_worktrees_units_are_ranked_with_the_checkouts
 pub fn collect_toward_max(
     repo: &Path,
     prune: &crate::prune::Prune,
@@ -398,8 +401,6 @@ pub fn collect_toward_max(
 ) -> Option<Collected> {
     let (_, max) = prune.free_band()?;
     let started = Instant::now();
-    //MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
-    //MUTANT worktree-targets-unseen|s@^        .chain(crate::git::linked_worktree_dirs(repo))$@        .chain(Vec::<PathBuf>::new())@|a_sibling_worktrees_units_are_ranked_with_the_checkouts
     let trees: Vec<PathBuf> = std::iter::once(repo.to_path_buf())
         .chain(crate::git::linked_worktree_dirs(repo))
         .map(|dir| dir.join(&prune.root))

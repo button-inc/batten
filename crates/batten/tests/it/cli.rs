@@ -13741,6 +13741,7 @@ fn a_reader_that_hangs_up_ends_the_run_without_a_diagnosis() {
     // whole backtrace, diagnosing a defect that did not exist. The run did not
     // finish, so the code stays `3`; stderr says nothing.
     let dir = scratch("cli-reader-hung-up");
+    common::init_repo(&dir);
     let (reader, writer) = std::io::pipe().expect("a pipe");
     drop(reader);
     let output = batten()

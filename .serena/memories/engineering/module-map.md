@@ -135,6 +135,9 @@ row here, so a new module lands with its line.
 - `probe_verdict.rs` — which of three things a probe build did, from its exit status and its log (CLOUD-418, CLOUD-1717).
 - `prune.rs` — the build tree's reclaim and its disk floor (CLOUD-766/861/1030), retired out of `mise-tasks/target-prune.sh` under CLOUD-1059.
 - `disk_watch.rs` — the disk arm of `land`'s gate race (CLOUD-1937): samples free space each tick, projects the burn over a horizon, and reclaims through `prune::prune` before the floor is crossed.
+- `collect.rs` — the disk collector (CLOUD-2197): below `[prune] min_free_mb`, superseded then least-recently-used cargo units across `target/` and linked worktrees until `max_free_mb` is free, never a held tree or the running engine.
+- `o200k.rs` — the `o200k` token counter from tables `build.rs` writes at compile time (CLOUD-2224): a sorted vocabulary and a serialized pre-tokenizer DFA, so no process builds either.
+- `stream_input.rs` — the hook's stdin read streaming (CLOUD-2224): teed to a spool, a result string leaf counted in `o200k` tokens as it arrives and spilled to a file past the bound.
 - `startup.rs` — the `[[startup]]` table (CLOUD-1324): what a container must be and how it is repaired.
 - `provision.rs` — the `[[provision]]` manifest (CLOUD-90): pinned tools fetched and cached out of tree; `provision status` (read) is freshness, `provision apply [-n]` (write) is the fix.
 - `race.rs` — which OTHER open pull request already claims this branch's key (CLOUD-446's duplicate-claim half, ported off `mise-tasks/claim-race-check.sh` by CLOUD-1422).

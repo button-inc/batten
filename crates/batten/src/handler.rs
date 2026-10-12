@@ -1915,7 +1915,7 @@ mod tests {
             .join(format!("batten-handler-root-{}", std::process::id()))
             .join("repo");
         std::fs::create_dir_all(root.join("scripts")).expect("root");
-        let root = root.canonicalize().expect("canonical root");
+        let root = crate::git::canonical(&root);
         let script = root.join("scripts").join("where.sh");
         std::fs::write(&script, "#!/bin/sh\npwd\n").expect("script");
         #[cfg(unix)]

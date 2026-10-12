@@ -1729,6 +1729,8 @@ struct Escalated {
 /// CLOUD-1249.** After is too late: tier 3 has already moved the basis, so the lap
 /// is already judged against the cold floor, and the space tier 2 would have found
 /// arrives too late to stop it.
+//MUTANT-SUITE crates/batten/tests/it/target_prune.rs
+//MUTANT cold-escalation-unguarded|s@^        \&\& \*free_mb + basis_moving_mb(root, \&config.regrowable) >= config.cold.mb$@        \&\& true@|an_escalation_that_cannot_reach_the_cold_floor_keeps_the_build_warm
 fn escalate(
     root: &Path,
     config: &Prune,
@@ -1823,8 +1825,6 @@ fn escalate(
     // on a volume that could reach 12742MB, and every later `verify` refused at
     // its own prune. A drop that cannot clear the floor it creates only converts a
     // warm shortfall the next lap might absorb into a cold one it cannot.
-    //MUTANT-SUITE crates/batten/tests/it/target_prune.rs
-    //MUTANT cold-escalation-unguarded|s@^        \&\& \*free_mb + basis_moving_mb(root, \&config.regrowable) >= config.cold.mb$@        \&\& true@|an_escalation_that_cannot_reach_the_cold_floor_keeps_the_build_warm
     if *free_mb < warm_in_force
         && *free_mb + basis_moving_mb(root, &config.regrowable) >= config.cold.mb
     {

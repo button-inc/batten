@@ -144,6 +144,7 @@ pub fn read(
     })
 }
 
+//MUTANT leaf-never-spills|s@^                if self.counted > self.bound {$@                if false {@|a_result_over_the_bound_spills_and_one_under_it_is_kept
 impl<C: FnMut(&str) -> u64> Walk<'_, C> {
     /// The top level: an object whose result members are walked as results.
     fn document<R: Read>(&mut self, json: &mut JsonStreamReader<R>) -> Result<Value> {
@@ -234,7 +235,6 @@ impl<C: FnMut(&str) -> u64> Walk<'_, C> {
 
     /// One result string, read in chunks: kept while the result is within the
     /// bound, spilled to a file from the chunk that passes it.
-    //MUTANT leaf-never-spills|s@^                if self.counted > self.bound {$@                if false {@|a_result_over_the_bound_spills_and_one_under_it_is_kept
     fn leaf<R: Read>(&mut self, json: &mut JsonStreamReader<R>, pointer: &str) -> Result<Value> {
         let mut text = json.next_string_reader()?;
         let mut kept = String::new();
