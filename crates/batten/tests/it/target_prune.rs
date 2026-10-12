@@ -253,6 +253,18 @@ fn built(repo: &Path) -> PathBuf {
     deps
 }
 
+/// Make a basis-moving root under `dir` large enough that dropping it can reach
+/// the cold floor, so the escalation's tier 3 is worth taking (CLOUD-2197).
+///
+/// SPARSE, so the fixture spends no disk on it: `directory_bytes` counts a
+/// file's length, which is what the guard sizes the drop by.
+fn ballast(dir: &Path) {
+    std::fs::File::create(dir.join("ballast.bin"))
+        .unwrap()
+        .set_len(COLD_MB * 1024 * 1024)
+        .unwrap();
+}
+
 /// The executable artifacts left under `deps`.
 fn survivors(deps: &Path) -> usize {
     std::fs::read_dir(deps).map_or(0, |entries| {
@@ -281,6 +293,7 @@ fn escalating_judges_against_the_cold_floor_it_just_created() {
     let incremental = repo.join("target/debug/incremental/batten-1a2b3c");
     std::fs::create_dir_all(&incremental).unwrap();
     std::fs::write(incremental.join("dep-graph.bin"), vec![0_u8; 200_000]).unwrap();
+    ballast(&incremental);
 
     let output = prune(&repo, "5000,9000", &["-y"]);
     let said = said(&output);
@@ -687,6 +700,7 @@ fn the_escalation_says_that_the_basis_moved_and_not_only_that_it_ran() {
     let incremental = repo.join("target/debug/incremental/batten-1a2b3c");
     std::fs::create_dir_all(&incremental).unwrap();
     std::fs::write(incremental.join("dep-graph.bin"), vec![0_u8; 200_000]).unwrap();
+    ballast(&incremental);
 
     let said = said(&prune(&repo, "5000,99999", &["-y"]));
     assert!(said.contains("regrowable cache dropped"), "{said}");
@@ -804,6 +818,30 @@ fn the_tightened_artifacts_are_counted_as_superseded_rather_than_as_cache() {
 // --- CLOUD-861: the escalation is conditional --------------------------------
 
 #[test]
+fn an_escalation_that_cannot_reach_the_cold_floor_keeps_the_build_warm() {
+    // CLOUD-2197, measured on #1132: a 20MB basis-moving root was dropped on a
+    // volume that could never reach the cold floor, and every later `verify`
+    // refused at its own prune. Here the root holds 200KB against a 14000MB
+    // floor from 1MB free: dropping it cannot help, so it stays and the run is
+    // judged warm.
+    let repo = repo("target-prune-cold-unreachable");
+    built(&repo);
+    let incremental = repo.join("target/debug/incremental/batten-1a2b3c");
+    std::fs::create_dir_all(&incremental).unwrap();
+    std::fs::write(incremental.join("dep-graph.bin"), vec![0_u8; 200_000]).unwrap();
+
+    let said = said(&prune(&repo, "1", &["-y"]));
+    assert!(
+        incremental.exists(),
+        "a drop that cannot reach the cold floor is not taken: {said}"
+    );
+    assert!(
+        !said.contains("next cargo build is COLD"),
+        "the build stays warm: {said}"
+    );
+}
+
+#[test]
 fn a_tree_below_the_floor_escalates_and_drops_the_incremental_cache() {
     // CARRIED. Red before the escalation existed: the run refused with the cache
     // untouched, which is exactly the state a human then cleared by hand, three
@@ -812,6 +850,7 @@ fn a_tree_below_the_floor_escalates_and_drops_the_incremental_cache() {
     let incremental = repo.join("target/debug/incremental/batten-1a2b3c/s-abc");
     std::fs::create_dir_all(&incremental).unwrap();
     std::fs::write(incremental.join("dep-graph.bin"), vec![0_u8; 200_000]).unwrap();
+    ballast(&incremental);
 
     let said = said(&prune(&repo, "1,99999", &["-y"]));
     assert!(said.contains("regrowable cache dropped"), "{said}");
@@ -1280,6 +1319,7 @@ fn a_lap_opened_cold_by_an_escalation_is_not_made_warm_by_a_tree_that_never_chan
     let incremental = repo.join("target/debug/incremental/batten-1a2b3c");
     std::fs::create_dir_all(&incremental).unwrap();
     std::fs::write(incremental.join("dep-graph.bin"), vec![0_u8; 200_000]).unwrap();
+    ballast(&incremental);
 
     // A first lap opens warm and above the floor.
     assert!(prune(&repo, "40000", &["-y"]).status.success());
@@ -1547,6 +1587,7 @@ fn a_warm_laps_consumption_does_not_raise_the_cold_floor() {
     let incremental = repo.join("target/debug/incremental/batten-1a2b3c");
     std::fs::create_dir_all(&incremental).unwrap();
     std::fs::write(incremental.join("dep-graph.bin"), vec![0_u8; 200_000]).unwrap();
+    ballast(&incremental);
 
     // THE NUMBERS DISCRIMINATE, and that took a second pass: a warm observation
     // UNDER the cold declaration cannot tell a shared ratchet from a per-basis
@@ -1688,6 +1729,7 @@ fn a_declared_basis_moving_root_still_moves_the_floor() {
     // every root as basis-moving both would refuse.
     let repo = repo("target-prune-cold-basis-root");
     let dropped = cache(&repo, "debug/incremental/batten-1a2b3c", 200_000);
+    ballast(&dropped);
 
     let output = prune(&repo, "5000,9000", &["-y"]);
     let said = said(&output);

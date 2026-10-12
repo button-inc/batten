@@ -895,7 +895,7 @@ pub fn dispatch(
     event: Event,
     raw_tool: &str,
     command: Option<&str>,
-    payload: &str,
+    payload: &Payload,
 ) -> Dispatched {
     let mut ran = Vec::new();
     for handler in handlers {
@@ -941,6 +941,52 @@ pub fn dispatch(
     Dispatched { ran }
 }
 
+/// What a handler reads on stdin: the host's own bytes, held as text or spooled
+/// to a file by the hook's streamed read (CLOUD-2224), so a large payload is
+/// copied from disk to the pipe and never held whole.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Payload {
+    /// The bytes, in memory.
+    Text(String),
+    /// The file the bytes were spooled to.
+    Spooled(std::path::PathBuf),
+}
+
+impl From<&str> for Payload {
+    fn from(text: &str) -> Self {
+        Payload::Text(text.to_owned())
+    }
+}
+
+impl Payload {
+    /// Copy the bytes to `sink`, streaming a spooled payload.
+    ///
+    /// # Errors
+    ///
+    /// The write's, or a spool that cannot be opened.
+    pub fn write_to(&self, sink: &mut dyn std::io::Write) -> std::io::Result<()> {
+        match self {
+            Payload::Text(text) => sink.write_all(text.as_bytes()),
+            Payload::Spooled(path) => {
+                std::io::copy(&mut std::fs::File::open(path)?, sink).map(drop)
+            }
+        }
+    }
+
+    /// The bytes as text, for a reader that needs the whole document (the Stop
+    /// ladder's, whose payloads carry no tool result). A spool that cannot be
+    /// read is empty, the could-not-look every reader of it already handles.
+    #[must_use]
+    pub fn text(&self) -> std::borrow::Cow<'_, str> {
+        match self {
+            Payload::Text(text) => std::borrow::Cow::Borrowed(text),
+            Payload::Spooled(path) => {
+                std::borrow::Cow::Owned(std::fs::read_to_string(path).unwrap_or_default())
+            }
+        }
+    }
+}
+
 /// Run one handler and read its answer.
 ///
 /// A bound that fires is RECORDED — the outcome is `TimedOut` and the advisory
@@ -949,9 +995,9 @@ pub fn dispatch(
 /// away in one way, and its case reads `Pass` where the record should have been.
 //MUTANT handler-bound-never-fires|s@^        if Instant::now() >= deadline {$@        if Instant::now() >= deadline + Duration::from_secs(3600) {@|a_handler_that_hangs_is_killed_at_its_bound_and_the_turn_still_ends
 //MUTANT step-bound-never-fires|s@^        if Instant::now() >= deadline {$@        if Instant::now() >= deadline + Duration::from_secs(3600) {@|a_step_that_hangs_is_killed_at_its_declared_bound
-//MUTANT payload-written-before-the-bound|s@^    let deadline = Instant::now() + bound;$@    let _ = child.stdin.as_mut().map(\x7cpipe\x7c std::io::Write::write_all(pipe, payload.as_bytes())); let deadline = Instant::now() + bound;@|a_handler_that_never_reads_stdin_cannot_wedge_the_parent
+//MUTANT payload-written-before-the-bound|s@^    let deadline = Instant::now() + bound;$@    let _ = child.stdin.as_mut().map(\x7cpipe\x7c payload.write_to(pipe)); let deadline = Instant::now() + bound;@|a_handler_that_never_reads_stdin_cannot_wedge_the_parent
 //MUTANT handler-cwd-inherited|s@^            .current_dir(root)$@            .current_dir(".")@|a_handler_runs_from_the_declaring_root_whatever_the_cwd
-fn run_one(root: &Path, handler: &Handler, payload: &str) -> Outcome {
+fn run_one(root: &Path, handler: &Handler, payload: &Payload) -> Outcome {
     let Some((program, args)) = handler.run.split_first() else {
         return Outcome::Broke(Violation::NotSpawnable);
     };
@@ -1049,12 +1095,11 @@ fn run_one(root: &Path, handler: &Handler, payload: &str) -> Outcome {
     let bound = handler.timeout();
     let deadline = Instant::now() + bound;
     let stdin_pipe = child.stdin.take();
-    let owned = payload.to_owned();
+    let owned = payload.clone();
     let (feed_tx, feed_done) = mpsc::channel();
     drop(std::thread::spawn(move || {
         if let Some(mut stdin) = stdin_pipe {
-            use std::io::Write as _;
-            let _ = stdin.write_all(owned.as_bytes());
+            let _ = owned.write_to(&mut stdin);
         }
         let _ = feed_tx.send(());
     }));
@@ -1461,7 +1506,7 @@ mod tests {
         // an elapsed-time ceiling only restated it, and added a way to flake.
         let mut deaf = handler("deaf", "stop", &["sh", "-c", "sleep 30"]);
         deaf.timeout_ms = Some(300);
-        let outcome = run_one(Path::new("."), &deaf, &oversized());
+        let outcome = run_one(Path::new("."), &deaf, &Payload::Text(oversized()));
         assert_eq!(
             outcome,
             Outcome::Broke(Violation::TimedOut(Duration::from_millis(300))),
@@ -1487,7 +1532,7 @@ mod tests {
         let outcome = run_one(
             Path::new("."),
             &handler("loud", "stop", &["sh", "-c", &script]),
-            "{}",
+            &Payload::from("{}"),
         );
         match outcome {
             Outcome::Advise(said) => assert_eq!(

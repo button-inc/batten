@@ -18883,7 +18883,7 @@ fn dispatch_handlers(
         envelope.event,
         &envelope.raw_tool,
         command,
-        raw,
+        &handler::Payload::from(raw),
     );
     // TIERED AT THE PUSH SITE (CLOUD-896), because "how soon must this be
     // answered" is a property of what is being said and the boundary has only
@@ -20790,7 +20790,7 @@ fn stop_handler_advice(overrides: &Overrides, raw: &str) -> Vec<refusal::Refusal
         hook::Event::Stop,
         "",
         None,
-        raw,
+        &handler::Payload::from(raw),
     );
     // EVERY ROW THAT SPOKE, classed (CLOUD-2078): a report as `hook report now`,
     // a refusal demoted at `Stop` as the class the dispatch door demotes it to.

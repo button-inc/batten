@@ -1816,7 +1816,18 @@ fn escalate(
     // whether the cheaper passes were enough; the number it is compared against has
     // to be the one that will judge the lap, or this tier inherits the identical
     // gap one step later.
-    if *free_mb < warm_in_force {
+    // TIER 3 ONLY WHERE IT CAN WIN. Taking a basis-moving root judges the next
+    // build against the cold floor, so it helps only if the space it frees brings
+    // the volume to that floor. Measured on #1132 (CLOUD-2197): `build` held
+    // ~20MB, the escalation took it, the next build needed the 21455MB cold floor
+    // on a volume that could reach 12742MB, and every later `verify` refused at
+    // its own prune. A drop that cannot clear the floor it creates only converts a
+    // warm shortfall the next lap might absorb into a cold one it cannot.
+    //MUTANT-SUITE crates/batten/tests/it/target_prune.rs
+    //MUTANT cold-escalation-unguarded|s@^        \&\& \*free_mb + basis_moving_mb(root, \&config.regrowable) >= config.cold.mb$@        \&\& true@|an_escalation_that_cannot_reach_the_cold_floor_keeps_the_build_warm
+    if *free_mb < warm_in_force
+        && *free_mb + basis_moving_mb(root, &config.regrowable) >= config.cold.mb
+    {
         let (costly, costly_bytes, basis_moved) =
             drop_regrowable(root, &config.regrowable, true, &mut || false);
         dropped += costly;
@@ -2806,6 +2817,25 @@ fn populated_directory(path: &Path) -> bool {
 /// asked after each row that removed something, so a root declared last is
 /// taken only when every cheaper one before it was not enough.
 //MUTANT drop-past-the-floor|s@^        if removed > 0 \&\& recovered() {$@        if false \&\& recovered() {@|an_escalation_stops_at_the_first_row_that_recovers_the_floor
+/// Megabytes the basis-moving roots hold: what tier 3 of [`escalate`] would free,
+/// sized by the same walk [`drop_regrowable`] removes by.
+fn basis_moving_mb(root: &Path, declared: &[Regrowable]) -> u64 {
+    let mut bytes = 0;
+    for (position, declared_root) in declared.iter().enumerate() {
+        if !declared_root.cold {
+            continue;
+        }
+        let later: Vec<&str> = declared[position + 1..]
+            .iter()
+            .map(|row| row.name.as_str())
+            .collect();
+        for cache in directories_named_outside(root, &declared_root.name, &later) {
+            bytes += directory_bytes(&cache);
+        }
+    }
+    bytes / (1024 * 1024)
+}
+
 fn drop_regrowable(
     root: &Path,
     declared: &[Regrowable],
