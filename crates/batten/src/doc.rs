@@ -1395,6 +1395,15 @@ pub const VENDORED_DOCS: &[VendoredDoc] = &[
         dont: &["raise the token budget to make the cut go away"],
     },
     VendoredDoc {
+        id: "cargo retire now",
+        why: Some("A full disk fails a build as a rustc IO error that reads like a test failure"),
+        act: &[
+            "carry on: the call was admitted, and a removed unit rebuilds on its next build",
+            "if it repeats, raise `[prune] min_free_mb` or free space outside `target/`",
+        ],
+        dont: &["delete `target/` by hand, which drops the units the next build needs"],
+    },
+    VendoredDoc {
         id: "output point now",
         why: Some(
             "A pointer the reader cannot slice sends them around it, paying the window twice",

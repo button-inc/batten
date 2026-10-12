@@ -1574,6 +1574,9 @@ pub enum Native {
     /// A reduced read stored the whole response and points at a view of it,
     /// field by field (CLOUD-2207).
     OutputPointNow,
+    /// Free space fell below `[prune] min_free_mb`, so the disk collector
+    /// removed cargo units before the call ran (CLOUD-2197).
+    CargoRetireNow,
 }
 
 impl Native {
@@ -1667,6 +1670,7 @@ impl Native {
         Native::IssueGradePartial,
         Native::ClaimMintRefused,
         Native::OutputPointNow,
+        Native::CargoRetireNow,
     ];
 
     /// The classes the CONFIG LOADER raises, in `parse_ungated` order.
@@ -1794,6 +1798,7 @@ impl Native {
             Native::IssueGradePartial => "issue grade partial",
             Native::ClaimMintRefused => "claim mint refused",
             Native::OutputPointNow => "output point now",
+            Native::CargoRetireNow => "cargo retire now",
         }
     }
 }
@@ -3001,6 +3006,17 @@ you need; the raw connector returns the same bytes into the window again.",
         applicability: Applicability::Advice,
     },
     VendoredVerdict {
+        id: "cargo retire now",
+        gloss: "free space fell below the declared minimum, so cargo units were removed before this call ran",
+        class: "Below `[prune] min_free_mb` the hook collects before admitting: superseded units first, \
+then live units least recently used first, until `max_free_mb` is free. A tree a running build holds \
+is never touched, and the engine's own unit survives. The subjects are the bytes freed, the units \
+removed and the free space after. The call was admitted either way; the next build of a removed unit \
+rebuilds it.",
+        routes: &[run("space read first", "batten target prune --dry-run")],
+        applicability: Applicability::Advice,
+    },
+    VendoredVerdict {
         id: "issue grade refused",
         gloss: "the issue fails a checkable Ready clause, named in the subject beside its line",
         class: "`ready lint` holds an issue's description to the checkable half of the Definition \
@@ -3588,6 +3604,7 @@ mod tests {
                 | Native::IssueGradePartial
                 | Native::ClaimMintRefused
                 | Native::OutputPointNow
+                | Native::CargoRetireNow
                 | Native::VerdictTableRefused
                 | Native::RedirectTableRefused
                 | Native::DeferralTableRefused

@@ -16989,8 +16989,8 @@ fn run_hook(
     //
     // [`recoverable_without_rules`] carries the argument for which two shapes
     // pass and why every other one still refuses.
-    let (policy, waivers) = if adjudicable {
-        match load_policy(overrides, harness) {
+    let (policy, waivers, pruning) = if adjudicable {
+        match load_hook_config(overrides, harness) {
             Ok(loaded) => loaded,
             // EVERY LOAD FAULT, NOT ONLY A PARSE FAILURE (CLOUD-1917). This arm
             // was guarded to a parse failure alone, and every other fault — a
@@ -17009,15 +17009,18 @@ fn run_hook(
                     // `protected: PathSet::empty()`, which is what lets the
                     // repair write reach the file that is faulting — the
                     // protected gate is not SUPPRESSED here, it has no table.
-                    (hook::Policy::declaring_nothing(harness), Vec::new())
+                    (hook::Policy::declaring_nothing(harness), Vec::new(), None)
                 } else {
                     return deny_unadjudicable(harness, &envelope, &unreadable, mode, out, err);
                 }
             }
         }
     } else {
-        (hook::Policy::declaring_nothing(harness), Vec::new())
+        (hook::Policy::declaring_nothing(harness), Vec::new(), None)
     };
+    // THE DISK COLLECTOR, BEFORE THE VERDICT (CLOUD-2197): one free-space read
+    // above the declared minimum; below it, a bounded collection, then admit.
+    collect_before_admitting(&envelope, pruning.as_ref(), &mut advice, err);
     // THE PER-ROW HATCHES (CLOUD-437), resolved here and nowhere earlier: which
     // hatches exist is a property of the loaded rows, so the read has to follow
     // the load. Cheap when irrelevant (§4): a ruleset declaring no `bypass_env`
@@ -21368,6 +21371,99 @@ fn push_capture_notice(advice: &mut Vec<advisory::Advice>, reason: &str) {
     push_finding(advice, severity::AdvisoryTier::Advisory, notice);
 }
 
+/// The hook's disk collector (CLOUD-2197): before every pre-tool verdict, one
+/// free-space read; below `[prune] min_free_mb`, a collection bounded by
+/// [`disk_watch::HOOK_COLLECT_DEADLINE`], then admit. The hook never denies a
+/// call for disk: denying would block the `rm` or edit that frees space. At
+/// SessionStart it re-arms every fingerprint, so a session that never runs
+/// `land` still orders units by use since it started.
+///
+/// Under `BATTEN_DISK_TRACE=1` a pre-tool call prints `disk-call <tool>
+/// <free_before_mb> <free_after_mb>` to stderr, band declared or not: the trace
+/// is what sizes the band.
+//MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
+//MUTANT hook-skips-collection|s@^        let collected = band.and_then(\x7cprune\x7c {$@        let collected = None::<collect::Collected>.and_then(\x7c_: \&prune::Prune\x7c {@|the_hook_collects_before_admitting_under_pressure
+//MUTANT session-rearm-skipped|s@^            collect::rearm(\&tree);$@@|a_session_start_re_arms_every_fingerprint
+//MUTANT trace-silent|s@^            let _ = writeln!(err, "disk-call {} {before} {after}", envelope.raw_tool);$@@|the_hook_traces_a_call_under_the_trace_variable
+fn collect_before_admitting(
+    envelope: &hook::Envelope,
+    pruning: Option<&prune::Prune>,
+    advice: &mut Vec<advisory::Advice>,
+    err: &mut dyn Write,
+) {
+    let authority = hook_authority_root();
+    let Ok(repo) = git::repo_root(authority) else {
+        return;
+    };
+    let band = pruning.filter(|prune| prune.free_band().is_some());
+    let root = pruning.map_or("target", |prune| prune.root.as_str());
+    let trees = || {
+        std::iter::once(repo.clone())
+            .chain(git::linked_worktree_dirs(&repo))
+            .map(|dir| dir.join(root))
+            .filter(|tree| tree.is_dir())
+    };
+    if envelope.event == hook::Event::SessionStart {
+        if band.is_some() {
+            for tree in trees() {
+                collect::rearm(&tree);
+            }
+        }
+        return;
+    }
+    if envelope.event != hook::Event::PreTool {
+        return;
+    }
+    let trace = std::env::var_os("BATTEN_DISK_TRACE").is_some_and(|value| value == "1");
+    if band.is_none() && !trace {
+        return;
+    }
+    let Ok(mut free) = prune::sampler(repo.join(root)) else {
+        return;
+    };
+    let before = if trace { free().unwrap_or(0) } else { 0 };
+    let collected = band.and_then(|prune| {
+        let kept = collect::kept(&engine_paths());
+        let deadline = std::time::Instant::now() + disk_watch::HOOK_COLLECT_DEADLINE;
+        collect::collect_if_pressed(&repo, prune, &kept, &mut free, Some(deadline), false)
+    });
+    if trace {
+        let after = collected.as_ref().map_or(before, |done| done.free_after_mb);
+        let _ = writeln!(err, "disk-call {} {before} {after}", envelope.raw_tool);
+    }
+    if let (Some(done), Some((min, _))) = (collected, band.and_then(prune::Prune::free_band)) {
+        let subjects = [
+            verdict::artifact(&format!("freed={}MB", done.freed_bytes / (1024 * 1024))),
+            verdict::artifact(&format!("units={}", done.units)),
+            verdict::artifact(&format!("free={}MB", done.free_after_mb)),
+            verdict::artifact(&format!("min_free_mb={min}")),
+        ];
+        let finding = refusal::Refusal::engine(
+            verdict::Native::CargoRetireNow,
+            &subjects,
+            refusal::Fix::None,
+        )
+        .with_severity(refusal::Severity::Note);
+        push_finding(advice, severity::AdvisoryTier::Advisory, finding);
+    }
+}
+
+/// The files the collector never removes: the running executable and the
+/// `batten` on `PATH`, canonicalised (CLOUD-2197 §5).
+fn engine_paths() -> Vec<PathBuf> {
+    let running = std::env::current_exe().ok();
+    let installed = std::env::var_os("PATH").and_then(|path| {
+        std::env::split_paths(&path)
+            .map(|dir| dir.join(surface::BINARY))
+            .find(|candidate| candidate.is_file())
+    });
+    running
+        .into_iter()
+        .chain(installed)
+        .filter_map(|path| path.canonicalize().ok())
+        .collect()
+}
+
 /// The `[capture]` bound, or `None` when the authority cannot be read.
 ///
 /// Read separately from the policy load below, and deliberately tolerant: a
@@ -21472,11 +21568,21 @@ fn seed_hook_authority(envelope: &hook::Envelope) -> &'static Path {
     hook_authority_root()
 }
 
-//MUTANT no-config-mode-bundle-dropped|s@^        return Ok((hook::Policy::mode_default(harness)?, Vec::new()));$@        return Ok((hook::Policy::declaring_nothing(harness), Vec::new()));@|an_auto_mode_call_is_granted_where_no_authority_governs
 fn load_policy(
     overrides: &Overrides,
     harness: hook::Harness,
 ) -> Result<(hook::Policy, Vec<waiver::Waiver>)> {
+    load_hook_config(overrides, harness).map(|(policy, waivers, _)| (policy, waivers))
+}
+
+/// [`load_policy`], with the `[prune]` table the same resolve read, so the disk
+/// collector's band costs the pre-tool path nothing beyond the load it already
+/// pays (CLOUD-2197).
+//MUTANT no-config-mode-bundle-dropped|s@^        return Ok((hook::Policy::mode_default(harness)?, Vec::new(), None));$@        return Ok((hook::Policy::declaring_nothing(harness), Vec::new(), None));@|an_auto_mode_call_is_granted_where_no_authority_governs
+fn load_hook_config(
+    overrides: &Overrides,
+    harness: hook::Harness,
+) -> Result<(hook::Policy, Vec<waiver::Waiver>, Option<prune::Prune>)> {
     let here = hook_authority_root();
     // THE FLAG IS CONSULTED BEFORE THE FILE (CLOUD-719). The zero-config
     // short-circuit below is correct in its own right — `batten hook` runs in
@@ -21496,7 +21602,7 @@ fn load_policy(
     // and the mode modules alone load, so auto mode grants and plan mode refuses
     // writes wherever the session's shell happens to stand.
     if overrides.config_from.is_none() && !here.join(config::CONFIG_FILE).exists() {
-        return Ok((hook::Policy::mode_default(harness)?, Vec::new()));
+        return Ok((hook::Policy::mode_default(harness)?, Vec::new(), None));
     }
     // The waivers travel beside the policy rather than inside it (CLOUD-610).
     // `Policy` is what `adjudicate` decides against and is resolved without a
@@ -21506,7 +21612,7 @@ fn load_policy(
     let resolved = resolve::resolve(here, overrides)?;
     let policy =
         hook::Policy::from_resolved(&resolved, harness, here, overrides.config_from.as_deref())?;
-    Ok((policy, resolved.waivers))
+    Ok((policy, resolved.waivers, resolved.prune))
 }
 
 /// Resolve the `exec` output predicates for this run (CLOUD-117).

@@ -63,6 +63,11 @@ pub const fn reserve_mb(floor: &crate::prune::Floor) -> u64 {
 /// twenty-five minutes and long against the syscall.
 pub const TICK: f64 = 5.0;
 
+/// How long the hook may collect before admitting (CLOUD-2197): a sixth of the
+/// harness's 60 s default command-hook timeout, so a killed hook is never the
+/// bound. Checked at unit boundaries; the next pressed call resumes.
+pub const HOOK_COLLECT_DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// How far ahead the burn is projected, in milliseconds: one tick, plus the
 /// reclaim's own wall time with room — a superseded pass over a warm tree was
 /// measured in seconds, and a projection shorter than the reaction is a floor
