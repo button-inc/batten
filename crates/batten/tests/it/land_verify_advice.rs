@@ -98,6 +98,35 @@ fn verify(dir: &std::path::Path, gate: &str) -> (i32, String) {
     )
 }
 
+/// THE GATE'S OUTPUT IS STORED AND POINTED AT, NEVER STREAMED (CLOUD-2223).
+///
+/// Measured on #1132: one task log read whole was 57,764 tokens, of which two
+/// lines were the verdict. The payload stays out of the lap's output, the lap
+/// prints one line naming where it is, and that handle gives it back.
+#[test]
+fn a_gate_s_output_is_stored_and_pointed_at() {
+    let dir = repo("land-verify-log-pointer", false);
+    let gate = failing_gate(&dir, "payload-line-from-the-gate");
+    let (code, said) = verify(&dir, &gate);
+    assert_eq!(code, 2, "{said}");
+    assert!(
+        !said.contains("payload-line-from-the-gate"),
+        "the log is not streamed: {said}"
+    );
+    let handle = said
+        .split("run batten capture show ")
+        .nth(1)
+        .and_then(|rest| rest.split_whitespace().next())
+        .unwrap_or_else(|| panic!("the lap names the log: {said}"))
+        .to_owned();
+    let shown = common::run(&dir, &["capture", "show", &handle, "--raw"]);
+    assert!(
+        String::from_utf8_lossy(&shown.stdout).contains("payload-line-from-the-gate"),
+        "the handle gives the output back: {}",
+        common::stderr(&shown)
+    );
+}
+
 /// A **linked worktree** whose own branch declares the classifier, off a main
 /// checkout that declares none.
 ///
@@ -460,21 +489,28 @@ fn a_refused_gate_renders_its_verdict_with_its_cause() {
     );
 }
 
-/// **THE GATE'S OWN OUTPUT REACHES THE OPERATOR.**
+/// **WHY THE GATE REFUSED IS ONE COMMAND AWAY, NEVER LOST.**
 ///
-/// `land::verify` ran through `exec::run_in_env`, whose `ExecConfig::DEFAULT`
-/// has `tee: false` — right for `batten exec`, where the bytes are addressable
-/// and a caller can go and read them, and wrong for an interactive lap that has
-/// just stopped. `Verified`'s own header claimed the output "went to the
-/// caller's terminal where it belongs" and it had never done so.
+/// This was a tee: `ExecConfig::DEFAULT`'s `tee: false` had hidden the gate's
+/// output from a stopped lap entirely. CLOUD-2223 replaces the tee with a pointer
+/// (57,764 tokens streamed for a two-line verdict), so the property kept is that
+/// the operator can still read what the gate said, by the handle the lap prints.
 #[test]
 fn the_gate_that_refused_is_shown_saying_why() {
     let dir = repo("verify-advice-tee", true);
     let gate = failing_gate(&dir, "'tests/primitives.rs:1171 a real finding'");
     let (_, said) = verify(&dir, &gate);
-
+    let handle = said
+        .split("run batten capture show ")
+        .nth(1)
+        .and_then(|rest| rest.split_whitespace().next())
+        .unwrap_or_else(|| panic!("the lap points at the gate's log: {said}"))
+        .to_owned();
+    let shown = common::run(&dir, &["capture", "show", &handle, "--raw"]);
     assert!(
-        said.contains("a real finding"),
-        "the operator is shown what the gate said: {said}"
+        String::from_utf8_lossy(&shown.stdout).contains("a real finding"),
+        "the operator can read what the gate said: {}{}",
+        String::from_utf8_lossy(&shown.stdout),
+        common::stderr(&shown)
     );
 }

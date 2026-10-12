@@ -11053,10 +11053,20 @@ fn unwind_lap(
             // wildcarded so a new arm is a compile error here.
             pipeline::Compensation::Nothing => {}
             pipeline::Compensation::Abandon if !land::abandons_the_runs(seen) => {
-                writeln!(
-                    out,
-                    "land: undo — the head is red, so its other runs are left to finish and report on this matrix"
-                )?;
+                // THE TWO KEEPERS SAY DIFFERENT THINGS (CLOUD-1215): a red head's
+                // runs report, an unread wait's were never read.
+                if seen == Some(land::TapVerdict::Unread) {
+                    let sha = git::head_commit(root).unwrap_or_default();
+                    writeln!(
+                        out,
+                        "land: undo skipped — no CI reading was taken, so {sha} stays ready and its runs are left alone"
+                    )?;
+                } else {
+                    writeln!(
+                        out,
+                        "land: undo — the head is red, so its other runs are left to finish and report on this matrix"
+                    )?;
+                }
             }
             pipeline::Compensation::Abandon => {
                 let Ok(sha) = git::head_commit(root) else {
@@ -12572,6 +12582,16 @@ fn run_land_verify(
         trunk,
         disk,
     )?;
+    // THE GATE'S LOG AS A POINTER (CLOUD-2223): its bytes are stored, never
+    // streamed, and this is the one line that names where.
+    let log = land::verify_log(root, branch, verified.sha());
+    if let Some(first) = log.first() {
+        writeln!(
+            out,
+            "land: gate log {}; run batten capture show {first} --raw",
+            log.join(" ")
+        )?;
+    }
     match verified {
         land::Verified::Clean(head) => {
             writeln!(out, "land: {head} passed the configured gate")?;
@@ -13687,7 +13707,11 @@ fn run_land_wait(
         // table over. Inventing a fifth code for red would be the per-verb
         // exception non-negotiable rule 5 forbids.
         land::Waited::Red { .. } => (land::answers(&sha, Some("red"), None), ExitCode::Violation),
-        land::Waited::Unanswered => (land::answers(&sha, None, None), ExitCode::Internal),
+        // `Unread` takes `Unanswered`'s record and code (CLOUD-1215): both could
+        // not get an answer, and the reading beside the code tells them apart.
+        land::Waited::Unanswered | land::Waited::Unread => {
+            (land::answers(&sha, None, None), ExitCode::Internal)
+        }
         // THE SAME CODE AS `Unanswered`, AND DELIBERATELY (CLOUD-497). Both are
         // "could not get an answer"; they differ in whether one is coming, and
         // that difference travels in the reading beside this code — which is
@@ -13768,6 +13792,12 @@ fn say_what_the_wait_saw(
         }
         land::Waited::Unanswered => {
             writeln!(out, "land: no answer yet on {sha} after {asks} ask(s)")?;
+        }
+        land::Waited::Unread => {
+            writeln!(
+                out,
+                "land: the forge answered none of {asks} ask(s) on {sha}; no reading was taken"
+            )?;
         }
         // POINTERS AND A REMEDY, in the red arm's shape rather than the
         // unanswered arm's (CLOUD-497). "No answer yet" is a status line because

@@ -292,6 +292,38 @@ fn every_lap_ending_is_reachable_from_some_step_and_code() {
 ///
 /// The two mirrors are what make this a statement about the verdict rather than
 /// about the step: same step, same code, three readings, and only one stops.
+/// AN UNREAD WAIT NEITHER RE-DRAFTS NOR CANCELS (CLOUD-1215).
+///
+/// The forge answered none of the first asks, so no reading was taken. Read as
+/// `Pending` it re-drafted a ready head and cancelled its runs on a forge nobody
+/// could read. The lap behaviour is unchanged: it still laps.
+#[test]
+fn an_unread_wait_neither_re_drafts_nor_cancels() {
+    let seen = land::tap_verdict(&land::Waited::Unread);
+    assert_eq!(seen, Some(TapVerdict::Unread));
+    let tap = land::Tap {
+        landed: false,
+        singleton_held: true,
+        is_draft: Some(false),
+        verdict: seen,
+    };
+    assert!(
+        !land::closes_the_tap(&tap),
+        "a ready head stays ready on no reading"
+    );
+    assert!(
+        !land::abandons_the_runs(seen),
+        "and its runs are left alone"
+    );
+    for basis in [land::Basis::Own, land::Basis::Borrowed] {
+        assert_eq!(
+            land::progress_of(Step::Wait, ExitCode::Internal, seen, basis),
+            Progress::Lap,
+            "the carve-out leaves lapping as it was ({basis:?})"
+        );
+    }
+}
+
 #[test]
 fn a_dead_end_wait_stops_the_lap_where_an_unanswered_one_laps() {
     use ExitCode::Internal;

@@ -2068,6 +2068,34 @@ fn a_reclaimed_copy_takes_its_cargo_fingerprint_with_it() {
 */
 
 #[test]
+fn a_held_root_is_reported_as_held() {
+    // CLOUD-2225. The escalation skips a root a running build holds, and the
+    // refusal then guessed the roots were "already gone, were never there, or
+    // none of them is the cargo build's own". Measured on #1132: every root was
+    // there and held by `verify`'s own build. Released, the root is taken, so
+    // the case cannot pass by the reclaim never reaching it.
+    let repo = repo("target-prune-held-root");
+    built_profile(&repo, "debug");
+    let root = cache(&repo, "semver-checks", 200_000);
+    std::fs::create_dir_all(root.join("debug")).unwrap();
+    let lock = std::fs::File::create(root.join("debug/.cargo-lock")).unwrap();
+    lock.lock().unwrap();
+
+    let held = said(&prune(&repo, "1000", &["-y"]));
+    assert!(
+        held.contains("semver-checks held by a running build (semver-checks/debug/.cargo-lock)"),
+        "the held root and its lock are named: {held}"
+    );
+    assert!(!held.contains("already gone"), "{held}");
+    assert!(root.exists(), "a held root is never taken");
+
+    drop(lock);
+    let released = said(&prune(&repo, "1000", &["-y"]));
+    assert!(!released.contains("held by a running build"), "{released}");
+    assert!(!root.exists(), "released, it is reclaimed: {released}");
+}
+
+#[test]
 fn a_tree_a_running_build_holds_is_not_reclaimed() {
     // The lock is held by THIS process and the prune runs in another, which is
     // the shape of the race: a `verify` step building while a sibling's

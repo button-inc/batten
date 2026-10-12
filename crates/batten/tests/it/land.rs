@@ -28,7 +28,7 @@
 #MUTANT-SUITE crates/batten/tests/it/land.rs
 #MUTANT a-truncated-reading-reads-as-closed|s@        "repos/{}/commits/{}/check-runs?per_page={PER_PAGE}&page={number}",@        "repos/{}/commits/{}/check-runs?per_page={PER_PAGE}",@|a_truncated_reading_is_not_read_as_closed
 #MUTANT dead-end-believed-before-the-ready-registers|s@^    before_ready.is_none_or(|seen| {$@    true || before_ready.is_none_or(|seen| {@|a_dead_end_after_a_fresh_ready_waits_for_the_ready_s_own_runs
-#MUTANT red-head-runs-cancelled|s@^    !matches!(seen, Some(TapVerdict::Red))$@    true@|a_red_head_s_other_runs_finish_and_every_other_stop_cancels
+#MUTANT red-head-runs-cancelled|s@^    !matches!(seen, Some(TapVerdict::Red \| TapVerdict::Unread))$@    true@|a_red_head_s_other_runs_finish_and_every_other_stop_cancels
 */
 
 #![cfg(unix)]
@@ -917,13 +917,19 @@ fn a_dead_end_after_a_fresh_ready_waits_for_the_ready_s_own_runs() {
 /// what they would have said minutes later. A red head needs a fix and a fresh
 /// matrix either way, so its siblings' remaining tail is the cheap half and
 /// their verdicts are the valuable one. Every verdict is enumerated, so a new
-/// arm that should not cancel cannot slip through by default.
+/// arm that should not cancel cannot slip through by default. The second
+/// exception is an unread wait (CLOUD-1215): nobody read its runs, so nothing
+/// says they are waste.
 #[test]
 fn a_red_head_s_other_runs_finish_and_every_other_stop_cancels() {
     use land::TapVerdict;
     assert!(
         !land::abandons_the_runs(Some(TapVerdict::Red)),
         "a red head keeps its other runs, so every verdict it paid for arrives"
+    );
+    assert!(
+        !land::abandons_the_runs(Some(TapVerdict::Unread)),
+        "an unread wait keeps its runs: no reading says they are waste"
     );
     for seen in [
         None,

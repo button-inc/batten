@@ -1305,6 +1305,9 @@ pub struct Outcome {
     /// under a reader without saying so is the wedge's own failure mode wearing
     /// the opposite sign.
     pub lowered: Option<(u64, u64)>,
+    /// The declared roots a running build held, which no reclaim could take
+    /// (CLOUD-2225): [`held_roots`]'s lines.
+    pub held: Vec<String>,
     /// Whether a lap journal was there and could not be read.
     ///
     /// Reported rather than swallowed: a run that silently started a fresh
@@ -1470,7 +1473,15 @@ impl Outcome {
     /// The refusal, naming the floor in force and why it is that one.
     #[must_use]
     pub fn refusal(&self, root: &Path) -> String {
+        let held = if self.held.is_empty() {
+            String::new()
+        } else {
+            format!("\n  {}", self.held.join("\n  "))
+        };
         let because = match self.basis {
+            Basis::Warm if !self.held.is_empty() => {
+                "the regrowable roots `[prune]` declares are held by a running build, so no reclaim may take them until it exits"
+            }
             Basis::Warm => {
                 "nothing left to reclaim that would change the basis — the regrowable roots `[prune]` declares are already gone, were never there, or none of them is the cargo build's own"
             }
@@ -1499,7 +1510,7 @@ impl Outcome {
             )
         });
         format!(
-            "target-prune: below the measured {basis} disk floor, and {because}\n  {boundary}\n  free {free}MB\n  floor {floor}MB ({basis} basis{provenance}){lap}\n  A build started here fails as a rustc IO error inside a test run, which reads as a suite regression rather than a full disk. A learned floor this volume keeps refusing re-bases on its own; one below the declaration needs more room on the volume holding {root}.",
+            "target-prune: below the measured {basis} disk floor, and {because}{held}\n  {boundary}\n  free {free}MB\n  floor {floor}MB ({basis} basis{provenance}){lap}\n  A build started here fails as a rustc IO error inside a test run, which reads as a suite regression rather than a full disk. A learned floor this volume keeps refusing re-bases on its own; one below the declaration needs more room on the volume holding {root}.",
             basis = self.basis.as_str(),
             free = self.free_mb,
             floor = self.floor_mb,
@@ -1624,6 +1635,8 @@ pub fn prune(
     // has nowhere to keep a history, so it decides on the declared floor alone —
     // which is exactly what every run did before this, and is why the journal
     // being absent is a state rather than a failure.
+    // Read after the reclaim, so a root this run took is not reported held.
+    let held = held_roots(root, &config.regrowable);
     let Some(store) = store else {
         return Ok(Outcome {
             pruned,
@@ -1638,6 +1651,7 @@ pub fn prune(
             consumed: None,
             // No journal means no standing observation to re-measure.
             lowered: None,
+            held,
             floor_source: FloorSource::Declared,
             journal_unreadable: false,
             // Both false and not merely defaulted: with no `$GIT_DIR` there was
@@ -1672,6 +1686,7 @@ pub fn prune(
         phase: lap.phase,
         consumed: lap.consumed,
         lowered: lap.lowered,
+        held,
         floor_source: lap.floor_source,
         journal_unreadable: lap.journal_unreadable,
         // Taken from the read rather than routed through `lap`, which is where
@@ -3071,6 +3086,58 @@ pub(crate) fn claim(root: &Path, path: &Path) -> Option<Vec<std::fs::File>> {
     Some(held)
 }
 
+/// The `.cargo-lock` of a running build holding `path`, the one [`claim`]
+/// would refuse on (CLOUD-2225), or `None` where nothing holds it.
+fn holder(root: &Path, path: &Path) -> Option<PathBuf> {
+    let enclosing = path.ancestors().take_while(|dir| dir.starts_with(root));
+    let nested = PROFILE_DIRS.iter().map(|profile| path.join(profile));
+    enclosing
+        .map(Path::to_path_buf)
+        .chain(nested)
+        .find_map(|profile| {
+            let lock = profile.join(BUILD_LOCK);
+            let file = std::fs::File::open(&lock).ok()?;
+            matches!(file.try_lock(), Err(std::fs::TryLockError::WouldBlock)).then_some(lock)
+        })
+}
+
+/// Every declared regrowable root a running build holds, as `<root> held by a
+/// running build (<lock>)`, paths relative to `root` (CLOUD-2225).
+///
+/// The escalation skips a held root, and the refusal then guessed it was
+/// "already gone, were never there, or none of them is the cargo build's own":
+/// measured on #1132, every root was present and held by the `verify` build
+/// itself, so the guess named three causes and none of them.
+//MUTANT-SUITE crates/batten/tests/it/target_prune.rs
+//MUTANT held-root-unreported|s@^            held.push(format!(@            drop(format!(@|a_held_root_is_reported_as_held
+#[must_use]
+pub fn held_roots(root: &Path, declared: &[Regrowable]) -> Vec<String> {
+    let mut held = Vec::new();
+    for (position, row) in declared.iter().enumerate() {
+        let later: Vec<&str> = declared[position + 1..]
+            .iter()
+            .map(|later| later.name.as_str())
+            .collect();
+        for cache in directories_named_outside(root, &row.name, &later) {
+            let Some(lock) = holder(root, &cache) else {
+                continue;
+            };
+            let relative = |path: &Path| {
+                path.strip_prefix(root)
+                    .unwrap_or(path)
+                    .display()
+                    .to_string()
+            };
+            held.push(format!(
+                "{} held by a running build ({})",
+                relative(&cache),
+                relative(&lock)
+            ));
+        }
+    }
+    held
+}
+
 /// The profile directories cargo lays down inside any build tree.
 ///
 /// Their presence one level in is what makes a directory a build tree rather
@@ -3727,6 +3794,7 @@ mod tests {
         // hand a reader the one figure the line exists to retire.
         let outcome = Outcome {
             lowered: None,
+            held: Vec::new(),
             pruned: 0,
             reclaimed_mb: 0,
             escalated_mb: None,
@@ -4078,6 +4146,7 @@ mod tests {
         // inferred from the word "escalated".
         let warm = Outcome {
             lowered: None,
+            held: Vec::new(),
             pruned: 0,
             reclaimed_mb: 0,
             escalated_mb: Some(2600),
@@ -4161,6 +4230,7 @@ mod tests {
         // reader, because the number alone cannot say why it is that number.
         let warm = Outcome {
             lowered: None,
+            held: Vec::new(),
             pruned: 0,
             reclaimed_mb: 0,
             escalated_mb: None,
@@ -4191,6 +4261,7 @@ mod tests {
         // warm number would pass here — which is exactly what the predecessor did.
         let cold = Outcome {
             lowered: None,
+            held: Vec::new(),
             pruned: 0,
             reclaimed_mb: 0,
             escalated_mb: Some(3800),

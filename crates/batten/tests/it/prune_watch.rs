@@ -108,8 +108,33 @@ fn a_tree_under_a_held_build_lock_survives_the_reclaim() {
     );
 
     drop(lock);
+    released(&tree.join("debug/.cargo-lock"));
     batten::disk_watch::reclaim(&tree, &rules("target", 1), 1).expect("reclaim");
     assert_eq!(survivors(&debug), 2, "released, keep = 2 applies again");
+}
+
+/// Wait until `lock` is actually free.
+///
+/// `drop` releases this case's handle, but a sibling case that forked between
+/// `lock()` and here shares the open file description, and with it the `flock`,
+/// until its child execs. Measured on #1132: the released reclaim found the lock
+/// still held and kept all three copies, while the case alone passed every time.
+fn released(lock: &std::path::Path) {
+    for _ in 0..200 {
+        let probe = std::fs::File::open(lock).unwrap();
+        if probe.try_lock().is_ok() {
+            return;
+        }
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "bounded by a real terminal state: the sibling's child execs and closes the shared description, capped at `200` tries"
+        )]
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    panic!(
+        "{} stayed locked after this case released it",
+        lock.display()
+    );
 }
 
 /// A repository whose gate writes a marker, so "the gate ran" is a file.
@@ -386,6 +411,7 @@ fn a_tree_a_build_holds_is_never_collected() {
         "a building profile loses nothing"
     );
     drop(lock);
+    released(&profile.join(".cargo-lock"));
     let _ = batten::collect::collect(&request(&trees, &[], u64::MAX));
     assert!(
         !present(&profile, "busy", "6666666666666666"),

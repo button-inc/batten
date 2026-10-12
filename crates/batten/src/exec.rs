@@ -1914,17 +1914,21 @@ pub(crate) fn classify_in_env(
     patterns: &[OutputPattern],
     settings: &ExecConfig,
     published: &[(String, String)],
-) -> Result<(i32, Vec<Hit>)> {
+) -> Result<(i32, Vec<Hit>, Vec<String>)> {
     let bundle = split_bundle(command)?;
     let outcomes = dispatch(repo_root, &bundle, settings, published, next_run())?;
     reraise(&outcomes)?;
     let code = bundle_code(&outcomes);
     let mut found: Vec<Hit> = Vec::new();
+    // THE STORED LOG'S HANDLES (CLOUD-2223): the caller points at the output
+    // rather than streaming it, so it needs the address the bytes were sealed at.
+    let mut handles = Vec::new();
     for outcome in &outcomes {
         found.extend(outputs::hits(patterns, Stream::Stdout, &outcome.out_bytes));
         found.extend(outputs::hits(patterns, Stream::Stderr, &outcome.err_bytes));
+        handles.extend(outcome.captures.iter().map(capture::Capture::handle));
     }
-    Ok((code, found))
+    Ok((code, found, handles))
 }
 
 /// Die of the signal a child was killed by, where one was.

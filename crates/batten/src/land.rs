@@ -799,6 +799,11 @@ pub enum Waited {
     /// code is not the discriminator here and never was: `seen` is. That is
     /// already how a red reading is told from a stale one in the same cell, and
     /// [`progress_of`] is the one table over the pair.
+    /// The forge answered none of the first
+    /// [`crate::pr_watch::UNANSWERED_BEFORE_REFUSING`] asks (CLOUD-1215), so no
+    /// reading was taken at all. Distinct from `Unanswered`, which asked its
+    /// count and read `Pending` every time: that IS a reading, this is not.
+    Unread,
     DeadEnd {
         /// Which required names are masked, as pointers.
         findings: Vec<crate::checks_green::Finding>,
@@ -820,9 +825,14 @@ pub enum Waited {
 /// next lap bought a whole matrix to learn what those two would have said
 /// minutes later. Every other stop still cancels: a stale base makes the whole
 /// run waste, and an unanswered or dead-end wait has nothing to wait for.
+///
+/// An UNREAD wait keeps its runs too (CLOUD-1215): nobody read them, so nothing
+/// says they are waste.
+//MUTANT-SUITE crates/batten/tests/it/land_lap.rs
+//MUTANT unread-wait-abandons-its-runs|s@    !matches!(seen, Some(TapVerdict::Red \| TapVerdict::Unread))@    !matches!(seen, Some(TapVerdict::Red))@|an_unread_wait_neither_re_drafts_nor_cancels
 #[must_use]
 pub const fn abandons_the_runs(seen: Option<TapVerdict>) -> bool {
-    !matches!(seen, Some(TapVerdict::Red))
+    !matches!(seen, Some(TapVerdict::Red | TapVerdict::Unread))
 }
 
 /// Whether a dead end read after a fresh ready is about the ready's own runs.
@@ -966,9 +976,12 @@ pub fn wait(
                 // the lap holds the lease and the operator sees one line. Left
                 // to the `Unanswered` verdict, which is what the lap already
                 // laps on, so the shape of the refusal is unchanged.
+                // NOT `Unanswered` (CLOUD-1215): no request was answered, so no
+                // reading was taken, and `Unanswered` read as `Pending` re-drafted
+                // the head and cancelled its runs on a forge it could not read.
                 if poll.unanswered_from_the_start() >= crate::pr_watch::UNANSWERED_BEFORE_REFUSING {
                     stop.store(true, std::sync::atomic::Ordering::Relaxed);
-                    drop(green.send(Waited::Unanswered));
+                    drop(green.send(Waited::Unread));
                     return;
                 }
                 // BOTH TERMINAL ANSWERS END THE WAIT, not only the one the lap
@@ -1275,6 +1288,14 @@ pub enum Refusal {
 }
 
 impl Verified {
+    /// The head this outcome is about.
+    #[must_use]
+    pub fn sha(&self) -> &str {
+        match self {
+            Self::Clean(sha) | Self::Refused { sha, .. } => sha,
+        }
+    }
+
     /// The record line this outcome writes.
     ///
     /// Four columns, `verify <verdict> <sha> <path>`, the store's shape. The
@@ -1412,8 +1433,14 @@ pub fn verify(
     // right unit to cancel: the whole tree or none of it. This is the one caller
     // that asks for it, which is why the flag is set here rather than moved into
     // `DEFAULT` — every other `exec` caller's topology is unchanged.
+    //
+    // STORED, NOT TEED, SINCE CLOUD-2223. The tee above put the whole gate log in
+    // the caller's window: measured on #1132, 57,764 tokens of which two lines
+    // were the verdict. The bytes are still sealed in the capture store, and the
+    // driver prints the one line that points at them (`verify_log`), so the
+    // reason a gate refused is one `batten capture show` away, not lost.
     let settings = crate::exec::ExecConfig {
-        tee: true,
+        tee: false,
         manage_process_group: true,
         ..crate::exec::ExecConfig::DEFAULT
     };
@@ -1422,13 +1449,15 @@ pub fn verify(
     // here is what kind of failure a red one was, and `classify_in_env` is the
     // sibling that answers it. Both readings from one function would produce
     // opposite verdicts over identical bytes.
-    let verified = match crate::exec::classify_in_env(
-        &started,
-        command,
-        environment,
-        &settings,
-        published,
-    ) {
+    let mut log = Vec::new();
+    let classified =
+        crate::exec::classify_in_env(&started, command, environment, &settings, published).map(
+            |(code, found, handles)| {
+                log = handles;
+                (code, found)
+            },
+        );
+    let verified = match classified {
         Ok((0, _)) => Verified::Clean(head),
         // **THE EXIT CODE IS READ BEFORE THE PATTERNS, and it was not read at
         // all** (review of #848). Every non-zero became `Refusal::Tree`
@@ -1481,8 +1510,37 @@ pub fn verify(
         },
         Err(problem) => return Err(problem.context("land: run the configured verify command")),
     };
-    append(root, branch, std::slice::from_ref(&verified.line()))?;
+    let mut lines = vec![verified.line()];
+    if !log.is_empty() {
+        lines.push(format!("{VERIFY_LOG} {} {}", verified.sha(), log.join(" ")));
+    }
+    append(root, branch, &lines)?;
     Ok(verified)
+}
+
+/// The lap record's pointer to a gate's stored output (CLOUD-2223): `verify-log
+/// <sha> <handle>…`, one `<stream>:<digest>` per stream.
+const VERIFY_LOG: &str = "verify-log";
+
+/// The handles of the newest gate log recorded for `sha` on `branch`, or empty
+/// where none was (CLOUD-2223).
+///
+/// The gate's output is stored, not streamed: measured on #1132, one task log
+/// read whole was 57,764 tokens, of which two lines were the verdict. This is the
+/// pointer the driver prints in its place.
+//MUTANT-SUITE crates/batten/tests/it/land_verify_advice.rs
+//MUTANT verify-log-unrecorded|s@^        lines.push(format!("{VERIFY_LOG} {} {}", verified.sha(), log.join(" ")));$@        drop(log.join(" "));@|a_gate_s_output_is_stored_and_pointed_at
+#[must_use]
+pub fn verify_log(root: &Path, branch: &str, sha: &str) -> Vec<String> {
+    branch_lap_lines(root, branch)
+        .iter()
+        .rev()
+        .find_map(|line| {
+            let mut words = line.split_whitespace();
+            (words.next() == Some(VERIFY_LOG) && words.next() == Some(sha))
+                .then(|| words.map(ToOwned::to_owned).collect())
+        })
+        .unwrap_or_default()
 }
 
 /// The gate, raced against the base it was asked about (CLOUD-423's other half).
@@ -3207,7 +3265,9 @@ pub fn closes_the_tap(state: &Tap) -> bool {
     match state.verdict {
         // COULD NOT LOOK IS NOT RED. `None` is a reading nobody took, and
         // draft-ing on it would punish a network blip with a stopped branch.
-        None | Some(TapVerdict::Green) => false,
+        // AN UNREAD WAIT IS COULD-NOT-LOOK TOO (CLOUD-1215): the forge answered
+        // none of its asks, so nothing was read to re-draft on.
+        None | Some(TapVerdict::Green | TapVerdict::Unread) => false,
         // A DEAD END JOINS THE TWO THAT RE-DRAFT, and it is the arm with the
         // strongest claim to (CLOUD-497). `Red` and `Pending` re-draft because the
         // resume needs a fresh run whatever happens; for a dead end that is not a
@@ -3231,12 +3291,15 @@ pub fn closes_the_tap(state: &Tap) -> bool {
 /// Pure, and separate from [`wait`] for the reason [`worthless`] is separate
 /// from [`abandon`]: the mapping is the decision, and a decision reachable only
 /// through a network call is a decision nothing tests.
+//MUTANT-SUITE crates/batten/tests/it/land_lap.rs
+//MUTANT unread-wait-reads-as-pending|s@        Waited::Unread => Some(TapVerdict::Unread),@        Waited::Unread => Some(TapVerdict::Pending),@|an_unread_wait_neither_re_drafts_nor_cancels
 #[must_use]
 pub const fn tap_verdict(waited: &Waited) -> Option<TapVerdict> {
     match waited {
         Waited::Green { .. } => Some(TapVerdict::Green),
         Waited::Red { .. } => Some(TapVerdict::Red),
         Waited::Unanswered => Some(TapVerdict::Pending),
+        Waited::Unread => Some(TapVerdict::Unread),
         Waited::DeadEnd { .. } => Some(TapVerdict::DeadEnd),
         Waited::Stale { .. } => None,
     }
@@ -3275,6 +3338,10 @@ pub enum TapVerdict {
     Pending,
     /// Not an answer, and not going to be one (CLOUD-497).
     DeadEnd,
+    /// No request was answered, so nothing was read (CLOUD-1215). Neither
+    /// re-drafts nor cancels: a forge nobody could read is no reason to stop a
+    /// head or its runs.
+    Unread,
 }
 
 impl TapVerdict {
