@@ -44,6 +44,29 @@ fn main() {
     }
     table.extend_from_slice(&blob);
     std::fs::write(out.join("o200k.bin"), &table).expect("write o200k.bin");
+    // THE PRE-TOKENIZER AS A DFA, built here so no process compiles a regex
+    // (measured at 4.7-6.7 ms per process with fancy-regex, against a 10 ms hook
+    // target). o200k's one lookahead alternative, `\s+(?!\S)`, is not
+    // DFA-expressible: it becomes `\s+`, and `o200k::pieces` trims a run that
+    // the lookahead would have left one character short.
+    let lookahead = r"|\s+(?!\S)|\s+";
+    let source = tiktoken_rs::O200K_BASE_PAT_STR;
+    assert!(
+        source.ends_with(lookahead),
+        "o200k's pattern changed shape: {source}"
+    );
+    let plain = format!("{}|\\s+", source.trim_end_matches(lookahead));
+    let dfa = regex_automata::dfa::dense::Builder::new()
+        .configure(
+            regex_automata::dfa::dense::Config::new()
+                .start_kind(regex_automata::dfa::StartKind::Anchored),
+        )
+        .build(&plain)
+        .expect("o200k's pattern builds as a DFA")
+        .to_sparse()
+        .expect("o200k's DFA converts to sparse");
+    std::fs::write(out.join("o200k_dfa.bin"), dfa.to_bytes_little_endian())
+        .expect("write o200k_dfa.bin");
     let mut pattern = std::fs::File::create(out.join("o200k_pattern.rs")).expect("create pattern");
     writeln!(
         pattern,

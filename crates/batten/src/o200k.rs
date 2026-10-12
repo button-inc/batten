@@ -9,8 +9,8 @@
 //!
 //! The merge is tiktoken's own byte-pair merge over the same pre-tokenizer
 //! pieces, and `tests::counts_match_tiktoken` holds the counts identical to
-//! tiktoken-rs. The pre-tokenizer regex still compiles once per process
-//! (measured 4.7-6.7 ms), and only when a count is asked for.
+//! tiktoken-rs. The pre-tokenizer is a DFA `build.rs` serializes, read in
+//! place: no process compiles a regex either.
 
 use std::sync::OnceLock;
 
@@ -96,26 +96,78 @@ fn piece_tokens(piece: &[u8]) -> usize {
     parts.len() - 1
 }
 
-fn splitter() -> Option<&'static fancy_regex::Regex> {
-    static REGEX: OnceLock<Option<fancy_regex::Regex>> = OnceLock::new();
-    REGEX
-        .get_or_init(|| fancy_regex::Regex::new(PATTERN).ok())
-        .as_ref()
+static DFA_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/o200k_dfa.bin"));
+
+/// The pre-tokenizer: `build.rs`'s serialized sparse DFA, read in place.
+fn dfa() -> Option<&'static regex_automata::dfa::sparse::DFA<&'static [u8]>> {
+    static DFA: OnceLock<Option<regex_automata::dfa::sparse::DFA<&'static [u8]>>> = OnceLock::new();
+    DFA.get_or_init(|| {
+        regex_automata::dfa::sparse::DFA::from_bytes(DFA_BYTES)
+            .ok()
+            .map(|(dfa, _)| dfa)
+    })
+    .as_ref()
+}
+
+/// The pre-tokenizer's pieces of `text`, in order.
+///
+/// Anchored forward searches from the end of the last piece. o200k's pattern
+/// ends `\s+(?!\S)|\s+`; the DFA has `\s+` alone, so a whitespace run with no
+/// newline, two or more characters long and followed by a non-space, gives up
+/// its last character to the next piece — exactly what the lookahead does.
+/// A position nothing matches is skipped, as tiktoken skips it.
+//MUTANT lookahead-untrimmed|s@^                    && rest.chars().next().is_some_and(\x7cnext\x7c !next.is_whitespace())$@                    \&\& false@|counts_match_tiktoken
+fn pieces<'a>(
+    dfa: &'a regex_automata::dfa::sparse::DFA<&'static [u8]>,
+    text: &'a str,
+) -> impl Iterator<Item = &'a str> {
+    use regex_automata::dfa::Automaton as _;
+    let mut at = 0;
+    std::iter::from_fn(move || {
+        while at < text.len() {
+            let input = regex_automata::Input::new(text)
+                .range(at..)
+                .anchored(regex_automata::Anchored::Yes);
+            if let Ok(Some(found)) = dfa.try_search_fwd(&input)
+                && found.offset() > at
+            {
+                let mut end = found.offset();
+                let piece = text.get(at..end).unwrap_or_default();
+                let rest = text.get(end..).unwrap_or_default();
+                if piece.chars().all(char::is_whitespace)
+                    && !piece.contains(['\r', '\n'])
+                    && piece.chars().nth(1).is_some()
+                    && rest
+                        .chars()
+                        .next()
+                        .is_some_and(|next| !next.is_whitespace())
+                {
+                    end -= piece.chars().last().map_or(0, char::len_utf8);
+                }
+                let out = text.get(at..end).unwrap_or_default();
+                at = end;
+                return Some(out);
+            }
+            at += text
+                .get(at..)
+                .and_then(|rest| rest.chars().next())
+                .map_or(1, char::len_utf8);
+        }
+        None
+    })
 }
 
 /// How many `o200k_base` tokens `text` is.
 ///
-/// A pattern that cannot compile (it is a build-time constant, so this does
-/// not happen) counts bytes: an over-count, so a bound errs toward a pointer.
+/// A DFA that cannot load (it is a build-time constant, so this does not
+/// happen) counts bytes: an over-count, so a bound errs toward a pointer.
 #[must_use]
 pub fn tokens(text: &str) -> u64 {
-    let Some(regex) = splitter() else {
+    let Some(dfa) = dfa() else {
         return text.len() as u64;
     };
-    regex
-        .find_iter(text)
-        .filter_map(Result::ok)
-        .map(|piece| piece_tokens(piece.as_str().as_bytes()) as u64)
+    pieces(dfa, text)
+        .map(|piece| piece_tokens(piece.as_bytes()) as u64)
         .sum()
 }
 

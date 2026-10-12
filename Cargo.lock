@@ -184,6 +184,7 @@ dependencies = [
  "ra_ap_syntax",
  "rable",
  "regex",
+ "regex-automata",
  "regex-syntax",
  "regorus",
  "rustix",
