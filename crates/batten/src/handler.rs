@@ -1718,7 +1718,7 @@ mod tests {
             Event::PreTool,
             "mcp__x__y",
             None,
-            payload,
+            &Payload::from(payload),
         );
         assert_eq!(
             dispatched.advice(),
@@ -1738,7 +1738,7 @@ mod tests {
             Event::PreTool,
             "mcp__x__y",
             None,
-            payload,
+            &Payload::from(payload),
         );
         assert_eq!(
             dispatched.preapproval(),
@@ -1770,7 +1770,7 @@ mod tests {
             Event::PreTool,
             "mcp__x__y",
             None,
-            "{}",
+            &Payload::from("{}"),
         );
         assert_eq!(dispatched.refusal(), Some(("g", "no")));
         assert_eq!(
@@ -1846,7 +1846,7 @@ mod tests {
             Event::PreTool,
             "mcp__x__y",
             None,
-            "{}",
+            &Payload::from("{}"),
         );
         assert_eq!(dispatched.preapproval(), Some(("a", "one")));
 
@@ -1862,7 +1862,7 @@ mod tests {
             Event::PreTool,
             "mcp__x__y",
             None,
-            "{}",
+            &Payload::from("{}"),
         );
         assert_eq!(dispatched.refusal(), Some(("d", "nope")));
         assert_eq!(
@@ -1895,7 +1895,7 @@ mod tests {
             Event::PreTool,
             "mcp__x__y",
             None,
-            "{}",
+            &Payload::from("{}"),
         );
         assert_eq!(dispatched.preapproval(), None);
         assert_eq!(
@@ -1931,7 +1931,7 @@ mod tests {
             Event::PreTool,
             "mcp__x__y",
             None,
-            "{}",
+            &Payload::from("{}"),
         );
         let _ = std::fs::remove_dir_all(root.parent().unwrap_or(&root));
         assert_eq!(
