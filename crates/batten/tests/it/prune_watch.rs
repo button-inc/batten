@@ -204,6 +204,7 @@ fn the_least_recently_used_live_unit_goes_first() {
 }
 
 #[test]
+#[cfg(unix)]
 fn a_unit_a_running_program_executes_is_never_collected() {
     // Measured on #1132: a hook collecting during a nextest run removed the
     // test binaries nextest was executing; no `.cargo-lock` was held. The
@@ -721,6 +722,7 @@ fn a_sweep_that_cannot_be_brought_above_the_minimum_stops_before_building() {
 }
 
 #[test]
+#[cfg(unix)]
 fn a_lap_whose_volume_cannot_be_freed_stops_before_the_gate() {
     // CLOUD-2197. A step the volume cannot hold never starts: below
     // `min_free_mb` the collector runs first, and a volume it cannot bring
