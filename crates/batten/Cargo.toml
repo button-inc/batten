@@ -166,12 +166,17 @@ rustix.workspace = true
 tiktoken-rs.workspace = true
 # CLOUD-2224: the hook reads its stdin streaming; see the workspace manifest.
 struson.workspace = true
+# CLOUD-2224: the o200k pre-tokenizer, until a build-time DFA replaces it.
+fancy-regex = "0.17"
 bpe-openai.workspace = true
 signal-hook.workspace = true
 
+[build-dependencies]
+# CLOUD-2224: `build.rs` writes the o200k vocabulary as a static table, so no
+# batten binary builds it at runtime; tiktoken-rs is the one source of it.
+tiktoken-rs.workspace = true
+
 [dev-dependencies]
-# CLOUD-2224: the bench splits the o200k load into its pre-tokenizer regex.
-fancy-regex = "0.17"
 # Only what the *tests* need and the crate itself does not. A normal dependency
 # is already in scope for every test target, so re-listing one here declares
 # nothing — `flate2`, `tar`, `serde_json` and `toml` all sat in both tables and

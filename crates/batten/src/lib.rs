@@ -110,6 +110,7 @@ pub mod mcp_posture;
 pub mod mint;
 pub mod minted;
 pub mod mutate;
+pub mod o200k;
 pub mod outcome;
 pub mod output;
 pub mod outputs;
