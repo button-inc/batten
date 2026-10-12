@@ -6,19 +6,19 @@
 //! `install::{matrix_targets, binstall_in, parametric, is_executable}` are pure
 //! and their own cases cover the anchored matrix form, the override table, the
 //! placeholder set and the magic bytes. None of them can show that the VERB
-//! resolves a repository root, asks `install.sh` through the flags it publishes
-//! and `dist`'s naming rule in process (`dist::archive_stem`, since
-//! `mise-tasks/dist.sh` retired onto `batten dist` under CLOUD-843), derives
-//! the installable set from the archive suffix rather than from a triple list,
-//! or reports could-not-look for a workflow that declares no
-//! matrix. Those are properties of the compiled binary.
+//! resolves a repository root, asks the generated bootstrap's target table and
+//! `dist`'s naming rule in process (`install::TARGETS` since CLOUD-2203,
+//! `dist::archive_stem` since `mise-tasks/dist.sh` retired onto `batten dist`
+//! under CLOUD-843), derives the installable set from the archive suffix rather
+//! than from a triple list, or reports could-not-look for a workflow that
+//! declares no matrix. Those are properties of the compiled binary.
 //!
 //! # THE COULD-NOT-LOOK CASES ARE THE ONES THAT MATTER
 //!
 //! Every way this gate can fail to look is a way it can report a contract it
 //! never checked, and that is a 404 on a user's machine rather than a red build.
-//! A workflow with no matrix, an `install.sh --targets` that prints nothing, and
-//! a `pkg-fmt` with no suffix rule are each `Internal` rather than a pass.
+//! A workflow with no matrix and a `pkg-fmt` with no suffix rule are each
+//! `Internal` rather than a pass.
 //
 // carried: mise-tasks/install-check.sh crates/batten/src/install.rs kind:verb crates/batten/tests/it/release_install.rs runs:mise+run+install-check
 // carried: tests/install-check.bats crates/batten/src/install.rs kind:verb crates/batten/tests/it/release_install.rs
@@ -52,9 +52,22 @@ use crate::common::{batten, git_in, scratch, stderr, stdout, write};
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
-/// A workflow declaring one Linux and one Windows leg.
-const WORKFLOW: &str = "jobs:\n  build:\n    strategy:\n      matrix:\n        include:\n          \
-                        - target: x86_64-unknown-linux-gnu\n          - target: x86_64-pc-windows-msvc\n";
+/// A workflow building `targets`, one matrix leg each.
+fn workflow(targets: &[&str]) -> String {
+    let legs: String = targets
+        .iter()
+        .map(|target| format!("          - target: {target}\n"))
+        .collect();
+    format!("jobs:\n  build:\n    strategy:\n      matrix:\n        include:\n{legs}")
+}
+
+/// A workflow building every target the generated bootstrap serves, plus the
+/// Windows zip leg it never does — the shape of the real release matrix.
+fn agreeing_workflow() -> String {
+    let mut targets: Vec<&str> = batten::install::TARGETS.to_vec();
+    targets.push("x86_64-pc-windows-msvc");
+    workflow(&targets)
+}
 
 /// A manifest whose template resolves to what `dist` names: `name-vVERSION-TARGET`.
 const MANIFEST: &str = r#"[package]
@@ -71,38 +84,10 @@ pkg-fmt = "zip"
 const WORKSPACE: &str =
     "[workspace.package]\nversion = \"1.2.3\"\nrepository = \"https://example/r\"\n";
 
-/// An `install.sh` stand-in that agrees with `dist::archive_stem`.
-const INSTALL_AGREEING: &str = "#!/usr/bin/env bash\nset -u\n\
-    case \"${1:-}\" in\n\
-    --targets) printf 'x86_64-unknown-linux-gnu\\n' ;;\n\
-    --asset-name)\n\
-      case \"$3\" in\n\
-      *windows*) printf 'batten-v%s-%s.zip\\n' \"$2\" \"$3\" ;;\n\
-      *) printf 'batten-v%s-%s.tar.gz\\n' \"$2\" \"$3\" ;;\n\
-      esac ;;\n\
-    esac\n";
-
-/// An `install.sh` stand-in whose template has the version BAKED IN, so it
-/// resolves one name whatever version it is asked for.
-///
-/// A dedicated fixture rather than surgery on [`INSTALL_AGREEING`]: the
-/// replacement had to match an escape sequence inside a Rust literal, and when
-/// it silently did not, this case ran the agreeing script and passed for the
-/// wrong reason. A fixture that fails to become what a case is named for is
-/// indistinguishable from a gate that does not fire.
-const INSTALL_HARDCODED: &str = "#!/usr/bin/env bash\nset -u\n\
-    case \"${1:-}\" in\n\
-    --targets) printf 'x86_64-unknown-linux-gnu\\n' ;;\n\
-    --asset-name)\n\
-      case \"$3\" in\n\
-      *windows*) printf 'batten-v1.2.3-%s.zip\\n' \"$3\" ;;\n\
-      *) printf 'batten-v1.2.3-%s.tar.gz\\n' \"$3\" ;;\n\
-      esac ;;\n\
-    esac\n";
-
 /// A repository fixture carrying the files the contract is written in. No `dist`
-/// stand-in: the naming rule is engine code now and is asked in process.
-fn fixture(name: &str, install: &str, workflow: &str) -> PathBuf {
+/// or `install.sh` stand-in: the naming rule and the bootstrap's target table
+/// are engine code (CLOUD-2203) and are asked in process.
+fn fixture(name: &str, workflow: &str) -> PathBuf {
     let repo = scratch(&format!("release-install-{name}"));
     // THE WORKFLOW IS DECLARED, not guessed (rule 1). `[ci] release_workflow`
     // is what tells the verb which file carries the build matrix; without it the
@@ -117,19 +102,6 @@ fn fixture(name: &str, install: &str, workflow: &str) -> PathBuf {
     write(&repo, ".github/workflows/release-artifacts.yml", workflow);
     write(&repo, "crates/batten/Cargo.toml", MANIFEST);
     write(&repo, "Cargo.toml", WORKSPACE);
-    write(&repo, "install.sh", install);
-    // `cfg(unix)` because `cross-check` TYPE-CHECKS this crate for
-    // `x86_64-pc-windows-gnu`, where `std::os::unix` does not exist at all --
-    // an unconditional path is an E0433 there rather than a runtime
-    // difference. The executable bit is what makes `install.sh` askable, and a
-    // target with no such bit needs nothing set.
-    #[cfg(unix)]
-    {
-        let path = repo.join("install.sh");
-        let mut mode = std::fs::metadata(&path).unwrap().permissions();
-        std::os::unix::fs::PermissionsExt::set_mode(&mut mode, 0o755);
-        std::fs::set_permissions(&path, mode).unwrap();
-    }
     // THE TEMPLATE, NOT A FORK. `common/mod.rs` owns the one `git init` this
     // suite pays and every other fixture copies it; `policy/fixture-forks.rego`
     // is what refuses a second one.
@@ -146,13 +118,7 @@ fn run(repo: &Path) -> Output {
 
 #[test]
 fn a_contract_every_authority_agrees_on_passes() {
-    // UNIX ONLY: the fixture's authorities are read through `bash`, which a
-    // Windows runner resolves to WSL; its UTF-16 banner then reads as 13
-    // disagreements about assets nobody changed.
-    if !cfg!(unix) {
-        return;
-    }
-    let repo = fixture("agreeing", INSTALL_AGREEING, WORKFLOW);
+    let repo = fixture("agreeing", &agreeing_workflow());
     let outcome = run(&repo);
     let (answer, cause) = (stdout(&outcome), stderr(&outcome));
     assert_eq!(
@@ -163,70 +129,30 @@ fn a_contract_every_authority_agrees_on_passes() {
     assert!(answer.contains("name-agree"), "{answer}{cause}");
 }
 
-/// THE CLASS THIS ROW EXISTS FOR: a matrix leg `install.sh` will not serve.
+/// THE CLASS THIS ROW EXISTS FOR: a tarball leg the bootstrap will not serve,
+/// so `curl … | sh` on that platform finds no asset.
 #[test]
 fn a_matrix_target_install_does_not_serve_is_refused() {
-    // UNIX ONLY: the fixture's authorities are read through `bash`, which a
-    // Windows runner resolves to WSL; its UTF-16 banner then reads as 13
-    // disagreements about assets nobody changed.
-    if !cfg!(unix) {
-        return;
-    }
-    let serves_nothing = INSTALL_AGREEING.replace("printf 'x86_64-unknown-linux-gnu\\n'", "true");
-    let repo = fixture("unserved", &serves_nothing, WORKFLOW);
-    let outcome = run(&repo);
-    let cause = stderr(&outcome);
-    // An `install.sh --targets` printing nothing is could-not-look rather than a
-    // refusal: the flag is how this reads the script's own list, and without it
-    // nothing has been compared.
-    assert_eq!(
-        outcome.status.code(),
-        Some(3),
-        "a --targets that answers nothing is could-not-look\n{cause}"
-    );
-}
-
-/// THE WINDOWS EXCLUSION IS DERIVED. `install.sh` listing the zip target is a
-/// disagreement, because nothing builds a POSIX installer for it.
-#[test]
-fn a_target_install_lists_that_ships_a_zip_is_refused() {
-    let lists_windows = INSTALL_AGREEING.replace(
-        "printf 'x86_64-unknown-linux-gnu\\n'",
-        "printf 'x86_64-unknown-linux-gnu\\nx86_64-pc-windows-msvc\\n'",
-    );
-    let repo = fixture("unbuilt", &lists_windows, WORKFLOW);
+    let mut targets: Vec<&str> = batten::install::TARGETS.to_vec();
+    targets.push("riscv64gc-unknown-linux-gnu");
+    let repo = fixture("unserved", &workflow(&targets));
     let outcome = run(&repo);
     let cause = stderr(&outcome);
     assert_eq!(outcome.status.code(), Some(2), "{cause}");
-    assert!(cause.contains("x86_64-pc-windows-msvc"), "{cause}");
+    assert!(cause.contains("riscv64gc-unknown-linux-gnu"), "{cause}");
 }
 
-/// A NAME `dist` DOES NOT WRITE. The 404 this whole gate exists to prevent.
+/// The other direction: a target the bootstrap serves that no matrix leg
+/// builds, so the script asks for an asset no release carries.
 #[test]
-fn an_asset_name_dist_does_not_write_is_refused() {
-    let renamed = INSTALL_AGREEING.replace("batten-v%s-%s.tar.gz", "batten_v%s_%s.tar.gz");
-    let repo = fixture("renamed", &renamed, WORKFLOW);
+fn a_target_the_bootstrap_serves_that_no_leg_builds_is_refused() {
+    let unbuilt = batten::install::TARGETS[0];
+    let targets: Vec<&str> = batten::install::TARGETS[1..].to_vec();
+    let repo = fixture("unbuilt", &workflow(&targets));
     let outcome = run(&repo);
     let cause = stderr(&outcome);
     assert_eq!(outcome.status.code(), Some(2), "{cause}");
-    assert!(cause.contains("dist writes"), "{cause}");
-}
-
-/// THE DEFECT THE SAMPLE VERSION EXISTED TO CATCH, caught directly.
-///
-/// A template with the version baked in resolves one name whatever it is asked,
-/// so the asset for every release but one is a 404.
-#[test]
-fn a_hardcoded_version_is_refused() {
-    let repo = fixture("hardcoded", INSTALL_HARDCODED, WORKFLOW);
-    let outcome = run(&repo);
-    let cause = stderr(&outcome);
-    assert_eq!(
-        outcome.status.code(),
-        Some(2),
-        "a template that does not carry the version must refuse\n{cause}"
-    );
-    assert!(cause.contains("does not carry the version"), "{cause}");
+    assert!(cause.contains(unbuilt), "{cause}");
 }
 
 /// A WORKFLOW DECLARING NO MATRIX IS COULD-NOT-LOOK. A gate that checks nothing
@@ -237,7 +163,7 @@ fn a_hardcoded_version_is_refused() {
 /// — so the two would be indistinguishable.
 #[test]
 fn a_tree_that_declares_no_release_workflow_is_could_not_look() {
-    let repo = fixture("undeclared-workflow", INSTALL_AGREEING, WORKFLOW);
+    let repo = fixture("undeclared-workflow", &agreeing_workflow());
     write(&repo, "batten.toml", "version = 1\n");
     let output = run(&repo);
     assert_eq!(
@@ -253,11 +179,7 @@ fn a_tree_that_declares_no_release_workflow_is_could_not_look() {
 
 #[test]
 fn a_workflow_with_no_matrix_is_could_not_look() {
-    let repo = fixture(
-        "no-matrix",
-        INSTALL_AGREEING,
-        "jobs:\n  build:\n    steps: []\n",
-    );
+    let repo = fixture("no-matrix", "jobs:\n  build:\n    steps: []\n");
     let outcome = run(&repo);
     let cause = stderr(&outcome);
     assert_eq!(outcome.status.code(), Some(3), "{cause}");
@@ -268,7 +190,7 @@ fn a_workflow_with_no_matrix_is_could_not_look() {
 /// would make the comparison pass over a template nobody has checked.
 #[test]
 fn an_unknown_package_format_is_could_not_look() {
-    let repo = fixture("unknown-format", INSTALL_AGREEING, WORKFLOW);
+    let repo = fixture("unknown-format", &agreeing_workflow());
     let manifest = MANIFEST.replace("pkg-fmt = \"tgz\"", "pkg-fmt = \"7z\"");
     write(&repo, "crates/batten/Cargo.toml", &manifest);
     let outcome = run(&repo);
@@ -282,7 +204,7 @@ fn an_unknown_package_format_is_could_not_look() {
 /// binary is exactly the payload rule 4 keeps out of a log.
 #[test]
 fn a_committed_binary_is_refused_and_only_its_path_is_named() {
-    let repo = fixture("committed-binary", INSTALL_AGREEING, WORKFLOW);
+    let repo = fixture("committed-binary", &agreeing_workflow());
     std::fs::write(
         repo.join("vendor.bin"),
         [0x7f, b'E', b'L', b'F', 0x02, 0x01, 0x01],
@@ -303,13 +225,7 @@ fn a_committed_binary_is_refused_and_only_its_path_is_named() {
 /// with two printable characters a PE header also uses.
 #[test]
 fn a_script_and_prose_are_not_committed_binaries() {
-    // UNIX ONLY: the fixture's authorities are read through `bash`, which a
-    // Windows runner resolves to WSL; its UTF-16 banner then reads as 13
-    // disagreements about assets nobody changed.
-    if !cfg!(unix) {
-        return;
-    }
-    let repo = fixture("not-binaries", INSTALL_AGREEING, WORKFLOW);
+    let repo = fixture("not-binaries", &agreeing_workflow());
     std::fs::write(repo.join("tool.sh"), "#!/usr/bin/env bash\nexit 0\n").unwrap();
     std::fs::write(repo.join("NOTES.md"), "MZ is how a sentence might start\n").unwrap();
     git_in(&repo, &["add", "-A"]);

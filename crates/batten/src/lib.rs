@@ -1373,7 +1373,6 @@ fn release_survey(
     repo: &str,
     name: &str,
     version: &str,
-    ask: &dyn Fn(&str, &[&str]) -> Result<String>,
     err: &mut dyn Write,
 ) -> Result<
     Option<(
@@ -1406,32 +1405,20 @@ fn release_survey(
         };
         let dist_name = format!("{stem}{suffix}");
 
-        // Every matrix target, including the ones `install.sh` declines to
-        // INSTALL: answering a naming query correctly for them is still part of
-        // the contract binstall reads.
-        let asked = ask("install.sh", &["--asset-name", version, target])?
-            .trim()
-            .to_owned();
-        if asked != dist_name {
-            found.push(install::Disagreement::AssetName {
-                target: target.clone(),
-                dist: dist_name.clone(),
-                install: asked.clone(),
-            });
-        }
-
-        // THE VERSION MUST BE CARRIED, NOT BAKED. Asking twice proves the
-        // template is parametric directly, where a sample version only proved
-        // it by proxy.
-        let other_version = if version == "9.9.9" { "1.1.1" } else { "9.9.9" };
-        let again = ask("install.sh", &["--asset-name", other_version, target])?
-            .trim()
-            .to_owned();
-        if !install::parametric((version, &asked), (other_version, &again)) {
-            found.push(install::Disagreement::NotParametric(target.clone()));
-        }
-
+        // What the generated bootstrap asks for (CLOUD-2203), with the version
+        // and the target substituted as its shell does. Only a tarball target
+        // has a bootstrap at all; a zip target is binstall's alone.
         if suffix != ".zip" {
+            let asked = install::bootstrap_asset(name)
+                .replace("${tag#v}", version)
+                .replace("$target", target);
+            if asked != dist_name {
+                found.push(install::Disagreement::AssetName {
+                    target: target.clone(),
+                    dist: dist_name.clone(),
+                    install: asked,
+                });
+            }
             installable.insert(target.clone());
         }
 
@@ -1454,9 +1441,9 @@ fn release_survey(
 /// # Three authorities, asked rather than scraped
 ///
 /// The release matrix is the workflow's, archive naming is `dist`'s, and which
-/// targets are installable is `install.sh`'s. Each is asked through the surface
-/// it already publishes; only the binstall template is restated here, because
-/// cargo reads TOML and not a shell function.
+/// targets are installable is the generated bootstrap's (`install::TARGETS`).
+/// Each is asked through the surface it already publishes; only the binstall
+/// template is restated here, because cargo reads TOML.
 ///
 /// # Errors
 ///
@@ -1534,38 +1521,14 @@ fn run_release(
         return Ok(ExitCode::Internal);
     };
 
-    // The one interim spawn. `install.sh` stays shell because it runs before
-    // the engine exists; `dist`'s naming is engine code now and is asked as a
-    // function inside `release_survey`.
-    //
-    // THROUGH `exec::piped`, NOT A `Command::new` HERE. `lib` is the CLI
-    // dispatch and `policy/spawn-adapters.rego` deliberately does not place it:
-    // a spawn written here would admit every future spawn in the crate's largest
-    // file at once. `exec` is the sanctioned child-process boundary, and asking a
-    // program for its stdout is exactly what `piped` exists to do.
-    let ask = |program: &str, args: &[&str]| -> Result<String> {
-        let args: Vec<String> = args.iter().map(|arg| (*arg).to_owned()).collect();
-        exec::piped(root, Path::new(program), &args, "")
-            .map(|(_, stdout)| stdout)
-            .ok_or_else(|| UsageError::raise(format!("release install: could not run {program}")))
-    };
-
-    let declared: std::collections::BTreeSet<String> = ask("install.sh", &["--targets"])?
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .map(ToOwned::to_owned)
+    // The installable targets are the bootstrap's own table (CLOUD-2203): the
+    // script is generated from it, so asking the script would ask the table.
+    let declared: std::collections::BTreeSet<String> = install::TARGETS
+        .iter()
+        .map(|target| (*target).to_owned())
         .collect();
-    if declared.is_empty() {
-        writeln!(
-            err,
-            "::error:: release install: install.sh --targets printed nothing. That flag is how \
-             this reads the script's own list; without it nothing is compared."
-        )?;
-        return Ok(ExitCode::Internal);
-    }
 
-    let survey = release_survey(&matrix, &binstall, &repo, &name, &version, &ask, err)?;
+    let survey = release_survey(&matrix, &binstall, &repo, &name, &version, err)?;
     let Some((mut found, installable)) = survey else {
         return Ok(ExitCode::Internal);
     };
