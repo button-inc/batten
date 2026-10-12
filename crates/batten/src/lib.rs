@@ -20737,7 +20737,13 @@ fn filed_here_rows(overrides: &Overrides, root: &Path) -> Option<(Vec<String>, V
 /// Whether the newest stored read or write of `key` says the row is closed.
 //MUTANT-SUITE crates/batten/tests/it/stop_posture.rs
 //MUTANT closed-row-listed|s@^        .filter(\x7cid\x7c !row_closed(root, id))$@        .filter(\x7c_\x7c true)@|a_closed_row_leaves_the_filed_checklist
-fn row_closed(repo: &Path, key: &str) -> bool {
+fn row_closed(authority: &Path, key: &str) -> bool {
+    // THE ROOT THE WRITER STORED UNDER: `capture_response` keys the store by
+    // `git::repo_root` of the authority, never the authority path itself.
+    let Ok(repo) = git::repo_root(authority) else {
+        return false;
+    };
+    let repo = repo.as_path();
     let tools = [READ_TOOL.to_owned(), WRITE_TOOL.to_owned()];
     let selector = capture::Selector {
         tools: &tools,
