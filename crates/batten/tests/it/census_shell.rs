@@ -526,7 +526,7 @@ fn this_repositorys_own_census_answers() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|entry| entry["path"] == "install.sh"),
+            .any(|entry| entry["path"] == "setup.sh"),
         "{document}"
     );
 }

@@ -436,7 +436,6 @@ fn the_exemption_set_is_exactly_the_files_that_must_be_shell() {
         BTreeSet::from([
             ".claude/hooks/git-hook.sh",
             "completions/batten.bash",
-            "install.sh",
             "setup.sh",
         ])
     );
