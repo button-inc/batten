@@ -351,6 +351,27 @@ fn a_source_pin_is_followed_to_the_checkouts_build() {
     );
 }
 
+/// A VERB IS FOLLOWED TOO, NOT ONLY THE HOOK (CLOUD-2232): `follow_pin`'s own
+/// source arm, which the hook's hand-off cannot stand in for. An installed
+/// engine whose stamp is behind the checkout's pin runs `config show` by the
+/// checkout's build, from inside the checkout.
+#[test]
+fn a_verb_is_followed_to_the_checkouts_build() {
+    let dir = repo("engine-update-follow-verb");
+    stub_cargo(&dir);
+    let installed = common::scratch_outside_tree("engine-update", "follow-verb-installed");
+    let binary = private_binary(&installed);
+    pin_source(&dir, &"1".repeat(64));
+    checkout_build(&dir, &"2".repeat(64));
+    let output = run(&binary, &dir, &["config", "show"], "");
+    assert!(
+        text(&output).contains("checkout build ran config show"),
+        "the installed binary runs the verb by the checkout's build: {}",
+        text(&output)
+    );
+    assert!(!dir.join("cargo-ran").exists(), "nothing built");
+}
+
 /// THE HOOK HANDS OFF FROM WHERE THE SESSION STANDS, NOT WHERE THE SHELL DOES.
 /// A worker restart put the shell above the checkout; `follow_pin`, reading the
 /// working directory, found no repository, and the stale installed engine

@@ -655,6 +655,7 @@ const ENGINE_UPDATED: &str = "BATTEN_ENGINE_UPDATED";
 /// running anyway would decide under the very engine the pin refuses.
 //MUTANT-SUITE crates/batten/tests/it/engine_update.rs
 //MUTANT checkout-build-replaced|s@^    if exe.starts_with(\&root) {$@    if false {@|a_build_inside_the_checkout_is_never_replaced
+//MUTANT follow-pin-source-unfollowed|s@^            Some(build) => build,$@            Some(_) => return Ok(None),@|a_verb_is_followed_to_the_checkouts_build
 fn follow_pin(may_build: bool) -> Result<Option<ExitCode>> {
     let Ok(root) = git::worktree_root(Path::new(".")) else {
         return Ok(None);

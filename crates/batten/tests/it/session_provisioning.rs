@@ -1015,6 +1015,27 @@ fn a_local_release_build_is_stamped_and_pinned_by_itself() {
     );
 }
 
+/// THE INSTALL STAMPS THE INSTALLED COPY (CLOUD-2232). `engine stamp` stamps the
+/// binary that runs it, and `_.path` puts `target/release` first on every task's
+/// PATH, so a bare `batten engine stamp` re-stamped the build: measured on #1132,
+/// the installed copy the hook ran carried a stale stamp and every call was
+/// refused. The stamp step runs the installed binary by its destination path.
+#[test]
+fn local_install_stamps_the_installed_binary_by_its_path() {
+    let install = task_surface("install:local").expect("the local install is a declared task");
+    assert!(
+        install.contains("/.local/bin{% endif %}/batten engine stamp"),
+        "install:local stamps the binary at its destination: {install}"
+    );
+    assert!(
+        !install
+            .lines()
+            .map(|line| line.trim().trim_end_matches(',').trim_matches('"'))
+            .any(|line| line == "batten engine stamp"),
+        "never `batten` resolved on PATH, which is `target/release` under `_.path`: {install}"
+    );
+}
+
 #[test]
 fn no_by_path_registration_survives_on_the_session_start_surface() {
     // THE OTHER HALF OF THE RETIRED REGISTRATION CASE, in the direction that
