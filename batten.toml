@@ -10328,9 +10328,28 @@ expires = "2026-10-31"
 # UNNARROWED and EXPECTED TO LAPSE UNUSED, for the reasons the waivers above
 # record: a ratchet finding's path is the glob plus the counts, and with
 # `base = "origin/main"` the floor becomes the new count the moment this lands.
+#
+# ONE ROW FOR TWO ADMISSIONS: a rule takes one waiver, so CLOUD-2203's reduction
+# (below) is named in this row's reason beside CLOUD-1771's rather than declared
+# twice.
 [[waiver]]
 rule = "test count dropped"
-reason = "CLOUD-1771 deletes the §8 sentence parser; the ten ready.rs cases that asserted it go with it (operator-admitted in .batten/asked.jsonl)"
+reason = "CLOUD-1771 deletes the §8 sentence parser; the ten ready.rs cases that asserted it go with it. CLOUD-2203 retires the hand-written install.sh's API-route, query-flag and proxy-fallback cases with their surface; every surviving behaviour is carried to a Rust-side case. Both operator-admitted in .batten/asked.jsonl"
+expires = "2026-10-31"
+
+# CLOUD-2203 replaces the 748-line hand-written `install.sh` with a generated
+# bootstrap. Admitted by the operator only once every removed case whose
+# behaviour still ships was shown implemented and tested in Rust: the download,
+# digest, exit-class, bounded-retry and CA-precedence cases in `install_web.rs`,
+# placement and version-from-ref in `engine_install.rs`, the fallback decision in
+# `engine::pick_release`'s unit cases — the retry and named-version cases each
+# shown red under a mutant. What has no successor is the GitHub API route, its
+# query flags and its proxy-credential fallback, whose surface is gone; the
+# `ported:` ledger in `install_script.rs` names each case's file. Its
+# `test count dropped` half is the row above.
+[[waiver]]
+rule = "test grade dropped"
+reason = "CLOUD-2203 retires the hand-written install.sh's API-route, query-flag and proxy-fallback cases with their surface; every surviving behaviour is carried to a Rust-side case (operator-admitted in .batten/asked.jsonl)"
 expires = "2026-10-31"
 
 # `cfg-gated-test`'s own first legitimate refusal, taken through the route the

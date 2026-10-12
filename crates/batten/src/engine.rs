@@ -314,17 +314,26 @@ pub fn fetch_release(repository: &str, tag: &str) -> Result<Vec<u8>> {
 
 /// The release tag `reference`'s workspace manifest names, read off the
 /// repository's raw-file host — never the API, whose anonymous budget a shared
-/// egress address spends (CLOUD-2203). `None` when it cannot be read.
-#[must_use]
-pub fn ref_release(repository: &str, reference: &str) -> Option<String> {
+/// egress address spends (CLOUD-2203).
+///
+/// # Errors
+///
+/// A manifest that does not answer `200`, or names no version. An operator who
+/// named a ref asked for THAT release, so a ref that cannot be read is a
+/// refusal rather than a quiet install of whatever binary is running.
+pub fn ref_release(repository: &str, reference: &str) -> Result<String> {
     let raw = repository.trim_end_matches('/').replacen(
         "https://github.com/",
         "https://raw.githubusercontent.com/",
         1,
     );
-    let answer = crate::fetch::get(&format!("{raw}/{reference}/Cargo.toml"), &[]).ok()?;
+    let url = format!("{raw}/{reference}/Cargo.toml");
+    let answer = crate::fetch::get(&url, &[])?;
     if answer.status != 200 {
-        return None;
+        return Err(UsageError::raise(format!(
+            "engine install: {url} answered {}, so the release ref {reference} names is unknown; nothing was installed",
+            answer.status
+        )));
     }
     String::from_utf8_lossy(&answer.body)
         .lines()
@@ -332,6 +341,97 @@ pub fn ref_release(repository: &str, reference: &str) -> Option<String> {
             let version = line.strip_prefix("version = \"")?.strip_suffix('"')?;
             Some(format!("v{version}"))
         })
+        .ok_or_else(|| {
+            UsageError::raise(format!(
+                "engine install: {url} names no version; nothing was installed"
+            ))
+        })
+}
+
+/// A release asked for by tag: its verified binary, or the fact that the tag is
+/// not published yet.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Release {
+    /// The binary, fetched and checked against the release's `SHA256SUMS`.
+    Published(Vec<u8>),
+    /// The release host answered `404` for the tag's `SHA256SUMS`.
+    Unpublished,
+}
+
+/// [`fetch_release`], except that a tag the host does not publish is an answer
+/// rather than an error.
+///
+/// **ONLY A `404` IS "UNPUBLISHED".** release-plz bumps the manifest before it
+/// tags, so trunk routinely names a release that does not exist yet, and that is
+/// the one case a caller may fall back from. A timeout, a 5xx or a digest that
+/// disagrees is the host failing to answer or answering wrongly, and is
+/// propagated: falling back from those would install a binary nobody asked for.
+///
+/// # Errors
+///
+/// As [`fetch_release`], for any answer but a `404` on `SHA256SUMS`.
+pub fn fetch_published(repository: &str, tag: &str) -> Result<Release> {
+    let sums = crate::fetch::get(&release_url(repository, tag, "SHA256SUMS"), &[])?;
+    if sums.status == 404 {
+        return Ok(Release::Unpublished);
+    }
+    fetch_release(repository, tag).map(Release::Published)
+}
+
+/// What `engine install` installs (CLOUD-2203).
+#[derive(Debug, PartialEq, Eq)]
+pub enum Pick {
+    /// The running binary, under its own tag.
+    Running,
+    /// Another release's binary.
+    Fetched {
+        /// The release's tag.
+        tag: String,
+        /// Its verified binary.
+        bytes: Vec<u8>,
+    },
+    /// The running binary, because the release a ref names is not published.
+    Unpublished {
+        /// The tag the ref named.
+        wanted: String,
+    },
+}
+
+/// Decide which release `engine install` installs, with the network injected so
+/// every arm is a unit case.
+///
+/// - **A named version wins, and the ref is never read.** The bootstrap already
+///   fetched and verified the release `BATTEN_VERSION` named, and that is the
+///   binary running; replacing it with the ref's would install a version nobody
+///   asked for.
+/// - With no ref, the running binary.
+/// - A ref naming the running release needs no fetch.
+/// - A ref naming another release installs that release, or — only when the
+///   host answers that it is not published — the running binary, said so.
+///
+/// # Errors
+///
+/// Whatever `ref_version` or `fetch` raises: a ref that cannot be read, or a
+/// release that cannot be fetched for any reason but not being published.
+pub fn pick_release(
+    running: &str,
+    named: bool,
+    ref_version: impl FnOnce() -> Result<Option<String>>,
+    fetch: impl FnOnce(&str) -> Result<Release>,
+) -> Result<Pick> {
+    if named {
+        return Ok(Pick::Running);
+    }
+    let Some(wanted) = ref_version()? else {
+        return Ok(Pick::Running);
+    };
+    if wanted == running {
+        return Ok(Pick::Running);
+    }
+    Ok(match fetch(&wanted)? {
+        Release::Published(bytes) => Pick::Fetched { tag: wanted, bytes },
+        Release::Unpublished => Pick::Unpublished { wanted },
+    })
 }
 
 /// The `bin` entry at the root of a `.tar.gz` release archive.
@@ -489,6 +589,102 @@ pub(crate) fn make_executable(_path: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A `ref_version` a case asserts is never consulted.
+    fn unread() -> Result<Option<String>> {
+        panic!("the ref must not be read")
+    }
+
+    /// A `fetch` a case asserts is never called.
+    fn unfetched(_: &str) -> Result<Release> {
+        panic!("no release may be fetched")
+    }
+
+    #[test]
+    fn a_named_version_never_reads_the_ref_or_fetches() {
+        assert_eq!(
+            pick_release("v1.0.0", true, unread, unfetched).unwrap(),
+            Pick::Running
+        );
+    }
+
+    #[test]
+    fn no_ref_installs_the_running_binary() {
+        assert_eq!(
+            pick_release("v1.0.0", false, || Ok(None), unfetched).unwrap(),
+            Pick::Running
+        );
+    }
+
+    #[test]
+    fn a_ref_naming_the_running_release_fetches_nothing() {
+        assert_eq!(
+            pick_release("v1.0.0", false, || Ok(Some("v1.0.0".into())), unfetched).unwrap(),
+            Pick::Running
+        );
+    }
+
+    #[test]
+    fn the_version_comes_from_the_refs_manifest() {
+        let pick = pick_release(
+            "v1.0.0",
+            false,
+            || Ok(Some("v2.0.0".into())),
+            |tag| {
+                assert_eq!(tag, "v2.0.0", "the ref's version is the one fetched");
+                Ok(Release::Published(b"two".to_vec()))
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            pick,
+            Pick::Fetched {
+                tag: "v2.0.0".into(),
+                bytes: b"two".to_vec()
+            }
+        );
+    }
+
+    #[test]
+    fn an_unpublished_ref_release_falls_back_to_the_running_binary() {
+        let pick = pick_release(
+            "v1.0.0",
+            false,
+            || Ok(Some("v2.0.0".into())),
+            |_| Ok(Release::Unpublished),
+        )
+        .unwrap();
+        assert_eq!(
+            pick,
+            Pick::Unpublished {
+                wanted: "v2.0.0".into()
+            }
+        );
+    }
+
+    #[test]
+    fn a_fetch_that_fails_for_any_other_reason_is_never_a_fallback() {
+        let err = pick_release(
+            "v1.0.0",
+            false,
+            || Ok(Some("v2.0.0".into())),
+            |_| Err(UsageError::raise("digest disagrees")),
+        )
+        .expect_err("a failed fetch is propagated, not read as unpublished");
+        assert!(err.to_string().contains("digest disagrees"), "{err}");
+    }
+
+    #[test]
+    fn a_ref_that_cannot_be_read_is_a_refusal() {
+        let err = pick_release(
+            "v1.0.0",
+            false,
+            || Err(UsageError::raise("manifest answered 500")),
+            unfetched,
+        )
+        .expect_err("an unreadable ref installs nothing");
+        assert!(err.to_string().contains("500"), "{err}");
+    }
 
     #[test]
     fn a_pin_is_rewritten_in_place_or_inserted_above_every_table() {

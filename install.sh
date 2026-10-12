@@ -31,20 +31,25 @@ esac
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 get() {
-	got=$(curl -sSL -o "$2" -w '%{http_code} %{url_effective}' "$1") || true
+	got=$(curl -sSL --connect-timeout 20 --max-time 600 --retry 3 --retry-delay 1 \
+		-o "$2" -w '%{http_code} %{url_effective}' "$1") || true
 	case "$got" in
 	200\ *) ;;
+	404\ *) fail "could not download $1: $got" "${3:-2}" ;;
 	*) fail "could not download $1: ${got:-000}" ;;
 	esac
 }
 tag="${BATTEN_VERSION:-}"
 if [ -z "$tag" ]; then
 	get "$base/releases/latest" "$tmp/latest"
-	tag=${got##*/}
+	case "$got" in
+	*/releases/tag/?*) tag=${got##*/} ;;
+	*) fail "$base/releases/latest did not redirect to a release tag: $got" ;;
+	esac
 fi
 asset="batten-v${tag#v}-$target.tar.gz"
-get "$base/releases/download/$tag/SHA256SUMS" "$tmp/SHA256SUMS"
-get "$base/releases/download/$tag/$asset" "$tmp/$asset"
+get "$base/releases/download/$tag/SHA256SUMS" "$tmp/SHA256SUMS" 1
+get "$base/releases/download/$tag/$asset" "$tmp/$asset" 1
 want=
 while read -r sum file; do
 	[ "${file#\*}" = "$asset" ] && want=$sum

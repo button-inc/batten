@@ -711,97 +711,6 @@ fn the_timeout_is_what_ends_it_rather_than_an_instant_failure() {
 ///
 /// That pair lives in `provision.rs`'s own `body_of` cases, where the response
 /// is a VALUE and a status can therefore be chosen. Do not re-add it here.
-/// Write `ca.pem`/`ca.key` and a `cert.pem`/`key.pem` the CA signed, into `tls`.
-///
-/// A real CA rather than a self-signed leaf, which is the difference from the
-/// `curl`-era fixture: a verifier that must chain to a root will not accept an
-/// end-entity certificate as its own issuer, so the old shape would fail the
-/// trusted arm for a reason that has nothing to do with the property under test.
-#[cfg(target_os = "linux")]
-fn mint_ca_and_server_certificate(tls: &Path) {
-    #[expect(
-        clippy::disallowed_types,
-        reason = "stays, and test-only: the import the spawn below needs, annotated at both sites the way every other openssl row in this file is"
-    )]
-    use std::process::Command;
-
-    let at = |name: &str| tls.join(name).to_str().unwrap().to_owned();
-    let openssl = |args: &[&str]| {
-        #[expect(
-            clippy::disallowed_types,
-            reason = "stays, and test-only: the fixture's key material has to be one nothing public signs, and `openssl` is what generates it"
-        )]
-        let run = Command::new("openssl")
-            .args(args)
-            .current_dir(tls)
-            .output()
-            .expect("openssl is required for the TLS fixture");
-        assert!(
-            run.status.success(),
-            "openssl {:?}: {}",
-            args.first(),
-            String::from_utf8_lossy(&run.stderr)
-        );
-    };
-
-    openssl(&[
-        "req",
-        "-x509",
-        "-newkey",
-        "rsa:2048",
-        "-nodes",
-        "-keyout",
-        &at("ca.key"),
-        "-out",
-        &at("ca.pem"),
-        "-days",
-        "1",
-        "-subj",
-        "/CN=Batten Fixture CA",
-        "-addext",
-        "basicConstraints=critical,CA:TRUE",
-        "-addext",
-        "keyUsage=critical,keyCertSign,cRLSign",
-    ]);
-    openssl(&[
-        "req",
-        "-newkey",
-        "rsa:2048",
-        "-nodes",
-        "-keyout",
-        &at("key.pem"),
-        "-out",
-        &at("csr.pem"),
-        "-subj",
-        "/CN=localhost",
-    ]);
-    // The SAN is what the verifier matches the URL's host against, so a
-    // certificate without it fails the trusted arm however well it chains.
-    fs::write(
-        tls.join("ext.cnf"),
-        "subjectAltName=DNS:localhost,IP:127.0.0.1\nbasicConstraints=critical,CA:FALSE\n\
-         extendedKeyUsage=serverAuth\n",
-    )
-    .unwrap();
-    openssl(&[
-        "x509",
-        "-req",
-        "-in",
-        &at("csr.pem"),
-        "-CA",
-        &at("ca.pem"),
-        "-CAkey",
-        &at("ca.key"),
-        "-CAcreateserial",
-        "-out",
-        &at("cert.pem"),
-        "-days",
-        "1",
-        "-extfile",
-        &at("ext.cnf"),
-    ]);
-}
-
 #[cfg(target_os = "linux")]
 #[test]
 fn host_ca_configuration_reaches_the_fetch() {
@@ -817,7 +726,7 @@ fn host_ca_configuration_reaches_the_fetch() {
     fs::create_dir_all(&tls).unwrap();
     let at = |name: &str| tls.join(name).to_str().unwrap().to_owned();
 
-    mint_ca_and_server_certificate(&tls);
+    common::mint_ca_and_server_certificate(&tls);
     fs::write(tls.join("payload.bin"), BINARY).unwrap();
 
     // Bind to find a free port, then release it for the listener. A fixed port

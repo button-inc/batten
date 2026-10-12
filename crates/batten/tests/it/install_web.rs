@@ -41,6 +41,7 @@ use std::os::unix::fs::PermissionsExt;
     reason = "stays, and test-only: the import both spawns below need, annotated at every site the way the other suites in this directory are"
 )]
 use std::process::Command;
+use std::sync::{Arc, Mutex};
 use std::thread;
 
 use common::scratch;
@@ -115,19 +116,36 @@ struct Route {
 /// own base URL, because a release host names itself in the `Location` it
 /// redirects to.
 fn host(build: impl FnOnce(&str) -> Vec<Route>) -> String {
+    logged_host(build).0
+}
+
+/// [`host`], also returning the path of every request it answered, in order —
+/// so a case can count a retry, or show no request was made at all.
+fn logged_host(build: impl FnOnce(&str) -> Vec<Route>) -> (String, Arc<Mutex<Vec<String>>>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
     let base = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
     let routes = build(&base);
+    let log = Arc::new(Mutex::new(Vec::new()));
+    let seen = Arc::clone(&log);
     thread::spawn(move || {
         for stream in listener.incoming() {
             let Ok(stream) = stream else { continue };
-            serve(stream, &routes);
+            serve(stream, &routes, &seen);
         }
     });
-    base
+    (base, log)
 }
 
-fn serve(mut stream: TcpStream, routes: &[Route]) {
+/// How many requests `log` holds for `path`.
+fn requests(log: &Mutex<Vec<String>>, path: &str) -> usize {
+    log.lock()
+        .unwrap()
+        .iter()
+        .filter(|seen| seen.as_str() == path)
+        .count()
+}
+
+fn serve(mut stream: TcpStream, routes: &[Route], log: &Mutex<Vec<String>>) {
     let mut reader = BufReader::new(stream.try_clone().unwrap());
     let mut request = String::new();
     if reader.read_line(&mut request).is_err() {
@@ -143,15 +161,20 @@ fn serve(mut stream: TcpStream, routes: &[Route]) {
         }
     }
     let path = request.split_whitespace().nth(1).unwrap_or("/").to_owned();
+    log.lock().unwrap().push(path.clone());
     let answer = routes.iter().find(|route| route.path == path);
     let response = match answer {
         Some(route) if route.status == 302 => format!(
             "HTTP/1.1 302 Found\r\nLocation: {}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
             route.location.clone().unwrap_or_default()
         ),
-        Some(route) => format!(
+        Some(route) if route.status == 200 => format!(
             "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
             route.body.len()
+        ),
+        Some(route) => format!(
+            "HTTP/1.1 {} Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            route.status
         ),
         None => {
             "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_owned()
@@ -234,7 +257,7 @@ fn install(name: &str, web: &str, env: &[(&str, &str)]) -> (Option<i32>, String,
         // The loopback host must not be reached through this container's proxy.
         .env("NO_PROXY", "127.0.0.1,localhost")
         .env("no_proxy", "127.0.0.1,localhost")
-        .env("BATTEN_RELEASES", format!("{web}/{REPO}"));
+        .env("BATTEN_RELEASES", [web, REPO].join("/"));
     for (key, value) in env {
         command.env(key, value);
     }
@@ -328,8 +351,8 @@ fn an_asset_absent_from_sha256sums_installs_nothing() {
     assert!(!stdout.contains("ran engine install"), "{stdout}");
 }
 
-/// A release with no `SHA256SUMS` is a download the host refused: exit 2,
-/// naming the status and the URL that answered, and nothing is run.
+/// A release with no `SHA256SUMS` is the RELEASE's fault once its tag resolved:
+/// exit 1, naming the status and the URL that answered, and nothing is run.
 #[test]
 fn a_release_publishing_no_sha256sums_names_the_status_and_url() {
     let dir = scratch("install-web-nomanifest");
@@ -341,12 +364,106 @@ fn a_release_publishing_no_sha256sums_names_the_status_and_url() {
     });
 
     let (code, stdout, stderr) = install("install-web-nomanifest-run", &web, &[]);
-    assert_eq!(code, Some(2), "{stdout}{stderr}");
+    assert_eq!(code, Some(1), "{stdout}{stderr}");
     assert!(
         stderr.contains("SHA256SUMS: 404 http://127.0.0.1:"),
         "a refused download names the status and what answered: {stderr}"
     );
     assert!(!stdout.contains("ran engine install"), "{stdout}");
+}
+
+/// A release carrying no archive for this target is exit 1, naming the asset.
+#[test]
+fn a_release_carrying_no_asset_for_this_target_is_exit_1_naming_it() {
+    let dir = scratch("install-web-noasset");
+    let archive = tarball(&dir);
+    let web = host(|base| {
+        let mut routes = release_routes(base, &archive);
+        routes.truncate(SUMS + 1);
+        routes
+    });
+
+    let (code, stdout, stderr) = install("install-web-noasset-run", &web, &[]);
+    assert_eq!(code, Some(1), "{stdout}{stderr}");
+    assert!(
+        stderr.contains(&format!("batten-{TAG}-")) && stderr.contains(".tar.gz: 404"),
+        "the refusal names the asset and the status: {stderr}"
+    );
+    assert!(!stdout.contains("ran engine install"), "{stdout}");
+}
+
+/// A `latest` that answers without landing on `releases/tag/<tag>` gives no tag,
+/// and the script never guesses one from wherever it did land: could-not-look.
+#[test]
+fn a_latest_that_does_not_redirect_to_a_tag_is_could_not_look() {
+    let dir = scratch("install-web-notag");
+    let archive = tarball(&dir);
+    let (web, log) = logged_host(|base| {
+        let mut routes = release_routes(base, &archive);
+        routes[0].status = 200;
+        routes[0].location = None;
+        routes
+    });
+
+    let (code, stdout, stderr) = install("install-web-notag-run", &web, &[]);
+    assert_eq!(code, Some(2), "{stdout}{stderr}");
+    assert!(
+        stderr.contains("did not redirect to a release tag"),
+        "{stderr}"
+    );
+    assert_eq!(
+        requests(&log, &format!("/{REPO}/releases/download/{TAG}/SHA256SUMS")),
+        0,
+        "no download is attempted under a guessed tag"
+    );
+}
+
+/// A transient answer is retried, a bounded number of times, and then reported
+/// as could-not-look rather than looping or hanging.
+#[test]
+fn the_retry_is_bounded_and_reports_rather_than_looping() {
+    let dir = scratch("install-web-retry");
+    let archive = tarball(&dir);
+    let (web, log) = logged_host(|base| {
+        let mut routes = release_routes(base, &archive);
+        routes[SUMS].status = 503;
+        routes
+    });
+
+    let (code, stdout, stderr) = install("install-web-retry-run", &web, &[]);
+    assert_eq!(code, Some(2), "{stdout}{stderr}");
+    assert!(stderr.contains("SHA256SUMS: 503"), "{stderr}");
+    assert_eq!(
+        requests(&log, &format!("/{REPO}/releases/download/{TAG}/SHA256SUMS")),
+        4,
+        "one attempt and three retries, then stop"
+    );
+}
+
+/// A platform no release builds is refused before any request is made.
+#[test]
+fn a_platform_no_release_builds_is_refused_before_any_request() {
+    let dir = scratch("install-web-platform");
+    let stub = dir.join("stub");
+    std::fs::create_dir_all(&stub).unwrap();
+    let uname = stub.join("uname");
+    std::fs::write(
+        &uname,
+        "#!/bin/sh\ncase \"$1\" in -s) echo Linux ;; -m) echo riscv64 ;; esac\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&uname, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let (web, log) = logged_host(|_| Vec::new());
+    let ambient = common::ambient_path();
+    let path =
+        std::env::join_paths(std::iter::once(stub.clone()).chain(std::env::split_paths(&ambient)))
+            .expect("a PATH entry carries no separator");
+    let path = path.to_string_lossy();
+
+    let (code, stdout, stderr) = install("install-web-platform-run", &web, &[("PATH", &path)]);
+    assert_eq!(code, Some(1), "{stdout}{stderr}");
+    assert!(stderr.contains("no release for Linux/riscv64"), "{stderr}");
+    assert!(log.lock().unwrap().is_empty(), "no request is made");
 }
 
 /// A web host that serves nothing is "could not look" (2), never a broken
@@ -362,4 +479,59 @@ fn a_web_host_that_serves_nothing_is_could_not_look() {
     );
     assert!(stderr.contains("releases/latest: 404"), "{stderr}");
     assert!(!stdout.contains("ran engine install"), "{stdout}");
+}
+
+/// A release tree for `s_server -WWW`: `SHA256SUMS` and every target's archive
+/// under `releases/download/<tag>/`. No redirect is possible there, so the cases
+/// served from it name the tag with `BATTEN_VERSION`.
+#[cfg(target_os = "linux")]
+fn release_tree(root: &std::path::Path, archive: &[u8]) {
+    let download = root.join(REPO).join("releases").join("download").join(TAG);
+    std::fs::create_dir_all(&download).unwrap();
+    std::fs::write(download.join("SHA256SUMS"), sums_for(&digest(archive))).unwrap();
+    for target in batten::install::TARGETS {
+        std::fs::write(download.join(asset(target)), archive).unwrap();
+    }
+}
+
+/// The CA a host declares reaches the bootstrap's downloads, in curl's own
+/// precedence — `CURL_CA_BUNDLE`, then `SSL_CERT_FILE` — so the one-liner
+/// installs through a proxy that re-terminates TLS. Without a declaration the
+/// same host is refused as could-not-look, which is what makes the trusted arms
+/// evidence about trust rather than about something answering.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_declared_ca_bundle_reaches_the_download_in_curls_precedence() {
+    let dir = scratch("install-web-ca");
+    let archive = tarball(&dir);
+    let root = dir.join("www");
+    release_tree(&root, &archive);
+    let tls = dir.join("tls");
+    std::fs::create_dir_all(&tls).unwrap();
+    let host = common::tls_www(&tls, &root);
+    let web = format!("https://localhost:{}", host.port);
+    let ca = tls.join("ca.pem").display().to_string();
+    let absent = dir.join("absent.pem").display().to_string();
+
+    let arms: [(&str, &[(&str, &str)], i32); 4] = [
+        ("curl-ca-bundle", &[("CURL_CA_BUNDLE", &ca)], 0),
+        ("ssl-cert-file", &[("SSL_CERT_FILE", &ca)], 0),
+        (
+            "curl-ca-bundle-outranks",
+            &[("CURL_CA_BUNDLE", &ca), ("SSL_CERT_FILE", &absent)],
+            0,
+        ),
+        ("undeclared", &[], 2),
+    ];
+    for (name, declared, want) in arms {
+        let mut env = vec![("BATTEN_VERSION", TAG)];
+        env.extend_from_slice(declared);
+        let (code, stdout, stderr) = install(&format!("install-web-ca-{name}"), &web, &env);
+        assert_eq!(code, Some(want), "{name}: {stdout}{stderr}");
+        assert_eq!(
+            stdout.contains("ran engine install"),
+            want == 0,
+            "{name}: {stdout}{stderr}"
+        );
+    }
 }

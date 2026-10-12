@@ -364,7 +364,14 @@ pub fn bootstrap_asset(name: &str) -> String {
 /// `releases/download` — never the API, whose anonymous budget a shared egress
 /// address spends — check the digest, and hand over to `engine install`, which
 /// places the binary and owns everything after. A refusal names the status and
-/// the URL that answered. `BATTEN_RELEASES` exists so a suite can serve the
+/// the URL that answered. Exit 1 is the release's fault: once a tag resolved, a
+/// download it does not serve, a missing digest, a digest that disagrees, or a
+/// platform no release builds. Exit 2 is could-not-look: a `latest` that does
+/// not answer — a private repository answers `404` to everything — or does not
+/// redirect to a tag. Every
+/// request is bounded — a connect timeout, a total timeout, and three retries of
+/// a transient answer — so a stalled host fails the install rather than hanging
+/// it. TLS trust is curl's own reading of `CURL_CA_BUNDLE`, then `SSL_CERT_FILE`. `BATTEN_RELEASES` exists so a suite can serve the
 /// release from a fixture; nothing else is configurable here.
 #[must_use]
 pub fn render_bootstrap(name: &str, repository: &str) -> String {
@@ -404,20 +411,25 @@ esac
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 get() {{
-	got=$(curl -sSL -o "$2" -w '%{{http_code}} %{{url_effective}}' "$1") || true
+	got=$(curl -sSL --connect-timeout 20 --max-time 600 --retry 3 --retry-delay 1 \
+		-o "$2" -w '%{{http_code}} %{{url_effective}}' "$1") || true
 	case "$got" in
 	200\ *) ;;
+	404\ *) fail "could not download $1: $got" "${{3:-2}}" ;;
 	*) fail "could not download $1: ${{got:-000}}" ;;
 	esac
 }}
 tag="${{BATTEN_VERSION:-}}"
 if [ -z "$tag" ]; then
 	get "$base/releases/latest" "$tmp/latest"
-	tag=${{got##*/}}
+	case "$got" in
+	*/releases/tag/?*) tag=${{got##*/}} ;;
+	*) fail "$base/releases/latest did not redirect to a release tag: $got" ;;
+	esac
 fi
 asset="{asset}"
-get "$base/releases/download/$tag/SHA256SUMS" "$tmp/SHA256SUMS"
-get "$base/releases/download/$tag/$asset" "$tmp/$asset"
+get "$base/releases/download/$tag/SHA256SUMS" "$tmp/SHA256SUMS" 1
+get "$base/releases/download/$tag/$asset" "$tmp/$asset" 1
 want=
 while read -r sum file; do
 	[ "${{file#\*}}" = "$asset" ] && want=$sum

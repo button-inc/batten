@@ -733,8 +733,10 @@ fn engine_update(root: &Path, out: &mut dyn Write) -> Result<ExitCode> {
 /// already pass keep their meaning: `BATTEN_INSTALL_DIR` names the directory,
 /// `BATTEN_ALLOW_OFF_PATH=1` admits one `PATH` does not reach,
 /// `BATTEN_VERSION_FROM_REF` installs the release a ref's manifest names (this
-/// binary when that release is not published yet), and `BATTEN_REQUIRE` refuses
-/// a binary that lacks the verb its caller is about to run.
+/// binary when the host answers that release is not published yet) unless
+/// `BATTEN_VERSION` named one, which always wins ([`engine::pick_release`]), and
+/// `BATTEN_REQUIRE` refuses a binary that lacks the verb its caller is about to
+/// run.
 ///
 /// Off `PATH` is a refusal, as it always was: every hook registration names
 /// `batten` bare, so a binary the shell cannot resolve is not installed.
@@ -758,24 +760,29 @@ fn engine_install(out: &mut dyn Write) -> Result<ExitCode> {
         &on_path,
         writable_dir,
     );
-    let repository = env!("CARGO_PKG_REPOSITORY");
-    let mut tag = format!("v{}", env!("CARGO_PKG_VERSION"));
-    let mut bytes = std::fs::read(std::env::current_exe()?)?;
-    let wanted = var("BATTEN_VERSION_FROM_REF")
-        .and_then(|reference| engine::ref_release(repository, &reference))
-        .filter(|wanted| *wanted != tag);
-    if let Some(wanted) = wanted {
-        match engine::fetch_release(repository, &wanted) {
-            Ok(fetched) => {
-                bytes = fetched;
-                tag = wanted;
-            }
-            // Unpublished yet: release-plz bumps the manifest before it tags,
-            // so trunk routinely names a release that does not exist. This
-            // binary is the latest that does.
-            Err(_) => writeln!(out, "unpublished={wanted}")?,
+    // `BATTEN_RELEASES` is the bootstrap's own seam, so a suite serves both
+    // halves of the install from one fixture host.
+    let repository =
+        var("BATTEN_RELEASES").unwrap_or_else(|| String::from(env!("CARGO_PKG_REPOSITORY")));
+    let running = format!("v{}", env!("CARGO_PKG_VERSION"));
+    let pick = engine::pick_release(
+        &running,
+        var("BATTEN_VERSION").is_some(),
+        || {
+            var("BATTEN_VERSION_FROM_REF")
+                .map(|reference| engine::ref_release(&repository, &reference))
+                .transpose()
+        },
+        |wanted| engine::fetch_published(&repository, wanted),
+    )?;
+    let (tag, bytes) = match pick {
+        engine::Pick::Fetched { tag, bytes } => (tag, bytes),
+        engine::Pick::Running => (running, std::fs::read(std::env::current_exe()?)?),
+        engine::Pick::Unpublished { wanted } => {
+            writeln!(out, "unpublished={wanted}")?;
+            (running, std::fs::read(std::env::current_exe()?)?)
         }
-    }
+    };
     std::fs::create_dir_all(&dest).map_err(|why| {
         UsageError::raise(format!(
             "engine install: cannot create {} ({why}); set BATTEN_INSTALL_DIR to a writable directory",
