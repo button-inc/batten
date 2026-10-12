@@ -20,6 +20,7 @@
 //! streamed, 2.4 MiB (the process baseline) and 179-210 ms.
 
 //MUTANT-SUITE crates/batten/src/stream_input.rs
+//MUTANT tee-drops-bytes|s@^        self.sink.write_all(buf.get(..read).unwrap_or_default())?;$@@|the_spool_holds_the_exact_bytes_the_host_sent
 
 use std::io::{BufReader, Read, Write};
 use std::path::{Path, PathBuf};
