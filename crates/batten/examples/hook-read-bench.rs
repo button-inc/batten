@@ -170,6 +170,22 @@ fn main() {
         );
         return;
     }
+    if mode == "static-load" {
+        // The compile-time table (CLOUD-2224): nothing to build, so the first
+        // call is the regex compile plus the count itself.
+        let text = "payload line of a large log, with some text\n".repeat(93);
+        let started = std::time::Instant::now();
+        let first = batten::o200k::tokens(&text);
+        let loaded = started.elapsed().as_secs_f64() * 1000.0;
+        let counted_at = std::time::Instant::now();
+        let tokens = batten::o200k::tokens(&text);
+        let counted = counted_at.elapsed().as_secs_f64() * 1000.0;
+        println!(
+            "static-load\t{loaded:.2}ms first call\t{counted:.2}ms for {tokens} tokens\t{}KiB\tfirst={first}",
+            peak_rss_kib()
+        );
+        return;
+    }
     if mode == "o200k-load" {
         // The one-off cost a hook process pays to load the table, and then to
         // count one ordinary 4 KiB result, which is what a lazy load buys back.
