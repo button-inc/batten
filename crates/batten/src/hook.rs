@@ -3225,8 +3225,13 @@ pub fn decode(harness: Harness, raw: &str) -> Option<Envelope> {
     // but a BOM is never meaningful in any of these payloads, so removing it
     // once here beats remembering which host emits one.
     let raw = raw.strip_prefix('\u{feff}').unwrap_or(raw);
-    let value: Value = serde_json::from_str(raw).ok()?;
+    decode_value(harness, serde_json::from_str(raw).ok()?)
+}
 
+/// [`decode`], over a document already parsed — the streamed read's
+/// (CLOUD-2224), which never holds the payload as one string.
+#[must_use]
+pub fn decode_value(harness: Harness, value: Value) -> Option<Envelope> {
     let raw_event = value
         .get("hook_event_name")
         .and_then(Value::as_str)

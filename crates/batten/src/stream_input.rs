@@ -19,6 +19,8 @@
 //! CLOUD-2224): reading a 50 MB payload whole peaked at 150 MiB and 248-284 ms;
 //! streamed, 2.4 MiB (the process baseline) and 179-210 ms.
 
+//MUTANT-SUITE crates/batten/src/stream_input.rs
+
 use std::io::{BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 
@@ -146,7 +148,7 @@ impl<C: FnMut(&str) -> u64> Walk<'_, C> {
     /// The top level: an object whose result members are walked as results.
     fn document<R: Read>(&mut self, json: &mut JsonStreamReader<R>) -> Result<Value> {
         if json.peek()? != ValueType::Object {
-            return self.plain(json);
+            return Self::plain(json);
         }
         json.begin_object()?;
         let mut map = serde_json::Map::new();
@@ -155,7 +157,7 @@ impl<C: FnMut(&str) -> u64> Walk<'_, C> {
             let value = if RESULT_KEYS.contains(&name.as_str()) {
                 self.result(json, "")?
             } else {
-                self.plain(json)?
+                Self::plain(json)?
             };
             map.insert(name, value);
         }
@@ -164,14 +166,14 @@ impl<C: FnMut(&str) -> u64> Walk<'_, C> {
     }
 
     /// Any value outside a result, parsed as it is.
-    fn plain<R: Read>(&mut self, json: &mut JsonStreamReader<R>) -> Result<Value> {
+    fn plain<R: Read>(json: &mut JsonStreamReader<R>) -> Result<Value> {
         Ok(match json.peek()? {
             ValueType::Object => {
                 json.begin_object()?;
                 let mut map = serde_json::Map::new();
                 while json.has_next()? {
                     let name = json.next_name_owned()?;
-                    let value = self.plain(json)?;
+                    let value = Self::plain(json)?;
                     map.insert(name, value);
                 }
                 json.end_object()?;
@@ -181,7 +183,7 @@ impl<C: FnMut(&str) -> u64> Walk<'_, C> {
                 json.begin_array()?;
                 let mut items = Vec::new();
                 while json.has_next()? {
-                    items.push(self.plain(json)?);
+                    items.push(Self::plain(json)?);
                 }
                 json.end_array()?;
                 Value::Array(items)
@@ -226,13 +228,12 @@ impl<C: FnMut(&str) -> u64> Walk<'_, C> {
                 Value::Array(items)
             }
             ValueType::String => self.leaf(json, pointer)?,
-            _ => self.plain(json)?,
+            _ => Self::plain(json)?,
         })
     }
 
     /// One result string, read in chunks: kept while the result is within the
     /// bound, spilled to a file from the chunk that passes it.
-    //MUTANT-SUITE crates/batten/src/stream_input.rs
     //MUTANT leaf-never-spills|s@^                if self.counted > self.bound {$@                if false {@|a_result_over_the_bound_spills_and_one_under_it_is_kept
     fn leaf<R: Read>(&mut self, json: &mut JsonStreamReader<R>, pointer: &str) -> Result<Value> {
         let mut text = json.next_string_reader()?;
@@ -301,6 +302,7 @@ impl<C: FnMut(&str) -> u64> Walk<'_, C> {
 }
 
 #[cfg(test)]
+#[allow(clippy::expect_used)]
 mod tests {
     use super::*;
 

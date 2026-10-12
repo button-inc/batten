@@ -1972,20 +1972,12 @@ pub fn result_max_tokens(config: Option<&CaptureConfig>) -> u64 {
 /// piece boundary, so splitting there changes the count by at most a merge per
 /// chunk; a chunk with no newline in reach is cut at a char boundary.
 ///
-/// The table loads once per process and only when asked: the caller asks only
-/// for a result whose BYTES exceed the bound (every `o200k` token is at least one
-/// byte), so the hook's ordinary path never loads it. A table that cannot load
-/// counts bytes, an over-count, so that failure yields a pointer, never an
-/// unbounded read.
+/// The counter is [`crate::o200k`]'s compile-time table, so no process builds a
+/// vocabulary (CLOUD-2224); the caller still asks only for a result whose BYTES
+/// exceed the bound (every `o200k` token is at least one byte).
 #[must_use]
 pub fn exceeds_o200k(texts: &[&str], bound: u64) -> bool {
-    static BPE: std::sync::OnceLock<Option<tiktoken_rs::CoreBPE>> = std::sync::OnceLock::new();
-    let bpe = BPE.get_or_init(|| tiktoken_rs::o200k_base().ok()).as_ref();
-    exceeds_counting(texts, bound, |chunk| {
-        bpe.map_or(chunk.len() as u64, |bpe| {
-            bpe.encode_ordinary(chunk).len() as u64
-        })
-    })
+    exceeds_counting(texts, bound, crate::o200k::tokens)
 }
 
 /// [`exceeds_o200k`]'s walk over any counter, so the case proving it stops can

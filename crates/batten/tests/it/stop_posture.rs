@@ -1412,3 +1412,70 @@ fn a_filed_row_naming_the_diff_is_pointed_at_under_its_real_row_id() {
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+/// The checklist re-evaluates OPEN rows: one the tracker last said was a
+/// duplicate is closed, and listing it asks for a groom it does not need.
+#[test]
+fn a_closed_row_leaves_the_filed_checklist() {
+    use std::io::Write as _;
+    let dir = scratch("filed-row-closed");
+    let home = dir.join(".home");
+    fs::create_dir_all(&home).expect("a state home");
+    common::init_repo(&dir);
+    fs::write(dir.join("batten.toml"), format!("{CONFIG}{FILED_ROWS}")).expect("write config");
+    fs::create_dir_all(dir.join("policy")).expect("policy dir");
+    install_modules(&dir);
+    fs::copy(
+        common::at_root("policy/filed-here.rego"),
+        dir.join("policy/filed-here.rego"),
+    )
+    .expect("install the filed-here module");
+    common::git_in(&dir, &["add", "-A"]);
+    common::git_in(&dir, &["commit", "--quiet", "-m", "base"]);
+    common::pin_origin_main(&dir);
+    let receipts = dir.join(".git/batten-receipts");
+    fs::create_dir_all(&receipts).expect("receipts dir");
+    fs::write(
+        receipts.join("board-writes.main"),
+        "issue CLOUD-7 2099-01-01T00:00:00Z ready 0 - 0\n\
+         issue CLOUD-8 2099-01-01T00:00:00Z ready 0 - 0\n",
+    )
+    .expect("write the board record");
+    // The tracker's answer for CLOUD-8, stored by the engine's own post-tool hook.
+    let read = serde_json::json!({
+        "hook_event_name": "PostToolUse",
+        "session_id": "filed-closed",
+        "tool_name": "mcp__tracker__get_issue",
+        "tool_input": {},
+        "tool_response": [{ "type": "text", "text": serde_json::json!({
+            "id": "CLOUD-8", "status": "Duplicate", "statusType": "duplicate",
+        }).to_string() }],
+    })
+    .to_string();
+    let mut command = common::batten();
+    command
+        .args(["adjudicate", "--harness", "claude-code"])
+        .current_dir(&dir)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    common::state_home(&mut command, &home);
+    let mut child = command.spawn().expect("spawn the post-tool hook");
+    let _ = child
+        .stdin
+        .take()
+        .expect("piped stdin")
+        .write_all(read.as_bytes());
+    let seeded = child.wait_with_output().expect("store the read");
+    assert_eq!(seeded.status.code(), Some(0), "{}", common::stderr(&seeded));
+
+    let stdout = stdout_of(&hook_in(&dir, &home, &stop_payload("Done.", false)));
+    assert!(
+        stdout.contains("CLOUD-7 filed"),
+        "the open row stays listed: {stdout}"
+    );
+    assert!(
+        !stdout.contains("CLOUD-8 filed"),
+        "the duplicate is off the checklist: {stdout}"
+    );
+}

@@ -142,6 +142,9 @@ pub struct Reclaimed {
     /// Wall time the reclaim spent, in milliseconds (CLOUD-1945's figure: what
     /// the unlinks cost on this runtime).
     pub wall_ms: u64,
+    /// Units the collector removed, where the band is declared and the
+    /// collector rather than the floor model did the reclaim (CLOUD-2197).
+    pub collected: Option<usize>,
 }
 
 impl Reclaimed {
@@ -158,10 +161,16 @@ impl Reclaimed {
     /// cost CLOUD-1945 decides the runtime on — what unlinking took here.
     #[must_use]
     pub fn lines(&self) -> Vec<String> {
-        let mut lines = vec![format!(
-            "disk-reclaimed {} {} {} {}",
-            self.freed_mb, self.free_mb, self.floor_mb, self.escalated
-        )];
+        let mut lines = vec![match self.collected {
+            Some(units) => format!(
+                "disk-collected {} {units} {} {}",
+                self.freed_mb, self.free_mb, self.floor_mb
+            ),
+            None => format!(
+                "disk-reclaimed {} {} {} {}",
+                self.freed_mb, self.free_mb, self.floor_mb, self.escalated
+            ),
+        }];
         lines.push(format!("disk-unlink-ms {}", self.wall_ms));
         lines
     }
@@ -194,6 +203,41 @@ pub fn reclaim(
         freed_mb: outcome.reclaimed_mb + outcome.escalated_mb.unwrap_or(0),
         escalated: outcome.escalated_mb.is_some(),
         wall_ms,
+        collected: None,
+    })
+}
+
+/// The floor a lap's disk arm watches: `[prune] min_free_mb` where the band is
+/// declared (CLOUD-2197), else the running lap's [`reserve_mb`].
+#[must_use]
+pub fn watched_floor_mb(config: &crate::prune::Prune) -> u64 {
+    config
+        .free_band()
+        .map_or_else(|| reserve_mb(&config.warm), |(min, _)| min)
+}
+
+/// Collect `tree`'s checkout toward `max_free_mb` from a reading of `free` MiB.
+///
+/// `None` where the band is undeclared, so the caller falls back to
+/// [`reclaim`]. Never waits on a build lock: the gate this watches is building.
+//MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
+//MUTANT lap-collector-unused|s@^    let repo = tree.parent()?;$@    let repo = tree.parent().filter(\x7c_\x7c false)?;@|a_banded_lap_collects_least_recently_used_units_before_the_gate
+pub fn collect_band(
+    tree: &std::path::Path,
+    config: &crate::prune::Prune,
+    free: u64,
+    free_mb: &mut dyn FnMut() -> anyhow::Result<u64>,
+) -> Option<Reclaimed> {
+    let repo = tree.parent()?;
+    let kept = crate::collect::kept(&crate::collect::engine_paths());
+    let done = crate::collect::collect_toward_max(repo, config, &kept, free, free_mb, None, false)?;
+    Some(Reclaimed {
+        free_mb: done.free_after_mb,
+        floor_mb: watched_floor_mb(config),
+        freed_mb: done.freed_bytes / (1024 * 1024),
+        escalated: false,
+        wall_ms: done.wall_ms,
+        collected: Some(done.units),
     })
 }
 

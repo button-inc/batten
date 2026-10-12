@@ -64,6 +64,23 @@ pub struct Kept {
     ino: u64,
 }
 
+/// The files no collection removes: the running executable and the `batten` on
+/// `PATH`, canonicalised (CLOUD-2197 §5).
+#[must_use]
+pub fn engine_paths() -> Vec<PathBuf> {
+    let running = std::env::current_exe().ok();
+    let installed = std::env::var_os("PATH").and_then(|path| {
+        std::env::split_paths(&path)
+            .map(|dir| dir.join(crate::surface::BINARY))
+            .find(|candidate| candidate.is_file())
+    });
+    running
+        .into_iter()
+        .chain(installed)
+        .filter_map(|path| path.canonicalize().ok())
+        .collect()
+}
+
 /// The [`Kept`] identities of `paths` that exist.
 #[must_use]
 pub fn kept(paths: &[PathBuf]) -> Vec<Kept> {
@@ -167,7 +184,7 @@ fn artifacts_of(profile: &Path, name: &str, hash: &str) -> Vec<PathBuf> {
 /// Remove `path`, file or tree, counting a file's blocks only when this was its
 /// last name. Returns the bytes actually freed.
 //MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
-//MUTANT shared-inode-counted-freed|s@^    if links == 1 {$@    if true {@|a_shared_inode_is_not_counted_until_its_last_name_goes
+//MUTANT shared-inode-counted-freed|s@^    if links == 1 { allocated } else { 0 }$@    allocated@|a_shared_inode_is_not_counted_until_its_last_name_goes
 fn remove_counted(path: &Path) -> u64 {
     let Ok(meta) = std::fs::symlink_metadata(path) else {
         return 0;
@@ -268,7 +285,7 @@ pub struct Request<'a> {
 //MUTANT lru-order-reversed|s@^    live.sort_by_key(\x7cunit\x7c unit.last_use);$@    live.sort_by_key(\x7cunit\x7c std::cmp::Reverse(unit.last_use));@|the_least_recently_used_live_unit_goes_first
 //MUTANT collects-past-max-free|s@^        if freed >= request.need_bytes \x7c\x7c past(request.deadline) {$@        if past(request.deadline) {@|collection_stops_at_max_free
 //MUTANT held-tree-collected|s@^        let Some(_held) = crate::prune::claim(\&unit.tree, \&unit.profile) else {$@        let Some(_held) = Some(()) else {@|a_tree_a_build_holds_is_never_collected
-//MUTANT engine-unit-collected|s@^        if unit.artifacts.iter().any(\x7cartifact\x7c is_kept(artifact, request.kept)) {$@        if false {@|the_running_engine_is_never_collected
+//MUTANT engine-unit-collected|s@^            .any(\x7cartifact\x7c is_kept(artifact, request.kept))$@            .any(\x7c_\x7c false)@|the_running_engine_is_never_collected
 #[must_use]
 pub fn collect(request: &Request<'_>) -> (u64, usize) {
     let past = |deadline: Option<Instant>| deadline.is_some_and(|at| Instant::now() >= at);
@@ -330,11 +347,30 @@ pub fn collect_if_pressed(
     deadline: Option<Instant>,
     wait: bool,
 ) -> Option<Collected> {
-    let (min, max) = prune.free_band()?;
+    let (min, _) = prune.free_band()?;
     let free = free_mb().ok()?;
     if free >= min {
         return None;
     }
+    collect_toward_max(repo, prune, kept, free, free_mb, deadline, wait)
+}
+
+/// Collect until `[prune] max_free_mb` is free, from a reading of `free` MiB.
+///
+/// The land watcher calls this on a PROJECTED crossing, when the reading itself
+/// may still sit above the minimum (CLOUD-1937's linker writes gigabytes between
+/// two samples); the hook calls it through [`collect_if_pressed`]. `None` where
+/// the band is undeclared.
+pub fn collect_toward_max(
+    repo: &Path,
+    prune: &crate::prune::Prune,
+    kept: &[Kept],
+    free: u64,
+    free_mb: &mut dyn FnMut() -> anyhow::Result<u64>,
+    deadline: Option<Instant>,
+    wait: bool,
+) -> Option<Collected> {
+    let (_, max) = prune.free_band()?;
     let started = Instant::now();
     //MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
     //MUTANT worktree-targets-unseen|s@^        .chain(crate::git::linked_worktree_dirs(repo))$@        .chain(Vec::<PathBuf>::new())@|a_sibling_worktrees_units_are_ranked_with_the_checkouts

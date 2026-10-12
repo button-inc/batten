@@ -77,16 +77,13 @@ fn piece_tokens(piece: &[u8]) -> usize {
         .collect();
     parts.push((piece.len() - 1, u32::MAX));
     parts.push((piece.len(), u32::MAX));
-    loop {
-        let Some((i, _)) = parts
-            .iter()
-            .take(parts.len() - 1)
-            .enumerate()
-            .filter(|(_, (_, rank))| *rank != u32::MAX)
-            .min_by_key(|(i, (_, rank))| (*rank, *i))
-        else {
-            break;
-        };
+    while let Some((i, _)) = parts
+        .iter()
+        .take(parts.len() - 1)
+        .enumerate()
+        .filter(|(_, (_, rank))| *rank != u32::MAX)
+        .min_by_key(|(i, (_, rank))| (*rank, *i))
+    {
         if i > 0 {
             parts[i - 1].1 = pair(&parts, i - 1);
         }
@@ -116,7 +113,8 @@ fn dfa() -> Option<&'static regex_automata::dfa::sparse::DFA<&'static [u8]>> {
 /// newline, two or more characters long and followed by a non-space, gives up
 /// its last character to the next piece — exactly what the lookahead does.
 /// A position nothing matches is skipped, as tiktoken skips it.
-//MUTANT lookahead-untrimmed|s@^                    && rest.chars().next().is_some_and(\x7cnext\x7c !next.is_whitespace())$@                    \&\& false@|counts_match_tiktoken
+//MUTANT-SUITE crates/batten/src/o200k.rs
+//MUTANT lookahead-untrimmed|s@^                        .is_some_and(\x7cnext\x7c !next.is_whitespace())$@                        .is_some_and(\x7c_\x7c false)@|counts_match_tiktoken
 fn pieces<'a>(
     dfa: &'a regex_automata::dfa::sparse::DFA<&'static [u8]>,
     text: &'a str,
@@ -172,6 +170,7 @@ pub fn tokens(text: &str) -> u64 {
 }
 
 #[cfg(test)]
+#[allow(clippy::expect_used)]
 mod tests {
     #[test]
     fn counts_match_tiktoken() {

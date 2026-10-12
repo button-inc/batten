@@ -10,8 +10,11 @@
 //! * `struson` — a pull parse that streams every string leaf through its own
 //!   reader in fixed chunks into the digest; nothing is held whole.
 //!
-//! `gen <bytes> <path>` writes a PostToolUse `Read` payload of about that size.
+//! `gen <bytes> <path>` writes a `PostToolUse` `Read` payload of about that size.
 //! Prints one line: mode, input bytes, wall ms, peak RSS KiB, digest prefix.
+
+// A measurement program: a failed read is the run's answer, printed and fatal.
+#![allow(clippy::print_stdout, clippy::print_stderr, clippy::expect_used)]
 
 use std::io::{BufReader, Read, Write};
 
@@ -59,7 +62,7 @@ fn current(path: &str) -> (u64, String) {
 
 fn reader(path: &str) -> (u64, String) {
     let file = std::fs::File::open(path).expect("open");
-    let len = file.metadata().map(|meta| meta.len()).unwrap_or(0);
+    let len = file.metadata().map_or(0, |meta| meta.len());
     let value: serde_json::Value = serde_json::from_reader(BufReader::new(file)).expect("parse");
     let bytes = serde_json::to_vec(&value["tool_response"]).expect("serialize");
     (len, blake3::hash(&bytes).to_hex()[..12].to_owned())
@@ -103,7 +106,7 @@ fn streamed(path: &str) -> (u64, String) {
         }
     }
     let file = std::fs::File::open(path).expect("open");
-    let len = file.metadata().map(|meta| meta.len()).unwrap_or(0);
+    let len = file.metadata().map_or(0, |meta| meta.len());
     let mut json = JsonStreamReader::new(BufReader::with_capacity(CHUNK, file));
     let mut hasher = blake3::Hasher::new();
     let mut chunk = vec![0_u8; CHUNK];

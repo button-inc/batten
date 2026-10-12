@@ -151,19 +151,6 @@ unicode-normalization.workspace = true
 # outside `ambient_authority.rs`'s list by property rather than by omission.
 x509-cert.workspace = true
 yaml-rust2.workspace = true
-
-# Process-group ownership for `batten exec` (CLOUD-427). Unix-only rather than
-# in the table above because the whole mechanism is: `setpgid`, the four
-# forwarded signals and `killpg` have no Windows analogue, and `exec.rs` gates
-# every use of them on `cfg(unix)`. A Windows build therefore links neither
-# crate, which is what keeps the topology there exactly what it is today.
-[target.'cfg(unix)'.dependencies]
-rustix.workspace = true
-# CLOUD-2223: every tool result is bounded in `o200k` tokens, the unit the
-# window is spent in. Loaded lazily and only for a result whose bytes already
-# exceed the bound, so the hook's ordinary path never touches the table. The
-# test binary's vocabulary check (CLOUD-1284 arm 4) uses the same crate.
-tiktoken-rs.workspace = true
 # CLOUD-2224: the hook reads its stdin streaming; see the workspace manifest.
 struson.workspace = true
 # CLOUD-2224: the o200k pre-tokenizer, a DFA `build.rs` serializes; searched only.
@@ -173,7 +160,14 @@ regex-automata = { version = "0.4", default-features = false, features = [
   "syntax",
   "unicode",
 ] }
-bpe-openai.workspace = true
+
+# Process-group ownership for `batten exec` (CLOUD-427). Unix-only rather than
+# in the table above because the whole mechanism is: `setpgid`, the four
+# forwarded signals and `killpg` have no Windows analogue, and `exec.rs` gates
+# every use of them on `cfg(unix)`. A Windows build therefore links neither
+# crate, which is what keeps the topology there exactly what it is today.
+[target.'cfg(unix)'.dependencies]
+rustix.workspace = true
 signal-hook.workspace = true
 
 [build-dependencies]
@@ -188,8 +182,12 @@ regex-automata = { version = "0.4", default-features = false, features = [
 ] }
 
 [dev-dependencies]
-# CLOUD-2224: the bench times the regex the DFA replaced.
+# CLOUD-2224: the bench times the regex the DFA replaced, and the two runtime
+# vocabularies the compile-time table replaced; `o200k`'s anti-drift case and
+# the vocabulary check (CLOUD-1284 arm 4) count against tiktoken-rs.
 fancy-regex = "0.17"
+tiktoken-rs.workspace = true
+bpe-openai.workspace = true
 # Only what the *tests* need and the crate itself does not. A normal dependency
 # is already in scope for every test target, so re-listing one here declares
 # nothing — `flate2`, `tar`, `serde_json` and `toml` all sat in both tables and

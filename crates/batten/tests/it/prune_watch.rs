@@ -288,7 +288,7 @@ fn a_superseded_unit_goes_before_an_older_live_one() {
     artifact(&deps, "cli", "cccccccccccc", 60);
     unit(&tree.join("debug"), "old", "3333333333333333", 7200, 4096);
     let trees = [tree.clone()];
-    batten::collect::collect(&request(&trees, &[], 1));
+    let _ = batten::collect::collect(&request(&trees, &[], 1));
     assert!(
         !deps.join("libcli-aaaaaaaaaaaa.rlib").exists(),
         "the superseded generation went"
@@ -317,7 +317,7 @@ fn collection_stops_at_max_free() {
         );
     }
     let trees = [tree.clone()];
-    batten::collect::collect(&request(&trees, &[], (1 << 20) + (1 << 19)));
+    let _ = batten::collect::collect(&request(&trees, &[], (1 << 20) + (1 << 19)));
     assert!(!present(&profile, "u0", "4444444444444441"));
     assert!(!present(&profile, "u1", "4444444444444442"));
     assert!(
@@ -342,7 +342,7 @@ fn a_collection_re_arms_the_survivors() {
     let tree = root.join("target");
     unit(&tree.join("debug"), "keepme", "5555555555555555", 60, 4096);
     let trees = [tree.clone()];
-    batten::collect::collect(&request(&trees, &[], 0));
+    let _ = batten::collect::collect(&request(&trees, &[], 0));
     let file = tree.join("debug/.fingerprint/keepme-5555555555555555/lib-keepme");
     let meta = std::fs::metadata(&file).unwrap();
     assert_eq!(
@@ -361,13 +361,13 @@ fn a_tree_a_build_holds_is_never_collected() {
     let lock = std::fs::File::create(profile.join(".cargo-lock")).unwrap();
     lock.lock().unwrap();
     let trees = [tree.clone()];
-    batten::collect::collect(&request(&trees, &[], u64::MAX));
+    let _ = batten::collect::collect(&request(&trees, &[], u64::MAX));
     assert!(
         present(&profile, "busy", "6666666666666666"),
         "a building profile loses nothing"
     );
     drop(lock);
-    batten::collect::collect(&request(&trees, &[], u64::MAX));
+    let _ = batten::collect::collect(&request(&trees, &[], u64::MAX));
     assert!(
         !present(&profile, "busy", "6666666666666666"),
         "released, it is collectable"
@@ -383,7 +383,7 @@ fn a_shared_inode_is_not_counted_until_its_last_name_goes() {
     unit(&profile, "next", "8888888888888888", 60, 4096);
     std::fs::hard_link(&older, root.join("second-name")).unwrap();
     let trees = [tree.clone()];
-    batten::collect::collect(&request(&trees, &[], 1 << 20));
+    let _ = batten::collect::collect(&request(&trees, &[], 1 << 20));
     assert!(
         !present(&profile, "next", "8888888888888888"),
         "the hardlinked file freed nothing, so the collection went on to the next unit"
@@ -401,7 +401,7 @@ fn the_running_engine_is_never_collected() {
     std::fs::hard_link(&engine, &installed).unwrap();
     let kept = batten::collect::kept(&[installed]);
     let trees = [tree.clone()];
-    batten::collect::collect(&request(&trees, &kept, u64::MAX));
+    let _ = batten::collect::collect(&request(&trees, &kept, u64::MAX));
     assert!(
         present(&profile, "batten", "9999999999999999"),
         "the engine's unit survives as the oldest"
@@ -451,4 +451,189 @@ fn a_sibling_worktrees_units_are_ranked_with_the_checkouts() {
         "near",
         "cccccccccccccccc"
     ));
+}
+
+#[test]
+fn a_banded_lap_collects_least_recently_used_units_before_the_gate() {
+    // Below min_free_mb at the first sample: the arm collects toward max_free_mb,
+    // least recently used first, then the gate runs on the room it made.
+    let (repo, command) = gated("prune-watch-banded");
+    let profile = repo.join("target/debug");
+    unit(&profile, "stale", "eeeeeeeeeeeeeeee", 7200, 2 << 20);
+    unit(&profile, "fresh", "ffffffffffffffff", 60, 1 << 20);
+    let mut config = rules("target", 1);
+    config.min_free_mb = Some(10);
+    config.max_free_mb = Some(11);
+    let mut readings = [9_u64, 50].into_iter();
+    let watch = batten::land::DiskWatch {
+        tree: repo.join("target"),
+        config: &config,
+        free_mb: Box::new(move || Ok(readings.next().unwrap_or(50))),
+    };
+    let verified = batten::land::verify_raced(&repo, "work", &command, &[], &[], None, Some(watch))
+        .expect("the lap answers");
+    assert!(
+        matches!(verified, batten::land::Verified::Clean(_)),
+        "{verified:?}"
+    );
+    assert!(!present(&profile, "stale", "eeeeeeeeeeeeeeee"), "LRU went");
+    assert!(
+        present(&profile, "fresh", "ffffffffffffffff"),
+        "the two MiB asked for were freed by the first unit"
+    );
+    let git_dir = repo.join(".git");
+    let record = batten::recorder::record_path(&git_dir, batten::land::LAP_RECORD, "work", None);
+    let lines = std::fs::read_to_string(&record).expect("the lap record");
+    assert!(lines.contains("disk-collected "), "{lines}");
+}
+
+// --- the hook's caller (CLOUD-2197) -------------------------------------------
+
+/// A committed `[prune]` table, with the free-space band when `band` is set.
+fn hook_config(band: bool) -> String {
+    let band = if band {
+        "min_free_mb = 100\nmax_free_mb = 200\n"
+    } else {
+        ""
+    };
+    format!(
+        "version = 1\n\n[prune]\nroot = \"target\"\nkeep = 2\n{band}\n\
+         [prune.warm]\nmb = 6000\nworst_mb = 6000\nmultiplier = 1\nmeasured = \"2026-08-22\"\n\n\
+         [prune.cold]\nmb = 14000\nworst_mb = 14000\nmultiplier = 1\nmeasured = \"2026-08-29\"\n"
+    )
+}
+
+/// A checkout carrying `config`, with one aged unit in its `target/debug`.
+fn hooked(name: &str, band: bool) -> PathBuf {
+    let repo = common::Fixture::at(common::scratch(name).join("repo"))
+        .config(&hook_config(band))
+        .file("Cargo.toml", "[workspace]\n")
+        .git()
+        .base_commit()
+        .build();
+    unit(
+        &repo.join("target/debug"),
+        "aged",
+        "dddddddddddddddd",
+        7200,
+        4096,
+    );
+    repo
+}
+
+/// One hook event through `batten adjudicate`, with `env` set.
+fn hook(dir: &Path, event: &str, env: &[(&str, &str)]) -> std::process::Output {
+    use std::io::Write as _;
+    let payload = serde_json::json!({
+        "hook_event_name": event,
+        "session_id": "disk",
+        "source": "startup",
+        "tool_name": "Read",
+        "tool_input": { "file_path": "Cargo.toml" },
+    })
+    .to_string();
+    let mut command = common::batten();
+    command
+        .current_dir(dir)
+        .args(["adjudicate", "--harness", "claude-code"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    for (key, value) in env {
+        command.env(key, value);
+    }
+    let mut child = command.spawn().expect("the binary runs");
+    // A child that answers before reading stdin is a legitimate outcome.
+    let _ = child
+        .stdin
+        .take()
+        .expect("stdin is piped")
+        .write_all(payload.as_bytes());
+    child.wait_with_output().expect("wait for batten")
+}
+
+#[test]
+fn the_hook_collects_before_admitting_under_pressure() {
+    let dir = hooked("hook-collects", true);
+    let profile = dir.join("target/debug");
+    let said = hook(&dir, "PreToolUse", &[("TARGET_PRUNE_FREE_MB", "50")]);
+    assert_eq!(said.status.code(), Some(0), "{}", common::stderr(&said));
+    let out = String::from_utf8_lossy(&said.stdout);
+    assert!(
+        !present(&profile, "aged", "dddddddddddddddd"),
+        "below min_free_mb, the unit was collected: {out}"
+    );
+    assert!(
+        out.contains("cargo retire now"),
+        "the collection is noted: {out}"
+    );
+    assert!(!out.contains("\"deny\""), "the hook never denies: {out}");
+
+    // Anti-vacuity: above the minimum, nothing at all is collected.
+    let roomy = hooked("hook-roomy", true);
+    hook(&roomy, "PreToolUse", &[("TARGET_PRUNE_FREE_MB", "500")]);
+    assert!(present(
+        &roomy.join("target/debug"),
+        "aged",
+        "dddddddddddddddd"
+    ));
+}
+
+#[test]
+fn a_session_start_re_arms_every_fingerprint() {
+    let dir = hooked("hook-rearm", true);
+    let file = dir.join("target/debug/.fingerprint/aged-dddddddddddddddd/lib-aged");
+    let before = std::fs::metadata(&file).unwrap();
+    assert_ne!(before.accessed().unwrap(), before.modified().unwrap());
+    let said = hook(&dir, "SessionStart", &[("TARGET_PRUNE_FREE_MB", "500")]);
+    assert_eq!(said.status.code(), Some(0), "{}", common::stderr(&said));
+    let after = std::fs::metadata(&file).unwrap();
+    assert_eq!(
+        after.accessed().unwrap(),
+        after.modified().unwrap(),
+        "atime re-armed to mtime"
+    );
+}
+
+#[test]
+fn a_sweep_that_cannot_be_brought_above_the_minimum_stops_before_building() {
+    let dir = hooked("sweep-exhausted", true);
+    let sweep = |free: &str| {
+        common::batten()
+            .current_dir(&dir)
+            .args(["mutate", "sweep"])
+            .env("MUTANT_GATES", "engine-fixture")
+            .env("TARGET_PRUNE_FREE_MB", free)
+            .stdin(std::process::Stdio::null())
+            .output()
+            .expect("the binary runs")
+    };
+    let stopped = sweep("5");
+    let said = common::stderr(&stopped);
+    assert_eq!(stopped.status.code(), Some(3), "{said}");
+    assert!(said.contains("min_free_mb 100"), "{said}");
+    assert!(
+        said.contains("mutate sweep: disk-collected "),
+        "the collection ran first: {said}"
+    );
+    // Anti-vacuity: with room, the sweep is not stopped for disk.
+    let roomy = sweep("500");
+    assert!(!common::stderr(&roomy).contains("min_free_mb"));
+}
+
+#[test]
+fn the_hook_traces_a_call_under_the_trace_variable() {
+    let dir = hooked("hook-trace", false);
+    let traced = hook(
+        &dir,
+        "PreToolUse",
+        &[("TARGET_PRUNE_FREE_MB", "777"), ("BATTEN_DISK_TRACE", "1")],
+    );
+    assert!(
+        common::stderr(&traced).contains("disk-call Read 777 777"),
+        "{}",
+        common::stderr(&traced)
+    );
+    let quiet = hook(&dir, "PreToolUse", &[("TARGET_PRUNE_FREE_MB", "777")]);
+    assert!(!common::stderr(&quiet).contains("disk-call"));
 }

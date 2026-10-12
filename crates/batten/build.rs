@@ -17,23 +17,25 @@ use std::io::Write as _;
 /// the merge table.
 const SPECIAL_RANKS: [u32; 2] = [199_999, 200_018];
 
-fn main() {
+type Built = Result<(), Box<dyn std::error::Error>>;
+
+fn main() -> Built {
     println!("cargo:rerun-if-changed=build.rs");
-    let out = std::path::PathBuf::from(std::env::var_os("OUT_DIR").expect("cargo sets OUT_DIR"));
-    let bpe = tiktoken_rs::o200k_base().expect("the vendored o200k vocabulary loads");
+    let out = std::path::PathBuf::from(std::env::var_os("OUT_DIR").ok_or("cargo sets OUT_DIR")?);
+    let bpe = tiktoken_rs::o200k_base()?;
     let mut entries: Vec<(Vec<u8>, u32)> = (0..=200_018_u32)
         .filter(|rank| !SPECIAL_RANKS.contains(rank))
         .filter_map(|rank| bpe.decode_bytes(&[rank]).ok().map(|bytes| (bytes, rank)))
         .collect();
     entries.sort_unstable();
-    let count = u32::try_from(entries.len()).expect("fits");
+    let count = u32::try_from(entries.len())?;
     let mut offsets = Vec::with_capacity(entries.len() + 1);
     let mut blob = Vec::new();
     for (bytes, _) in &entries {
-        offsets.push(u32::try_from(blob.len()).expect("fits"));
+        offsets.push(u32::try_from(blob.len())?);
         blob.extend_from_slice(bytes);
     }
-    offsets.push(u32::try_from(blob.len()).expect("fits"));
+    offsets.push(u32::try_from(blob.len())?);
     let mut table = Vec::with_capacity(4 + offsets.len() * 4 + entries.len() * 4 + blob.len());
     table.extend_from_slice(&count.to_le_bytes());
     for offset in &offsets {
@@ -43,7 +45,7 @@ fn main() {
         table.extend_from_slice(&rank.to_le_bytes());
     }
     table.extend_from_slice(&blob);
-    std::fs::write(out.join("o200k.bin"), &table).expect("write o200k.bin");
+    std::fs::write(out.join("o200k.bin"), &table)?;
     // THE PRE-TOKENIZER AS A DFA, built here so no process compiles a regex
     // (measured at 4.7-6.7 ms per process with fancy-regex, against a 10 ms hook
     // target). o200k's one lookahead alternative, `\s+(?!\S)`, is not
@@ -51,27 +53,23 @@ fn main() {
     // the lookahead would have left one character short.
     let lookahead = r"|\s+(?!\S)|\s+";
     let source = tiktoken_rs::O200K_BASE_PAT_STR;
-    assert!(
-        source.ends_with(lookahead),
-        "o200k's pattern changed shape: {source}"
-    );
+    if !source.ends_with(lookahead) {
+        return Err(format!("o200k's pattern changed shape: {source}").into());
+    }
     let plain = format!("{}|\\s+", source.trim_end_matches(lookahead));
     let dfa = regex_automata::dfa::dense::Builder::new()
         .configure(
             regex_automata::dfa::dense::Config::new()
                 .start_kind(regex_automata::dfa::StartKind::Anchored),
         )
-        .build(&plain)
-        .expect("o200k's pattern builds as a DFA")
-        .to_sparse()
-        .expect("o200k's DFA converts to sparse");
-    std::fs::write(out.join("o200k_dfa.bin"), dfa.to_bytes_little_endian())
-        .expect("write o200k_dfa.bin");
-    let mut pattern = std::fs::File::create(out.join("o200k_pattern.rs")).expect("create pattern");
+        .build(&plain)?
+        .to_sparse()?;
+    std::fs::write(out.join("o200k_dfa.bin"), dfa.to_bytes_little_endian())?;
+    let mut pattern = std::fs::File::create(out.join("o200k_pattern.rs"))?;
     writeln!(
         pattern,
         "/// `o200k_base`'s pre-tokenizer, copied from tiktoken-rs at build time.\npub const PATTERN: &str = {:?};",
         tiktoken_rs::O200K_BASE_PAT_STR
-    )
-    .expect("write pattern");
+    )?;
+    Ok(())
 }

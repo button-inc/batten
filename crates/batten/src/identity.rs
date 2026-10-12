@@ -1515,7 +1515,7 @@ pub const fn compare_to_anchor(anchor: u64, current: u64) -> CountChange {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

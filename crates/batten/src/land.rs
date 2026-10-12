@@ -1550,7 +1550,7 @@ pub fn verify_raced(
     });
     let started = std::time::Instant::now();
     let mut disk = disk.map(|watch| {
-        let reserve = crate::disk_watch::reserve_mb(&watch.config.warm);
+        let reserve = crate::disk_watch::watched_floor_mb(watch.config);
         let pressure = crate::disk_watch::Pressure::new(reserve, crate::disk_watch::HORIZON);
         (watch, pressure)
     });
@@ -1933,12 +1933,19 @@ fn disk_turn(
     let at = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
     match pressure.observe(at, free) {
         crate::disk_watch::Reading::Clear => None,
-        crate::disk_watch::Reading::Reclaim => crate::disk_watch::reclaim(
-            &watch.tree,
-            watch.config,
-            crate::disk_watch::reserve_mb(&watch.config.warm),
-        )
-        .ok(),
+        // THE COLLECTOR WHERE THE BAND IS DECLARED (CLOUD-2197), the floor
+        // model's reclaim where it is not.
+        crate::disk_watch::Reading::Reclaim => {
+            crate::disk_watch::collect_band(&watch.tree, watch.config, free, &mut watch.free_mb)
+                .or_else(|| {
+                    crate::disk_watch::reclaim(
+                        &watch.tree,
+                        watch.config,
+                        crate::disk_watch::reserve_mb(&watch.config.warm),
+                    )
+                    .ok()
+                })
+        }
     }
 }
 

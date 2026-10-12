@@ -15494,6 +15494,9 @@ fn run_mutate_sweep(
         .ok()
         .map(|id| id.trim().to_owned())
         .filter(|id| !id.is_empty());
+    if !disk_admits(root, "mutate sweep", err)? {
+        return Ok(ExitCode::Internal);
+    }
     let change = narrowed.change.clone();
     let declared = run_declared_sweep(root, narrowed, &registry, shard.as_deref(), out, err)?;
     let Some(id) = runner else {
@@ -15507,6 +15510,54 @@ fn run_mutate_sweep(
     } else {
         declared
     })
+}
+
+/// THE DISK ADMISSION a building step takes first (CLOUD-2197): below `[prune]
+/// min_free_mb`, collect toward `max_free_mb`; still below it, refuse the step as
+/// the environment's failure before it spends a build dying of the volume.
+///
+/// Admits where no band is declared or free space cannot be read: the
+/// fail-open direction every disk arm takes.
+//MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
+//MUTANT sweep-unwatched|s@^    if !disk_admits(root, "mutate sweep", err)? {$@    if false \&\& !disk_admits(root, "mutate sweep", err)? {@|a_sweep_that_cannot_be_brought_above_the_minimum_stops_before_building
+fn disk_admits(root: &Path, step: &str, err: &mut dyn Write) -> Result<bool> {
+    let Some(prune) = resolve::resolve(root, &Overrides::default())
+        .ok()
+        .and_then(|resolved| resolved.prune)
+    else {
+        return Ok(true);
+    };
+    let Some((min, _)) = prune.free_band() else {
+        return Ok(true);
+    };
+    let Ok(mut free) = prune::sampler(root.join(&prune.root)) else {
+        return Ok(true);
+    };
+    let Ok(now) = free() else {
+        return Ok(true);
+    };
+    if now >= min {
+        return Ok(true);
+    }
+    let kept = collect::kept(&collect::engine_paths());
+    let mut after = now;
+    if let Some(done) =
+        collect::collect_toward_max(root, &prune, &kept, now, &mut free, None, false)
+    {
+        for line in done.lines() {
+            writeln!(err, "{step}: {line}")?;
+        }
+        after = done.free_after_mb;
+    }
+    if after >= min {
+        return Ok(true);
+    }
+    writeln!(
+        err,
+        "::error:: {step}: the volume holding {} has {after}MB free against min_free_mb {min} and nothing the collector may still remove — free space on it, then run it again",
+        root.join(&prune.root).display()
+    )?;
+    Ok(false)
 }
 
 /// The declared runner over the narrowed (and possibly sharded) gates.
@@ -16847,8 +16898,7 @@ fn run_hook(
     //
     // The note rides the ladder above `normal`, because on the hosts where this
     // is reachable it is the ordinary state rather than news.
-    let capabilities = harness.capabilities();
-    if let Some(note) = undeclared_event_note(harness, &capabilities, envelope.event) {
+    if let Some(note) = undeclared_event_note(harness, &harness.capabilities(), envelope.event) {
         output::message(mode, Verbosity::Verbose, err, &note)?;
         return Ok(ExitCode::Success);
     }
@@ -18692,8 +18742,8 @@ fn collapse_seen_output(envelope: &hook::Envelope) -> Option<serde_json::Value> 
 /// CHEAP WHEN SMALL: the size is read before config, and only a result over the
 /// inline threshold pays for reading the declared bound.
 //MUTANT-SUITE crates/batten/tests/it/result_bound.rs
-//MUTANT result-bound-ignored|s@^    if size <= bound {$@    if size <= u64::MAX {@|an_oversized_result_becomes_a_pointer_to_a_view_of_its_text
-//MUTANT small-result-rewritten|s@^    if size <= bound {$@    if size == 0 {@|a_result_within_the_bound_is_left_alone
+//MUTANT result-bound-ignored|s@^    if !capture::exceeds_o200k(\&leaves, bound) {$@    if true {@|an_oversized_result_becomes_a_pointer_to_a_view_of_its_text
+//MUTANT small-result-rewritten|s@^    if !capture::exceeds_o200k(\&leaves, bound) {$@    if false {@|a_result_within_the_bound_is_left_alone
 fn bound_result(result: &serde_json::Value) -> Option<(serde_json::Value, refusal::Refusal)> {
     fn texts<'a>(value: &'a serde_json::Value, into: &mut Vec<&'a str>) {
         match value {
@@ -20673,7 +20723,39 @@ fn filed_here_rows(overrides: &Overrides, root: &Path) -> Option<(Vec<String>, V
                 .collect()
         })
         .unwrap_or_default();
+    // A CLOSED ROW NEEDS NO RE-EVALUATION: a row the tracker last said was
+    // canceled, a duplicate or completed is off the checklist. The store's
+    // newest read answers it, so the Stop path never calls the tracker; a row
+    // never read stays listed, the could-not-look direction.
+    let filed = filed
+        .into_iter()
+        .filter(|id| !row_closed(root, id))
+        .collect();
     Some((flagged, filed))
+}
+
+/// Whether the newest stored read or write of `key` says the row is closed.
+//MUTANT-SUITE crates/batten/tests/it/stop_posture.rs
+//MUTANT closed-row-listed|s@^        .filter(\x7cid\x7c !row_closed(root, id))$@        .filter(\x7c_\x7c true)@|a_closed_row_leaves_the_filed_checklist
+fn row_closed(repo: &Path, key: &str) -> bool {
+    let tools = [READ_TOOL.to_owned(), WRITE_TOOL.to_owned()];
+    let selector = capture::Selector {
+        tools: &tools,
+        key,
+        key_at: DEFAULT_KEY_AT,
+    };
+    let Ok(Some(found)) = capture::find(repo, &selector) else {
+        return false;
+    };
+    capture::read(repo, &found.capture)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .and_then(|row| {
+            row.get("statusType")
+                .and_then(serde_json::Value::as_str)
+                .map(|kind| matches!(kind, "canceled" | "duplicate" | "completed"))
+        })
+        .unwrap_or(false)
 }
 
 /// The predicate the filed-here rungs select their row by, and whose findings rung 3 uses.
@@ -21375,7 +21457,7 @@ fn push_capture_notice(advice: &mut Vec<advisory::Advice>, reason: &str) {
 /// free-space read; below `[prune] min_free_mb`, a collection bounded by
 /// [`disk_watch::HOOK_COLLECT_DEADLINE`], then admit. The hook never denies a
 /// call for disk: denying would block the `rm` or edit that frees space. At
-/// SessionStart it re-arms every fingerprint, so a session that never runs
+/// `SessionStart` it re-arms every fingerprint, so a session that never runs
 /// `land` still orders units by use since it started.
 ///
 /// Under `BATTEN_DISK_TRACE=1` a pre-tool call prints `disk-call <tool>
@@ -21423,7 +21505,7 @@ fn collect_before_admitting(
     };
     let before = if trace { free().unwrap_or(0) } else { 0 };
     let collected = band.and_then(|prune| {
-        let kept = collect::kept(&engine_paths());
+        let kept = collect::kept(&collect::engine_paths());
         let deadline = std::time::Instant::now() + disk_watch::HOOK_COLLECT_DEADLINE;
         collect::collect_if_pressed(&repo, prune, &kept, &mut free, Some(deadline), false)
     });
@@ -21446,22 +21528,6 @@ fn collect_before_admitting(
         .with_severity(refusal::Severity::Note);
         push_finding(advice, severity::AdvisoryTier::Advisory, finding);
     }
-}
-
-/// The files the collector never removes: the running executable and the
-/// `batten` on `PATH`, canonicalised (CLOUD-2197 §5).
-fn engine_paths() -> Vec<PathBuf> {
-    let running = std::env::current_exe().ok();
-    let installed = std::env::var_os("PATH").and_then(|path| {
-        std::env::split_paths(&path)
-            .map(|dir| dir.join(surface::BINARY))
-            .find(|candidate| candidate.is_file())
-    });
-    running
-        .into_iter()
-        .chain(installed)
-        .filter_map(|path| path.canonicalize().ok())
-        .collect()
 }
 
 /// The `[capture]` bound, or `None` when the authority cannot be read.
