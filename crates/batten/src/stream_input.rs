@@ -110,7 +110,10 @@ pub fn read(
         .with_context(|| format!("create the hook spool {}", spool_dir.display()))?;
     let raw = spool_dir.join(format!("payload-{}.json", std::process::id()));
     let spool = std::io::BufWriter::new(
-        std::fs::File::create(&raw).with_context(|| format!("spool {}", raw.display()))?,
+        // The host's bytes, teed as they are parsed and read back by this
+        // process alone: committed when the parse returns.
+        std::fs::File::create(&raw) // stream: the hook spool
+            .with_context(|| format!("spool {}", raw.display()))?,
     );
     let mut bom = [0_u8; 3];
     let mut input = BufReader::with_capacity(CHUNK, input);
@@ -276,7 +279,9 @@ impl<C: FnMut(&str) -> u64> Walk<'_, C> {
                     self.spilled.len()
                 ));
                 let mut out = std::io::BufWriter::new(
-                    std::fs::File::create(&path)
+                    // One leaf's bulk, committed by the flush that records it
+                    // in `Spilled`.
+                    std::fs::File::create(&path) // stream: a spilled leaf
                         .with_context(|| format!("spill {}", path.display()))?,
                 );
                 out.write_all(kept.as_bytes())?;

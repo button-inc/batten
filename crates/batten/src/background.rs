@@ -85,9 +85,7 @@ pub fn defer(git_dir: &Path, id: &str, pending: &Pending) -> std::io::Result<()>
     let dir = git_dir.join(DIR);
     std::fs::create_dir_all(&dir)?;
     let body = serde_json::to_vec(pending).map_err(std::io::Error::other)?;
-    let staging = dir.join(format!(".{id}.tmp"));
-    std::fs::write(&staging, body)?;
-    std::fs::rename(staging, dir.join(format!("{id}.json")))
+    crate::durable::replace(dir.join(format!("{id}.json")), body)
 }
 
 /// How a task ended, as its notification says.

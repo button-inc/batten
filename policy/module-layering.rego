@@ -277,6 +277,28 @@ declared_modules := {
 	# runs is that module's, under the committed `[prune]` rules — and `land` reaches
 	# it, never the reverse, so the projection stays a pure function of samples.
 	"disk_watch",
+	# `collect` arrived with CLOUD-2197, the collector `disk_watch` runs, and sits
+	# between the two for their reason: it reaches `prune` for the superseded pass
+	# and the profile lock, and `disk_watch` reaches it, never the reverse.
+	"collect",
+	# `o200k` arrived with CLOUD-2224: a token count over a table `build.rs`
+	# writes. A pure function of its input; it reaches nothing in the crate.
+	"o200k",
+	# `stream_input` arrived with CLOUD-2224: the hook's stdin, read streaming
+	# into a spool. An acquisition module below the adjudicator it feeds.
+	"stream_input",
+	# `background` arrived with CLOUD-2214: a backgrounded call's output, followed
+	# from its declared file. It reaches nothing in the crate.
+	"background",
+	# The release path's four modules arrived with CLOUD-2033, one per gate:
+	# `release_verify` (G1, a release is published), `release_path` (G2, the one
+	# predicate a write of `main` is graded by), `release_state` (the path's
+	# decisions) and `release_guard` (G4, the server gate holds). Each verb is a
+	# thin shell over these, and the lower gates never reach the higher.
+	"release_verify",
+	"release_path",
+	"release_state",
+	"release_guard",
 	# `wiring` arrived with CLOUD-893 and it worked a sixth time, on a rebase
 	# rather than on a fresh write: the module landed on a branch based before
 	# this table's last row and nothing said so until `main` moved under it.
@@ -1071,6 +1093,25 @@ forbidden[from] contains to if {
 		# into the module that adjudicates a mediated call is exactly the reach
 		# the surface split exists to make unwritable.
 		"prune": {"rules", "hook"},
+		# `collect -> {rules, hook, disk_watch}`: `prune`'s pair for `prune`'s
+		# reason, and the watcher it runs under, which reaches it and never the
+		# reverse (CLOUD-2197; the trace helpers moved down here to keep it so).
+		"collect": {"rules", "hook", "disk_watch"},
+		# `o200k -> {rules, hook, capture, stream_input}`: a count over a static
+		# table, lower than every module that asks it for one (CLOUD-2224).
+		"o200k": {"rules", "hook", "capture", "stream_input"},
+		# `stream_input -> {rules}`: it reads the hook's stdin into a spool and
+		# never judges what it read (CLOUD-2224).
+		"stream_input": {"rules"},
+		# `background -> {rules, hook}`: it follows a task's output file and
+		# decides nothing about the call it came from (CLOUD-2214).
+		"background": {"rules", "hook"},
+		# The release path's gates, lowest first (CLOUD-2033): G2's predicate and
+		# G1's verification never reach the decisions or the guard built on them.
+		"release_path": {"rules", "hook", "release_state", "release_guard", "release_verify"},
+		"release_verify": {"rules", "hook", "release_state", "release_guard"},
+		"release_state": {"rules", "hook", "release_guard"},
+		"release_guard": {"rules", "hook"},
 		# `mutate -> {rules, hook}`, `prune`'s pair for `prune`'s reason. It is
 		# `Effect::Write` on `Surface::VerifyOnly` and stages a tree to re-run a
 		# suite against it, so a back-edge into the module that adjudicates a
