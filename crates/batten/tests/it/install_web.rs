@@ -1,44 +1,31 @@
-//! `install.sh`'s token-free web route, over a loopback release host (CLOUD-205).
+//! The generated `install.sh` (CLOUD-2203), run end to end over a loopback
+//! release host.
 //!
-//! # Why this tier exists at all
-//!
-//! `install.sh`'s header has claimed "NO TOKEN IS REQUIRED BY CONSTRUCTION"
-//! since it was written and did not hold it: every route ran through
-//! `api.github.com`, whose ANONYMOUS budget is 60 an hour per source ADDRESS.
-//! On a shared agent-container egress that is exhausted by other tenants, so a
-//! container's Setup script died with `cannot read the release list` and named
-//! a token the header says is unnecessary. The repair is a second route over
-//! the release WEB host, which shares no budget and needs no credential.
-//!
-//! # Why it is not in `tests/install.bats`
-//!
-//! That suite is a `.bats` under `tests/`, so `policy/shell-retirement.rego`
-//! governs it and an EDIT is refused — the two landable shapes are retire it
-//! whole or leave it alone, and neither is what adding a case to it would be.
-//! A Rust tier is the shape a new suite takes here anyway
-//! (`.claude/rules/toolchain.md`), and it costs that file nothing.
-//!
-//! **The existing bats suite is still the sensor that caught the design error.**
-//! Two of its cases make the fixture API unreadable and require exit 2; the
-//! first draft of the fallback reached the real github.com and installed a real
-//! binary instead, so the suite's own hermeticity failed it. That is why
-//! `BATTEN_API` set without `BATTEN_WEB` switches the fallback OFF, and why the
-//! bats file needed no edit: it was right.
+//! The script is `install::render_bootstrap`'s output and nothing else: detect
+//! the target, read the tag off the web host's `latest` redirect (or take
+//! `BATTEN_VERSION`), fetch `SHA256SUMS` and the archive from
+//! `releases/download`, check the digest, and run `batten engine install`.
+//! Everything after the hand-over is Rust and is tested where it lives
+//! (`install.rs`, `engine_install.rs`). This tier proves what only the script can:
+//! that the tag resolves, that the digest gate refuses bytes the release did not
+//! publish, and that a refused download names what answered.
 //!
 //! # A loopback HTTP host rather than a `file://` tree
 //!
-//! `resolve_via_web` reads the tag off the URL curl ENDED on — the web host
-//! answers `…/releases/latest` with a `302` to `…/releases/tag/<tag>`. A
-//! `file://` fixture cannot redirect, so it could exercise the download leg and
-//! never the resolution leg, which is the half that decides WHICH release gets
-//! installed. `provision.rs` stands up loopback listeners for the same reason.
+//! The tag comes off the URL curl ENDED on — the web host answers
+//! `…/releases/latest` with a `302` to `…/releases/tag/<tag>`. A `file://`
+//! fixture cannot redirect, so it could exercise the download leg and never the
+//! resolution leg, which is the half that decides WHICH release gets installed.
 //! Nothing leaves the machine.
+//!
+//! # The archive's `batten` is a stub
+//!
+//! It prints the arguments it was run with, which is how a case sees the
+//! hand-over: `ran engine install` on stdout means the verified bytes were run.
 
-// UNIX ONLY, and `rust.yml`'s `windows` job is why rather than a preference:
-// the subject is a POSIX shell program, driven here through `sh` with
-// `.env_clear()` (which drops `SystemRoot` and `ComSpec`), against a hard-coded
-// `x86_64-unknown-linux-musl` target, and needing `mktemp`, `curl`, `tar` and
-// `sha256sum`. `run_shape_guard_door.rs` guards for the same reason.
+// UNIX ONLY: the subject is a POSIX shell program, driven through `sh` with
+// `.env_clear()` (which drops `SystemRoot` and `ComSpec`), needing `uname`,
+// `mktemp`, `curl`, `tar` and `sha256sum`/`shasum`.
 #![cfg(unix)]
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -47,7 +34,6 @@ use crate::common;
 
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
-use std::path::PathBuf;
 #[expect(
     clippy::disallowed_types,
     reason = "stays, and test-only: the import both spawns below need, annotated at every site the way the other suites in this directory are"
@@ -60,26 +46,24 @@ use common::scratch;
 /// The tag the fixture host publishes.
 const TAG: &str = "v9.9.9";
 
-/// The repository the fixture host serves.
+/// The repository path the fixture host serves.
 ///
 /// Named by the fixture rather than defaulted, so this suite does not spell out
-/// where this repository is hosted — `forge name other` refuses
-/// that literal anywhere under `crates/batten/tests/**`, and it is right to: a
-/// fixture that hard-codes the origin is testing this deployment rather than the
-/// installer. `install.sh` reads `BATTEN_REPO`, so naming one here is the
-/// supported route and not a workaround.
+/// where this repository is hosted — `forge name other` refuses that literal
+/// anywhere under `crates/batten/tests/**`. The script reads `BATTEN_RELEASES`,
+/// so pointing it here is the supported route and not a workaround.
 const REPO: &str = "example/pkg";
 
-/// The archive payload: a `batten` executable at the archive root, which is what
-/// `batten dist` produces and what the installer requires.
+/// The archive payload: a `batten` stub at the archive root, which is where
+/// `batten dist` puts the binary and where the bootstrap extracts it from.
 fn tarball(dir: &std::path::Path) -> Vec<u8> {
     let stage = dir.join("stage");
     std::fs::create_dir_all(&stage).unwrap();
-    std::fs::write(stage.join("batten"), "#!/bin/sh\necho fixture-batten\n").unwrap();
+    std::fs::write(stage.join("batten"), "#!/bin/sh\necho \"ran $*\"\n").unwrap();
     let archive = dir.join("payload.tar.gz");
     #[expect(
         clippy::disallowed_types,
-        reason = "stays, and test-only: the installer untars what it downloads, so the fixture payload has to be a real gzipped tar and `tar` is what writes one"
+        reason = "stays, and test-only: the bootstrap untars what it downloads, so the fixture payload has to be a real gzipped tar and `tar` is what writes one"
     )]
     let status = Command::new("tar")
         .args([
@@ -96,9 +80,14 @@ fn tarball(dir: &std::path::Path) -> Vec<u8> {
 }
 
 /// sha256 of `bytes` as lowercase hex, through the same helper the engine uses,
-/// so a fixture cannot pin a digest the installer would never compute.
+/// so a fixture cannot pin a digest the script would never compute.
 fn digest(bytes: &[u8]) -> String {
     batten::provision::digest(bytes)
+}
+
+/// The asset name the bootstrap asks for on `target`.
+fn asset(target: &str) -> String {
+    format!("batten-{TAG}-{target}.tar.gz")
 }
 
 /// One route the fixture host serves.
@@ -115,13 +104,11 @@ struct Route {
 
 /// A loopback HTTP host serving `routes`, returning its base URL.
 ///
-/// Single-threaded and serial by design: the installer makes its requests in
+/// Single-threaded and serial by design: the script makes its requests in
 /// order, and a concurrent server would let a missing request pass unnoticed as
-/// a timing artefact. Unknown paths answer `404`, which is what a private
-/// repository looks like from the web host and is the arm one case below drives.
-/// `build` is handed the host's own base URL, because a release host has to name
-/// itself in the `Location` it redirects to — binding first and building the
-/// routes from the real address is what keeps that from being a guessed port.
+/// a timing artefact. Unknown paths answer `404`. `build` is handed the host's
+/// own base URL, because a release host names itself in the `Location` it
+/// redirects to.
 fn host(build: impl FnOnce(&str) -> Vec<Route>) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
     let base = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
@@ -174,14 +161,15 @@ fn serve(mut stream: TcpStream, routes: &[Route]) {
     let _ = stream.flush();
 }
 
-/// The four routes a complete release serves.
-fn release_routes(base: &str, asset: &str, archive: &[u8]) -> Vec<Route> {
-    let sums = format!(
-        "{}  {asset}\n{}  batten-{TAG}-aarch64-apple-darwin.tar.gz\n",
-        digest(archive),
-        "0".repeat(64)
-    );
-    vec![
+/// The routes a complete release serves: the `latest` redirect, the tag page,
+/// `SHA256SUMS`, and the archive under every bootstrap target's name, so a case
+/// passes on whichever host runs it.
+fn release_routes(base: &str, archive: &[u8]) -> Vec<Route> {
+    let sums: String = batten::install::TARGETS
+        .iter()
+        .map(|target| format!("{}  {}\n", digest(archive), asset(target)))
+        .collect();
+    let mut routes = vec![
         Route {
             path: format!("/{REPO}/releases/latest"),
             status: 302,
@@ -200,191 +188,170 @@ fn release_routes(base: &str, asset: &str, archive: &[u8]) -> Vec<Route> {
             location: None,
             body: sums.into_bytes(),
         },
-        Route {
-            path: format!("/{REPO}/releases/download/{TAG}/{asset}"),
+    ];
+    for target in batten::install::TARGETS {
+        routes.push(Route {
+            path: format!("/{REPO}/releases/download/{TAG}/{}", asset(target)),
             status: 200,
             location: None,
             body: archive.to_vec(),
-        },
-    ]
+        });
+    }
+    routes
 }
 
-/// Run `install.sh` against `web`, with the API pointed at a host that answers
-/// nothing and EVERY credential unset.
-///
-/// `BATTEN_API` names an unroutable host rather than being left at its default:
-/// the point of each case is that the WEB route did the work, and a default API
-/// that happened to answer would let a case pass without the route under test
-/// running at all.
-fn install(name: &str, web: &str, target: &str) -> (Option<i32>, String, String, PathBuf) {
+/// The index of the `SHA256SUMS` route in [`release_routes`].
+const SUMS: usize = 2;
+
+/// Run the committed `install.sh` against `web`, with every credential unset.
+fn install(name: &str, web: &str, env: &[(&str, &str)]) -> (Option<i32>, String, String) {
     let dir = scratch(name);
-    let dest = dir.join("bin");
-    std::fs::create_dir_all(&dest).unwrap();
     #[expect(
         clippy::disallowed_types,
-        reason = "stays, and test-only: the subject of this suite IS a shell program, so there is nothing to assert without running it — the same reason `install.bats` drives it end to end"
+        reason = "stays, and test-only: the subject of this suite IS a shell program, so there is nothing to assert without running it"
     )]
-    let out = Command::new("sh")
+    let mut command = Command::new("sh");
+    command
         .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/../../install.sh"))
+        .current_dir(&dir)
         .env_clear()
         // No `batten` resolvable by name (CLOUD-1951): CI's runner has none, so
-        // an installer that found one here would be reading a different box.
+        // a script that found one here would be reading a different box.
         .env("PATH", common::ambient_path())
         .env("HOME", dir.to_str().unwrap())
         // The loopback host must not be reached through this container's proxy.
         .env("NO_PROXY", "127.0.0.1,localhost")
         .env("no_proxy", "127.0.0.1,localhost")
-        .env("BATTEN_API", "http://127.0.0.1:1")
-        .env("BATTEN_REPO", REPO)
-        .env("BATTEN_WEB", web)
-        .env("BATTEN_TARGET", target)
-        .env("BATTEN_INSTALL_DIR", &dest)
-        .env("BATTEN_ALLOW_OFF_PATH", "1")
-        .env("BATTEN_RETRIES", "1")
-        .output()
-        .expect("run install.sh");
+        .env("BATTEN_RELEASES", format!("{web}/{REPO}"));
+    for (key, value) in env {
+        command.env(key, value);
+    }
+    let out = command.output().expect("run install.sh");
     (
         out.status.code(),
         String::from_utf8_lossy(&out.stdout).into_owned(),
         String::from_utf8_lossy(&out.stderr).into_owned(),
-        dest.join("batten"),
     )
 }
 
-const TARGET: &str = "x86_64-unknown-linux-musl";
-
-fn asset_name() -> String {
-    format!("batten-{TAG}-{TARGET}.tar.gz")
-}
-
-/// THE CASE THE DEFECT FAILS. No token, no reachable API — the install still
-/// completes, which is the header's claim delivered rather than asserted.
+/// No token, no API: the tag comes off the redirect, the digest gate runs, and
+/// the verified binary is handed `engine install`.
 #[test]
 fn the_web_route_installs_with_no_token_and_no_api() {
     let dir = scratch("install-web-happy");
     let archive = tarball(&dir);
-    let asset = asset_name();
-    let web = host(|base| release_routes(base, &asset, &archive));
+    let web = host(|base| release_routes(base, &archive));
 
-    let (code, stdout, stderr, installed) = install("install-web-ok", &web, TARGET);
+    let (code, stdout, stderr) = install("install-web-ok", &web, &[]);
     assert_eq!(code, Some(0), "install failed: {stdout}{stderr}");
     assert!(
-        stdout.contains(&format!("version={TAG}")),
-        "the tag comes off the redirect, not a payload: {stdout}"
+        stdout.contains("ran engine install"),
+        "the verified binary must be run with `engine install`: {stdout}"
     );
-    assert!(
-        stdout.contains("verified=sha256"),
-        "the digest gate still ran: {stdout}"
-    );
-    assert!(installed.is_file(), "the binary reached the destination");
 }
 
-/// THE DIGEST GATE IS UNCHANGED, and this is the half that proves the web route
-/// is a second route rather than a weaker one. A `SHA256SUMS` disagreeing with
-/// the bytes is a REFUSAL, and nothing reaches the destination.
+/// `BATTEN_VERSION` names the tag, so the `latest` redirect is never asked.
+#[test]
+fn a_named_version_never_asks_for_latest() {
+    let dir = scratch("install-web-named");
+    let archive = tarball(&dir);
+    let web = host(|base| {
+        let mut routes = release_routes(base, &archive);
+        // Drop the redirect: a script that still asked would fail on the 404.
+        routes.remove(0);
+        routes
+    });
+
+    let (code, stdout, stderr) = install("install-web-named-run", &web, &[("BATTEN_VERSION", TAG)]);
+    assert_eq!(code, Some(0), "install failed: {stdout}{stderr}");
+    assert!(stdout.contains("ran engine install"), "{stdout}");
+}
+
+/// A `SHA256SUMS` disagreeing with the bytes is a REFUSAL, and the bytes are
+/// never run.
 #[test]
 fn a_sha256sums_that_disagrees_with_the_bytes_installs_nothing() {
     let dir = scratch("install-web-badsum");
     let archive = tarball(&dir);
-    let asset = asset_name();
     let web = host(|base| {
-        let mut routes = release_routes(base, &asset, &archive);
+        let mut routes = release_routes(base, &archive);
         // Publish a digest for a payload that is not the one served.
-        routes[2].body = format!("{}  {asset}\n", "1".repeat(64)).into_bytes();
+        routes[SUMS].body = batten::install::TARGETS
+            .iter()
+            .map(|target| format!("{}  {}\n", "1".repeat(64), asset(target)))
+            .collect::<String>()
+            .into_bytes();
         routes
     });
 
-    let (code, stdout, stderr, installed) = install("install-web-bad", &web, TARGET);
+    let (code, stdout, stderr) = install("install-web-bad", &web, &[]);
     assert_eq!(
         code,
         Some(1),
         "a digest mismatch is a refusal: {stdout}{stderr}"
     );
+    assert!(stderr.contains("does not match"), "{stderr}");
     assert!(
-        !installed.exists(),
-        "a refused install must leave the destination empty"
+        !stdout.contains("ran engine install"),
+        "unverified bytes must never be run: {stdout}"
     );
 }
 
-/// AN ASSET THE MANIFEST DOES NOT NAME IS A REFUSAL, never an unverified
-/// install. `SHA256SUMS` is matched by exact field equality, so a release that
-/// simply omits this target's line does not fall through to the next one.
+/// An asset `SHA256SUMS` does not name is a refusal, never an unverified run.
+/// The manifest is matched by exact field equality, so a release that omits
+/// this target's line does not fall through to another's.
 #[test]
 fn an_asset_absent_from_sha256sums_installs_nothing() {
     let dir = scratch("install-web-nosum");
     let archive = tarball(&dir);
-    let asset = asset_name();
     let web = host(|base| {
-        let mut routes = release_routes(base, &asset, &archive);
-        routes[2].body = format!("{}  some-other-asset.tar.gz\n", digest(&archive)).into_bytes();
+        let mut routes = release_routes(base, &archive);
+        routes[SUMS].body = format!("{}  some-other-asset.tar.gz\n", digest(&archive)).into_bytes();
         routes
     });
 
-    let (code, stdout, stderr, installed) = install("install-web-nosum-run", &web, TARGET);
+    let (code, stdout, stderr) = install("install-web-nosum-run", &web, &[]);
     assert_eq!(
         code,
         Some(1),
-        "a release that publishes no digest for this asset is a refusal, not a could-not-look: \
-         {stdout}{stderr}"
+        "a release that publishes no digest for this asset is a refusal: {stdout}{stderr}"
     );
-    assert!(!installed.exists(), "nothing may reach the destination");
+    assert!(stderr.contains("publishes no sha256"), "{stderr}");
+    assert!(!stdout.contains("ran engine install"), "{stdout}");
 }
 
-/// A RELEASE WITH NO `SHA256SUMS` AT ALL IS THE SAME REFUSAL (1), and it used to
-/// be reported as a could-not-look (2) with a rate-limit remedy.
-///
-/// The two absences are one statement about the release — it does not publish
-/// the digest this script will not install without — and the case above already
-/// pinned the manifest-present half. This is the half `resolve_via_web` got
-/// wrong: the fetch of `SHA256SUMS` returned `1`, which reaches the caller's
-/// `*` arm and says "cannot read release metadata … set `BATTEN_GITHUB_TOKEN` …
-/// if the repository is private". Every tag in a repository's history from
-/// before it started publishing a manifest reaches it, so this is the common
-/// shape rather than an exotic one, and the remedy it printed was for a fault
-/// that is not present.
-///
-/// The discriminating input is a host that resolves the tag and serves the
-/// ASSET — everything except the manifest. A case that simply served nothing
-/// would take the could-not-look arm one leg earlier and pass against the
-/// defect, which is what `a_web_host_that_serves_nothing_is_could_not_look`
-/// below is for.
+/// A release with no `SHA256SUMS` is a download the host refused: exit 2,
+/// naming the status and the URL that answered, and nothing is run.
 #[test]
-fn a_release_publishing_no_sha256sums_at_all_is_a_refusal() {
+fn a_release_publishing_no_sha256sums_names_the_status_and_url() {
     let dir = scratch("install-web-nomanifest");
     let archive = tarball(&dir);
-    let asset = asset_name();
     let web = host(|base| {
-        let mut routes = release_routes(base, &asset, &archive);
-        // Drop the manifest route, keeping the redirect, the tag page and the
-        // asset — so every leg but this one succeeds.
-        routes.remove(2);
+        let mut routes = release_routes(base, &archive);
+        routes.remove(SUMS);
         routes
     });
 
-    let (code, stdout, stderr, installed) = install("install-web-nomanifest-run", &web, TARGET);
-    assert_eq!(
-        code,
-        Some(1),
-        "an absent SHA256SUMS is the release's own fault, not the environment's: {stdout}{stderr}"
-    );
+    let (code, stdout, stderr) = install("install-web-nomanifest-run", &web, &[]);
+    assert_eq!(code, Some(2), "{stdout}{stderr}");
     assert!(
-        stderr.contains("publishes no sha256"),
-        "the message must name the missing digest rather than a rate limit: {stderr}"
+        stderr.contains("SHA256SUMS: 404 http://127.0.0.1:"),
+        "a refused download names the status and what answered: {stderr}"
     );
-    assert!(!installed.exists(), "nothing may reach the destination");
+    assert!(!stdout.contains("ran engine install"), "{stdout}");
 }
 
-/// A WEB HOST THAT SERVES NOTHING IS "COULD NOT LOOK" (2), never a broken
-/// release (1). This is the private-repository shape: the web route 404s and
-/// has nothing to say, so the exit class must stay environmental.
+/// A web host that serves nothing is "could not look" (2), never a broken
+/// release (1). This is the private-repository shape.
 #[test]
 fn a_web_host_that_serves_nothing_is_could_not_look() {
     let web = host(|_| Vec::new());
-    let (code, stdout, stderr, installed) = install("install-web-404", &web, TARGET);
+    let (code, stdout, stderr) = install("install-web-404", &web, &[]);
     assert_eq!(
         code,
         Some(2),
         "an unreadable release is environment, not a bad release: {stdout}{stderr}"
     );
-    assert!(!installed.exists());
+    assert!(stderr.contains("releases/latest: 404"), "{stderr}");
+    assert!(!stdout.contains("ran engine install"), "{stdout}");
 }
