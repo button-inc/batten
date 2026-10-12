@@ -1,4 +1,7 @@
 name: auto-release-land
+# workflow-shell: CLOUD-2033 the step count rises by the settings read and the
+# cut's steps (fetch, settings, in-flight, pin, bump-unusable, cut), each one
+# `batten` verb; the multi-line `gh api` fast-forward step they replace is gone.
 
 # Land release-plz's version-bump PR with no human in the loop. release-plz opens
 # a `release-plz-*` PR (version + CHANGELOG bump); once its CI is green this posts
@@ -435,7 +438,13 @@ jobs:
   cut:
     name: cut
     needs: fast-forward-release-pr
-    if: needs.fast-forward-release-pr.outputs.green == 'true'
+    # THE ORIGIN TEST IS THIS JOB'S OWN (`privileged-lane`): it holds `contents:
+    # write` on a `workflow_run` trigger, and each job is judged alone, so the
+    # test in `fast-forward-release-pr` does not cover it.
+    if: >-
+      needs.fast-forward-release-pr.outputs.green == 'true' &&
+      (github.event_name != 'workflow_run' ||
+      github.event.workflow_run.head_repository.full_name == github.repository)
     runs-on: ubuntu-latest
     timeout-minutes: 30 # budget: p95=600s x3 measured=2026-10-12
     concurrency:

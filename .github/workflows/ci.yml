@@ -935,7 +935,9 @@ jobs:
           save-if: false
       # The same task `verify` runs, over this shard of both halves: a slice of
       # the declared runner's touched gates, then the registered runner's shard.
-      - run: mise run batten -- ci step --summary "Mutants - shard ${{ matrix.shard }} of 16" -- mise run mutant:changed
+      # The summary names no shard: an expression on the `run:` line is shell
+      # (`no-new-shell`), and the job's own name already carries the shard.
+      - run: mise run batten -- ci step --summary Mutants -- mise run mutant:changed
         env:
           MUTANT_RUNNER: cargo-mutants
           MUTANT_SHARD: ${{ matrix.shard }}/16

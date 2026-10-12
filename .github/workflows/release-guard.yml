@@ -1,4 +1,7 @@
 name: release-guard
+# workflow-shell: CLOUD-2033 a new workflow of five steps (post `release-path`,
+# probe the settings, resolve, verify and mark the pinned release), each one
+# `batten` verb or one `gh` call.
 
 # G4 (CLOUD-2033): the server gate the release path rests on, measured rather
 # than assumed, on every push to the trunk and hourly.

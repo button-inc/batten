@@ -1,4 +1,7 @@
 name: fast-forward
+# workflow-shell: CLOUD-2033 the step count rises by the release predicate's
+# four steps (in-flight, read the head, fetch it, `release path --strict`),
+# each one `batten` verb or one command under `ci step`.
 
 # THE RUN CARRIES THE PR IT ANSWERS FOR (CLOUD-409, CLOUD-456). An
 # `issue_comment` run attaches to the default-branch tip, so `head_branch` and

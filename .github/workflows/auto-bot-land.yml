@@ -1,4 +1,7 @@
 name: auto-bot-land
+# workflow-shell: CLOUD-2033 the step count rises by the release predicate's
+# three steps (in-flight, fetch the head, `release path --strict`), each one
+# `batten` verb; the logic lives in the verb, not in the step.
 
 # Land the bot's pull requests with no human in the loop — the whole lane, from a
 # draft nobody has looked at to a fast-forward on `main`.
