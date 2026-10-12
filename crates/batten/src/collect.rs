@@ -508,7 +508,7 @@ pub fn collect(request: &Request<'_>) -> (u64, usize) {
         rearm(tree);
     }
     if crate::disk_watch::tracing() {
-        let line = crate::disk_watch::trace_line(
+        let traced = crate::disk_watch::trace_line(
             "disk-pass",
             &[
                 u64::try_from(locks.len()).unwrap_or(u64::MAX),
@@ -520,7 +520,7 @@ pub fn collect(request: &Request<'_>) -> (u64, usize) {
                 request.need_bytes / (1024 * 1024),
             ],
         );
-        let _ = std::io::Write::write_all(&mut std::io::stderr(), format!("{line}\n").as_bytes());
+        let _ = std::io::Write::write_all(&mut std::io::stderr(), format!("{traced}\n").as_bytes());
     }
     (freed, removed)
 }

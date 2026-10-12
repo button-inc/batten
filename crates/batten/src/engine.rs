@@ -391,13 +391,19 @@ pub fn running_stamp() -> Option<String> {
 /// a malformed pin is left to [`check`] to name.
 #[must_use]
 pub fn stale(text: &str, stamp: impl FnOnce() -> Option<String>) -> Option<Pin> {
+    stale_as(text, stamp, runs_local())
+}
+
+/// [`stale`], with `BATTEN_ENGINE=local`'s answer passed in rather than read,
+/// so the decision is a function of its arguments.
+fn stale_as(text: &str, stamp: impl FnOnce() -> Option<String>, local: bool) -> Option<Pin> {
     let pin = declared(text)?;
     let satisfied = match (pin.release.as_deref(), pin.source.as_deref()) {
         (Some(tag), None) => tag == release(),
         // `BATTEN_ENGINE=local` satisfies a source pin here exactly as it does
         // in [`check`]: one answer to "is this the engine", or a test run of
         // the branch would try to BUILD the pin it was told to run without.
-        (None, Some(digest)) => runs_local() || stamp().as_deref() == Some(digest),
+        (None, Some(digest)) => local || stamp().as_deref() == Some(digest),
         _ => true,
     };
     (!satisfied).then_some(pin)
@@ -961,10 +967,20 @@ mod tests {
     #[test]
     fn a_satisfied_or_absent_pin_is_not_stale() {
         let tag = release();
-        assert!(stale("version = 1\n", || None).is_none());
-        assert!(stale(&format!("engine = {{ release = \"{tag}\" }}\n"), || None).is_none());
-        assert!(stale("engine = { release = \"v0.0.1\" }\n", || None).is_some());
-        assert!(stale("engine = { source = \"ab\" }\n", || Some("ab".into())).is_none());
-        assert!(stale("engine = { source = \"ab\" }\n", || None).is_some());
+        let stale =
+            |text: &str, stamp: Option<&str>| stale_as(text, || stamp.map(str::to_owned), false);
+        assert!(stale("version = 1\n", None).is_none());
+        assert!(stale(&format!("engine = {{ release = \"{tag}\" }}\n"), None).is_none());
+        assert!(stale("engine = { release = \"v0.0.1\" }\n", None).is_some());
+        assert!(stale("engine = { source = \"ab\" }\n", Some("ab")).is_none());
+        assert!(stale("engine = { source = \"ab\" }\n", None).is_some());
+    }
+
+    /// `BATTEN_ENGINE=local` (CLOUD-2232) answers a source pin and never a
+    /// release pin.
+    #[test]
+    fn the_local_engine_answers_a_source_pin_only() {
+        assert!(stale_as("engine = { source = \"ab\" }\n", || None, true).is_none());
+        assert!(stale_as("engine = { release = \"v0.0.1\" }\n", || None, true).is_some());
     }
 }
