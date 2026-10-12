@@ -177,13 +177,18 @@ fn lint(dir: &Path, extra: &[&str]) -> Output {
 /// The trailer is kept as an input on purpose: it no longer admits anything, and
 /// the #962 shape is only statable as a branch that carries one and asked nothing.
 fn weakening_pr(name: &str, trailer: Option<&str>) -> PathBuf {
+    weakening_pr_from(Fixture::new(name), trailer)
+}
+
+/// [`weakening_pr`] built in `fixture`, for a case that chooses where it lives.
+fn weakening_pr_from(fixture: Fixture, trailer: Option<&str>) -> PathBuf {
     // `must_land_on` because a fixture has no remote, so no recorded default
     // branch: without a declared target a CLAIMED run could not find its fork
     // point and would stay unarmed, and every claim-armed case below would pass
     // by never deciding anything.
     let base = "version = 1\nmust_land_on = \"origin/main\"\n\n[[rule]]\nid = \"no-todo\"\nkind = \"forbid\"\nglob = \"**/*.rs\"\npattern = \"x\"\nseverity = \"deny\"\nno_fix_reason = \"class 3 (x): y\"\n";
     let working = base.replace("\"deny\"", "\"warn\"");
-    let dir = Fixture::new(name)
+    let dir = fixture
         .config(base)
         .git()
         .undeclared_trunk()
@@ -284,14 +289,10 @@ fn an_answered_question_admits_the_weakening_it_names() {
 #[test]
 fn an_answer_recorded_above_the_checkout_lands_in_the_checkout() {
     let parent = common::scratch_outside_tree("asked-workspace", "parent");
-    let consumer = parent.join("consumer");
-    fs::rename(weakening_pr("lint-admit-workspace", None), &consumer).unwrap();
-    let plain = parent.join("plain");
-    fs::rename(
-        Fixture::new("lint-admit-workspace-plain").git().build(),
-        &plain,
-    )
-    .unwrap();
+    // Built in place, never moved: on Windows the temp dir and `target/` are
+    // different drives, and a rename cannot cross one.
+    let consumer = weakening_pr_from(Fixture::at(parent.join("consumer")), None);
+    let plain = Fixture::at(parent.join("plain")).git().build();
 
     assert_eq!(
         ask(&parent, "Admit it"),
