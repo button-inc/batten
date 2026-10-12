@@ -56,6 +56,15 @@ import rego.v1
 
 rules contains "hook wire missing"
 
+# THE MERGED HALF RAISES ITS OWN ID, AND ITS ROW REPORTS IT AS A WARNING
+# (CLOUD-2233). The merged surfaces are files under `$HOME` that no commit can
+# change, so a finding over them is a fact about the machine and never about the
+# branch. Measured 2026-10-12: a worker restart re-registered the launcher's Stop
+# hook three times and `verify` refused a byte-identical tree each time, while CI
+# — whose runner has no launcher file — could never have agreed. The committed
+# half stays `hook wire missing` and stays deny: a branch CAN change those files.
+rules contains "hook wire stray"
+
 # The program every hook registration must resolve to.
 #
 # A name rather than a full argv: the launcher spells the same registration
@@ -209,7 +218,7 @@ strays_in(path) := {command |
 # that may be emitted, and the declared id would only tell a reader which
 # home-relative file to open on their own machine.
 violation contains {
-	"rule": "hook wire missing",
+	"rule": "hook wire stray",
 	"verdict": "hook wire duplicate",
 	"subjects": [{"count": count(merged_strays)}],
 } if {
@@ -263,7 +272,7 @@ violation contains {
 # a config literal, so unlike a merged COMMAND it carries no home directory and
 # §5's reduction does not apply to it.
 violation contains {
-	"rule": "hook wire missing",
+	"rule": "hook wire stray",
 	"verdict": "hook wire unread",
 	"subjects": [{"artifact": id}],
 } if {
@@ -476,4 +485,7 @@ test_a_tree_with_no_wiring_surface_is_clean if {
 # case it names asserts the PATH, so it reddens; a case asserting only that a
 # finding fired would survive this, which is why that assertion was tightened
 # rather than added to.
+# CLOUD-2233's own falsifier: the merged half raises the committed half's id again,
+# so a machine-local registration refuses landing.
+#MUTANT merged-stray-blocks-landing|s@^\t"rule": "hook wire stray",$@\t"rule": "hook wire missing",@|a_merged_stray_is_reported_and_never_refuses
 #MUTANT unread-unnamed|s@^\t"subjects": \[{"path": path}\],$@\t"subjects": [{"count": count(unreadable)}],@|a_committed_surface_that_will_not_parse_is_reported

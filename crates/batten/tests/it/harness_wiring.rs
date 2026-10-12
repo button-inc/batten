@@ -295,6 +295,7 @@ scope = "tree"
 documents = [".claude/settings.json"]
 module = "harness-wiring.rego"
 severity = "deny"
+predicate_severity = {{ "hook wire stray" = "warn" }}
 
 [[rule.external]]
 id = "harness-launcher-settings"
@@ -551,9 +552,15 @@ fn a_merged_registration_beside_the_mediator_is_refused() {
         Some(&wiring(&[], &["~/.claude/some-other-hook.sh"])),
     );
     let output = check(&repo, Some(&outside));
-    assert!(!output.status.success(), "a merged sibling passed");
+    // REPORTED, NEVER DECIDING (CLOUD-2233): the surface is under `$HOME`, which
+    // no branch can change, so the finding is a warning.
     assert!(
-        findings(&output).contains("hook wire missing"),
+        output.status.success(),
+        "a merged sibling decided the exit: {}",
+        findings(&output)
+    );
+    assert!(
+        findings(&output).contains("rule 'hook wire stray'"),
         "wrong finding: {}",
         findings(&output)
     );
@@ -580,15 +587,17 @@ fn the_launcher_hooks_are_refused_rather_than_tolerated() {
         Some(&wiring(&[], &RETIRED_MERGED)),
     );
     let output = check(&repo, Some(&outside));
+    // TOLD, AND NOT A REFUSAL (CLOUD-2233): the report is what CLOUD-1383 asked
+    // for, and a refusal over `$HOME` is one no commit can clear.
     assert!(
-        !output.status.success(),
-        "a retired launcher hook came back and was allowed: {}",
+        output.status.success(),
+        "a launcher hook in $HOME decided the exit: {}",
         findings(&output)
     );
     // A COUNT AND NO PATH: a merged path is under somebody's home directory and
     // differs per machine, so rule 4 and §6 byte-stability both forbid it travelling.
     assert!(
-        findings(&output).contains("2 rule 'hook wire missing'"),
+        findings(&output).contains("2 rule 'hook wire stray'"),
         "wrong finding: {}",
         findings(&output)
     );
@@ -596,6 +605,36 @@ fn the_launcher_hooks_are_refused_rather_than_tolerated() {
         !findings(&output).contains(".claude"),
         "a merged path travelled into the finding: {}",
         findings(&output)
+    );
+}
+
+#[test]
+fn a_merged_stray_is_reported_and_never_refuses() {
+    // CLOUD-2233. Measured 2026-10-12: a worker restart re-registered the
+    // launcher's Stop hook in `$HOME`, and `verify` refused a byte-identical tree
+    // three laps running while CI, with no launcher file, could never agree. The
+    // landing gate is `check --rule 'hook wire missing'`, and a merged stray must
+    // leave it at exit 0 while still being reported under its own id.
+    let (repo, outside) = fixture(
+        "merged-never-refuses",
+        &clean_committed(),
+        Some(&wiring(&[], &RETIRED_MERGED)),
+    );
+    let mut gate = batten();
+    gate.current_dir(&repo)
+        .args(["check", "--rule", "hook wire missing"])
+        .env(ROOT_VAR, &outside);
+    let landing = gate.output().expect("run batten check --rule");
+    assert_eq!(
+        landing.status.code(),
+        Some(0),
+        "a merged stray refused the landing gate: {}",
+        findings(&landing)
+    );
+    let reported = findings(&check(&repo, Some(&outside)));
+    assert!(
+        reported.contains("rule 'hook wire stray'"),
+        "the merged stray went unreported: {reported}"
     );
 }
 

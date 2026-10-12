@@ -9353,6 +9353,9 @@ id = "hook wire missing"
 no_fix_reason = "class 1 (config_edit's JSON backend): the repair is an edit to a JSON settings file, and config_edit carries only a TOML backend"
 kind = "policy"
 scope = "tree"
+# The merged-surface findings are a fact about this machine's `$HOME`, which no
+# branch can change: reported, never deciding an exit (CLOUD-2233).
+predicate_severity = { "hook wire stray" = "warn" }
 documents = [
   ".claude/settings.json",
   ".cursor/hooks.json",
