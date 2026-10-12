@@ -609,15 +609,18 @@ rustix = { version = "1.1", features = ["fs", "process"] }
 # for the same reason, so the two ends of the pgroup protocol are implemented
 # against one set of semantics (CLOUD-455 is the prior-art gate).
 signal-hook = { version = "0.4", default-features = false, features = ["iterator"] }
-# The executable of every running process, on every shipped target (CLOUD-2197):
-# the collector keeps a unit whose binary a process is executing, which a test
-# runner holds no lock over. Linux answers from `/proc`, macOS from `libproc`,
-# Windows from the process snapshot API; only Linux has a std route, and the
-# other two are FFI that `unsafe_code = "forbid"` puts out of reach. One crate
-# means one code path, so the suite on each CI platform exercises the call the
-# shipped binary makes. `system` alone: no disk, network, component or user
-# tables are read.
-sysinfo = { version = "0.39", default-features = false, features = ["system"] }
+# The executable of every running process on macOS (CLOUD-2197): the collector
+# keeps a unit whose binary a process is executing, which a test runner holds no
+# lock over. `sysctl(3)` lives in libSystem, which every macOS binary already
+# links, and calling it is FFI that `unsafe_code = "forbid"` puts out of reach;
+# this crate is the safe wrapper, and `kern.proc.all` and `kern.procargs2` are
+# what Go's `x/sys/unix` reads for the same answer. Measured on #1132, every
+# other route fails: `sysinfo` links IOKit and CoreFoundation, which
+# `darwin-link` cannot resolve without an Apple SDK; `libproc` runs bindgen
+# against the build host's SDK; `darwin-libproc` pins `memchr ~2.3`, which
+# cannot resolve beside `imara-diff`. Linux reads `/proc` with `std`, and
+# Windows needs no scan.
+sysctl = "0.7"
 # A file's identity on Windows (volume serial and file index), the analogue of
 # `(dev, ino)` that `std` keeps unstable there. Already in the tree under
 # `same-file`, so the declaration vendors nothing new.

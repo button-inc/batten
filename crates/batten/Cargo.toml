@@ -107,7 +107,6 @@ clap_mangen.workspace = true
 etcetera.workspace = true
 blake3.workspace = true
 fs4.workspace = true
-sysinfo.workspace = true
 getrandom.workspace = true
 gix.workspace = true
 gix-diff.workspace = true
@@ -175,6 +174,10 @@ signal-hook.workspace = true
 # is `std`, and its Windows analogue is not.
 [target.'cfg(windows)'.dependencies]
 winapi-util.workspace = true
+
+# The running programs' executables on macOS (CLOUD-2197); Linux reads `/proc`.
+[target.'cfg(target_os = "macos")'.dependencies]
+sysctl.workspace = true
 
 [build-dependencies]
 # CLOUD-2224: `build.rs` writes the o200k vocabulary as a static table, so no

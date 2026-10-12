@@ -94,24 +94,99 @@ pub fn engine_paths() -> Vec<PathBuf> {
         .collect()
 }
 
-/// The executable of every process this user can see, from the platform's own
-/// process table: `/proc` on Linux, `libproc` on macOS, the process snapshot on
-/// Windows, all through `sysinfo` so each CI platform's suite runs the call the
-/// shipped binary makes. A process whose executable cannot be read (another
-/// user's, or one that exited mid-scan) contributes nothing; the other kept
-/// paths still hold.
+/// The executable of every process this user can see, from each platform's own
+/// process table. A process whose executable cannot be read (another user's,
+/// or one that exited mid-scan) contributes nothing; the other kept paths still
+/// hold.
+///
+/// Linux and Android read `/proc/<pid>/exe`.
+#[cfg(any(target_os = "linux", target_os = "android"))]
 fn running_programs() -> Vec<PathBuf> {
-    let mut table = sysinfo::System::new();
-    table.refresh_processes_specifics(
-        sysinfo::ProcessesToUpdate::All,
-        true,
-        sysinfo::ProcessRefreshKind::nothing().with_exe(sysinfo::UpdateKind::Always),
-    );
-    table
-        .processes()
-        .values()
-        .filter_map(|process| process.exe().map(Path::to_path_buf))
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return Vec::new();
+    };
+    entries
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .bytes()
+                .all(|b| b.is_ascii_digit())
+        })
+        .filter_map(|entry| std::fs::read_link(entry.path().join("exe")).ok())
         .collect()
+}
+
+/// macOS reads `kern.proc.all` for every pid and `kern.procargs2` for each
+/// one's exec path: the two reads Go's `x/sys/unix` makes for the same answer.
+#[cfg(target_os = "macos")]
+fn running_programs() -> Vec<PathBuf> {
+    use sysctl::Sysctl as _;
+    // `CTL_KERN` and `KERN_PROCARGS2`, from `<sys/sysctl.h>`.
+    const CTL_KERN: i32 = 1;
+    const KERN_PROCARGS2: i32 = 49;
+    let bytes = |ctl: &sysctl::Ctl| match ctl.value() {
+        Ok(sysctl::CtlValue::Node(raw) | sysctl::CtlValue::Struct(raw)) => Some(raw),
+        _ => None,
+    };
+    let Some(table) = sysctl::Ctl::new("kern.proc.all")
+        .ok()
+        .and_then(|ctl| bytes(&ctl))
+    else {
+        return Vec::new();
+    };
+    darwin::pids(&table)
+        .into_iter()
+        .filter_map(|pid| {
+            let args = bytes(&sysctl::Ctl::Oid(vec![CTL_KERN, KERN_PROCARGS2, pid]))?;
+            darwin::exec_path(&args)
+        })
+        .collect()
+}
+
+/// The two Darwin layouts [`running_programs`] reads, as pure functions so every
+/// platform's suite checks them; only the `sysctl` calls are macOS's own.
+//MUTANT-SUITE crates/batten/src/collect.rs
+//MUTANT kinfo-pid-misread|s@^            .filter_map(\x7centry\x7c entry.get(P_PID..P_PID + 4))$@            .filter_map(\x7centry\x7c entry.get(0..4))@|a_kinfo_table_yields_each_pid
+//MUTANT procargs-argc-unskipped|s@^        let rest = args.get(4..)?;$@        let rest = args.get(0..)?;@|a_procargs_buffer_yields_its_exec_path
+#[cfg(any(target_os = "macos", test))]
+mod darwin {
+    use std::path::PathBuf;
+
+    /// `sizeof(struct kinfo_proc)` and the offset of `kp_proc.p_pid` on both
+    /// Apple triples, as Go's `ztypes_darwin_{amd64,arm64}.go` record them.
+    const KINFO_PROC: usize = 648;
+    const P_PID: usize = 40;
+
+    /// Every live pid in a `kern.proc.all` table; pid 0 is the kernel.
+    pub(super) fn pids(table: &[u8]) -> Vec<i32> {
+        table
+            .chunks_exact(KINFO_PROC)
+            .filter_map(|entry| entry.get(P_PID..P_PID + 4))
+            .filter_map(|raw| raw.try_into().ok().map(i32::from_le_bytes))
+            .filter(|pid| *pid > 0)
+            .collect()
+    }
+
+    /// The exec path in a `kern.procargs2` buffer: an `int argc`, then the path
+    /// the process was executed from, NUL-terminated.
+    pub(super) fn exec_path(args: &[u8]) -> Option<PathBuf> {
+        let rest = args.get(4..)?;
+        let path = rest.split(|byte| *byte == 0).next()?;
+        if path.is_empty() {
+            return None;
+        }
+        std::str::from_utf8(path).ok().map(PathBuf::from)
+    }
+}
+
+/// Windows needs no scan: the OS refuses to remove a running image under any of
+/// its names, at the moment of removal, which a scan taken before it can only
+/// approximate. [`collect`] counts a unit whose artifact survived as kept.
+#[cfg(not(any(target_os = "linux", target_os = "android", target_os = "macos")))]
+fn running_programs() -> Vec<PathBuf> {
+    Vec::new()
 }
 
 /// The [`Kept`] identities of `paths` that exist.
@@ -517,7 +592,13 @@ pub fn collect(request: &Request<'_>) -> (u64, usize) {
         for artifact in &unit.artifacts {
             freed += remove_counted(artifact);
         }
-        removed += 1;
+        // AN ARTIFACT THE OS REFUSED TO REMOVE is in use: Windows will not unlink
+        // a running image. The unit is counted kept, not removed.
+        if unit.artifacts.iter().any(|artifact| artifact.exists()) {
+            why.kept += 1;
+        } else {
+            removed += 1;
+        }
     }
     for (tree, _) in &locks {
         rearm(tree);
@@ -617,4 +698,38 @@ pub fn collect_toward_max(
         free_after_mb: free_mb().unwrap_or(free),
         wall_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::darwin;
+    use std::path::PathBuf;
+
+    fn kinfo(pid: i32) -> Vec<u8> {
+        let mut entry = vec![0xAA; 648];
+        entry[40..44].copy_from_slice(&pid.to_le_bytes());
+        entry
+    }
+
+    #[test]
+    fn a_kinfo_table_yields_each_pid() {
+        let table: Vec<u8> = [0, 1, 4242].into_iter().flat_map(kinfo).collect();
+        assert_eq!(darwin::pids(&table), vec![1, 4242], "pid 0 is the kernel");
+        assert!(
+            darwin::pids(&table[..647]).is_empty(),
+            "a short entry is no pid"
+        );
+    }
+
+    #[test]
+    fn a_procargs_buffer_yields_its_exec_path() {
+        let mut args = 2i32.to_le_bytes().to_vec();
+        args.extend_from_slice(b"/opt/target/debug/deps/it-0123\0\0\0it\0--exact\0");
+        assert_eq!(
+            darwin::exec_path(&args),
+            Some(PathBuf::from("/opt/target/debug/deps/it-0123"))
+        );
+        assert_eq!(darwin::exec_path(&2i32.to_le_bytes()), None);
+        assert_eq!(darwin::exec_path(&[1, 0]), None);
+    }
 }
