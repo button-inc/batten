@@ -4508,6 +4508,17 @@ description = "Full local pre-flight — run this before marking any draft PR re
 #    own 2 still means "behind", and it reaches `land` unchanged.
 # 5. THE GATE SET, `verify:gated`, which writes the receipt last.
 #
+# AND THE HOOK SURFACE IS REPAIRED BEFORE THE GATE SET JUDGES IT (CLOUD-2233).
+# `session:wiring`'s own comment records the residue: the launcher re-provisions
+# its Stop hook MID-SESSION, after the session-start repair ran. Measured
+# 2026-10-12: each worker restart re-registered and re-armed it, and
+# `hooks-wiring-check` refused three laps of a byte-identical tree. That refusal
+# was ACCURATE — a live second decider existed and fired — and the gap was that
+# its repair ran at one event only. So the same verb runs here, where the gate
+# reads the surface: in a disposable container (CLOUD-1383) it removes the
+# registration and disarms the script (CLOUD-1704), denying that hook every call;
+# on a real machine it removes nothing, and the gate still refuses, as it should.
+# The tree's own binary, like every step here, so a stale install cannot no-op it.
 # THE OPEN-LAP MARKER (CLOUD-1913) is exported to every step, and — because a
 # nested `mise run` inherits its parent's environment where a task's own
 # `depends` do not — to everything `verify:gated` depends on, which is the reach
@@ -4525,6 +4536,7 @@ run = [
   "mise run toolchain-check",
   "cargo run --quiet -p batten -- receipt status claim --or bot --or carry --key branch",
   "mise run linear-check",
+  "cargo run --quiet -p batten -- wiring reclaim -y",
   "mise run verify:gated",
 ]
 

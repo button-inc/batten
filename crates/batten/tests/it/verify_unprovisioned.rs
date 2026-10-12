@@ -428,6 +428,27 @@ fn the_verify_mapper_refuses_an_unprovisioned_toolchain_before_it_reads_any_rece
     assert!(guard < gated, "and precedes the gate set that writes one");
 }
 
+/// CLOUD-2233. The launcher re-provisions its Stop hook mid-session, after the
+/// session-start repair ran, so `hooks-wiring-check` refused byte-identical trees
+/// lap after lap — accurately, because a live second decider existed. The repair
+/// therefore runs where the gate reads the surface: before the gate set, with the
+/// tree's own binary. Removing the step, or moving it after the gate set,
+/// reintroduces the measured refusal.
+#[test]
+fn the_hook_surface_is_reclaimed_before_the_gate_set_judges_it() {
+    let body = task_body("verify");
+    let reclaim = body
+        .find("\"cargo run --quiet -p batten -- wiring reclaim -y\",")
+        .expect("verify repairs the hook surface with the tree's own binary");
+    let gated = body
+        .find("mise run verify:gated")
+        .expect("verify runs the gate set");
+    assert!(
+        reclaim < gated,
+        "the repair precedes the gate that judges it"
+    );
+}
+
 /// CLOUD-1683. A STOP, NEVER A LAP. The precondition is its own step of the
 /// sequence, and a refused step ends `verify` with that step's code — which
 /// `doctor toolchain` spells `1`, never the policy verdict `2`
