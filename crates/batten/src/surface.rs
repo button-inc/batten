@@ -3437,7 +3437,7 @@ const fn required(id: &'static str, long: &'static str, help: &'static str) -> F
 const RELEASE_WORKFLOW: FlagDecl = required(
     "workflow",
     "workflow",
-    "The workflow's file name under .github/workflows",
+    "The workflow's file name, as the forge's workflow API names it",
 );
 
 /// `--branch <branch>` on `release bump-unusable`.

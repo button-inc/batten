@@ -1,0 +1,25 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-release-cut 1  batten 
+.SH NAME
+batten\-release\-cut \- Discard any draft of the version, draft it at the release head and dispatch its build
+.SH SYNOPSIS
+\fBbatten release cut\fR [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-sha\fR> <\fB\-\-changelog\fR> <\fB\-\-workflow\fR> <\fItag\fR> 
+.SH DESCRIPTION
+Discard any draft of the version, draft it at the release head and dispatch its build
+.SH OPTIONS
+.TP
+\fB\-\-sha\fR \fI<sha>\fR
+The commit the build was dispatched with
+.TP
+\fB\-\-changelog\fR \fI<changelog>\fR
+The changelog carrying the release\*(Aqs `## [X]` section
+.TP
+\fB\-\-workflow\fR \fI<workflow>\fR
+The workflow\*(Aqs file name, as the forge\*(Aqs workflow API names it
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fItag\fR>
+The release\*(Aqs tag

@@ -4006,10 +4006,26 @@ expression: stdout_of(&output)
         {
           "path": "release bump-unusable",
           "id": "release.bump_unusable",
-          "about": "Move a burned or stray-tagged version to the next one in all four release paths",
+          "about": "Move a burned or stray-tagged version to the next one in all four release paths, as one commit on the release branch",
           "effect": "write",
           "data_channel": false,
           "flags": [
+            {
+              "name": "branch",
+              "short": null,
+              "long": "branch",
+              "takes_value": true,
+              "positional": false,
+              "help": "The release branch the bump is committed onto"
+            },
+            {
+              "name": "changelog",
+              "short": null,
+              "long": "changelog",
+              "takes_value": true,
+              "positional": false,
+              "help": "The changelog carrying the release's `## [X]` section"
+            },
             {
               "name": "tag",
               "short": null,
@@ -4017,6 +4033,48 @@ expression: stdout_of(&output)
               "takes_value": true,
               "positional": true,
               "help": "The release's tag"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "path": "release cut",
+          "id": "release.cut",
+          "about": "Discard any draft of the version, draft it at the release head and dispatch its build",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "changelog",
+              "short": null,
+              "long": "changelog",
+              "takes_value": true,
+              "positional": false,
+              "help": "The changelog carrying the release's `## [X]` section"
+            },
+            {
+              "name": "sha",
+              "short": null,
+              "long": "sha",
+              "takes_value": true,
+              "positional": false,
+              "help": "The commit the build was dispatched with"
+            },
+            {
+              "name": "tag",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The release's tag"
+            },
+            {
+              "name": "workflow",
+              "short": null,
+              "long": "workflow",
+              "takes_value": true,
+              "positional": false,
+              "help": "The workflow's file name, as the forge's workflow API names it"
             }
           ],
           "subcommands": []
@@ -4071,7 +4129,16 @@ expression: stdout_of(&output)
           "about": "Exit 0 when no release is in flight, 1 naming the one that is",
           "effect": "read",
           "data_channel": false,
-          "flags": [],
+          "flags": [
+            {
+              "name": "workflow",
+              "short": null,
+              "long": "workflow",
+              "takes_value": true,
+              "positional": false,
+              "help": "The workflow's file name, as the forge's workflow API names it"
+            }
+          ],
           "subcommands": []
         },
         {
@@ -4128,9 +4195,9 @@ expression: stdout_of(&output)
               "name": "seal",
               "short": null,
               "long": "seal",
-              "takes_value": false,
+              "takes_value": true,
               "positional": false,
-              "help": "Exit 1 when the verdict is failure and the head is not release-shaped or the release guard's settings are not green"
+              "help": "Exit 1 when the verdict is failure and the head is not release-shaped or this release-guard workflow's last settings job is not green"
             },
             {
               "name": "sha",
@@ -4139,6 +4206,58 @@ expression: stdout_of(&output)
               "takes_value": true,
               "positional": true,
               "help": "The head commit graded"
+            },
+            {
+              "name": "strict",
+              "short": null,
+              "long": "strict",
+              "takes_value": false,
+              "positional": false,
+              "help": "Exit 1 when the verdict is failure"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "path": "release pin",
+          "id": "release.pin",
+          "about": "Print the release batten.toml pins, in the working tree or at a revision",
+          "effect": "read",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "at",
+              "short": null,
+              "long": "at",
+              "takes_value": true,
+              "positional": false,
+              "help": "Read the pin at this revision rather than the working tree"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "path": "release settings",
+          "id": "release.settings",
+          "about": "Exit 0 only when the rulesets and release settings the release path rests on hold",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "last_run",
+              "short": null,
+              "long": "last-run",
+              "takes_value": true,
+              "positional": false,
+              "help": "Answer from the settings job of this guard workflow's last completed run on the trunk"
+            },
+            {
+              "name": "probe",
+              "short": null,
+              "long": "probe",
+              "takes_value": false,
+              "positional": false,
+              "help": "Offer the probe branch a status-less fast-forward and require a ruleset refusal"
             }
           ],
           "subcommands": []
@@ -5396,6 +5515,10 @@ expression: stdout_of(&output)
     {
       "id": "release.land_state",
       "path": "release land-state"
+    },
+    {
+      "id": "release.pin",
+      "path": "release pin"
     },
     {
       "id": "show",

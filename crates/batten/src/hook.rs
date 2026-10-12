@@ -9549,10 +9549,7 @@ fn flatten_command(
         raw: node.source_text(source).to_owned(),
         terminator: after,
         input_redirect: redirects.iter().any(binds_stdin),
-        stdin_text: redirects
-            .iter()
-            .filter_map(|redirect| stdin_text(redirect, source))
-            .collect(),
+        stdin_text: redirects.iter().filter_map(stdin_text).collect(),
         construct,
         nested: false,
         grouped: false,
@@ -9770,12 +9767,19 @@ fn descend_redirect(redirect: &rable::Node, source: &str, out: &mut Vec<Segment>
 
 /// The text a stdin redirection hands its command: a heredoc's body, or a
 /// here-string's word unquoted. A file redirect (`<`) hands a path, not text.
-fn stdin_text(redirect: &rable::Node, source: &str) -> Option<String> {
+///
+/// The here-string's word is read off its token value, never its source span:
+/// the parser builds a redirect target spanless (`Node::empty`), so
+/// `source_text` hands back nothing and the script would go unread.
+fn stdin_text(redirect: &rable::Node) -> Option<String> {
     match &redirect.kind {
         rable::NodeKind::HereDoc { content, .. } => Some(content.clone()),
-        rable::NodeKind::Redirect { op, target, .. } if op == "<<<" => {
-            Some(unquote(target.source_text(source)))
-        }
+        rable::NodeKind::Redirect { op, target, .. } if op == "<<<" => match &target.kind {
+            rable::NodeKind::Word { value, .. } | rable::NodeKind::WordLiteral { value } => {
+                Some(unquote(value))
+            }
+            _ => None,
+        },
         _ => None,
     }
 }
@@ -14102,7 +14106,12 @@ deny contains "refused by themodule" if {
             "node -e 'require(\"fs\").writeFileSync(\".serena/memories/core.md\", \"\")'",
             "ruby <<< 'File.write(\".serena/memories/core.md\", \"\")'",
         ] {
-            let refused = denial(guarded(command));
+            let decision = guarded(command);
+            assert!(
+                matches!(decision, Decision::Deny(_)),
+                "{command} was admitted"
+            );
+            let refused = denial(decision);
             assert_eq!(
                 refused.verdict(),
                 Some(crate::verdict::Native::ProgramUnknown.id()),

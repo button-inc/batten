@@ -384,7 +384,13 @@ web_get() {
 # same absence and reporting it twice as "could not look" would be a lie.
 resolve_via_api() {
 	rel_url="$API/repos/$REPO/releases/tags/${BATTEN_VERSION}"
-	api_get "$rel_url" "application/vnd.github+json" "$tmp/release.json" || return 1
+	# A `404` IS THE API'S ANSWER, and `3` is its class: the pin names no
+	# published release, which is a statement about the release, not about this
+	# machine's reach. Any other failure stays `1`, could-not-look.
+	if ! api_get "$rel_url" "application/vnd.github+json" "$tmp/release.json"; then
+		[ "$(head -n 1 "$tmp/release.json.code" 2>/dev/null || true)" = 404 ] || return 1
+		return 3
+	fi
 
 	flatten "$tmp/release.json" >"$tmp/release.line" ||
 		die 2 "could not read the release payload this machine just downloaded."
@@ -603,7 +609,11 @@ main() {
 		fi
 	fi
 
-	if ! resolve_via_api; then
+	unpublished="the pin $BATTEN_VERSION ($pin_source) is not a published release carrying a sha256 for $(asset_name "${BATTEN_VERSION#v}" "$target"), and this script does not install unverified bytes. Set BATTEN_VERSION to install another release."
+	api_status=0
+	resolve_via_api || api_status=$?
+	[ "$api_status" -ne 3 ] || die 1 "$unpublished"
+	if [ "$api_status" -ne 0 ]; then
 		[ -n "$WEB_FALLBACK" ] ||
 			die 2 "cannot read the release $BATTEN_VERSION from $REPO at $API. If you are being rate-limited, set BATTEN_GITHUB_TOKEN, GH_TOKEN or GITHUB_TOKEN."
 		resolve_via_web || case $? in
@@ -611,7 +621,7 @@ main() {
 			# No `SHA256SUMS`, or none naming this asset: either the pin names no
 			# published release, or the release does not publish the digest this
 			# script refuses to install without. One remedy covers both.
-			die 1 "the pin $BATTEN_VERSION ($pin_source) is not a published release carrying a sha256 for $asset, and this script does not install unverified bytes. Set BATTEN_VERSION to install another release."
+			die 1 "$unpublished"
 			;;
 		*)
 			die 2 "cannot read release metadata for $REPO from either $API or $WEB. If the API is rate-limiting this address, set BATTEN_GITHUB_TOKEN, GH_TOKEN or GITHUB_TOKEN; if the repository is private, a token is required."

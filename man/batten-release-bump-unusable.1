@@ -2,12 +2,18 @@
 .el .ds Aq '
 .TH batten-release-bump-unusable 1  batten 
 .SH NAME
-batten\-release\-bump\-unusable \- Move a burned or stray\-tagged version to the next one in all four release paths
+batten\-release\-bump\-unusable \- Move a burned or stray\-tagged version to the next one in all four release paths, as one commit on the release branch
 .SH SYNOPSIS
-\fBbatten release bump\-unusable\fR [\fB\-h\fR|\fB\-\-help\fR] <\fItag\fR> 
+\fBbatten release bump\-unusable\fR [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-branch\fR> <\fB\-\-changelog\fR> <\fItag\fR> 
 .SH DESCRIPTION
-Move a burned or stray\-tagged version to the next one in all four release paths
+Move a burned or stray\-tagged version to the next one in all four release paths, as one commit on the release branch
 .SH OPTIONS
+.TP
+\fB\-\-branch\fR \fI<branch>\fR
+The release branch the bump is committed onto
+.TP
+\fB\-\-changelog\fR \fI<changelog>\fR
+The changelog carrying the release\*(Aqs `## [X]` section
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help

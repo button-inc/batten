@@ -35,10 +35,19 @@ batten\-release\-land\-state(1)
 Print the land job\*(Aqs branch for a release: skip\-to\-f, resume\-at\-d, burned, draft\-ok, draft\-bad or absent
 .TP
 batten\-release\-bump\-unusable(1)
-Move a burned or stray\-tagged version to the next one in all four release paths
+Move a burned or stray\-tagged version to the next one in all four release paths, as one commit on the release branch
 .TP
 batten\-release\-guard(1)
 Exit 0 only when a build of the commit may upload into the release: a draft that targets it
+.TP
+batten\-release\-cut(1)
+Discard any draft of the version, draft it at the release head and dispatch its build
+.TP
+batten\-release\-pin(1)
+Print the release batten.toml pins, in the working tree or at a revision
+.TP
+batten\-release\-settings(1)
+Exit 0 only when the rulesets and release settings the release path rests on hold
 .TP
 batten\-release\-backfill(1)
 Dispatch a backfill workflow once per release tag, oldest first, waiting on each run and stopping at the first that does not succeed

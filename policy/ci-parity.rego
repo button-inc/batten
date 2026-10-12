@@ -1088,11 +1088,10 @@ needs_of(job) := [job.needs] if is_string(job.needs)
 
 needs_of(job) := [] if not job.needs
 
-release_wire(path, property) := {
-	"rule": "release ship other",
-	"verdict": "release wire wrong",
-	"subjects": [{"path": path}, {"artifact": property}],
-}
+# EACH HEAD NAMES ITS VERDICT LITERALLY, never through a helper: the engine's
+# registry census reads a refusal's verdict off the `violation` head and does
+# not follow a value across a rule boundary, so a helper-built object reads as
+# raising nothing and the bundle does not load.
 
 # A job writes the trunk: a ref write to `heads/main`, or the fast-forward action.
 writes_main(path, name) if {
@@ -1142,7 +1141,11 @@ posts_release_path(step) if {
 	contains(text, "release-path")
 }
 
-violation contains release_wire(path, sprintf("release-path is posted by %s", [name])) if {
+violation contains {
+	"rule": "release ship other",
+	"verdict": "release wire wrong",
+	"subjects": [{"path": path}, {"artifact": sprintf("release-path is posted by %s", [name])}],
+} if {
 	release_path_adopted
 	some path, doc in workflow
 	some name, job in doc.jobs
@@ -1168,7 +1171,11 @@ latest_allowed(path, name, _) if {
 	name == "pinned"
 }
 
-violation contains release_wire(path, sprintf("%s marks a release latest before main reaches it", [name])) if {
+violation contains {
+	"rule": "release ship other",
+	"verdict": "release wire wrong",
+	"subjects": [{"path": path}, {"artifact": sprintf("%s marks a release latest before main reaches it", [name])}],
+} if {
 	release_path_adopted
 	some path, doc in workflow
 	some name, _ in doc.jobs
@@ -1188,7 +1195,11 @@ main_writer(path, name) if writes_main(path, name)
 
 main_writer(path, name) if dispatches_build(path, name)
 
-violation contains release_wire(path, sprintf("%s writes main outside main-writer", [name])) if {
+violation contains {
+	"rule": "release ship other",
+	"verdict": "release wire wrong",
+	"subjects": [{"path": path}, {"artifact": sprintf("%s writes main outside main-writer", [name])}],
+} if {
 	release_path_adopted
 	some path, doc in workflow
 	some name, job in doc.jobs
@@ -1204,7 +1215,11 @@ guarded_before(path, name, i) if {
 	contains(step_text(earlier), "release guard")
 }
 
-violation contains release_wire(path, sprintf("%s uploads with --clobber unguarded", [name])) if {
+violation contains {
+	"rule": "release ship other",
+	"verdict": "release wire wrong",
+	"subjects": [{"path": path}, {"artifact": sprintf("%s uploads with --clobber unguarded", [name])}],
+} if {
 	release_path_adopted
 	some path, doc in workflow
 	some name, _ in doc.jobs
@@ -1246,7 +1261,11 @@ writes_a_tag(text) if {
 	endswith(trim_space(line), "mise run release")
 }
 
-violation contains release_wire(path, sprintf("%s creates or deletes a tag", [name])) if {
+violation contains {
+	"rule": "release ship other",
+	"verdict": "release wire wrong",
+	"subjects": [{"path": path}, {"artifact": sprintf("%s creates or deletes a tag", [name])}],
+} if {
 	release_path_adopted
 	some path, doc in workflow
 	some name, _ in doc.jobs
@@ -1263,7 +1282,11 @@ freeze_owed(path, name) if {
 
 freeze_owed(path, name) if dispatches_build(path, name)
 
-violation contains release_wire(path, sprintf("%s writes main without the release freeze", [name])) if {
+violation contains {
+	"rule": "release ship other",
+	"verdict": "release wire wrong",
+	"subjects": [{"path": path}, {"artifact": sprintf("%s writes main without the release freeze", [name])}],
+} if {
 	release_path_adopted
 	some path, doc in workflow
 	some name, _ in doc.jobs
@@ -1275,7 +1298,11 @@ violation contains release_wire(path, sprintf("%s writes main without the releas
 # so is opening the release PR: nothing is readied or cut before B2.
 cut_gates := ["release settings", "release in-flight", "release bump-unusable"]
 
-violation contains release_wire(path, sprintf("the cut %s has no %s", [name, gate])) if {
+violation contains {
+	"rule": "release ship other",
+	"verdict": "release wire wrong",
+	"subjects": [{"path": path}, {"artifact": sprintf("the cut %s has no %s", [name, gate])}],
+} if {
 	release_path_adopted
 	some path, doc in workflow
 	some name, _ in doc.jobs
@@ -1284,7 +1311,11 @@ violation contains release_wire(path, sprintf("the cut %s has no %s", [name, gat
 	not contains(job_text(path, name), gate)
 }
 
-violation contains release_wire(path, sprintf("%s opens the release PR without the settings gate", [name])) if {
+violation contains {
+	"rule": "release ship other",
+	"verdict": "release wire wrong",
+	"subjects": [{"path": path}, {"artifact": sprintf("%s opens the release PR without the settings gate", [name])}],
+} if {
 	release_path_adopted
 	some path, doc in workflow
 	some name, _ in doc.jobs
@@ -1305,13 +1336,21 @@ uses_the_pat(step) if {
 	value == "${{ secrets.RELEASE_PLZ_TOKEN }}"
 }
 
-violation contains release_wire(release_artifacts, "land checks out something other than main") if {
+violation contains {
+	"rule": "release ship other",
+	"verdict": "release wire wrong",
+	"subjects": [{"path": release_artifacts}, {"artifact": "land checks out something other than main"}],
+} if {
 	release_path_adopted
 	job := workflow[release_artifacts].jobs.land
 	not checks_out_main(job)
 }
 
-violation contains release_wire(release_artifacts, "land moves main without RELEASE_PLZ_TOKEN") if {
+violation contains {
+	"rule": "release ship other",
+	"verdict": "release wire wrong",
+	"subjects": [{"path": release_artifacts}, {"artifact": "land moves main without RELEASE_PLZ_TOKEN"}],
+} if {
 	release_path_adopted
 	some step in job_steps(release_artifacts, "land")
 	contains(step_all(step), "git/refs/heads/main")
@@ -1326,7 +1365,11 @@ writes_the_bump(step) if contains(step_text(step), "release bump-unusable")
 
 writes_the_bump(step) if contains(step_text(step), "git push")
 
-violation contains release_wire(path, sprintf("the cut %s pushes the bump without RELEASE_PLZ_TOKEN", [name])) if {
+violation contains {
+	"rule": "release ship other",
+	"verdict": "release wire wrong",
+	"subjects": [{"path": path}, {"artifact": sprintf("the cut %s pushes the bump without RELEASE_PLZ_TOKEN", [name])}],
+} if {
 	release_path_adopted
 	some path, doc in workflow
 	some name, _ in doc.jobs
@@ -1337,7 +1380,11 @@ violation contains release_wire(path, sprintf("the cut %s pushes the bump withou
 }
 
 # ONE DISPATCHER of the build: the cut.
-violation contains release_wire(path, sprintf("%s dispatches release-artifacts", [name])) if {
+violation contains {
+	"rule": "release ship other",
+	"verdict": "release wire wrong",
+	"subjects": [{"path": path}, {"artifact": sprintf("%s dispatches release-artifacts", [name])}],
+} if {
 	release_path_adopted
 	some path, doc in workflow
 	some name, _ in doc.jobs
@@ -1362,14 +1409,22 @@ names_the_head_sha(step) if {
 	contains(step_text(step), sprintf("--arg-env %s ", [var]))
 }
 
-violation contains release_wire(".github/workflows/ci.yml", "ci grades release-path with the head's own predicate") if {
+violation contains {
+	"rule": "release ship other",
+	"verdict": "release wire wrong",
+	"subjects": [{"path": ".github/workflows/ci.yml"}, {"artifact": "ci grades release-path with the head's own predicate"}],
+} if {
 	release_path_adopted
 	some step in job_steps(".github/workflows/ci.yml", "batten-check")
 	posts_release_path(step)
 	not graded_by_the_trunk(step)
 }
 
-violation contains release_wire(".github/workflows/ci.yml", "ci grades release-path on something other than the PR head SHA") if {
+violation contains {
+	"rule": "release ship other",
+	"verdict": "release wire wrong",
+	"subjects": [{"path": ".github/workflows/ci.yml"}, {"artifact": "ci grades release-path on something other than the PR head SHA"}],
+} if {
 	release_path_adopted
 	some step in job_steps(".github/workflows/ci.yml", "batten-check")
 	posts_release_path(step)
@@ -1378,7 +1433,11 @@ violation contains release_wire(".github/workflows/ci.yml", "ci grades release-p
 
 # `cleanup` DISCARDS ON A BUILD FAILURE ONLY: never after `land`, so recovery by
 # re-running `land` always finds its draft.
-violation contains release_wire(release_artifacts, sprintf("%s discards after land", [name])) if {
+violation contains {
+	"rule": "release ship other",
+	"verdict": "release wire wrong",
+	"subjects": [{"path": release_artifacts}, {"artifact": sprintf("%s discards after land", [name])}],
+} if {
 	release_path_adopted
 	some name, job in workflow[release_artifacts].jobs
 	name != "land"
@@ -1397,7 +1456,11 @@ final_sealed if {
 	contains(step_text(step), "--seal")
 }
 
-violation contains release_wire(".github/workflows/ci.yml", "final does not fail on an unverified pin") if {
+violation contains {
+	"rule": "release ship other",
+	"verdict": "release wire wrong",
+	"subjects": [{"path": ".github/workflows/ci.yml"}, {"artifact": "final does not fail on an unverified pin"}],
+} if {
 	release_path_adopted
 	workflow[".github/workflows/ci.yml"]
 	not final_sealed
@@ -1416,7 +1479,11 @@ publishes_bare(text) if {
 	not contains(text, "--draft")
 }
 
-violation contains release_wire(path, sprintf("%s publishes without --prerelease or creates without --draft", [name])) if {
+violation contains {
+	"rule": "release ship other",
+	"verdict": "release wire wrong",
+	"subjects": [{"path": path}, {"artifact": sprintf("%s publishes without --prerelease or creates without --draft", [name])}],
+} if {
 	release_path_adopted
 	some path, doc in workflow
 	some name, _ in doc.jobs

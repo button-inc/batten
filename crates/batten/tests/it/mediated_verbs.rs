@@ -647,47 +647,27 @@ fn a_protected_path_is_refused_for_the_named_verb_and_the_unnamed_program_alike(
     assert_denied(&format!("ruby -e x {GUARDED}"));
 }
 
-/// THE RESIDUE, ASSERTED AS ALLOWED SO IT CANNOT BE MISTAKEN FOR COVERAGE.
+/// THE RESIDUE THESE TWO CASES ONCE PINNED AS ALLOWED, NOW CLOSED (CLOUD-2231).
 ///
-/// `python3 -c "open('p','w')"` writes a protected path and is **not** refused,
-/// because the path is a substring of one quoted word rather than an operand.
-/// The wider scan that catches it — every word, split on punctuation a path
-/// cannot contain — was tried and reverted: it refused a `for` loop whose quoted
-/// body merely mentioned the path, and `echo "see batten.toml"` is the same
-/// shape. A guard that refuses ordinary mentions gets switched off within a day.
+/// `python3 -c "open('p','w')"` carried the path inside one quoted word, and a
+/// heredoc carried it in a body `hook::segments` keeps as data (CLOUD-723), so
+/// no operand check reached either. The wide scan once tried — every word of
+/// every command — refused `echo "see batten.toml"` and was reverted. The fix is
+/// narrower: only an UNKNOWN program's SCRIPT is read — the value after `-c`,
+/// `-e` or `--eval`, and the stdin text its segment binds. A known program's
+/// words, and an unknown program's ordinary argument, stay unread.
 ///
-/// So this case pins a KNOWN GAP rather than a desired behaviour. It is written
-/// down because the alternative is a suite that looks complete over a shape the
-/// gate never sees, which is the defect CLOUD-418 names. If a later change gives
-/// the mediated surface the prospective content as a fact rather than a string to
-/// grep, this case flips and that is the signal it worked.
+/// Measured before the fix on this branch: two python heredocs wrote registered
+/// policy modules unrefused. The cases flipped when the script became a fact.
 #[test]
-fn an_interpreter_writing_through_its_program_text_is_a_known_gap() {
-    assert_allowed(&format!("python3 -c \"open('{AUTHORITY}','w')\""));
+fn an_interpreter_writing_through_its_program_text_is_refused() {
+    assert_denied(&format!("python3 -c \"open('{AUTHORITY}','w')\""));
 }
 
-/// THE SECOND RESIDUE, AND IT IS STRUCTURAL RATHER THAN A SCANNING LIMIT.
-///
-/// The sibling above loses because the path sits inside a quoted word. This one
-/// loses earlier: the path is inside a HEREDOC BODY, and `hook::segments` drops
-/// bodies before any predicate exists — a body is data, not shell (CLOUD-723).
-/// So the segment's words are `["python3", "-", "<<'PY'"]` and the operand list
-/// contains no path at all. No operand-based check can reach it, however wide.
-///
-/// CLOUD-1141's own commit names this shape as deliberately open, and its body
-/// says closing it "needs the prospective content as a fact rather than a string
-/// to grep, which is its own row". That row is why this is a pin and not a fix.
-///
-/// Written down because it had NO case at all while its sibling had one, which
-/// is the CLOUD-418 shape exactly: a suite that reads complete over a shape it
-/// never exercises. Measured 2026-09-01 on `5a9924b6` — a `python3` heredoc
-/// wrote a registered policy module and was not refused.
-///
-/// Flips when the mediated surface gains that fact. That is the signal, and it
-/// is the same one the sibling carries.
+/// The heredoc half of the same residue: the body is the script.
 #[test]
-fn an_interpreter_writing_through_a_heredoc_body_is_a_known_gap() {
-    assert_allowed(&format!("python3 - <<'PY'\nopen('{AUTHORITY}','w')\nPY"));
+fn an_interpreter_writing_through_a_heredoc_body_is_refused() {
+    assert_denied(&format!("python3 - <<'PY'\nopen('{AUTHORITY}','w')\nPY"));
 }
 
 /// THE DIRECTION A CARELESS FIX BREAKS, and the one that decides whether this

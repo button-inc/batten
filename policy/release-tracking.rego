@@ -227,7 +227,11 @@ checkout_line(path, job) := min(lines) + 1 if {
 # sync attaches nothing. File-wide line numbers would let a refresh in another job
 # satisfy this, and each job is its own checkout.
 refreshed(path, job) if {
-	first := min({call.line - 1 | some call in calls(path); call.job == job})
+	first := min({index |
+		some call in calls(path)
+		call.job == job
+		index := call.line - 1
+	})
 	[start, _] := job_span(path, job)
 	some i, line in code(path)
 	i > start

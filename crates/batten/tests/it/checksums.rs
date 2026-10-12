@@ -332,21 +332,24 @@ fn the_cut_dispatches_the_artifacts_for_the_draft_it_created() {
     let job = &docs[0]["jobs"]["cut"];
     let steps = job["steps"].as_vec().expect("the cut has steps");
     let field = |step: &Yaml, key: &str| step[key].as_str().unwrap_or_default().to_owned();
-    let drafted = steps
+    // ONE VERB DRAFTS AND DISPATCHES, in that order inside `release cut`; the
+    // workflow's part is handing it the tag, the release head and the build.
+    let cut = steps
         .iter()
-        .position(|step| {
-            field(step, "run").contains("gh release create \"$TAG\" --draft --target \"$SHA\"")
-        })
-        .expect("a step creates the draft at the release head");
-    let dispatch = steps
-        .iter()
-        .position(|step| field(step, "run").contains("gh workflow run release-artifacts.yml"))
-        .expect("a step dispatches release-artifacts");
-    assert!(dispatch > drafted, "the dispatch follows the draft");
-    let run = field(&steps[dispatch], "run");
+        .find(|step| field(step, "run").contains("release cut"))
+        .expect("a step cuts the release");
+    let run = field(cut, "run");
     assert!(
-        run.contains("-f tag=\"$TAG\"") && run.contains("-f sha=\"$SHA\""),
-        "the dispatch names the draft's tag and its release head: {run}"
+        run.contains("--workflow release-artifacts.yml")
+            && run.contains("--arg-env SHA")
+            && run.contains("--arg-env TAG"),
+        "the cut names the build, the draft's tag and its release head: {run}"
+    );
+    assert!(
+        !steps
+            .iter()
+            .any(|step| field(step, "run").contains("gh workflow run")),
+        "no second step dispatches beside the cut"
     );
     assert_eq!(
         job["permissions"]["actions"].as_str(),

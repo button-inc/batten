@@ -500,15 +500,16 @@ fn fetch_depth_0_on_a_job_that_does_not_invoke_the_action_is_not_enough() {
     assert!(
         found.contains(&format!(
             "{RELEASE}#shallow-checkout:{}",
-            land_checkout_line()
+            land_checkout_line(&moved)
         )),
         "{found:?}"
     );
 }
 
-/// The 1-based line of the `land` job's checkout in [`CLEAN_RELEASE`].
-fn land_checkout_line() -> usize {
-    let lines: Vec<&str> = CLEAN_RELEASE.lines().collect();
+/// The 1-based line of the `land` job's checkout in `text` — the edited
+/// workflow, since an insertion above it moves it.
+fn land_checkout_line(text: &str) -> usize {
+    let lines: Vec<&str> = text.lines().collect();
     let job = lines
         .iter()
         .position(|line| *line == "  land:")

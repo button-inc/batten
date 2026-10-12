@@ -777,21 +777,6 @@ fn the_version_comes_from_the_refs_pin_when_one_is_named() {
 }
 
 #[test]
-fn a_ref_whose_pin_is_no_published_release_is_refused() {
-    // NEVER THE LATEST INSTEAD (CLOUD-2033): a pin is a release a gate stood
-    // behind, and the latest is one nobody did.
-    let fixture = Fixture::new("from-ref-unreleased");
-    fixture.release_json(Some(fixture.digest.as_str()));
-    fs::copy(fixture.tagged("v9.9.9"), fixture.latest()).unwrap();
-    fixture.pin_at_ref("v7.7.7");
-    let run = fixture.install(&[], None, &[("BATTEN_VERSION_FROM_REF", "main")]);
-    assert_eq!(run.code, Some(1), "{}", run.output);
-    assert!(run.output.contains("v7.7.7"), "{}", run.output);
-    assert!(run.output.contains("BATTEN_VERSION"), "{}", run.output);
-    assert!(!fixture.installed().exists());
-}
-
-#[test]
 fn a_ref_that_pins_no_release_is_refused_naming_the_ref() {
     let fixture = Fixture::new("from-ref-no-pin");
     fixture.release_json(Some(fixture.digest.as_str()));
@@ -861,25 +846,8 @@ fn install_installs_the_consumers_pin() {
     assert!(run.output.contains("version=v0.0.4"), "{}", run.output);
 }
 
-/// A consumer pin naming no published release is refused, naming the pin and
-/// the override — never the latest instead.
-#[test]
-fn a_consumers_pin_that_is_not_published_is_refused() {
-    let fixture = Fixture::new("consumers-pin-unpublished");
-    fixture.release_json(Some(fixture.digest.as_str()));
-    let consumer = fixture.dir.join("consumer");
-    fs::create_dir_all(&consumer).unwrap();
-    common::git_in(&consumer, &["init", "-q"]);
-    fs::write(
-        consumer.join("batten.toml"),
-        "version = 1\nengine = { release = \"v0.0.3\" }\n",
-    )
-    .unwrap();
-    let run = fixture.install_in(&consumer);
-    assert_eq!(run.code, Some(1), "{}", run.output);
-    assert!(run.output.contains("v0.0.3"), "{}", run.output);
-    assert!(run.output.contains("BATTEN_VERSION"), "{}", run.output);
-}
+// The two refusals of an UNPUBLISHED pin live in `install_web.rs`: they turn on
+// the API answering `404` for the tag, and a `file://` fixture has no status.
 
 /// `action.yml`'s resolve step, run against an action directory whose manifest
 /// says 0.0.9 and whose pin says v0.0.5: the pin is what installs.

@@ -641,38 +641,41 @@ complete -c batten -n "__fish_batten_using_subcommand ci; and __fish_seen_subcom
 complete -c batten -n "__fish_batten_using_subcommand ci; and __fish_seen_subcommand_from help" -f -a "suites" -d 'Name the bats suites a diff can move, or every suite where it cannot prove one inert'
 complete -c batten -n "__fish_batten_using_subcommand ci; and __fish_seen_subcommand_from help" -f -a "step" -d 'Run one command and write its step outputs, run summary or mapped verdict to the runner\'s files'
 complete -c batten -n "__fish_batten_using_subcommand ci; and __fish_seen_subcommand_from help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
-complete -c batten -n "__fish_batten_using_subcommand release; and not __fish_seen_subcommand_from install sums verify path discard in-flight land-state bump-unusable guard backfill help" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
+complete -c batten -n "__fish_batten_using_subcommand release; and not __fish_seen_subcommand_from install sums verify path discard in-flight land-state bump-unusable guard cut pin settings backfill help" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand release; and not __fish_seen_subcommand_from install sums verify path discard in-flight land-state bump-unusable guard backfill help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
-complete -c batten -n "__fish_batten_using_subcommand release; and not __fish_seen_subcommand_from install sums verify path discard in-flight land-state bump-unusable guard backfill help" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
-complete -c batten -n "__fish_batten_using_subcommand release; and not __fish_seen_subcommand_from install sums verify path discard in-flight land-state bump-unusable guard backfill help" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
+complete -c batten -n "__fish_batten_using_subcommand release; and not __fish_seen_subcommand_from install sums verify path discard in-flight land-state bump-unusable guard cut pin settings backfill help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand release; and not __fish_seen_subcommand_from install sums verify path discard in-flight land-state bump-unusable guard cut pin settings backfill help" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
+complete -c batten -n "__fish_batten_using_subcommand release; and not __fish_seen_subcommand_from install sums verify path discard in-flight land-state bump-unusable guard cut pin settings backfill help" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
 normal\t'The default'
 verbose\t'Explain what is being checked'
 debug\t'Add resolution detail'
 trace\t'Add everything'"
-complete -c batten -n "__fish_batten_using_subcommand release; and not __fish_seen_subcommand_from install sums verify path discard in-flight land-state bump-unusable guard backfill help" -l fail-on-warning -d 'Promote a warn-severity finding to a violation (an override may only turn this on)'
-complete -c batten -n "__fish_batten_using_subcommand release; and not __fish_seen_subcommand_from install sums verify path discard in-flight land-state bump-unusable guard backfill help" -l silent -d 'Say nothing but a verdict or a usage error'
-complete -c batten -n "__fish_batten_using_subcommand release; and not __fish_seen_subcommand_from install sums verify path discard in-flight land-state bump-unusable guard backfill help" -s q -l quiet -d 'Suppress ordinary progress (repeatable: -qq is silent)'
-complete -c batten -n "__fish_batten_using_subcommand release; and not __fish_seen_subcommand_from install sums verify path discard in-flight land-state bump-unusable guard backfill help" -s v -l verbose -d 'Explain what is being checked (repeatable: -vv is debug)'
-complete -c batten -n "__fish_batten_using_subcommand release; and not __fish_seen_subcommand_from install sums verify path discard in-flight land-state bump-unusable guard backfill help" -l debug -d 'Add resolution detail'
-complete -c batten -n "__fish_batten_using_subcommand release; and not __fish_seen_subcommand_from install sums verify path discard in-flight land-state bump-unusable guard backfill help" -l trace -d 'Add everything'
-complete -c batten -n "__fish_batten_using_subcommand release; and not __fish_seen_subcommand_from install sums verify path discard in-flight land-state bump-unusable guard backfill help" -l no-color -d 'Never colour stderr, whatever it is attached to'
-complete -c batten -n "__fish_batten_using_subcommand release; and not __fish_seen_subcommand_from install sums verify path discard in-flight land-state bump-unusable guard backfill help" -l no-input -d 'Never prompt; treat the run as unattended'
-complete -c batten -n "__fish_batten_using_subcommand release; and not __fish_seen_subcommand_from install sums verify path discard in-flight land-state bump-unusable guard backfill help" -s y -l yes -d 'Confirm a destructive operation that would otherwise refuse'
-complete -c batten -n "__fish_batten_using_subcommand release; and not __fish_seen_subcommand_from install sums verify path discard in-flight land-state bump-unusable guard backfill help" -s h -l help -d 'Print help (see more with \'--help\')'
-complete -c batten -n "__fish_batten_using_subcommand release; and not __fish_seen_subcommand_from install sums verify path discard in-flight land-state bump-unusable guard backfill help" -f -a "install" -d 'Decide whether install.sh, the release matrix and the binstall manifest agree on every asset name, and that no binary is committed'
-complete -c batten -n "__fish_batten_using_subcommand release; and not __fish_seen_subcommand_from install sums verify path discard in-flight land-state bump-unusable guard backfill help" -f -a "sums" -d 'Hash a published release\'s own assets into a checksum manifest, never the manifest itself'
-complete -c batten -n "__fish_batten_using_subcommand release; and not __fish_seen_subcommand_from install sums verify path discard in-flight land-state bump-unusable guard backfill help" -f -a "verify" -d 'Exit 0 only if a release carries every asset, its checksums match, and it is published and immutable at its own tag'
-complete -c batten -n "__fish_batten_using_subcommand release; and not __fish_seen_subcommand_from install sums verify path discard in-flight land-state bump-unusable guard backfill help" -f -a "path" -d 'Print whether a head may write main: its pin is inherited, or it changes only the release paths to a verified published release'
-complete -c batten -n "__fish_batten_using_subcommand release; and not __fish_seen_subcommand_from install sums verify path discard in-flight land-state bump-unusable guard backfill help" -f -a "discard" -d 'Delete a draft release and its tag; do nothing for no release; refuse a published one'
-complete -c batten -n "__fish_batten_using_subcommand release; and not __fish_seen_subcommand_from install sums verify path discard in-flight land-state bump-unusable guard backfill help" -f -a "in-flight" -d 'Exit 0 when no release is in flight, 1 naming the one that is'
-complete -c batten -n "__fish_batten_using_subcommand release; and not __fish_seen_subcommand_from install sums verify path discard in-flight land-state bump-unusable guard backfill help" -f -a "land-state" -d 'Print the land job\'s branch for a release: skip-to-f, resume-at-d, burned, draft-ok, draft-bad or absent'
-complete -c batten -n "__fish_batten_using_subcommand release; and not __fish_seen_subcommand_from install sums verify path discard in-flight land-state bump-unusable guard backfill help" -f -a "bump-unusable" -d 'Move a burned or stray-tagged version to the next one in all four release paths'
-complete -c batten -n "__fish_batten_using_subcommand release; and not __fish_seen_subcommand_from install sums verify path discard in-flight land-state bump-unusable guard backfill help" -f -a "guard" -d 'Exit 0 only when a build of the commit may upload into the release: a draft that targets it'
-complete -c batten -n "__fish_batten_using_subcommand release; and not __fish_seen_subcommand_from install sums verify path discard in-flight land-state bump-unusable guard backfill help" -f -a "backfill" -d 'Dispatch a backfill workflow once per release tag, oldest first, waiting on each run and stopping at the first that does not succeed'
-complete -c batten -n "__fish_batten_using_subcommand release; and not __fish_seen_subcommand_from install sums verify path discard in-flight land-state bump-unusable guard backfill help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
+complete -c batten -n "__fish_batten_using_subcommand release; and not __fish_seen_subcommand_from install sums verify path discard in-flight land-state bump-unusable guard cut pin settings backfill help" -l fail-on-warning -d 'Promote a warn-severity finding to a violation (an override may only turn this on)'
+complete -c batten -n "__fish_batten_using_subcommand release; and not __fish_seen_subcommand_from install sums verify path discard in-flight land-state bump-unusable guard cut pin settings backfill help" -l silent -d 'Say nothing but a verdict or a usage error'
+complete -c batten -n "__fish_batten_using_subcommand release; and not __fish_seen_subcommand_from install sums verify path discard in-flight land-state bump-unusable guard cut pin settings backfill help" -s q -l quiet -d 'Suppress ordinary progress (repeatable: -qq is silent)'
+complete -c batten -n "__fish_batten_using_subcommand release; and not __fish_seen_subcommand_from install sums verify path discard in-flight land-state bump-unusable guard cut pin settings backfill help" -s v -l verbose -d 'Explain what is being checked (repeatable: -vv is debug)'
+complete -c batten -n "__fish_batten_using_subcommand release; and not __fish_seen_subcommand_from install sums verify path discard in-flight land-state bump-unusable guard cut pin settings backfill help" -l debug -d 'Add resolution detail'
+complete -c batten -n "__fish_batten_using_subcommand release; and not __fish_seen_subcommand_from install sums verify path discard in-flight land-state bump-unusable guard cut pin settings backfill help" -l trace -d 'Add everything'
+complete -c batten -n "__fish_batten_using_subcommand release; and not __fish_seen_subcommand_from install sums verify path discard in-flight land-state bump-unusable guard cut pin settings backfill help" -l no-color -d 'Never colour stderr, whatever it is attached to'
+complete -c batten -n "__fish_batten_using_subcommand release; and not __fish_seen_subcommand_from install sums verify path discard in-flight land-state bump-unusable guard cut pin settings backfill help" -l no-input -d 'Never prompt; treat the run as unattended'
+complete -c batten -n "__fish_batten_using_subcommand release; and not __fish_seen_subcommand_from install sums verify path discard in-flight land-state bump-unusable guard cut pin settings backfill help" -s y -l yes -d 'Confirm a destructive operation that would otherwise refuse'
+complete -c batten -n "__fish_batten_using_subcommand release; and not __fish_seen_subcommand_from install sums verify path discard in-flight land-state bump-unusable guard cut pin settings backfill help" -s h -l help -d 'Print help (see more with \'--help\')'
+complete -c batten -n "__fish_batten_using_subcommand release; and not __fish_seen_subcommand_from install sums verify path discard in-flight land-state bump-unusable guard cut pin settings backfill help" -f -a "install" -d 'Decide whether install.sh, the release matrix and the binstall manifest agree on every asset name, and that no binary is committed'
+complete -c batten -n "__fish_batten_using_subcommand release; and not __fish_seen_subcommand_from install sums verify path discard in-flight land-state bump-unusable guard cut pin settings backfill help" -f -a "sums" -d 'Hash a published release\'s own assets into a checksum manifest, never the manifest itself'
+complete -c batten -n "__fish_batten_using_subcommand release; and not __fish_seen_subcommand_from install sums verify path discard in-flight land-state bump-unusable guard cut pin settings backfill help" -f -a "verify" -d 'Exit 0 only if a release carries every asset, its checksums match, and it is published and immutable at its own tag'
+complete -c batten -n "__fish_batten_using_subcommand release; and not __fish_seen_subcommand_from install sums verify path discard in-flight land-state bump-unusable guard cut pin settings backfill help" -f -a "path" -d 'Print whether a head may write main: its pin is inherited, or it changes only the release paths to a verified published release'
+complete -c batten -n "__fish_batten_using_subcommand release; and not __fish_seen_subcommand_from install sums verify path discard in-flight land-state bump-unusable guard cut pin settings backfill help" -f -a "discard" -d 'Delete a draft release and its tag; do nothing for no release; refuse a published one'
+complete -c batten -n "__fish_batten_using_subcommand release; and not __fish_seen_subcommand_from install sums verify path discard in-flight land-state bump-unusable guard cut pin settings backfill help" -f -a "in-flight" -d 'Exit 0 when no release is in flight, 1 naming the one that is'
+complete -c batten -n "__fish_batten_using_subcommand release; and not __fish_seen_subcommand_from install sums verify path discard in-flight land-state bump-unusable guard cut pin settings backfill help" -f -a "land-state" -d 'Print the land job\'s branch for a release: skip-to-f, resume-at-d, burned, draft-ok, draft-bad or absent'
+complete -c batten -n "__fish_batten_using_subcommand release; and not __fish_seen_subcommand_from install sums verify path discard in-flight land-state bump-unusable guard cut pin settings backfill help" -f -a "bump-unusable" -d 'Move a burned or stray-tagged version to the next one in all four release paths, as one commit on the release branch'
+complete -c batten -n "__fish_batten_using_subcommand release; and not __fish_seen_subcommand_from install sums verify path discard in-flight land-state bump-unusable guard cut pin settings backfill help" -f -a "guard" -d 'Exit 0 only when a build of the commit may upload into the release: a draft that targets it'
+complete -c batten -n "__fish_batten_using_subcommand release; and not __fish_seen_subcommand_from install sums verify path discard in-flight land-state bump-unusable guard cut pin settings backfill help" -f -a "cut" -d 'Discard any draft of the version, draft it at the release head and dispatch its build'
+complete -c batten -n "__fish_batten_using_subcommand release; and not __fish_seen_subcommand_from install sums verify path discard in-flight land-state bump-unusable guard cut pin settings backfill help" -f -a "pin" -d 'Print the release batten.toml pins, in the working tree or at a revision'
+complete -c batten -n "__fish_batten_using_subcommand release; and not __fish_seen_subcommand_from install sums verify path discard in-flight land-state bump-unusable guard cut pin settings backfill help" -f -a "settings" -d 'Exit 0 only when the rulesets and release settings the release path rests on hold'
+complete -c batten -n "__fish_batten_using_subcommand release; and not __fish_seen_subcommand_from install sums verify path discard in-flight land-state bump-unusable guard cut pin settings backfill help" -f -a "backfill" -d 'Dispatch a backfill workflow once per release tag, oldest first, waiting on each run and stopping at the first that does not succeed'
+complete -c batten -n "__fish_batten_using_subcommand release; and not __fish_seen_subcommand_from install sums verify path discard in-flight land-state bump-unusable guard cut pin settings backfill help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
 complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from install" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
@@ -740,6 +743,7 @@ complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_s
 complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from verify" -l no-input -d 'Never prompt; treat the run as unattended'
 complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from verify" -s y -l yes -d 'Confirm a destructive operation that would otherwise refuse'
 complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from verify" -s h -l help -d 'Print help (see more with \'--help\')'
+complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from path" -l seal -d 'Exit 1 when the verdict is failure and the head is not release-shaped or this release-guard workflow\'s last settings job is not green' -r
 complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from path" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
@@ -752,7 +756,7 @@ verbose\t'Explain what is being checked'
 debug\t'Add resolution detail'
 trace\t'Add everything'"
 complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from path" -l post -d 'Post the verdict as the release-path commit status on the graded head'
-complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from path" -l seal -d 'Exit 1 when the verdict is failure and the head is not release-shaped or the release guard\'s settings are not green'
+complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from path" -l strict -d 'Exit 1 when the verdict is failure'
 complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from path" -l fail-on-warning -d 'Promote a warn-severity finding to a violation (an override may only turn this on)'
 complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from path" -l silent -d 'Say nothing but a verdict or a usage error'
 complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from path" -s q -l quiet -d 'Suppress ordinary progress (repeatable: -qq is silent)'
@@ -784,6 +788,7 @@ complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_s
 complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from discard" -l no-input -d 'Never prompt; treat the run as unattended'
 complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from discard" -s y -l yes -d 'Confirm a destructive operation that would otherwise refuse'
 complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from discard" -s h -l help -d 'Print help (see more with \'--help\')'
+complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from in-flight" -l workflow -d 'The workflow\'s file name, as the forge\'s workflow API names it' -r
 complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from in-flight" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
@@ -827,6 +832,8 @@ complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_s
 complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from land-state" -l no-input -d 'Never prompt; treat the run as unattended'
 complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from land-state" -s y -l yes -d 'Confirm a destructive operation that would otherwise refuse'
 complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from land-state" -s h -l help -d 'Print help (see more with \'--help\')'
+complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from bump-unusable" -l branch -d 'The release branch the bump is committed onto' -r
+complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from bump-unusable" -l changelog -d 'The changelog carrying the release\'s `## [X]` section' -r
 complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from bump-unusable" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
@@ -870,6 +877,75 @@ complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_s
 complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from guard" -l no-input -d 'Never prompt; treat the run as unattended'
 complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from guard" -s y -l yes -d 'Confirm a destructive operation that would otherwise refuse'
 complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from guard" -s h -l help -d 'Print help (see more with \'--help\')'
+complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from cut" -l sha -d 'The commit the build was dispatched with' -r
+complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from cut" -l changelog -d 'The changelog carrying the release\'s `## [X]` section' -r
+complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from cut" -l workflow -d 'The workflow\'s file name, as the forge\'s workflow API names it' -r
+complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from cut" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
+standard\t'The default: a finding is a violation'
+strict\t'Everything `Standard` fails on, plus anything advisory'"
+complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from cut" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from cut" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
+complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from cut" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
+quiet\t'Suppress ordinary progress; keep warnings'
+normal\t'The default'
+verbose\t'Explain what is being checked'
+debug\t'Add resolution detail'
+trace\t'Add everything'"
+complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from cut" -l fail-on-warning -d 'Promote a warn-severity finding to a violation (an override may only turn this on)'
+complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from cut" -l silent -d 'Say nothing but a verdict or a usage error'
+complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from cut" -s q -l quiet -d 'Suppress ordinary progress (repeatable: -qq is silent)'
+complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from cut" -s v -l verbose -d 'Explain what is being checked (repeatable: -vv is debug)'
+complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from cut" -l debug -d 'Add resolution detail'
+complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from cut" -l trace -d 'Add everything'
+complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from cut" -l no-color -d 'Never colour stderr, whatever it is attached to'
+complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from cut" -l no-input -d 'Never prompt; treat the run as unattended'
+complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from cut" -s y -l yes -d 'Confirm a destructive operation that would otherwise refuse'
+complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from cut" -s h -l help -d 'Print help (see more with \'--help\')'
+complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from pin" -l at -d 'Read the pin at this revision rather than the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from pin" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
+standard\t'The default: a finding is a violation'
+strict\t'Everything `Standard` fails on, plus anything advisory'"
+complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from pin" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from pin" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
+complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from pin" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
+quiet\t'Suppress ordinary progress; keep warnings'
+normal\t'The default'
+verbose\t'Explain what is being checked'
+debug\t'Add resolution detail'
+trace\t'Add everything'"
+complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from pin" -l fail-on-warning -d 'Promote a warn-severity finding to a violation (an override may only turn this on)'
+complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from pin" -l silent -d 'Say nothing but a verdict or a usage error'
+complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from pin" -s q -l quiet -d 'Suppress ordinary progress (repeatable: -qq is silent)'
+complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from pin" -s v -l verbose -d 'Explain what is being checked (repeatable: -vv is debug)'
+complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from pin" -l debug -d 'Add resolution detail'
+complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from pin" -l trace -d 'Add everything'
+complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from pin" -l no-color -d 'Never colour stderr, whatever it is attached to'
+complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from pin" -l no-input -d 'Never prompt; treat the run as unattended'
+complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from pin" -s y -l yes -d 'Confirm a destructive operation that would otherwise refuse'
+complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from pin" -s h -l help -d 'Print help (see more with \'--help\')'
+complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from settings" -l last-run -d 'Answer from the settings job of this guard workflow\'s last completed run on the trunk' -r
+complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from settings" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
+standard\t'The default: a finding is a violation'
+strict\t'Everything `Standard` fails on, plus anything advisory'"
+complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from settings" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from settings" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
+complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from settings" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
+quiet\t'Suppress ordinary progress; keep warnings'
+normal\t'The default'
+verbose\t'Explain what is being checked'
+debug\t'Add resolution detail'
+trace\t'Add everything'"
+complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from settings" -l probe -d 'Offer the probe branch a status-less fast-forward and require a ruleset refusal'
+complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from settings" -l fail-on-warning -d 'Promote a warn-severity finding to a violation (an override may only turn this on)'
+complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from settings" -l silent -d 'Say nothing but a verdict or a usage error'
+complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from settings" -s q -l quiet -d 'Suppress ordinary progress (repeatable: -qq is silent)'
+complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from settings" -s v -l verbose -d 'Explain what is being checked (repeatable: -vv is debug)'
+complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from settings" -l debug -d 'Add resolution detail'
+complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from settings" -l trace -d 'Add everything'
+complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from settings" -l no-color -d 'Never colour stderr, whatever it is attached to'
+complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from settings" -l no-input -d 'Never prompt; treat the run as unattended'
+complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from settings" -s y -l yes -d 'Confirm a destructive operation that would otherwise refuse'
+complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from settings" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from backfill" -l tag -d 'A release tag to record (repeatable); absent, every tag the pattern selects, oldest first' -r
 complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from backfill" -l workflow -d 'The workflow file dispatched once per tag' -r
 complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from backfill" -l ref -d 'The branch the dispatched runs execute on' -r
@@ -905,8 +981,11 @@ complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_s
 complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from help" -f -a "discard" -d 'Delete a draft release and its tag; do nothing for no release; refuse a published one'
 complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from help" -f -a "in-flight" -d 'Exit 0 when no release is in flight, 1 naming the one that is'
 complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from help" -f -a "land-state" -d 'Print the land job\'s branch for a release: skip-to-f, resume-at-d, burned, draft-ok, draft-bad or absent'
-complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from help" -f -a "bump-unusable" -d 'Move a burned or stray-tagged version to the next one in all four release paths'
+complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from help" -f -a "bump-unusable" -d 'Move a burned or stray-tagged version to the next one in all four release paths, as one commit on the release branch'
 complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from help" -f -a "guard" -d 'Exit 0 only when a build of the commit may upload into the release: a draft that targets it'
+complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from help" -f -a "cut" -d 'Discard any draft of the version, draft it at the release head and dispatch its build'
+complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from help" -f -a "pin" -d 'Print the release batten.toml pins, in the working tree or at a revision'
+complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from help" -f -a "settings" -d 'Exit 0 only when the rulesets and release settings the release path rests on hold'
 complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from help" -f -a "backfill" -d 'Dispatch a backfill workflow once per release tag, oldest first, waiting on each run and stopping at the first that does not succeed'
 complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
 complete -c batten -n "__fish_batten_using_subcommand config; and not __fish_seen_subcommand_from show epoch deprecations lint help" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
@@ -5542,8 +5621,11 @@ complete -c batten -n "__fish_batten_using_subcommand help; and __fish_seen_subc
 complete -c batten -n "__fish_batten_using_subcommand help; and __fish_seen_subcommand_from release" -f -a "discard" -d 'Delete a draft release and its tag; do nothing for no release; refuse a published one'
 complete -c batten -n "__fish_batten_using_subcommand help; and __fish_seen_subcommand_from release" -f -a "in-flight" -d 'Exit 0 when no release is in flight, 1 naming the one that is'
 complete -c batten -n "__fish_batten_using_subcommand help; and __fish_seen_subcommand_from release" -f -a "land-state" -d 'Print the land job\'s branch for a release: skip-to-f, resume-at-d, burned, draft-ok, draft-bad or absent'
-complete -c batten -n "__fish_batten_using_subcommand help; and __fish_seen_subcommand_from release" -f -a "bump-unusable" -d 'Move a burned or stray-tagged version to the next one in all four release paths'
+complete -c batten -n "__fish_batten_using_subcommand help; and __fish_seen_subcommand_from release" -f -a "bump-unusable" -d 'Move a burned or stray-tagged version to the next one in all four release paths, as one commit on the release branch'
 complete -c batten -n "__fish_batten_using_subcommand help; and __fish_seen_subcommand_from release" -f -a "guard" -d 'Exit 0 only when a build of the commit may upload into the release: a draft that targets it'
+complete -c batten -n "__fish_batten_using_subcommand help; and __fish_seen_subcommand_from release" -f -a "cut" -d 'Discard any draft of the version, draft it at the release head and dispatch its build'
+complete -c batten -n "__fish_batten_using_subcommand help; and __fish_seen_subcommand_from release" -f -a "pin" -d 'Print the release batten.toml pins, in the working tree or at a revision'
+complete -c batten -n "__fish_batten_using_subcommand help; and __fish_seen_subcommand_from release" -f -a "settings" -d 'Exit 0 only when the rulesets and release settings the release path rests on hold'
 complete -c batten -n "__fish_batten_using_subcommand help; and __fish_seen_subcommand_from release" -f -a "backfill" -d 'Dispatch a backfill workflow once per release tag, oldest first, waiting on each run and stopping at the first that does not succeed'
 complete -c batten -n "__fish_batten_using_subcommand help; and __fish_seen_subcommand_from config" -f -a "show" -d 'Print the effective configuration'
 complete -c batten -n "__fish_batten_using_subcommand help; and __fish_seen_subcommand_from config" -f -a "epoch" -d 'Print the content hash of the governing config surface'

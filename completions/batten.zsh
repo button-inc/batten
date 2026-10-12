@@ -1084,6 +1084,7 @@ trace\:"Add everything"))' \
 ;;
 (path)
 _arguments "${_arguments_options[@]}" : \
+'--seal=[Exit 1 when the verdict is failure and the head is not release-shaped or this release-guard workflow'\''s last settings job is not green]:seal:_default' \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
@@ -1096,7 +1097,7 @@ verbose\:"Explain what is being checked"
 debug\:"Add resolution detail"
 trace\:"Add everything"))' \
 '--post[Post the verdict as the release-path commit status on the graded head]' \
-'--seal[Exit 1 when the verdict is failure and the head is not release-shaped or the release guard'\''s settings are not green]' \
+'--strict[Exit 1 when the verdict is failure]' \
 '--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
 '*--silent[Say nothing but a verdict or a usage error]' \
 '*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
@@ -1146,6 +1147,7 @@ trace\:"Add everything"))' \
 ;;
 (in-flight)
 _arguments "${_arguments_options[@]}" : \
+'--workflow=[The workflow'\''s file name, as the forge'\''s workflow API names it]:workflow:_default' \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
@@ -1206,6 +1208,8 @@ trace\:"Add everything"))' \
 ;;
 (bump-unusable)
 _arguments "${_arguments_options[@]}" : \
+'--branch=[The release branch the bump is committed onto]:branch:_default' \
+'--changelog=[The changelog carrying the release'\''s \`## \[X\]\` section]:changelog:_default' \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
@@ -1263,6 +1267,100 @@ trace\:"Add everything"))' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 ':tag -- The release'\''s tag:_default' \
+&& ret=0
+;;
+(cut)
+_arguments "${_arguments_options[@]}" : \
+'--sha=[The commit the build was dispatched with]:sha:_default' \
+'--changelog=[The changelog carrying the release'\''s \`## \[X\]\` section]:changelog:_default' \
+'--workflow=[The workflow'\''s file name, as the forge'\''s workflow API names it]:workflow:_default' \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+':tag -- The release'\''s tag:_default' \
+&& ret=0
+;;
+(pin)
+_arguments "${_arguments_options[@]}" : \
+'--at=[Read the pin at this revision rather than the working tree]:at:_default' \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+&& ret=0
+;;
+(settings)
+_arguments "${_arguments_options[@]}" : \
+'--last-run=[Answer from the settings job of this guard workflow'\''s last completed run on the trunk]:last_run:_default' \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--probe[Offer the probe branch a status-less fast-forward and require a ruleset refusal]' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
 ;;
 (backfill)
@@ -1346,6 +1444,18 @@ _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
 (guard)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(cut)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(pin)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(settings)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -9341,6 +9451,18 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
+(cut)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(pin)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(settings)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
 (backfill)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
@@ -12711,8 +12833,11 @@ _batten__subcmd__help__subcmd__release_commands() {
 'discard:Delete a draft release and its tag; do nothing for no release; refuse a published one' \
 'in-flight:Exit 0 when no release is in flight, 1 naming the one that is' \
 'land-state:Print the land job'\''s branch for a release\: skip-to-f, resume-at-d, burned, draft-ok, draft-bad or absent' \
-'bump-unusable:Move a burned or stray-tagged version to the next one in all four release paths' \
+'bump-unusable:Move a burned or stray-tagged version to the next one in all four release paths, as one commit on the release branch' \
 'guard:Exit 0 only when a build of the commit may upload into the release\: a draft that targets it' \
+'cut:Discard any draft of the version, draft it at the release head and dispatch its build' \
+'pin:Print the release batten.toml pins, in the working tree or at a revision' \
+'settings:Exit 0 only when the rulesets and release settings the release path rests on hold' \
 'backfill:Dispatch a backfill workflow once per release tag, oldest first, waiting on each run and stopping at the first that does not succeed' \
     )
     _describe -t commands 'batten help release commands' commands "$@"
@@ -12726,6 +12851,11 @@ _batten__subcmd__help__subcmd__release__subcmd__backfill_commands() {
 _batten__subcmd__help__subcmd__release__subcmd__bump-unusable_commands() {
     local commands; commands=()
     _describe -t commands 'batten help release bump-unusable commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__release__subcmd__cut_commands] )) ||
+_batten__subcmd__help__subcmd__release__subcmd__cut_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help release cut commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__help__subcmd__release__subcmd__discard_commands] )) ||
 _batten__subcmd__help__subcmd__release__subcmd__discard_commands() {
@@ -12756,6 +12886,16 @@ _batten__subcmd__help__subcmd__release__subcmd__land-state_commands() {
 _batten__subcmd__help__subcmd__release__subcmd__path_commands() {
     local commands; commands=()
     _describe -t commands 'batten help release path commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__release__subcmd__pin_commands] )) ||
+_batten__subcmd__help__subcmd__release__subcmd__pin_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help release pin commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__release__subcmd__settings_commands] )) ||
+_batten__subcmd__help__subcmd__release__subcmd__settings_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help release settings commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__help__subcmd__release__subcmd__sums_commands] )) ||
 _batten__subcmd__help__subcmd__release__subcmd__sums_commands() {
@@ -14369,8 +14509,11 @@ _batten__subcmd__release_commands() {
 'discard:Delete a draft release and its tag; do nothing for no release; refuse a published one' \
 'in-flight:Exit 0 when no release is in flight, 1 naming the one that is' \
 'land-state:Print the land job'\''s branch for a release\: skip-to-f, resume-at-d, burned, draft-ok, draft-bad or absent' \
-'bump-unusable:Move a burned or stray-tagged version to the next one in all four release paths' \
+'bump-unusable:Move a burned or stray-tagged version to the next one in all four release paths, as one commit on the release branch' \
 'guard:Exit 0 only when a build of the commit may upload into the release\: a draft that targets it' \
+'cut:Discard any draft of the version, draft it at the release head and dispatch its build' \
+'pin:Print the release batten.toml pins, in the working tree or at a revision' \
+'settings:Exit 0 only when the rulesets and release settings the release path rests on hold' \
 'backfill:Dispatch a backfill workflow once per release tag, oldest first, waiting on each run and stopping at the first that does not succeed' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
@@ -14385,6 +14528,11 @@ _batten__subcmd__release__subcmd__backfill_commands() {
 _batten__subcmd__release__subcmd__bump-unusable_commands() {
     local commands; commands=()
     _describe -t commands 'batten release bump-unusable commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__release__subcmd__cut_commands] )) ||
+_batten__subcmd__release__subcmd__cut_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten release cut commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__release__subcmd__discard_commands] )) ||
 _batten__subcmd__release__subcmd__discard_commands() {
@@ -14406,8 +14554,11 @@ _batten__subcmd__release__subcmd__help_commands() {
 'discard:Delete a draft release and its tag; do nothing for no release; refuse a published one' \
 'in-flight:Exit 0 when no release is in flight, 1 naming the one that is' \
 'land-state:Print the land job'\''s branch for a release\: skip-to-f, resume-at-d, burned, draft-ok, draft-bad or absent' \
-'bump-unusable:Move a burned or stray-tagged version to the next one in all four release paths' \
+'bump-unusable:Move a burned or stray-tagged version to the next one in all four release paths, as one commit on the release branch' \
 'guard:Exit 0 only when a build of the commit may upload into the release\: a draft that targets it' \
+'cut:Discard any draft of the version, draft it at the release head and dispatch its build' \
+'pin:Print the release batten.toml pins, in the working tree or at a revision' \
+'settings:Exit 0 only when the rulesets and release settings the release path rests on hold' \
 'backfill:Dispatch a backfill workflow once per release tag, oldest first, waiting on each run and stopping at the first that does not succeed' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
@@ -14422,6 +14573,11 @@ _batten__subcmd__release__subcmd__help__subcmd__backfill_commands() {
 _batten__subcmd__release__subcmd__help__subcmd__bump-unusable_commands() {
     local commands; commands=()
     _describe -t commands 'batten release help bump-unusable commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__release__subcmd__help__subcmd__cut_commands] )) ||
+_batten__subcmd__release__subcmd__help__subcmd__cut_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten release help cut commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__release__subcmd__help__subcmd__discard_commands] )) ||
 _batten__subcmd__release__subcmd__help__subcmd__discard_commands() {
@@ -14458,6 +14614,16 @@ _batten__subcmd__release__subcmd__help__subcmd__path_commands() {
     local commands; commands=()
     _describe -t commands 'batten release help path commands' commands "$@"
 }
+(( $+functions[_batten__subcmd__release__subcmd__help__subcmd__pin_commands] )) ||
+_batten__subcmd__release__subcmd__help__subcmd__pin_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten release help pin commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__release__subcmd__help__subcmd__settings_commands] )) ||
+_batten__subcmd__release__subcmd__help__subcmd__settings_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten release help settings commands' commands "$@"
+}
 (( $+functions[_batten__subcmd__release__subcmd__help__subcmd__sums_commands] )) ||
 _batten__subcmd__release__subcmd__help__subcmd__sums_commands() {
     local commands; commands=()
@@ -14487,6 +14653,16 @@ _batten__subcmd__release__subcmd__land-state_commands() {
 _batten__subcmd__release__subcmd__path_commands() {
     local commands; commands=()
     _describe -t commands 'batten release path commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__release__subcmd__pin_commands] )) ||
+_batten__subcmd__release__subcmd__pin_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten release pin commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__release__subcmd__settings_commands] )) ||
+_batten__subcmd__release__subcmd__settings_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten release settings commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__release__subcmd__sums_commands] )) ||
 _batten__subcmd__release__subcmd__sums_commands() {

@@ -1,0 +1,16 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-release-pin 1  batten 
+.SH NAME
+batten\-release\-pin \- Print the release batten.toml pins, in the working tree or at a revision
+.SH SYNOPSIS
+\fBbatten release pin\fR [\fB\-\-at\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.SH DESCRIPTION
+Print the release batten.toml pins, in the working tree or at a revision
+.SH OPTIONS
+.TP
+\fB\-\-at\fR \fI<at>\fR
+Read the pin at this revision rather than the working tree
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
