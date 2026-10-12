@@ -115,11 +115,9 @@ on:
   schedule:
     - cron: "0 * * * *"
 
-permissions:
-  contents: write
-  checks: read
-  pull-requests: write
-  actions: read # the release guard's last settings run (CLOUD-2033)
+# NOTHING AT THE WORKFLOW LEVEL: two jobs, each granted what it uses, so the
+# cut's dispatch right is not also the landing job's (zizmor excessive-permissions).
+permissions: {}
 
 # One constant group, not the per-SHA key this used to carry. With two triggers a
 # cron tick and a `workflow_run` tick can now reach the same release PR at the
@@ -161,6 +159,11 @@ jobs:
     # The settings read builds the engine from the trunk's tree on a due tick,
     # which the 5-minute budget a read-only tick carried cannot hold.
     timeout-minutes: 30 # budget: p95=600s x3 measured=2026-10-12
+    permissions:
+      contents: write
+      checks: read
+      pull-requests: write
+      actions: read # the release guard's last settings run (CLOUD-2033)
     env:
       REPO: ${{ github.repository }}
     outputs:
@@ -441,7 +444,7 @@ jobs:
       queue: max
     permissions:
       contents: write # create the draft
-      actions: write # dispatch release-artifacts
+      actions: write # dispatch release-artifacts, and read the guard's settings run
     env:
       SHA: ${{ needs.fast-forward-release-pr.outputs.sha }}
       BRANCH: ${{ needs.fast-forward-release-pr.outputs.branch }}
