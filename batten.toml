@@ -248,6 +248,9 @@ mutation = "never write it by hand — it records a human's answers, so put the 
 glob = ".serena/memories/**"
 mutation = "use Serena's memory tools — `write_memory` to create, `edit_memory` to change in place, `rename_memory` to move (it is the only route that rewrites `mem:` referrers)"
 read = "read_memory"
+# Refused only where a declared source resolves Serena (CLOUD-2229): measured on
+# #1132, a cloud session resolved none, and this row refused every memory read.
+read_server = "serena"
 
 [[redirect]]
 glob = "policy/**"

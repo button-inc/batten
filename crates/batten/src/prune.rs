@@ -2716,7 +2716,23 @@ fn basis_of(root: &Path) -> Basis {
     // to the cold floor by `floor_basis` whatever the lap rebuilt: every lap after a
     // cold escalation refused at its close, the unreachable floor that function's
     // own comment measured, reached through `build` instead of `deps`.
-    let every_profile_ready = built_profiles.iter().all(|fingerprint| {
+    //
+    // ONLY THE PROFILES THE DEFAULT BUILD READS DECIDE THE TREE (CLOUD-2227). A
+    // cross triple, a nested tree (`clippy`, `mutate-cargo`) or a custom profile
+    // (`darwin-link`) that lost `build` costs ITS rebuild, not the whole tree's:
+    // measured on #1132, `target/darwin-link` alone held every `verify` to the
+    // 21455MB cold floor at 12332MB free while `debug` and `release` were intact.
+    // A tree holding neither host profile is judged over every profile, as before.
+    let host: Vec<&PathBuf> = built_profiles
+        .iter()
+        .filter(|fingerprint| is_host_default_profile(root, fingerprint))
+        .collect();
+    let judged: Vec<&PathBuf> = if host.is_empty() {
+        built_profiles.iter().collect()
+    } else {
+        host
+    };
+    let every_profile_ready = judged.iter().all(|fingerprint| {
         fingerprint.parent().is_some_and(|profile| {
             populated_directory(&profile.join("deps"))
                 && (!compiled_a_build_script(fingerprint)
@@ -2728,6 +2744,21 @@ fn basis_of(root: &Path) -> Basis {
     } else {
         Basis::Cold
     }
+}
+
+/// Whether `fingerprint` is `<root>/debug/.fingerprint` or
+/// `<root>/release/.fingerprint`: the profiles a plain `cargo build` and
+/// `cargo build --release` read.
+//MUTANT-SUITE crates/batten/tests/it/target_prune.rs
+//MUTANT side-profile-colds-the-tree|s@^    let judged: Vec<\&PathBuf> = if host.is_empty() {$@    let judged: Vec<\&PathBuf> = if true {@|a_cold_side_profile_does_not_make_the_tree_cold
+fn is_host_default_profile(root: &Path, fingerprint: &Path) -> bool {
+    fingerprint.parent().is_some_and(|profile| {
+        profile.parent() == Some(root)
+            && matches!(
+                profile.file_name().and_then(|name| name.to_str()),
+                Some("debug" | "release")
+            )
+    })
 }
 
 /// Whether a profile's `.fingerprint` records a compiled build script: cargo

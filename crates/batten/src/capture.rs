@@ -1518,6 +1518,20 @@ fn view_path_in(dir: &Path, digest: &str) -> PathBuf {
     dir.join("views").join(format!("{digest}.md"))
 }
 
+/// Whether `path` is a view in `repo_root`'s capture store (CLOUD-2228).
+///
+/// The bound's pointer names a view as the route back to the text, so a read of
+/// one is the route being followed: bounding it again handed back a second
+/// pointer, and the text was never reachable by the route printed.
+#[must_use]
+pub fn is_view(repo_root: &Path, path: &Path) -> bool {
+    let Ok(dir) = captures_dir(repo_root) else {
+        return false;
+    };
+    path.parent() == Some(dir.join("views").as_path())
+        && path.extension().and_then(|ext| ext.to_str()) == Some("md")
+}
+
 // --- navigation (CLOUD-121) --------------------------------------------------
 //
 // The half that deletes the re-run. `cmd | tail -N` re-executes a possibly

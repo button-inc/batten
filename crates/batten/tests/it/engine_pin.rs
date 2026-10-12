@@ -29,15 +29,29 @@ fn repo(name: &str, config: &str) -> PathBuf {
     reason = "stays, and test-only: the source-pin cases run a private COPY of the compiled binary so its stamp is its own, which `common::batten` cannot target because it names the shared binary"
 )]
 fn run(binary: &Path, dir: &Path, args: &[&str]) -> Output {
-    std::process::Command::new(binary)
+    let mut command = std::process::Command::new(binary);
+    command
         .args(args)
         .current_dir(dir)
         // These cases measure the pre-parse refusal, which is what a stale engine
         // answers once its one update has run; without this the startup update
         // (CLOUD-2062) would download or build before the refusal is reached.
-        .env("BATTEN_ENGINE_UPDATED", "1")
-        .output()
-        .expect("run batten")
+        .env("BATTEN_ENGINE_UPDATED", "1");
+    // A just-copied binary can be briefly unexecutable (ETXTBSY) while a sibling
+    // case's fork holds its write handle; see `engine_update::spawn_copy`.
+    for _ in 0..100 {
+        match command.output() {
+            Err(err) if err.kind() == std::io::ErrorKind::ExecutableFileBusy => {
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "bounded by a real terminal state: `ETXTBSY` clears when the sibling child holding the copy's write handle execs, so the poll ends at that exec, capped at `100` tries"
+                )]
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            output => return output.expect("run batten"),
+        }
+    }
+    command.output().expect("run batten")
 }
 
 fn text(output: &Output) -> String {
@@ -98,6 +112,10 @@ fn a_release_pin_naming_another_build_is_refused_with_its_install() {
 #[test]
 fn a_source_pin_matching_the_stamp_loads() {
     let dir = repo("engine-pin-source-same", "version = 1\n");
+    // An engine input, so the digest names a source rather than nothing
+    // (CLOUD-2230).
+    common::write(&dir, "crates/engine/src/lib.rs", "// the engine\n");
+    common::git_in(&dir, &["add", "crates"]);
     let binary = private_binary(&dir);
     let stamped = run(&binary, &dir, &["engine", "stamp"]);
     assert!(stamped.status.success(), "{}", text(&stamped));
@@ -112,6 +130,26 @@ fn a_source_pin_matching_the_stamp_loads() {
     );
     let output = run(&binary, &dir, &["config", "show"]);
     assert!(output.status.success(), "{}", text(&output));
+}
+
+#[test]
+fn a_stamp_over_no_inputs_is_refused() {
+    // CLOUD-2230. A tree tracking no engine input hashes to SHA-256's empty
+    // value, which names no source; measured on #1132 a debug binary carried
+    // that stamp and every `cargo run -p batten` task refused under a source pin.
+    let dir = repo("engine-pin-stamp-empty", "version = 1\n");
+    let binary = private_binary(&dir);
+    let stamped = run(&binary, &dir, &["engine", "stamp"]);
+    assert!(!stamped.status.success(), "{}", text(&stamped));
+    assert!(
+        text(&stamped).contains("no engine input"),
+        "{}",
+        text(&stamped)
+    );
+    assert!(
+        !batten::engine::stamp_path(&binary).exists(),
+        "nothing is written over no inputs"
+    );
 }
 
 #[test]

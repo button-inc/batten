@@ -61,15 +61,20 @@ fn make_executable(path: &Path) {
 )]
 fn run(binary: &Path, dir: &Path, args: &[&str], stdin: &str) -> Output {
     use std::io::Write as _;
-    let path = std::env::join_paths(
-        std::iter::once(dir.join("bin")).chain(std::env::split_paths(
-            &std::env::var_os("PATH").unwrap_or_default(),
-        )),
-    )
+    // THE CASE'S OWN `bin` AND THE SYSTEM'S, NEVER THE CALLER'S `PATH`. An update
+    // installs over the `batten` it resolves there (CLOUD-2226), and with the
+    // caller's `PATH` appended that was the session's own engine: measured, a run
+    // of this suite replaced `~/.local/bin/batten` with the stub's output.
+    let path = std::env::join_paths([
+        dir.join("bin"),
+        hook_bin(dir),
+        PathBuf::from("/usr/bin"),
+        PathBuf::from("/bin"),
+    ])
     .unwrap();
     let mut command = std::process::Command::new(binary);
     common::state_dir(&mut command, &dir.join("state"));
-    let mut child = command
+    command
         .args(args)
         .current_dir(dir)
         .env("PATH", path)
@@ -78,9 +83,8 @@ fn run(binary: &Path, dir: &Path, args: &[&str], stdin: &str) -> Output {
         .env_remove("BATTEN_ENGINE_UPDATED")
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .expect("run batten");
+        .stderr(std::process::Stdio::piped());
+    let mut child = spawn_copy(&mut command);
     child
         .stdin
         .take()
@@ -88,6 +92,33 @@ fn run(binary: &Path, dir: &Path, args: &[&str], stdin: &str) -> Output {
         .write_all(stdin.as_bytes())
         .unwrap();
     child.wait_with_output().expect("wait for batten")
+}
+
+/// Spawn a just-copied binary, retrying while exec reports `ETXTBSY`.
+///
+/// A sibling case forking while this copy's write handle was still open hands
+/// that handle to its child, and the kernel refuses to exec a file open for
+/// writing until the child execs and closes it. Measured on #1132 as
+/// `the_hook_path_never_builds_a_source_pin` failing with "Text file busy". The
+/// window is the sibling's fork-to-exec, so a short retry outlasts it.
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays, and test-only: it spawns the private COPY `run` built, which `common::batten` cannot target"
+)]
+fn spawn_copy(command: &mut std::process::Command) -> std::process::Child {
+    for _ in 0..100 {
+        match command.spawn() {
+            Err(err) if err.kind() == std::io::ErrorKind::ExecutableFileBusy => {
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "bounded by a real terminal state: `ETXTBSY` clears when the sibling child holding the copy's write handle execs, so the poll ends at that exec, capped at `100` tries"
+                )]
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            spawned => return spawned.expect("run batten"),
+        }
+    }
+    command.spawn().expect("run batten")
 }
 
 fn text(output: &Output) -> String {
@@ -116,6 +147,46 @@ fn an_unpinned_repo_updates_nothing() {
     assert!(output.status.success(), "{}", text(&output));
     assert_eq!(std::fs::read(&binary).unwrap(), before, "nothing replaced");
     assert!(!dir.join("cargo-ran").exists(), "nothing built");
+}
+
+#[test]
+fn a_source_pin_update_installs_where_the_hook_resolves() {
+    // CLOUD-2226. Under `mise exec` the running binary is the build output, so
+    // installing over it alone left the `batten` the hook resolves on `PATH`
+    // unstamped and the refusal standing. A `batten` on `PATH` here is that one.
+    let dir = repo("engine-update-path-install");
+    stub_cargo(&dir);
+    let binary = private_binary(&dir);
+    // OUTSIDE THE CHECKOUT, where an installed engine lives (`~/.local/bin`): a
+    // `batten` under the repository is cargo's output and is never replaced.
+    let on_path = hook_bin(&dir).join("batten");
+    std::fs::create_dir_all(hook_bin(&dir)).unwrap();
+    std::fs::copy(&binary, &on_path).unwrap();
+    let digest = text(&run(&binary, &dir, &["engine", "digest"], ""))
+        .trim()
+        .to_owned();
+    pin_source(&dir, &digest);
+    let output = run(&binary, &dir, &["engine", "update"], "");
+    assert!(output.status.success(), "{}", text(&output));
+    assert_eq!(
+        std::fs::read(&on_path).unwrap(),
+        b"the built engine\n",
+        "the PATH copy was replaced"
+    );
+    let stamp = std::fs::read_to_string(engine_stamp(&on_path)).unwrap_or_default();
+    assert_eq!(stamp.trim(), digest, "and stamped with the pin");
+}
+
+/// The case's stand-in for `~/.local/bin`: a sibling of the repository, on `PATH`
+/// after the stub `bin`.
+fn hook_bin(dir: &Path) -> PathBuf {
+    let mut name = dir.file_name().unwrap().to_os_string();
+    name.push(".hook-bin");
+    dir.with_file_name(name)
+}
+
+fn engine_stamp(binary: &Path) -> PathBuf {
+    batten::engine::stamp_path(binary)
 }
 
 #[test]

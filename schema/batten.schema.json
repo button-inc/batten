@@ -4323,6 +4323,14 @@
             "null"
           ],
           "maxLength": 512
+        },
+        "read_server": {
+          "description": "The MCP server whose tool `read` names (CLOUD-2229).\n\nDeclared, the read is refused only where some `[[mcp.source]]` resolves\nthis server, which is the question `batten mcp call` answers before it\ndispatches. Measured on #1132: in a cloud session no source resolved\n`serena`, so the refusal named a route the session could not take and\nevery memory read was refused outright. Absent, `read` refuses as before.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 1536
         }
       },
       "additionalProperties": false,

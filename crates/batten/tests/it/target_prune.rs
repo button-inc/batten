@@ -476,6 +476,25 @@ fn a_built_profile_whose_build_scripts_are_gone_is_cold() {
 }
 
 #[test]
+fn a_cold_side_profile_does_not_make_the_tree_cold() {
+    // CLOUD-2227. Measured on #1132: `debug` and `release` intact, and
+    // `target/darwin-link` holding compiled build scripts with no `build`. The
+    // tree read cold and every `verify` was held to the full-tree cold floor,
+    // though rebuilding that one profile cost a fraction of it.
+    let repo = repo("target-prune-side-profile-cold");
+    built_profile(&repo, "debug");
+    built_profile(&repo, "darwin-link");
+    let unit = repo.join("target/darwin-link/.fingerprint/serde-0123456789abcdef");
+    std::fs::create_dir_all(&unit).unwrap();
+    std::fs::write(unit.join("build-script-build-script-build"), b"fp").unwrap();
+    let said = said(&prune(&repo, "20000", &["-y"]));
+    assert!(
+        said.contains("warm floor"),
+        "a side profile's rebuild is not the tree's: {said}"
+    );
+}
+
+#[test]
 fn every_built_profile_intact_is_still_warm() {
     // ANTI-VACUITY. Without this the repair is satisfied by calling every tree
     // cold, which raises the COLD floor instead and fails the same way one bucket

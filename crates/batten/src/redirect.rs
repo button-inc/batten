@@ -97,6 +97,36 @@ pub struct Redirect {
     /// mutation half exactly as before.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub read: Option<String>,
+    /// The MCP server whose tool `read` names (CLOUD-2229).
+    ///
+    /// Declared, the read is refused only where some `[[mcp.source]]` resolves
+    /// this server, which is the question `batten mcp call` answers before it
+    /// dispatches. Measured on #1132: in a cloud session no source resolved
+    /// `serena`, so the refusal named a route the session could not take and
+    /// every memory read was refused outright. Absent, `read` refuses as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read_server: Option<String>,
+}
+
+/// The table with every `read` dropped whose `read_server` `resolves` says no
+/// source can reach (CLOUD-2229): a refusal must name a route that can be taken.
+//MUTANT unreachable-route-still-refused|s@^        if row.read_server.as_deref().is_some_and(\|server\| !resolves(server)) {$@        if false {@|a_memory_read_is_admitted_where_no_source_resolves_its_server
+#[must_use]
+pub fn offered(table: &[Redirect], resolves: impl Fn(&str) -> bool) -> Vec<Redirect> {
+    table
+        .iter()
+        .cloned()
+        .map(|mut row| {
+            if row
+                .read_server
+                .as_deref()
+                .is_some_and(|server| !resolves(server))
+            {
+                row.read = None;
+            }
+            row
+        })
+        .collect()
 }
 
 /// Reject a table that would make a refusal dishonest or silent.
@@ -319,7 +349,36 @@ mod tests {
             glob: glob.to_owned(),
             mutation: mutation.to_owned(),
             read: None,
+            read_server: None,
         }
+    }
+
+    #[test]
+    fn a_memory_read_is_admitted_where_no_source_resolves_its_server() {
+        // CLOUD-2229. Measured on #1132: no declared source resolved `serena` in
+        // a cloud session, so `read_memory` was a route nobody could take.
+        let memory = Redirect {
+            read: Some("read_memory".to_owned()),
+            read_server: Some("serena".to_owned()),
+            ..row(".serena/memories/**", "use Serena's memory tools")
+        };
+        let unreachable = offered(std::slice::from_ref(&memory), |_| false);
+        assert_eq!(resolve_read(&unreachable, ".serena/memories/core.md"), None);
+        let reachable = offered(std::slice::from_ref(&memory), |server| server == "serena");
+        assert_eq!(
+            resolve_read(&reachable, ".serena/memories/core.md"),
+            Some("read_memory")
+        );
+        // A row naming no server refuses as it always did.
+        let unnamed = Redirect {
+            read_server: None,
+            ..memory
+        };
+        let kept = offered(std::slice::from_ref(&unnamed), |_| false);
+        assert_eq!(
+            resolve_read(&kept, ".serena/memories/core.md"),
+            Some("read_memory")
+        );
     }
 
     #[test]

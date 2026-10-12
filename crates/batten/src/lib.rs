@@ -739,11 +739,22 @@ fn engine_update(root: &Path, out: &mut dyn Write) -> Result<ExitCode> {
             )));
         }
     };
-    durable::replace(&binary, bytes)?;
-    if pin.source.is_some() {
-        engine::stamp(&binary, &engine::digest(root)?)?;
+    if pin.source.is_none() {
+        durable::replace(&binary, bytes)?;
+        writeln!(out, "{}", binary.display())?;
+        return Ok(ExitCode::Success);
     }
-    writeln!(out, "{}", binary.display())?;
+    // EVERY `batten` THE HOOK COULD RESOLVE, not only the one running (CLOUD-2226).
+    // Under `mise exec` the running binary is the build output itself, so
+    // installing over it alone left `~/.local/bin/batten` unstamped and the hook
+    // refusing: the floor's one repair could not clear the floor. Measured on
+    // #1132. The digest is read first, so a tree naming no source installs nothing.
+    let digest = engine::digest(root)?;
+    for target in engine::install_targets(&binary, std::env::var_os("PATH").as_deref(), root) {
+        durable::replace(&target, &bytes)?;
+        engine::stamp(&target, &digest)?;
+        writeln!(out, "{}", target.display())?;
+    }
     Ok(ExitCode::Success)
 }
 
@@ -18672,7 +18683,11 @@ fn rewrite_post_tool(
     // first JSON document on stdout and drops the rest.
     let collapsed = collapse_seen_output(envelope);
     let current = collapsed.as_ref().unwrap_or(&envelope.result);
-    let bounded = bound_result(current);
+    let bounded = if reads_a_view(envelope) {
+        None
+    } else {
+        bound_result(current)
+    };
     let rewritten = bounded
         .as_ref()
         .map(|(result, _)| result)
@@ -18691,6 +18706,24 @@ fn rewrite_post_tool(
         (None, None) => {}
     }
     Ok(())
+}
+
+/// Whether this call reads a capture view, the route the bound's own pointer
+/// prints (CLOUD-2228): such a read is never bounded again.
+//MUTANT-SUITE crates/batten/tests/it/result_bound.rs
+//MUTANT view-re-read-rebounded|s@^    let bounded = if reads_a_view(envelope) {$@    let bounded = if false {@|following_the_pointer_returns_text_not_another_pointer
+fn reads_a_view(envelope: &hook::Envelope) -> bool {
+    let Some(path) = envelope
+        .input
+        .get("file_path")
+        .and_then(serde_json::Value::as_str)
+    else {
+        return false;
+    };
+    let Ok(root) = git::repo_root(hook_authority_root()) else {
+        return false;
+    };
+    capture::is_view(&root, Path::new(path))
 }
 
 /// Mark every finding a tool's output carries as seen in this context, and cut

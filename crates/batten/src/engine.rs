@@ -80,10 +80,19 @@ fn is_input(path: &str) -> bool {
 ///
 /// # Errors
 ///
-/// A tree that is not a repository, or a tracked input that will not read.
+/// A tree that is not a repository, a tracked input that will not read, or a
+/// tree holding no engine input at all.
+///
+/// NO INPUTS IS COULD-NOT-LOOK, NEVER A DIGEST (CLOUD-2230). Hashing nothing is
+/// SHA-256's empty value, `e3b0c442…`, which names no source; measured on #1132,
+/// a debug binary carried exactly that stamp and every `cargo run -p batten`
+/// task refused under a source pin.
+//MUTANT-SUITE crates/batten/tests/it/engine_pin.rs
+//MUTANT empty-digest-stamped|s@^    if inputs == 0 {$@    if false {@|a_stamp_over_no_inputs_is_refused
 pub fn digest(root: &Path) -> Result<String> {
     use sha2::Digest as _;
     let mut hasher = sha2::Sha256::new();
+    let mut inputs = 0_usize;
     for path in crate::git::tracked_paths(root)?
         .iter()
         .filter(|path| is_input(path))
@@ -93,6 +102,13 @@ pub fn digest(root: &Path) -> Result<String> {
         hasher.update([0]);
         hasher.update(&bytes);
         hasher.update([0]);
+        inputs += 1;
+    }
+    if inputs == 0 {
+        return Err(UsageError::raise(format!(
+            "engine digest: {} tracks no engine input (crates/, Cargo.toml, Cargo.lock), so it names no source",
+            root.display()
+        )));
     }
     Ok(hex(&hasher.finalize()))
 }
@@ -103,6 +119,44 @@ fn hex(bytes: &[u8]) -> String {
         let _ = write!(text, "{byte:02x}");
         text
     })
+}
+
+/// Where a source-pinned build is installed: `running`, and the first `batten`
+/// on `path` outside the checkout at `root` (CLOUD-2226) — the installed engine
+/// a hook registered as a bare `batten` runs.
+///
+/// THE FIRST ON `PATH`, NEVER EVERY ONE. A shadowed `batten` further down is not
+/// what any hook runs, and replacing it reaches binaries nothing asked for:
+/// measured while building this, a test whose `PATH` ended in the caller's own
+/// overwrote the session's installed engine with a stub.
+///
+/// OUTSIDE THE CHECKOUT, for [`crate`]'s `follow_pin` reason (CLOUD-2063): a
+/// binary under `root` is cargo's output, not an installed engine. Under
+/// `mise exec` that output is first on `PATH`, and the one past it is what the
+/// hook runs — the case #1132 measured.
+//MUTANT-SUITE crates/batten/tests/it/engine_update.rs
+//MUTANT source-update-installs-nothing|s@^        targets.push(resolved);$@@|a_source_pin_update_installs_where_the_hook_resolves
+#[must_use]
+pub fn install_targets(
+    running: &Path,
+    path: Option<&std::ffi::OsStr>,
+    root: &Path,
+) -> Vec<PathBuf> {
+    let mut targets = vec![running.to_path_buf()];
+    let resolved = path
+        .map(std::env::split_paths)
+        .into_iter()
+        .flatten()
+        .map(|dir| crate::git::canonical(&dir.join("batten")))
+        .find(|candidate| {
+            candidate.is_file() && !candidate.starts_with(crate::git::canonical(root))
+        });
+    if let Some(resolved) = resolved
+        && resolved != crate::git::canonical(running)
+    {
+        targets.push(resolved);
+    }
+    targets
 }
 
 /// Write `digest` as the stamp beside `binary`.

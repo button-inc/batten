@@ -3723,7 +3723,18 @@ impl Policy {
             advisory: resolved.advisory.clone(),
             refusal: resolved.refusal.clone(),
             protected_readers: resolved.protected_readers.clone(),
-            redirects: resolved.redirects.clone(),
+            // A READ ROUTE NO SOURCE CAN REACH IS NOT OFFERED (CLOUD-2229). Only
+            // a server no declared source answers clears it: a source that
+            // resolves and will not read is could-not-look, and keeps the refusal.
+            redirects: crate::redirect::offered(&resolved.redirects, |server| {
+                resolved.mcp.as_ref().is_some_and(|mcp| {
+                    !matches!(
+                        crate::mcp::wiring(mcp, root, server),
+                        Err(crate::mcp::Unresolved::NotFound { .. }
+                            | crate::mcp::Unresolved::Undeclared)
+                    )
+                })
+            }),
             facts: resolved.facts.clone(),
             mints: resolved.mints.clone(),
             recorders: resolved.recorders.clone(),
@@ -14749,6 +14760,7 @@ deny contains "refused by themodule" if {
             glob: glob.to_owned(),
             mutation: mutation.to_owned(),
             read: None,
+            read_server: None,
         }
     }
 
@@ -16451,6 +16463,7 @@ deny contains "refused by themodule" if {
                 glob: "batten.toml".to_owned(),
                 mutation: "change it in a pull request".to_owned(),
                 read: None,
+                read_server: None,
             }],
         );
         let Decision::Deny(refusal) = adjudicate(

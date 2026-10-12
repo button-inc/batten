@@ -124,6 +124,48 @@ fn an_oversized_result_becomes_a_pointer_to_a_view_of_its_text() {
 }
 
 #[test]
+fn following_the_pointer_returns_text_not_another_pointer() {
+    // CLOUD-2228. The pointer's route is `read <view>`, and the view of an
+    // oversized result is itself over the bound, so reading it was bounded
+    // again into a second pointer: the text was never reachable by the route
+    // printed. Measured on #1132, every view over ~8KB.
+    let dir = repo("result-bound-follow");
+    let first = post_tool(&dir, &read_result(&payload(2000)));
+    let said = String::from_utf8_lossy(&first.stdout);
+    let view = said
+        .split("; read ")
+        .nth(1)
+        .and_then(|rest| rest.split(['"', '\\']).next())
+        .unwrap_or_else(|| panic!("the pointer names the view: {said}"))
+        .to_owned();
+    let text = std::fs::read_to_string(&view).expect("the view exists");
+    let payload = serde_json::json!({
+        "hook_event_name": "PostToolUse",
+        "session_id": "bound",
+        "tool_name": "Read",
+        "tool_input": { "file_path": view },
+        "tool_response": read_result(&text),
+    });
+    let followed = common::run_with_stdin(
+        &dir,
+        &["adjudicate", "--harness", "claude-code"],
+        &payload.to_string(),
+    );
+    assert_eq!(
+        followed.status.code(),
+        Some(0),
+        "{}",
+        common::stderr(&followed)
+    );
+    let again = String::from_utf8_lossy(&followed.stdout);
+    assert!(
+        !again.contains("output point now"),
+        "the view is read, not re-bounded: {again}"
+    );
+    assert!(!again.contains("updatedToolOutput"), "{again}");
+}
+
+#[test]
 fn a_built_in_result_is_evicted_before_a_tracker_read() {
     // Storing every result must not displace what gates resolve: a store bounded
     // to two records keeps the tracker read through three built-in results.
