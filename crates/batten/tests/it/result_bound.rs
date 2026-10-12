@@ -124,6 +124,51 @@ fn an_oversized_result_becomes_a_pointer_to_a_view_of_its_text() {
 }
 
 #[test]
+fn a_built_in_result_is_evicted_before_a_tracker_read() {
+    // Storing every result must not displace what gates resolve: a store bounded
+    // to two records keeps the tracker read through three built-in results.
+    let dir = common::Fixture::at(common::scratch("result-bound-evict").join("repo"))
+        .config("version = 1\n\n[capture]\nmax_records = 2\n")
+        .git()
+        .base_commit()
+        .build();
+    let tracker = serde_json::json!({
+        "hook_event_name": "PostToolUse",
+        "session_id": "bound",
+        "tool_name": "mcp__tracker__get_issue",
+        "tool_input": {},
+        "tool_response": [{ "type": "text", "text": "{\"id\":\"CLOUD-9\",\"statusType\":\"duplicate\"}" }],
+    });
+    let stored = common::run_with_stdin(
+        &dir,
+        &["adjudicate", "--harness", "claude-code"],
+        &tracker.to_string(),
+    );
+    assert_eq!(stored.status.code(), Some(0), "{}", common::stderr(&stored));
+    for n in 0..3 {
+        post_tool(&dir, &read_result(&format!("built-in result {n}\n")));
+    }
+    let calls = common::run(&dir, &["capture", "list", "--calls", "-J"]);
+    let rows: serde_json::Value = serde_json::from_slice(&calls.stdout).expect("JSON rows");
+    let digest = rows
+        .as_array()
+        .and_then(|rows| {
+            rows.iter()
+                .find(|row| row["tool"] == "mcp__tracker__get_issue")
+        })
+        .and_then(|row| row["digest"].as_str())
+        .unwrap_or_else(|| panic!("the tracker row: {rows}"))
+        .to_owned();
+    let shown = common::run(&dir, &["capture", "show", &format!("response:{digest}")]);
+    assert_eq!(
+        shown.status.code(),
+        Some(0),
+        "the tracker read survives the built-in results: {}",
+        common::stderr(&shown)
+    );
+}
+
+#[test]
 fn a_host_that_cannot_rewrite_still_gets_the_pointer() {
     // The neutral adapter honours no rewrite, so the result reaches the model
     // whole; the pointer rides the advisory channel beside it, never silently

@@ -20734,7 +20734,7 @@ fn filed_here_rows(overrides: &Overrides, root: &Path) -> Option<(Vec<String>, V
     Some((flagged, filed))
 }
 
-/// Whether the newest stored read or write of `key` says the row is closed.
+/// Whether the newest stored read of `key` says the row is closed.
 //MUTANT-SUITE crates/batten/tests/it/stop_posture.rs
 //MUTANT closed-row-listed|s@^        .filter(\x7cid\x7c !row_closed(root, id))$@        .filter(\x7c_\x7c true)@|a_closed_row_leaves_the_filed_checklist
 fn row_closed(authority: &Path, key: &str) -> bool {
@@ -20744,7 +20744,10 @@ fn row_closed(authority: &Path, key: &str) -> bool {
         return false;
     };
     let repo = repo.as_path();
-    let tools = [READ_TOOL.to_owned(), WRITE_TOOL.to_owned()];
+    // READS ONLY: a write's response need not carry `statusType`, and a newer
+    // write would then hide the read that does. Measured on #1132's own board:
+    // three closed rows stayed listed behind their filing writes.
+    let tools = [READ_TOOL.to_owned()];
     let selector = capture::Selector {
         tools: &tools,
         key,
@@ -21350,7 +21353,7 @@ fn capture_response(
             .session
             .clone()
             .unwrap_or_else(|| "unnamed".to_owned()),
-        source: "post-tool-member".to_owned(),
+        source: capture::POST_TOOL_MEMBER.to_owned(),
         host: harness.as_str().to_owned(),
         tool: envelope.raw_tool.clone(),
         event: hook::Event::PostTool.as_str().to_owned(),
@@ -21429,7 +21432,7 @@ fn record_absence(
             .session
             .clone()
             .unwrap_or_else(|| "unnamed".to_owned()),
-        source: "post-tool-member".to_owned(),
+        source: capture::POST_TOOL_MEMBER.to_owned(),
         host: harness.as_str().to_owned(),
         tool: envelope.raw_tool.clone(),
         event: hook::Event::PostTool.as_str().to_owned(),

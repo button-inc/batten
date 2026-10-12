@@ -3225,13 +3225,13 @@ pub fn decode(harness: Harness, raw: &str) -> Option<Envelope> {
     // but a BOM is never meaningful in any of these payloads, so removing it
     // once here beats remembering which host emits one.
     let raw = raw.strip_prefix('\u{feff}').unwrap_or(raw);
-    decode_value(harness, serde_json::from_str(raw).ok()?)
+    decode_value(harness, &serde_json::from_str(raw).ok()?)
 }
 
 /// [`decode`], over a document already parsed — the streamed read's
 /// (CLOUD-2224), which never holds the payload as one string.
 #[must_use]
-pub fn decode_value(harness: Harness, value: Value) -> Option<Envelope> {
+pub fn decode_value(harness: Harness, value: &Value) -> Option<Envelope> {
     let raw_event = value
         .get("hook_event_name")
         .and_then(Value::as_str)
@@ -3243,7 +3243,7 @@ pub fn decode_value(harness: Harness, value: Value) -> Option<Envelope> {
     // `tool_name`; every other shape nests it under `tool_input`.
     let specialized = harness == Harness::Cursor && cursor_specialized_tool(&raw_event).is_some();
     let input = if specialized {
-        cursor_specialized_input(&value)
+        cursor_specialized_input(value)
     } else {
         // Copilot's `toolArgs` is typed `unknown` and its own docs show it
         // stringified, so the parser accepts both an object and a JSON string.
@@ -3364,8 +3364,8 @@ pub fn decode_value(harness: Harness, value: Value) -> Option<Envelope> {
             .filter(|mode| !mode.is_empty())
             .map(ToOwned::to_owned),
         // CLOUD-2075: the sightings context and the SessionStart source.
-        agent: present_str(&value, "agent_id"),
-        start_source: present_str(&value, "source"),
+        agent: present_str(value, "agent_id"),
+        start_source: present_str(value, "source"),
     })
 }
 

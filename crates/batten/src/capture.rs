@@ -2160,14 +2160,24 @@ pub fn evict_to_budget_in(dir: &Path, config: Option<&CaptureConfig>) -> Result<
         .collect();
     let mut taken: std::collections::HashSet<&str> = std::collections::HashSet::new();
     let mut candidates: Vec<Capture> = Vec::new();
-    for row in &ordered {
-        let Some(digest) = row.digest.as_deref() else {
-            continue;
-        };
-        if let Some(found) = by_digest.get(digest)
-            && taken.insert(found.digest.as_str())
-        {
-            candidates.push((*found).clone());
+    // A BUILT-IN TOOL'S RESULT GOES FIRST (CLOUD-2223). Those are stored so a
+    // bounded result can be re-read, not because a gate selects them, and they
+    // arrive on every call; evicted in plain append order they pushed out the
+    // tracker reads `ready lint`, `claim check` and the Stop checklist resolve
+    // within minutes. Everything the store held before 2223 keeps its order.
+    for builtin_pass in [true, false] {
+        for row in &ordered {
+            if is_builtin_result(row) != builtin_pass {
+                continue;
+            }
+            let Some(digest) = row.digest.as_deref() else {
+                continue;
+            };
+            if let Some(found) = by_digest.get(digest)
+                && taken.insert(found.digest.as_str())
+            {
+                candidates.push((*found).clone());
+            }
         }
     }
     for record in &held {
@@ -2192,6 +2202,17 @@ pub fn evict_to_budget_in(dir: &Path, config: Option<&CaptureConfig>) -> Result<
     }
     Ok(removed)
 }
+
+/// Whether `row` records a built-in tool's result taken at `PostToolUse` — the
+/// volume CLOUD-2223 added, and the first a bounded store gives up.
+//MUTANT-SUITE crates/batten/tests/it/result_bound.rs
+//MUTANT builtin-results-not-first|s@^    row.source == POST_TOOL_MEMBER \&\& !row.tool.starts_with("mcp__")$@    false@|a_built_in_result_is_evicted_before_a_tracker_read
+fn is_builtin_result(row: &CallRow) -> bool {
+    row.source == POST_TOOL_MEMBER && !row.tool.starts_with("mcp__")
+}
+
+/// The `source` a result taken from the `PostToolUse` envelope is filed under.
+pub const POST_TOOL_MEMBER: &str = "post-tool-member";
 
 /// The `source` a recorded `--raw` retrieval is filed under.
 ///
@@ -2426,7 +2447,32 @@ fn trim_calls(dir: &Path, ordered: &[CallRow], max_records: u64) -> Result<()> {
     if ordered.len() <= allowed {
         return Ok(());
     }
-    let keep = &ordered[ordered.len() - allowed..];
+    // Built-in results' rows go first, for the eviction's reason; the rest keep
+    // the newest suffix the log always kept.
+    let mut excess = ordered.len() - allowed;
+    let mut dropped = vec![false; ordered.len()];
+    for (index, row) in ordered.iter().enumerate() {
+        if excess == 0 {
+            break;
+        }
+        if is_builtin_result(row) {
+            dropped[index] = true;
+            excess -= 1;
+        }
+    }
+    for flag in &mut dropped {
+        if excess == 0 {
+            break;
+        }
+        if !*flag {
+            *flag = true;
+            excess -= 1;
+        }
+    }
+    let keep = ordered
+        .iter()
+        .zip(&dropped)
+        .filter_map(|(row, gone)| (!gone).then_some(row));
     let mut rendered = String::new();
     for row in keep {
         let line = serde_json::to_string(row).context("render a call row")?;
