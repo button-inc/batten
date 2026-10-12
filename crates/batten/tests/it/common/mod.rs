@@ -2700,7 +2700,6 @@ pub(crate) fn schema_leaf<'a>(
 /// `curl`-era fixture: a verifier that must chain to a root will not accept an
 /// end-entity certificate as its own issuer, so the old shape would fail the
 /// trusted arm for a reason that has nothing to do with the property under test.
-#[cfg(target_os = "linux")]
 pub(crate) fn mint_ca_and_server_certificate(tls: &Path) {
     #[expect(
         clippy::disallowed_types,
@@ -2791,14 +2790,12 @@ pub(crate) fn mint_ca_and_server_certificate(tls: &Path) {
 ///
 /// `-WWW` answers `200` for a file it cannot open, with the error as the body
 /// (`provision.rs` measured it), so a case served here can never see a `404`.
-#[cfg(target_os = "linux")]
 pub(crate) struct TlsWww {
     /// The loopback port it listens on.
     pub(crate) port: u16,
     child: std::process::Child,
 }
 
-#[cfg(target_os = "linux")]
 impl Drop for TlsWww {
     fn drop(&mut self) {
         let _ = self.child.kill();
@@ -2807,7 +2804,6 @@ impl Drop for TlsWww {
 }
 
 /// Mint a CA into `tls` and serve `root` over HTTPS with it.
-#[cfg(target_os = "linux")]
 pub(crate) fn tls_www(tls: &Path, root: &Path) -> TlsWww {
     #[expect(
         clippy::disallowed_types,

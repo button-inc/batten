@@ -484,7 +484,6 @@ fn a_web_host_that_serves_nothing_is_could_not_look() {
 /// A release tree for `s_server -WWW`: `SHA256SUMS` and every target's archive
 /// under `releases/download/<tag>/`. No redirect is possible there, so the cases
 /// served from it name the tag with `BATTEN_VERSION`.
-#[cfg(target_os = "linux")]
 fn release_tree(root: &std::path::Path, archive: &[u8]) {
     let download = root.join(REPO).join("releases").join("download").join(TAG);
     std::fs::create_dir_all(&download).unwrap();
@@ -494,14 +493,22 @@ fn release_tree(root: &std::path::Path, archive: &[u8]) {
     }
 }
 
+/// One arm of the CA case: its name, the variables it declares, the exit wanted.
+type CaArm<'a> = (&'a str, &'a [(&'a str, &'a str)], i32);
+
 /// The CA a host declares reaches the bootstrap's downloads, in curl's own
 /// precedence — `CURL_CA_BUNDLE`, then `SSL_CERT_FILE` — so the one-liner
 /// installs through a proxy that re-terminates TLS. Without a declaration the
 /// same host is refused as could-not-look, which is what makes the trusted arms
 /// evidence about trust rather than about something answering.
-#[cfg(target_os = "linux")]
+///
+/// Linux only, said inside the case so it compiles everywhere (CLOUD-1148): the
+/// fixture's key material comes from `openssl`, as `provision.rs`'s does.
 #[test]
 fn a_declared_ca_bundle_reaches_the_download_in_curls_precedence() {
+    if !cfg!(target_os = "linux") {
+        return;
+    }
     let dir = scratch("install-web-ca");
     let archive = tarball(&dir);
     let root = dir.join("www");
@@ -513,7 +520,7 @@ fn a_declared_ca_bundle_reaches_the_download_in_curls_precedence() {
     let ca = tls.join("ca.pem").display().to_string();
     let absent = dir.join("absent.pem").display().to_string();
 
-    let arms: [(&str, &[(&str, &str)], i32); 4] = [
+    let arms: [CaArm<'_>; 4] = [
         ("curl-ca-bundle", &[("CURL_CA_BUNDLE", &ca)], 0),
         ("ssl-cert-file", &[("SSL_CERT_FILE", &ca)], 0),
         (

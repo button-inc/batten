@@ -10345,12 +10345,9 @@ expires = "2026-10-31"
 # `engine::pick_release`'s unit cases — the retry and named-version cases each
 # shown red under a mutant. What has no successor is the GitHub API route, its
 # query flags and its proxy-credential fallback, whose surface is gone; the
-# `ported:` ledger in `install_script.rs` names each case's file. Its
-# `test count dropped` half is the row above.
-[[waiver]]
-rule = "test grade dropped"
-reason = "CLOUD-2203 retires the hand-written install.sh's API-route, query-flag and proxy-fallback cases with their surface; every surviving behaviour is carried to a Rust-side case (operator-admitted in .batten/asked.jsonl)"
-expires = "2026-10-31"
+# `ported:` ledger in `install_script.rs` names each case's file. The waiver is
+# the row above; `test grade dropped` is a warning and reports the same drop
+# without one.
 
 # `cfg-gated-test`'s own first legitimate refusal, taken through the route the
 # class declares rather than the one it declared first. The long form of why an

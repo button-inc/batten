@@ -114,23 +114,18 @@ fn an_off_path_destination_declared_deliberate_is_admitted() {
 }
 
 /// The repository path the TLS fixture serves the release from.
-#[cfg(target_os = "linux")]
 const REPO: &str = "example/pkg";
 
 /// The release a ref's manifest names in the fixture, never this binary's own.
-#[cfg(target_os = "linux")]
 const WANTED: &str = "v9.9.9";
 
 /// The bytes the fixture release ships as its binary.
-#[cfg(target_os = "linux")]
 const SHIPPED: &[u8] = b"#!/bin/sh\necho the fixture release\n";
 
 /// Serve, over loopback TLS, a ref `main` whose manifest names [`WANTED`], and
 /// [`WANTED`]'s release for this build's target. Returns the host and the
 /// environment `engine install` needs to reach and trust it.
-#[cfg(target_os = "linux")]
 fn ref_release_host(home: &Path) -> (common::TlsWww, Vec<(String, String)>) {
-    use std::os::unix::fs::PermissionsExt as _;
     #[expect(
         clippy::disallowed_types,
         reason = "stays, and test-only: `engine install` untars what it fetches, so the fixture release has to be a real gzipped tar and `tar` is what writes one"
@@ -150,8 +145,16 @@ fn ref_release_host(home: &Path) -> (common::TlsWww, Vec<(String, String)>) {
     std::fs::create_dir_all(&stage).unwrap();
     let bin = stage.join(binary());
     std::fs::write(&bin, SHIPPED).unwrap();
-    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
     let archive = home.join("release.tar.gz");
+    #[expect(
+        clippy::disallowed_types,
+        reason = "stays, and test-only: the spawn the import above names"
+    )]
     let packed = Command::new("tar")
         .arg("-czf")
         .arg(&archive)
@@ -191,9 +194,13 @@ fn ref_release_host(home: &Path) -> (common::TlsWww, Vec<(String, String)>) {
 
 /// `BATTEN_VERSION_FROM_REF` installs the release the ref's manifest names,
 /// fetched and verified, rather than the binary that is running.
-#[cfg(target_os = "linux")]
 #[test]
 fn the_version_comes_from_the_refs_manifest() {
+    // Linux only, said here so the case compiles everywhere (CLOUD-1148): the
+    // TLS fixture's key material comes from `openssl`.
+    if !cfg!(target_os = "linux") {
+        return;
+    }
     let home = common::scratch_repo("engine-install-ref");
     let named = home.join("bin");
     let (_host, served) = ref_release_host(&home);
@@ -226,9 +233,13 @@ fn the_version_comes_from_the_refs_manifest() {
 
 /// A named `BATTEN_VERSION` always wins: the bootstrap fetched and verified that
 /// release, so the ref is never read and the running binary is what lands.
-#[cfg(target_os = "linux")]
 #[test]
 fn an_explicitly_named_version_is_never_replaced_by_the_ref() {
+    // Linux only, said here so the case compiles everywhere (CLOUD-1148): the
+    // TLS fixture's key material comes from `openssl`.
+    if !cfg!(target_os = "linux") {
+        return;
+    }
     let home = common::scratch_repo("engine-install-named-wins");
     let named = home.join("bin");
     let (_host, served) = ref_release_host(&home);
@@ -263,9 +274,13 @@ fn an_explicitly_named_version_is_never_replaced_by_the_ref() {
 
 /// A ref whose manifest names no version is a refusal, never a quiet install of
 /// whatever binary is running.
-#[cfg(target_os = "linux")]
 #[test]
 fn a_ref_naming_no_version_installs_nothing() {
+    // Linux only, said here so the case compiles everywhere (CLOUD-1148): the
+    // TLS fixture's key material comes from `openssl`.
+    if !cfg!(target_os = "linux") {
+        return;
+    }
     let home = common::scratch_repo("engine-install-ref-unreadable");
     let named = home.join("bin");
     let (_host, served) = ref_release_host(&home);

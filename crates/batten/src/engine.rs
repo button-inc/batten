@@ -601,31 +601,34 @@ mod tests {
     }
 
     #[test]
-    fn a_named_version_never_reads_the_ref_or_fetches() {
+    fn a_named_version_never_reads_the_ref_or_fetches() -> Result<()> {
         assert_eq!(
-            pick_release("v1.0.0", true, unread, unfetched).unwrap(),
+            pick_release("v1.0.0", true, unread, unfetched)?,
             Pick::Running
         );
+        Ok(())
     }
 
     #[test]
-    fn no_ref_installs_the_running_binary() {
+    fn no_ref_installs_the_running_binary() -> Result<()> {
         assert_eq!(
-            pick_release("v1.0.0", false, || Ok(None), unfetched).unwrap(),
+            pick_release("v1.0.0", false, || Ok(None), unfetched)?,
             Pick::Running
         );
+        Ok(())
     }
 
     #[test]
-    fn a_ref_naming_the_running_release_fetches_nothing() {
+    fn a_ref_naming_the_running_release_fetches_nothing() -> Result<()> {
         assert_eq!(
-            pick_release("v1.0.0", false, || Ok(Some("v1.0.0".into())), unfetched).unwrap(),
+            pick_release("v1.0.0", false, || Ok(Some("v1.0.0".into())), unfetched)?,
             Pick::Running
         );
+        Ok(())
     }
 
     #[test]
-    fn the_version_comes_from_the_refs_manifest() {
+    fn the_version_comes_from_the_refs_manifest() -> Result<()> {
         let pick = pick_release(
             "v1.0.0",
             false,
@@ -634,8 +637,7 @@ mod tests {
                 assert_eq!(tag, "v2.0.0", "the ref's version is the one fetched");
                 Ok(Release::Published(b"two".to_vec()))
             },
-        )
-        .unwrap();
+        )?;
         assert_eq!(
             pick,
             Pick::Fetched {
@@ -643,47 +645,52 @@ mod tests {
                 bytes: b"two".to_vec()
             }
         );
+        Ok(())
     }
 
     #[test]
-    fn an_unpublished_ref_release_falls_back_to_the_running_binary() {
+    fn an_unpublished_ref_release_falls_back_to_the_running_binary() -> Result<()> {
         let pick = pick_release(
             "v1.0.0",
             false,
             || Ok(Some("v2.0.0".into())),
             |_| Ok(Release::Unpublished),
-        )
-        .unwrap();
+        )?;
         assert_eq!(
             pick,
             Pick::Unpublished {
                 wanted: "v2.0.0".into()
             }
         );
+        Ok(())
     }
 
     #[test]
     fn a_fetch_that_fails_for_any_other_reason_is_never_a_fallback() {
-        let err = pick_release(
+        let pick = pick_release(
             "v1.0.0",
             false,
             || Ok(Some("v2.0.0".into())),
             |_| Err(UsageError::raise("digest disagrees")),
-        )
-        .expect_err("a failed fetch is propagated, not read as unpublished");
-        assert!(err.to_string().contains("digest disagrees"), "{err}");
+        );
+        assert!(
+            matches!(&pick, Err(err) if err.to_string().contains("digest disagrees")),
+            "a failed fetch is propagated, not read as unpublished: {pick:?}"
+        );
     }
 
     #[test]
     fn a_ref_that_cannot_be_read_is_a_refusal() {
-        let err = pick_release(
+        let pick = pick_release(
             "v1.0.0",
             false,
             || Err(UsageError::raise("manifest answered 500")),
             unfetched,
-        )
-        .expect_err("an unreadable ref installs nothing");
-        assert!(err.to_string().contains("500"), "{err}");
+        );
+        assert!(
+            matches!(&pick, Err(err) if err.to_string().contains("500")),
+            "an unreadable ref installs nothing: {pick:?}"
+        );
     }
 
     #[test]
