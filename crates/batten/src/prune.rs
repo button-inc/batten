@@ -260,7 +260,7 @@ pub(crate) fn reclaim_superseded(root: &Path, keep: usize) -> (usize, u64) {
         })
         .collect();
     for deps in directories_named(root, "deps").into_iter().chain(examples) {
-        let Some(_building) = claim(root, &deps) else {
+        let Ok(_building) = claim(root, &deps) else {
             continue;
         };
         let fingerprints = deps.parent().map(|profile| profile.join(".fingerprint"));
@@ -768,8 +768,8 @@ const BUILD_LOCK: &str = ".cargo-lock";
 /// that is simply colder. A lock that cannot be opened is no lock at all — a tree
 /// cargo never built into, which is exactly what the pass already handled.
 //MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
-//MUTANT reclaim-under-held-lock|s@^            Err(std::fs::TryLockError::WouldBlock) => return None,$@            Err(std::fs::TryLockError::WouldBlock) => {}@|a_tree_a_build_holds_is_never_collected
-pub(crate) fn claim(root: &Path, path: &Path) -> Option<Vec<std::fs::File>> {
+//MUTANT reclaim-under-held-lock|s@^            Err(std::fs::TryLockError::WouldBlock) => return Err(profile.join(BUILD_LOCK)),$@            Err(std::fs::TryLockError::WouldBlock) => {}@|a_tree_a_build_holds_is_never_collected
+pub(crate) fn claim(root: &Path, path: &Path) -> Result<Vec<std::fs::File>, PathBuf> {
     let enclosing = path.ancestors().take_while(|dir| dir.starts_with(root));
     let nested = PROFILE_DIRS.iter().map(|profile| path.join(profile));
     let mut held = Vec::new();
@@ -779,13 +779,13 @@ pub(crate) fn claim(root: &Path, path: &Path) -> Option<Vec<std::fs::File>> {
         };
         match lock.try_lock() {
             Ok(()) => held.push(lock),
-            Err(std::fs::TryLockError::WouldBlock) => return None,
+            Err(std::fs::TryLockError::WouldBlock) => return Err(profile.join(BUILD_LOCK)),
             // An error that is not contention says nothing about a build, and
             // refusing on it would let one unreadable lock wedge every reclaim.
             Err(std::fs::TryLockError::Error(_)) => {}
         }
     }
-    Some(held)
+    Ok(held)
 }
 
 /// The profile directories cargo lays down inside any build tree.

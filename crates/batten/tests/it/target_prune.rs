@@ -932,6 +932,35 @@ fn a_repository_declaring_no_prune_table_reports_rather_than_refusing() {
     assert!(said.contains("no [prune] table"), "{said}");
 }
 
+/// CLOUD-2225. A unit under a profile a running build holds is never collected,
+/// and the run says which lock held it rather than reporting nothing to take:
+/// measured on #1132, a pass passed over 1,026 such units and its report named
+/// no cause. The case holds `target/debug/.cargo-lock` as cargo does.
+#[test]
+fn a_held_profile_is_reported_by_its_lock() {
+    let repo = repo("target-prune-held");
+    let profile = repo.join("target/debug");
+    live(&profile, "stale", "cccccccccccccccc", 7200, 1 << 20);
+    let lock = std::fs::File::create(profile.join(".cargo-lock")).unwrap();
+    lock.lock().unwrap();
+
+    let output = prune(&repo, FREE, &["-y"]);
+    let said = said(&output);
+    assert_eq!(output.status.code(), Some(0), "{said}");
+    assert!(
+        profile.join("deps/stale-cccccccccccccccc").exists(),
+        "a held profile is never collected: {said}"
+    );
+    let named = said.lines().any(|line| {
+        line.contains("disk-held ")
+            && line
+                .trim_end()
+                .ends_with(&format!("debug{}.cargo-lock", std::path::MAIN_SEPARATOR))
+    });
+    assert!(named, "the lock that held it is named: {said}");
+    drop(lock);
+}
+
 /// `[tasks."target-prune"]`'s run, as the manifest carries it.
 fn run_of(task: &str) -> String {
     let block = common::task_block(task).unwrap_or_else(|| panic!("{task} is a declared task"));

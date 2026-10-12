@@ -78,23 +78,6 @@ impl std::fmt::Debug for DiskWatch<'_> {
     }
 }
 
-/// Whether `BATTEN_DISK_TRACE=1` asks for the sample trace.
-#[must_use]
-pub fn tracing() -> bool {
-    std::env::var_os("BATTEN_DISK_TRACE").is_some_and(|value| value == "1")
-}
-
-/// One trace line, the one spelling the watcher and the hook share.
-#[must_use]
-pub fn trace_line(kind: &str, fields: &[u64]) -> String {
-    let mut line = String::from(kind);
-    for field in fields {
-        line.push(' ');
-        line.push_str(&field.to_string());
-    }
-    line
-}
-
 /// Start the watcher in `scope`; it runs until `stop` is set, then returns the
 /// record lines its collections produced (`disk-collected …`, `disk-unlink-ms …`).
 ///
@@ -126,7 +109,7 @@ pub fn watch<'scope>(
         let reader: Reader<'scope> = Arc::new(Mutex::new(free_mb));
         let lines: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
         let collecting = Arc::new(AtomicBool::new(false));
-        let trace = tracing();
+        let trace = crate::collect::tracing();
         let started = std::time::Instant::now();
         let mut pending: Option<std::thread::ScopedJoinHandle<'scope, ()>> = None;
         while !stop.load(Ordering::Relaxed) {
@@ -136,7 +119,11 @@ pub fn watch<'scope>(
                     let ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
                     let _ = std::io::Write::write_all(
                         &mut std::io::stderr(),
-                        format!("{}\n", trace_line("disk-sample", &[ms, free])).as_bytes(),
+                        format!(
+                            "{}\n",
+                            crate::collect::trace_line("disk-sample", &[ms, free])
+                        )
+                        .as_bytes(),
                     );
                 }
                 // ONE COLLECTION AT A TIME: a sample that finds one running

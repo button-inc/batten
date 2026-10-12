@@ -155,7 +155,7 @@ fn a_stale_incremental_cache_is_collected_and_a_fresh_one_kept() {
     aged_dir(&profile.join("incremental/stale-0aaaaaaaaaaaa"), 7200);
     aged_dir(&profile.join("incremental/fresh-0bbbbbbbbbbbb/s-new"), 1);
     let trees = [tree.clone()];
-    let (_, units) = batten::collect::collect(&request(&trees, &[], u64::MAX));
+    let units = batten::collect::collect(&request(&trees, &[], u64::MAX)).removed;
     assert_eq!(units, 1, "only the stale cache is outside the working set");
     assert!(!profile.join("incremental/stale-0aaaaaaaaaaaa").exists());
     assert!(
@@ -175,13 +175,32 @@ fn a_stale_test_scratch_entry_is_collected() {
     aged_dir(&tree.join("tmp/old-fixture"), 7200);
     aged_dir(&tree.join("tmp/live-fixture"), 1);
     let trees = [tree.clone()];
-    let (_, units) = batten::collect::collect(&request(&trees, &[], u64::MAX));
+    let units = batten::collect::collect(&request(&trees, &[], u64::MAX)).removed;
     assert_eq!(
         units, 1,
         "only the stale fixture is outside the working set"
     );
     assert!(!tree.join("tmp/old-fixture").exists());
     assert!(tree.join("tmp/live-fixture").exists());
+}
+
+/// A BUILD INSIDE FRESH SCRATCH IS THE SCRATCH ENTRY'S, NOT A UNIT OF ITS OWN:
+/// a suite's fixture tree under `tmp/` carries units of any age, and the entry
+/// that holds them is what the working set judges. `#MUTANT scratch-unit-ranked`
+/// collects the nested unit.
+#[test]
+fn a_build_inside_fresh_scratch_is_never_collected() {
+    let root = common::scratch("collect-nested-scratch");
+    let tree = root.join("target");
+    let nested = tree.join("tmp/running-case/target/debug");
+    unit(&nested, "fixture", "9999999999999999", 7200, 16);
+    aged_dir(&tree.join("tmp/running-case"), 1);
+    let trees = [tree.clone()];
+    let _ = batten::collect::collect(&request(&trees, &[], u64::MAX));
+    assert!(
+        present(&nested, "fixture", "9999999999999999"),
+        "a unit inside a fresh scratch entry is the entry's"
+    );
 }
 
 #[test]
@@ -191,7 +210,7 @@ fn the_least_recently_used_live_unit_goes_first() {
     unit(&one.join("debug"), "alpha", "1111111111111111", 3600, 4096);
     unit(&two.join("debug"), "beta", "2222222222222222", 1800, 4096);
     let trees = [one.clone(), two.clone()];
-    let (_, units) = batten::collect::collect(&request(&trees, &[], 1));
+    let units = batten::collect::collect(&request(&trees, &[], 1)).removed;
     assert_eq!(units, 1, "one unit frees the one byte asked for");
     assert!(
         !present(&one.join("debug"), "alpha", "1111111111111111"),
@@ -260,7 +279,7 @@ fn the_working_set_is_never_collected() {
     unit(&profile, "fresh", "eeeeeeeeeeeeeeee", 30, 4096);
     unit(&profile, "stale", "ffffffffffffffff", 7200, 4096);
     let trees = [root.join("target")];
-    let (_, units) = batten::collect::collect(&request(&trees, &[], u64::MAX));
+    let units = batten::collect::collect(&request(&trees, &[], u64::MAX)).removed;
     assert_eq!(units, 1, "only the unit outside the window goes");
     assert!(present(&profile, "fresh", "eeeeeeeeeeeeeeee"));
     assert!(!present(&profile, "stale", "ffffffffffffffff"));
@@ -289,7 +308,7 @@ fn a_unit_just_rebuilt_is_not_least_recently_used() {
         .unwrap();
     unit(&two.join("debug"), "idle", "4444444444444444", 1800, 4096);
     let trees = [one.clone(), two.clone()];
-    let (_, units) = batten::collect::collect(&request(&trees, &[], 1));
+    let units = batten::collect::collect(&request(&trees, &[], 1)).removed;
     assert_eq!(units, 1);
     assert!(
         present(&one.join("debug"), "rebuilt", "3333333333333333"),
@@ -314,7 +333,8 @@ fn a_collected_unit_takes_its_artifacts() {
         1 << 20,
     );
     let trees = [tree.clone()];
-    let (freed, units) = batten::collect::collect(&request(&trees, &[], 1));
+    let pass = batten::collect::collect(&request(&trees, &[], 1));
+    let (freed, units) = (pass.freed_bytes, pass.removed);
     assert_eq!(units, 1);
     assert!(!artifact.exists(), "the unit's deps artifact went with it");
     assert!(freed >= 1 << 20, "and its bytes were counted: {freed}");

@@ -21785,12 +21785,23 @@ fn collect_before_admitting(
         let _ = writeln!(err, "disk-call {} {before} {after}", envelope.raw_tool);
     }
     if let (Some(done), Some((min, _))) = (collected, band.and_then(prune::Prune::free_band)) {
-        let subjects = [
+        // WHAT STOPPED IT SHORT, named (CLOUD-2225): a lock a running build
+        // holds, and the working set, each a subject rather than a guess.
+        let mut subjects = vec![
             verdict::artifact(&format!("freed={}MB", done.freed_bytes / (1024 * 1024))),
             verdict::artifact(&format!("units={}", done.units)),
             verdict::artifact(&format!("free={}MB", done.free_after_mb)),
             verdict::artifact(&format!("min_free_mb={min}")),
         ];
+        subjects.extend(
+            done.held
+                .locks
+                .iter()
+                .map(|lock| verdict::artifact(&format!("held={}", lock.display()))),
+        );
+        if done.held.working_set {
+            subjects.push(verdict::artifact("working-set"));
+        }
         let finding = refusal::Refusal::engine(
             verdict::Native::CargoRetireNow,
             &subjects,

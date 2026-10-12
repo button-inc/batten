@@ -37,16 +37,45 @@ pub struct Collected {
     pub free_after_mb: u64,
     /// Wall time the unlinks took, in milliseconds.
     pub wall_ms: u64,
+    /// Why units were passed over: the locks a running build held, and whether
+    /// the pass stopped at the working set (CLOUD-2225).
+    pub held: Held,
+}
+
+/// What stopped a pass short, named so a report never guesses (CLOUD-2225):
+/// measured on #1132, a pass passed over 1,026 units whose profile a running
+/// build held and stopped at the working set, and reported only that it freed
+/// nothing.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Held {
+    /// Each `.cargo-lock` or collector lock that declined, once, in order.
+    pub locks: Vec<PathBuf>,
+    /// The pass reached a unit used inside [`WORKING_SET`] and stopped there.
+    pub working_set: bool,
+}
+
+/// What one [`collect`] pass did.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Pass {
+    /// Bytes freed, each inode counted once.
+    pub freed_bytes: u64,
+    /// Units removed, superseded and live together.
+    pub removed: usize,
+    /// What it passed over, and why.
+    pub held: Held,
 }
 
 //MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
 //MUTANT reclaim-unlink-unmeasured|s@^            format!("disk-unlink-ms {}", self.wall_ms),$@@|the_arm_watches_past_the_gate
+//MUTANT-SUITE crates/batten/tests/it/target_prune.rs
+//MUTANT held-lock-unreported|s@^                .map(\x7clock\x7c format!("disk-held {}", lock.display())),$@                .filter(\x7c_\x7c false).map(\x7clock\x7c format!("disk-held {}", lock.display())),@|a_held_profile_is_reported_by_its_lock
 impl Collected {
-    /// The lap-record lines: `disk-collected <freed_mb> <units> <free_after_mb>`
-    /// and the unlink cost (CLOUD-1945's figure).
+    /// The lap-record lines: `disk-collected <freed_mb> <units> <free_after_mb>`,
+    /// the unlink cost (CLOUD-1945's figure), then one `disk-held <lock>` per
+    /// lock that declined and `disk-working-set` where the pass stopped there.
     #[must_use]
     pub fn lines(&self) -> Vec<String> {
-        vec![
+        let mut lines = vec![
             format!(
                 "disk-collected {} {} {}",
                 self.freed_bytes / (1024 * 1024),
@@ -54,8 +83,38 @@ impl Collected {
                 self.free_after_mb
             ),
             format!("disk-unlink-ms {}", self.wall_ms),
-        ]
+        ];
+        lines.extend(
+            self.held
+                .locks
+                .iter()
+                .map(|lock| format!("disk-held {}", lock.display())),
+        );
+        if self.held.working_set {
+            lines.push("disk-working-set".to_owned());
+        }
+        lines
     }
+}
+
+/// Whether `BATTEN_DISK_TRACE=1` asks for the sample trace. Here rather than in
+/// [`crate::disk_watch`], which reaches this module: the collector is the lower
+/// of the two and never reaches its watcher.
+#[must_use]
+pub fn tracing() -> bool {
+    std::env::var_os("BATTEN_DISK_TRACE").is_some_and(|value| value == "1")
+}
+
+/// One trace line, the one spelling the watcher, the collector and the hook
+/// share.
+#[must_use]
+pub fn trace_line(kind: &str, fields: &[u64]) -> String {
+    let mut line = String::from(kind);
+    for field in fields {
+        line.push(' ');
+        line.push_str(&field.to_string());
+    }
+    line
 }
 
 /// A file that must never be collected: the installed engine, the running
@@ -235,9 +294,20 @@ struct Unit {
 
 /// Every unit under `tree`, at any depth: every `.fingerprint` directory, nested
 /// target triples and build trees included.
+//MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
+//MUTANT scratch-unit-ranked|s@^        .filter(\x7cfingerprints\x7c !fingerprints.starts_with(\&scratch))$@        .filter(\x7c_\x7c true)@|a_build_inside_fresh_scratch_is_never_collected
 fn units_in(tree: &Path) -> Vec<Unit> {
     let mut units = Vec::new();
-    for fingerprints in crate::prune::directories_named(tree, ".fingerprint") {
+    // SCRATCH IS ONE UNIT EACH, RANKED BY [`scratch_in`]: a test suite builds
+    // whole trees under `tmp/`, and ranking their units one by one reached past
+    // the working set that keeps a running suite's fixture whole. Measured on
+    // #1132, the session's hook collected a running case's aged fixture unit
+    // and the case failed three runs in five.
+    let scratch = tree.join("tmp");
+    for fingerprints in crate::prune::directories_named(tree, ".fingerprint")
+        .into_iter()
+        .filter(|fingerprints| !fingerprints.starts_with(&scratch))
+    {
         let Some(profile) = fingerprints.parent().map(Path::to_path_buf) else {
             continue;
         };
@@ -522,21 +592,25 @@ pub struct Request<'a> {
 
 /// Collect: superseded units first, then live units oldest first, until
 /// `need_bytes` are freed or the deadline passes; then re-arm the survivors.
-/// Returns the bytes freed and the units removed.
+/// Returns what it freed and removed, and what stopped it short.
 //MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
 //MUTANT reachability-pass-skipped|s@^        let (units, bytes) = crate::prune::reclaim_superseded(tree, request.keep_generations);$@        let (units, bytes) = (0, 0);@|a_superseded_unit_goes_before_an_older_live_one
 //MUTANT lru-order-reversed|s@^    live.sort_by_key(\x7cunit\x7c unit.last_use);$@    live.sort_by_key(\x7cunit\x7c std::cmp::Reverse(unit.last_use));@|the_least_recently_used_live_unit_goes_first
 //MUTANT collects-past-max-free|s@^        if freed >= request.need_bytes \x7c\x7c past(request.deadline) {$@        if past(request.deadline) {@|collection_stops_at_max_free
-//MUTANT held-tree-collected|s@^        let Some(_held) = crate::prune::claim(\&unit.tree, \&unit.profile) else {$@        let Some(_held) = Some(()) else {@|a_tree_a_build_holds_is_never_collected
+//MUTANT held-tree-collected|s@^        let _building = match crate::prune::claim(\&unit.tree, \&unit.profile) {$@        let _building = match Ok::<(), PathBuf>(()) {@|a_tree_a_build_holds_is_never_collected
 //MUTANT engine-unit-collected|s@^            .any(\x7cartifact\x7c is_kept(artifact, request.kept))$@            .any(\x7c_\x7c false)@|the_running_engine_is_never_collected
 #[must_use]
-pub fn collect(request: &Request<'_>) -> (u64, usize) {
+pub fn collect(request: &Request<'_>) -> Pass {
     let past = |deadline: Option<Instant>| deadline.is_some_and(|at| Instant::now() >= at);
-    let locks: Vec<(PathBuf, std::fs::File)> = request
-        .trees
-        .iter()
-        .filter_map(|tree| lock_tree(tree, request.wait).map(|lock| (tree.clone(), lock)))
-        .collect();
+    let mut held = Held::default();
+    let mut locks: Vec<(PathBuf, std::fs::File)> = Vec::new();
+    for tree in request.trees {
+        match lock_tree(tree, request.wait) {
+            Some(lock) => locks.push((tree.clone(), lock)),
+            // Another collector holds this tree; its own pass reports it.
+            None => held.locks.push(tree.clone()),
+        }
+    }
     let mut freed: u64 = 0;
     let mut removed = 0usize;
     for (tree, _) in &locks {
@@ -574,9 +648,15 @@ pub fn collect(request: &Request<'_>) -> (u64, usize) {
             why.working_set = true;
             break;
         }
-        let Some(_held) = crate::prune::claim(&unit.tree, &unit.profile) else {
-            why.held += 1;
-            continue;
+        let _building = match crate::prune::claim(&unit.tree, &unit.profile) {
+            Ok(guards) => guards,
+            Err(lock) => {
+                why.held += 1;
+                if !held.locks.contains(&lock) {
+                    held.locks.push(lock);
+                }
+                continue;
+            }
         };
         if unit
             .artifacts
@@ -603,8 +683,8 @@ pub fn collect(request: &Request<'_>) -> (u64, usize) {
     for (tree, _) in &locks {
         rearm(tree);
     }
-    if crate::disk_watch::tracing() {
-        let traced = crate::disk_watch::trace_line(
+    if tracing() {
+        let traced = trace_line(
             "disk-pass",
             &[
                 u64::try_from(locks.len()).unwrap_or(u64::MAX),
@@ -618,7 +698,12 @@ pub fn collect(request: &Request<'_>) -> (u64, usize) {
         );
         let _ = std::io::Write::write_all(&mut std::io::stderr(), format!("{traced}\n").as_bytes());
     }
-    (freed, removed)
+    held.working_set = why.working_set;
+    Pass {
+        freed_bytes: freed,
+        removed,
+        held,
+    }
 }
 
 /// What a pass passed over, for the trace: `disk-pass <trees> <candidates>
@@ -684,7 +769,7 @@ pub fn collect_toward_max(
     let started = Instant::now();
     let trees = trees(repo, prune);
     let need_bytes = max.saturating_sub(free).saturating_mul(1024 * 1024);
-    let (freed_bytes, units) = collect(&Request {
+    let pass = collect(&Request {
         trees: &trees,
         keep_generations: prune.keep,
         kept,
@@ -693,10 +778,11 @@ pub fn collect_toward_max(
         wait,
     });
     Some(Collected {
-        freed_bytes,
-        units,
+        freed_bytes: pass.freed_bytes,
+        units: pass.removed,
         free_after_mb: free_mb().unwrap_or(free),
         wall_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+        held: pass.held,
     })
 }
 
