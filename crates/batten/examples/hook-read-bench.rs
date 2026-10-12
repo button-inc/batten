@@ -149,6 +149,27 @@ fn main() {
         );
         return;
     }
+    if mode == "o200k-regex" {
+        // The pre-tokenizer alone: o200k's split pattern compiled and run once,
+        // so the table load splits into regex compile and vocabulary build.
+        const PATTERN: &str = concat!(
+            r"[^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}]*[\p{Ll}\p{Lm}\p{Lo}\p{M}]+(?i:'s|'t|'re|'ve|'m|'ll|'d)?",
+            r"|[^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}]+[\p{Ll}\p{Lm}\p{Lo}\p{M}]*(?i:'s|'t|'re|'ve|'m|'ll|'d)?",
+            r"|\p{N}{1,3}| ?[^\s\p{L}\p{N}]+[\r\n/]*|\s*[\r\n]+|\s+(?!\S)|\s+",
+        );
+        let started = std::time::Instant::now();
+        let regex = fancy_regex::Regex::new(PATTERN).expect("pattern");
+        let compiled = started.elapsed().as_secs_f64() * 1000.0;
+        let text = "payload line of a large log, with some text\n".repeat(93);
+        let split_at = std::time::Instant::now();
+        let pieces = regex.find_iter(&text).count();
+        let split = split_at.elapsed().as_secs_f64() * 1000.0;
+        println!(
+            "o200k-regex\t{compiled:.1}ms compile\t{split:.2}ms for {pieces} pieces\t{}KiB",
+            peak_rss_kib()
+        );
+        return;
+    }
     if mode == "o200k-load" {
         // The one-off cost a hook process pays to load the table, and then to
         // count one ordinary 4 KiB result, which is what a lazy load buys back.

@@ -161,6 +161,7 @@ dependencies = [
  "clap_complete",
  "clap_mangen",
  "etcetera",
+ "fancy-regex 0.17.0",
  "flate2",
  "fs4",
  "getrandom 0.4.3",

@@ -170,6 +170,8 @@ bpe-openai.workspace = true
 signal-hook.workspace = true
 
 [dev-dependencies]
+# CLOUD-2224: the bench splits the o200k load into its pre-tokenizer regex.
+fancy-regex = "0.17"
 # Only what the *tests* need and the crate itself does not. A normal dependency
 # is already in scope for every test target, so re-listing one here declares
 # nothing — `flate2`, `tar`, `serde_json` and `toml` all sat in both tables and
