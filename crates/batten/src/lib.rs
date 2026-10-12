@@ -16,6 +16,7 @@ pub mod arm;
 pub mod asked;
 pub mod attestation;
 pub mod attribution;
+pub mod background;
 pub mod baseline;
 /// The board's column vocabulary, resolved from config rather than held as
 /// engine constants (non-negotiable rule 1, CLOUD-1623).
@@ -16888,8 +16889,9 @@ fn run_hook(
     // sends an absolute `file_path`, so before this line every one of those
     // comparisons was against a string that could not match, and a live `Write`
     // to a protected path was allowed. A target outside the tree is untouched.
-    // Seeded from this session's authority first (CLOUD-2204).
-    envelope.relativise_writes(seed_hook_authority(&envelope));
+    // Seeded from this session's authority first (CLOUD-2204), and every record
+    // a backgrounded call owes is written before anything below reads one.
+    settle_envelope(overrides, &mut envelope);
     // The capability table, consulted before anything keys on the event
     // (CLOUD-45). A host that does not declare this event fires nothing and
     // allows — never an error, never a deny: an absent capability is a statement
@@ -20826,7 +20828,48 @@ fn write_records(overrides: &Overrides, envelope: &hook::Envelope) {
     if envelope.result.is_null() {
         return;
     }
-    let Some(result) = facts::payload_in(&envelope.result) else {
+    write_records_for(
+        overrides,
+        &envelope.raw_tool,
+        &envelope.input,
+        &envelope.result,
+    );
+}
+
+/// What `run_hook` settles before anything reads the envelope: write targets
+/// relativised against this session's authority (CLOUD-1133, CLOUD-2204), and
+/// the records owed by backgrounded calls that have since exited (CLOUD-2214).
+fn settle_envelope(overrides: &Overrides, envelope: &mut hook::Envelope) {
+    envelope.relativise_writes(seed_hook_authority(envelope));
+    resolve_backgrounded(overrides, envelope);
+}
+
+/// Replay every backgrounded call whose task has since exited (CLOUD-2214).
+///
+/// On every event, before anything adjudicates, so a record a gate reads is in
+/// place by the first call after the task's notification rather than the
+/// second. One `read_dir` of a directory that is nearly always absent is the
+/// whole cost when nothing is pending.
+fn resolve_backgrounded(overrides: &Overrides, envelope: &hook::Envelope) {
+    let Ok(git_dir) = git::git_dir(hook_authority_root()) else {
+        return;
+    };
+    let transcript = envelope.transcript.as_deref().map(Path::new);
+    for (pending, stdout) in background::resolve(&git_dir, transcript, now_unix()) {
+        let result = serde_json::json!({"stdout": stdout, "stderr": ""});
+        write_records_for(overrides, &pending.tool, &pending.input, &result);
+    }
+}
+
+/// [`write_records`] over a tool, input and result, so a deferred call replays
+/// through the same rows a foreground one is recorded by.
+fn write_records_for(
+    overrides: &Overrides,
+    raw_tool: &str,
+    input: &serde_json::Value,
+    raw: &serde_json::Value,
+) {
+    let Some(result) = facts::payload_in(raw) else {
         return;
     };
     let Ok((policy, _)) = load_policy(overrides, hook::Harness::ExitCode) else {
@@ -20834,6 +20877,14 @@ fn write_records(overrides: &Overrides, envelope: &hook::Envelope) {
     };
     let recorders = policy.declared_recorders();
     if recorders.is_empty() {
+        return;
+    }
+    // A BACKGROUNDED RESULT NAMES ITS TASK, NOT ITS OUTPUT (CLOUD-2214). Its
+    // `stdout` is empty because the command has not run, so a row reading it
+    // records a measurement of nothing. Kept for `resolve_backgrounded` instead,
+    // when some row selects the call at all.
+    if let Some(id) = background::task_id(&result) {
+        defer_backgrounded(&policy, recorders, raw_tool, input, &result, id);
         return;
     }
     // THE ANCHOR, NEVER THE CWD (CLOUD-1024's measured defect, restated here
@@ -20855,7 +20906,7 @@ fn write_records(overrides: &Overrides, envelope: &hook::Envelope) {
     let grammar = ready::Grammar::from_compiled(&patterns).ok();
     let context = crate::recorder::Context {
         result: &result,
-        input: &envelope.input,
+        input,
         programs: policy.declared_programs(),
         patterns: &patterns,
         grammar: grammar.as_ref(),
@@ -20873,8 +20924,50 @@ fn write_records(overrides: &Overrides, envelope: &hook::Envelope) {
         &branch,
         &context,
         rules::selects_tool_name,
-        &envelope.raw_tool,
+        raw_tool,
     );
+}
+
+/// Keep a backgrounded call for [`resolve_backgrounded`] when some row selects
+/// it; a call no row is about leaves nothing behind.
+fn defer_backgrounded(
+    policy: &hook::Policy,
+    recorders: &[crate::recorder::Declared],
+    raw_tool: &str,
+    input: &serde_json::Value,
+    result: &serde_json::Value,
+    id: &str,
+) {
+    let root = hook_authority_root();
+    let Ok(git_dir) = git::git_dir(root) else {
+        return;
+    };
+    let patterns = policy.compiled_patterns();
+    let context = crate::recorder::Context {
+        result,
+        input,
+        programs: policy.declared_programs(),
+        patterns: &patterns,
+        grammar: None,
+        root,
+        branch: None,
+        now: i64::try_from(now_unix()).unwrap_or(i64::MAX),
+    };
+    let selected = recorders.iter().any(|row| {
+        rules::selects_tool_name(&row.tool, raw_tool)
+            && !matches!(
+                crate::recorder::outcome(row, &context),
+                crate::recorder::Outcome::NotSelected
+            )
+    });
+    if selected {
+        let pending = background::Pending {
+            tool: raw_tool.to_owned(),
+            input: input.clone(),
+            at: now_unix(),
+        };
+        let _ = background::defer(&git_dir, id, &pending);
+    }
 }
 
 /// Mint every receipt this result earns (CLOUD-1024).

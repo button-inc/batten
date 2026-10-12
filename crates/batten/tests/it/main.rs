@@ -347,6 +347,7 @@ mod reclaim_report_once;
 mod record_closes;
 mod record_families;
 mod record_verdicts;
+mod recorder_background;
 mod redirect_resolves;
 mod reference;
 mod reference_coverage;

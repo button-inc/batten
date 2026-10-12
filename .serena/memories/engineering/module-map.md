@@ -137,6 +137,7 @@ row here, so a new module lands with its line.
 - `disk_watch.rs` — the disk arm of `land`'s gate race (CLOUD-1937): samples free space each tick, projects the burn over a horizon, and reclaims through `prune::prune` before the floor is crossed.
 - `collect.rs` — the disk collector (CLOUD-2197): below `[prune] min_free_mb`, superseded then least-recently-used cargo units across `target/` and linked worktrees until `max_free_mb` is free, never a held tree or the running engine.
 - `o200k.rs` — the `o200k` token counter from tables `build.rs` writes at compile time (CLOUD-2224): a sorted vocabulary and a serialized pre-tokenizer DFA, so no process builds either.
+- `background.rs` — a backgrounded call followed to its output (CLOUD-2214): a recorder-selected result naming a `backgroundTaskId` is kept, and replayed with the task's output file as `stdout` once the transcript's notification says it completed.
 - `stream_input.rs` — the hook's stdin read streaming (CLOUD-2224): teed to a spool, a result string leaf counted in `o200k` tokens as it arrives and spilled to a file past the bound.
 - `startup.rs` — the `[[startup]]` table (CLOUD-1324): what a container must be and how it is repaired.
 - `provision.rs` — the `[[provision]]` manifest (CLOUD-90): pinned tools fetched and cached out of tree; `provision status` (read) is freshness, `provision apply [-n]` (write) is the fix.
