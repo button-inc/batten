@@ -55,11 +55,16 @@ fn make_executable(path: &Path) {
     std::fs::set_permissions(path, mode).expect("chmod the stub");
 }
 
+fn run(binary: &Path, dir: &Path, args: &[&str], stdin: &str) -> Output {
+    run_from(binary, dir, dir, args, stdin)
+}
+
+/// [`run`], standing in `cwd` rather than in the repository.
 #[expect(
     clippy::disallowed_types,
     reason = "stays, and test-only: the update replaces the binary it runs, so each case runs a private COPY of the compiled binary, which `common::batten` cannot target"
 )]
-fn run(binary: &Path, dir: &Path, args: &[&str], stdin: &str) -> Output {
+fn run_from(binary: &Path, dir: &Path, cwd: &Path, args: &[&str], stdin: &str) -> Output {
     use std::io::Write as _;
     // THE CASE'S OWN `bin` AND THE SYSTEM'S, NEVER THE CALLER'S `PATH`. An update
     // installs over the `batten` it resolves there (CLOUD-2226), and with the
@@ -76,7 +81,7 @@ fn run(binary: &Path, dir: &Path, args: &[&str], stdin: &str) -> Output {
     common::state_dir(&mut command, &dir.join("state"));
     command
         .args(args)
-        .current_dir(dir)
+        .current_dir(cwd)
         .env("PATH", path)
         .env("CARGO_TARGET_DIR", dir.join("target"))
         .env("STUB_RAN", dir.join("cargo-ran"))
@@ -149,6 +154,48 @@ fn a_source_pin_update_installs_where_the_hook_resolves() {
     );
     let stamp = std::fs::read_to_string(engine_stamp(&on_path)).unwrap_or_default();
     assert_eq!(stamp.trim(), digest, "and stamped with the pin");
+}
+
+/// CLOUD-2226 THROUGH CLOUD-2232'S HANDOFF. The installed engine hands
+/// `engine update` to the checkout's build, which already carries the pin's
+/// stamp; judging only itself, it returned success and left the copy the hook
+/// runs behind, so the refusal's one repair changed nothing. Measured on #1132.
+/// A current running engine installs ITSELF over the stale copy, with no build.
+#[test]
+fn a_current_engine_replaces_a_stale_installed_copy() {
+    let dir = repo("engine-update-current-runner");
+    stub_cargo(&dir);
+    let binary = private_binary(&dir);
+    let digest = text(&run(&binary, &dir, &["engine", "digest"], ""))
+        .trim()
+        .to_owned();
+    pin_source(&dir, &digest);
+    common::write(
+        binary.parent().unwrap(),
+        "batten.source",
+        &format!("{digest}\n"),
+    );
+    let on_path = hook_bin(&dir).join("batten");
+    std::fs::create_dir_all(hook_bin(&dir)).unwrap();
+    common::write(&hook_bin(&dir), "batten", "an older engine\n");
+    common::write(
+        &hook_bin(&dir),
+        "batten.source",
+        &format!("{}\n", "0".repeat(64)),
+    );
+    let output = run(&binary, &dir, &["engine", "update"], "");
+    assert!(output.status.success(), "{}", text(&output));
+    assert!(
+        !dir.join("cargo-ran").exists(),
+        "a current engine is copied, not rebuilt"
+    );
+    assert_eq!(
+        std::fs::read(&on_path).unwrap(),
+        std::fs::read(&binary).unwrap(),
+        "the stale installed copy became the running engine"
+    );
+    let stamp = std::fs::read_to_string(engine_stamp(&on_path)).unwrap_or_default();
+    assert_eq!(stamp.trim(), digest, "and carries the pin's stamp");
 }
 
 /// The case's stand-in for `~/.local/bin`: a sibling of the repository, on `PATH`
@@ -302,6 +349,41 @@ fn a_source_pin_is_followed_to_the_checkouts_build() {
         "and the refusal names the update: {}",
         text(&output)
     );
+}
+
+/// THE HOOK HANDS OFF FROM WHERE THE SESSION STANDS, NOT WHERE THE SHELL DOES.
+/// A worker restart put the shell above the checkout; `follow_pin`, reading the
+/// working directory, found no repository, and the stale installed engine
+/// refused every call, its own repair included. Measured on #1132. The hook
+/// knows the session's authority from the envelope (CLOUD-2204) and hands the
+/// call to that checkout's build.
+#[test]
+fn a_hook_outside_the_checkout_hands_off_to_the_authoritys_build() {
+    let dir = repo("engine-update-handoff-outside");
+    stub_cargo(&dir);
+    // OUTSIDE ANY REPOSITORY, both the installed copy and where the shell
+    // stands: `common::scratch` is under this checkout's `target/`, from which
+    // the working directory resolves THIS repository and its real build.
+    let installed = common::scratch_outside_tree("engine-update", "handoff-installed");
+    let binary = private_binary(&installed);
+    let envelope = r#"{"hook_event_name":"PreToolUse","session_id":"cloud-2232-handoff","permission_mode":"default","tool_name":"Bash","tool_input":{"command":"ls"}}"#;
+    let args = ["adjudicate", "--harness", "claude-code"];
+    // The session first stands in the repository, unpinned, and records it.
+    let first = run(&binary, &dir, &args, envelope);
+    assert!(
+        !text(&first).contains("checkout build ran"),
+        "{}",
+        text(&first)
+    );
+    pin_source(&dir, &"1".repeat(64));
+    checkout_build(&dir, &"2".repeat(64));
+    let output = run_from(&binary, &dir, &installed, &args, envelope);
+    assert!(
+        text(&output).contains("checkout build ran adjudicate --harness claude-code"),
+        "from outside the repository, the call reaches the authority's build: {}",
+        text(&output)
+    );
+    assert!(!dir.join("cargo-ran").exists(), "nothing built");
 }
 
 /// CLOUD-2220: a stale build of the checkout was told to `batten engine update`,

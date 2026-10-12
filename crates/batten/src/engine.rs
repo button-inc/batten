@@ -285,7 +285,7 @@ pub const LOCAL_ENV: &str = "BATTEN_ENGINE";
 /// engine's name, and running another under it is the skew this check refuses.
 //MUTANT-SUITE crates/batten/tests/it/engine_pin.rs
 //MUTANT local-engine-ignored|s@^    std::env::var_os(LOCAL_ENV).is_some_and(\x7cvalue\x7c value == "local")$@    false@|the_local_engine_runs_under_a_source_pin
-fn runs_local() -> bool {
+pub(crate) fn runs_local() -> bool {
     std::env::var_os(LOCAL_ENV).is_some_and(|value| value == "local")
 }
 
@@ -378,8 +378,13 @@ pub fn check(text: &str, source: &str, stamp: impl FnOnce() -> Option<String>) -
 /// This running binary's stamp, or `None` when it carries none.
 #[must_use]
 pub fn running_stamp() -> Option<String> {
-    let binary = std::env::current_exe().ok()?;
-    let text = std::fs::read_to_string(stamp_path(&binary)).ok()?;
+    stamp_of(&std::env::current_exe().ok()?)
+}
+
+/// `binary`'s stamp, or `None` when it carries none.
+#[must_use]
+pub fn stamp_of(binary: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(stamp_path(binary)).ok()?;
     let digest = text.trim();
     (!digest.is_empty()).then(|| digest.to_owned())
 }

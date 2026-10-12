@@ -732,54 +732,79 @@ fn follow_pin(may_build: bool) -> Result<Option<ExitCode>> {
 /// running binary. A release is fetched from the engine's own repository and
 /// verified against its `SHA256SUMS`; a source pin is built from this tree and
 /// stamped. Either is swapped in by rename, so a crash leaves the old binary.
+//MUTANT-SUITE crates/batten/tests/it/engine_update.rs
+//MUTANT update-judges-only-itself|s@^    if engine::runs_local() {$@    if engine::runs_local() \x7c\x7c engine::running_stamp().as_deref() == Some(want) {@|a_current_engine_replaces_a_stale_installed_copy
 fn engine_update(root: &Path, out: &mut dyn Write) -> Result<ExitCode> {
     let Ok(text) = std::fs::read_to_string(root.join(config::CONFIG_FILE)) else {
         return Ok(ExitCode::Success);
     };
-    let Some(pin) = engine::stale(&text, engine::running_stamp) else {
+    let Some(pin) = engine::declared(&text) else {
         return Ok(ExitCode::Success);
     };
     let binary = std::env::current_exe()?;
-    let bytes = match (pin.release.as_deref(), pin.source.as_deref()) {
-        (Some(tag), None) => engine::fetch_release(env!("CARGO_PKG_REPOSITORY"), tag)?,
-        (None, Some(_)) => {
-            let build: Vec<String> = ["cargo", "build", "--release", "-p", "batten"]
-                .iter()
-                .map(|word| (*word).to_owned())
-                .collect();
-            // A FAILED BUILD NAMES ITSELF (CLOUD-2172): the child's output is
-            // captured, so a bare `?` surfaced only its exit status, and a build
-            // the ambient toolchain could not compile read as a silent 101.
-            exec::run_in(root, &build).map_err(|why| {
-                UsageError::raise(format!(
-                    "engine update: `{}` failed ({why}); it builds on the ambient \
-                     toolchain, so run `{}` to build on the project's",
-                    build.join(" "),
-                    engine::REPAIR_PINNED,
-                ))
-            })?;
-            let target_dir = std::env::var_os("CARGO_TARGET_DIR")
-                .map_or_else(|| root.join("target"), std::path::PathBuf::from);
-            std::fs::read(target_dir.join("release").join("batten"))?
+    let want = match (pin.release.as_deref(), pin.source.as_deref()) {
+        (Some(tag), None) => {
+            if engine::stale(&text, engine::running_stamp).is_none() {
+                return Ok(ExitCode::Success);
+            }
+            let bytes = engine::fetch_release(env!("CARGO_PKG_REPOSITORY"), tag)?;
+            durable::replace(&binary, bytes)?;
+            writeln!(out, "{}", binary.display())?;
+            return Ok(ExitCode::Success);
         }
+        (None, Some(want)) => want,
         _ => {
             return Err(UsageError::raise(String::from(
                 "engine update: `engine` names exactly one of `release` or `source`",
             )));
         }
     };
-    if pin.source.is_none() {
-        durable::replace(&binary, bytes)?;
-        writeln!(out, "{}", binary.display())?;
+    if engine::runs_local() {
         return Ok(ExitCode::Success);
     }
-    // EVERY `batten` THE HOOK COULD RESOLVE, not only the one running (CLOUD-2226).
-    // Under `mise exec` the running binary is the build output itself, so
-    // installing over it alone left `~/.local/bin/batten` unstamped and the hook
-    // refusing: the floor's one repair could not clear the floor. Measured on
-    // #1132. The digest is read first, so a tree naming no source installs nothing.
-    let digest = engine::digest(root)?;
-    for target in engine::install_targets(&binary, std::env::var_os("PATH").as_deref(), root) {
+    // EVERY TARGET IS JUDGED BY ITS OWN STAMP, NEVER BY THE RUNNING BINARY'S
+    // (CLOUD-2226). Since CLOUD-2232 the installed engine hands this verb to the
+    // checkout's build, which satisfies the pin: judging the running binary
+    // returned success at once and left the copy the hook runs behind. Measured
+    // on #1132: the floor's one repair ran, exited 0 and changed nothing.
+    let behind: Vec<std::path::PathBuf> =
+        engine::install_targets(&binary, std::env::var_os("PATH").as_deref(), root)
+            .into_iter()
+            .filter(|target| engine::stamp_of(target).as_deref() != Some(want))
+            .collect();
+    if behind.is_empty() {
+        return Ok(ExitCode::Success);
+    }
+    // A CURRENT RUNNING BINARY IS COPIED, NOT REBUILT: it is the pinned engine
+    // already, by its stamp, and a build would be the same bytes slower.
+    let (bytes, digest) = if engine::running_stamp().as_deref() == Some(want) {
+        (std::fs::read(&binary)?, want.to_owned())
+    } else {
+        let build: Vec<String> = ["cargo", "build", "--release", "-p", "batten"]
+            .iter()
+            .map(|word| (*word).to_owned())
+            .collect();
+        // A FAILED BUILD NAMES ITSELF (CLOUD-2172): the child's output is
+        // captured, so a bare `?` surfaced only its exit status, and a build
+        // the ambient toolchain could not compile read as a silent 101.
+        exec::run_in(root, &build).map_err(|why| {
+            UsageError::raise(format!(
+                "engine update: `{}` failed ({why}); it builds on the ambient \
+                 toolchain, so run `{}` to build on the project's",
+                build.join(" "),
+                engine::REPAIR_PINNED,
+            ))
+        })?;
+        let target_dir = std::env::var_os("CARGO_TARGET_DIR")
+            .map_or_else(|| root.join("target"), std::path::PathBuf::from);
+        // The digest is read first, so a tree naming no source installs nothing.
+        let digest = engine::digest(root)?;
+        (
+            std::fs::read(target_dir.join("release").join("batten"))?,
+            digest,
+        )
+    };
+    for target in behind {
         durable::replace(&target, &bytes)?;
         engine::stamp(&target, &digest)?;
         writeln!(out, "{}", target.display())?;
@@ -17091,6 +17116,9 @@ fn run_hook(
             // is registered to enforce did not load, so nothing judged the call;
             // the floor below still passes a read and the repair write.
             Err(unreadable) => {
+                if let Some(code) = hand_to_checkout_build(&raw, out)? {
+                    return Ok(code);
+                }
                 if recoverable_without_rules(&envelope) {
                     // THE SAME EMPTY POLICY THE HATCH HANDS BACK, and for the
                     // same reason: there is no rule to apply, so there is
@@ -17766,6 +17794,54 @@ fn unadjudicable_remedy() -> Fix {
         engine::repair_at(&root, engine::REPAIR),
         engine::repair_at(&root, engine::REPAIR_PINNED),
     ))
+}
+
+/// Hand a call this engine cannot judge to the hook authority's own checkout
+/// build, with the payload already read (CLOUD-2232).
+///
+/// `follow_pin` makes the same hand-off before the verb runs, but it finds the
+/// checkout from the working directory, and a host launched above its
+/// checkouts snaps the shell back to that parent (CLOUD-2204). From there it
+/// found no repository, the stale installed engine refused every call, and its
+/// one repair could not run. Measured on #1132 after a worker restart. Here the
+/// root is the session's authority, which the envelope has already pinned.
+///
+/// `None` when there is nothing to hand to: no source pin, no checkout build,
+/// this IS that build, or this call was already handed once.
+//MUTANT-SUITE crates/batten/tests/it/engine_update.rs
+//MUTANT hook-handoff-skipped|s@^    let Some(build) = engine::checkout_build(root) else {$@    let Some(build) = None::<PathBuf> else {@|a_hook_outside_the_checkout_hands_off_to_the_authoritys_build
+fn hand_to_checkout_build(raw: &str, out: &mut dyn Write) -> Result<Option<ExitCode>> {
+    if std::env::var_os(ENGINE_UPDATED).is_some() {
+        return Ok(None);
+    }
+    let root = hook_authority_root();
+    let Ok(text) = std::fs::read_to_string(root.join(config::CONFIG_FILE)) else {
+        return Ok(None);
+    };
+    if engine::declared(&text).and_then(|pin| pin.source).is_none() {
+        return Ok(None);
+    }
+    let Some(build) = engine::checkout_build(root) else {
+        return Ok(None);
+    };
+    if git::canonical(&std::env::current_exe()?) == git::canonical(&build) {
+        return Ok(None);
+    }
+    let mut argv = vec![build.to_string_lossy().into_owned()];
+    argv.extend(std::env::args().skip(1));
+    let published = [(String::from(ENGINE_UPDATED), Some(String::from("1")))];
+    let Some((code, stdout)) =
+        exec::piped_argv(root, &argv, raw, exec::Diagnostics::Pass, &published)
+    else {
+        return Ok(None);
+    };
+    out.write_all(stdout.as_bytes())?;
+    Ok(Some(match code {
+        0 => ExitCode::Success,
+        2 => ExitCode::Violation,
+        3 => ExitCode::Internal,
+        _ => ExitCode::Usage,
+    }))
 }
 
 /// Refuse a call whose rules this build could not load (CLOUD-1677).
