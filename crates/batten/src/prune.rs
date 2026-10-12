@@ -188,6 +188,17 @@ pub struct Prune {
     /// whatever the superseded pass reclaimed.
     #[serde(default)]
     pub regrowable: Vec<Regrowable>,
+    /// Below this much free space, in MB, the disk collector runs (CLOUD-2197):
+    /// on every mediated call, and throughout `land` and `mutate sweep`. Nix's
+    /// `min-free`. Declared with [`Prune::max_free_mb`] or not at all; absent,
+    /// the collector is off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_free_mb: Option<u64>,
+    /// Once triggered, the collector frees space until this much is free, in
+    /// MB, then stops. Nix's `max-free`; above [`Prune::min_free_mb`], so the
+    /// pair is a hysteresis band rather than a threshold that re-fires at once.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_free_mb: Option<u64>,
 }
 
 /// One regrowable root, and what dropping it costs.
@@ -343,7 +354,30 @@ impl Prune {
         for root in &self.regrowable {
             root.validate()?;
         }
+        match (self.min_free_mb, self.max_free_mb) {
+            (None, None) => {}
+            (Some(min), Some(max)) if max > min => {}
+            (Some(min), Some(max)) => {
+                return Err(UsageError::raise(format!(
+                    "[prune]: `max_free_mb` ({max}) is not above `min_free_mb` ({min}) — the collector frees space until `max_free_mb` is free once it falls below `min_free_mb`, so a band with no width re-fires on the next call"
+                )));
+            }
+            _ => {
+                return Err(UsageError::raise(
+                    "[prune]: `min_free_mb` and `max_free_mb` are declared together or not at all — one without the other is a trigger with no stop, or a stop with no trigger",
+                ));
+            }
+        }
         Ok(())
+    }
+
+    /// The collector's band, where both keys are declared (CLOUD-2197).
+    #[must_use]
+    pub const fn free_band(&self) -> Option<(u64, u64)> {
+        match (self.min_free_mb, self.max_free_mb) {
+            (Some(min), Some(max)) => Some((min, max)),
+            _ => None,
+        }
     }
 }
 
@@ -2121,7 +2155,7 @@ fn lap(
 /// nothing, which is CLOUD-766's disk exhaustion back.
 //MUTANT-SUITE crates/batten/tests/it/target_prune.rs
 //MUTANT examples-never-pruned|s@\.chain(examples)@.chain(Vec::<PathBuf>::new())@|superseded_example_generations_are_reclaimed_like_deps
-fn reclaim_superseded(root: &Path, keep: usize) -> (usize, u64) {
+pub(crate) fn reclaim_superseded(root: &Path, keep: usize) -> (usize, u64) {
     let mut pruned = 0;
     let mut bytes = 0;
     // `examples` BESIDE `deps` (CLOUD-2047). cargo writes an example target's
@@ -2957,7 +2991,7 @@ const BUILD_LOCK: &str = ".cargo-lock";
 /// cargo never built into, which is exactly what the pass already handled.
 //MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
 //MUTANT reclaim-under-held-lock|s@^            Err(std::fs::TryLockError::WouldBlock) => return None,$@            Err(std::fs::TryLockError::WouldBlock) => {}@|a_tree_under_a_held_build_lock_survives_the_reclaim
-fn claim(root: &Path, path: &Path) -> Option<Vec<std::fs::File>> {
+pub(crate) fn claim(root: &Path, path: &Path) -> Option<Vec<std::fs::File>> {
     let enclosing = path.ancestors().take_while(|dir| dir.starts_with(root));
     let nested = PROFILE_DIRS.iter().map(|profile| path.join(profile));
     let mut held = Vec::new();
@@ -3079,7 +3113,7 @@ fn name_matches(candidate: &std::ffi::OsStr, declared: &str) -> bool {
 /// escalation, handed to `remove_dir_all`. The predecessor was safe by accident
 /// of its instrument (`find -type d` does not follow without `-L`); the port made
 /// it a decision, and review caught the window between the two on #734.
-fn directories_named(root: &Path, name: &str) -> Vec<PathBuf> {
+pub(crate) fn directories_named(root: &Path, name: &str) -> Vec<PathBuf> {
     directories_named_outside(root, name, &[])
 }
 
@@ -3684,6 +3718,8 @@ mod tests {
             warm: floor(warm_mb),
             cold: floor(warm_mb * 2),
             regrowable: Vec::new(),
+            min_free_mb: None,
+            max_free_mb: None,
         }
     }
 

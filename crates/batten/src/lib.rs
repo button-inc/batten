@@ -42,6 +42,7 @@ pub mod ci_step;
 pub mod claim;
 pub mod cli;
 pub mod codemod;
+pub mod collect;
 pub mod commit;
 pub mod completion;
 pub mod config;

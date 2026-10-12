@@ -47,6 +47,8 @@ fn rules(root: &str, warm_mb: u64) -> Prune {
         warm: floor(warm_mb),
         cold: floor(warm_mb * 2),
         regrowable: Vec::new(),
+        min_free_mb: None,
+        max_free_mb: None,
     }
 }
 
@@ -208,4 +210,245 @@ fn a_lap_below_the_admission_floor_but_within_its_budget_runs() {
         "{verified:?}"
     );
     assert!(repo.join("gate-ran.cfg").exists(), "the gate ran");
+}
+
+// --- the disk collector (CLOUD-2197) -----------------------------------------
+
+/// One cargo unit in `profile`: a fingerprint file read `age` seconds ago and a
+/// `deps` artifact of `bytes` real bytes. Returns the artifact's path.
+fn unit(profile: &Path, name: &str, hash: &str, age: u64, bytes: usize) -> PathBuf {
+    let fingerprint = profile.join(".fingerprint").join(format!("{name}-{hash}"));
+    std::fs::create_dir_all(&fingerprint).unwrap();
+    let file = fingerprint.join(format!("lib-{name}"));
+    std::fs::write(&file, b"fingerprint").unwrap();
+    let when = SystemTime::now() - Duration::from_secs(age);
+    std::fs::File::open(&file)
+        .unwrap()
+        .set_times(
+            std::fs::FileTimes::new()
+                .set_accessed(when)
+                .set_modified(SystemTime::now() - Duration::from_secs(age + 10)),
+        )
+        .unwrap();
+    let deps = profile.join("deps");
+    std::fs::create_dir_all(&deps).unwrap();
+    let artifact = deps.join(format!("lib{name}-{hash}.rlib"));
+    std::fs::write(&artifact, vec![7_u8; bytes]).unwrap();
+    artifact
+}
+
+fn present(profile: &Path, name: &str, hash: &str) -> bool {
+    profile
+        .join(".fingerprint")
+        .join(format!("{name}-{hash}"))
+        .exists()
+}
+
+fn request<'a>(
+    trees: &'a [PathBuf],
+    kept: &'a [batten::collect::Kept],
+    need: u64,
+) -> batten::collect::Request<'a> {
+    batten::collect::Request {
+        trees,
+        keep_generations: 2,
+        kept,
+        need_bytes: need,
+        deadline: None,
+        wait: false,
+    }
+}
+
+#[test]
+fn the_least_recently_used_live_unit_goes_first() {
+    let root = common::scratch("collect-lru");
+    let (one, two) = (root.join("a/target"), root.join("b/target"));
+    unit(&one.join("debug"), "alpha", "1111111111111111", 3600, 4096);
+    unit(&two.join("debug"), "beta", "2222222222222222", 60, 4096);
+    let trees = [one.clone(), two.clone()];
+    let (_, units) = batten::collect::collect(&request(&trees, &[], 1));
+    assert_eq!(units, 1, "one unit frees the one byte asked for");
+    assert!(
+        !present(&one.join("debug"), "alpha", "1111111111111111"),
+        "the older unit went"
+    );
+    assert!(
+        present(&two.join("debug"), "beta", "2222222222222222"),
+        "the newer one stays"
+    );
+}
+
+#[test]
+fn a_superseded_unit_goes_before_an_older_live_one() {
+    let root = common::scratch("collect-superseded");
+    let tree = root.join("target");
+    let deps = tree.join("debug/deps");
+    artifact(&deps, "cli", "aaaaaaaaaaaa", 3600);
+    artifact(&deps, "cli", "bbbbbbbbbbbb", 1800);
+    artifact(&deps, "cli", "cccccccccccc", 60);
+    unit(&tree.join("debug"), "old", "3333333333333333", 7200, 4096);
+    let trees = [tree.clone()];
+    batten::collect::collect(&request(&trees, &[], 1));
+    assert!(
+        !deps.join("libcli-aaaaaaaaaaaa.rlib").exists(),
+        "the superseded generation went"
+    );
+    assert!(
+        present(&tree.join("debug"), "old", "3333333333333333"),
+        "and the older live unit was never reached"
+    );
+}
+
+#[test]
+fn collection_stops_at_max_free() {
+    let root = common::scratch("collect-stops");
+    let tree = root.join("target");
+    let profile = tree.join("debug");
+    for (index, hash) in ["4444444444444441", "4444444444444442", "4444444444444443"]
+        .iter()
+        .enumerate()
+    {
+        unit(
+            &profile,
+            &format!("u{index}"),
+            hash,
+            3000 - index as u64 * 1000,
+            1 << 20,
+        );
+    }
+    let trees = [tree.clone()];
+    batten::collect::collect(&request(&trees, &[], (1 << 20) + (1 << 19)));
+    assert!(!present(&profile, "u0", "4444444444444441"));
+    assert!(!present(&profile, "u1", "4444444444444442"));
+    assert!(
+        present(&profile, "u2", "4444444444444443"),
+        "it stops once the bytes asked for are freed"
+    );
+
+    // Anti-vacuity: above the minimum, nothing at all is collected.
+    let mut rules = rules("target", 1);
+    rules.min_free_mb = Some(10);
+    rules.max_free_mb = Some(20);
+    let mut plenty = || Ok(1000);
+    assert!(
+        batten::collect::collect_if_pressed(&root, &rules, &[], &mut plenty, None, false).is_none()
+    );
+    assert!(present(&profile, "u2", "4444444444444443"));
+}
+
+#[test]
+fn a_collection_re_arms_the_survivors() {
+    let root = common::scratch("collect-rearm");
+    let tree = root.join("target");
+    unit(&tree.join("debug"), "keepme", "5555555555555555", 60, 4096);
+    let trees = [tree.clone()];
+    batten::collect::collect(&request(&trees, &[], 0));
+    let file = tree.join("debug/.fingerprint/keepme-5555555555555555/lib-keepme");
+    let meta = std::fs::metadata(&file).unwrap();
+    assert_eq!(
+        meta.accessed().unwrap(),
+        meta.modified().unwrap(),
+        "atime re-armed to mtime"
+    );
+}
+
+#[test]
+fn a_tree_a_build_holds_is_never_collected() {
+    let root = common::scratch("collect-held");
+    let tree = root.join("target");
+    let profile = tree.join("debug");
+    unit(&profile, "busy", "6666666666666666", 3600, 4096);
+    let lock = std::fs::File::create(profile.join(".cargo-lock")).unwrap();
+    lock.lock().unwrap();
+    let trees = [tree.clone()];
+    batten::collect::collect(&request(&trees, &[], u64::MAX));
+    assert!(
+        present(&profile, "busy", "6666666666666666"),
+        "a building profile loses nothing"
+    );
+    drop(lock);
+    batten::collect::collect(&request(&trees, &[], u64::MAX));
+    assert!(
+        !present(&profile, "busy", "6666666666666666"),
+        "released, it is collectable"
+    );
+}
+
+#[test]
+fn a_shared_inode_is_not_counted_until_its_last_name_goes() {
+    let root = common::scratch("collect-inode");
+    let tree = root.join("target");
+    let profile = tree.join("debug");
+    let older = unit(&profile, "shared", "7777777777777777", 3600, 1 << 20);
+    unit(&profile, "next", "8888888888888888", 60, 4096);
+    std::fs::hard_link(&older, root.join("second-name")).unwrap();
+    let trees = [tree.clone()];
+    batten::collect::collect(&request(&trees, &[], 1 << 20));
+    assert!(
+        !present(&profile, "next", "8888888888888888"),
+        "the hardlinked file freed nothing, so the collection went on to the next unit"
+    );
+}
+
+#[test]
+fn the_running_engine_is_never_collected() {
+    let root = common::scratch("collect-engine");
+    let tree = root.join("target");
+    let profile = tree.join("release");
+    let engine = unit(&profile, "batten", "9999999999999999", 7200, 4096);
+    unit(&profile, "other", "aaaaaaaaaaaaaaaa", 60, 4096);
+    let installed = root.join("installed-batten");
+    std::fs::hard_link(&engine, &installed).unwrap();
+    let kept = batten::collect::kept(&[installed]);
+    let trees = [tree.clone()];
+    batten::collect::collect(&request(&trees, &kept, u64::MAX));
+    assert!(
+        present(&profile, "batten", "9999999999999999"),
+        "the engine's unit survives as the oldest"
+    );
+    assert!(
+        !present(&profile, "other", "aaaaaaaaaaaaaaaa"),
+        "everything else was collectable"
+    );
+}
+
+#[test]
+fn a_sibling_worktrees_units_are_ranked_with_the_checkouts() {
+    let root = common::scratch("collect-worktree");
+    let repo = root.join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    common::init_repo(&repo);
+    common::git_in(&repo, &["worktree", "add", "-q", "../sibling"]);
+    let sibling = root.join("sibling");
+    unit(
+        &sibling.join("target/debug"),
+        "far",
+        "bbbbbbbbbbbbbbbb",
+        7200,
+        3 << 20,
+    );
+    unit(
+        &repo.join("target/debug"),
+        "near",
+        "cccccccccccccccc",
+        60,
+        3 << 20,
+    );
+    let mut rules = rules("target", 1);
+    rules.min_free_mb = Some(1);
+    rules.max_free_mb = Some(2);
+    let mut pressed = || Ok(0);
+    let collected =
+        batten::collect::collect_if_pressed(&repo, &rules, &[], &mut pressed, None, false)
+            .expect("below the minimum, it collects");
+    assert!(collected.units >= 1);
+    assert!(
+        !present(&sibling.join("target/debug"), "far", "bbbbbbbbbbbbbbbb"),
+        "the sibling's older unit went first"
+    );
+    assert!(present(
+        &repo.join("target/debug"),
+        "near",
+        "cccccccccccccccc"
+    ));
 }

@@ -4458,6 +4458,30 @@ pub fn worktree_fact(dir: &Path) -> Result<WorktreeFact> {
     Ok(WorktreeFact { linked })
 }
 
+/// The directories of this repository's linked worktrees that are still present
+/// (CLOUD-2197), in process through gix as [`worktree_fact`] reads them: the disk
+/// collector ranks every worktree's `target/` with the checkout's, because a
+/// sibling worktree's build filled a volume nothing in the checkout could see.
+///
+/// Empty outside a repository, or where none is linked: the collector's caller
+/// then ranks the checkout's tree alone, which is the answer for both.
+#[must_use]
+pub fn linked_worktree_dirs(dir: &Path) -> Vec<PathBuf> {
+    let Ok(repo) = open(dir) else {
+        return Vec::new();
+    };
+    let Ok(worktrees) = repo.worktrees() else {
+        return Vec::new();
+    };
+    let mut dirs: Vec<PathBuf> = worktrees
+        .into_iter()
+        .filter_map(|proxy| proxy.base().ok())
+        .filter(|base| base.is_dir())
+        .collect();
+    dirs.sort();
+    dirs
+}
+
 /// Acquire the DECLARED refs, skipping every one that does not resolve.
 ///
 /// Skipping is the could-not-look channel and is the whole point: a ref absent
