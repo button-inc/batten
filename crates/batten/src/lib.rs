@@ -17513,6 +17513,10 @@ fn is_adjudicable(envelope: &hook::Envelope) -> bool {
 /// hands a declared handler the payload as it arrived. Re-reading stdin for it is
 /// not an option — the stream is consumed — and re-serializing the envelope would
 /// hand a handler a document the host never sent.
+//MUTANT-SUITE crates/batten/tests/it/result_bound.rs
+//MUTANT spill-floor-restored|s@^    let bound = capture::DEFAULT_RESULT_MAX_TOKENS;$@    let bound = 1_000_000;@|a_result_over_the_bound_is_spilled_not_held
+//MUTANT-SUITE crates/batten/tests/it/handler_dispatch.rs
+//MUTANT handler-bytes-reserialized|s@^    let raw = if streamed.spilled.is_empty() {$@    let raw = if false {@|a_handler_reads_the_payload_the_host_sent
 fn read_envelope(
     harness: hook::Harness,
     mode: Mode,
@@ -17524,10 +17528,13 @@ fn read_envelope(
     // root, which is pinned from this very envelope (CLOUD-2204): a leaf over the
     // default spills, and `rewrite_post_tool` points at it.
     let spool = std::env::temp_dir().join(format!("batten-hook-{}", std::process::id()));
-    // SPILL ONLY WHAT MEMORY CANNOT HOLD: a result between the bound and this
-    // still reaches `bound_result`, whose view addresses lines; past it, the
-    // leaf never enters memory and is pointed at whole.
-    let bound = capture::result_max_tokens(None).max(SPILL_TOKENS);
+    // SPILLED AT THE RESULT BOUND, so a result over it never enters memory
+    // whole (CLOUD-2224). Measured by this row's cold read: a floor of a
+    // million tokens held every result between the bound and ~4 MB whole. The
+    // DEFAULT bound, because the configured one lives under the authority this
+    // envelope pins; `rewrite_post_tool` leaves alone a spilled result that a
+    // raised bound would keep.
+    let bound = capture::DEFAULT_RESULT_MAX_TOKENS;
     let read = stream_input::read(std::io::stdin().lock(), &spool, bound, o200k::tokens);
     let Ok(streamed) = read else {
         let _ = std::fs::remove_dir_all(&spool);
@@ -17546,22 +17553,23 @@ fn read_envelope(
         output::message(mode, Verbosity::Normal, err, said)?;
         return Ok(None);
     };
-    let _ = std::fs::remove_file(&streamed.raw);
     let Some(envelope) = hook::decode_value(harness, &streamed.value) else {
         let _ = std::fs::remove_dir_all(&spool);
         output::message(mode, Verbosity::Normal, err, UNDECODABLE_PAYLOAD)?;
         return Ok(None);
     };
-    // The document handlers read: the host's own, minus any spilled leaf, which
-    // holds its marker. Small by construction, since every large leaf spilled.
-    let raw = serde_json::to_string(&streamed.value).unwrap_or_default();
+    // THE DOCUMENT HANDLERS READ IS THE HOST'S OWN BYTES (CLOUD-2224), read
+    // back from the spool, which holds at most the bound when nothing spilled.
+    // A spilled payload is by definition one memory must not hold, so there the
+    // handlers read the parsed value, each spilled leaf holding its marker.
+    let raw = if streamed.spilled.is_empty() {
+        std::fs::read_to_string(&streamed.raw).unwrap_or_default()
+    } else {
+        serde_json::to_string(&streamed.value).unwrap_or_default()
+    };
+    let _ = std::fs::remove_file(&streamed.raw);
     Ok(Some((raw, envelope, streamed.spilled, Spool(spool))))
 }
-
-/// The result size, in `o200k` tokens, past which a leaf spills to a file
-/// instead of being held: about 4 MB of text, a fiftieth of the 150 MiB peak
-/// measured reading a 50 MB payload whole (CLOUD-2224).
-const SPILL_TOKENS: u64 = 1_000_000;
 
 /// One hook payload, read streaming (CLOUD-2224): the document handlers read,
 /// the decoded envelope, the result leaves too large to hold, and their spool.
@@ -18833,12 +18841,18 @@ fn rewrite_post_tool(
     // first JSON document on stdout and drops the rest.
     let collapsed = collapse_seen_output(envelope);
     let current = collapsed.as_ref().unwrap_or(&envelope.result);
-    // A SPILLED RESULT IS ALREADY BOUNDED (CLOUD-2224): its bulk never entered
-    // memory, so it is pointed at from its files rather than measured here.
-    let bounded = if !spilled.is_empty() {
-        point_at_spills(current, spilled)
-    } else if reads_a_view(envelope) {
+    // A VIEW READ IS NEVER BOUNDED (CLOUD-2228), spilled or not: emitting
+    // nothing leaves the host its own result. A SPILLED RESULT IS POINTED AT
+    // FROM ITS FILES (CLOUD-2224), its bulk never having entered memory, unless
+    // a raised bound keeps it whole.
+    let bounded = if reads_a_view(envelope) {
         None
+    } else if !spilled.is_empty() {
+        if spills_within_bound(current, spilled) {
+            None
+        } else {
+            point_at_spills(current, spilled)
+        }
     } else {
         bound_result(current)
     };
@@ -18867,7 +18881,7 @@ fn rewrite_post_tool(
 /// streamed read never held. `None` with no repository to store into, which
 /// leaves the marker as `bound_result` leaves an over-bound leaf: unrewritten.
 //MUTANT-SUITE crates/batten/tests/it/result_bound.rs
-//MUTANT spilled-leaf-unpointed|s@^    let bounded = if !spilled.is_empty() {$@    let bounded = if false {@|a_result_too_large_to_hold_reaches_the_model_as_a_pointer
+//MUTANT spilled-leaf-unpointed|s@^    } else if !spilled.is_empty() {$@    } else if false {@|a_result_too_large_to_hold_reaches_the_model_as_a_pointer
 fn point_at_spills(
     result: &serde_json::Value,
     spilled: &[stream_input::Spilled],
@@ -18892,26 +18906,35 @@ fn point_at_spills(
         let capture = capture::store_file(&root, capture::Stream::Response, &spill.path).ok()?;
         stored.push((spill, capture));
     }
-    // THE HANDLE ON THE LINE: the pointer arm renders a generic route, so the
-    // address of the stored leaf has to be a subject or nothing can follow it.
-    let subjects: Vec<verdict::Subject> = stored
+    // THE VIEW, AS THE IN-MEMORY BOUND WRITES IT: the text leaves on their own
+    // lines, each spilled section copied from its file, so the pointer names
+    // line ranges a read can slice and not only a handle to the whole leaf.
+    let markers: Vec<(String, PathBuf)> = spilled
         .iter()
-        .flat_map(|(spill, capture)| {
-            [
-                verdict::artifact(&format!("{}({}B)", spill.pointer, spill.bytes)),
-                verdict::artifact(&capture.handle()),
-            ]
+        .map(|spill| (stream_input::marker(&spill.pointer), spill.path.clone()))
+        .collect();
+    let (_, first) = stored.first()?;
+    let (path, index) = capture::result_view_spilled(&root, first, result, &markers).ok()?;
+    let mut subjects: Vec<verdict::Subject> = index
+        .iter()
+        .map(|field| {
+            verdict::artifact(&format!(
+                "{}:{}-{}({}B)",
+                field.pointer, field.from, field.to, field.bytes
+            ))
         })
         .collect();
-    let route = stored
-        .first()
-        .map(|(_, capture)| format!("batten capture show {} --raw", capture.handle()))
-        .unwrap_or_default();
+    subjects.extend(
+        stored
+            .iter()
+            .map(|(_, capture)| verdict::artifact(&capture.handle())),
+    );
     let pointer = refusal::Refusal::engine(
         verdict::Native::OutputPointNow,
         &subjects,
-        refusal::Fix::Run(route),
+        refusal::Fix::None,
     )
+    .with_document_route(&path.display().to_string())
     .with_severity(refusal::Severity::Note);
     let line = pointer.render_finding(refusal::Arm::Pointer);
     let mut bounded = result.clone();
@@ -18919,6 +18942,65 @@ fn point_at_spills(
         replace(&mut bounded, &stream_input::marker(&spill.pointer), &line);
     }
     Some((bounded, pointer))
+}
+
+/// Whether a spilled result is still within the CONFIGURED bound (CLOUD-2224):
+/// the read spills at the default, so a repository that raises the bound keeps
+/// such a result whole, and emitting nothing hands the host its own.
+///
+/// Counted from the files in chunks, stopping once past the bound; a file whose
+/// bytes alone prove it over (an `o200k` token is at most 128 bytes) is never
+/// read. At or under the default, nothing spilled can be within it.
+//MUTANT-SUITE crates/batten/tests/it/result_bound.rs
+//MUTANT raised-bound-ignored|s@^    if configured <= capture::DEFAULT_RESULT_MAX_TOKENS {$@    if true {@|a_raised_bound_keeps_a_spilled_result_whole
+fn spills_within_bound(result: &serde_json::Value, spilled: &[stream_input::Spilled]) -> bool {
+    fn inline(value: &serde_json::Value, into: &mut u64) {
+        match value {
+            serde_json::Value::String(text) => *into += o200k::tokens(text),
+            serde_json::Value::Array(items) => items.iter().for_each(|item| inline(item, into)),
+            serde_json::Value::Object(fields) => {
+                fields.values().for_each(|field| inline(field, into));
+            }
+            _ => {}
+        }
+    }
+    let configured = capture::result_max_tokens(capture_budget().as_ref());
+    if configured <= capture::DEFAULT_RESULT_MAX_TOKENS {
+        return false;
+    }
+    let mut counted = 0;
+    inline(result, &mut counted);
+    for spill in spilled {
+        if spill.bytes / 128 > configured {
+            return false;
+        }
+        let Ok(mut file) = std::fs::File::open(&spill.path) else {
+            return false;
+        };
+        let mut chunk = vec![0_u8; 64 * 1024];
+        let mut carry = Vec::new();
+        loop {
+            let Ok(read) = std::io::Read::read(&mut file, &mut chunk) else {
+                return false;
+            };
+            if read == 0 {
+                break;
+            }
+            carry.extend_from_slice(chunk.get(..read).unwrap_or_default());
+            // A CHUNK ENDS ON A CHARACTER: the tail of a split one waits.
+            let whole = match std::str::from_utf8(&carry) {
+                Ok(_) => carry.len(),
+                Err(cut) => cut.valid_up_to(),
+            };
+            let (text, rest) = carry.split_at(whole);
+            counted += o200k::tokens(std::str::from_utf8(text).unwrap_or_default());
+            carry = rest.to_vec();
+            if counted > configured {
+                return false;
+            }
+        }
+    }
+    counted <= configured
 }
 
 /// Whether this call reads a capture view, the route the bound's own pointer

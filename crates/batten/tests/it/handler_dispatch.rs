@@ -252,3 +252,63 @@ fn a_current_mediator_produces_no_advisory_on_the_same_call() {
         door.out
     );
 }
+
+/// A HANDLER READS THE HOST'S OWN BYTES (CLOUD-2224): the payload is spooled as
+/// read, and a handler is handed that spool, never a re-serialized document.
+/// The payload is written in a shape no serializer emits (spacing, key order),
+/// so a re-serialization cannot pass. `#MUTANT handler-bytes-reserialized`.
+#[test]
+fn a_handler_reads_the_payload_the_host_sent() {
+    use std::io::Write as _;
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let repo = scratch("handler-host-bytes").join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    write(
+        &repo,
+        "batten.toml",
+        r#"version = 1
+
+[[hook.handler]]
+id = "host-bytes"
+on = "post-tool"
+run = ["./copy-stdin.sh"]
+matcher = "^Read$"
+timeout_ms = 5000
+owner = "CLOUD-2224"
+expires = "2027-03-31"
+"#,
+    );
+    common::init_repo(&repo);
+    let got = repo.join("got.json");
+    let script = repo.join("copy-stdin.sh");
+    std::fs::write(
+        &script,
+        format!("#!/bin/sh\ncat > {:?}\nexit 0\n", got.to_str().unwrap()),
+    )
+    .unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let payload = "{ \"tool_response\" : {\"file\":{\"content\":\"x\"}} ,\n  \"tool_name\":\"Read\", \"hook_event_name\" :\"PostToolUse\",\"tool_input\":{\"file_path\":\"a\"} }";
+    let mut child = common::batten()
+        .current_dir(&repo)
+        .args(["adjudicate", "--harness", "claude-code"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("the binary runs");
+    child
+        .stdin
+        .take()
+        .expect("stdin is piped")
+        .write_all(payload.as_bytes())
+        .expect("write stdin");
+    let outcome = child.wait_with_output().expect("wait for batten");
+    let received = std::fs::read_to_string(&got).unwrap_or_else(|_| {
+        panic!(
+            "the handler ran: {}",
+            String::from_utf8_lossy(&outcome.stderr)
+        )
+    });
+    assert_eq!(received, payload, "the handler read the host's bytes");
+}

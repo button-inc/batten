@@ -1457,60 +1457,124 @@ pub fn result_view(
     capture: &Capture,
     result: &serde_json::Value,
 ) -> Result<(PathBuf, Vec<ViewField>)> {
-    fn walk(
-        pointer: &str,
-        value: &serde_json::Value,
-        text: &mut String,
-        index: &mut Vec<ViewField>,
-        line: &mut usize,
-    ) -> Result<()> {
+    result_view_spilled(repo_root, capture, result, &[])
+}
+
+/// [`result_view`], where some text leaves were spilled to files by the
+/// streamed read (CLOUD-2224): a leaf holding one of `spills`' markers has its
+/// section copied from that file in chunks, its lines counted as they pass, so
+/// the bulk never enters memory here either.
+///
+/// # Errors
+///
+/// When the state root cannot be resolved, a spilled file cannot be read, or
+/// the view cannot be written.
+//MUTANT-SUITE crates/batten/tests/it/result_bound.rs
+//MUTANT spilled-section-unstreamed|s@^            Some(source) => copy_counted(source, \&mut at.out)?,$@            Some(_) => (0, 0),@|an_oversized_result_becomes_a_pointer_to_a_view_of_its_text
+pub fn result_view_spilled(
+    repo_root: &Path,
+    capture: &Capture,
+    result: &serde_json::Value,
+    spills: &[(String, PathBuf)],
+) -> Result<(PathBuf, Vec<ViewField>)> {
+    struct Walk<'a> {
+        out: std::io::BufWriter<std::fs::File>,
+        index: Vec<ViewField>,
+        line: usize,
+        spills: &'a [(String, PathBuf)],
+    }
+    /// Copy `source` into `out`, returning its bytes and its line count.
+    fn copy_counted(source: &Path, out: &mut impl Write) -> Result<(usize, usize)> {
+        let mut file = std::fs::File::open(source)
+            .with_context(|| format!("read the spilled leaf {}", source.display()))?;
+        let mut chunk = vec![0_u8; 64 * 1024];
+        let (mut bytes, mut newlines) = (0usize, 0usize);
+        loop {
+            let read = std::io::Read::read(&mut file, &mut chunk)?;
+            if read == 0 {
+                break;
+            }
+            let piece = chunk.get(..read).unwrap_or_default();
+            newlines += piece.iter().filter(|byte| **byte == b'\n').count();
+            bytes += read;
+            out.write_all(piece)?;
+        }
+        Ok((bytes, newlines + 1))
+    }
+    fn walk(pointer: &str, value: &serde_json::Value, at: &mut Walk<'_>) -> Result<()> {
         match value {
             serde_json::Value::Object(fields) if !fields.is_empty() => {
                 for (key, child) in fields {
                     let escaped = key.replace('~', "~0").replace('/', "~1");
-                    walk(&format!("{pointer}/{escaped}"), child, text, index, line)?;
+                    walk(&format!("{pointer}/{escaped}"), child, at)?;
                 }
                 return Ok(());
             }
             serde_json::Value::Null => return Ok(()),
             _ => {}
         }
+        let spilled = match value {
+            serde_json::Value::String(content) => at
+                .spills
+                .iter()
+                .find(|(marker, _)| marker == content)
+                .map(|(_, path)| path.as_path()),
+            _ => None,
+        };
         let body = match value {
+            _ if spilled.is_some() => String::new(),
             serde_json::Value::String(content) => content.clone(),
             other => serde_json::to_string_pretty(other)?,
         };
-        if body.is_empty() {
+        if spilled.is_none() && body.is_empty() {
             return Ok(());
         }
         let pointer = if pointer.is_empty() { "/" } else { pointer };
-        text.push_str("## ");
-        text.push_str(pointer);
-        text.push('\n');
-        *line += 1;
-        let lines = body.matches('\n').count() + 1;
-        index.push(ViewField {
+        writeln!(at.out, "## {pointer}")?;
+        at.line += 1;
+        let (bytes, lines) = match spilled {
+            Some(source) => copy_counted(source, &mut at.out)?,
+            None => {
+                at.out.write_all(body.as_bytes())?;
+                (body.len(), body.matches('\n').count() + 1)
+            }
+        };
+        at.index.push(ViewField {
             pointer: pointer.to_owned(),
-            from: *line + 1,
-            to: *line + lines,
-            bytes: body.len(),
+            from: at.line + 1,
+            to: at.line + lines,
+            bytes,
         });
-        text.push_str(&body);
-        text.push('\n');
-        *line += lines;
+        at.out.write_all(b"\n")?;
+        at.line += lines;
         Ok(())
     }
-    let mut text = String::new();
-    let mut index = Vec::new();
-    let mut line = 0usize;
-    walk("", result, &mut text, &mut index, &mut line)?;
     let dir = captures_dir(repo_root)?;
     let path = view_path_in(&dir, &capture.digest);
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("the view {} has no directory", path.display()))?;
+    std::fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
+    let staging = parent.join(format!(".{}.{}.tmp", capture.digest, std::process::id()));
+    let file = std::fs::File::create(&staging) // stream: a view, committed by the rename below
+        .with_context(|| format!("write the view {}", staging.display()))?;
+    let mut at = Walk {
+        out: std::io::BufWriter::new(file),
+        index: Vec::new(),
+        line: 0,
+        spills,
+    };
+    let walked = walk("", result, &mut at).and_then(|()| {
+        at.out.flush()?;
+        Ok(())
+    });
+    if let Err(problem) = walked {
+        let _ = std::fs::remove_file(&staging);
+        return Err(problem);
     }
-    crate::durable::replace(&path, text.as_bytes())
+    std::fs::rename(&staging, &path)
         .with_context(|| format!("write the view {}", path.display()))?;
-    Ok((path, index))
+    Ok((path, at.index))
 }
 
 /// Where the view of the capture `digest` lives in the store `dir`.

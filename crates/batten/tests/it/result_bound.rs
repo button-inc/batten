@@ -158,6 +158,44 @@ fn a_result_too_large_to_hold_reaches_the_model_as_a_pointer() {
     );
 }
 
+/// A RESULT OVER THE BOUND NEVER ENTERS MEMORY WHOLE (CLOUD-2224): the read
+/// spills it at the bound, so its pointer carries the stored leaf's handle
+/// beside the view's lines. Measured by the row's cold read: a spill floor of a
+/// million tokens held every result between the bound and ~4 MB whole, and
+/// that path's pointer carried no handle. `#MUTANT spill-floor-restored`.
+#[test]
+fn a_result_over_the_bound_is_spilled_not_held() {
+    let dir = repo("result-bound-spilled-at-bound");
+    let posted = post_tool(&dir, &read_result(&payload(2000)));
+    assert_eq!(posted.status.code(), Some(0), "{}", common::stderr(&posted));
+    let said = String::from_utf8_lossy(&posted.stdout);
+    assert!(
+        said.contains("output point now at /file/content:"),
+        "the view's lines: {said}"
+    );
+    assert!(
+        said.contains("response:"),
+        "and the spilled leaf's stored handle: {said}"
+    );
+}
+
+/// A RAISED BOUND KEEPS A SPILLED RESULT WHOLE (CLOUD-2224): the read spills at
+/// the default, before the authority is known, so a result within a raised
+/// bound is left to the host as it sent it. `#MUTANT raised-bound-ignored`.
+#[test]
+fn a_raised_bound_keeps_a_spilled_result_whole() {
+    let dir = common::Fixture::at(common::scratch("result-bound-raised").join("repo"))
+        .config("version = 1\n\n[capture]\nresult_max_tokens = 200000\n")
+        .git()
+        .base_commit()
+        .build();
+    let posted = post_tool(&dir, &read_result(&payload(2000)));
+    assert_eq!(posted.status.code(), Some(0), "{}", common::stderr(&posted));
+    let said = String::from_utf8_lossy(&posted.stdout);
+    assert!(!said.contains("output point now"), "{said}");
+    assert!(!said.contains("updatedToolOutput"), "{said}");
+}
+
 #[test]
 fn following_the_pointer_returns_text_not_another_pointer() {
     // CLOUD-2228. The pointer's route is `read <view>`, and the view of an
