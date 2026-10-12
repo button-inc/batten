@@ -66,8 +66,39 @@ violation contains {
 	some path, sites in input.tree.invocations
 	some site in sites
 	some argument in site.arguments
+	judged(argument)
 	some token in reachability_answers
 	contains(argument, token)
+}
+
+# WHICH ARGUMENTS ARE A COMMAND. An argv token carries no whitespace, and a
+# command written as one string starts with `git`. A sentence passed to a
+# formatter is neither: measured on #1132, `"... inherited from the
+# merge-base"`, a status message, was refused as a reachability decision -- the
+# prose false positive this module was written to end, moved from comments into
+# string literals.
+judged(argument) if {
+	every space in {" ", "\t", "\n"} {
+		not contains(argument, space)
+	}
+}
+
+judged(argument) if startswith(argument, "git ")
+
+test_a_sentence_naming_the_verb_is_not_a_decision if {
+	count(violation) == 0 with input as {"tree": {"invocations": {"crates/batten/src/x.rs": [{
+		"program": "from",
+		"arguments": ["the pin and version are inherited from the merge-base"],
+		"line": 117,
+	}]}}}
+}
+
+test_a_git_command_string_is_still_refused if {
+	count(violation) == 1 with input as {"tree": {"invocations": {"crates/batten/src/x.rs": [{
+		"program": "sh",
+		"arguments": ["git merge-base a b"],
+		"line": 9,
+	}]}}}
 }
 
 # A reachability verb in a COMMENT is not a decision, and asserting that is the
