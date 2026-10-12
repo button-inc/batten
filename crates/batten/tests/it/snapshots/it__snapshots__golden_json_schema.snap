@@ -4839,7 +4839,7 @@ expression: stdout_of(&output)
         {
           "path": "target prune",
           "id": "target.prune",
-          "about": "Reclaim superseded build artifacts, and refuse below the measured disk floor for the build the next lap will run",
+          "about": "Collect superseded, then least recently used, build units until [prune] max_free_mb is free",
           "effect": "destructive",
           "data_channel": false,
           "flags": [

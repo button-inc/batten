@@ -14,7 +14,7 @@ Print help
 .SH SUBCOMMANDS
 .TP
 batten\-target\-prune(1)
-Reclaim superseded build artifacts, and refuse below the measured disk floor for the build the next lap will run
+Collect superseded, then least recently used, build units until [prune] max_free_mb is free
 .TP
 batten\-target\-help(1)
 Print this message or the help of the given subcommand(s)

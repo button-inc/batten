@@ -2654,53 +2654,6 @@
         "is"
       ]
     },
-    "Floor": {
-      "description": "One floor, and the measurement that justifies it.\n\nThe basis travels WITH the number, in the shape `timeout-check` uses for\nworkflow jobs and `mcp-timeout-budget` for the MCP startup budget (CLOUD-266).\nA limit with no recorded measurement is boilerplate, and a stale measurement\nreads exactly like a fresh one — which is why the date is required rather than\ncommentary.",
-      "type": "object",
-      "properties": {
-        "basis": {
-          "description": "What the tree looked like when that lap was measured (CLOUD-1158).\n\nOPTIONAL IN THE TYPE AND REFUSED ON THE VERIFY SURFACE, which is not the\nsame as optional in the contract — an absent basis is refused by\n[`basis_drift`], on `measured`'s own ground, and the only thing that moved\nis WHERE.\n\nIt has to move, and the reason is measured rather than stylistic. A\nrequired field means the NEW engine cannot parse the OLD config, and\n`config-lint` loads `origin/main:batten.toml` with the working tree's\nbinary precisely so a branch cannot lower the bar it is judged by. So a\nnewly-required key makes its own PR unlandable: the base ref has no such\nkey, the load fails with `missing field`, and the gate reports\ncould-not-look rather than a verdict. Measured on this row's own landing\nlap, after the whole gate was otherwise green.\n\nThe refusal is not weakened by the move — it is the same refusal one\nsurface later, on the surface CLOUD-1158 §2 already puts the live\ncomparison on, and `an_undeclared_basis_is_refused_on_the_verify_surface`\nis what holds it there.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Measured"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "mb": {
-          "description": "The floor itself, in megabytes.",
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0
-        },
-        "measured": {
-          "description": "When the worst lap was measured, `YYYY-MM-DD`.",
-          "type": "string",
-          "maxLength": 1536
-        },
-        "multiplier": {
-          "description": "The safety factor applied to it.",
-          "type": "integer",
-          "format": "uint64",
-          "default": 1,
-          "minimum": 0
-        },
-        "worst_mb": {
-          "description": "The worst lap this basis was measured over, in megabytes.",
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "mb",
-        "worst_mb",
-        "measured"
-      ]
-    },
     "Forge": {
       "description": "Which forge this repository is hosted on, in the parts the engine cannot\nderive (CLOUD-1622).\n\n**Only what a consumer can actually answer.** The REST base stays the constant\nabove: pointing this tier at another host asks for a different CLIENT, not a\ndifferent value, and that reasoning is unchanged by this table. What a\nconsumer genuinely knows, and what the engine had no way to be told, is which\nenvironment variables carry the token.\n\n**IT IS NOT THE FORGE'S CONVENTIONAL NAMES, and the first revision of this\ntype said it was.** That revision argued a CI provider injects a job token\nunder its own name and so those names are what a REST read should present.\nMeasured, the opposite holds on this class of host: the injected value is a\nsubstitutable PLACEHOLDER — batten's own provisioning carries a\n`reject_prefix` to refuse it — and the credential the consumer holds lives\nunder a name only they can state. Reading a conventional spelling as a\ncredential is the same rule-1 defect as hard-coding it, one level of\nindirection along.",
       "type": "object",
@@ -3196,35 +3149,6 @@
         }
       },
       "additionalProperties": false
-    },
-    "Measured": {
-      "description": "The world the floor was measured against, so a reader can tell when it moved.\n\n# A date is a POINTER to a basis, not the basis (CLOUD-1158)\n\n[`Floor::measured`] discharges CLOUD-266 — a limit carries its measurement —\nand stops there: nothing could say whether the world under the number had\nchanged since. It had, and it changes on a schedule this repository sets for\nitself.\n\nRetained bytes after a perfectly successful prune are `keep x stems x size`.\n`keep` is 2 and `size` is stable; `stems` is not. CLOUD-766 recorded ~41\ndistinct integration-test stems resident in `deps` on 2026-08-20;\n`crates/batten/tests/*.rs` was 110 tracked files on 2026-08-29, each an\nindependent cargo test target, and CLOUD-843's retirement campaign adds one per\nretired gate with 147 shell suites still standing. Measured on this container\nthe same day: 114 extension-less test binaries holding 13411.9 MB, 86.8% of\n`deps`.\n\nA floor taken against a smaller count fails in the direction that fails\nSILENTLY — the check passes, the build writes more than the basis anticipated,\nand the exhaustion arrives as a rustc IO error inside a test run, which is the\npresentation this module's refusal exists to prevent.\n\n# The comparison is not here, and that is the whole of §2\n\n`config.rs` calls [`Prune::validate`] on the shared config-load path, which\nEVERY `batten` invocation runs — `batten hook`, on every mediated tool call,\nincluded. Enumerating tracked paths there would tax a tree read onto the\nmediated call against `perf-assert`'s ceiling, which is the exact shape\n`claim-race-check` was moved off that path for.\n\nSo this type is CONFIG — validated for shape at load, which is free — and the\ncomparison against the live tree runs on `Surface::VerifyOnly`, in\n`batten target prune`, which that budget deliberately has no ceiling for.",
-      "type": "object",
-      "properties": {
-        "count": {
-          "description": "How many tracked files matched it when the floor was measured.",
-          "type": "integer",
-          "format": "uint",
-          "minimum": 0
-        },
-        "glob": {
-          "description": "The glob whose tracked-file count is the basis.",
-          "type": "string",
-          "maxLength": 1536
-        },
-        "tolerance": {
-          "description": "How far the count may drift before the floor is stale.\n\nA TOLERANCE RATHER THAN EQUALITY, because a gate that reds on the first\nadded test file is one somebody switches off — and the thing being watched\nis a trend, not an edit. It is required rather than defaulted: what counts\nas drift is a fact about how fast THIS consumer's suite grows.",
-          "type": "integer",
-          "format": "uint",
-          "minimum": 0
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "glob",
-        "count",
-        "tolerance"
-      ]
     },
     "MintKey": {
       "description": "What a mint's receipt is filed under.\n\nThe two keyings the censused receipts actually use, and a closed enum rather\nthan a free string for [`crate::rules::SinkKey`]'s reason: a key a config\ncould spell arbitrarily is a filename a config could point anywhere, and the\nstore lives under `$GIT_DIR`.",
@@ -4007,15 +3931,15 @@
       ]
     },
     "Prune": {
-      "description": "The `[prune]` table: what this project's build costs, and what to keep.\n\nCONSUMER CONFIG, NOT A CONST, and non-negotiable rule 1 is the reason as much\nas taste is: how many megabytes a full rebuild writes is a fact about THIS\nproject, and the predecessor carried it as a shell variable inside the program\nthat enforced it. Declaring it means the engine validates the arithmetic at\nload — which is what the predecessor's runtime self-parse was reaching for,\none tier earlier and without a program reading its own source.",
+      "description": "The `[prune]` table: the build tree, what to keep, and the collector's band.\n\nCONSUMER CONFIG, NOT A CONST (non-negotiable rule 1): which directory a\nproject builds into and how much free space its builds need are facts about\nTHAT project.",
       "type": "object",
       "properties": {
         "cold": {
-          "description": "What a lap needs after the escalation has dropped that cache.",
-          "$ref": "#/$defs/Floor"
+          "description": "RETIRED (CLOUD-2198): the cold floor. Read and ignored, as `warm`.",
+          "writeOnly": true
         },
         "keep": {
-          "description": "Copies retained per stem. See the module header for why this is 2.\n\nThe bound is in the SCHEMA as well as in [`Prune::validate`] (raised on\n#734): an editor validating against the published schema is the surface\nmost consumers meet first, and one that accepts `keep = 0` there and\nrefuses it at load teaches the wrong bound at the cheaper moment.",
+          "description": "Copies retained per stem. See the module header for why this is 2.\n\nThe bound is in the SCHEMA as well as in [`Prune::validate`] (raised on\n#734): an editor validating against the published schema is the surface\nmost consumers meet first.",
           "type": "integer",
           "format": "uint",
           "default": 2,
@@ -4040,12 +3964,8 @@
           "minimum": 0
         },
         "regrowable": {
-          "description": "The regrowable roots the escalation may drop, in the order it drops them.\n\nEmpty by default rather than defaulting to `incremental`: a default here\nwould be this crate holding a fact about somebody else's build tree, which\nis the constant CLOUD-1157 removed wearing a different hat. A repository\nthat declares none simply has no escalation — its floor is judged over\nwhatever the superseded pass reclaimed.",
-          "type": "array",
-          "default": [],
-          "items": {
-            "$ref": "#/$defs/Regrowable"
-          }
+          "description": "RETIRED (CLOUD-2198): the escalation's regrowable roots. Read and\nignored, as `warm`: the collector never drops a cache whole.",
+          "writeOnly": true
         },
         "root": {
           "description": "The build directory, relative to the repository root.",
@@ -4054,15 +3974,11 @@
           "maxLength": 1536
         },
         "warm": {
-          "description": "What a lap needs when its incremental cache survives.",
-          "$ref": "#/$defs/Floor"
+          "description": "RETIRED (CLOUD-2198): the warm floor. Read and ignored, so a config\nwritten for the floor model still loads while its pin moves; the\ncollector's band ([`Prune::min_free_mb`]) replaces it.",
+          "writeOnly": true
         }
       },
-      "additionalProperties": false,
-      "required": [
-        "warm",
-        "cold"
-      ]
+      "additionalProperties": false
     },
     "Query": {
       "description": "One `[[forge.query]]` row: a declared, paginated REST read and the reduction\na producer records from it (CLOUD-843).\n\n# Why a row rather than a verb per measurement\n\nEleven shell bodies each re-derived the same four things — an endpoint with\nthe repository spliced in, a pagination walk, a date cut-off and a `jq`\nprojection — and three of them got the truncation wrong three different ways\n([`crate::forge`]'s header). One declared row per read puts the consumer's\nfacts (which endpoint, which fields, which window) in the committed authority\nand leaves the mechanism in the engine, which is non-negotiable rule 1's split\nexactly: nothing here names an endpoint, and nothing in `batten.toml` walks a\npage.\n\nThe row's `id` is also the RECORD FAMILY it writes, and a `[[record]]` row\nmust declare that family — a query nothing projects would write a store no\nmodule can read, which is CLOUD-1810's dead gate one table over, refused at\nload rather than discovered as a green run.",
@@ -4397,26 +4313,6 @@
           "type": "string",
           "const": "token"
         }
-      ]
-    },
-    "Regrowable": {
-      "description": "One regrowable root, and what dropping it costs.\n\nRegrowable, never superseded: nothing supersedes a cache, so no retention rule\ncan reach one and the only honest reclaim is \"drop it whole, and only when the\nfloor is already breached\".",
-      "type": "object",
-      "properties": {
-        "cold": {
-          "description": "Whether dropping this root makes the next CARGO build a full one.\n\nThe basis is a consequence of what was reclaimed, so this is the row's\nanswer to \"does the cold floor now apply\", not a preference.",
-          "type": "boolean"
-        },
-        "name": {
-          "description": "The directory NAME, matched anywhere under the root — never a path.\n\nA single trailing `*` makes it a prefix, which is what `flycheck*` needs:\nrust-analyzer numbers a directory per instance, so the set is open and no\nenumeration of it stays true. Anything richer is a glob language, and this\nkey does not need one.",
-          "type": "string",
-          "maxLength": 1536
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "name",
-        "cold"
       ]
     },
     "RelativeTo": {

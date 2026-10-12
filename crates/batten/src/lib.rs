@@ -690,10 +690,19 @@ fn follow_pin(may_build: bool) -> Result<Option<ExitCode>> {
                 Err(err) => return Err(err),
             }
         }
-        (None, Some(_)) if may_build => {
-            engine_update(&root, &mut std::io::sink())?;
-            exe
-        }
+        // A SOURCE PIN IS FOLLOWED TO THE CHECKOUT'S OWN BUILD (CLOUD-2232),
+        // as a release pin is followed to its cache: the installed binary execs
+        // `target/release/batten` — on the hook path too, since nothing is
+        // built. One `batten` on PATH dispatches; no second engine is
+        // installed beside the one the branch built.
+        (None, Some(_)) => match engine::checkout_build(&root) {
+            Some(build) => build,
+            None if may_build => {
+                engine_update(&root, &mut std::io::sink())?;
+                exe
+            }
+            None => return Ok(None),
+        },
         // A source pin on the hook path, or a malformed pin: the pre-parse
         // refusal names it.
         _ => return Ok(None),

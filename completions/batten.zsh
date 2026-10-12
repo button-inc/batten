@@ -13033,7 +13033,7 @@ _batten__subcmd__help__subcmd__step__subcmd__run_commands() {
 (( $+functions[_batten__subcmd__help__subcmd__target_commands] )) ||
 _batten__subcmd__help__subcmd__target_commands() {
     local commands; commands=(
-'prune:Reclaim superseded build artifacts, and refuse below the measured disk floor for the build the next lap will run' \
+'prune:Collect superseded, then least recently used, build units until \[prune\] max_free_mb is free' \
     )
     _describe -t commands 'batten help target commands' commands "$@"
 }
@@ -14943,7 +14943,7 @@ _batten__subcmd__step__subcmd__run_commands() {
 (( $+functions[_batten__subcmd__target_commands] )) ||
 _batten__subcmd__target_commands() {
     local commands; commands=(
-'prune:Reclaim superseded build artifacts, and refuse below the measured disk floor for the build the next lap will run' \
+'prune:Collect superseded, then least recently used, build units until \[prune\] max_free_mb is free' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'batten target commands' commands "$@"
@@ -14951,7 +14951,7 @@ _batten__subcmd__target_commands() {
 (( $+functions[_batten__subcmd__target__subcmd__help_commands] )) ||
 _batten__subcmd__target__subcmd__help_commands() {
     local commands; commands=(
-'prune:Reclaim superseded build artifacts, and refuse below the measured disk floor for the build the next lap will run' \
+'prune:Collect superseded, then least recently used, build units until \[prune\] max_free_mb is free' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'batten target help commands' commands "$@"

@@ -1028,6 +1028,28 @@ fn the_reclaim_itself_stays_dependency_free_and_the_surfaces_are_not_empty() {
     );
 }
 
+/// A LOCAL RELEASE BUILD IS THE ENGINE IN USE (CLOUD-2232): built, stamped with
+/// this tree's digest, and pinned by it, in that order, by the binary just
+/// built. A build that skipped either left an unstamped binary first on
+/// `_.path` while `batten.toml` named the release, so the branch was judged by
+/// an engine it had not built.
+#[test]
+fn a_local_release_build_is_stamped_and_pinned_by_itself() {
+    let build = task_surface("build:release").expect("the release build is a declared task");
+    let at = |needle: &str| {
+        build
+            .find(needle)
+            .unwrap_or_else(|| panic!("build:release runs `{needle}`: {build}"))
+    };
+    let compiled = at("cargo build --quiet --release -p batten");
+    let stamped = at("target/release/batten engine stamp");
+    let pinned = at("target/release/batten engine pin source");
+    assert!(
+        compiled < stamped && stamped < pinned,
+        "built, then stamped, then pinned: {build}"
+    );
+}
+
 #[test]
 fn no_by_path_registration_survives_on_the_session_start_surface() {
     // THE OTHER HALF OF THE RETIRED REGISTRATION CASE, in the direction that

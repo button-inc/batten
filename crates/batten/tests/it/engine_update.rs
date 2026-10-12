@@ -232,9 +232,100 @@ fn a_build_inside_the_checkout_is_never_replaced() {
         text(&output)
     );
     assert_eq!(std::fs::read(&binary).unwrap(), before, "nothing replaced");
+    // AND IT LOADS (CLOUD-2232): the checkout's own build answers for the
+    // checkout's source pin whatever digest it names — a pin the tree moved
+    // off is `engine-pin:check`'s to refuse, never this binary's.
+    assert!(output.status.success(), "{}", text(&output));
+}
+
+/// THE CHECKOUT'S OWN BUILD SATISFIES ITS OWN SOURCE PIN (CLOUD-2232), rustup's
+/// `path` toolchain: a branch pinning the tree it stands on loads under the
+/// binary cargo built inside it, with no stamp and no update. The mirror is
+/// `a_build_inside_the_checkout_is_never_replaced`: a pin naming some OTHER
+/// digest is still refused.
+#[test]
+fn the_checkouts_own_build_satisfies_its_source_pin() {
+    let dir = repo("engine-update-own-source");
+    stub_cargo(&dir);
+    let binary = private_binary(&dir);
+    let digest = text(&run(&binary, &dir, &["engine", "digest"], ""))
+        .trim()
+        .to_owned();
+    pin_source(&dir, &digest);
+    let output = run(&binary, &dir, &["config", "show"], "");
+    assert!(output.status.success(), "{}", text(&output));
+    assert!(
+        !text(&output).contains("engine update"),
+        "no update is asked of the tree's own build: {}",
+        text(&output)
+    );
+    assert!(!dir.join("cargo-ran").exists(), "nothing built");
+    assert!(
+        !engine_stamp(&binary).exists(),
+        "and no stamp was needed: {}",
+        text(&output)
+    );
+}
+
+/// A stand-in for the checkout's stamped release build: it names itself and its
+/// arguments, so a case can see which engine decided.
+fn checkout_build(dir: &Path, stamp: &str) {
+    let release = dir.join("target").join("release");
+    std::fs::create_dir_all(&release).unwrap();
+    common::write(
+        &release,
+        "batten",
+        "#!/bin/sh\necho \"checkout build ran $*\"\n",
+    );
+    make_executable(&release.join("batten"));
+    common::write(&release, "batten.source", &format!("{stamp}\n"));
+}
+
+/// ONE `batten` ON PATH DISPATCHES TO THE BRANCH'S BUILD (CLOUD-2232), the
+/// source-pin half of `a_release_pin_is_followed_from_the_cache_on_the_hook_path`.
+/// The installed binary, outside the checkout, finds `target/release/batten`
+/// and execs it — on the hook path, nothing built — even under a pin its stamp
+/// is behind, since a refreshed pin must never strand the hook. The mirror: a
+/// checkout with no release build is not followed, and the refusal names the
+/// update.
+#[test]
+fn a_source_pin_is_followed_to_the_checkouts_build() {
+    let digest = "1".repeat(64);
+    let dir = repo("engine-update-follow-source");
+    stub_cargo(&dir);
+    let installed = common::scratch("engine-update-follow-source-installed");
+    let binary = private_binary(&installed);
+    pin_source(&dir, &digest);
+    checkout_build(&dir, &"2".repeat(64));
+    let envelope = r#"{"hook_event_name":"PreToolUse","permission_mode":"default","tool_name":"Bash","tool_input":{"command":"ls"}}"#;
+    let output = run(
+        &binary,
+        &dir,
+        &["adjudicate", "--harness", "claude-code"],
+        envelope,
+    );
+    assert!(
+        text(&output).contains("checkout build ran adjudicate --harness claude-code"),
+        "the installed binary runs the branch's stamped build: {}",
+        text(&output)
+    );
+    assert!(!dir.join("cargo-ran").exists(), "nothing built");
+
+    std::fs::remove_dir_all(dir.join("target")).unwrap();
+    let output = run(
+        &binary,
+        &dir,
+        &["adjudicate", "--harness", "claude-code"],
+        envelope,
+    );
+    assert!(
+        !text(&output).contains("checkout build ran"),
+        "with no release build there is nothing to follow: {}",
+        text(&output)
+    );
     assert!(
         text(&output).contains("batten engine update"),
-        "the stale build is refused and the update named: {}",
+        "and the refusal names the update: {}",
         text(&output)
     );
 }
@@ -322,7 +413,10 @@ fn a_release_pin_is_followed_from_the_cache_on_the_hook_path() {
 fn the_hook_path_never_builds_a_source_pin() {
     let dir = repo("engine-update-hook");
     stub_cargo(&dir);
-    let binary = private_binary(&dir);
+    // OUTSIDE the checkout, so the binary is an installed engine that proves
+    // itself by its stamp: the checkout's own build would satisfy the pin.
+    let installed = common::scratch("engine-update-hook-installed");
+    let binary = private_binary(&installed);
     pin_source(&dir, &"0".repeat(64));
     let envelope = r#"{"hook_event_name":"PreToolUse","permission_mode":"default","tool_name":"Bash","tool_input":{"command":"ls"}}"#;
     let output = run(

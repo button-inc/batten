@@ -275,6 +275,23 @@ fn built_in(source: &str) -> bool {
         .is_some_and(|root| exe.starts_with(root))
 }
 
+/// The checkout's own release build: the engine a source pin is followed to
+/// (CLOUD-2232), rustup's `path` toolchain. ANY DIGEST, for the reason
+/// [`check`]'s in-tree arm states: the pin moves with every edit under
+/// `crates/`, and following only an exact stamp stranded the hook on every
+/// refresh until a release build finished. Whether the pin is current is
+/// `engine-pin:check`'s question. One `stat`, so the hook path can take it.
+//MUTANT-SUITE crates/batten/tests/it/engine_update.rs
+//MUTANT source-pin-unfollowed|s@^    build.is_file().then_some(build)$@    None::<PathBuf>.filter(\x7c_\x7c build.is_file())@|a_source_pin_is_followed_to_the_checkouts_build
+#[must_use]
+pub fn checkout_build(root: &Path) -> Option<PathBuf> {
+    let build = root
+        .join("target")
+        .join("release")
+        .join(crate::surface::BINARY);
+    build.is_file().then_some(build)
+}
+
 /// Refuse a config whose pin this engine does not satisfy.
 ///
 /// `stamp` yields this binary's recorded source digest, or `None` when it has
@@ -286,6 +303,8 @@ fn built_in(source: &str) -> bool {
 /// A [`UsageError`] naming both identities and the update, when the pin names
 /// another release or another source, names both or neither, or names a source
 /// this binary carries no stamp for.
+//MUTANT-SUITE crates/batten/tests/it/engine_update.rs
+//MUTANT in-tree-build-unaccepted|s@^            if built_in(source) {$@            if false {@|the_checkouts_own_build_satisfies_its_source_pin
 pub fn check(text: &str, source: &str, stamp: impl FnOnce() -> Option<String>) -> Result<()> {
     let Some(pin) = declared(text) else {
         return Ok(());
@@ -308,6 +327,24 @@ pub fn check(text: &str, source: &str, stamp: impl FnOnce() -> Option<String>) -
             Ok(())
         }
         (None, Some(digest)) => {
+            // THE CHECKOUT'S OWN BUILD ANSWERS FOR THE CHECKOUT'S OWN PIN
+            // (CLOUD-2232), rustup's `path` toolchain: a source pin names this
+            // tree, and a binary cargo built inside it IS that tree's engine —
+            // so `cargo test`, `cargo run` and `target/release` load a branch's
+            // source-pinned config without a separate stamp step.
+            //
+            // NO DIGEST COMPARISON HERE, and the reason is measured: the pin is
+            // the digest the tree had when it was written, and every edit under
+            // `crates/` moves the tree's — so comparing them refused the tree's
+            // own build mid-edit and blamed the binary for a stale PIN. Pin
+            // freshness is `engine-pin:check`'s question, asked at commit and in
+            // CI. An installed copy outside the checkout still proves itself by
+            // its stamp. Stated limit: an in-tree build older than the tree
+            // passes until rebuilt, the exposure a release pin's in-tree build
+            // already carries.
+            if built_in(source) {
+                return Ok(());
+            }
             let stamp = stamp();
             if stamp.as_deref() != Some(digest) {
                 let running = stamp.as_deref().unwrap_or("unstamped");
