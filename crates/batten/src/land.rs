@@ -518,6 +518,16 @@ pub fn record(root: &Path, branch: &str, outcome: &Replay) -> Result<()> {
     append(root, branch, std::slice::from_ref(&outcome.line()))
 }
 
+/// Append the disk watcher's lines (`disk-collected …`, `disk-unlink-ms …`) to
+/// this branch's lap record, once the landing has returned (CLOUD-2197).
+///
+/// # Errors
+///
+/// A record that cannot be written.
+pub fn record_disk(root: &Path, branch: &str, lines: &[String]) -> Result<()> {
+    append(root, branch, lines)
+}
+
 /// Append `lines` to this branch's lap record.
 ///
 /// ONE WRITER FOR BOTH FAMILIES, because the store is shared: a replay outcome
@@ -534,6 +544,9 @@ pub fn record(root: &Path, branch: &str, outcome: &Replay) -> Result<()> {
 /// signature mean something: a race's two lines land together or not at all,
 /// rather than leaving a record with a winner and no loser — the exact shape a
 /// lap reading both sides would also produce.
+///
+/// The one public door is [`record_disk`]: the watcher's lines reach the record
+/// through it, after the landing, so the record keeps one writer.
 fn append(root: &Path, branch: &str, lines: &[String]) -> Result<()> {
     let Ok(git_dir) = crate::git::git_dir(root) else {
         return Ok(());
@@ -1596,7 +1609,6 @@ pub fn verify_raced(
     published: &[(String, String)],
     environment: &[crate::outputs::OutputPattern],
     trunk: Option<(&crate::main_watch::Config, &str)>,
-    disk: Option<DiskWatch<'_>>,
 ) -> Result<Verified> {
     let head = crate::git::head_commit(root).context("land: read this clone's HEAD")?;
     let watched = trunk.map(|(trunk, reference)| {
@@ -1607,27 +1619,10 @@ pub fn verify_raced(
         (trunk, replayed_onto)
     });
     let started = std::time::Instant::now();
-    let mut disk = disk.map(|watch| {
-        let reserve = crate::disk_watch::watched_floor_mb(watch.config);
-        let pressure = crate::disk_watch::Pressure::new(reserve, crate::disk_watch::HORIZON);
-        (watch, pressure)
-    });
-
-    // A VOLUME THAT CANNOT HOLD THE GATE NEVER STARTS IT (CLOUD-1937). The first
-    // sample is taken here, before the spawn, so a lap admitted onto a volume the
-    // committed rules cannot clear stops as the environment's failure instead of
-    // spending the gate's minutes to die of it.
-    if let Some((watch, pressure)) = disk.as_mut()
-        && let Some(reclaimed) = disk_turn(watch, pressure, started)
-    {
-        append(root, branch, &reclaimed.lines())?;
-        if reclaimed.exhausted() {
-            let verified = exhausted(head, &watch.tree, &reclaimed);
-            append(root, branch, std::slice::from_ref(&verified.line()))?;
-            return Ok(verified);
-        }
-    }
-    if watched.is_none() && disk.is_none() {
+    // THE DISK IS NOT THIS RACE'S ARM ANY MORE (CLOUD-2197): one watcher spans
+    // the whole landing (`disk_watch::around`), and a volume that cannot hold
+    // the gate is refused before it starts by the step's own pre-check.
+    if watched.is_none() {
         // No trunk to read, so a gate's "main moved" cannot be confirmed — and
         // an unconfirmed `2` is a refusal of the tree (see [`confirmed`]).
         return verify(root, branch, command, published, environment)
@@ -1643,11 +1638,6 @@ pub fn verify_raced(
     // gate was actually stopped, and a lap that reclaimed nothing spent the
     // minutes anyway. Reported rather than inferred from the verdict.
     let (cancelled, reclaimed_rx) = std::sync::mpsc::channel();
-    // THE DISK ARM'S RECORD LINES travel back rather than being appended from the
-    // watcher, so the record has one writer and the lap's lines stay in order.
-    let (reclaims_tx, reclaims_rx) = std::sync::mpsc::channel::<Vec<String>>();
-    let escalated = std::sync::atomic::AtomicBool::new(false);
-    let disk_tree = disk.as_ref().map(|(watch, _)| watch.tree.clone());
     let stop = std::sync::atomic::AtomicBool::new(false);
     let stop = &stop;
 
@@ -1664,28 +1654,19 @@ pub fn verify_raced(
         let arms = Arms {
             raced: tx.clone(),
             cancelled,
-            reclaims: reclaims_tx,
-            escalated: &escalated,
             stop,
         };
-        drop(scope.spawn(move || watch_arm(root, watched.as_ref(), disk.as_mut(), started, &arms)));
+        drop(scope.spawn(move || watch_arm(root, watched.as_ref(), started, &arms)));
 
         drop(tx);
         rx.recv().ok()
     });
-    let disk_lines: Vec<String> = reclaims_rx.try_iter().flatten().collect();
-    if !disk_lines.is_empty() {
-        append(root, branch, &disk_lines)?;
-    }
-    let tree = disk_tree.as_deref().unwrap_or(root);
 
     settle_race(
         &Settle {
             root,
             branch,
             head,
-            tree,
-            escalated: escalated.load(std::sync::atomic::Ordering::Relaxed),
             confirm_against: confirm_against.as_ref(),
             reclaimed: &reclaimed_rx,
         },
@@ -1699,55 +1680,21 @@ struct Settle<'a> {
     root: &'a Path,
     branch: &'a str,
     head: String,
-    /// Where the disk arm reclaims, which a volume refusal names.
-    tree: &'a Path,
-    /// Whether the disk loop escalated while the gate ran.
-    escalated: bool,
     confirm_against: Option<&'a (&'a crate::main_watch::Config, String)>,
     /// Whether the cancel actually stopped the gate.
     reclaimed: &'a std::sync::mpsc::Receiver<bool>,
 }
 
-/// The race's answer as this lap's verdict, recorded (CLOUD-318, CLOUD-1937).
+/// The race's answer as this lap's verdict, recorded (CLOUD-318).
 ///
 /// Split out of [`verify_raced`] at the seam between running the race and
 /// reading its result, so each stays under `clippy::too_many_lines`.
+///
+/// No escalation arm any more (CLOUD-2197): the collector never drops a cache a
+/// running gate reads — a held tree is skipped and the working set is kept — so
+/// a red gate is the tree's, whatever the watcher did meanwhile.
 fn settle_race(settle: &Settle<'_>, raced: Option<Raced>) -> Result<Verified> {
     match raced {
-        // A FAILURE AFTER A MID-GATE ESCALATION IS THE VOLUME'S (CLOUD-1937). The
-        // escalation drops regrowable roots a running suite may be reading —
-        // CLOUD-1913 measured `tmp` emptied under its fixtures — so a red gate
-        // after one is not a verdict about this tree, and the advice for a tree
-        // failure would send its reader looking for a defect that is not there.
-        Some(Raced::Gate(Ok(Verified::Refused {
-            sha,
-            cause: Refusal::Tree,
-        }))) if settle.escalated => {
-            let verified = Verified::Refused {
-                sha,
-                cause: Refusal::Environment {
-                    remedy: format!(
-                        "the disk loop dropped regrowable caches under {} while this gate ran, so its failure is the volume's — run the lap again",
-                        settle.tree.display()
-                    ),
-                },
-            };
-            append(
-                settle.root,
-                settle.branch,
-                std::slice::from_ref(&verified.line()),
-            )?;
-            Ok(verified)
-        }
-        Some(Raced::Disk(reclaimed)) => {
-            let verified = exhausted(settle.head.clone(), settle.tree, &reclaimed);
-            append(
-                settle.root,
-                settle.branch,
-                std::slice::from_ref(&verified.line()),
-            )?;
-            Ok(verified)
-        }
         Some(Raced::Gate(answer)) => {
             answer.map(|verified| confirmed(verified, settle.confirm_against))
         }
@@ -1842,7 +1789,6 @@ fn confirmed(
 enum Raced {
     Gate(Result<Verified>),
     Moved(String),
-    Disk(crate::disk_watch::Reclaimed),
 }
 
 /// Where the watcher arm reports, bundled so its signature stays readable.
@@ -1851,31 +1797,23 @@ struct Arms<'a> {
     raced: std::sync::mpsc::Sender<Raced>,
     /// Whether a cancel actually stopped the gate.
     cancelled: std::sync::mpsc::Sender<bool>,
-    /// The disk arm's record lines, appended by the lap after the race.
-    reclaims: std::sync::mpsc::Sender<Vec<String>>,
-    /// Whether a reclaim dropped a regrowable root while the gate ran.
-    escalated: &'a std::sync::atomic::AtomicBool,
     /// The flag both arms read; the gate's completion sets it.
     stop: &'a std::sync::atomic::AtomicBool,
 }
 
-/// The watcher arm of [`verify_raced`]: the trunk and the disk, on one loop.
+/// The watcher arm of [`verify_raced`]: the trunk, on the server's interval.
 ///
 /// Lifted out whole for `clippy::too_many_lines`, the remedy `lib.rs` takes for
 /// the same lint — it is one nameable step, the arm that is not the gate.
 fn watch_arm(
     root: &Path,
     watched: Option<&(&crate::main_watch::Config, String)>,
-    mut disk: Option<&mut (DiskWatch<'_>, crate::disk_watch::Pressure)>,
     started: std::time::Instant,
     arms: &Arms<'_>,
 ) {
     let mut poll = crate::main_watch::Poll::default();
-    // ONE LOOP, ONE PAUSE, TWO QUESTIONS (CLOUD-1937). The trunk keeps its
-    // own deadline — the server's interval, which a disk tick must not
-    // shorten into more requests — and the disk is sampled every tick.
-    // The pause is the shorter of the two, served by the crate's one
-    // sanctioned delay.
+    // ONE LOOP, ONE PAUSE: the trunk keeps its own deadline — the server's
+    // interval — served by the crate's one sanctioned delay.
     let mut next_poll = std::time::Duration::ZERO;
     while !arms.stop.load(std::sync::atomic::Ordering::Relaxed) {
         let mut pause = f64::INFINITY;
@@ -1916,109 +1854,10 @@ fn watch_arm(
             }
             pause = next_poll.saturating_sub(started.elapsed()).as_secs_f64();
         }
-        if let Some((watch, pressure)) = disk.as_mut() {
-            if let Some(reclaimed) = disk_turn(watch, pressure, started) {
-                drop(arms.reclaims.send(reclaimed.lines()));
-                if reclaimed.escalated {
-                    arms.escalated
-                        .store(true, std::sync::atomic::Ordering::Relaxed);
-                }
-                // A GATE THAT ALREADY ANSWERED KEEPS ITS ANSWER. Measured on
-                // #1036's first lap: the gate printed `fast-forward-green`,
-                // set `stop`, and this arm — mid-turn when it did — cancelled a
-                // finished group and claimed the race. A verdict that exists is
-                // never replaced by a reading taken after it.
-                if arms.stop.load(std::sync::atomic::Ordering::Relaxed) {
-                    return;
-                }
-                if reclaimed.exhausted() {
-                    // NOTHING LEFT THE RULES MAY RECLAIM, so the gate dies
-                    // of the volume either way; stopping it now spends
-                    // nothing further on a verdict about this tree it
-                    // cannot give.
-                    arms.stop.store(true, std::sync::atomic::Ordering::Relaxed);
-                    let _ = arms.cancelled.send(crate::exec::cancel_owned_group(root));
-                    drop(arms.raced.send(Raced::Disk(reclaimed)));
-                    return;
-                }
-            }
-            pause = pause.min(crate::disk_watch::TICK);
-        }
         if !pause.is_finite() {
             return;
         }
         crate::pr_watch::pause_until(pause, arms.stop);
-    }
-}
-
-/// The disk arm a raced gate carries (CLOUD-1937): where to reclaim, under which
-/// committed rules, and how free space is read.
-///
-/// The reading is INJECTED — the volume in production, a series in a test — so
-/// the projection and the stop are decidable without filling a disk.
-pub struct DiskWatch<'a> {
-    /// The build tree `[prune]` governs.
-    pub tree: std::path::PathBuf,
-    /// The committed `[prune]` rules; nothing outside them is touched.
-    pub config: &'a crate::prune::Prune,
-    /// Free space on the tree's volume, in megabytes.
-    pub free_mb: Box<dyn FnMut() -> Result<u64> + Send + 'a>,
-}
-
-impl std::fmt::Debug for DiskWatch<'_> {
-    /// The reader is a closure, so it is named rather than printed.
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("DiskWatch")
-            .field("tree", &self.tree)
-            .field("config", &self.config)
-            .field("free_mb", &"<reader>")
-            .finish()
-    }
-}
-
-/// One disk sample: read, project, and reclaim when the projection crosses.
-///
-/// Could-not-look answers `None` — a volume this arm cannot read never wins the
-/// race, which leaves the gate's own verdict standing, the fail-open direction
-/// every arm here takes.
-fn disk_turn(
-    watch: &mut DiskWatch<'_>,
-    pressure: &mut crate::disk_watch::Pressure,
-    started: std::time::Instant,
-) -> Option<crate::disk_watch::Reclaimed> {
-    let free = (watch.free_mb)().ok()?;
-    let at = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-    match pressure.observe(at, free) {
-        crate::disk_watch::Reading::Clear => None,
-        // THE COLLECTOR WHERE THE BAND IS DECLARED (CLOUD-2197), the floor
-        // model's reclaim where it is not.
-        crate::disk_watch::Reading::Reclaim => {
-            crate::disk_watch::collect_band(&watch.tree, watch.config, free, &mut watch.free_mb)
-                .or_else(|| {
-                    crate::disk_watch::reclaim(
-                        &watch.tree,
-                        watch.config,
-                        crate::disk_watch::reserve_mb(&watch.config.warm),
-                    )
-                    .ok()
-                })
-        }
-    }
-}
-
-/// The environment's stop for a volume the committed rules cannot clear.
-fn exhausted(head: String, tree: &Path, reclaimed: &crate::disk_watch::Reclaimed) -> Verified {
-    Verified::Refused {
-        sha: head,
-        cause: Refusal::Environment {
-            remedy: format!(
-                "the volume holding {} has {}MB free against a {}MB floor and nothing `[prune]` may still reclaim — free space on it, then run the lap again",
-                tree.display(),
-                reclaimed.free_mb,
-                reclaimed.floor_mb
-            ),
-        },
     }
 }
 

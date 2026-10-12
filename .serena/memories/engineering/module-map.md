@@ -133,8 +133,8 @@ row here, so a new module lands with its line.
 - `durable.rs` — the ONE place this crate mutates a file (CLOUD-1919): `append` is one `write(2)` plus `fsync`, and `replace` is temp, `fsync`, `rename`, then a directory `fsync`.
 - `cargo_graph.rs` — the ACTIVATED dependency graph, read from a `cargo metadata` document (CLOUD-1717).
 - `probe_verdict.rs` — which of three things a probe build did, from its exit status and its log (CLOUD-418, CLOUD-1717).
-- `prune.rs` — the build tree's reclaim and its disk floor (CLOUD-766/861/1030), retired out of `mise-tasks/target-prune.sh` under CLOUD-1059.
-- `disk_watch.rs` — the disk arm of `land`'s gate race (CLOUD-1937): samples free space each tick, projects the burn over a horizon, and reclaims through `prune::prune` before the floor is crossed.
+- `prune.rs` — the `[prune]` table (root, keep, the `min_free_mb`/`max_free_mb` band), the superseded pass, the build-lock claim and the free-space sampler (CLOUD-766/1030); the floor model retired under CLOUD-2198.
+- `disk_watch.rs` — the watcher a long-running batten process hosts (CLOUD-2197): `land` around every lap and `mutate sweep` around its builds; samples each tick and runs `collect` on its own thread below `min_free_mb`.
 - `collect.rs` — the disk collector (CLOUD-2197): below `[prune] min_free_mb`, superseded then least-recently-used cargo units across `target/` and linked worktrees until `max_free_mb` is free, never a held tree or the running engine.
 - `o200k.rs` — the `o200k` token counter from tables `build.rs` writes at compile time (CLOUD-2224): a sorted vocabulary and a serialized pre-tokenizer DFA, so no process builds either.
 - `background.rs` — a backgrounded call followed to its output (CLOUD-2214): a recorder-selected result naming a `backgroundTaskId` is kept, and replayed with the task's output file as `stdout` once the transcript's notification says it completed.

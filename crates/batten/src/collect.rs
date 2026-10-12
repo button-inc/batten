@@ -39,6 +39,8 @@ pub struct Collected {
     pub wall_ms: u64,
 }
 
+//MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
+//MUTANT reclaim-unlink-unmeasured|s@^            format!("disk-unlink-ms {}", self.wall_ms),$@@|the_arm_watches_past_the_gate
 impl Collected {
     /// The lap-record lines: `disk-collected <freed_mb> <units> <free_after_mb>`
     /// and the unlink cost (CLOUD-1945's figure).
@@ -445,14 +447,25 @@ pub fn collect_if_pressed(
     collect_toward_max(repo, prune, kept, free, free_mb, deadline, wait)
 }
 
-/// Collect until `[prune] max_free_mb` is free, from a reading of `free` MiB.
-///
-/// The land watcher calls this on a PROJECTED crossing, when the reading itself
-/// may still sit above the minimum (CLOUD-1937's linker writes gigabytes between
-/// two samples); the hook calls it through [`collect_if_pressed`]. `None` where
-/// the band is undeclared.
+/// The trees a collection ranks together: the checkout's `[prune] root` and
+/// each linked worktree's. Measured 2026-10-11: a sibling worktree's `target/`
+/// filled the volume, and nothing the main checkout collected could see it.
 //MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
 //MUTANT worktree-targets-unseen|s@^        .chain(crate::git::linked_worktree_dirs(repo))$@        .chain(Vec::<PathBuf>::new())@|a_sibling_worktrees_units_are_ranked_with_the_checkouts
+#[must_use]
+pub fn trees(repo: &Path, prune: &crate::prune::Prune) -> Vec<PathBuf> {
+    std::iter::once(repo.to_path_buf())
+        .chain(crate::git::linked_worktree_dirs(repo))
+        .map(|dir| dir.join(&prune.root))
+        .filter(|tree| tree.is_dir())
+        .collect()
+}
+
+/// Collect until `[prune] max_free_mb` is free, from a reading of `free` MiB.
+///
+/// The watcher ([`crate::disk_watch::watch`]) calls this below the minimum, on
+/// its own collection thread; the hook calls it through [`collect_if_pressed`].
+/// `None` where the band is undeclared.
 pub fn collect_toward_max(
     repo: &Path,
     prune: &crate::prune::Prune,
@@ -464,11 +477,7 @@ pub fn collect_toward_max(
 ) -> Option<Collected> {
     let (_, max) = prune.free_band()?;
     let started = Instant::now();
-    let trees: Vec<PathBuf> = std::iter::once(repo.to_path_buf())
-        .chain(crate::git::linked_worktree_dirs(repo))
-        .map(|dir| dir.join(&prune.root))
-        .filter(|tree| tree.is_dir())
-        .collect();
+    let trees = trees(repo, prune);
     let need_bytes = max.saturating_sub(free).saturating_mul(1024 * 1024);
     let (freed_bytes, units) = collect(&Request {
         trees: &trees,

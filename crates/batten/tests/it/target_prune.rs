@@ -1,28 +1,28 @@
-//! The disk-floor reclaim's contract, over the compiled engine (CLOUD-1030).
+//! `batten target prune`'s contract, over the compiled engine (CLOUD-1030,
+//! CLOUD-2198).
+//!
+//! # One forced collection, and no floor
+//!
+//! The verb is the disk collector run on demand: superseded units, then least
+//! recently used ones, until `[prune] max_free_mb` is free, reporting
+//! `disk-collected <freed_mb> <units> <free_after_mb>` and exiting 0. The floor
+//! model this suite used to pin — warm and cold floors, a ratchet over a lap
+//! journal, a basis count, a tiered escalation — retired with CLOUD-2198; its
+//! cases went with the behaviour they tested. What stays is the superseded
+//! pass's retention rule, the build-lock guard, and the verb's surface.
 //!
 //! # Why this tier
 //!
-//! `crates/batten/src/prune.rs` unit-tests the pure parts — stem grouping, the
-//! floor arithmetic, the date shape — and that is the right home for them: they
-//! are functions of their arguments and keeping them exercisable without a build
-//! is what makes them separable at all.
+//! `crates/batten/src/prune.rs` unit-tests the pure parts — the grouping key and
+//! the table — and that is the right home for them. What those cases cannot
+//! establish is that the ENGINE builds the input: the band reaches the
+//! collection through `batten.toml`'s `[prune]` table, the config loader,
+//! `resolve`, and a `-y` binding on a `CommandDecl` — four seams a `Prune { .. }`
+//! literal fabricates rather than exercises.
 //!
-//! What those cases cannot establish is the half `rules/policy-modules.md`
-//! names for its own surface and which applies verbatim here: that the ENGINE
-//! builds the input the predicate reads. The floors reach the decision through
-//! `batten.toml`'s `[prune]` table, the config loader, `resolve`, and a `-y`
-//! binding on a `CommandDecl` — four seams a `Prune { .. }` literal in a unit
-//! test fabricates rather than exercises. A table that parses and never reaches
-//! the comparison is byte-identical, on the decision surface, to a floor that
-//! passed.
+//! Every case declares its own free space through `TARGET_PRUNE_FREE_MB`
+//! (CLOUD-778's seam), so the suite decides the same way on every runner.
 //!
-//! Every case declares its own free space through `TARGET_PRUNE_FREE_MB`. That
-//! is CLOUD-778's seam and it is not optional here: without it a case asserting a
-//! successful run is answering "how full is this runner's disk", which is how
-//! nine cases went red in CI at a single floor change. Declaring it in every case
-//! also keeps this suite off `df`, so it decides the same way on every platform.
-//!
-//! # The retirement ledger
 //!
 //! `mise-tasks/target-prune.sh` and `tests/target-prune.bats` are retired here
 //! under CLOUD-1059. The rows below are what `shell retire partial`'s arm C reads.
@@ -121,37 +121,18 @@ use crate::common;
 
 use std::path::{Path, PathBuf};
 
-use common::{Fixture, batten, run_with_stdin, stderr, stdout};
+use common::{Fixture, batten, stderr, stdout};
 
-/// The floors every case is judged against, and they are the shape the committed
-/// `[prune]` table has rather than round numbers: a fixture whose config is a
-/// different SHAPE from the real one tests a loader nobody runs.
-const WARM_MB: u64 = 6000;
-const COLD_MB: u64 = 14000;
-
-/// The regrowable roots every case declares, and they are the shape the committed
-/// table has for the same reason the floors are: one basis-moving, one not, and
-/// one prefix. A fixture declaring only `incremental` could not tell a basis that
-/// moves from a basis that was never asked to.
-const REGROWABLE: &str = "[[prune.regrowable]]\nname = \"incremental\"\ncold = true\n\n\
-                          [[prune.regrowable]]\nname = \"semver-checks\"\ncold = false\n\n\
-                          [[prune.regrowable]]\nname = \"flycheck*\"\ncold = false\n";
-
-/// The basis every fixture floor declares (CLOUD-1158).
-///
-/// `count = 0` over a glob no fixture writes a file for, so the ordinary case is a
-/// tree that MATCHES its basis and the drift cases declare their own. A fixture
-/// whose basis is stale by construction would make every other case in this file
-/// depend on a number it does not care about.
-const BASIS: &str = "glob = \"src/*.rs\"\ncount = 0\ntolerance = 0\n";
+/// The band every case declares: wide enough that a reading of `FREE` asks the
+/// collection for more than any fixture holds, so the superseded pass always
+/// runs whole and the working set is what stops the live pass.
+const MIN_FREE_MB: u64 = 100_000;
+const MAX_FREE_MB: u64 = 200_000;
+const FREE: &str = "99999";
 
 fn config() -> String {
     format!(
-        "version = 1\n\n[prune]\nroot = \"target\"\nkeep = 2\n\n\
-         [prune.warm]\nmb = {WARM_MB}\nworst_mb = {WARM_MB}\nmultiplier = 1\nmeasured = \"2026-08-22\"\n\n\
-         [prune.cold]\nmb = {COLD_MB}\nworst_mb = {COLD_MB}\nmultiplier = 1\nmeasured = \"2026-08-29\"\n\n\
-         [prune.warm.basis]\n{BASIS}\n[prune.cold.basis]\n{BASIS}\n\
-         {REGROWABLE}"
+        "version = 1\n\n[prune]\nroot = \"target\"\nkeep = 2\nmin_free_mb = {MIN_FREE_MB}\nmax_free_mb = {MAX_FREE_MB}\n"
     )
 }
 
@@ -175,18 +156,14 @@ fn artifact(deps: &Path, stem: &str, hash: &str, age_seconds: u64) {
 /// The same, of a named kind — `rlib`, `rmeta`, `so`, or `""` for the
 /// extension-less executable.
 ///
-/// NOT EXECUTABLE FOR AN EXTENSIONED KIND, and that is deliberate rather than
-/// incidental: cargo does not set the bit on a `.rlib`, so a fixture that did
-/// would prove the pass reaches a file no build ever writes (CLOUD-1157).
+/// NOT EXECUTABLE FOR AN EXTENSIONED KIND, deliberately: cargo does not set the
+/// bit on a `.rlib`, so a fixture that did would prove the pass reaches a file
+/// no build ever writes (CLOUD-1157).
 fn kinded(deps: &Path, stem: &str, hash: &str, kind: &str, age_seconds: u64) {
     sized(deps, stem, hash, kind, age_seconds, 16 * 1024);
 }
 
 /// The same, of a chosen size.
-///
-/// The size is a parameter for exactly one case — the reclaim's own megabytes
-/// have to appear in what a lap is recorded as consuming (CLOUD-861), and the
-/// report counts whole megabytes, so a 16 KB artifact cannot express it.
 fn sized(deps: &Path, stem: &str, hash: &str, kind: &str, age_seconds: u64, bytes: usize) {
     std::fs::create_dir_all(deps).unwrap();
     let suffix = if kind.is_empty() {
@@ -203,10 +180,6 @@ fn sized(deps: &Path, stem: &str, hash: &str, kind: &str, age_seconds: u64, byte
         mode.set_mode(0o755);
         std::fs::set_permissions(&path, mode).unwrap();
     }
-    // `File::set_modified` rather than a dev-dependency on `filetime`: the
-    // std call has been stable since well before this crate's MSRV, and a new
-    // dependency to move one timestamp is a dependency the whole workspace then
-    // carries.
     let when = std::time::SystemTime::now() - std::time::Duration::from_secs(age_seconds);
     std::fs::File::options()
         .write(true)
@@ -223,7 +196,6 @@ fn prune(dir: &Path, free: &str, args: &[&str]) -> std::process::Output {
         .arg("prune")
         .args(args)
         .env("TARGET_PRUNE_FREE_MB", free)
-        .env_remove("BATTEN_PRUNE_LAP_OPEN")
         .current_dir(dir)
         .output()
         .expect("run batten")
@@ -234,35 +206,21 @@ fn said(output: &std::process::Output) -> String {
     format!("{}{}", stdout(output), stderr(output))
 }
 
+/// The units a run's `disk-collected <freed_mb> <units> <free_after_mb>` line
+/// counts, or `None` where it printed none.
+fn collected_units(said: &str) -> Option<usize> {
+    said.lines()
+        .find_map(|line| line.trim().strip_prefix("disk-collected "))
+        .and_then(|fields| fields.split_whitespace().nth(1))
+        .and_then(|units| units.parse().ok())
+}
+
 /// A BUILT tree: a `deps` directory that is not empty.
-///
-/// EMPTY IS NOT BUILT, and every fixture that created the directory and stopped
-/// was declaring a tree whose next build writes everything — which `basis_of`
-/// reads as `Basis::Cold`, while every assertion in those cases is about a warm
-/// one. Seven of them went red the moment the basis stopped being read from the
-/// escalation alone, which is the sensor discriminating rather than the fixtures
-/// being wrong before.
-///
-/// NO HASH SUFFIX ON THE RESIDENT FILE, deliberately: it is not a name any pass
-/// groups and not a file `survivors` counts, so a case's retention arithmetic is
-/// untouched by the tree being warm.
 fn built(repo: &Path) -> PathBuf {
     let deps = repo.join("target/debug/deps");
     std::fs::create_dir_all(&deps).unwrap();
     std::fs::write(deps.join("resident.rlib"), vec![0_u8; 1024]).unwrap();
     deps
-}
-
-/// Make a basis-moving root under `dir` large enough that dropping it can reach
-/// the cold floor, so the escalation's tier 3 is worth taking (CLOUD-2197).
-///
-/// SPARSE, so the fixture spends no disk on it: `directory_bytes` counts a
-/// file's length, which is what the guard sizes the drop by.
-fn ballast(dir: &Path) {
-    std::fs::File::create(dir.join("ballast.bin"))
-        .unwrap()
-        .set_len(COLD_MB * 1024 * 1024)
-        .unwrap();
 }
 
 /// The executable artifacts left under `deps`.
@@ -278,1559 +236,80 @@ fn survivors(deps: &Path) -> usize {
     })
 }
 
-// --- CLOUD-1030: the basis moves with the reclaim ----------------------------
+// --- one forced collection, no floor (CLOUD-2198) ----------------------------
 
+/// A live unit: an artifact and a fingerprint file whose last use is
+/// `age_seconds` ago, `bytes` large.
+fn live(profile: &Path, name: &str, hash: &str, age_seconds: u64, bytes: usize) {
+    sized(&profile.join("deps"), name, hash, "", age_seconds, bytes);
+    let fingerprint = profile.join(".fingerprint").join(format!("{name}-{hash}"));
+    std::fs::create_dir_all(&fingerprint).unwrap();
+    let file = fingerprint.join(format!("bin-{name}"));
+    std::fs::write(&file, b"fingerprint").unwrap();
+    let when = std::time::SystemTime::now() - std::time::Duration::from_secs(age_seconds);
+    std::fs::File::open(&file)
+        .unwrap()
+        .set_times(
+            std::fs::FileTimes::new()
+                .set_accessed(when)
+                .set_modified(when),
+        )
+        .unwrap();
+}
+
+/// THE VERB IS ONE COLLECTION, and the spec's own case. Two live units of known
+/// size, free space one MiB short of `max_free_mb`: the older unit goes, the
+/// line is `disk-collected …`, and the exit is 0 — no floor, no basis, no
+/// escalation field. `#MUTANT prune-verb-skips-collect` returns before
+/// collecting, and the older unit survives.
 #[test]
-fn escalating_judges_against_the_cold_floor_it_just_created() {
-    // THE DISCRIMINATING CASE, and it is red against the predecessor rather than
-    // against a strawman. Two readings: 5000MB before the escalation, 9000MB
-    // after it. The predecessor re-read free space exactly here and compared it
-    // against the warm floor, so 9000 >= 6242 passed — on its way into a build
-    // whose incremental cache it had just deleted, which is the one build the
-    // warm number was never measured over. 9000 is below the cold floor, so the
-    // repaired reading refuses.
-    let repo = repo("target-prune-basis-moves");
-    let incremental = repo.join("target/debug/incremental/batten-1a2b3c");
-    std::fs::create_dir_all(&incremental).unwrap();
-    std::fs::write(incremental.join("dep-graph.bin"), vec![0_u8; 200_000]).unwrap();
-    ballast(&incremental);
+fn target_prune_collects_to_max_free_without_a_floor() {
+    let repo = repo("target-prune-collects");
+    let profile = repo.join("target/debug");
+    live(&profile, "stale", "aaaaaaaaaaaaaaaa", 7200, 2 << 20);
+    live(&profile, "fresh", "bbbbbbbbbbbbbbbb", 7000, 1 << 20);
 
-    let output = prune(&repo, "5000,9000", &["-y"]);
+    let free = (MAX_FREE_MB - 1).to_string();
+    let output = prune(&repo, &free, &["-y"]);
     let said = said(&output);
+    assert_eq!(output.status.code(), Some(0), "{said}");
     assert!(
-        !output.status.success(),
-        "9000MB clears the warm floor and not the cold one, and the cold one is what the escalation just made apply: {said}"
+        !profile.join("deps/stale-aaaaaaaaaaaaaaaa").exists(),
+        "the least recently used unit goes: {said}"
     );
     assert!(
-        said.contains("cold"),
-        "the refusal names the basis in force, because a number alone cannot say why it is that number: {said}"
+        profile.join("deps/fresh-bbbbbbbbbbbbbbbb").exists(),
+        "one MiB was asked for and the first unit freed two: {said}"
     );
-    assert!(
-        !repo.join("target/debug/incremental").exists(),
-        "the escalation still runs — this case is about what it is judged against, not whether it happens"
-    );
-}
-
-#[test]
-fn a_run_that_never_escalates_is_judged_against_the_warm_floor() {
-    // ANTI-VACUITY, and without it the fix above degenerates to "always judge
-    // against the cold floor", which would refuse every ordinary lap on this
-    // container: the cold floor is more than twice the warm one by measurement.
-    // 7000MB clears the warm floor, nothing escalates, and the run passes.
-    let repo = repo("target-prune-warm-basis");
-    built(&repo);
-
-    let output = prune(&repo, "7000", &["-y"]);
-    let said = said(&output);
-    assert!(
-        output.status.success(),
-        "7000MB clears the warm floor: {said}"
-    );
-    assert!(
-        said.contains("warm floor"),
-        "the passing report names its basis too, or the basis is only ever visible on a failure: {said}"
-    );
-    assert!(
-        !said.contains("escalated"),
-        "nothing was breached, so nothing escalates: {said}"
-    );
-}
-
-#[test]
-fn a_tree_emptied_by_something_other_than_the_escalation_is_still_a_cold_one() {
-    // FOUND ON THIS BRANCH'S OWN LANDING LAP, and it poisoned the ratchet rather
-    // than merely mis-reporting. The basis was read from the escalation alone —
-    // `Cold` iff THIS run dropped a basis-moving root — so a human deleting
-    // `target/debug` by hand to satisfy the floor was invisible: the lap that
-    // followed built 110 test binaries from nothing, and the journal recorded that
-    // 21226MB COLD lap as the worst WARM one on record. Every warm lap after it is
-    // then admitted against a full rebuild's demand, which is the floor nothing can
-    // satisfy that CLOUD-861's own §8 names as the failure getting a gate switched
-    // off.
-    let repo = repo("target-prune-emptied-by-hand");
-    built(&repo);
-    let warm = said(&prune(&repo, "20000", &["-y"]));
-    assert!(warm.contains("warm floor"), "a built tree is warm: {warm}");
-
-    // Nothing this run did, and that is the whole case: the artifacts are simply
-    // gone, so the next build writes all of them.
-    std::fs::remove_dir_all(repo.join("target/debug/deps")).unwrap();
-    let output = prune(&repo, "20000", &["-y"]);
-    let cold = said(&output);
-    assert!(
-        output.status.success(),
-        "20000MB clears both floors: {cold}"
-    );
-    assert!(
-        cold.contains("cold floor"),
-        "the basis is a property of the TREE rather than of this invocation: {cold}"
-    );
-    assert!(
-        !cold.contains("escalated"),
-        "and no escalation ran, so the escalation's flag cannot be what said so: {cold}"
-    );
-}
-
-/// A profile cargo has BUILT: a `.fingerprint` directory beside a populated
-/// `deps`. `built` alone writes only `deps`, which is a tree cargo has never
-/// fingerprinted and is judged by the fallback reading.
-fn built_profile(repo: &Path, profile: &str) {
-    for dir in [".fingerprint", "deps"] {
-        let path = repo.join("target").join(profile).join(dir);
-        std::fs::create_dir_all(&path).unwrap();
-        std::fs::write(path.join("resident"), vec![0_u8; 1024]).unwrap();
+    assert_eq!(collected_units(&said), Some(1), "{said}");
+    for retired in ["floor", "basis", "escalat"] {
+        assert!(!said.contains(retired), "no `{retired}` field: {said}");
     }
 }
 
+/// THE ARM SWITCHED OFF: a `[prune]` with no band collects nothing and says so,
+/// at exit 0. The retired floor tables still load beside it, read and ignored,
+/// while the pin moves (CLOUD-2198's commit A).
 #[test]
-fn a_build_tree_nested_under_the_root_does_not_decide_the_root_s_basis() {
-    // MEASURED, and it wedged the branch that introduced the `.fingerprint`
-    // reading. The walk is unbounded, so it reaches every build tree nested inside
-    // the root — and this repository's own suite writes its fixtures under
-    // `target/tmp/<case>/`, one of which exists to model a profile whose `deps`
-    // was removed. That fixture judged the WHOLE REPOSITORY cold, and `verify`
-    // refused its own precondition against a full rebuild's floor on a tree that
-    // had just built cleanly.
-    //
-    // Cargo writes `<root>/<profile>/` and `<root>/<triple>/<profile>/`. Anything
-    // deeper is a different tree that happens to live here, and this fixture is
-    // the shape the suite itself leaves behind.
-    let repo = repo("target-prune-nested-build-tree");
-    built_profile(&repo, "debug");
-
-    let nested = repo.join("target/tmp/a-case/target/debug");
-    std::fs::create_dir_all(nested.join(".fingerprint")).unwrap();
-    std::fs::write(nested.join(".fingerprint/resident"), vec![0_u8; 1024]).unwrap();
-    // Its `deps` is REMOVED — the state the nested case is modelling, and the one
-    // that reads cold.
-    assert!(!nested.join("deps").exists());
-
-    let said = said(&prune(&repo, "9000", &["-y"]));
-    assert!(
-        said.contains("warm floor"),
-        "the root's own profile has something to build on, and a tree five levels \
-         down is not this build: {said}"
-    );
-}
-
-#[test]
-fn a_profile_whose_deps_was_removed_is_cold_though_another_profile_is_built() {
-    // CLOUD-1218, the third instance, and the shape the earlier case cannot
-    // reach: `a_tree_emptied_by_something_other_than_the_escalation_is_still_a_
-    // cold_one` deletes `deps` on a tree with ONE profile, so the walk comes back
-    // empty and any quantifier answers cold. Here a second profile survives, and
-    // reading only the `deps` directories that EXIST reports the tree warm —
-    // which is how a full debug rebuild taught the warm ratchet 24715MB.
-    let repo = repo("target-prune-profile-deps-removed");
-    built_profile(&repo, "debug");
-    built_profile(&repo, "release");
-    let warm = said(&prune(&repo, "20000", &["-y"]));
-    assert!(
-        warm.contains("warm floor"),
-        "both profiles have something to build on: {warm}"
-    );
-
-    // REMOVED, not emptied, because that is what the refusal's own advice
-    // produces — and it is the difference the previous reading could not see.
-    std::fs::remove_dir_all(repo.join("target/debug/deps")).unwrap();
-    let cold = said(&prune(&repo, "20000", &["-y"]));
-    assert!(
-        cold.contains("cold floor"),
-        "a built profile with no `deps` left rebuilds from nothing, however many \
-         other profiles are intact: {cold}"
-    );
-    assert!(
-        !cold.contains("escalated"),
-        "and no escalation ran, so nothing this invocation did can be what said so: {cold}"
-    );
-}
-
-#[test]
-fn a_built_profile_whose_build_scripts_are_gone_is_cold() {
-    // CLOUD-2222. `build` holds the compiled build scripts, so a profile that
-    // compiled one and lost `build` rebuilds its whole graph (CLOUD-2192's
-    // measurement). Read only through `deps` that tree was warm, so the lap
-    // opening on it recorded a warm tree and its close was held to the cold floor
-    // whatever it rebuilt.
-    let repo = repo("target-prune-build-scripts-gone");
-    built_profile(&repo, "debug");
-    let unit = repo.join("target/debug/.fingerprint/serde-0123456789abcdef");
-    std::fs::create_dir_all(&unit).unwrap();
-    std::fs::write(unit.join("build-script-build-script-build"), b"fp").unwrap();
-    let script = repo.join("target/debug/build/serde-0123456789abcdef");
-    std::fs::create_dir_all(&script).unwrap();
-    std::fs::write(
-        script.join("build_script_build-0123456789abcdef"),
-        vec![0_u8; 1024],
-    )
-    .unwrap();
-    let warm = said(&prune(&repo, "20000", &["-y"]));
-    assert!(warm.contains("warm floor"), "scripts present: {warm}");
-
-    std::fs::remove_dir_all(repo.join("target/debug/build")).unwrap();
-    let cold = said(&prune(&repo, "20000", &["-y"]));
-    assert!(
-        cold.contains("cold floor"),
-        "a profile whose compiled build scripts are gone rebuilds from nothing: {cold}"
-    );
-}
-
-#[test]
-fn a_cold_side_profile_does_not_make_the_tree_cold() {
-    // CLOUD-2227. Measured on #1132: `debug` and `release` intact, and
-    // `target/darwin-link` holding compiled build scripts with no `build`. The
-    // tree read cold and every `verify` was held to the full-tree cold floor,
-    // though rebuilding that one profile cost a fraction of it.
-    let repo = repo("target-prune-side-profile-cold");
-    built_profile(&repo, "debug");
-    built_profile(&repo, "darwin-link");
-    let unit = repo.join("target/darwin-link/.fingerprint/serde-0123456789abcdef");
-    std::fs::create_dir_all(&unit).unwrap();
-    std::fs::write(unit.join("build-script-build-script-build"), b"fp").unwrap();
-    let said = said(&prune(&repo, "20000", &["-y"]));
-    assert!(
-        said.contains("warm floor"),
-        "a side profile's rebuild is not the tree's: {said}"
-    );
-}
-
-#[test]
-fn every_built_profile_intact_is_still_warm() {
-    // ANTI-VACUITY. Without this the repair is satisfied by calling every tree
-    // cold, which raises the COLD floor instead and fails the same way one bucket
-    // over — the failure the row's own §7 names.
-    let repo = repo("target-prune-profiles-intact");
-    built_profile(&repo, "debug");
-    built_profile(&repo, "release");
-    let said = said(&prune(&repo, "20000", &["-y"]));
-    assert!(said.contains("warm floor"), "{said}");
-}
-
-#[test]
-fn a_tree_cargo_never_fingerprinted_is_judged_by_the_older_reading() {
-    // THE FALLBACK IS WHAT KEEPS THIS A NARROWING. A bare `deps` with no
-    // `.fingerprint` beside it is every fixture written before this row and any
-    // layout `.fingerprint` does not describe; it must answer exactly as it did.
-    let repo = repo("target-prune-no-fingerprint");
-    built(&repo);
-    let said = said(&prune(&repo, "20000", &["-y"]));
-    assert!(
-        said.contains("warm floor"),
-        "a populated `deps` with no fingerprint is warm, as before: {said}"
-    );
-}
-
-#[test]
-fn an_observed_floor_names_the_file_that_holds_it() {
-    // CLOUD-1218's last acceptance bullet. Telling a reader the floor is
-    // "observed" still leaves them nowhere to go: the number lives in a file no
-    // message mentions. Measured cost of that omission, on another container: a
-    // full cold rebuild, 21519MB and ~20 minutes, reaching for the `rm -rf target`
-    // the refusal DOES name.
-    let repo = lapped("target-prune-observed-names-the-file");
-    built(&repo);
-    let journal = repo.join(".git/batten-prune");
-    std::fs::create_dir_all(&journal).unwrap();
-    // Above the declared warm floor and BELOW the declared cold one, so it is a
-    // plausible observation that legitimately binds — the case would prove nothing
-    // over a number the repair discards.
-    //
-    // STAMPED, and that is CLOUD-1246 arriving in this case's own terms. An
-    // observation carries the reading that took it, and one whose stamp is not the
-    // running engine's is discarded rather than obeyed — so an unstamped fixture
-    // IS "a number the repair discards", exactly as the sentence above warns, and
-    // this case would then assert nothing. The literal is duplicated from
-    // `prune::JOURNAL_GENERATION` because an integration test cannot see it; when
-    // that constant next moves this case reds, loudly, which is the right failure.
-    //
-    // IT MOVED, AND THIS CASE DID EXACTLY THAT (CLOUD-1218): the bump to
-    // `2026-09-01.capped-is-capacity` superseded this fixture, the standing
-    // observation went with it, and the refusal this case asserts stopped
-    // existing. The stamp is updated rather than the assertion, which is the
-    // difference between honouring the design and working around it. `capped` is
-    // written explicitly rather than left to `serde(default)` so the fixture says
-    // which KIND of observation it holds — a cost, which is what makes an 8000MB
-    // reading refuse against it.
-    //
-    // AND IT MOVED AGAIN (CLOUD-1511), which is this case doing its job a second
-    // time: `2026-09-06.cleanup-is-not-cost` repaired the `spent` arithmetic that
-    // booked a run's own cleanup as the lap's consumption, so every observation
-    // taken under the old spelling is a number whose kind cannot be recovered and
-    // the generation discards them. Same repair as before — the stamp moves, the
-    // assertion does not.
-    std::fs::write(
-        journal.join("laps.json"),
-        r#"{"taken_by":"2026-09-28.supersede-by-unit","open":null,"ratchet":{"warm":{"mb":9000,"head":"abcd1234","measured":"2026-08-30","capped":false},"cold":null}}"#,
-    )
-    .unwrap();
-
-    let said = said(&prune(&repo, "8000", &["-y"]));
-    assert!(
-        said.contains("laps.json"),
-        "a learned floor has to name where it lives, or the recovery stays \
-         undiscoverable from the refusal: {said}"
-    );
-}
-
-/// A journal whose LEARNED warm floor is the only thing refusing: 9000MB of
-/// observation over the declared 6000MB, an open lap, and `refused` sole-refuser
-/// laps already counted against it.
-///
-/// `capped: false` on purpose — this is the kind `lower_capacity` will not touch,
-/// which is the shape that wedged a real container at 20669MB (CLOUD-1885).
-fn unreachable_floor(repo: &Path, refused: u32) {
-    let journal = repo.join(".git/batten-prune");
-    std::fs::create_dir_all(&journal).unwrap();
-    std::fs::write(
-        journal.join("laps.json"),
-        format!(
-            r#"{{"taken_by":"2026-09-28.supersede-by-unit","open":{{"free_mb":8000,"basis":"warm","tree_basis":"warm","head":"abcd1234","measured":"2026-09-20"}},"ratchet":{{"warm":{{"mb":9000,"head":"abcd1234","measured":"2026-09-20","capped":false,"refused":{refused}}},"cold":null}}}}"#
-        ),
-    )
-    .unwrap();
-}
-
-// CLOUD-1885's declared mutation, and why the row is in THIS file.
-//
-// `test name undefined` reads the declared file for a line carrying
-// `MUTANT <slug>|`, and its `line_sources` cover `crates/batten/tests/**` and not
-// `crates/batten/src/**` — so the row lives here although the expression belongs to
-// `prune.rs`'s `Ratchet::note_refusal`. It makes the threshold unreachable, which is
-// the wedge exactly: a floor the volume keeps refusing that nothing re-bases.
-//
-// INERT UNDER THE SWEEP, as `rebase.rs` records for its own rows (CLOUD-1486):
-// `mutate::apply` seds the file that DECLARED the row, so this row rewrites this
-// file and never reaches the engine. The kill was demonstrated BY HAND at
-// implementation — the expression applied to `prune.rs`, the case below observed
-// red, the file restored — and this paragraph is the only record of it.
-/*
-#MUTANT-SUITE crates/batten/tests/it/target_prune.rs
-#MUTANT unreachable-floor-not-rebased|s@        if standing.refused < REFUSALS_PROVING_UNREACHABLE {@        if true {@|a_learned_floor_the_volume_keeps_refusing_re_bases_at_the_threshold
-*/
-
-#[test]
-fn a_learned_floor_the_volume_keeps_refusing_re_bases_at_the_threshold() {
-    // CLOUD-1885. The learned floor is 9000MB, the declaration 6000MB, and the
-    // volume shows 8000MB however much is reclaimed — so the declaration would pass
-    // and only the observation refuses. One such lap can be transient and must
-    // still refuse; the next one proves the floor unreachable and re-bases it.
-    let repo = lapped("target-prune-unreachable-rebases");
-    built(&repo);
-    unreachable_floor(&repo, 0);
-
-    let first = prune(&repo, "8000", &["-y"]);
-    assert_ne!(
-        first.status.code(),
-        Some(0),
-        "one refusal can be transient, so the first lap still refuses: {}",
-        said(&first)
-    );
-    assert!(
-        journal(&repo).contains(r#""mb":9000"#) && journal(&repo).contains(r#""refused":1"#),
-        "the floor stands and the refusal is counted: {}",
-        journal(&repo)
-    );
-
-    let second = prune(&repo, "8000", &["-y"]);
-    assert_eq!(
-        second.status.code(),
-        Some(0),
-        "the second sole-refuser lap proves the floor unreachable and re-bases it: {}",
-        said(&second)
-    );
-    assert!(
-        !journal(&repo).contains(r#""mb":9000"#),
-        "the learned floor no longer stands at a number the volume cannot present: {}",
-        journal(&repo)
-    );
-}
-
-#[test]
-fn a_volume_short_of_its_declaration_never_re_bases() {
-    // ANTI-VACUITY, and the half that keeps this from being a way to switch the
-    // floor off. At 5000MB the volume is short of the 6000MB DECLARATION, so the
-    // learned floor is not the sole refuser and no count of laps may lower it.
-    let repo = lapped("target-prune-short-of-declaration");
-    built(&repo);
-    unreachable_floor(&repo, 1);
-
-    for lap in 0..3 {
-        let output = prune(&repo, "5000", &["-y"]);
-        assert_ne!(
-            output.status.code(),
-            Some(0),
-            "lap {lap}: a volume short of its declaration still refuses: {}",
-            said(&output)
-        );
-    }
-    assert!(
-        journal(&repo).contains(r#""mb":9000"#),
-        "no refusal below the declaration re-bases the learned floor: {}",
-        journal(&repo)
-    );
-}
-
-/// CLOUD-1246 over the COMPILED BINARY, which the unit tier cannot reach.
-///
-/// `prune.rs`'s own cases call `LapJournal::read` directly, so they prove the
-/// predicate and not that the engine routes its answer anywhere. This is the tier
-/// `rules/policy-modules.md` argues for: the same bytes that refused this
-/// container, through the real verb, asserting that the run says so AND that the
-/// number it discarded stopped binding.
-///
-/// The pair is what makes it discriminate. Without the second assertion the case
-/// passes over an engine that prints the line and obeys the observation anyway;
-/// without the first it passes over one that silently starts a fresh history,
-/// which is the failure `journal_unreadable` already exists to prevent.
-#[test]
-fn a_journal_an_older_reading_took_is_discarded_and_stops_binding() {
-    let repo = lapped("target-prune-superseded-reading");
-    built(&repo);
-    let journal = repo.join(".git/batten-prune");
-    std::fs::create_dir_all(&journal).unwrap();
-    // Verbatim from `$GIT_DIR/batten-prune/laps.json` on the container where
-    // CLOUD-1241's fix landed and `land` was then refused at 8356MB free against a
-    // floor of 10997MB — 1092MB ABOVE the declaration, by the artifact of the bug
-    // it had just fixed. No `taken_by`, because the key did not exist yet.
-    std::fs::write(
-        journal.join("laps.json"),
-        r#"{"open":{"free_mb":12192,"basis":"warm","head":"2b7f57b2","measured":"2026-08-31"},"ratchet":{"warm":{"mb":10997,"head":"45601adc","measured":"2026-08-31"},"cold":{"mb":98,"head":"2b7f57b2","measured":"2026-08-31"}}}"#,
-    )
-    .unwrap();
-
-    let said = said(&prune(&repo, "8000", &["-y"]));
-    assert!(
-        said.contains("superseded reading"),
-        "the discard is said out loud rather than starting a fresh history in silence: {said}"
-    );
-    assert!(
-        !said.contains("10997"),
-        "and the discarded observation binds nothing — it was never a measurement \
-         this reading took: {said}"
-    );
-}
-
-#[test]
-fn the_escalation_says_that_the_basis_moved_and_not_only_that_it_ran() {
-    // CLOUD-1030 §5. The predecessor's escalation line reported megabytes
-    // dropped, which is what it DID; the thing a reader needs is that the number
-    // being judged against changed underneath them.
-    let repo = repo("target-prune-escalation-says-why");
-    let incremental = repo.join("target/debug/incremental/batten-1a2b3c");
-    std::fs::create_dir_all(&incremental).unwrap();
-    std::fs::write(incremental.join("dep-graph.bin"), vec![0_u8; 200_000]).unwrap();
-    ballast(&incremental);
-
-    let said = said(&prune(&repo, "5000,99999", &["-y"]));
-    assert!(said.contains("regrowable cache dropped"), "{said}");
-    assert!(
-        said.contains("the cold floor is what now applies"),
-        "the line has to name the consequence, not only the act: {said}"
-    );
-}
-
-// --- CLOUD-1249: the undo hedge is the third tier ----------------------------
-
-/// A `deps` holding two generations of every stem — what `keep = 2` retains after
-/// a perfectly successful prune, and what the header prices as the undo hedge.
-fn two_generations(repo: &Path) -> PathBuf {
-    let deps = repo.join("target/debug/deps");
-    for stem in ["cli", "walker", "waivers"] {
-        artifact(&deps, stem, "1111111111111111", 10);
-        artifact(&deps, stem, "2222222222222222", 600);
-    }
-    deps
-}
-
-#[test]
-fn a_breached_floor_spends_the_undo_hedge_before_it_takes_the_basis() {
-    // THE WHOLE ROW. `keep = 2` is a hedge against a rebase that reverts, priced
-    // at one copy per stem — and `keep x stems x size` grew past a lap while both
-    // passes reported success. The retention could not take it (two copies is what
-    // it was told to leave) and the escalation could not see it (not a declared
-    // root), so a short run reached for `incremental` instead: a full cold rebuild,
-    // with gigabytes nothing will read sitting beside it.
-    let repo = repo("target-prune-hedge-spent");
-    let deps = two_generations(&repo);
-    let incremental = repo.join("target/debug/incremental/batten-1a2b3c");
-    std::fs::create_dir_all(&incremental).unwrap();
-    std::fs::write(incremental.join("dep-graph.bin"), vec![0_u8; 200_000]).unwrap();
-
-    // Below the floor at open and after the cheap tier; above it once the hedge is
-    // spent, so the run stops there and tier 3 is never reached.
-    let said = said(&prune(&repo, "1,99999", &["-y"]));
-
-    assert_eq!(
-        survivors(&deps),
-        3,
-        "one generation per stem survives, not two: {said}"
-    );
-    assert!(
-        said.contains("retention tightened"),
-        "the run says it spent the hedge: {said}"
-    );
-    assert!(
-        incremental.exists(),
-        "and it stopped there — the basis-moving root is untouched, which is the \
-         whole point of the ordering: {said}"
-    );
-}
-
-#[test]
-fn spending_the_hedge_leaves_the_basis_warm() {
-    // The copy taken is by definition not the one the next build reads, so `deps`
-    // stays populated and nothing about the next build changed. A tier that moved
-    // the basis here would raise the floor the lap is judged against from the warm
-    // number to the cold one — CLOUD-1030's defect, arriving through a new door.
-    let repo = repo("target-prune-hedge-warm");
-    two_generations(&repo);
-
-    let said = said(&prune(&repo, "1,99999", &["-y"]));
-    assert!(said.contains("retention tightened"), "{said}");
-    assert!(
-        !said.contains("COLD") && !said.contains("cold floor"),
-        "tightening retention is not a basis-moving reclaim: {said}"
-    );
-}
-
-#[test]
-fn a_tree_above_the_floor_keeps_its_undo_hedge() {
-    // INERT ABOVE THE FLOOR, which is what keeps this a reclaim under pressure
-    // rather than a policy change. The header bought the hedge for a reason and it
-    // is only spent when the alternative is worse.
-    let repo = repo("target-prune-hedge-kept");
-    let deps = two_generations(&repo);
-
-    let said = said(&prune(&repo, "99999", &["-y"]));
-    assert_eq!(
-        survivors(&deps),
-        6,
-        "both generations stand while there is room: {said}"
-    );
-    assert!(
-        !said.contains("retention tightened"),
-        "and the run does not claim to have tightened anything: {said}"
-    );
-}
-
-#[test]
-fn the_tightened_artifacts_are_counted_as_superseded_rather_than_as_cache() {
-    // POINTER-ONLY AND IN THE RIGHT COLUMN. The tightened pass IS the superseded
-    // pass re-run at a stricter bound, so its artifacts join that count; a reader
-    // who saw them under "regrowable cache dropped" would think a cache had gone
-    // that had not. The two lines cost different things and the report has to keep
-    // them apart.
-    let repo = repo("target-prune-hedge-counted");
-    two_generations(&repo);
-
-    let said = said(&prune(&repo, "1,99999", &["-y"]));
-    assert!(
-        said.contains("3 superseded artifact(s) taken beyond `keep`"),
-        "the tightened count is its own pointer: {said}"
-    );
-    assert!(
-        !said.contains("regrowable cache dropped"),
-        "no cache was dropped here, and the report must not say one was: {said}"
-    );
-}
-
-// --- CLOUD-861: the escalation is conditional --------------------------------
-
-#[test]
-fn an_escalation_that_cannot_reach_the_cold_floor_keeps_the_build_warm() {
-    // CLOUD-2197, measured on #1132: a 20MB basis-moving root was dropped on a
-    // volume that could never reach the cold floor, and every later `verify`
-    // refused at its own prune. Here the root holds 200KB against a 14000MB
-    // floor from 1MB free: dropping it cannot help, so it stays and the run is
-    // judged warm.
-    let repo = repo("target-prune-cold-unreachable");
-    built(&repo);
-    let incremental = repo.join("target/debug/incremental/batten-1a2b3c");
-    std::fs::create_dir_all(&incremental).unwrap();
-    std::fs::write(incremental.join("dep-graph.bin"), vec![0_u8; 200_000]).unwrap();
-
-    let said = said(&prune(&repo, "1", &["-y"]));
-    assert!(
-        incremental.exists(),
-        "a drop that cannot reach the cold floor is not taken: {said}"
-    );
-    assert!(
-        !said.contains("next cargo build is COLD"),
-        "the build stays warm: {said}"
-    );
-}
-
-#[test]
-fn a_tree_below_the_floor_escalates_and_drops_the_incremental_cache() {
-    // CARRIED. Red before the escalation existed: the run refused with the cache
-    // untouched, which is exactly the state a human then cleared by hand, three
-    // times in one session.
-    let repo = repo("target-prune-escalates");
-    let incremental = repo.join("target/debug/incremental/batten-1a2b3c/s-abc");
-    std::fs::create_dir_all(&incremental).unwrap();
-    std::fs::write(incremental.join("dep-graph.bin"), vec![0_u8; 200_000]).unwrap();
-    ballast(&incremental);
-
-    let said = said(&prune(&repo, "1,99999", &["-y"]));
-    assert!(said.contains("regrowable cache dropped"), "{said}");
-    assert!(
-        !repo.join("target/debug/incremental").exists(),
-        "the cache is gone: {said}"
-    );
-}
-
-#[test]
-fn a_tree_above_the_floor_keeps_its_incremental_cache() {
-    // CARRIED, and it is the reason the escalation is conditional. Dropping the
-    // cache costs a full rebuild, so paying it every lap would trade a rare stall
-    // for a permanent tax — a fix that always deleted it would pass the row above
-    // and be worse than the defect.
-    let repo = repo("target-prune-keeps-cache");
-    let incremental = repo.join("target/debug/incremental/batten-1a2b3c/s-abc");
-    std::fs::create_dir_all(&incremental).unwrap();
-    std::fs::write(incremental.join("dep-graph.bin"), vec![0_u8; 200_000]).unwrap();
-
-    let output = prune(&repo, "99999", &["-y"]);
-    let said = said(&output);
-    assert!(output.status.success(), "{said}");
-    assert!(!said.contains("escalated"), "{said}");
-    assert!(repo.join("target/debug/incremental").exists(), "{said}");
-}
-
-// --- CLOUD-1158: the floor's basis, and where the comparison may run --------
-
-/// A checkout whose floors declare `basis` over `crates/**/*.rs`, at `count`.
-///
-/// `tolerance = 1`, which is what makes the drift cases and the anti-vacuity
-/// cases differ by a number rather than by a mechanism.
-fn based(name: &str, count: usize, files: &[(&str, &str)]) -> PathBuf {
-    let basis = format!("glob = \"crates/**/*.rs\"\ncount = {count}\ntolerance = 1\n");
-    let config = format!(
-        "version = 1\n\n[prune]\nroot = \"target\"\nkeep = 2\n\n\
-         [prune.warm]\nmb = {WARM_MB}\nworst_mb = {WARM_MB}\nmultiplier = 1\nmeasured = \"2026-08-22\"\n\n\
-         [prune.cold]\nmb = {COLD_MB}\nworst_mb = {COLD_MB}\nmultiplier = 1\nmeasured = \"2026-08-29\"\n\n\
-         [prune.warm.basis]\n{basis}\n[prune.cold.basis]\n{basis}"
-    );
-    Fixture::new(name)
-        .config(&config)
-        .file("Cargo.toml", "[workspace]\n")
-        .files(files)
-        .git()
-        .base_commit()
-        .build()
-}
-
-/// Four tracked files under the basis glob.
-const BASIS_FILES: &[(&str, &str)] = &[
-    ("crates/batten/tests/it/one.rs", "// one\n"),
-    ("crates/batten/tests/it/two.rs", "// two\n"),
-    ("crates/batten/tests/it/three.rs", "// three\n"),
-    ("crates/batten/src/lib.rs", "// lib\n"),
-];
-
-#[test]
-fn a_floor_whose_basis_has_moved_is_refused_naming_both_counts() {
-    // THE DEFECT, as an assertion. `measured` is a POINTER to a basis nobody
-    // wrote down, so nothing could tell whether the world under the number had
-    // moved — and it moves on a schedule this repository sets for itself:
-    // CLOUD-843's retirement owes a `crates/batten/tests/*.rs` per retired gate,
-    // with 147 shell suites still standing.
-    let repo = based("target-prune-basis-moved", 1, BASIS_FILES);
-    built(&repo);
-
-    let output = prune(&repo, "99999", &["-y"]);
-    let said = said(&output);
-    assert!(
-        !output.status.success(),
-        "the floor declares a basis of 1 file and the tree tracks 4: {said}"
-    );
-    assert_eq!(
-        output.status.code(),
-        Some(2),
-        "a verdict about the tree: {said}"
-    );
-    assert!(
-        said.contains("declared 1, live 4"),
-        "both counts travel: {said}"
-    );
-    assert!(
-        said.contains("2026-08-22"),
-        "and the date it was taken: {said}"
-    );
-    assert!(
-        !said.contains("one.rs"),
-        "POINTER-ONLY: the count is the finding and the paths are unbounded: {said}"
-    );
-}
-
-#[test]
-fn a_tree_at_its_declared_basis_loads_clean() {
-    // ANTI-VACUITY, and the first of two: without it the check is "always red",
-    // which is a gate nobody keeps.
-    let repo = based("target-prune-basis-exact", 4, BASIS_FILES);
-    built(&repo);
-
-    let output = prune(&repo, "99999", &["-y"]);
-    let said = said(&output);
-    assert!(output.status.success(), "4 tracked, 4 declared: {said}");
-    assert!(!said.contains("no longer exists"), "{said}");
-}
-
-#[test]
-fn a_tree_inside_the_tolerance_loads_clean() {
-    // The second, and it is what makes `tolerance` a real key rather than a
-    // decoration: a gate that reds on the first added test file is one somebody
-    // switches off, and the thing being watched is a trend.
-    let repo = based("target-prune-basis-tolerated", 3, BASIS_FILES);
-    built(&repo);
-
-    let output = prune(&repo, "99999", &["-y"]);
-    let said = said(&output);
-    assert!(
-        output.status.success(),
-        "4 tracked, 3 declared, 1 allowed: {said}"
-    );
-    assert!(!said.contains("no longer exists"), "{said}");
-}
-
-#[test]
-fn a_floor_declaring_no_basis_is_refused_at_load() {
-    // On `measured`'s own ground (CLOUD-266): an absent basis reads exactly like a
-    // satisfied one. An empty glob is the expressible form of absent — a missing
-    // key is serde's refusal, and this is the engine's.
-    let repo = Fixture::new("target-prune-basis-absent")
+fn a_table_without_the_band_collects_nothing() {
+    let repo = Fixture::new("target-prune-unbanded")
         .config(
             "version = 1\n\n[prune]\nroot = \"target\"\nkeep = 2\n\n\
              [prune.warm]\nmb = 6000\nworst_mb = 6000\nmultiplier = 1\nmeasured = \"2026-08-22\"\n\n\
-             [prune.cold]\nmb = 14000\nworst_mb = 14000\nmultiplier = 1\nmeasured = \"2026-08-29\"\n\n\
-             [prune.warm.basis]\nglob = \"\"\ncount = 0\ntolerance = 0\n\n\
-             [prune.cold.basis]\nglob = \"src/*.rs\"\ncount = 0\ntolerance = 0\n",
+             [prune.cold]\nmb = 14000\nworst_mb = 14000\nmultiplier = 1\nmeasured = \"2026-08-29\"\n",
         )
         .file("Cargo.toml", "[workspace]\n")
         .build();
-    built(&repo);
-
-    let output = prune(&repo, "99999", &["-y"]);
-    let said = said(&output);
-    assert!(!output.status.success(), "{said}");
-    assert!(said.contains("[prune.warm.basis]"), "{said}");
-}
-
-#[test]
-fn an_undeclared_basis_is_refused_on_the_verify_surface() {
-    // THE SAME REFUSAL, ONE SURFACE LATER, and where it lives is the finding.
-    //
-    // `basis` was a required field, so a floor without one failed to PARSE. That
-    // makes the key's own PR unlandable: `config-lint` loads
-    // `origin/main:batten.toml` with the WORKING TREE's binary — house style §8's
-    // out-of-band load, so a branch cannot lower the bar it is judged by — and the
-    // base ref has no such key, so the load fails with `missing field` and the gate
-    // reports could-not-look instead of a verdict. Measured on this row's own
-    // landing lap, with the whole of the rest of the gate green.
-    //
-    // So the type takes `Option` and the refusal moves to the surface CLOUD-1158 §2
-    // already puts the live comparison on. What must NOT change is that an absent
-    // basis is refused at all — that is `measured`'s own ground — and this case is
-    // what holds it.
-    let repo = Fixture::new("target-prune-basis-undeclared")
-        .config(&format!(
-            "version = 1\n\n[prune]\nroot = \"target\"\nkeep = 2\n\n\
-             [prune.warm]\nmb = {WARM_MB}\nworst_mb = {WARM_MB}\nmultiplier = 1\nmeasured = \"2026-08-22\"\n\n\
-             [prune.cold]\nmb = {COLD_MB}\nworst_mb = {COLD_MB}\nmultiplier = 1\nmeasured = \"2026-08-29\"\n"
-        ))
-        .file("Cargo.toml", "[workspace]\n")
-        .files(BASIS_FILES)
-        .git()
-        .base_commit()
-        .build();
-    built(&repo);
-
-    let output = prune(&repo, "99999", &["-y"]);
-    let said = said(&output);
-    assert!(
-        !output.status.success(),
-        "a date points at nothing without a basis: {said}"
-    );
-    assert_eq!(
-        output.status.code(),
-        Some(2),
-        "a verdict about the tree rather than a usage error, because the config \
-         loaded: {said}"
-    );
-    assert!(
-        said.contains("[prune.warm] declares no basis"),
-        "the refusal names the floor: {said}"
-    );
-    assert!(
-        said.contains("2026-08-22"),
-        "and the date that points at nothing: {said}"
-    );
-}
-
-#[test]
-fn a_checkout_with_no_index_is_not_refused_for_a_basis_nobody_could_count() {
-    // COULD-NOT-LOOK ALLOWS, which is `git.rs`'s own stated posture for
-    // `tracked_paths`: a tree that cannot be enumerated is never refused on the
-    // strength of a count nobody took. The fixture is the drift case MINUS the
-    // git repository, so the only difference is whether the count is available.
-    let repo = Fixture::new("target-prune-basis-no-index")
-        .config(&format!(
-            "version = 1\n\n[prune]\nroot = \"target\"\nkeep = 2\n\n\
-             [prune.warm]\nmb = {WARM_MB}\nworst_mb = {WARM_MB}\nmultiplier = 1\nmeasured = \"2026-08-22\"\n\n\
-             [prune.cold]\nmb = {COLD_MB}\nworst_mb = {COLD_MB}\nmultiplier = 1\nmeasured = \"2026-08-29\"\n\n\
-             [prune.warm.basis]\nglob = \"crates/**/*.rs\"\ncount = 1\ntolerance = 1\n\n\
-             [prune.cold.basis]\nglob = \"crates/**/*.rs\"\ncount = 1\ntolerance = 1\n"
-        ))
-        .file("Cargo.toml", "[workspace]\n")
-        .files(BASIS_FILES)
-        .build();
-    built(&repo);
-
-    let output = prune(&repo, "99999", &["-y"]);
-    let said = said(&output);
-    assert!(output.status.success(), "{said}");
-    assert!(!said.contains("no longer exists"), "{said}");
-}
-
-#[test]
-fn the_mediated_call_does_not_judge_the_basis() {
-    // THE PLACEMENT CASE, and it is red against this row's own first draft, which
-    // put the comparison in `Floor::validate`. `config.rs` calls that on the
-    // shared config-load path, which EVERY `batten` invocation runs — `batten
-    // hook` on every mediated tool call included — so a tracked-path enumeration
-    // there is a tree read taxed onto the `PreToolUse` budget. The repository has
-    // ruled on this exact shape once already: `claim-race-check` was moved off the
-    // mediated call for it.
-    //
-    // The fixture's basis has moved (1 declared, 4 tracked), so a comparison at
-    // load would refuse — and `batten target prune` over the same tree does refuse,
-    // which is what makes this a placement assertion rather than a vacuous one.
-    let repo = based("target-prune-basis-mediated", 1, BASIS_FILES);
-    built(&repo);
-    assert!(
-        !prune(&repo, "99999", &["-y"]).status.success(),
-        "the verify surface does refuse this tree, so the hook's silence below is \
-         about WHERE the comparison runs rather than about whether it can fire"
-    );
-
-    let envelope = "{\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"Bash\",\
-                    \"tool_input\":{\"command\":\"echo hello\"}}";
-    let output = run_with_stdin(&repo, &["adjudicate", "--harness", "claude-code"], envelope);
-    let said = format!(
-        "{}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert_eq!(output.status.code(), Some(0), "the engine decided: {said}");
-    assert!(
-        !said.contains("\"permissionDecision\":\"deny\""),
-        "a benign call is allowed over a tree whose basis has moved: {said}"
-    );
-    assert!(
-        !said.contains("no longer exists"),
-        "and the mediated call says nothing about the basis at all: {said}"
-    );
-}
-
-// --- CLOUD-861: the floor is an invariant, and its basis ratchets ------------
-
-/// A checkout that can keep a lap history: the `[prune]` fixture plus a `.git`.
-///
-/// The journal lives under `$GIT_DIR`, so a fixture without one decides on the
-/// declared floors alone — which is what every other case in this file does, and
-/// is asserted rather than assumed by
-/// `a_checkout_with_no_lap_history_decides_on_the_declaration_alone`.
-fn lapped(name: &str) -> PathBuf {
-    Fixture::new(name)
-        .config(&config())
-        .file("Cargo.toml", "[workspace]\n")
-        .git()
-        .base_commit()
-        .build()
-}
-
-/// The lap journal's raw bytes, or empty where none was written.
-fn journal(repo: &Path) -> String {
-    std::fs::read_to_string(repo.join(".git/batten-prune/laps.json")).unwrap_or_default()
-}
-
-#[test]
-fn the_closing_reading_refuses_a_lap_that_spent_its_own_headroom() {
-    // THE DEFECT, as an assertion, and it is red before this row because there is
-    // no second reading to compare — the floor was read once, at the head of
-    // `verify`, and answered "is there room to begin".
-    //
-    // Measured three times in one session: the prune passed at 6242MB free, the
-    // `cargo test` link step inside the same lap took all of it, and the
-    // exhaustion arrived as a rustc IO error under a `land` line telling the
-    // author to fix their own diff.
-    let repo = lapped("target-prune-lap-breach");
-    built(&repo);
-
-    let opened = said(&prune(&repo, "9000", &["-y"]));
-    assert!(opened.contains("lap-open"), "{opened}");
-
-    let output = prune(&repo, "2000", &["-y"]);
-    let said = said(&output);
-    assert!(
-        !output.status.success(),
-        "the lap was admitted at 9000MB and ended at 2000MB, below the 6000MB \
-         floor it was admitted under: {said}"
-    );
-    assert!(said.contains("CLOSING reading"), "{said}");
-    assert!(
-        said.contains("consumed 7000MB"),
-        "and the closing run names what the lap actually cost, which is the \
-         quantity the floor is about and which nothing had ever printed: {said}"
-    );
-}
-
-#[test]
-fn a_closing_escalation_does_not_make_the_lap_it_closes_a_cold_one() {
-    // FOUND ON THIS ROW'S OWN FIRST LIVE LAP, and it is the spiral the basis-of-
-    // record rule exists against. A closing run whose reclaim escalates has moved
-    // the basis for the NEXT build; it cannot retroactively make the lap being
-    // closed a cold one. Judging it against the cold floor its own closing
-    // reclaim just created is what made every full lap fail at its own close:
-    // measured here at 9790MB free against a 14914MB cold floor.
-    let repo = lapped("target-prune-close-basis-of-record");
-    built(&repo);
-    let incremental = repo.join("target/debug/incremental/batten-1a2b3c");
-    std::fs::create_dir_all(&incremental).unwrap();
-    std::fs::write(incremental.join("dep-graph.bin"), vec![0_u8; 200_000]).unwrap();
-    // A NON-BASIS ROOT BESIDE IT, so the close has something it may still take and
-    // the case can tell "escalated on what it is allowed to" apart from "did not
-    // escalate at all".
-    let regrowable = cache(&repo, "semver-checks", 200_000);
-
-    // A warm lap opens above the floor.
-    assert!(prune(&repo, "20000", &["-y"]).status.success());
-
-    // The close is below the warm floor, so it escalates — and 8000MB clears the
-    // 6000MB warm floor while not clearing the 14000MB cold one, so the two
-    // readings of "which basis" give opposite verdicts.
-    let output = prune(&repo, "5000,8000", &["-y"]);
-    let closed = said(&output);
-    assert!(closed.contains("regrowable cache dropped"), "{closed}");
-    assert!(!regrowable.exists(), "the non-basis root goes: {closed}");
-    assert!(
-        output.status.success(),
-        "the lap ran warm, so it is judged against the warm floor it was \
-         admitted under: {closed}"
-    );
-    assert!(closed.contains("warm floor"), "{closed}");
-    // AND THE BASIS-MOVING ROOT IS STILL THERE, because the cheap tier already
-    // cleared the floor and the expensive one is only reached if it did not.
-    // Measured twice on this row's own landing lap: the escalation took every root
-    // at once, freed 5711MB, and thereby raised the floor the NEXT lap had to clear
-    // from 6242MB to 14914MB on a tree a full lap leaves at ~8.7GB — so every
-    // second `land` lap was refused for a full rebuild nothing had asked for. The
-    // escalation created the demand that refused it.
-    assert!(
-        incremental.exists(),
-        "the cheap tier cleared the floor, so the expensive one is never reached: {closed}"
-    );
-    assert!(
-        closed.contains("none of those roots is the cargo build's basis"),
-        "and it says so, rather than reporting a move it did not make: {closed}"
-    );
-
-    // And the next lap is admitted WARM, which is the whole point — 8000MB clears
-    // the 6000MB warm floor and would not clear the cold one.
-    let next = said(&prune(&repo, "8000", &["-y"]));
-    assert!(
-        next.contains("warm floor"),
-        "the escalation left the basis alone, so the next lap is still a warm one: {next}"
-    );
-}
-
-#[test]
-fn a_lap_that_opened_cold_and_ends_on_a_built_tree_is_judged_warm() {
-    // CLOUD-1218's THIRD failure mode, and the mirror of the case above: that one
-    // is a lap that opened warm and must not be closed cold, this is a lap that
-    // opened cold and must not be closed cold either, because the tree it left is
-    // warm.
-    //
-    // MEASURED, five consecutive `land` laps on a ~38GB allowance. A lap opened on
-    // an empty `target/` — correctly Cold, nothing to build on — and closed on a
-    // fully built tree with 14839MB free, and was refused against the 17357MB COLD
-    // floor. `verify` had SUCCEEDED inside that lap: a full cargo build, the whole
-    // cargo suite, all 2491 bats cases, no disk error anywhere. The refusal was
-    // the closing reading alone.
-    //
-    // The floor is unreachable by construction there: building the tree is
-    // precisely what spends the headroom a cold floor demands, so a cold-started
-    // lap refuses at its own close forever, however much is reclaimed first. Every
-    // `rm -rf target` recovery an agent performs opens exactly this lap.
-    let repo = lapped("target-prune-cold-open-warm-close");
-
-    // NOTHING BUILT, so the lap opens Cold — 20000MB is above the 14000MB cold
-    // floor, which is what makes the open legal and the close the only reading
-    // under test.
-    let opened = said(&prune(&repo, "20000", &["-y"]));
-    assert!(opened.contains("lap-open"), "{opened}");
-    assert!(
-        opened.contains("cold floor"),
-        "an empty tree has nothing to build on, so the lap opens cold: {opened}"
-    );
-
-    // THE LAP'S BUILD, which is what the lap was for.
-    built(&repo);
-
-    // 9000MB clears the 6000MB warm floor and does NOT clear the 14000MB cold one,
-    // so the two readings of "which basis" give opposite exit codes and the case
-    // cannot pass by accident.
-    let output = prune(&repo, "9000", &["-y"]);
-    let closed = said(&output);
-    assert!(
-        output.status.success(),
-        "the tree the lap left has something to build on, so the next build is \
-         warm and the warm floor is what it has to clear: {closed}"
-    );
-    assert!(closed.contains("warm floor"), "{closed}");
-    assert!(
-        closed.contains("CLOSING reading") || closed.contains("lap-close"),
-        "{closed}"
-    );
-}
-
-#[test]
-fn a_lap_that_opened_cold_and_is_still_unbuilt_is_judged_cold() {
-    // THE GUARD ON THE CASE ABOVE, without which the repair degrades to "call
-    // every close warm" — which fails the same way one bucket over, admitting a
-    // full rebuild against an incremental build's floor. That is CLOUD-1030's
-    // defect pointing backwards, and it is the reason the closing basis is READ
-    // from the tree rather than assumed from the phase.
-    let repo = lapped("target-prune-cold-open-cold-close");
-
-    let opened = said(&prune(&repo, "20000", &["-y"]));
-    assert!(opened.contains("lap-open"), "{opened}");
-
-    // Nothing built between the two readings: the tree still has nothing to build
-    // on, so the next build is a full one and the cold floor still binds.
-    let output = prune(&repo, "9000", &["-y"]);
-    let closed = said(&output);
-    assert!(
-        !output.status.success(),
-        "9000MB does not fit a full rebuild, and nothing about this lap made the \
-         tree warm: {closed}"
-    );
-    assert!(closed.contains("cold floor"), "{closed}");
-}
-
-#[test]
-fn a_lap_opened_cold_by_an_escalation_is_not_made_warm_by_a_tree_that_never_changed() {
-    // THE OTHER HALF OF THE CASE ABOVE, and the one that killed the first attempt
-    // at this repair — which read the closing basis from the tree alone and was
-    // caught by `a_warm_laps_consumption_does_not_raise_the_cold_floor`.
-    //
-    // `basis_of` reads `deps`. Dropping `incremental` leaves `deps` FULL and still
-    // makes the next cargo build a complete one, which is why the effective basis
-    // is the tree's reading OR'd with the escalation's flag rather than either
-    // alone. So a lap that opens Cold with a full `deps` reads Warm from the tree
-    // at both boundaries, and a close deciding on the tree would silently hand a
-    // full rebuild an incremental build's floor.
-    //
-    // The discriminator is the tree's reading AT OPEN, and this case is where the
-    // two readings disagree: cold effective, warm tree, unchanged throughout.
-    let repo = lapped("target-prune-escalation-cold-stays-cold");
-    built(&repo);
-    let incremental = repo.join("target/debug/incremental/batten-1a2b3c");
-    std::fs::create_dir_all(&incremental).unwrap();
-    std::fs::write(incremental.join("dep-graph.bin"), vec![0_u8; 200_000]).unwrap();
-    ballast(&incremental);
-
-    // A first lap opens warm and above the floor.
-    assert!(prune(&repo, "40000", &["-y"]).status.success());
-    // Its close breaches the warm floor, so the escalation takes `incremental` —
-    // the declared basis-moving root — and the NEXT lap opens Cold on a tree whose
-    // `deps` is untouched and still reads Warm.
-    let escalated = said(&prune(&repo, "5000,30000", &["-y"]));
-    assert!(
-        !incremental.exists(),
-        "the basis-moving root is what moved the basis: {escalated}"
-    );
-
-    // 9000MB clears the 6000MB warm floor and not the 14000MB cold one, so a close
-    // that read the tree instead of the journal would pass here.
-    let output = prune(&repo, "9000", &["-y"]);
-    let closed = said(&output);
-    assert!(
-        !output.status.success(),
-        "nothing rebuilt what the escalation took, so the next build is still a \
-         full one and the cold floor still binds: {closed}"
-    );
-    assert!(closed.contains("cold floor"), "{closed}");
-}
-
-#[test]
-fn the_consumption_observation_still_belongs_to_the_basis_the_lap_opened_under() {
-    // THE CASE THAT DISCRIMINATES THE SPLIT, and the only one that does. The two
-    // above are about which FLOOR a close is judged against; this is about which
-    // RATCHET BUCKET the close's observation lands in, and the answer is the other
-    // one. Collapsing `floor_basis` and `opened_basis` back into a single value
-    // passes both cases above and fails only here.
-    //
-    // What a lap COST is a fact about the build that ran — this lap built from
-    // nothing, so it is a cold lap's cost however warm the tree it left. Folding
-    // it into the warm bucket is the CLOUD-1157 poisoning in miniature: a full
-    // rebuild's demand recorded as what an incremental build costs, after which
-    // every warm lap is admitted against a floor nothing can satisfy.
-    let repo = lapped("target-prune-observation-bucket");
-
-    assert!(prune(&repo, "20000", &["-y"]).status.success());
-    built(&repo);
-    let output = prune(&repo, "9000", &["-y"]);
-    assert!(output.status.success(), "{}", said(&output));
-
-    let recorded = journal(&repo);
-    assert!(
-        recorded.contains(r#""warm":null"#),
-        "a cold lap teaches the warm ratchet nothing: {recorded}"
-    );
-    assert!(
-        recorded.contains(r#""cold":{"mb":9000"#),
-        "and the cold bucket is where its cost belongs — capped at what the lap \
-         demonstrably left: {recorded}"
-    );
-}
-
-#[test]
-fn the_ratchet_raises_the_floor_and_the_refusal_names_the_lap_that_set_it() {
-    // The second half of the row: `worst_mb` was hand-declared at `x1`, so the
-    // floor was exactly the worst lap somebody wrote down and a measurement taken
-    // once read exactly like a fresh one forever.
-    let repo = lapped("target-prune-ratchet");
-    built(&repo);
-
-    assert!(prune(&repo, "20000", &["-y"]).status.success());
-
-    // 20000 -> 12000 is an 8000MB lap, worse than the 6000MB declaration, and it
-    // is NOT refused: it is judged against the floor it was admitted under, which
-    // is the ordering that keeps a machine's first lap from refusing itself for
-    // the crime of being the thing that measured it.
-    let observed = prune(&repo, "12000", &["-y"]);
-    let raised = said(&observed);
-    assert!(observed.status.success(), "{raised}");
-    assert!(
-        raised.contains("the observed warm floor rises to 8000MB from the next lap"),
-        "{raised}"
-    );
-
-    // And from the next lap it binds: 7000MB clears the 6000MB declaration and
-    // not the 8000MB observation.
-    let refused = prune(&repo, "7000", &["-y"]);
-    let denied = said(&refused);
-    assert!(!refused.status.success(), "{denied}");
-    assert!(denied.contains("floor 8000MB"), "{denied}");
-    assert!(
-        denied.contains("rather than declared"),
-        "the refusal says the number is an observation and names the lap: {denied}"
-    );
-}
-
-#[test]
-fn the_ratchet_never_rises_above_what_the_lap_that_set_it_left_free() {
-    // THE FLOOR MEANS "leave room for another lap like the last one", so clearing
-    // it needs `free_at_open >= floor + spent` — twice a lap's cost. On a volume
-    // that cannot hold two laps the observation sets a number the very measurement
-    // it came from has already shown unreachable, and every later lap is refused
-    // at its own close however much is reclaimed first. That is the "gate somebody
-    // switches off" failure the anti-vacuity case below exists against, arriving
-    // from the other side.
-    //
-    // Measured on a ~38GB container, ~11GB of it toolchains: a full gated lap
-    // consumed 18541MB and closed at 7887MB, the ratchet stood at 20228MB, and
-    // eight consecutive laps built cleanly and were refused. Emptying `target/`
-    // and the cargo registry moved the close reading not at all — the build spends
-    // what it is given.
-    let repo = lapped("target-prune-ratchet-capped");
-    built(&repo);
-
-    // A lap that spends MORE than it leaves: 20000 -> 7000 is 13000MB spent
-    // against 7000MB left. Uncapped it sets a 13000MB floor.
-    assert!(prune(&repo, "20000", &["-y"]).status.success());
-    let observed = said(&prune(&repo, "7000", &["-y"]));
-    assert!(observed.contains("consumed 13000MB"), "{observed}");
-    assert!(
-        observed.contains("floor rises to 7000MB"),
-        "the SPEND and the FLOOR are two different facts once the cap bites — the \
-         lap really did cost 13000MB, and 7000MB is what it showed this volume \
-         leaves over: {observed}"
-    );
-
-    // And the next lap of the same shape closes cleanly, which is the whole point.
-    // Uncapped this is refused against 13000MB, and so is every lap after it.
-    assert!(prune(&repo, "20000", &["-y"]).status.success());
-    let output = prune(&repo, "7000", &["-y"]);
-    let closed = said(&output);
-    assert!(
-        output.status.success(),
-        "a volume that cannot hold two laps must still be able to run one: {closed}"
-    );
-}
-
-#[test]
-fn a_capped_floor_lowers_to_a_leaner_close_rather_than_wedging() {
-    // THE WEDGE, MEASURED IN THIS CONTAINER AND REPRODUCED HERE (CLOUD-1218).
-    // Five consecutive `land` laps were refused and one 12GB cold rebuild was
-    // spent before the recovery — deleting a journal no message names — was
-    // found by reading the source.
-    //
-    // The cap (CLOUD-1241) keeps a floor from exceeding what its own lap left
-    // free, and that makes the floor a KNIFE EDGE: `clears_the_floor` is
-    // `free >= floor`, so once the cap bites the floor equals exactly the free
-    // space one lap left, and any later lap leaving one megabyte less can never
-    // clear it. No reclaim helps, because the reclaim is already what produced
-    // the reading. Measured: floor 14431MB, later laps reclaimed to 14336MB,
-    // refused forever.
-    //
-    // THE DISCRIMINATOR IS THE CAP ITSELF, and the case above it says so in its
-    // own words — "the SPEND and the FLOOR are two different facts once the cap
-    // bites". An uncapped observation is a COST: what a lap of this shape costs,
-    // which ratchets. A capped one is a CAPACITY reading: what this volume
-    // leaves over, which is a fact about now rather than a high-water mark.
-    let repo = lapped("target-prune-capped-lowers");
-    built(&repo);
-
-    // A lap that spends more than it leaves, so the cap bites: 20000 -> 7000.
-    assert!(prune(&repo, "20000", &["-y"]).status.success());
-    let capped = said(&prune(&repo, "7000", &["-y"]));
-    assert!(capped.contains("floor rises to 7000MB"), "{capped}");
-
-    // Now the tree has grown a little and the next lap of the same shape leaves
-    // 6800MB rather than 7000MB. Against a ratcheted 7000MB floor this is the
-    // wedge: refused, with nothing left to reclaim and no way back.
-    assert!(prune(&repo, "20000", &["-y"]).status.success());
-    let output = prune(&repo, "6800", &["-y"]);
-    let closed = said(&output);
-    assert!(
-        output.status.success(),
-        "a capacity reading is a fact about NOW: a volume that has since gotten \
-         tighter must re-measure rather than refuse against a number it can no \
-         longer reach: {closed}"
-    );
-    assert!(
-        closed.contains("lowered"),
-        "and it must never be silent — an adjusted floor a reader cannot see is \
-         the same class of defect as the wedge it fixes: {closed}"
-    );
-}
-
-#[test]
-fn a_cost_floor_is_not_lowered_by_a_leaner_close() {
-    // THE ANTI-VACUITY MIRROR, and without it the case above degenerates into
-    // "never refuse", which is the gate somebody switches off.
-    //
-    // The distinction is the cap. Here the lap spends 8000MB and LEAVES 12000MB,
-    // so the cap does not bite and the 8000MB observation is a genuine cost — a
-    // statement about what a lap of this shape needs, not about what the volume
-    // happens to have. A later lap leaving less does NOT make that cost untrue,
-    // so the floor stands and the refusal stands with it.
-    let repo = lapped("target-prune-cost-floor-holds");
-    built(&repo);
-
-    assert!(prune(&repo, "20000", &["-y"]).status.success());
-    let observed = said(&prune(&repo, "12000", &["-y"]));
-    assert!(
-        observed.contains("floor rises to 8000MB"),
-        "the cap does not bite here — 8000MB spent, 12000MB left: {observed}"
-    );
-
-    // 7000MB clears the 6000MB declaration and not the 8000MB cost. It must be
-    // refused, and the floor must still be 8000MB afterwards.
-    let output = prune(&repo, "7000", &["-y"]);
-    let denied = said(&output);
-    assert!(!output.status.success(), "{denied}");
-    assert!(denied.contains("floor 8000MB"), "{denied}");
-    assert!(
-        !denied.contains("lowered"),
-        "a cost observation is never lowered by a leaner lap: {denied}"
-    );
-}
-
-#[test]
-fn a_lap_that_stays_above_the_floor_is_not_refused_and_does_not_ratchet() {
-    // ANTI-VACUITY, and without it the row degenerates to "refuse more", which is
-    // a gate somebody switches off. A 1000MB lap is under the declaration, so
-    // nothing is observed and the floor does not move.
-    let repo = lapped("target-prune-quiet-lap");
-    built(&repo);
-
-    assert!(prune(&repo, "20000", &["-y"]).status.success());
-    let output = prune(&repo, "19000", &["-y"]);
-    let quiet = said(&output);
-    assert!(output.status.success(), "{quiet}");
-    assert!(quiet.contains("consumed 1000MB"), "{quiet}");
-    assert!(
-        !quiet.contains("rises to"),
-        "1000MB is under the 6000MB declaration, which is a lower bound, so the \
-         floor in force does not move and nothing announces that it did: {quiet}"
-    );
-    // The behavioural half, and it is the one worth having: the NEXT lap is still
-    // admitted under the declared number. Asserting the journal's bytes would
-    // pin the storage instead — and the journal legitimately records the
-    // observation, because the worst lap seen is the history's answer whatever
-    // the seed says.
-    let next = said(&prune(&repo, "18000", &["-y"]));
-    assert!(next.contains("warm floor 6000MB"), "{next}");
-    assert!(!next.contains("rather than declared"), "{next}");
-    assert!(!journal(&repo).is_empty(), "a lap history was kept");
-}
-
-#[test]
-fn a_first_lap_below_the_declaration_is_refused_on_the_declaration_alone() {
-    // The other anti-vacuity twin: with no lap open there is nothing to close and
-    // no observation to appeal to, so the seed decides — which is the behaviour
-    // every run had before the journal existed.
-    let repo = lapped("target-prune-seed-alone");
-    built(&repo);
-
-    let output = prune(&repo, "1000", &["-y"]);
-    let said = said(&output);
-    assert!(!output.status.success(), "{said}");
-    assert!(said.contains("there is not room to begin"), "{said}");
-    assert!(
-        !said.contains("rather than declared"),
-        "no lap has been observed, so the floor is the declared one: {said}"
-    );
-}
-
-#[test]
-fn a_warm_laps_consumption_does_not_raise_the_cold_floor() {
-    // PER BASIS, and folding them together is the failure this pins: a warm lap's
-    // consumption is a statement about an incremental build, and a cold floor
-    // raised by one would refuse a lap for a demand nobody measured.
-    let repo = lapped("target-prune-basis-not-shared");
-    built(&repo);
-    let incremental = repo.join("target/debug/incremental/batten-1a2b3c");
-    std::fs::create_dir_all(&incremental).unwrap();
-    std::fs::write(incremental.join("dep-graph.bin"), vec![0_u8; 200_000]).unwrap();
-    ballast(&incremental);
-
-    // THE NUMBERS DISCRIMINATE, and that took a second pass: a warm observation
-    // UNDER the cold declaration cannot tell a shared ratchet from a per-basis
-    // one, because `max(14000, 8000)` is 14000 either way. Measured as a
-    // surviving mutation. So the warm lap here observes 20000MB — above the
-    // 14000MB cold declaration — and the cold reading below sits between the two.
-    //
-    // THE LAP LEAVES WHAT IT SPENT, deliberately, because the observation is
-    // capped by the free space its own lap left over: a 40000 -> 18000 lap spends
-    // 22000MB and would once have observed all of it, but caps to 18000MB, and
-    // 18000 against an 18000MB reading is exactly the tie a leaked warm floor
-    // would pass on. Spending 20000 and leaving 20000 puts the observation clear
-    // of the cold declaration with a margin the cold lap below can fall inside.
-    assert!(prune(&repo, "40000", &["-y"]).status.success());
-    let warm = said(&prune(&repo, "20000", &["-y"]));
-    assert!(
-        warm.contains("the observed warm floor rises to 20000MB"),
-        "{warm}"
-    );
-
-    // Now a lap that escalates: 5000 breaches the warm floor and the declared
-    // `incremental` root is dropped, so the basis moves to cold — for the NEXT
-    // lap, which is where that consequence belongs.
-    assert!(prune(&repo, "5000,30000", &["-y"]).status.success());
-
-    // THAT next lap is the cold one, and it is the reading that discriminates:
-    // 18000MB clears the 14000MB cold declaration and would NOT clear a cold
-    // floor raised to 22000MB by the warm lap above.
-    let output = prune(&repo, "18000", &["-y"]);
-    let cold = said(&output);
-    assert!(output.status.success(), "{cold}");
-    assert!(
-        cold.contains("cold floor 14000MB"),
-        "the cold floor is its own declaration, untouched by a warm observation: {cold}"
-    );
-    assert!(
-        !cold.contains("rather than declared"),
-        "no COLD lap has been observed: {cold}"
-    );
-}
-
-#[test]
-fn a_checkout_with_no_lap_history_decides_on_the_declaration_alone() {
-    // The journal lives under `$GIT_DIR`, so a checkout without one has nowhere
-    // to keep a history. Asserted rather than assumed, because it is what every
-    // other case in this file silently relies on — and because "no history" must
-    // be a state rather than a failure. OUTSIDE the tree, because under
-    // `target/tmp` a directory with no `.git` resolves to this checkout's.
-    let repo = Fixture::at(crate::common::scratch_outside_tree(
-        "target-prune",
-        "no-history",
-    ))
-    .config(&config())
-    .file("Cargo.toml", "[workspace]\n")
-    .build();
-    built(&repo);
-
-    let first = said(&prune(&repo, "20000", &["-y"]));
-    let second = said(&prune(&repo, "19000", &["-y"]));
-    assert!(first.contains("lap-open"), "{first}");
-    assert!(
-        second.contains("lap-open"),
-        "nothing was recorded, so the second run opens rather than closes: {second}"
-    );
-    assert!(second.contains("0 superseded"), "{second}");
-    assert!(journal(&repo).is_empty(), "and no journal was written");
-}
-
-#[test]
-fn what_the_reclaim_freed_counts_toward_what_the_lap_consumed() {
-    // THE ARITHMETIC, pinned rather than left to a difference of two readings:
-    // `start - end + reclaimed_in_between`. Space this run handed back is space
-    // the lap had spent, so a lap that reclaimed megabytes and ended level did not
-    // consume nothing — which is exactly what subtracting two readings would say.
-    let repo = lapped("target-prune-reclaim-counts");
     let deps = repo.join("target/debug/deps");
-    sized(&deps, "cli", "aaaaaaaaaaaa", "", 3600, 1_100_000);
-    sized(&deps, "cli", "bbbbbbbbbbbb", "", 1800, 1_100_000);
+    artifact(&deps, "cli", "aaaaaaaaaaaa", 3600);
+    artifact(&deps, "cli", "bbbbbbbbbbbb", 1800);
+    artifact(&deps, "cli", "cccccccccccc", 60);
 
-    assert!(prune(&repo, "20000", &["-y"]).status.success());
-    // A third copy appears during the lap, so the closing run has exactly one
-    // artifact to reclaim — and the reading does not move.
-    sized(&deps, "cli", "cccccccccccc", "", 60, 1_100_000);
-
-    let said = said(&prune(&repo, "20000", &["-y"]));
-    assert!(said.contains("1MB reclaimed"), "{said}");
-    assert!(
-        said.contains("consumed 1MB"),
-        "the free-space readings are level, so the whole of this lap's cost is \
-         what the reclaim handed back: {said}"
-    );
-}
-
-// --- CLOUD-1157: the escalation's roots are declared, and so is their cost ----
-
-/// A regrowable root with something in it, at `target/<name>`.
-fn cache(repo: &Path, name: &str, bytes: usize) -> PathBuf {
-    let dir = repo.join("target").join(name);
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("blob"), vec![0_u8; bytes]).unwrap();
-    dir
-}
-
-#[test]
-fn a_declared_root_that_is_not_the_cargo_basis_is_dropped_without_moving_the_floor() {
-    // CLOUD-1157's second half, and the case that makes `cold` a per-row answer
-    // rather than a constant. `semver-checks` held 2.6 GB on a real container and
-    // was outside the walk entirely; dropping it makes only ITS next run cold, so
-    // a lap judged against the 14000MB cold floor here would be refused for a full
-    // rebuild that is not going to happen.
-    //
-    // Two readings: 5000MB before the escalation and 9000MB after it. 9000 clears
-    // the warm floor and does NOT clear the cold one, so the two answers are
-    // distinguishable by the exit code alone.
-    let repo = repo("target-prune-warm-basis-root");
-    built(&repo);
-    let dropped = cache(&repo, "semver-checks", 200_000);
-
-    let output = prune(&repo, "5000,9000", &["-y"]);
+    let output = prune(&repo, "1", &["-y"]);
     let said = said(&output);
-    assert!(!dropped.exists(), "the declared root is dropped: {said}");
-    assert!(
-        output.status.success(),
-        "and the lap is judged against the WARM floor, because the next cargo \
-         build is still incremental: {said}"
-    );
-    assert!(
-        said.contains("none of those roots is the cargo build's basis"),
-        "the report says why the floor did not move: {said}"
-    );
-    assert!(!said.contains("COLD"), "{said}");
-}
-
-#[test]
-fn a_declared_basis_moving_root_still_moves_the_floor() {
-    // The discriminating twin of the case above, on the same fixture shape and the
-    // same readings: only the row's `cold` differs, and the verdict inverts. Under
-    // a rule that ignored the flag both would pass, and under one that treated
-    // every root as basis-moving both would refuse.
-    let repo = repo("target-prune-cold-basis-root");
-    let dropped = cache(&repo, "debug/incremental/batten-1a2b3c", 200_000);
-    ballast(&dropped);
-
-    let output = prune(&repo, "5000,9000", &["-y"]);
-    let said = said(&output);
-    assert!(!dropped.exists(), "{said}");
-    assert!(
-        !output.status.success(),
-        "9000MB does not fit a cold build, and `incremental` is declared as the \
-         one whose loss makes the next build cold: {said}"
-    );
-    assert!(said.contains("COLD"), "{said}");
-}
-
-#[test]
-fn a_prefix_row_reaches_every_numbered_instance() {
-    // `flycheck*`, and the reason the key carries a wildcard at all:
-    // rust-analyzer numbers a directory per instance, so an enumeration goes stale
-    // the first time a second instance runs. Two instances, and a third directory
-    // sharing the prefix's first letters but not the prefix.
-    let repo = repo("target-prune-prefix-root");
-    let zero = cache(&repo, "flycheck0", 200_000);
-    let one = cache(&repo, "flycheck1", 200_000);
-    let unrelated = cache(&repo, "fly", 200_000);
-
-    let said = said(&prune(&repo, "1,99999", &["-y"]));
-    assert!(!zero.exists(), "{said}");
-    assert!(!one.exists(), "a prefix row is not one directory: {said}");
-    assert!(
-        unrelated.exists(),
-        "and it is a PREFIX, not a substring — `fly` is not `flycheck*`: {said}"
-    );
-}
-
-#[test]
-fn a_declared_root_above_the_floor_keeps_its_bytes() {
-    // ANTI-VACUITY, and the one that keeps this from being `cargo clean` on a
-    // timer: every one of these roots regrows, so dropping them unconditionally
-    // trades a rare stall for a permanent tax. The escalation is conditional, and
-    // widening WHAT it may drop must not widen WHEN.
-    let repo = repo("target-prune-roots-above-floor");
-    let semver = cache(&repo, "semver-checks", 200_000);
-    let flycheck = cache(&repo, "flycheck0", 200_000);
-    let incremental = cache(&repo, "debug/incremental/batten-1a2b3c", 200_000);
-
-    let output = prune(&repo, "99999", &["-y"]);
-    let said = said(&output);
-    assert!(output.status.success(), "{said}");
-    assert!(
-        semver.exists() && flycheck.exists() && incremental.exists(),
-        "{said}"
-    );
-    assert!(!said.contains("escalated"), "{said}");
-}
-
-#[test]
-fn a_regrowable_root_that_is_not_a_name_is_refused_at_load() {
-    // The engine tier for `Regrowable::validate`: a unit test pins that the
-    // function returns an error when called, and says nothing about whether the
-    // loader calls it. `remove_dir_all` is what runs at the far end of this key,
-    // so a declaration meaning something wider than its author thinks must be
-    // refused before anything is spent — `name = "*"` is `cargo clean` spelled as
-    // a prefix.
-    let repo = Fixture::new("target-prune-bad-root")
-        .config(
-            "version = 1\n\n[prune]\nroot = \"target\"\nkeep = 2\n\n\
-             [prune.warm]\nmb = 6000\nworst_mb = 6000\nmultiplier = 1\nmeasured = \"2026-08-22\"\n\n\
-             [prune.cold]\nmb = 14000\nworst_mb = 14000\nmultiplier = 1\nmeasured = \"2026-08-29\"\n\n\
-             [prune.warm.basis]\nglob = \"src/*.rs\"\ncount = 0\ntolerance = 0\n\n\
-             [prune.cold.basis]\nglob = \"src/*.rs\"\ncount = 0\ntolerance = 0\n\n\
-             [[prune.regrowable]]\nname = \"*\"\ncold = false\n",
-        )
-        .file("Cargo.toml", "[workspace]\n")
-        .build();
-    built(&repo);
-
-    let output = prune(&repo, "99999", &["-y"]);
-    let said = said(&output);
-    assert!(!output.status.success(), "{said}");
-    assert!(said.contains("[prune.regrowable]"), "{said}");
-    assert!(
-        repo.join("target/debug/deps").exists(),
-        "a refusal at LOAD removes nothing: {said}"
-    );
+    assert_eq!(output.status.code(), Some(0), "{said}");
+    assert!(said.contains("no min_free_mb/max_free_mb"), "{said}");
+    assert_eq!(survivors(&deps), 3, "{said}");
 }
 
 // --- the retention rule ------------------------------------------------------
@@ -1843,7 +322,7 @@ fn the_newest_k_copies_survive_and_the_rest_are_removed() {
     artifact(&deps, "cli", "bbbbbbbbbbbb", 1800);
     artifact(&deps, "cli", "cccccccccccc", 60);
 
-    let output = prune(&repo, "99999", &["-y"]);
+    let output = prune(&repo, FREE, &["-y"]);
     assert!(output.status.success(), "{}", said(&output));
     assert_eq!(survivors(&deps), 2, "keep = 2, so the oldest of three goes");
     assert!(
@@ -1892,7 +371,7 @@ fn three_versions_of_one_crate_all_survive() {
     unit(&deps, "cli", "bbbbbbbbbbbb", 1800, 102, 5);
     unit(&deps, "cli", "cccccccccccc", 60, 103, 5);
 
-    let output = prune(&repo, "99999", &["-y"]);
+    let output = prune(&repo, FREE, &["-y"]);
     assert!(output.status.success(), "{}", said(&output));
     assert_eq!(
         survivors(&deps),
@@ -1912,7 +391,7 @@ fn two_profiles_of_one_crate_both_survive() {
     unit(&deps, "cli", "bbbbbbbbbbbb", 1800, 101, 6);
     unit(&deps, "cli", "cccccccccccc", 60, 101, 6);
 
-    let output = prune(&repo, "99999", &["-y"]);
+    let output = prune(&repo, FREE, &["-y"]);
     assert!(output.status.success(), "{}", said(&output));
     assert!(
         deps.join("cli-aaaaaaaaaaaa").exists(),
@@ -1933,7 +412,7 @@ fn generations_of_one_unit_still_supersede() {
     unit(&deps, "cli", "bbbbbbbbbbbb", 1800, 101, 5);
     unit(&deps, "cli", "cccccccccccc", 60, 101, 5);
 
-    let output = prune(&repo, "99999", &["-y"]);
+    let output = prune(&repo, FREE, &["-y"]);
     assert!(output.status.success(), "{}", said(&output));
     assert_eq!(survivors(&deps), 2, "keep = 2 of one unit's generations");
     assert!(!deps.join("cli-aaaaaaaaaaaa").exists(), "the oldest goes");
@@ -1961,7 +440,7 @@ fn superseded_example_generations_are_reclaimed_like_deps() {
     artifact(&foreign, "bench", "bbbbbbbbbbbb", 1800);
     artifact(&foreign, "bench", "cccccccccccc", 60);
 
-    let output = prune(&repo, "99999", &["-y"]);
+    let output = prune(&repo, FREE, &["-y"]);
     assert!(output.status.success(), "{}", said(&output));
     assert_eq!(
         survivors(&examples),
@@ -1987,12 +466,8 @@ fn superseded_example_generations_are_reclaimed_like_deps() {
 /// whose unit is live is not. The live one is the control: the case cannot pass by
 /// the pass sweeping `.dwo` wholesale, which would cost every live unit its
 /// debuginfo and `file:line` in a backtrace.
-///
-/// Measured before the fix: 48,692 orphaned `.dwo`, 7,498 MB, left behind by the
-/// superseded pass on two days of laps — the residue that refused lap closes
-/// under the warm floor.
 //
-// The declared mutation, in a plain comment for CLOUD-1913's reason above;
+// The declared mutation, in a plain comment for CLOUD-1913's reason below;
 // killed by hand:
 // MUTANT orphaned-dwo-kept|s@        if !live.contains(hash) {@        if false {@|a_dwo_whose_unit_has_no_fingerprint_is_reclaimed_and_a_live_ones_is_not
 #[test]
@@ -2005,7 +480,7 @@ fn a_dwo_whose_unit_has_no_fingerprint_is_reclaimed_and_a_live_ones_is_not() {
     std::fs::write(&live, b"debuginfo").unwrap();
     std::fs::write(&orphan, b"debuginfo").unwrap();
 
-    let output = prune(&repo, "99999", &["-y"]);
+    let output = prune(&repo, FREE, &["-y"]);
     assert!(output.status.success(), "{}", said(&output));
     assert!(
         !orphan.exists(),
@@ -2021,10 +496,10 @@ fn a_dwo_whose_unit_has_no_fingerprint_is_reclaimed_and_a_live_ones_is_not() {
     );
 }
 
-// CLOUD-1913's declared mutation, in THIS file for the reason CLOUD-1885's block
-// above gives: `test name undefined` cannot see `crates/batten/src/**`. The
-// expression belongs to `prune.rs`'s `reclaim_superseded`; inert under the sweep,
-// its kill was demonstrated by hand against the case below.
+// CLOUD-1913's declared mutation, in THIS file because `test name undefined`
+// cannot see `crates/batten/src/**`. The expression belongs to `prune.rs`'s
+// `reclaim_superseded`; inert under the sweep, its kill was demonstrated by hand
+// against the case below.
 /*
 #MUTANT-SUITE crates/batten/tests/it/target_prune.rs
 #MUTANT fingerprint-left-behind|s@^                        forget_fingerprint(fingerprints, victim);$@                        let _ = (fingerprints, victim);@|a_reclaimed_copy_takes_its_cargo_fingerprint_with_it
@@ -2035,7 +510,9 @@ fn a_reclaimed_copy_takes_its_cargo_fingerprint_with_it() {
     // CLOUD-1913. A fingerprint naming a deleted artifact tells cargo the crate is
     // fresh, so the next build links against a file that is gone (E0460/E0463).
     // The survivor's fingerprint is the control: the case cannot pass by the
-    // reclaim sweeping `.fingerprint` wholesale.
+    // reclaim sweeping `.fingerprint` wholesale. Each fingerprint holds a file
+    // read just now, so the live pass ranks it in the working set rather than
+    // as a unit last used at the epoch.
     let repo = repo("target-prune-fingerprint");
     let deps = repo.join("target/debug/deps");
     let fingerprints = repo.join("target/debug/.fingerprint");
@@ -2045,10 +522,12 @@ fn a_reclaimed_copy_takes_its_cargo_fingerprint_with_it() {
         ("cccccccccccc", 60),
     ] {
         artifact(&deps, "cli", hash, age);
-        std::fs::create_dir_all(fingerprints.join(format!("cli-{hash}"))).unwrap();
+        let dir = fingerprints.join(format!("cli-{hash}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("bin-cli"), b"fingerprint").unwrap();
     }
 
-    let output = prune(&repo, "99999", &["-y"]);
+    let output = prune(&repo, FREE, &["-y"]);
     assert!(output.status.success(), "{}", said(&output));
     assert!(
         !fingerprints.join("cli-aaaaaaaaaaaa").exists(),
@@ -2068,39 +547,12 @@ fn a_reclaimed_copy_takes_its_cargo_fingerprint_with_it() {
 */
 
 #[test]
-fn a_held_root_is_reported_as_held() {
-    // CLOUD-2225. The escalation skips a root a running build holds, and the
-    // refusal then guessed the roots were "already gone, were never there, or
-    // none of them is the cargo build's own". Measured on #1132: every root was
-    // there and held by `verify`'s own build. Released, the root is taken, so
-    // the case cannot pass by the reclaim never reaching it.
-    let repo = repo("target-prune-held-root");
-    built_profile(&repo, "debug");
-    let root = cache(&repo, "semver-checks", 200_000);
-    std::fs::create_dir_all(root.join("debug")).unwrap();
-    let lock = std::fs::File::create(root.join("debug/.cargo-lock")).unwrap();
-    lock.lock().unwrap();
-
-    let held = said(&prune(&repo, "1000", &["-y"]));
-    assert!(
-        held.contains("semver-checks held by a running build (semver-checks/debug/.cargo-lock)"),
-        "the held root and its lock are named: {held}"
-    );
-    assert!(!held.contains("already gone"), "{held}");
-    assert!(root.exists(), "a held root is never taken");
-
-    drop(lock);
-    let released = said(&prune(&repo, "1000", &["-y"]));
-    assert!(!released.contains("held by a running build"), "{released}");
-    assert!(!root.exists(), "released, it is reclaimed: {released}");
-}
-
-#[test]
 fn a_tree_a_running_build_holds_is_not_reclaimed() {
     // The lock is held by THIS process and the prune runs in another, which is
-    // the shape of the race: a `verify` step building while a sibling's
-    // `build:release` prunes first. Released, the same tree is reclaimed, so the
-    // case cannot pass by the pass doing nothing.
+    // the shape of the race. The verb waits on a held TREE's lock, so the hold
+    // here is the profile's `.cargo-lock`, which the pass skips rather than
+    // waits on. Released, the same tree is reclaimed, so the case cannot pass by
+    // the pass doing nothing.
     let repo = repo("target-prune-running-build");
     let deps = repo.join("target/debug/deps");
     artifact(&deps, "cli", "aaaaaaaaaaaa", 3600);
@@ -2109,99 +561,43 @@ fn a_tree_a_running_build_holds_is_not_reclaimed() {
     let lock = std::fs::File::create(repo.join("target/debug/.cargo-lock")).unwrap();
     lock.lock().unwrap();
 
-    let output = prune(&repo, "99999", &["-y"]);
+    let output = prune(&repo, FREE, &["-y"]);
     assert!(output.status.success(), "{}", said(&output));
     assert_eq!(survivors(&deps), 3, "a building tree loses nothing");
 
     drop(lock);
-    let output = prune(&repo, "99999", &["-y"]);
+    let output = prune(&repo, FREE, &["-y"]);
     assert!(output.status.success(), "{}", said(&output));
     assert_eq!(survivors(&deps), 2, "released, keep = 2 applies again");
 }
 
-// CLOUD-1913's third declared mutation: a marker naming this tree read as some
-// other tree's is the mid-lap escalation that emptied `target/tmp` under the suite.
-/*
-#MUTANT-SUITE crates/batten/tests/it/target_prune.rs
-#MUTANT prune-inside-an-open-lap|s@^        (Ok(opened), Ok(here)) => opened == here,$@        (Ok(_), Ok(_)) => false,@|a_prune_inside_this_tree_s_open_lap_touches_nothing
-*/
-
-#[test]
-fn a_prune_inside_this_tree_s_open_lap_touches_nothing() {
-    // The marker `verify` exports names the tree it opened a lap on. Here it is
-    // this fixture, so the run is inside that lap and reclaims nothing; named for
-    // another tree, the same run prunes, so the case cannot pass by doing nothing.
-    let repo = repo("target-prune-open-lap");
-    let deps = repo.join("target/debug/deps");
-    artifact(&deps, "cli", "aaaaaaaaaaaa", 3600);
-    artifact(&deps, "cli", "bbbbbbbbbbbb", 1800);
-    artifact(&deps, "cli", "cccccccccccc", 60);
-
-    let inside = batten()
-        .args(["target", "prune", "-y"])
-        .env("TARGET_PRUNE_FREE_MB", "99999")
-        .env("BATTEN_PRUNE_LAP_OPEN", &repo)
-        .current_dir(&repo)
-        .output()
-        .expect("run batten");
-    assert!(inside.status.success(), "{}", said(&inside));
-    assert_eq!(
-        survivors(&deps),
-        3,
-        "inside the open lap nothing is touched"
-    );
-    assert!(
-        said(&inside).contains("nothing touched"),
-        "{}",
-        said(&inside)
-    );
-
-    let elsewhere = batten()
-        .args(["target", "prune", "-y"])
-        .env("TARGET_PRUNE_FREE_MB", "99999")
-        .env("BATTEN_PRUNE_LAP_OPEN", repo.join("target"))
-        .current_dir(&repo)
-        .output()
-        .expect("run batten");
-    assert!(elsewhere.status.success(), "{}", said(&elsewhere));
-    assert_eq!(
-        survivors(&deps),
-        2,
-        "a lap on another tree does not hold this one"
-    );
-}
-
 #[test]
 fn a_stem_with_fewer_than_keep_copies_is_untouched() {
-    // CARRIED, and it had no home in either tier until #734's review said so —
-    // the ledger named a file that did not carry it. The retention is a FLOOR as
-    // well as a ceiling: a stem below `keep` has nothing superseded, and a rule
-    // that took from one anyway would delete what the next build reads.
-    //
-    // Two stems, one at `keep` and one under it, so the case cannot pass by the
-    // reclaim simply doing nothing at all.
+    // The retention is a FLOOR as well as a ceiling: a stem below `keep` has
+    // nothing superseded, and a rule that took from one anyway would delete what
+    // the next build reads. Two stems, one at `keep` and one under it, so the
+    // case cannot pass by the reclaim simply doing nothing at all.
     let repo = repo("target-prune-under-keep");
     let deps = repo.join("target/debug/deps");
     artifact(&deps, "solo", "aaaaaaaaaaaa", 3600);
     artifact(&deps, "pair", "bbbbbbbbbbbb", 1800);
     artifact(&deps, "pair", "cccccccccccc", 60);
 
-    let output = prune(&repo, "99999", &["-y"]);
+    let output = prune(&repo, FREE, &["-y"]);
     let said = said(&output);
     assert!(output.status.success(), "{said}");
     assert_eq!(survivors(&deps), 3, "nothing was superseded: {said}");
-    assert!(
-        said.contains("0 superseded artifact(s) removed"),
+    assert_eq!(
+        collected_units(&said),
+        Some(0),
         "and the report says so rather than staying silent: {said}"
     );
 }
 
 #[test]
 fn nothing_outside_deps_is_considered() {
-    // CARRIED, and it is the distinction the whole task exists for: `incremental`
-    // and the cross-target dirs REGROW, so deleting them costs a rebuild. That is
-    // what made the two hand-remedies preceding this task re-consume the space
-    // they freed.
+    // `incremental` and the cross-target dirs REGROW, so deleting them costs a
+    // rebuild. The superseded pass reaches `deps` alone.
     let repo = repo("target-prune-only-deps");
     let target = repo.join("target");
     std::fs::create_dir_all(target.join("debug/incremental")).unwrap();
@@ -2215,7 +611,7 @@ fn nothing_outside_deps_is_considered() {
     .unwrap();
     std::fs::write(target.join("debug/batten"), vec![0_u8; 65536]).unwrap();
 
-    let output = prune(&repo, "99999", &["-y"]);
+    let output = prune(&repo, FREE, &["-y"]);
     assert!(output.status.success(), "{}", said(&output));
     assert!(target.join("debug/incremental/blob").exists());
     assert!(target.join("aarch64-apple-darwin/debug/blob").exists());
@@ -2233,7 +629,7 @@ fn a_cross_target_deps_directory_is_pruned_too() {
     artifact(&deps, "cli", "bbbbbbbbbbbb", 1800);
     artifact(&deps, "cli", "cccccccccccc", 60);
 
-    let output = prune(&repo, "99999", &["-y"]);
+    let output = prune(&repo, FREE, &["-y"]);
     assert!(output.status.success(), "{}", said(&output));
     assert_eq!(
         survivors(&deps),
@@ -2245,14 +641,7 @@ fn a_cross_target_deps_directory_is_pruned_too() {
 #[cfg(unix)]
 #[test]
 fn a_file_of_a_kind_this_pass_does_not_reclaim_is_left_alone() {
-    // CHANGED under CLOUD-1157, and the change is the point of that row. This case
-    // used to be `a_non_executable_file_beside_the_artifacts_is_left_alone` and
-    // pinned the EXECUTABLE BIT as the scope — which is what made `.rlib`,
-    // `.rmeta` and `.so` unreachable while reading as a safety check. The bit now
-    // gates only the extension-less class, where it is the sole signal that a name
-    // is an artifact rather than somebody's scratch.
-    //
-    // What is still left alone is a KIND the pass does not reclaim: `.d` (2.8 MB
+    // What is left alone is a KIND the pass does not reclaim: `.d` (2.8 MB
     // across 666 files, measured — below the noise) and anything unrecognised.
     let repo = repo("target-prune-unreclaimed-kinds");
     let deps = repo.join("target/debug/deps");
@@ -2267,7 +656,7 @@ fn a_file_of_a_kind_this_pass_does_not_reclaim_is_left_alone() {
     std::fs::write(deps.join("cli-aaaaaaaaaaaa.rcgu.o"), "obj\n").unwrap();
     std::fs::write(deps.join("notes-aaaaaaaaaaaa.txt"), "scratch\n").unwrap();
 
-    let output = prune(&repo, "99999", &["-y"]);
+    let output = prune(&repo, FREE, &["-y"]);
     let said = said(&output);
     assert!(output.status.success(), "{said}");
     assert!(deps.join("cli-aaaaaaaaaaaa.d").exists(), "{said}");
@@ -2283,18 +672,16 @@ fn a_file_of_a_kind_this_pass_does_not_reclaim_is_left_alone() {
 #[cfg(unix)]
 #[test]
 fn an_extensioned_stem_past_keep_loses_its_oldest_copy() {
-    // RED BEFORE CLOUD-1157, and red for a structural reason rather than a tuning
-    // one: `libbatten-42061777d57a0311.rlib` split on its last `-` gave a "hash"
-    // of `42061777d57a0311.rlib`, the `.` failed the hex test, and the whole
-    // filename became its own stem. Every extensioned artifact was a group of one,
-    // and nothing in a group of one is ever past `keep`.
+    // RED BEFORE CLOUD-1157: `libbatten-42061777d57a0311.rlib` split on its last
+    // `-` gave a "hash" of `42061777d57a0311.rlib`, the `.` failed the hex test,
+    // and every extensioned artifact was a group of one.
     let repo = repo("target-prune-extensioned");
     let deps = repo.join("target/debug/deps");
     kinded(&deps, "libbatten", "aaaaaaaaaaaa", "rlib", 3600);
     kinded(&deps, "libbatten", "bbbbbbbbbbbb", "rlib", 1800);
     kinded(&deps, "libbatten", "cccccccccccc", "rlib", 60);
 
-    let output = prune(&repo, "99999", &["-y"]);
+    let output = prune(&repo, FREE, &["-y"]);
     let said = said(&output);
     assert!(output.status.success(), "{said}");
     assert!(
@@ -2306,8 +693,9 @@ fn an_extensioned_stem_past_keep_loses_its_oldest_copy() {
         deps.join("libbatten-cccccccccccc.rlib").exists(),
         "the newest is what the next build reads: {said}"
     );
-    assert!(
-        said.contains("1 superseded artifact(s) removed"),
+    assert_eq!(
+        collected_units(&said),
+        Some(1),
         "exactly one, not the whole group: {said}"
     );
 }
@@ -2315,16 +703,11 @@ fn an_extensioned_stem_past_keep_loses_its_oldest_copy() {
 #[cfg(unix)]
 #[test]
 fn a_stem_carrying_two_kinds_retains_keep_of_each() {
-    // THE DATA-LOSS CASE, and it is red against the first draft of CLOUD-1157
-    // rather than against the code this repairs. A key of the stem ALONE puts
-    // `libbatten`'s 2 `.rlib` and 6 `.rmeta` in one group of eight, where
-    // `keep = 2` can retain two `.rmeta` and delete the LIVE `.rlib` — the
-    // `keep = 0` failure `Prune::validate` already refuses, arriving through the
-    // grouping instead of through the count.
-    //
-    // The mtimes are the shape that makes it bite: every `.rmeta` is newer than
-    // every `.rlib`, which is what `check` and `clippy` produce on a lap that
-    // rebuilt no binary.
+    // THE DATA-LOSS CASE. A key of the stem ALONE puts `libbatten`'s 2 `.rlib`
+    // and 6 `.rmeta` in one group of eight, where `keep = 2` can retain two
+    // `.rmeta` and delete the LIVE `.rlib`. Every `.rmeta` is newer than every
+    // `.rlib`, which is what `check` and `clippy` produce on a lap that rebuilt
+    // no binary.
     let repo = repo("target-prune-two-kinds");
     let deps = repo.join("target/debug/deps");
     kinded(&deps, "libbatten", "aaaaaaaaaaaa", "rlib", 7200);
@@ -2349,7 +732,7 @@ fn a_stem_carrying_two_kinds_retains_keep_of_each() {
         );
     }
 
-    let output = prune(&repo, "99999", &["-y"]);
+    let output = prune(&repo, FREE, &["-y"]);
     let said = said(&output);
     assert!(output.status.success(), "{said}");
     assert!(
@@ -2367,8 +750,9 @@ fn a_stem_carrying_two_kinds_retains_keep_of_each() {
         !rmeta("cccccccccccc") && !rmeta("dddddddddddd"),
         "the four oldest `.rmeta` are superseded: {said}"
     );
-    assert!(
-        said.contains("4 superseded artifact(s) removed"),
+    assert_eq!(
+        collected_units(&said),
+        Some(4),
         "four `.rmeta` and no `.rlib`: {said}"
     );
 }
@@ -2376,16 +760,15 @@ fn a_stem_carrying_two_kinds_retains_keep_of_each() {
 #[cfg(unix)]
 #[test]
 fn a_stem_with_a_single_extensioned_copy_is_untouched() {
-    // The anti-vacuity twin for the widening, and without it "reclaim the
-    // extensioned kinds too" degenerates into a `cargo clean` that costs a full
-    // rebuild every lap. One `.rlib`, one `.rmeta`, one `.so`, each alone.
+    // The anti-vacuity twin for the widening: one `.rlib`, one `.rmeta`, one
+    // `.so`, each alone, and none of them goes.
     let repo = repo("target-prune-single-copies");
     let deps = repo.join("target/debug/deps");
     kinded(&deps, "libbatten", "aaaaaaaaaaaa", "rlib", 3600);
     kinded(&deps, "libbatten", "aaaaaaaaaaaa", "rmeta", 3600);
     kinded(&deps, "libserde_derive", "bbbbbbbbbbbb", "so", 3600);
 
-    let output = prune(&repo, "99999", &["-y"]);
+    let output = prune(&repo, FREE, &["-y"]);
     let said = said(&output);
     assert!(output.status.success(), "{said}");
     assert!(deps.join("libbatten-aaaaaaaaaaaa.rlib").exists(), "{said}");
@@ -2394,45 +777,31 @@ fn a_stem_with_a_single_extensioned_copy_is_untouched() {
         deps.join("libserde_derive-bbbbbbbbbbbb.so").exists(),
         "{said}"
     );
-    assert!(said.contains("0 superseded artifact(s) removed"), "{said}");
+    assert_eq!(collected_units(&said), Some(0), "{said}");
 }
 
 #[cfg(unix)]
 #[test]
 fn a_symlink_out_of_the_build_tree_is_never_followed() {
-    // RAISED ON #734 AND CONFIRMED, and it is a regression the PORT introduced
-    // rather than a hole the predecessor had: `find -type d` does not follow a
-    // link without `-L`, and `Path::is_dir` does. So a link under the build tree
-    // pointing anywhere at all was descended into — its executables considered
-    // for removal, and an `incremental` beneath it handed to `remove_dir_all`.
-    //
-    // The fixture is the shape that makes it reachable: something OUTSIDE the
-    // tree, holding both things the reclaim looks for, reached only through a
-    // link inside it. Red before the fix, on both halves.
+    // RAISED ON #734: `Path::is_dir` follows a link, so a link under the build
+    // tree pointing anywhere at all was descended into. The fixture is something
+    // OUTSIDE the tree, holding what the reclaim looks for, reached only through
+    // a link inside it.
     let repo = repo("target-prune-symlink");
     let outside = repo.join("not-the-build-tree");
     let deps = outside.join("debug/deps");
     artifact(&deps, "cli", "aaaaaaaaaaaa", 3600);
     artifact(&deps, "cli", "bbbbbbbbbbbb", 1800);
     artifact(&deps, "cli", "cccccccccccc", 60);
-    let cache = outside.join("debug/incremental/somebody-elses");
-    std::fs::create_dir_all(&cache).unwrap();
-    std::fs::write(cache.join("dep-graph.bin"), vec![0_u8; 200_000]).unwrap();
 
     std::fs::create_dir_all(repo.join("target")).unwrap();
     std::os::unix::fs::symlink(&outside, repo.join("target/linked")).unwrap();
 
-    // `1,99999` so the escalation is not merely allowed but REQUIRED to run: a
-    // case where nothing escalates would pass without proving anything.
-    let said = said(&prune(&repo, "1,99999", &["-y"]));
+    let said = said(&prune(&repo, FREE, &["-y"]));
     assert_eq!(
         survivors(&deps),
         3,
         "nothing across a link is superseded — it is not this tree's to judge: {said}"
-    );
-    assert!(
-        cache.exists(),
-        "the escalation must not reach through a link either: {said}"
     );
 }
 
@@ -2440,147 +809,63 @@ fn a_symlink_out_of_the_build_tree_is_never_followed() {
 
 #[test]
 fn the_report_is_a_count_and_bytes_never_a_path_listing() {
-    // CARRIED. Pointer-only per non-negotiable rule 4: a path list is unbounded,
-    // and a caller who wants one can run `du`.
+    // Pointer-only per non-negotiable rule 4: a path list is unbounded, and a
+    // caller who wants one can run `du`.
     let repo = repo("target-prune-pointer-only");
     let deps = repo.join("target/debug/deps");
     artifact(&deps, "SENTINELSTEM", "aaaaaaaaaaaa", 3600);
     artifact(&deps, "SENTINELSTEM", "bbbbbbbbbbbb", 1800);
     artifact(&deps, "SENTINELSTEM", "cccccccccccc", 60);
 
-    let said = said(&prune(&repo, "99999", &["-y"]));
+    let said = said(&prune(&repo, FREE, &["-y"]));
     assert!(
         !said.contains("SENTINELSTEM"),
         "the removed artifact's own name must not reach the report: {said}"
     );
-    assert!(said.contains("superseded artifact(s) removed"), "{said}");
-}
-
-#[test]
-fn the_report_names_the_floor_and_its_basis_beside_the_free_space() {
-    // CHANGED rather than carried, and strictly stronger: there are two floors
-    // now, so a number with no basis beside it cannot say which one is in force.
-    let repo = repo("target-prune-report-floor");
-    built(&repo);
-
-    let said = said(&prune(&repo, "99999", &["-y"]));
-    assert!(said.contains("99999MB free"), "{said}");
-    assert!(said.contains(&format!("warm floor {WARM_MB}MB")), "{said}");
-}
-
-// --- the floor, and the order it is judged in --------------------------------
-
-#[test]
-fn a_prunable_tree_is_never_refused_for_being_over_budget() {
-    // A tree above the floor but full of superseded copies is this task's
-    // ordinary case, not a stop: checking the floor first would turn every few
-    // laps into a refusal for a condition the next four lines fix.
-    //
-    // WHAT THIS DOES NOT ASSERT, corrected on #734 rather than left implied: the
-    // ORDER. The free-space seam is declared, so no reading can rise because the
-    // reclaim freed something, and no fixture here can put the judgement on the
-    // far side of a reclaim that moved it. The order is asserted where it is
-    // expressible — `escalating_judges_against_the_cold_floor_it_just_created`
-    // reaches its second reading only because the reclaim ran first.
-    let repo = repo("target-prune-order");
-    let deps = repo.join("target/debug/deps");
-    artifact(&deps, "cli", "aaaaaaaaaaaa", 3600);
-    artifact(&deps, "cli", "bbbbbbbbbbbb", 1800);
-    artifact(&deps, "cli", "cccccccccccc", 60);
-
-    let output = prune(&repo, "99999", &["-y"]);
+    assert!(said.contains("disk-collected "), "{said}");
     assert!(
-        output.status.success(),
-        "the reclaim runs before the judgement: {}",
-        said(&output)
+        said.contains("disk-unlink-ms "),
+        "the unlink cost is CLOUD-1945's figure: {said}"
     );
-    assert_eq!(survivors(&deps), 2);
-}
-
-#[test]
-fn a_tree_still_below_the_floor_after_pruning_is_refused() {
-    let repo = repo("target-prune-refuses");
-    built(&repo);
-
-    let output = prune(&repo, "1", &["-y"]);
-    let said = said(&output);
-    assert!(!output.status.success(), "{said}");
-    assert!(said.contains("below the measured"), "{said}");
-    assert!(said.contains("free 1MB"), "{said}");
-    assert!(said.contains("floor"), "{said}");
-}
-
-#[test]
-fn the_refusal_explains_how_exhaustion_would_otherwise_present() {
-    // CARRIED, and it is the whole point of the second half: without this the
-    // next thing an author sees is a rustc IO error inside a test run, under a
-    // `land` line telling them to fix their own diff.
-    let repo = repo("target-prune-refusal-explains");
-    built(&repo);
-
-    let said = said(&prune(&repo, "1", &["-y"]));
-    assert!(said.contains("reads as a suite regression"), "{said}");
 }
 
 // --- the fresh-clone path ----------------------------------------------------
 
 #[test]
-fn an_unbuilt_tree_beside_a_manifest_prunes_nothing_and_still_judges_the_floor() {
-    // CARRIED. Measured 2026-08-25: conflating an unbuilt tree with a wrong
-    // directory made `verify` unrunnable on a fresh clone for three consecutive
-    // `land` laps, on a tree whose only fault was a deleted `target/`.
+fn an_unbuilt_tree_beside_a_manifest_collects_nothing_at_exit_zero() {
+    // Measured 2026-08-25: conflating an unbuilt tree with a wrong directory
+    // made `verify` unrunnable on a fresh clone for three consecutive `land`
+    // laps, on a tree whose only fault was a deleted `target/`.
     let repo = repo("target-prune-unbuilt");
 
-    let output = prune(&repo, "99999", &["-y"]);
+    let output = prune(&repo, FREE, &["-y"]);
     let said = said(&output);
-    assert!(output.status.success(), "{said}");
-    assert!(said.contains("nothing built"), "{said}");
-    assert!(
-        said.contains("0 superseded artifact(s) removed"),
-        "the floor is still decided, which is the half that must not be lost: {said}"
-    );
-}
-
-#[test]
-fn an_unbuilt_tree_below_the_floor_still_refuses() {
-    // The fresh-clone path is not an escape: a clone starting with less space
-    // than a lap needs has to be told so before it spends the lap.
-    let repo = repo("target-prune-unbuilt-tight");
-
-    let output = prune(&repo, "1", &["-y"]);
-    assert!(!output.status.success(), "{}", said(&output));
+    assert_eq!(output.status.code(), Some(0), "{said}");
+    assert_eq!(collected_units(&said), Some(0), "{said}");
 }
 
 #[test]
 fn no_build_directory_and_no_manifest_is_could_not_look() {
-    // CHANGED: exit 3 rather than the predecessor's exit 2, because the engine's
-    // contract reserves 2 for a violation and this is not one — the cwd is not a
-    // workspace root, so nothing was examined, which is not the same as nothing
-    // to prune. What must not change is that it is non-zero and says so.
+    // Exit 3: the cwd is not a workspace root, so nothing was examined, which is
+    // not the same as nothing to collect.
     let repo = Fixture::new("target-prune-elsewhere")
         .config(&config())
         .build();
 
-    let output = prune(&repo, "99999", &["-y"]);
+    let output = prune(&repo, FREE, &["-y"]);
     let said = said(&output);
-    assert!(!output.status.success(), "{said}");
-    // THE CODE, not merely non-zero (raised on #734), and it is what makes the
-    // ledger's `changed` arm true rather than asserted: an implementation still
-    // returning the predecessor's exit 2 passes every other line here.
     assert_eq!(output.status.code(), Some(3), "{said}");
     assert!(said.contains("nothing was examined"), "{said}");
 }
 
 #[test]
 fn a_named_root_that_is_absent_is_could_not_look_whatever_the_cwd_holds() {
-    // The other discriminator, and both are needed: somebody asked about a
-    // SPECIFIC tree and it is not there, which is could-not-look even in a
-    // workspace whose default root simply has not been built.
+    // Somebody asked about a SPECIFIC tree and it is not there, which is
+    // could-not-look even in a workspace whose default root is unbuilt.
     let repo = repo("target-prune-named-absent");
 
-    let output = prune(&repo, "99999", &["-y", "--root", "nowhere"]);
+    let output = prune(&repo, FREE, &["-y", "--root", "nowhere"]);
     let said = said(&output);
-    assert!(!output.status.success(), "{said}");
     assert_eq!(output.status.code(), Some(3), "{said}");
     assert!(said.contains("nothing was examined"), "{said}");
 }
@@ -2589,14 +874,12 @@ fn a_named_root_that_is_absent_is_could_not_look_whatever_the_cwd_holds() {
 
 #[test]
 fn the_destructive_verb_refuses_without_yes() {
-    // House-style §5's binding, and `capture prune` carries the identical pairing
-    // for the identical reason: the primary caller is `verify`, which is
-    // non-interactive, and a gate that blocks on a Y/N is a dead gate. So the
-    // consent is a FLAG rather than a prompt, and it is required.
+    // House-style §5's binding: the primary caller is non-interactive, and a gate
+    // that blocks on a Y/N is a dead gate, so the consent is a required FLAG.
     let repo = repo("target-prune-needs-yes");
     built(&repo);
 
-    let output = prune(&repo, "99999", &[]);
+    let output = prune(&repo, FREE, &[]);
     let said = said(&output);
     assert!(!output.status.success(), "{said}");
     assert!(said.contains("-y"), "the refusal names the flag: {said}");
@@ -2610,18 +893,17 @@ fn a_dry_run_removes_nothing_and_says_what_it_would_do() {
     artifact(&deps, "cli", "bbbbbbbbbbbb", 1800);
     artifact(&deps, "cli", "cccccccccccc", 60);
 
-    let output = prune(&repo, "99999", &["-n"]);
+    let output = prune(&repo, FREE, &["-n"]);
     let said = said(&output);
     assert!(output.status.success(), "{said}");
     assert_eq!(survivors(&deps), 3, "a dry run removes nothing: {said}");
+    assert!(said.contains("would collect"), "{said}");
 }
 
 #[test]
 fn target_is_a_noun_that_performs_no_default_action() {
-    // House-style §2, and `surface::is_noun`'s other half. A bare noun lists its
-    // sub-verbs rather than doing something — which matters more here than
-    // anywhere else on the surface, because the thing it would otherwise do is
-    // delete files.
+    // House-style §2: a bare noun lists its sub-verbs rather than doing
+    // something — which matters most here, where the thing is deleting files.
     let repo = repo("target-prune-noun");
     let output = batten()
         .arg("target")
@@ -2638,133 +920,28 @@ fn target_is_a_noun_that_performs_no_default_action() {
 
 #[test]
 fn a_repository_declaring_no_prune_table_reports_rather_than_refusing() {
-    // Not a refusal, because nothing was asked for: a repository with no
-    // `[prune]` table has no build tree named and no floor to judge against, and
-    // inventing one would be the core holding a number about somebody else's
-    // build (non-negotiable rule 1).
+    // Not a refusal, because nothing was asked for (non-negotiable rule 1).
     let repo = Fixture::new("target-prune-no-table")
         .config("version = 1\n[[rule]]\nid = \"noop\"\nkind = \"forbid\"\nglob = \"*.nothing\"\npattern = \"x\"\nseverity = \"warn\"\nscope = \"tree\"\n")
         .file("Cargo.toml", "[workspace]\n")
         .build();
 
-    let output = prune(&repo, "99999", &["-y"]);
+    let output = prune(&repo, FREE, &["-y"]);
     let said = said(&output);
     assert!(output.status.success(), "{said}");
     assert!(said.contains("no [prune] table"), "{said}");
 }
 
-#[test]
-fn a_floor_disagreeing_with_its_declared_basis_is_refused_at_load() {
-    // CARRIED, and this is the case that proves the ENGINE reaches the
-    // validation rather than that `Prune::validate` returns an error when called
-    // — which a unit test already pins and which says nothing about whether
-    // anything calls it. The predecessor answered the same question by parsing
-    // its own source with a regex at runtime.
-    let repo = Fixture::new("target-prune-basis-disagrees")
-        .config(
-            "version = 1\n\n[prune]\nroot = \"target\"\nkeep = 2\n\n\
-             [prune.warm]\nmb = 5000\nworst_mb = 6242\nmultiplier = 1\nmeasured = \"2026-08-22\"\n\n\
-             [prune.cold]\nmb = 14000\nworst_mb = 14000\nmultiplier = 1\nmeasured = \"2026-08-29\"\n\n\
-             [prune.warm.basis]\nglob = \"src/*.rs\"\ncount = 0\ntolerance = 0\n\n\
-             [prune.cold.basis]\nglob = \"src/*.rs\"\ncount = 0\ntolerance = 0\n",
-        )
-        .file("Cargo.toml", "[workspace]\n")
-        .build();
-
-    let output = prune(&repo, "99999", &["-y"]);
-    let said = said(&output);
-    assert!(!output.status.success(), "{said}");
-    assert!(
-        said.contains("disagrees with the basis"),
-        "and both numbers travel with the refusal: {said}"
-    );
-}
-
-#[test]
-fn a_cold_floor_at_or_below_the_warm_one_is_refused_at_load() {
-    // The two-floor design's own vacuity guard. A cold floor that does not exceed
-    // the warm one would make the second floor decide nothing — the escalation
-    // drops the incremental cache, so a cold lap cannot need less — and it is the
-    // shape of a number somebody copied rather than measured.
-    let repo = Fixture::new("target-prune-cold-not-above")
-        .config(
-            "version = 1\n\n[prune]\nroot = \"target\"\nkeep = 2\n\n\
-             [prune.warm]\nmb = 6000\nworst_mb = 6000\nmultiplier = 1\nmeasured = \"2026-08-22\"\n\n\
-             [prune.cold]\nmb = 6000\nworst_mb = 6000\nmultiplier = 1\nmeasured = \"2026-08-29\"\n\n\
-             [prune.warm.basis]\nglob = \"src/*.rs\"\ncount = 0\ntolerance = 0\n\n\
-             [prune.cold.basis]\nglob = \"src/*.rs\"\ncount = 0\ntolerance = 0\n",
-        )
-        .file("Cargo.toml", "[workspace]\n")
-        .build();
-
-    let output = prune(&repo, "99999", &["-y"]);
-    let said = said(&output);
-    assert!(!output.status.success(), "{said}");
-    assert!(said.contains("is not above the warm one"), "{said}");
-}
-
-#[test]
-fn a_floor_carrying_no_measurement_date_is_refused_at_load() {
-    // CLOUD-266's class: a stale measurement reads exactly like a fresh one, so
-    // the date is required rather than commentary.
-    let repo = Fixture::new("target-prune-no-date")
-        .config(
-            "version = 1\n\n[prune]\nroot = \"target\"\nkeep = 2\n\n\
-             [prune.warm]\nmb = 6000\nworst_mb = 6000\nmultiplier = 1\nmeasured = \"recently\"\n\n\
-             [prune.cold]\nmb = 14000\nworst_mb = 14000\nmultiplier = 1\nmeasured = \"2026-08-29\"\n\n\
-             [prune.warm.basis]\nglob = \"src/*.rs\"\ncount = 0\ntolerance = 0\n\n\
-             [prune.cold.basis]\nglob = \"src/*.rs\"\ncount = 0\ntolerance = 0\n",
-        )
-        .file("Cargo.toml", "[workspace]\n")
-        .build();
-
-    let output = prune(&repo, "99999", &["-y"]);
-    let said = said(&output);
-    assert!(!output.status.success(), "{said}");
-    assert!(said.contains("not a YYYY-MM-DD date"), "{said}");
-}
-
-// ---------------------------------------------------------------------------
-// CLOUD-843: the task is one argv, and the fallback cascade its shell body ran
-// is the engine's where it had a home and provisioning's where it did not.
-//
-// FIVE CASES RETIRED WITH THE BODY THEY RAN, each named with where its property
-// went, because a case that ran a POSIX `sh` program has nothing left to run:
-//
-// * `an_absent_engine_on_a_short_disk_is_refused_without_a_build`,
-//   `an_absent_engine_on_an_ample_disk_builds_as_before` and
-//   `an_absent_engine_with_no_readable_floor_falls_through_to_the_build` —
-//   CLOUD-1838's arm for a machine with no `batten` at all. That machine now
-//   fails at once with the runner's own "not found", before a byte is built:
-//   STRICTER than the arm, which built whenever free space cleared the cold
-//   floor. A session always has one — `session:batten` installs the release
-//   through `install.sh`, the one program that stays shell because nothing else
-//   runs before `batten` exists.
-// * `a_present_engine_that_answers_needs_no_build` — unchanged by construction:
-//   the task IS the engine answering, and `the_task_is_the_verb_and_builds_nothing`
-//   pins it.
-// * `a_present_engine_that_refuses_still_falls_through_to_the_build` — the arm
-//   CLOUD-1146 argued for, a binary older than the config refusing the whole
-//   file. The engine answers it now without a build: `prune::declared_alone`
-//   reads the committed `[prune]` table ALONE, strictly, and
-//   `a_build_the_config_outran_reclaims_by_the_prune_table_alone` pins it over the
-//   binary. What the arm ALSO did — build on a genuine floor refusal — is gone on
-//   purpose: a refusal about the disk is the answer, and building on it spent the
-//   disk the refusal was about.
-// ---------------------------------------------------------------------------
-
 /// `[tasks."target-prune"]`'s run, and its lap-boundary twin's, as the manifest
 /// carries them.
-///
-/// Through `common::task_block`, so under `mutate sweep` this is the STAGED
-/// manifest.
 fn run_of(task: &str) -> String {
     let block = common::task_block(task).unwrap_or_else(|| panic!("{task} is a declared task"));
     common::task_value(&block, "run")
 }
 
 /// The task is the verb, and nothing in it builds: the point of this task is to
-/// reclaim WITHOUT a build, which `cargo run` cannot do.
+/// collect WITHOUT a build, which `cargo run` cannot do. The tasks themselves
+/// retire in CLOUD-2198's commit B, once the pin carries this verb.
 #[test]
 fn the_task_is_the_verb_and_builds_nothing() {
     for task in ["target-prune", "target-prune:lap"] {
@@ -2774,7 +951,7 @@ fn the_task_is_the_verb_and_builds_nothing() {
 }
 
 /// A config carrying a key no build knows — the shape a release meets on every
-/// branch that adds one — with a floor the tree clears.
+/// branch that adds one.
 fn outran(name: &str, prune_key: Option<&str>) -> PathBuf {
     let extra = prune_key
         .map(|key| format!("{key} = 1\n"))
@@ -2792,16 +969,16 @@ fn outran(name: &str, prune_key: Option<&str>) -> PathBuf {
         .build()
 }
 
-/// **A BUILD THE CONFIG HAS OUTRUN STILL RECLAIMS** (CLOUD-843, CLOUD-1146).
+/// **A BUILD THE CONFIG HAS OUTRUN STILL COLLECTS** (CLOUD-843, CLOUD-1146).
 ///
 /// `Config` is `deny_unknown_fields`, so a binary older than the tree's config
-/// refuses the whole file; the retired body answered that by building the engine.
-/// The verb reads the one table it needs instead, and says that it did.
+/// refuses the whole file; the verb reads the one table it needs instead, and
+/// says that it did.
 #[test]
 fn a_build_the_config_outran_reclaims_by_the_prune_table_alone() {
     let repo = outran("target-prune-outran", None);
     built(&repo);
-    let output = prune(&repo, "99999", &["-y"]);
+    let output = prune(&repo, FREE, &["-y"]);
     let said = said(&output);
     assert!(output.status.success(), "{said}");
     assert!(
@@ -2816,40 +993,6 @@ fn a_build_the_config_outran_reclaims_by_the_prune_table_alone() {
 fn a_prune_key_this_build_predates_is_still_refused() {
     let repo = outran("target-prune-outran-prune-key", Some("future_key"));
     built(&repo);
-    let output = prune(&repo, "99999", &["-y"]);
+    let output = prune(&repo, FREE, &["-y"]);
     assert!(!output.status.success(), "{}", said(&output));
-}
-
-/// **AND THE FLOOR STILL DECIDES**: read alone, the table's floor refuses a short
-/// disk exactly as it does read whole — the fallback admits nothing the floor
-/// would not.
-#[test]
-fn a_table_read_alone_still_refuses_below_its_floor() {
-    let repo = outran("target-prune-outran-short", None);
-    built(&repo);
-    let output = prune(&repo, "1000", &["-y"]);
-    assert_eq!(output.status.code(), Some(2), "{}", said(&output));
-}
-
-/// `target/<profile>/build` holds the COMPILED build scripts, so dropping it is
-/// basis-moving (CLOUD-2192). Measured 2026-10-11 under
-/// `CARGO_LOG=cargo::core::compiler::fingerprint=info` after an escalation took
-/// the root as `cold = false`: 170 crates compiled, every root
-/// `FailedToReadMetadata` on a `build_script_build` binary under it, for a
-/// directory of 20 MB. A row declaring it warm lets the escalation print "the
-/// next build is still warm" over a full rebuild.
-#[test]
-fn the_committed_build_root_is_basis_moving() {
-    let prune = batten::prune::declared_alone(&common::at_root("."))
-        .expect("this repository's committed [prune] table loads");
-    let build: Vec<_> = prune
-        .regrowable
-        .iter()
-        .filter(|row| row.name == "build")
-        .collect();
-    assert_eq!(build.len(), 1, "the `build` root is declared once");
-    assert!(
-        build[0].cold,
-        "dropping `build` makes the next cargo build cold"
-    );
 }

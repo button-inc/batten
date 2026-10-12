@@ -3467,19 +3467,50 @@ fn run_target(
         }
     };
     let Some(declared) = declared.as_ref() else {
-        // A repository that declares no `[prune]` has no floor to judge against,
-        // and inventing one would be the core holding a number about somebody
-        // else's build. Not a refusal: nothing was asked for.
+        // A repository that declares no `[prune]` declares no band to collect
+        // toward, and inventing one would be the core holding a number about
+        // somebody else's build. Not a refusal: nothing was asked for.
         output::message(
             mode,
             output::Verbosity::Normal,
             err,
-            "target prune: no [prune] table, so this repository declares no build tree to reclaim or floor to judge",
+            "target prune: no [prune] table, so this repository declares no build tree to collect",
         )?;
         return Ok(ExitCode::Success);
     };
-    let named = root.is_some();
-    let tree = here.join(root.as_deref().unwrap_or(declared.root.as_str()));
+    // A NAMED TREE COLLECTS UNDER THE SAME BAND, rooted where it was named.
+    let mut declared = declared.clone();
+    if let Some(named) = root {
+        declared.root.clone_from(named);
+    }
+    let tree = here.join(&declared.root);
+    // NOTHING EXAMINED IS COULD-NOT-LOOK, never a clean collection: a tree
+    // somebody named that is not there, or no tree and no manifest beside the
+    // cwd — which is not a workspace root at all. An unbuilt tree beside a
+    // manifest is a fresh clone, and collects nothing at exit 0.
+    if !tree.is_dir() && (root.is_some() || !here.join("Cargo.toml").is_file()) {
+        output::message(
+            mode,
+            output::Verbosity::Normal,
+            err,
+            &format!(
+                "target prune: {} is not a build tree and nothing was examined",
+                tree.display()
+            ),
+        )?;
+        return Ok(ExitCode::Internal);
+    }
+    // THE ARM SWITCHED OFF IS NOT A REFUSAL (CLOUD-2198): a `[prune]` without
+    // the band asks for nothing, as a missing `[prune]` does.
+    let Some((min, max)) = declared.free_band() else {
+        output::message(
+            mode,
+            output::Verbosity::Normal,
+            err,
+            "target prune: [prune] declares no min_free_mb/max_free_mb, so there is no band to collect toward",
+        )?;
+        return Ok(ExitCode::Success);
+    };
 
     if *dry_run {
         output::message(
@@ -3487,11 +3518,8 @@ fn run_target(
             output::Verbosity::Normal,
             err,
             &format!(
-                "target prune: would keep {} copy/copies per stem under {}, against a {}MB warm floor and a {}MB cold one",
-                declared.keep,
+                "target prune: would collect under {} — superseded units, then least recently used — toward max_free_mb {max} (min_free_mb {min})",
                 tree.display(),
-                declared.warm.mb,
-                declared.cold.mb
             ),
         )?;
         return Ok(ExitCode::Success);
@@ -3506,81 +3534,45 @@ fn run_target(
         ));
     }
 
-    // THE LAP HISTORY IS OPTIONAL, and both halves of that are deliberate
-    // (CLOUD-861). `$GIT_DIR` is where it lives, beside `batten-receipts/`; a
-    // checkout without one — a fixture, an exported tree — has nowhere to keep a
-    // history and decides on the declared floors alone, exactly as every run did
-    // before the ratchet existed. A HEAD that cannot be read is not a reason to
-    // refuse either: the sha is a pointer the report prints, never a key anything
-    // is looked up by.
-    //
-    // THE CWD'S OWN `.git`, NEVER AN ANCESTOR'S, and this is the same defect #734
-    // records for the config root one paragraph up — caught here by the suite
-    // rather than by reading. `git::git_dir` walks up, so a fixture at
-    // `target/tmp/<name>` resolved the ENCLOSING repository's git dir and every
-    // case in the suite shared one lap journal: a run with a fabricated 99999MB
-    // reading wrote a ratchet that the next case then judged itself against. The
-    // authority is `./.git`, for the reason `./batten.toml` is the config's.
-    if prune::inside_open_lap(here, std::env::var_os(prune::LAP_OPEN_ENV).as_deref()) {
-        output::message(
-            mode,
-            output::Verbosity::Normal,
-            err,
-            "target prune: this tree's lap is open in another run, and its own close reclaims — nothing touched",
-        )?;
-        return Ok(ExitCode::Success);
+    // THE RETIRED LAP JOURNAL GOES ON FIRST RUN (CLOUD-2198), as `replay.rs`
+    // retires its old state cache: nothing reads it any more. The cwd's own
+    // `.git`, never an ancestor's, for `./batten.toml`'s reason.
+    if here.join(".git").exists()
+        && let Ok(git_dir) = git::git_dir(here)
+    {
+        let _ = std::fs::remove_file(git_dir.join("batten-prune").join("laps.json"));
     }
-    let store = here
-        .join(".git")
-        .exists()
-        .then(|| git::git_dir(here).ok())
-        .flatten()
-        .map(|git_dir| prune::LapStore {
-            head: git::head_commit(here).map_or_else(
-                |_| String::from("unknown"),
-                |sha| sha.chars().take(8).collect(),
-            ),
-            git_dir,
-        });
-    let outcome = prune::prune(&tree, declared, named, store.as_ref())?;
-    output::message(mode, output::Verbosity::Normal, err, &outcome.report())?;
-    if outcome.clears_the_floor() {
-        // THE BASIS, AFTER THE FLOOR AND ONLY ON THIS SURFACE (CLOUD-1158). The
-        // floor refusal is the urgent one and comes first; this one asks the
-        // slower question — is the number still measured against the tree it was
-        // measured against — and it asks it here rather than at config load
-        // because `Prune::validate` runs on every mediated tool call. See
-        // `prune::Measured`.
-        //
-        // COULD-NOT-LOOK ALLOWS: `git.rs` states the posture every caller of
-        // `tracked_paths` takes — a tree that cannot be enumerated is never
-        // refused on the strength of a count nobody took.
-        //
-        // AND THE CWD'S OWN `.git` IS THE AUTHORITY, never an ancestor's, for the
-        // reason the lap store above says: `open` walks up, so a fixture under
-        // `target/tmp/` otherwise counts the ENCLOSING repository's index and is
-        // refused for a basis that is not its own. Measured here as a fixture
-        // declaring 1 file and being told the tree tracks 189.
-        let index = here
-            .join(".git")
-            .exists()
-            .then(|| git::tracked_paths(here).ok())
-            .flatten();
-        if let Some(tracked) = index {
-            let paths: Vec<&str> = tracked.iter().map(String::as_str).collect();
-            if let Some(drift) = prune::basis_drift(declared, &paths) {
-                output::verdict(err, &drift.refusal())?;
-                return Ok(ExitCode::Violation);
-            }
-        }
+    collect_on_demand(here, &declared, mode, err)
+}
+
+/// ONE FORCED COLLECTION (CLOUD-2198): superseded units, then least recently
+/// used, until `max_free_mb` is free — the hook's and the watcher's collector,
+/// run on demand, and waiting on a held tree's lock rather than skipping it.
+/// No floor, no basis, no escalation: it reports `disk-collected <freed_mb>
+/// <units> <free_after_mb>` and exits 0.
+///
+/// # Errors
+///
+/// Free space that cannot be read is could-not-look.
+//MUTANT-SUITE crates/batten/tests/it/target_prune.rs
+//MUTANT prune-verb-skips-collect|s@^    let collected = collect::collect_toward_max(here, declared, \&kept, now, \&mut free, None, true);$@    let collected = None::<collect::Collected>;@|target_prune_collects_to_max_free_without_a_floor
+fn collect_on_demand(
+    here: &Path,
+    declared: &prune::Prune,
+    mode: Mode,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let mut free = prune::sampler(here.join(&declared.root))?;
+    let now = free()?;
+    let kept = collect::kept(&collect::engine_paths());
+    let collected = collect::collect_toward_max(here, declared, &kept, now, &mut free, None, true);
+    let Some(done) = collected else {
         return Ok(ExitCode::Success);
+    };
+    for line in done.lines() {
+        output::message(mode, output::Verbosity::Normal, err, &line)?;
     }
-    // THE VERDICT, and it is a violation rather than an internal failure: the
-    // invocation was well-formed and the answer is "this tree cannot fit the
-    // build the next lap will run". Exit 2 is that answer everywhere in this
-    // engine, with no per-verb exception.
-    output::verdict(err, &outcome.refusal(&tree))?;
-    Ok(ExitCode::Violation)
+    Ok(ExitCode::Success)
 }
 
 /// What one `capture show` asked for: which window, and in which encoding.
@@ -10612,8 +10604,22 @@ fn run_land_lap(
         pipeline,
         guard: &guard,
     };
+    // ONE DISK WATCHER FOR THE WHOLE LANDING (CLOUD-2197): replay, verify, push
+    // and the CI wait, every lap. It ends with the landing, on its stop flag.
+    let prune_rules = resolve::resolve(root, &Overrides::default())
+        .ok()
+        .and_then(|resolved| resolved.prune);
     land_census_window(root, &beat_note, &stop_note, || {
-        run_land_laps(run, out, err)
+        let (ended, lines) = disk_watch::around(disk_watcher(root, prune_rules.as_ref()), || {
+            run_land_laps(run, out, err)
+        });
+        if !lines.is_empty() {
+            for line in &lines {
+                writeln!(err, "land: {line}")?;
+            }
+            land::record_disk(root, branch, &lines)?;
+        }
+        ended
     })
 }
 
@@ -12471,25 +12477,23 @@ fn run_land_replay(
 /// make the engine compose a shell line out of an environment variable, which is
 /// exactly the argv-composition `policy/spawn-adapters.rego` records refusing for
 /// `prune`'s deletes. A consumer needing that writes a script and names it.
-/// The lap's disk arm (CLOUD-1937), under the committed `[prune]` rules and
-/// nothing else.
+/// The disk watcher a long-running batten process hosts (CLOUD-2197), under the
+/// committed `[prune]` band and nothing else.
 ///
-/// A repository that declares no `[prune]` has no floor to watch, and a config
-/// that would not resolve reaches here as `None` too — the gate runs unwatched
-/// rather than refused, the fail-open direction every arm of the race takes.
-fn disk_watch<'a>(
+/// `None` — the run goes unwatched — where no band is declared or free space
+/// cannot be read: the fail-open direction every disk arm takes.
+fn disk_watcher<'a>(
     root: &Path,
     config: Option<&'a prune::Prune>,
-) -> Result<Option<land::DiskWatch<'a>>> {
-    let Some(config) = config else {
-        return Ok(None);
-    };
-    let tree = root.join(&config.root);
-    Ok(Some(land::DiskWatch {
-        free_mb: Box::new(prune::sampler(tree.clone())?),
-        tree,
+) -> Option<disk_watch::DiskWatch<'a>> {
+    let config = config.filter(|config| config.free_band().is_some())?;
+    let free_mb = prune::sampler(root.join(&config.root)).ok()?;
+    Some(disk_watch::DiskWatch {
+        repo: root.to_path_buf(),
         config,
-    }))
+        free_mb: Box::new(free_mb),
+        kept: collect::kept(&collect::engine_paths()),
+    })
 }
 
 //MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
@@ -12549,19 +12553,7 @@ fn run_land_verify(
     let raced = reference
         .and_then(|reference| repo_slug(root).map(|slug| trunk_watch(reference, "", &slug, 1)));
     let trunk = raced.as_ref().zip(reference);
-    let prune_rules = resolve::resolve(root, &Overrides::default())
-        .ok()
-        .and_then(|resolved| resolved.prune);
-    let disk = disk_watch(root, prune_rules.as_ref())?;
-    let verified = land::verify_raced(
-        root,
-        branch,
-        &command,
-        &published,
-        &environment,
-        trunk,
-        disk,
-    )?;
+    let verified = land::verify_raced(root, branch, &command, &published, &environment, trunk)?;
     // THE GATE'S LOG AS A POINTER (CLOUD-2223): its bytes are stored, never
     // streamed, and this is the one line that names where.
     let log = land::verify_log(root, branch, verified.sha());
@@ -15520,18 +15512,33 @@ fn run_mutate_sweep(
         return Ok(ExitCode::Internal);
     }
     let change = narrowed.change.clone();
-    let declared = run_declared_sweep(root, narrowed, &registry, shard.as_deref(), out, err)?;
-    let Some(id) = runner else {
-        return Ok(declared);
-    };
-    // BOTH HALVES RUN, AND THE FIRST REFUSAL IS THE VERDICT: a declared finding
-    // must not hide behind a clean registered run, nor the reverse.
-    let registered = run_registered_runner(root, &id, &registry, change, out, err)?;
-    Ok(if declared == ExitCode::Success {
-        registered
-    } else {
-        declared
-    })
+    // THE SWEEP HOSTS THE DISK WATCHER AROUND ITS BUILDS (CLOUD-2197): its
+    // inner cargo processes are not tool calls, so no hook sees them.
+    let prune_rules = resolve::resolve(root, &Overrides::default())
+        .ok()
+        .and_then(|resolved| resolved.prune);
+    let (swept, lines) = disk_watch::around(
+        disk_watcher(root, prune_rules.as_ref()),
+        || -> Result<ExitCode> {
+            let declared =
+                run_declared_sweep(root, narrowed, &registry, shard.as_deref(), out, err)?;
+            let Some(id) = runner else {
+                return Ok(declared);
+            };
+            // BOTH HALVES RUN, AND THE FIRST REFUSAL IS THE VERDICT: a declared
+            // finding must not hide behind a clean registered run, nor the reverse.
+            let registered = run_registered_runner(root, &id, &registry, change, out, err)?;
+            Ok(if declared == ExitCode::Success {
+                registered
+            } else {
+                declared
+            })
+        },
+    );
+    for line in &lines {
+        writeln!(err, "mutate sweep: {line}")?;
+    }
+    swept
 }
 
 /// THE DISK ADMISSION a building step takes first (CLOUD-2197): below `[prune]

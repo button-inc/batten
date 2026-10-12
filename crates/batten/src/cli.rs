@@ -1715,7 +1715,7 @@ pub enum McpCommand {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum TargetCommand {
-    /// Reclaim superseded artifacts, then judge the floor the next build needs.
+    /// Collect superseded, then least recently used, units toward `max_free_mb`.
     Prune {
         /// The global `-y --yes`, which this verb requires: it never prompts.
         yes: bool,

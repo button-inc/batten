@@ -4167,8 +4167,9 @@ pub const SURFACE: &[CommandDecl] = &[
         effect: Effect::Unclassified,
         flags: &[],
     },
-    // The disk floor and the reclaim (CLOUD-766, CLOUD-861, CLOUD-1030), ported
-    // out of `mise-tasks/target-prune.sh` under CLOUD-1059.
+    // The reclaim (CLOUD-766, CLOUD-1030), ported out of
+    // `mise-tasks/target-prune.sh` under CLOUD-1059; since CLOUD-2198 one forced
+    // run of the disk collector, with no floor.
     //
     // `destructive`, not `write`, and for `capture prune`'s reason one row up:
     // what it removes is recoverable only by re-running the build that produced
@@ -4178,7 +4179,7 @@ pub const SURFACE: &[CommandDecl] = &[
     CommandDecl {
         path: "target prune",
         id: "target.prune",
-        about: "Reclaim superseded build artifacts, and refuse below the measured disk floor for the build the next lap will run",
+        about: "Collect superseded, then least recently used, build units until [prune] max_free_mb is free",
         data_channel: false,
         exits: EXITS_VERDICT,
         effect: Effect::Destructive,
