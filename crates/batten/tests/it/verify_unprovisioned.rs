@@ -437,10 +437,14 @@ fn the_verify_mapper_refuses_an_unprovisioned_toolchain_before_it_reads_any_rece
 #[test]
 fn the_hook_surface_is_reclaimed_before_the_gate_set_judges_it() {
     let body = task_body("verify");
-    let reclaim = body
+    // THE STEPS ONLY. The block above `run` carries this task's own `#MUTANT`
+    // row, whose sed pattern spells the step verbatim, so a search over the
+    // whole block found the step after the mutant had deleted it.
+    let steps = &body[body.find("run = [").expect("verify declares its steps")..];
+    let reclaim = steps
         .find("\"cargo run --quiet -p batten -- wiring reclaim -y\",")
         .expect("verify repairs the hook surface with the tree's own binary");
-    let gated = body
+    let gated = steps
         .find("mise run verify:gated")
         .expect("verify runs the gate set");
     assert!(
