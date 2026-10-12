@@ -609,6 +609,19 @@ rustix = { version = "1.1", features = ["fs", "process"] }
 # for the same reason, so the two ends of the pgroup protocol are implemented
 # against one set of semantics (CLOUD-455 is the prior-art gate).
 signal-hook = { version = "0.4", default-features = false, features = ["iterator"] }
+# The executable of every running process, on every shipped target (CLOUD-2197):
+# the collector keeps a unit whose binary a process is executing, which a test
+# runner holds no lock over. Linux answers from `/proc`, macOS from `libproc`,
+# Windows from the process snapshot API; only Linux has a std route, and the
+# other two are FFI that `unsafe_code = "forbid"` puts out of reach. One crate
+# means one code path, so the suite on each CI platform exercises the call the
+# shipped binary makes. `system` alone: no disk, network, component or user
+# tables are read.
+sysinfo = { version = "0.39", default-features = false, features = ["system"] }
+# A file's identity on Windows (volume serial and file index), the analogue of
+# `(dev, ino)` that `std` keeps unstable there. Already in the tree under
+# `same-file`, so the declaration vendors nothing new.
+winapi-util = "0.1"
 # The tree walk (CLOUD-214), adopted rather than rebuilt. ripgrep's own walker,
 # so gitignore semantics are the ones every contributor already has in their
 # head — and, measured on this repository after one `cargo build`, 8891 of the

@@ -204,28 +204,40 @@ fn the_least_recently_used_live_unit_goes_first() {
 }
 
 #[test]
-#[cfg(unix)]
 fn a_unit_a_running_program_executes_is_never_collected() {
     // Measured on #1132: a hook collecting during a nextest run removed the
     // test binaries nextest was executing; no `.cargo-lock` was held. The
-    // unit's binary here is a running `sleep`, and it is the only unit.
+    // unit's binary here is a copy of the engine, held running by a verb that
+    // blocks reading stdin, and it is the only unit. A copy keeps its mode bits
+    // on unix and takes the platform's suffix, so the case runs everywhere the
+    // collector ships.
     let root = common::scratch("collect-running");
     let profile = root.join("target/debug");
     unit(&profile, "runner", "5555555555555555", 7200, 16);
-    let binary = profile.join("deps/runner-5555555555555555");
-    std::fs::copy("/bin/sleep", &binary).unwrap();
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
+    let binary = profile.join(format!(
+        "deps/runner-5555555555555555{}",
+        std::env::consts::EXE_SUFFIX
+    ));
+    std::fs::copy(env!("CARGO_BIN_EXE_batten"), &binary).unwrap();
     #[expect(
         clippy::disallowed_types,
         reason = "stays, and test-only: the case needs a process executing the unit's own binary, which `common::batten` cannot be"
     )]
-    let mut running = std::process::Command::new(&binary)
-        .arg("30")
-        .spawn()
-        .unwrap();
+    let mut command = std::process::Command::new(&binary);
+    command
+        .current_dir(&root)
+        .args([
+            "payload",
+            "field",
+            "--harness",
+            "claude-code",
+            "--name",
+            "prompt",
+        ])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    let mut running = common::spawn_copy(&mut command);
     let kept = batten::collect::kept(&batten::collect::engine_paths());
     let trees = [root.join("target")];
     let _ = batten::collect::collect(&request(&trees, &kept, u64::MAX));
@@ -722,24 +734,19 @@ fn a_sweep_that_cannot_be_brought_above_the_minimum_stops_before_building() {
 }
 
 #[test]
-#[cfg(unix)]
 fn a_lap_whose_volume_cannot_be_freed_stops_before_the_gate() {
     // CLOUD-2197. A step the volume cannot hold never starts: below
     // `min_free_mb` the collector runs first, and a volume it cannot bring
     // back above the minimum refuses the step before the gate spends a build.
+    // The gate is `git tag`, a program every platform's suite already runs, and
+    // its tag is the trace that it started.
     let dir = hooked("land-step-exhausted", true);
-    let marker = dir.join("gate-ran");
-    let gate = dir.join("gate.sh");
-    std::fs::write(&gate, format!("#!/bin/sh\n: > '{}'\n", marker.display())).unwrap();
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        std::fs::set_permissions(&gate, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
+    let marker = dir.join(".git/refs/tags/gate-ran");
     let verify = |free: &str| {
         common::batten()
             .current_dir(&dir)
             .args(["land", "verify"])
-            .env("LAND_VERIFY", &gate)
+            .env("LAND_VERIFY", "git tag gate-ran")
             .env("TARGET_PRUNE_FREE_MB", free)
             .output()
             .expect("the binary runs")

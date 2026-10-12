@@ -107,6 +107,7 @@ clap_mangen.workspace = true
 etcetera.workspace = true
 blake3.workspace = true
 fs4.workspace = true
+sysinfo.workspace = true
 getrandom.workspace = true
 gix.workspace = true
 gix-diff.workspace = true
@@ -169,6 +170,11 @@ regex-automata = { version = "0.4", default-features = false, features = [
 [target.'cfg(unix)'.dependencies]
 rustix.workspace = true
 signal-hook.workspace = true
+
+# File identity for the collector's kept set (CLOUD-2197): `(dev, ino)` on unix
+# is `std`, and its Windows analogue is not.
+[target.'cfg(windows)'.dependencies]
+winapi-util.workspace = true
 
 [build-dependencies]
 # CLOUD-2224: `build.rs` writes the o200k vocabulary as a static table, so no

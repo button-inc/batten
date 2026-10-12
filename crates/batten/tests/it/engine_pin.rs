@@ -48,20 +48,14 @@ fn run_engine(binary: &Path, dir: &Path, args: &[&str], local: bool) -> Output {
         command.env(batten::engine::LOCAL_ENV, "local");
     }
     // A just-copied binary can be briefly unexecutable (ETXTBSY) while a sibling
-    // case's fork holds its write handle; see `engine_update::spawn_copy`.
-    for _ in 0..100 {
-        match command.output() {
-            Err(err) if err.kind() == std::io::ErrorKind::ExecutableFileBusy => {
-                #[expect(
-                    clippy::disallowed_methods,
-                    reason = "bounded by a real terminal state: `ETXTBSY` clears when the sibling child holding the copy's write handle execs, so the poll ends at that exec, capped at `100` tries"
-                )]
-                std::thread::sleep(std::time::Duration::from_millis(10));
-            }
-            output => return output.expect("run batten"),
-        }
-    }
-    command.output().expect("run batten")
+    // case's fork holds its write handle; see `common::spawn_copy`.
+    command
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    common::spawn_copy(&mut command)
+        .wait_with_output()
+        .expect("run batten")
 }
 
 fn text(output: &Output) -> String {

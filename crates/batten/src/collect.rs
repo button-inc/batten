@@ -94,22 +94,23 @@ pub fn engine_paths() -> Vec<PathBuf> {
         .collect()
 }
 
-/// The executable of every process this user can see (`/proc/<pid>/exe`).
-/// Empty where `/proc` is not there: the other kept paths still hold.
+/// The executable of every process this user can see, from the platform's own
+/// process table: `/proc` on Linux, `libproc` on macOS, the process snapshot on
+/// Windows, all through `sysinfo` so each CI platform's suite runs the call the
+/// shipped binary makes. A process whose executable cannot be read (another
+/// user's, or one that exited mid-scan) contributes nothing; the other kept
+/// paths still hold.
 fn running_programs() -> Vec<PathBuf> {
-    let Ok(entries) = std::fs::read_dir("/proc") else {
-        return Vec::new();
-    };
-    entries
-        .filter_map(Result::ok)
-        .filter(|entry| {
-            entry
-                .file_name()
-                .to_string_lossy()
-                .bytes()
-                .all(|b| b.is_ascii_digit())
-        })
-        .filter_map(|entry| std::fs::read_link(entry.path().join("exe")).ok())
+    let mut table = sysinfo::System::new();
+    table.refresh_processes_specifics(
+        sysinfo::ProcessesToUpdate::All,
+        true,
+        sysinfo::ProcessRefreshKind::nothing().with_exe(sysinfo::UpdateKind::Always),
+    );
+    table
+        .processes()
+        .values()
+        .filter_map(|process| process.exe().map(Path::to_path_buf))
         .collect()
 }
 
@@ -129,7 +130,19 @@ fn identity(path: &Path) -> Option<Kept> {
     })
 }
 
-#[cfg(not(unix))]
+/// Volume serial and file index: Windows' `(dev, ino)`, which names a file
+/// across its hardlinks as the unix pair does. `std` keeps it unstable there.
+#[cfg(windows)]
+fn identity(path: &Path) -> Option<Kept> {
+    let file = std::fs::File::open(path).ok()?;
+    let info = winapi_util::file::information(&file).ok()?;
+    Some(Kept {
+        dev: info.volume_serial_number(),
+        ino: info.file_index(),
+    })
+}
+
+#[cfg(not(any(unix, windows)))]
 fn identity(_path: &Path) -> Option<Kept> {
     None
 }
@@ -360,7 +373,9 @@ fn allocation(meta: &std::fs::Metadata) -> (u64, u64) {
 
 /// Whether `path` is one of the kept files, by device and inode.
 fn is_kept(path: &Path, kept: &[Kept]) -> bool {
-    identity(path).is_some_and(|id| kept.contains(&id))
+    // No identity is read when nothing is kept: on Windows each read opens the
+    // file, and a pass ranks thousands of artifacts.
+    !kept.is_empty() && identity(path).is_some_and(|id| kept.contains(&id))
 }
 
 /// Take the collector's lock on `tree`: an exclusive `flock` on the directory

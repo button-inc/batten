@@ -85,7 +85,7 @@ fn run(binary: &Path, dir: &Path, args: &[&str], stdin: &str) -> Output {
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
-    let mut child = spawn_copy(&mut command);
+    let mut child = common::spawn_copy(&mut command);
     child
         .stdin
         .take()
@@ -93,33 +93,6 @@ fn run(binary: &Path, dir: &Path, args: &[&str], stdin: &str) -> Output {
         .write_all(stdin.as_bytes())
         .unwrap();
     child.wait_with_output().expect("wait for batten")
-}
-
-/// Spawn a just-copied binary, retrying while exec reports `ETXTBSY`.
-///
-/// A sibling case forking while this copy's write handle was still open hands
-/// that handle to its child, and the kernel refuses to exec a file open for
-/// writing until the child execs and closes it. Measured on #1132 as
-/// `the_hook_path_never_builds_a_source_pin` failing with "Text file busy". The
-/// window is the sibling's fork-to-exec, so a short retry outlasts it.
-#[expect(
-    clippy::disallowed_types,
-    reason = "stays, and test-only: it spawns the private COPY `run` built, which `common::batten` cannot target"
-)]
-fn spawn_copy(command: &mut std::process::Command) -> std::process::Child {
-    for _ in 0..100 {
-        match command.spawn() {
-            Err(err) if err.kind() == std::io::ErrorKind::ExecutableFileBusy => {
-                #[expect(
-                    clippy::disallowed_methods,
-                    reason = "bounded by a real terminal state: `ETXTBSY` clears when the sibling child holding the copy's write handle execs, so the poll ends at that exec, capped at `100` tries"
-                )]
-                std::thread::sleep(std::time::Duration::from_millis(10));
-            }
-            spawned => return spawned.expect("run batten"),
-        }
-    }
-    command.spawn().expect("run batten")
 }
 
 fn text(output: &Output) -> String {
