@@ -4021,6 +4021,24 @@
           "default": 2,
           "minimum": 1
         },
+        "max_free_mb": {
+          "description": "Once triggered, the collector frees space until this much is free, in\nMB, then stops. Nix's `max-free`; above [`Prune::min_free_mb`], so the\npair is a hysteresis band rather than a threshold that re-fires at once.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "min_free_mb": {
+          "description": "Below this much free space, in MB, the disk collector runs (CLOUD-2197):\non every mediated call, and throughout `land` and `mutate sweep`. Nix's\n`min-free`. Declared with [`Prune::max_free_mb`] or not at all; absent,\nthe collector is off.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
         "regrowable": {
           "description": "The regrowable roots the escalation may drop, in the order it drops them.\n\nEmpty by default rather than defaulting to `incremental`: a default here\nwould be this crate holding a fact about somebody else's build tree, which\nis the constant CLOUD-1157 removed wearing a different hat. A repository\nthat declares none simply has no escalation — its floor is judged over\nwhatever the superseded pass reclaimed.",
           "type": "array",
