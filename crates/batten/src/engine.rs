@@ -709,35 +709,51 @@ pub fn rewrite(text: &str, pin: &Pin) -> String {
 
 /// The `batten` verbs a workflow's command lines invoke (CLOUD-2063).
 ///
-/// A command line is one whose trimmed text, less a YAML `- ` list marker,
-/// starts `batten ` or `run: batten `;
-/// prose and comments that merely mention a verb are not invocations. The verb
-/// is the leading lowercase words after `batten`, at most two, so
-/// `batten pr ensure "$PR_NUM"` is `pr ensure`. `mise run batten -- …` builds
-/// the engine from source and is not a released-binary call, which the rule
-/// excludes by construction: the line does not start with `batten`.
+/// A command line is one whose trimmed text, less a YAML `- ` list marker and a
+/// `run: `, starts `batten ` or `mise `; prose and comments that merely mention
+/// a verb are not invocations. The verb is the leading lowercase words after
+/// `batten`, at most two, so `batten pr ensure "$PR_NUM"` is `pr ensure`.
+/// `mise run batten -- …` builds the engine from source and is not a
+/// released-binary call, which the rule excludes by construction: only a bare
+/// `batten` names the pinned release.
+///
+/// THE WRAPPED CALL TOO (CLOUD-2033): `batten ci step … -- batten release path`
+/// runs the released binary twice, and reading only the line's first verb let a
+/// lane call a verb its pin does not carry. Measured on #1132: three of four
+/// such calls were invisible to this scan. Every `-- batten ` on a command line
+/// is a released-binary call of its own.
+//MUTANT-SUITE crates/batten/src/engine.rs
+//MUTANT wrapped-verb-unseen|s@^        for (at, _) in command.match_indices("-- batten ") {$@        for (at, _) in command.match_indices("\\u{0}") {@|a_wrapped_released_call_invokes_its_verb
 #[must_use]
 pub fn invoked_verbs(text: &str) -> std::collections::BTreeSet<String> {
-    text.lines()
-        .filter_map(|line| {
-            let trimmed = line.trim_start();
-            let trimmed = trimmed.strip_prefix("- ").unwrap_or(trimmed);
-            trimmed
-                .strip_prefix("run: batten ")
-                .or_else(|| trimmed.strip_prefix("batten "))
-        })
-        .map(|rest| {
-            rest.split_whitespace()
-                .take_while(|word| {
-                    word.chars().next().is_some_and(|c| c.is_ascii_lowercase())
-                        && word.chars().all(|c| c.is_ascii_lowercase() || c == '-')
-                })
-                .take(2)
-                .collect::<Vec<_>>()
-                .join(" ")
-        })
-        .filter(|verb| !verb.is_empty())
-        .collect()
+    fn verb(rest: &str) -> String {
+        rest.split_whitespace()
+            .take_while(|word| {
+                word.chars().next().is_some_and(|c| c.is_ascii_lowercase())
+                    && word.chars().all(|c| c.is_ascii_lowercase() || c == '-')
+            })
+            .take(2)
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+    let mut verbs = std::collections::BTreeSet::new();
+    for line in text.lines() {
+        let trimmed = line.trim_start();
+        let trimmed = trimmed.strip_prefix("- ").unwrap_or(trimmed);
+        let command = trimmed.strip_prefix("run: ").unwrap_or(trimmed);
+        if let Some(rest) = command.strip_prefix("batten ") {
+            verbs.insert(verb(rest));
+        } else if !command.starts_with("mise ") {
+            continue;
+        }
+        for (at, _) in command.match_indices("-- batten ") {
+            verbs.insert(verb(
+                command.get(at + "-- batten ".len()..).unwrap_or_default(),
+            ));
+        }
+    }
+    verbs.retain(|verb| !verb.is_empty());
+    verbs
 }
 
 /// Where the pinned release's binary is kept once fetched: under the
@@ -923,6 +939,16 @@ mod tests {
                         \x20     - run: mise run batten -- ci step -- true\n";
         let verbs: Vec<_> = invoked_verbs(workflow).into_iter().collect();
         assert_eq!(verbs, ["checks green", "pr ensure"]);
+    }
+
+    /// `#MUTANT wrapped-verb-unseen` reads only each line's first verb.
+    #[test]
+    fn a_wrapped_released_call_invokes_its_verb() {
+        let workflow = "      - run: batten ci step --arg-env X -- batten release path --strict\n\
+                        \x20     - run: mise run batten -- ci step -- batten release in-flight\n\
+                        \x20     - run: mise run batten -- ci step -- mise run batten -- release cut\n";
+        let verbs: Vec<_> = invoked_verbs(workflow).into_iter().collect();
+        assert_eq!(verbs, ["ci step", "release in-flight", "release path"]);
     }
 
     #[test]

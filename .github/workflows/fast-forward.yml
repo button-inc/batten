@@ -1,7 +1,4 @@
 name: fast-forward
-# workflow-shell: CLOUD-2033 the step count rises by the release predicate's
-# four steps (in-flight, read the head, fetch it, `release path --strict`),
-# each one `batten` verb or one command under `ci step`.
 
 # THE RUN CARRIES THE PR IT ANSWERS FOR (CLOUD-409, CLOUD-456). An
 # `issue_comment` run attaches to the default-branch tip, so `head_branch` and
@@ -316,32 +313,12 @@ jobs:
           echo "::error:: refusing #$PR at $head_sha: $why (CLOUD-1570)"
           exit 1
 
-      # THE RELEASE FREEZE AND THE RELEASE PREDICATE (CLOUD-2033). While a
-      # release is in flight — a build running, a young draft, or a published
-      # release `main` has not reached yet — no lander moves `main`, so the
-      # landing that release owes cannot be burned by a sibling's. And a head
-      # whose G2 verdict is failure — a pin change to a release that is not
-      # published, immutable and verified — is refused here as well as by the
-      # server. Both are the installed engine's, which is `main`'s pin.
-      - name: refuse while a release is in flight
-        env:
-          BATTEN_GITHUB_TOKEN: ${{ github.token }}
-        run: batten release in-flight --workflow release-artifacts.yml
-      - name: read the head as it is now
-        id: head
-        env:
-          GH_TOKEN: ${{ github.token }}
-          ROUTE: repos/${{ github.repository }}/pulls/${{ github.event.issue.number }}
-        run: batten ci step --capture sha --arg-env ROUTE -- gh api --jq .head.sha
-      - name: fetch the head the release predicate grades
-        env:
-          PR_REF: refs/pull/${{ github.event.issue.number }}/head
-        run: batten ci step --arg-env PR_REF -- git fetch origin
-      - name: refuse a head the release predicate fails
-        env:
-          BATTEN_GITHUB_TOKEN: ${{ github.token }}
-          HEAD_SHA: ${{ steps.head.outputs.sha }}
-        run: batten ci step --arg-env HEAD_SHA -- batten release path --strict
+      # THE RELEASE FREEZE AND THE RELEASE PREDICATE (CLOUD-2033) ARE HELD here
+      # until `main` pins a release carrying `release in-flight` and `release
+      # path`: this lane runs the installed engine, which is `main`'s pin, and
+      # v0.0.214 has neither verb (`engine-pin-check`, CLOUD-2063). They return
+      # with that pin; until then a pin change is sealed by `final` (ci.yml's
+      # release-path step runs from the tree).
 
       # `# v1.0.0`, NOT `# v1`, and the difference is load-bearing rather than
       # pedantic (CLOUD-676). Upstream publishes exactly one tag — `v1.0.0` —
