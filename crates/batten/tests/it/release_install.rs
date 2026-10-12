@@ -49,15 +49,16 @@
 
 use crate::common::{batten, git_in, scratch, stderr, stdout, write};
 
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
 /// A workflow building `targets`, one matrix leg each.
 fn workflow(targets: &[&str]) -> String {
-    let legs: String = targets
-        .iter()
-        .map(|target| format!("          - target: {target}\n"))
-        .collect();
+    let legs = targets.iter().fold(String::new(), |mut legs, target| {
+        let _ = writeln!(legs, "          - target: {target}");
+        legs
+    });
     format!("jobs:\n  build:\n    strategy:\n      matrix:\n        include:\n{legs}")
 }
 

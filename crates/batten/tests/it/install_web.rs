@@ -32,6 +32,7 @@
 
 use crate::common;
 
+use std::fmt::Write as _;
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
 use std::os::unix::fs::PermissionsExt;
@@ -169,10 +170,7 @@ fn serve(mut stream: TcpStream, routes: &[Route]) {
 /// `SHA256SUMS`, and the archive under every bootstrap target's name, so a case
 /// passes on whichever host runs it.
 fn release_routes(base: &str, archive: &[u8]) -> Vec<Route> {
-    let sums: String = batten::install::TARGETS
-        .iter()
-        .map(|target| format!("{}  {}\n", digest(archive), asset(target)))
-        .collect();
+    let sums = sums_for(&digest(archive));
     let mut routes = vec![
         Route {
             path: format!("/{REPO}/releases/latest"),
@@ -202,6 +200,16 @@ fn release_routes(base: &str, archive: &[u8]) -> Vec<Route> {
         });
     }
     routes
+}
+
+/// A `SHA256SUMS` body naming `digest` for the archive of every bootstrap target.
+fn sums_for(digest: &str) -> String {
+    batten::install::TARGETS
+        .iter()
+        .fold(String::new(), |mut sums, target| {
+            let _ = writeln!(sums, "{digest}  {}", asset(target));
+            sums
+        })
 }
 
 /// The index of the `SHA256SUMS` route in [`release_routes`].
@@ -280,11 +288,7 @@ fn a_sha256sums_that_disagrees_with_the_bytes_installs_nothing() {
     let web = host(|base| {
         let mut routes = release_routes(base, &archive);
         // Publish a digest for a payload that is not the one served.
-        routes[SUMS].body = batten::install::TARGETS
-            .iter()
-            .map(|target| format!("{}  {}\n", "1".repeat(64), asset(target)))
-            .collect::<String>()
-            .into_bytes();
+        routes[SUMS].body = sums_for(&"1".repeat(64)).into_bytes();
         routes
     });
 
