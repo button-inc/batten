@@ -318,7 +318,7 @@ pub fn checkout_build(root: &Path) -> Option<PathBuf> {
 /// another release or another source, names both or neither, or names a source
 /// this binary carries no stamp for.
 //MUTANT-SUITE crates/batten/tests/it/engine_update.rs
-//MUTANT in-tree-build-unaccepted|s@^            if built_in(source) {$@            if false {@|the_checkouts_own_build_satisfies_its_source_pin
+//MUTANT in-tree-build-unaccepted|s@^            if built_in(source) \x7c\x7c runs_local() {$@            if runs_local() {@|the_checkouts_own_build_satisfies_its_source_pin
 pub fn check(text: &str, source: &str, stamp: impl FnOnce() -> Option<String>) -> Result<()> {
     let Some(pin) = declared(text) else {
         return Ok(());

@@ -647,7 +647,7 @@ CI_VERDICT_STEPS = "Run mise run ,Run mise exec -- "
 # which is a property of the world and belongs on a clock (`lock-complete`).
 REGORUS_OPA_COMPLIANCE = "1.2.0"
 REGORUS_OPA_COMPLIANCE_FOR = "0.11"
-MUTANT_GATES = ".config/nextest.toml,engine-testing,crates/batten/tests/it/common/mod.rs,agentic-experiment-record,answer-the-operator,claude-code-cloud,engine-disk-watch,engine-prune,awk-regex,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-inert,ci-suite-lane,ci-tools,claim-before-code,claim-order-is-stated,coderabbit-config,commit-hygiene,dead-capability,denials-outlive-the-turn,digest-major-agreement,egress-fencing,engine-checks-green,engine-config,engine-doctor,engine-exec,engine-handler,engine-hook,engine-land,engine-landed,engine-lease,engine-lib,engine-mcp,engine-perf,engine-semver,engine-identity,engine-install,engine-pinned,engine-pipeline,engine-policy,engine-ready,engine-speculation,engine-surface,engine-verdict,engine-wiring,filed-here,could-not-look-laundered,fixture-forks,forge-verdict-required,glob-containment,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,landing-loop,landing-roster-guarded,leased-push,license-table,lock-complete,mcp-timeout-budget,mise,mise-action-floor,mise-pin-agreement,module-map,msrv-pin-agreement,mutation-declared-case,nextest-slow,no-doctests,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential,release-due,release-provision-parity,release-tag-shape,remedy-authorship,repetition-without-progress,report-only,review-answered,review-dispatched,rules-paths-trigger,run-shape,rust-paths-check,sbom-inventory,shell-hygiene,shell-retirement,shell-write-advisory,skill-frontmatter-complete,spawn-widening,stop-posture,suite-subject-retirable,task-substitution,test-targets,timeout-budget,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration,engine-mutate,engine-task,run-arg-shape,engine-cargo-graph,branch-age,engine-released,evaluator-closure,evaluator-io-probe,agent-spawn,macos-link,ntia,release-tracking,sbom-actions,task-callable,transcript-corpus,engine-rules,release-assets,durable-write,spawn-factory,turn-ask,engine-forge,engine-forge-query,engine-git,engine-census,ci-signal,engine-ci-signal,docs-tree-absent,ripcord-untracked,hk-pin-agreement,engine-record,engine-suites,engine-admission,engine-ci-step,engine-gitwrite,engine-refusal,engine-repair,crates/batten/tests/it/mutant_rows.rs,crates/batten/tests/it/refusal_ceiling.rs,hk-fix-selection.pkl,engine-dist,engine-sbom,supply-chain,engine-reclaim,engine-durable,engine-step,engine-step-table,engine-mcp-grant,engine-mcp-posture,engine-preflight,engine-trust,engine-sweep,sweep-exit-table,tracker-hygiene,engine-tracker-reading,task-duplicate-close-check,task-verify,engine-release,release-hygiene,engine-hk,hook-profile,engine-attestation,engine-turn,engine-unsubscribe,engine-probe,finding-sink,engine-commit,engine-receipt,engine-board-check,check-verdict,engine-budget,engine-codemod,engine-remedy,engine-config-edit,engine-propose,crates/batten/tests/it/stub_portability.rs,crates/batten/tests/it/truncate_handle.rs,git,engine-engine,engine-attribution,crates/batten/tests/it/pointer_only.rs,engine-hookcost,engine-transcript,engine-contract,forge-read-first,engine-advisory,engine-drain,engine-patch,engine-provision,batten.toml,engine-replay,engine-fetch,engine-pr-watch,engine-symbols,engine-rest,engine-worktree,engine-capture,engine-doc,engine-history,engine-recorder,engine-state,engine-collect,engine-o200k,engine-stream_input,engine-stream-input,engine-background,install.sh,action.yml,engine-redirect,engine-release-verify,engine-release-path,engine-release-state,engine-release-guard"
+MUTANT_GATES = ".config/nextest.toml,install.sh,action.yml,engine-testing,crates/batten/tests/it/common/mod.rs,agentic-experiment-record,answer-the-operator,claude-code-cloud,engine-disk-watch,engine-prune,awk-regex,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-inert,ci-suite-lane,ci-tools,claim-before-code,claim-order-is-stated,coderabbit-config,commit-hygiene,dead-capability,denials-outlive-the-turn,digest-major-agreement,egress-fencing,engine-checks-green,engine-config,engine-doctor,engine-exec,engine-handler,engine-hook,engine-land,engine-landed,engine-lease,engine-lib,engine-mcp,engine-perf,engine-semver,engine-identity,engine-install,engine-pinned,engine-pipeline,engine-policy,engine-ready,engine-speculation,engine-surface,engine-verdict,engine-wiring,filed-here,could-not-look-laundered,fixture-forks,forge-verdict-required,glob-containment,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,landing-loop,landing-roster-guarded,leased-push,license-table,lock-complete,mcp-timeout-budget,mise,mise-action-floor,mise-pin-agreement,module-map,msrv-pin-agreement,mutation-declared-case,nextest-slow,no-doctests,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential,release-due,release-provision-parity,release-tag-shape,remedy-authorship,repetition-without-progress,report-only,review-answered,review-dispatched,rules-paths-trigger,run-shape,rust-paths-check,sbom-inventory,shell-hygiene,shell-retirement,shell-write-advisory,skill-frontmatter-complete,spawn-widening,stop-posture,suite-subject-retirable,task-substitution,test-targets,timeout-budget,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration,engine-mutate,engine-task,run-arg-shape,engine-cargo-graph,branch-age,engine-released,evaluator-closure,evaluator-io-probe,agent-spawn,macos-link,ntia,release-tracking,sbom-actions,task-callable,transcript-corpus,engine-rules,release-assets,durable-write,spawn-factory,turn-ask,engine-forge,engine-forge-query,engine-git,engine-census,ci-signal,engine-ci-signal,docs-tree-absent,ripcord-untracked,hk-pin-agreement,engine-record,engine-suites,engine-admission,engine-ci-step,engine-gitwrite,engine-refusal,engine-repair,crates/batten/tests/it/mutant_rows.rs,crates/batten/tests/it/refusal_ceiling.rs,hk-fix-selection.pkl,engine-dist,engine-sbom,supply-chain,engine-reclaim,engine-durable,engine-step,engine-step-table,engine-mcp-grant,engine-mcp-posture,engine-preflight,engine-trust,engine-sweep,sweep-exit-table,tracker-hygiene,engine-tracker-reading,task-duplicate-close-check,engine-release,release-hygiene,engine-hk,hook-profile,engine-attestation,engine-turn,engine-unsubscribe,engine-probe,finding-sink,engine-commit,engine-receipt,engine-board-check,check-verdict,engine-budget,engine-codemod,engine-remedy,engine-config-edit,engine-propose,crates/batten/tests/it/stub_portability.rs,crates/batten/tests/it/truncate_handle.rs,git,engine-engine,engine-attribution,crates/batten/tests/it/pointer_only.rs,engine-hookcost,engine-transcript,engine-contract,forge-read-first,engine-advisory,engine-drain,engine-patch,engine-provision,batten.toml,engine-replay,engine-fetch,engine-pr-watch,engine-symbols,engine-rest,engine-worktree,engine-doc,engine-history,engine-capture,engine-recorder,engine-state,engine-collect,engine-o200k,engine-stream-input,engine-background,engine-redirect,engine-release-verify,engine-release-path,engine-release-state,engine-release-guard"
 # The file inline tasks are declared in, for `mutate`'s `task-` route (CLOUD-1909).
 # The crate may not spell a consumer's filename (non-negotiable rule 1), so the
 # manifest is named here, beside the set it serves. Unset, a `task-` gate resolves
@@ -1742,15 +1742,11 @@ description = "Gate: every gate in the tree is either mutation-enforced or carri
 run = "cargo run --quiet -p batten -- mutate census"
 
 [tasks."target-prune"]
-description = "Reclaim superseded build artifacts, and refuse below a measured disk floor — pointer-only, no build, no network"
-# CLOUD-766's reclaim, ported off `mise-tasks/target-prune.sh` under CLOUD-1059,
-# carrying CLOUD-1030's repair.
-#
-# THE TASK NAME SURVIVES THE MIGRATION, for `perf-pair`'s reason above and with
-# the same edge: `build:release` depends on it by name, and `verify` reaches it
-# as `target-prune:lap`, which runs this same argv with the open-lap marker
-# cleared. Keeping the name is what holds this retirement to the one program
-# being retired.
+description = "Collect superseded, then least recently used, build units until [prune] max_free_mb is free — pointer-only, no build, no network"
+# CLOUD-766's reclaim, ported off `mise-tasks/target-prune.sh` under CLOUD-1059;
+# since CLOUD-2198 one forced run of the disk collector, on demand. No other task
+# depends on it and `verify` runs no prune step: the hook collects before every
+# mediated call (CLOUD-2197).
 #
 # `-y` RATHER THAN A PROMPT, and it is house-style §5's binding on a destructive
 # verb rather than a convenience: the primary caller is `verify`, which is
@@ -1794,18 +1790,6 @@ description = "Reclaim superseded build artifacts, and refuse below a measured d
 #
 # `batten`, BARE, and resolved through `_.path` like `alive` and `ci-wait`: the
 # point of this task is to run WITHOUT building, which `cargo run` cannot do.
-run = "batten target prune -y"
-
-# THE LAP'S OWN BOUNDARY (CLOUD-861, CLOUD-1913), as a task because the marker is
-# an environment fact and a `run` array cannot scope one to a single step.
-# `verify` exports `BATTEN_PRUNE_LAP_OPEN` to everything it runs so that any
-# nested `target-prune` (a `build:release` reached mid-gate) does not escalate;
-# the lap's opener and closer are the two prunes that must act anyway, so they
-# clear it for their own call and nothing else. This is the retired body's
-# `BATTEN_PRUNE_LAP_OPEN= mise run target-prune`, spelled as data.
-[tasks."target-prune:lap"]
-description = "Open or close a verify lap: `target-prune` with the open-lap marker cleared for this one call"
-env = { BATTEN_PRUNE_LAP_OPEN = "" }
 run = "batten target prune -y"
 
 [tasks.filed-here-check]
@@ -2654,56 +2638,9 @@ run = "cargo run --quiet -p batten -- step run deny -- cargo deny check"
 
 [tasks."build:release"]
 description = "Build the release binary the hook registrations execute"
-# THE DISK PRECONDITION EVERY OTHER BUILD ALREADY HAS (CLOUD-1329). Measured
-# 2026-09-02: the session's first `install:local` died inside `cargo build
-# --release` on `ENOSPC` with 0MB free, over a `target/debug` a previous session
-# had left at ~24GB. `target-prune` exists for exactly that input — its own
-# header says it "runs when the disk is SHORT" — and `verify` and every `land`
-# lap call it. This entry point, which runs before any of them, did not. The
-# failure surfaced as a cargo IO error naming neither the disk nor the floor.
+# NO `depends` ON `target-prune` (CLOUD-2198): the floor model it judged is
+# retired, and the hook collects before this task's own spawn.
 #
-# A `depends` RATHER THAN A GUARDED CALL IN THE BODY, and §5 is the reason: the
-# refusal a reader should see is `target-prune`'s own pointer-only line, naming
-# free space and the floor. A body guard would print a second message over the
-# first — a second authority for a verdict the prune already rendered. `depends`
-# runs it before the body and propagates its exit verbatim, which is the whole
-# of what the row asks. `install:local` resolves it transitively, so it gains
-# the precondition without naming it.
-#
-# NO CYCLE: `target-prune` declares no `depends` of its own, which
-# `the_reclaim_itself_stays_dependency_free_and_the_surfaces_are_not_empty` in
-# `crates/batten/tests/it/session_provisioning.rs` asserts rather than assumes.
-#
-# THE PRECONDITION NEEDS A `batten` TO RUN AT ALL (CLOUD-843), and this is a
-# narrowing stated rather than absorbed. `target-prune` is one bare `batten`
-# argv now, never a build: the retired body's no-binary arm (CLOUD-1838), which
-# compared `df` against `[prune.cold]` and built only above it, is gone with the
-# shell it was written in. So on a machine with no `batten` on PATH and no
-# `target/release/batten`, this task — and `install:local` through it — stops
-# at the runner's "not found" before a byte is built. That case is
-# provisioning's: `session:batten` installs a release through `install.sh`, and
-# a clone nobody provisioned runs `./install.sh` (or `cargo build --release -p
-# batten`, which puts the tree's own binary first on `_.path`) once by hand.
-#
-# IT DOES NOT REACH INSIDE `verify`'S LAP TODAY: its callers are `install:local`
-# and the two benches, none of which `verify` runs — `test:bats`'s reach into it
-# went with its startup-table dependency (CLOUD-1753). `verify` itself reaches the
-# engine two ways, `cargo run -p batten` for its questions and a bare `batten`
-# for the prunes that bracket the lap. Should a caller of this task ever run
-# under `verify`, CLOUD-1913's open-lap marker, which `verify` exports to
-# everything it runs, makes that nested prune touch nothing, while
-# `target-prune:lap` clears the marker for the lap's own opener and closer. So
-# those two keep their order either way.
-#
-# WHAT IT DOES COST, stated so a reviewer need not derive it. `prune::Phase` is
-# DERIVED from the lap journal rather than declared — a run that finds an open
-# lap closes it — so a build outside a `verify` toggles a boundary `verify`
-# would otherwise have owned. It cannot corrupt the floor, which is a high-water
-# mark and only ratchets up, so a short spurious lap records a smaller number
-# and changes nothing. What it can produce is one `lap-close` whose consumption
-# figure describes no real lap. CLOUD-1218 is the adjacent row on journal
-# poisoning if that ever proves to matter.
-depends = ["target-prune"]
 # The one place the hook's binary is produced, so `install:local`,
 # `session-start.sh` and `mise-tasks/perf.sh` name a task rather than three copies
 # of a cargo line that could drift in their flags.
@@ -4499,8 +4436,6 @@ description = "Everything CI runs"
 depends = ["hooks", "deny"]
 
 [tasks.verify]
-#MUTANT-SUITE crates/batten/tests/it/verify_unprovisioned.rs
-#MUTANT hook-repair-dropped|s@^  "cargo run --quiet -p batten -- wiring reclaim -y",$@@|the_hook_surface_is_reclaimed_before_the_gate_set_judges_it
 description = "Full local pre-flight — run this before marking any draft PR ready"
 # A SEQUENCE OF ARGV STEPS, AND NO LONGER A MAPPER (CLOUD-843, CLOUD-1990). mise
 # runs a `run` array in order, stops at the first step that fails, and exits with
@@ -4519,10 +4454,12 @@ description = "Full local pre-flight — run this before marking any draft PR re
 #
 # THE ORDER IS THE RETIRED BODY'S, AND EACH STEP STILL MEANS WHAT IT MEANT:
 #
-# 1. RECLAIM FIRST (CLOUD-766, CLOUD-861). The only guard the others cannot
-#    survive failing: with no disk every question below answers "failed" for a
-#    reason unrelated to the tree. `target-prune:lap` because this task exports the
-#    open-lap marker below and the lap's own opener must act regardless.
+# 1. NO RECLAIM STEP (CLOUD-2198). The lap-open and lap-close prunes judged a
+#    learned floor and, at each close, dropped the build the lap had just paid
+#    for (CLOUD-2192); measured on #1132 the opener refused a lap at 9502MB free
+#    against a 10935MB floor. The disk collector (CLOUD-2197) runs before every
+#    mediated call — this task's own spawn included — and `min_free_mb`'s
+#    headroom covers its inside, so no step here owns the disk.
 # 2. THE TOOLCHAIN (CLOUD-1683), after the reclaim and before anything that runs
 #    `cargo run`, so an unprovisioned tree is refused as that and not as a missing
 #    claim receipt.
@@ -4541,35 +4478,15 @@ description = "Full local pre-flight — run this before marking any draft PR re
 #    own 2 still means "behind", and it reaches `land` unchanged.
 # 5. THE GATE SET, `verify:gated`, which writes the receipt last.
 #
-# AND THE HOOK SURFACE IS REPAIRED BEFORE THE GATE SET JUDGES IT (CLOUD-2233).
-# `session:wiring`'s own comment records the residue: the launcher re-provisions
-# its Stop hook MID-SESSION, after the session-start repair ran. Measured
-# 2026-10-12: each worker restart re-registered and re-armed it, and
-# `hooks-wiring-check` refused three laps of a byte-identical tree. That refusal
-# was ACCURATE — a live second decider existed and fired — and the gap was that
-# its repair ran at one event only. So the same verb runs here, where the gate
-# reads the surface: in a disposable container (CLOUD-1383) it removes the
-# registration and disarms the script (CLOUD-1704), denying that hook every call;
-# on a real machine it removes nothing, and the gate still refuses, as it should.
-# The tree's own binary, like every step here, so a stale install cannot no-op it.
-# THE OPEN-LAP MARKER (CLOUD-1913) is exported to every step, and — because a
-# nested `mise run` inherits its parent's environment where a task's own
-# `depends` do not — to everything `verify:gated` depends on, which is the reach
-# the retired `export` had. `{{config_root}}` is this checkout's root, the tree
-# `prune::inside_open_lap` compares against.
-#
 # THE RECEIPT FAST PATH (CLOUD-1891) IS `land`'s AND ONLY `land`'s NOW. A lap
 # answers a head that already carries a valid `verify` receipt without running
 # this task at all (`LAND_VERIFY_RECEIPT`, `land::verified_by_receipt`), which is
 # the path the measurement was about. A hand-run `mise run verify` re-proves; the
 # early exit could not be spelled as a step of a sequence that runs every step.
-env = { BATTEN_PRUNE_LAP_OPEN = "{{config_root}}" }
 run = [
-  "mise run target-prune:lap",
   "mise run toolchain-check",
   "cargo run --quiet -p batten -- receipt status claim --or bot --or carry --key branch",
   "mise run linear-check",
-  "cargo run --quiet -p batten -- wiring reclaim -y",
   "mise run verify:gated",
 ]
 
@@ -4691,7 +4608,6 @@ run = [
   "mise run perf-gate",
   "mise run prose-only-check",
   "mise run batten -- ci step --verdict needed --on 0=true --on 2=false -- mise run ci-slow-needed origin/main",
-  "mise run target-prune:lap",
   "cargo run --quiet -p batten -- receipt record verify",
 ]
 

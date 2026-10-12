@@ -596,8 +596,7 @@ const COMPILE_ENTRY_POINTS: [&str; 2] = ["install:local", "build:release"];
 /// So this reads `run` and `depends` — what mise will actually execute —
 /// discarding the commentary around them. `depends` is here because
 /// `install:local` carries `depends = ["build:release"]`: a task can compile
-/// without its own body naming a compiler, and since CLOUD-1329 `build:release`
-/// carries `depends = ["target-prune"]` for the same reason one layer down.
+/// without its own body naming a compiler.
 ///
 /// `[tasks."name"]` and `[tasks.name]` are both spelled in this file, and both
 /// are anchored to their own line: `[tasks.verify]` appears inside two comments
@@ -949,74 +948,40 @@ fn the_install_step_is_declared_lockfile_free() {
     );
 }
 
-/// CLOUD-1329. Every build the repository owns sat behind the disk precondition
-/// except the one that runs FIRST.
-///
-/// Measured 2026-09-02: the session's first `install:local` died inside `cargo
-/// build --release` on `ENOSPC` over a `target/debug` a previous session left at
-/// ~24GB, and the failure named neither the disk nor the floor. `target-prune`
-/// exists for exactly that input and `verify` and every `land` lap call it.
-///
-/// # Shown able to fail by hand, because no sweep can carry it (CLOUD-418)
-///
-/// The row's §7 asks for a `build-skips-prune` mutation, and `mutate` cannot
-/// apply one: `mutate::sources_for` resolves a gate name to `mise-tasks/<n>.sh`,
-/// `policy/<n>.rego`, `crates/batten/src/<n>.rs` or a preset directory, and the
-/// subject here is `mise.toml`, which is none of them. A `//MUTANT` row in this
-/// file would never be scanned — it would read as coverage while applying
-/// nothing, which is the false signal the mutation machinery exists to refuse.
-///
-/// So the demonstration is recorded rather than automated. Measured on this
-/// branch: with `depends = ["target-prune"]` deleted from `build:release` and
-/// nothing else changed, `test:cargo` reported **2 failed** — this case and
-/// `every_build_entry_point_reaches_the_same_precondition` — while the
-/// anti-vacuity mirror below stayed green, which is what says the pair
-/// discriminates rather than merely being present. Restoring the line returned
-/// the suite to green.
+/// CLOUD-2198 RETIRES CLOUD-1329's EDGE. `build:release` once declared
+/// `depends = ["target-prune"]` so the first build of a session ran the disk
+/// precondition; the precondition was v0.0.214's floor model, which refused a
+/// release build over a 10.9GB floor at 6.4GB free and so made every lap a disk
+/// lap. Collection now runs beside the work (`disk_watch`), so no build waits on
+/// a reclaim step: neither the build nor the install it serves declares one.
 #[test]
-fn the_release_build_runs_the_disk_precondition_before_cargo() {
-    let depends = task_depends("build:release");
-    assert!(
-        depends.iter().any(|entry| entry == "target-prune"),
-        "the build that runs before any gate DECLARES the same disk question they ask, \
-         as a dependency rather than as a mention: {depends:?}"
-    );
-}
-
-/// CLOUD-1329, §2's actual claim: *every* build entry point the repository owns
-/// runs the precondition, not merely the one that declares it.
-///
-/// `install:local` names `build:release` and never names the prune, so this is
-/// the transitive half — and it is the half a reader would otherwise have to
-/// take on trust from a `depends` line in another table.
-#[test]
-fn every_build_entry_point_reaches_the_same_precondition() {
+fn no_build_entry_point_waits_on_a_reclaim_step() {
     let install = task_depends("install:local");
     assert!(
         install.iter().any(|entry| entry == "build:release"),
         "the install DECLARES the build, so it inherits what the build declares: {install:?}"
     );
-    let build = task_depends("build:release");
-    assert!(
-        build.iter().any(|entry| entry == "target-prune"),
-        "and what the build declares is the precondition: {build:?}"
-    );
+    for name in ["build:release", "install:local"] {
+        let depends = task_depends(name);
+        assert!(
+            !depends
+                .iter()
+                .any(|entry| entry.starts_with("target-prune")),
+            "{name} waits on no reclaim step: {depends:?}"
+        );
+    }
 }
 
-/// CLOUD-1329's ANTI-VACUITY MIRROR, which the row asks for by name: without it
-/// the case above is satisfied by making every build refuse, and the reclaim
-/// `verify` performs would be free to drift underneath it.
-///
-/// Two halves. `target-prune` declares no `depends` of its own — the property
-/// that makes the new edge acyclic, since the reclaim must be able to run
-/// without a build. And the extraction is reading real bodies rather than
-/// returning empty, which every `contains` above would otherwise pass over.
+/// THE ANTI-VACUITY MIRROR (CLOUD-1329): the case above is satisfied by an
+/// extraction that reads nothing, so this asks that it reads real bodies. And
+/// `target-prune`, the on-demand verb, still declares no `depends` of its own:
+/// the reclaim must be able to run without a build.
 #[test]
 fn the_reclaim_itself_stays_dependency_free_and_the_surfaces_are_not_empty() {
     let prune = task_surface("target-prune").expect("the reclaim is a declared task");
     assert!(
         task_depends("target-prune").is_empty(),
-        "the reclaim declares no dependency, so the edge this row adds cannot cycle: {prune}"
+        "the reclaim declares no dependency, so it runs without a build: {prune}"
     );
     assert!(
         prune.contains("target prune"),

@@ -147,7 +147,8 @@ fn depends_of(name: &str) -> Vec<String> {
 #[test]
 fn the_verify_sequence_was_found_at_all() {
     let verify = steps("verify");
-    assert!(verify.len() >= 5, "{verify:?}");
+    // Toolchain, claim, linearity, gate set: the four the order case reads.
+    assert!(verify.len() >= 4, "{verify:?}");
     let gated = steps("verify:gated");
     assert!(
         gated
@@ -168,7 +169,6 @@ fn every_step_is_argv() {
         "verify:commit-lint",
         "verify:config-lint",
         "target-prune",
-        "target-prune:lap",
         "ci-wait",
         "test:cargo",
         "test:musl",
@@ -206,19 +206,16 @@ fn verify_gated_carries_the_depends_verify_gave_up() {
 }
 
 /// THE RETIRED BODY'S ORDER, which the old suite pinned by behaviour and by text:
-/// the reclaim first (the one refusal the others cannot survive), then the
-/// toolchain, then the claim receipt (a question cheaper than any below it),
+/// the toolchain first, then the claim receipt (a question cheaper than any below it),
 /// then linearity (a branch that is behind laps regardless, so the gate set is
 /// not paid for first), and the gate set last.
 #[test]
 fn the_steps_run_in_the_retired_order() {
     let verify = steps("verify");
-    let reclaim = step_at(&verify, "target-prune:lap");
     let toolchain = step_at(&verify, "toolchain-check");
     let claim = step_at(&verify, "receipt status claim");
     let linear = step_at(&verify, "linear-check");
     let gated = step_at(&verify, "verify:gated");
-    assert!(reclaim < toolchain, "{verify:?}");
     assert!(toolchain < claim, "{verify:?}");
     assert!(claim < linear, "{verify:?}");
     assert!(linear < gated, "{verify:?}");
@@ -236,18 +233,13 @@ fn the_claim_step_asks_every_kind_by_branch() {
 }
 
 /// THE RECEIPT IS WRITTEN LAST, and only past every gate — so a refused step
-/// leaves none. The lap's close immediately precedes it, and the tree is asked
-/// clean before anything is decided about the commit (CLOUD-277).
+/// leaves none. The tree is asked clean before anything is decided about the
+/// commit (CLOUD-277).
 #[test]
-fn the_receipt_is_the_last_step_and_follows_the_lap_close() {
+fn the_receipt_is_the_last_step() {
     let gated = steps("verify:gated");
     let receipt = step_at(&gated, "receipt record verify");
     assert_eq!(receipt, gated.len() - 1, "{gated:?}");
-    assert_eq!(
-        step_at(&gated, "target-prune:lap"),
-        receipt - 1,
-        "the lap closes just before the receipt: {gated:?}"
-    );
     assert!(gated[0].contains("tree-clean"), "{gated:?}");
     assert!(
         depends_of("verify:gated")
@@ -257,14 +249,25 @@ fn the_receipt_is_the_last_step_and_follows_the_lap_close() {
     );
 }
 
-/// THE OPEN-LAP MARKER reaches every step of `verify` — and through the nested
-/// `mise run verify:gated`, everything that task depends on — while the lap's own
-/// opener and closer clear it for their call (CLOUD-1913).
+/// NO RECLAIM STEP IN THE LAP (CLOUD-2198): the run-wide watcher collects while
+/// the lap runs, so neither verify task opens or closes a prune lap, and the
+/// lap's marker is exported to nothing.
 #[test]
-fn the_open_lap_marker_is_exported_and_the_boundary_clears_it() {
-    assert_eq!(env_of("verify", "BATTEN_PRUNE_LAP_OPEN"), "{{config_root}}");
-    assert_eq!(env_of("target-prune:lap", "BATTEN_PRUNE_LAP_OPEN"), "");
-    assert_eq!(steps("target-prune:lap"), steps("target-prune"));
+fn the_lap_carries_no_reclaim_step() {
+    for name in ["verify", "verify:gated"] {
+        let found = steps(name);
+        assert!(
+            !found.iter().any(|step| step.contains("target-prune")),
+            "{name}: {found:?}"
+        );
+        assert!(
+            task(name)
+                .get("env")
+                .and_then(|env| env.get("BATTEN_PRUNE_LAP_OPEN"))
+                .is_none(),
+            "{name} exports no lap marker"
+        );
+    }
 }
 
 /// THE LAP'S OWN RANGE AND BASE (CLOUD-1702): the speculative base when `land`

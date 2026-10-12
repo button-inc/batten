@@ -932,22 +932,22 @@ fn a_repository_declaring_no_prune_table_reports_rather_than_refusing() {
     assert!(said.contains("no [prune] table"), "{said}");
 }
 
-/// `[tasks."target-prune"]`'s run, and its lap-boundary twin's, as the manifest
-/// carries them.
+/// `[tasks."target-prune"]`'s run, as the manifest carries it.
 fn run_of(task: &str) -> String {
     let block = common::task_block(task).unwrap_or_else(|| panic!("{task} is a declared task"));
     common::task_value(&block, "run")
 }
 
 /// The task is the verb, and nothing in it builds: the point of this task is to
-/// collect WITHOUT a build, which `cargo run` cannot do. The tasks themselves
-/// retire in CLOUD-2198's commit B, once the pin carries this verb.
+/// collect WITHOUT a build, which `cargo run` cannot do. Its lap-boundary twin
+/// retired with the lap's reclaim step (CLOUD-2198).
 #[test]
 fn the_task_is_the_verb_and_builds_nothing() {
-    for task in ["target-prune", "target-prune:lap"] {
-        let run = run_of(task);
-        assert_eq!(run, "batten target prune -y", "[tasks.{task}]");
-    }
+    assert_eq!(run_of("target-prune"), "batten target prune -y");
+    assert!(
+        common::task_block("target-prune:lap").is_none(),
+        "the lap-boundary twin is retired"
+    );
 }
 
 /// A config carrying a key no build knows — the shape a release meets on every
