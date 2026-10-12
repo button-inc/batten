@@ -11102,6 +11102,15 @@ cold = true
 name = "tmp"
 cold = false
 
+# THE MUTATION SWEEP'S OWN CARGO TARGET (CLOUD-2197). `mutate::SUITE_TARGET` keeps
+# the staged tree's builds apart from the repository's, so only `mutate sweep`
+# reads it and its next run rebuilds it: never the cargo basis. Measured on #1132
+# (2026-10-12): 4.9GB undeclared, so a `verify` prune stopped 700MB under the warm
+# floor with it untouched. Before `perf*`, which costs a whole release closure.
+[[prune.regrowable]]
+name = "mutate-cargo"
+cold = false
+
 # LAST, BECAUSE IT IS THE DEAREST TO REGROW (CLOUD-1891). `perf*` holds the perf
 # pair's shared arms directory, a full release-profile dependency closure. The
 # escalation now stops at the first row that recovers the floor, so a root
