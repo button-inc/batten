@@ -2832,14 +2832,20 @@ pub(crate) fn tls_www(tls: &Path, root: &Path) -> TlsWww {
         .stderr(Stdio::null())
         .spawn()
         .expect("start the local TLS listener");
-    let host = TlsWww { port, child };
-    for _ in 0..100 {
+    let mut host = TlsWww { port, child };
+    // 600 x 50ms: under the full suite's load `s_server` measured slower than
+    // the 5s `provision.rs` allowed one listener alone. A listener that EXITED is
+    // reported at once rather than waited out.
+    for _ in 0..600 {
         if std::net::TcpListener::bind(("127.0.0.1", port)).is_err() {
             return host;
         }
+        if let Ok(Some(status)) = host.child.try_wait() {
+            panic!("the TLS listener exited before it bound: {status}");
+        }
         #[expect(
             clippy::disallowed_methods,
-            reason = "the interval of a bounded poll: the exit condition is `TcpListener::bind` failing because the listener took the port, and the 100-iteration bound turns a listener that never came up into a failed assertion rather than a hang (CLOUD-1177)"
+            reason = "the interval of a bounded poll: the exit condition is `TcpListener::bind` failing because the listener took the port, and the 600-iteration bound turns a listener that never came up into a failed assertion rather than a hang (CLOUD-1177)"
         )]
         std::thread::sleep(std::time::Duration::from_millis(50));
     }

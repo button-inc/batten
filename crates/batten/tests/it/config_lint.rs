@@ -287,8 +287,11 @@ fn an_answer_recorded_above_the_checkout_lands_in_the_checkout() {
     let consumer = parent.join("consumer");
     fs::rename(weakening_pr("lint-admit-workspace", None), &consumer).unwrap();
     let plain = parent.join("plain");
-    fs::create_dir_all(&plain).unwrap();
-    common::git_in(&plain, &["init", "-q"]);
+    fs::rename(
+        Fixture::new("lint-admit-workspace-plain").git().build(),
+        &plain,
+    )
+    .unwrap();
 
     assert_eq!(
         ask(&parent, "Admit it"),
