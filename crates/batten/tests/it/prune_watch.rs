@@ -547,22 +547,24 @@ fn the_arm_watches_past_the_gate() {
     );
 }
 
-/// Wait until `done`, bounded: the watcher samples every tick, so a few ticks
-/// is the longest a live watcher can take to act.
+/// How many 50 ms polls [`wait_for`] takes before giving up: four of the
+/// watcher's 5 s ticks, the longest a live watcher can take to act.
+const WAIT_POLLS: u32 = 400;
+
+/// Wait until `done`, counted rather than clocked: at most [`WAIT_POLLS`]
+/// polls, then the case fails on the outcome it was waiting for.
 fn wait_for(done: impl Fn() -> bool) {
-    let deadline =
-        std::time::Instant::now() + Duration::from_secs_f64(batten::disk_watch::TICK * 4.0);
-    while !done() {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "the watcher did not act within four ticks"
-        );
+    for _ in 0..WAIT_POLLS {
+        if done() {
+            return;
+        }
         #[expect(
             clippy::disallowed_methods,
-            reason = "bounded by the deadline above: four of the watcher's own ticks"
+            reason = "bounded by a count: at most `WAIT_POLLS` polls, four of the watcher's own ticks"
         )]
-        std::thread::sleep(Duration::from_millis(20));
+        std::thread::sleep(Duration::from_millis(50));
     }
+    panic!("the watcher did not act within `WAIT_POLLS` polls");
 }
 
 /// THE MIRROR: a band undeclared is the arm switched off, and nothing goes.

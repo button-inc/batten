@@ -210,7 +210,7 @@ fn said(output: &std::process::Output) -> String {
 /// counts, or `None` where it printed none.
 fn collected_units(said: &str) -> Option<usize> {
     said.lines()
-        .find_map(|line| line.trim().strip_prefix("disk-collected "))
+        .find_map(|line| line.split_once("disk-collected ").map(|(_, fields)| fields))
         .and_then(|fields| fields.split_whitespace().nth(1))
         .and_then(|units| units.parse().ok())
 }

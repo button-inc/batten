@@ -1216,9 +1216,8 @@ pub(crate) fn committed_protected_path() -> &'static str {
 #[must_use]
 pub(crate) fn committed_fixture_with_protected(name: &str) -> PathBuf {
     let committed = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let authority = without_source_pin(
-        &std::fs::read_to_string(committed.join("batten.toml")).expect("read the committed config"),
-    );
+    let authority =
+        std::fs::read_to_string(committed.join("batten.toml")).expect("read the committed config");
     // The owner's three classes, UNIONED into whatever set is declared rather
     // than injected only when none is. Since CLOUD-1078 a narrower set is live —
     // just the asked ledger — and reading "a set is declared" as "the owner's
@@ -2228,7 +2227,7 @@ impl Fixture {
     /// Write `batten.toml`.
     #[must_use]
     pub(crate) fn config(self, contents: &str) -> Self {
-        write(&self.dir, "batten.toml", &without_source_pin(contents));
+        write(&self.dir, "batten.toml", contents);
         self
     }
 
@@ -2444,29 +2443,6 @@ pub(crate) fn committed_patterns() -> Vec<batten::pattern::NamedPattern> {
     static PATTERNS: std::sync::LazyLock<Vec<batten::pattern::NamedPattern>> =
         std::sync::LazyLock::new(parse_committed_patterns);
     PATTERNS.clone()
-}
-
-/// `contents` without a SOURCE engine pin (CLOUD-2232).
-///
-/// A branch pins this checkout's own build (`engine = { source = … }`), and a
-/// binary built here satisfies that pin only inside this checkout. A fixture
-/// copying the committed config is another directory, so the pin would refuse
-/// every load there — and what the fixture exercises is the config's rules,
-/// never which engine this checkout runs. A RELEASE pin is kept: fixtures that
-/// name one are exercising it.
-pub(crate) fn without_source_pin(contents: &str) -> String {
-    let kept: Vec<&str> = contents
-        .lines()
-        .filter(|line| {
-            let line = line.trim_start();
-            !(line.starts_with("engine") && line.contains("source = \""))
-        })
-        .collect();
-    let mut text = kept.join("\n");
-    if contents.ends_with('\n') {
-        text.push('\n');
-    }
-    text
 }
 
 fn parse_committed_patterns() -> Vec<batten::pattern::NamedPattern> {

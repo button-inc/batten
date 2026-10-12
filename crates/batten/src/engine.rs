@@ -275,6 +275,20 @@ fn built_in(source: &str) -> bool {
         .is_some_and(|root| exe.starts_with(root))
 }
 
+/// The variable that runs this binary as it is under a SOURCE pin.
+pub const LOCAL_ENV: &str = "BATTEN_ENGINE";
+
+/// Whether `BATTEN_ENGINE=local` asks for this binary as it is (CLOUD-2232),
+/// Go's `GOTOOLCHAIN=local`: a test run of a branch tests the engine it built,
+/// and an in-process load names its source by label rather than by a path the
+/// in-tree arm could judge. Source pins only — a release pin is a published
+/// engine's name, and running another under it is the skew this check refuses.
+//MUTANT-SUITE crates/batten/tests/it/engine_pin.rs
+//MUTANT local-engine-ignored|s@^    std::env::var_os(LOCAL_ENV).is_some_and(\x7cvalue\x7c value == "local")$@    false@|the_local_engine_runs_under_a_source_pin
+fn runs_local() -> bool {
+    std::env::var_os(LOCAL_ENV).is_some_and(|value| value == "local")
+}
+
 /// The checkout's own release build: the engine a source pin is followed to
 /// (CLOUD-2232), rustup's `path` toolchain. ANY DIGEST, for the reason
 /// [`check`]'s in-tree arm states: the pin moves with every edit under
@@ -342,7 +356,7 @@ pub fn check(text: &str, source: &str, stamp: impl FnOnce() -> Option<String>) -
             // its stamp. Stated limit: an in-tree build older than the tree
             // passes until rebuilt, the exposure a release pin's in-tree build
             // already carries.
-            if built_in(source) {
+            if built_in(source) || runs_local() {
                 return Ok(());
             }
             let stamp = stamp();
@@ -380,7 +394,10 @@ pub fn stale(text: &str, stamp: impl FnOnce() -> Option<String>) -> Option<Pin> 
     let pin = declared(text)?;
     let satisfied = match (pin.release.as_deref(), pin.source.as_deref()) {
         (Some(tag), None) => tag == release(),
-        (None, Some(digest)) => stamp().as_deref() == Some(digest),
+        // `BATTEN_ENGINE=local` satisfies a source pin here exactly as it does
+        // in [`check`]: one answer to "is this the engine", or a test run of
+        // the branch would try to BUILD the pin it was told to run without.
+        (None, Some(digest)) => runs_local() || stamp().as_deref() == Some(digest),
         _ => true,
     };
     (!satisfied).then_some(pin)

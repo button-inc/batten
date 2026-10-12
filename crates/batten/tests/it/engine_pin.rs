@@ -24,11 +24,15 @@ fn repo(name: &str, config: &str) -> PathBuf {
     dir
 }
 
+fn run(binary: &Path, dir: &Path, args: &[&str]) -> Output {
+    run_engine(binary, dir, args, false)
+}
+
 #[expect(
     clippy::disallowed_types,
     reason = "stays, and test-only: the source-pin cases run a private COPY of the compiled binary so its stamp is its own, which `common::batten` cannot target because it names the shared binary"
 )]
-fn run(binary: &Path, dir: &Path, args: &[&str]) -> Output {
+fn run_engine(binary: &Path, dir: &Path, args: &[&str], local: bool) -> Output {
     let mut command = std::process::Command::new(binary);
     command
         .args(args)
@@ -36,7 +40,13 @@ fn run(binary: &Path, dir: &Path, args: &[&str]) -> Output {
         // These cases measure the pre-parse refusal, which is what a stale engine
         // answers once its one update has run; without this the startup update
         // (CLOUD-2062) would download or build before the refusal is reached.
-        .env("BATTEN_ENGINE_UPDATED", "1");
+        .env("BATTEN_ENGINE_UPDATED", "1")
+        // ENFORCEMENT IS THE SUBJECT, so the suite's `BATTEN_ENGINE=local`
+        // (CLOUD-2232) is not inherited; a case that wants it asks for it.
+        .env_remove(batten::engine::LOCAL_ENV);
+    if local {
+        command.env(batten::engine::LOCAL_ENV, "local");
+    }
     // A just-copied binary can be briefly unexecutable (ETXTBSY) while a sibling
     // case's fork holds its write handle; see `engine_update::spawn_copy`.
     for _ in 0..100 {
@@ -149,6 +159,37 @@ fn a_stamp_over_no_inputs_is_refused() {
     assert!(
         !batten::engine::stamp_path(&binary).exists(),
         "nothing is written over no inputs"
+    );
+}
+
+/// `BATTEN_ENGINE=local` RUNS THIS BINARY AS IT IS (CLOUD-2232), Go's
+/// `GOTOOLCHAIN=local`: the same unstamped installed engine the case below
+/// refuses loads under it. A release pin it does not name is still refused,
+/// so the variable is no general bypass.
+#[test]
+fn the_local_engine_runs_under_a_source_pin() {
+    let dir = repo(
+        "engine-pin-source-local",
+        &format!(
+            "version = 1\nengine = {{ source = \"{}\" }}\n",
+            "0".repeat(64)
+        ),
+    );
+    let installed = common::scratch("engine-pin-source-local-installed");
+    let binary = private_binary(&installed);
+    let output = run_engine(&binary, &dir, &["config", "show"], true);
+    assert!(output.status.success(), "{}", text(&output));
+
+    common::write(
+        &dir,
+        "batten.toml",
+        "version = 1\nengine = { release = \"v9.9.9\" }\n",
+    );
+    let output = run_engine(&binary, &dir, &["config", "show"], true);
+    assert!(
+        !output.status.success(),
+        "a release pin is enforced under `local` too: {}",
+        text(&output)
     );
 }
 

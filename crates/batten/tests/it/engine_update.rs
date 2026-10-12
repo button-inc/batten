@@ -81,6 +81,7 @@ fn run(binary: &Path, dir: &Path, args: &[&str], stdin: &str) -> Output {
         .env("CARGO_TARGET_DIR", dir.join("target"))
         .env("STUB_RAN", dir.join("cargo-ran"))
         .env_remove("BATTEN_ENGINE_UPDATED")
+        .env_remove(batten::engine::LOCAL_ENV)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
