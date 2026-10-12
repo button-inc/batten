@@ -50,8 +50,8 @@ pub struct Collected {
 pub struct Held {
     /// Each `.cargo-lock` or collector lock that declined, once, in order.
     pub locks: Vec<PathBuf>,
-    /// The pass reached a unit used inside [`WORKING_SET`] and stopped there.
-    pub working_set: bool,
+    /// The pass reached a unit a live build has used and stopped there.
+    pub live: bool,
 }
 
 /// What one [`collect`] pass did.
@@ -72,7 +72,7 @@ pub struct Pass {
 impl Collected {
     /// The lap-record lines: `disk-collected <freed_mb> <units> <free_after_mb>`,
     /// the unlink cost (CLOUD-1945's figure), then one `disk-held <lock>` per
-    /// lock that declined and `disk-working-set` where the pass stopped there.
+    /// lock that declined and `disk-live` where a live build stopped the pass.
     #[must_use]
     pub fn lines(&self) -> Vec<String> {
         let mut lines = vec![
@@ -90,8 +90,8 @@ impl Collected {
                 .iter()
                 .map(|lock| format!("disk-held {}", lock.display())),
         );
-        if self.held.working_set {
-            lines.push("disk-working-set".to_owned());
+        if self.held.live {
+            lines.push("disk-live".to_owned());
         }
         lines
     }
@@ -153,18 +153,36 @@ pub fn engine_paths() -> Vec<PathBuf> {
         .collect()
 }
 
-/// The executable of every process this user can see, from each platform's own
-/// process table. A process whose executable cannot be read (another user's,
-/// or one that exited mid-scan) contributes nothing; the other kept paths still
-/// hold.
-///
-/// Linux and Android read `/proc/<pid>/exe`.
-#[cfg(any(target_os = "linux", target_os = "android"))]
+/// A running process: the program it executes and when it started.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Process {
+    /// Its executable, as the process table names it.
+    pub exe: PathBuf,
+    /// When it started.
+    pub started: SystemTime,
+}
+
 fn running_programs() -> Vec<PathBuf> {
-    let Ok(entries) = std::fs::read_dir("/proc") else {
-        return Vec::new();
-    };
-    entries
+    processes()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|process| process.exe)
+        .collect()
+}
+
+/// Every process this user can see, from each platform's own process table, or
+/// `None` where the table itself could not be read. A process whose executable
+/// or start cannot be read (another user's, or one that exited mid-scan)
+/// contributes nothing; the other roots still hold.
+///
+/// Linux and Android read `/proc/<pid>/exe` and field 22 of `/proc/<pid>/stat`,
+/// clock ticks since boot, against `/proc/stat`'s `btime`.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn processes() -> Option<Vec<Process>> {
+    let boot = proc_stat::boot_seconds(&std::fs::read_to_string("/proc/stat").ok()?)?;
+    let ticks = rustix::param::clock_ticks_per_second().max(1);
+    let entries = std::fs::read_dir("/proc").ok()?;
+    let table = entries
         .filter_map(Result::ok)
         .filter(|entry| {
             entry
@@ -173,14 +191,46 @@ fn running_programs() -> Vec<PathBuf> {
                 .bytes()
                 .all(|b| b.is_ascii_digit())
         })
-        .filter_map(|entry| std::fs::read_link(entry.path().join("exe")).ok())
-        .collect()
+        .filter_map(|entry| {
+            let exe = std::fs::read_link(entry.path().join("exe")).ok()?;
+            let stat = std::fs::read_to_string(entry.path().join("stat")).ok()?;
+            let since_boot = proc_stat::start_ticks(&stat)?;
+            let started = SystemTime::UNIX_EPOCH
+                + std::time::Duration::from_secs(boot)
+                + std::time::Duration::from_millis(since_boot.saturating_mul(1000) / ticks);
+            Some(Process { exe, started })
+        })
+        .collect();
+    Some(table)
 }
 
-/// macOS reads `kern.proc.all` for every pid and `kern.procargs2` for each
-/// one's exec path: the two reads Go's `x/sys/unix` makes for the same answer.
+/// The two `/proc` layouts [`processes`] reads, as pure functions so every
+/// platform's suite checks them.
+//MUTANT-SUITE crates/batten/src/collect.rs
+//MUTANT stat-start-misread|s@^        rest.split_whitespace().nth(19)?.parse().ok()$@        rest.split_whitespace().nth(18)?.parse().ok()@|a_stat_line_yields_its_start_ticks
+#[cfg(any(target_os = "linux", target_os = "android", test))]
+mod proc_stat {
+    /// Field 22 of a `/proc/<pid>/stat` line, `starttime`: read after the LAST
+    /// `)`, since the command name in field 2 may itself hold spaces and parens.
+    pub(super) fn start_ticks(stat: &str) -> Option<u64> {
+        let (_, rest) = stat.rsplit_once(')')?;
+        rest.split_whitespace().nth(19)?.parse().ok()
+    }
+
+    /// `/proc/stat`'s `btime`: the boot instant, in seconds since the epoch.
+    pub(super) fn boot_seconds(stat: &str) -> Option<u64> {
+        stat.lines()
+            .find_map(|line| line.strip_prefix("btime "))?
+            .trim()
+            .parse()
+            .ok()
+    }
+}
+
+/// macOS reads `kern.proc.all` for every pid and its start, and
+/// `kern.procargs2` for each one's exec path: the reads Go's `x/sys/unix` makes.
 #[cfg(target_os = "macos")]
-fn running_programs() -> Vec<PathBuf> {
+fn processes() -> Option<Vec<Process>> {
     use sysctl::Sysctl as _;
     // `CTL_KERN` and `KERN_PROCARGS2`, from `<sys/sysctl.h>`.
     const CTL_KERN: i32 = 1;
@@ -189,42 +239,58 @@ fn running_programs() -> Vec<PathBuf> {
         Ok(sysctl::CtlValue::Node(raw) | sysctl::CtlValue::Struct(raw)) => Some(raw),
         _ => None,
     };
-    let Some(table) = sysctl::Ctl::new("kern.proc.all")
+    let table = sysctl::Ctl::new("kern.proc.all")
         .ok()
-        .and_then(|ctl| bytes(&ctl))
-    else {
-        return Vec::new();
-    };
-    darwin::pids(&table)
+        .and_then(|ctl| bytes(&ctl))?;
+    let table = darwin::pids(&table)
         .into_iter()
-        .filter_map(|pid| {
+        .filter_map(|(pid, started)| {
             let args = bytes(&sysctl::Ctl::Oid(vec![CTL_KERN, KERN_PROCARGS2, pid]))?;
-            darwin::exec_path(&args)
+            let exe = darwin::exec_path(&args)?;
+            Some(Process { exe, started })
         })
-        .collect()
+        .collect();
+    Some(table)
 }
 
-/// The two Darwin layouts [`running_programs`] reads, as pure functions so every
+/// The two Darwin layouts [`processes`] reads, as pure functions so every
 /// platform's suite checks them; only the `sysctl` calls are macOS's own.
 //MUTANT-SUITE crates/batten/src/collect.rs
-//MUTANT kinfo-pid-misread|s@^            .filter_map(\x7centry\x7c entry.get(P_PID..P_PID + 4))$@            .filter_map(\x7centry\x7c entry.get(0..4))@|a_kinfo_table_yields_each_pid
+//MUTANT kinfo-pid-misread|s@^                let pid = i32::from_le_bytes(entry.get(P_PID..P_PID + 4)?.try_into().ok()?);$@                let pid = i32::from_le_bytes(entry.get(0..4)?.try_into().ok()?);@|a_kinfo_table_yields_each_pid
+//MUTANT kinfo-start-misread|s@^                    i64::from_le_bytes(entry.get(P_STARTTIME..P_STARTTIME + 8)?.try_into().ok()?);$@                    i64::from_le_bytes(entry.get(P_PID..P_PID + 8)?.try_into().ok()?);@|a_kinfo_table_yields_each_start
 //MUTANT procargs-argc-unskipped|s@^        let rest = args.get(4..)?;$@        let rest = args.get(0..)?;@|a_procargs_buffer_yields_its_exec_path
 #[cfg(any(target_os = "macos", test))]
 mod darwin {
     use std::path::PathBuf;
+    use std::time::{Duration, SystemTime};
 
-    /// `sizeof(struct kinfo_proc)` and the offset of `kp_proc.p_pid` on both
+    /// `sizeof(struct kinfo_proc)`, and the offsets of `kp_proc.p_starttime` (a
+    /// `timeval`: `i64` seconds, `i32` microseconds) and `kp_proc.p_pid`, on both
     /// Apple triples, as Go's `ztypes_darwin_{amd64,arm64}.go` record them.
     const KINFO_PROC: usize = 648;
+    const P_STARTTIME: usize = 0;
     const P_PID: usize = 40;
 
-    /// Every live pid in a `kern.proc.all` table; pid 0 is the kernel.
-    pub(super) fn pids(table: &[u8]) -> Vec<i32> {
+    /// Every live pid in a `kern.proc.all` table with its start; pid 0 is the
+    /// kernel.
+    pub(super) fn pids(table: &[u8]) -> Vec<(i32, SystemTime)> {
         table
             .chunks_exact(KINFO_PROC)
-            .filter_map(|entry| entry.get(P_PID..P_PID + 4))
-            .filter_map(|raw| raw.try_into().ok().map(i32::from_le_bytes))
-            .filter(|pid| *pid > 0)
+            .filter_map(|entry| {
+                let pid = i32::from_le_bytes(entry.get(P_PID..P_PID + 4)?.try_into().ok()?);
+                let secs =
+                    i64::from_le_bytes(entry.get(P_STARTTIME..P_STARTTIME + 8)?.try_into().ok()?);
+                let micros = i32::from_le_bytes(
+                    entry
+                        .get(P_STARTTIME + 8..P_STARTTIME + 12)?
+                        .try_into()
+                        .ok()?,
+                );
+                let started = SystemTime::UNIX_EPOCH
+                    + Duration::from_secs(u64::try_from(secs).ok()?)
+                    + Duration::from_micros(u64::try_from(micros).ok()?);
+                (pid > 0).then_some((pid, started))
+            })
             .collect()
     }
 
@@ -240,12 +306,139 @@ mod darwin {
     }
 }
 
-/// Windows needs no scan: the OS refuses to remove a running image under any of
-/// its names, at the moment of removal, which a scan taken before it can only
-/// approximate. [`collect`] counts a unit whose artifact survived as kept.
-#[cfg(not(any(target_os = "linux", target_os = "android", target_os = "macos")))]
-fn running_programs() -> Vec<PathBuf> {
-    Vec::new()
+/// Windows asks PowerShell, which every supported Windows ships: `Get-Process`
+/// names each process's path and `StartTime`, printed as a UTC `FILETIME`. A
+/// spawn, a few hundred milliseconds, paid only when a collection runs, which
+/// is below `min_free_mb`; the Win32 calls themselves are FFI that
+/// `unsafe_code = "forbid"` puts out of reach, and the safe wrapper (`sysinfo`)
+/// adds eighteen crates to the lockfile for this one listing.
+#[cfg(windows)]
+fn processes() -> Option<Vec<Process>> {
+    let argv: Vec<String> = [
+        "powershell",
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        WINDOWS_PROCESSES,
+    ]
+    .iter()
+    .map(|word| (*word).to_owned())
+    .collect();
+    let root = std::env::temp_dir();
+    match crate::exec::piped_argv(&root, &argv, "", crate::exec::Diagnostics::Drop, &[]) {
+        Some((0, listing)) => Some(windows_table::parse(&listing)),
+        _ => None,
+    }
+}
+
+/// The listing [`processes`] asks PowerShell for: `<path>\t<FILETIME>`, one
+/// process per line. A process whose start this user may not read throws, and
+/// is skipped.
+#[cfg(windows)]
+const WINDOWS_PROCESSES: &str = "Get-Process | ForEach-Object { try { $_.Path + \"`t\" + $_.StartTime.ToFileTimeUtc() } catch {} }";
+
+/// The listing's layout, as a pure function so every platform's suite checks it.
+//MUTANT-SUITE crates/batten/src/collect.rs
+//MUTANT filetime-epoch-ignored|s@^                    .checked_sub(FILETIME_TO_UNIX)?;$@                    ;@|a_powershell_listing_yields_each_process
+#[cfg(any(windows, test))]
+mod windows_table {
+    use super::Process;
+    use std::path::PathBuf;
+    use std::time::{Duration, SystemTime};
+
+    /// 100-nanosecond intervals from 1601-01-01 to the Unix epoch.
+    const FILETIME_TO_UNIX: u64 = 116_444_736_000_000_000;
+
+    pub(super) fn parse(listing: &str) -> Vec<Process> {
+        listing
+            .lines()
+            .filter_map(|line| {
+                let (path, filetime) = line.trim_end().rsplit_once('\t')?;
+                if path.is_empty() {
+                    return None;
+                }
+                let intervals = filetime
+                    .trim()
+                    .parse::<u64>()
+                    .ok()?
+                    .checked_sub(FILETIME_TO_UNIX)?;
+                Some(Process {
+                    exe: PathBuf::from(path),
+                    started: SystemTime::UNIX_EPOCH + Duration::from_nanos(intervals * 100),
+                })
+            })
+            .collect()
+    }
+}
+
+/// Elsewhere no process table is read.
+#[cfg(not(any(
+    target_os = "linux",
+    target_os = "android",
+    target_os = "macos",
+    windows
+)))]
+fn processes() -> Option<Vec<Process>> {
+    None
+}
+
+/// The programs whose process is a build: cargo and what it runs.
+const BUILD_PROGRAMS: [&str; 6] = [
+    "cargo",
+    "cargo-nextest",
+    "cargo-clippy",
+    "clippy-driver",
+    "rustc",
+    "rustdoc",
+];
+
+/// The instant from which every unit used is live: the start of the earliest
+/// live build (CLOUD-2197). `None` where no build is running.
+///
+/// A PROCESS TABLE THAT COULD NOT BE READ IS NOT "NO BUILD": every unit is then
+/// live, so a pass takes only what no build can reach (the superseded pass) and
+/// says a live build stopped it. Could-not-look is never clean.
+///
+/// NIX'S RULE, NOT AN AGE. Nix never deletes a live path, and liveness is
+/// reachability from roots, with no time window. Here the root is a running
+/// build: a run's fresh check reads every fingerprint it depends on, so what it
+/// used since it started is exactly what it may still need, for exactly as long
+/// as it lives. Measured on #1132, the 10-minute window this replaces was wrong
+/// both ways: a hook collection during a nextest run removed the
+/// `policy_modules` binary built for it (a guess too short for a long run), and
+/// under pressure every recent unit was protected, so a pass freed 0 MB with
+/// free space below `min_free_mb`.
+#[must_use]
+pub fn live_since(trees: &[PathBuf]) -> Option<SystemTime> {
+    match processes() {
+        Some(table) => earliest_build_start(&table, trees),
+        None => Some(SystemTime::UNIX_EPOCH),
+    }
+}
+
+/// The earliest start among `processes` that are builds: a [`BUILD_PROGRAMS`]
+/// program, or an executable under one of `trees` (a test binary it runs).
+//MUTANT-SUITE crates/batten/src/collect.rs
+//MUTANT root-takes-any-process|s@^        .filter(\x7cprocess\x7c is_build(\&process.exe, \&trees))$@        .filter(\x7c_\x7c true)@|the_earliest_build_is_the_root
+#[must_use]
+pub fn earliest_build_start(processes: &[Process], trees: &[PathBuf]) -> Option<SystemTime> {
+    let trees: Vec<PathBuf> = trees
+        .iter()
+        .map(|tree| crate::git::canonical(tree))
+        .collect();
+    processes
+        .iter()
+        .filter(|process| is_build(&process.exe, &trees))
+        .map(|process| process.started)
+        .min()
+}
+
+fn is_build(exe: &Path, trees: &[PathBuf]) -> bool {
+    let named = exe
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .is_some_and(|stem| BUILD_PROGRAMS.contains(&stem));
+    named || trees.iter().any(|tree| exe.starts_with(tree))
 }
 
 /// The [`Kept`] identities of `paths` that exist.
@@ -561,18 +754,6 @@ fn rearm_file(path: &Path) -> std::io::Result<()> {
     std::fs::File::open(path)?.set_times(std::fs::FileTimes::new().set_accessed(modified))
 }
 
-/// Units used this recently are the working set, never collected (CLOUD-2197).
-///
-/// Collecting toward `max_free_mb` walks oldest first, and with need enough it
-/// reaches what was built minutes ago: measured on #1132, a hook collecting
-/// during a nextest run removed the `policy_modules` test binary built for that
-/// same run, before nextest executed it, and its 20 cases failed to exec. A
-/// volume that cannot be brought above the minimum without the working set is
-/// the pre-step check's refusal to make, never a deletion of the build in use.
-//MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
-//MUTANT working-set-collected|s@^        if unit.last_use >= working_set {$@        if false {@|the_working_set_is_never_collected
-pub const WORKING_SET: std::time::Duration = std::time::Duration::from_mins(10);
-
 /// How a collection is asked for.
 #[derive(Debug, Clone)]
 pub struct Request<'a> {
@@ -588,6 +769,8 @@ pub struct Request<'a> {
     pub deadline: Option<Instant>,
     /// Block on another collector's lock rather than skipping the tree.
     pub wait: bool,
+    /// Every unit used at or after this instant is live: [`live_since`].
+    pub live_since: Option<SystemTime>,
 }
 
 /// Collect: superseded units first, then live units oldest first, until
@@ -598,6 +781,7 @@ pub struct Request<'a> {
 //MUTANT lru-order-reversed|s@^    live.sort_by_key(\x7cunit\x7c unit.last_use);$@    live.sort_by_key(\x7cunit\x7c std::cmp::Reverse(unit.last_use));@|the_least_recently_used_live_unit_goes_first
 //MUTANT collects-past-max-free|s@^        if freed >= request.need_bytes \x7c\x7c past(request.deadline) {$@        if past(request.deadline) {@|collection_stops_at_max_free
 //MUTANT held-tree-collected|s@^        let _building = match crate::prune::claim(\&unit.tree, \&unit.profile) {$@        let _building = match Ok::<(), PathBuf>(()) {@|a_tree_a_build_holds_is_never_collected
+//MUTANT live-root-ignored|s@^            .is_some_and(\x7csince\x7c unit.last_use >= since)$@            .is_some_and(\x7c_\x7c false)@|a_unit_used_since_a_live_build_started_is_never_collected
 //MUTANT engine-unit-collected|s@^            .any(\x7cartifact\x7c is_kept(artifact, request.kept))$@            .any(\x7c_\x7c false)@|the_running_engine_is_never_collected
 #[must_use]
 pub fn collect(request: &Request<'_>) -> Pass {
@@ -628,9 +812,6 @@ pub fn collect(request: &Request<'_>) -> Pass {
     let mut live: Vec<Unit> = locks.iter().flat_map(|(tree, _)| units_in(tree)).collect();
     live.extend(scratch);
     live.sort_by_key(|unit| unit.last_use);
-    let working_set = SystemTime::now()
-        .checked_sub(WORKING_SET)
-        .unwrap_or(SystemTime::UNIX_EPOCH);
     // WHY A PASS REMOVED WHAT IT DID, counted (CLOUD-2197's trace): measured on
     // #1132, a pass over hundreds of units older than the working set removed
     // none, and nothing said which guard stopped it.
@@ -642,10 +823,13 @@ pub fn collect(request: &Request<'_>) -> Pass {
         if freed >= request.need_bytes || past(request.deadline) {
             break;
         }
-        // THE WORKING SET IS NEVER COLLECTED: units are oldest first, so the
-        // first one used inside the window ends the pass.
-        if unit.last_use >= working_set {
-            why.working_set = true;
+        // A LIVE BUILD'S UNITS ARE NEVER COLLECTED: units are oldest first, so
+        // the first one a live build has used ends the pass.
+        if request
+            .live_since
+            .is_some_and(|since| unit.last_use >= since)
+        {
+            why.live = true;
             break;
         }
         let _building = match crate::prune::claim(&unit.tree, &unit.profile) {
@@ -691,14 +875,14 @@ pub fn collect(request: &Request<'_>) -> Pass {
                 u64::try_from(why.candidates).unwrap_or(u64::MAX),
                 u64::try_from(why.held).unwrap_or(u64::MAX),
                 u64::try_from(why.kept).unwrap_or(u64::MAX),
-                u64::from(why.working_set),
+                u64::from(why.live),
                 u64::try_from(removed).unwrap_or(u64::MAX),
                 request.need_bytes / (1024 * 1024),
             ],
         );
         let _ = std::io::Write::write_all(&mut std::io::stderr(), format!("{traced}\n").as_bytes());
     }
-    held.working_set = why.working_set;
+    held.live = why.live;
     Pass {
         freed_bytes: freed,
         removed,
@@ -707,13 +891,13 @@ pub fn collect(request: &Request<'_>) -> Pass {
 }
 
 /// What a pass passed over, for the trace: `disk-pass <trees> <candidates>
-/// <held> <kept> <stopped_at_working_set> <removed> <need_mb>`.
+/// <held> <kept> <stopped_at_live_build> <removed> <need_mb>`.
 #[derive(Debug, Default)]
 struct Skipped {
     candidates: usize,
     held: usize,
     kept: usize,
-    working_set: bool,
+    live: bool,
 }
 
 /// Collect if free space is below the declared minimum (CLOUD-2197).
@@ -756,6 +940,8 @@ pub fn trees(repo: &Path, prune: &crate::prune::Prune) -> Vec<PathBuf> {
 /// The watcher ([`crate::disk_watch::watch`]) calls this below the minimum, on
 /// its own collection thread; the hook calls it through [`collect_if_pressed`].
 /// `None` where the band is undeclared.
+//MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
+//MUTANT checkout-build-collected|s@^    kept.extend(crate::engine::checkout_build(repo).and_then(\x7cbuild\x7c identity(\&build)));$@@|the_checkout_build_is_never_collected
 pub fn collect_toward_max(
     repo: &Path,
     prune: &crate::prune::Prune,
@@ -769,13 +955,19 @@ pub fn collect_toward_max(
     let started = Instant::now();
     let trees = trees(repo, prune);
     let need_bytes = max.saturating_sub(free).saturating_mul(1024 * 1024);
+    // THE CHECKOUT'S OWN BUILD IS A ROOT (CLOUD-2232): the installed engine
+    // hands every call to it, so collecting it while nothing runs it would leave
+    // the hook refusing until a rebuild.
+    let mut kept = kept.to_vec();
+    kept.extend(crate::engine::checkout_build(repo).and_then(|build| identity(&build)));
     let pass = collect(&Request {
         trees: &trees,
         keep_generations: prune.keep,
-        kept,
+        kept: &kept,
         need_bytes,
         deadline,
         wait,
+        live_since: live_since(&trees),
     });
     Some(Collected {
         freed_bytes: pass.freed_bytes,
@@ -788,23 +980,97 @@ pub fn collect_toward_max(
 
 #[cfg(test)]
 mod tests {
-    use super::darwin;
+    use super::{Process, darwin, earliest_build_start, proc_stat};
     use std::path::PathBuf;
+    use std::time::{Duration, SystemTime};
 
-    fn kinfo(pid: i32) -> Vec<u8> {
+    fn at(secs: u64) -> SystemTime {
+        SystemTime::UNIX_EPOCH + Duration::from_secs(secs)
+    }
+
+    /// One `kinfo_proc`: `p_starttime` at offset 0, `p_pid` at 40, the rest
+    /// filler that must never be read.
+    fn kinfo(pid: i32, started: i64) -> Vec<u8> {
         let mut entry = vec![0xAA; 648];
+        entry[0..8].copy_from_slice(&started.to_le_bytes());
+        entry[8..12].copy_from_slice(&250_000_i32.to_le_bytes());
         entry[40..44].copy_from_slice(&pid.to_le_bytes());
         entry
     }
 
     #[test]
     fn a_kinfo_table_yields_each_pid() {
-        let table: Vec<u8> = [0, 1, 4242].into_iter().flat_map(kinfo).collect();
-        assert_eq!(darwin::pids(&table), vec![1, 4242], "pid 0 is the kernel");
+        let table: Vec<u8> = [0, 1, 4242]
+            .into_iter()
+            .flat_map(|pid| kinfo(pid, 1_700_000_000))
+            .collect();
+        let pids: Vec<i32> = darwin::pids(&table)
+            .into_iter()
+            .map(|(pid, _)| pid)
+            .collect();
+        assert_eq!(pids, vec![1, 4242], "pid 0 is the kernel");
         assert!(
             darwin::pids(&table[..647]).is_empty(),
             "a short entry is no pid"
         );
+    }
+
+    #[test]
+    fn a_kinfo_table_yields_each_start() {
+        let table = kinfo(7, 1_700_000_123);
+        assert_eq!(
+            darwin::pids(&table),
+            vec![(7, at(1_700_000_123) + Duration::from_millis(250))]
+        );
+    }
+
+    #[test]
+    fn a_stat_line_yields_its_start_ticks() {
+        // A command name holding a space and a paren, as `(cargo nextest)` and
+        // worse can: the fields are read after the LAST `)`.
+        let stat =
+            "4242 (a) b) S 1 4242 4242 0 -1 4194560 100 0 0 0 5 3 0 0 20 0 1 0 987654 1000 100";
+        assert_eq!(proc_stat::start_ticks(stat), Some(987_654));
+        assert_eq!(proc_stat::start_ticks("4242 (cut"), None);
+        assert_eq!(
+            proc_stat::boot_seconds("cpu  1 2 3\nbtime 1700000000\nprocesses 9\n"),
+            Some(1_700_000_000)
+        );
+    }
+
+    #[test]
+    fn a_powershell_listing_yields_each_process() {
+        // 2023-11-14T22:13:20Z as a FILETIME, then a pathless system process
+        // and a line with no start, both skipped.
+        let listing = "C:\\Users\\u\\.cargo\\bin\\cargo.exe\t133444736000000000\r\n\t133444736000000000\r\nC:\\x.exe\t\r\n";
+        assert_eq!(
+            super::windows_table::parse(listing),
+            vec![Process {
+                exe: PathBuf::from("C:\\Users\\u\\.cargo\\bin\\cargo.exe"),
+                started: at(1_700_000_000),
+            }]
+        );
+    }
+
+    #[test]
+    fn the_earliest_build_is_the_root() {
+        let tree = PathBuf::from("/nonexistent/repo/target");
+        let process = |exe: &str, secs| Process {
+            exe: PathBuf::from(exe),
+            started: at(secs),
+        };
+        let table = [
+            process("/bin/bash", 100),
+            process("/home/u/.rustup/toolchains/x/bin/cargo", 300),
+            process("/nonexistent/repo/target/debug/deps/it-0123", 200),
+            process("/usr/bin/batten", 50),
+        ];
+        assert_eq!(
+            earliest_build_start(&table, std::slice::from_ref(&tree)),
+            Some(at(200)),
+            "a test binary under the tree is a build; a shell and the engine are not"
+        );
+        assert_eq!(earliest_build_start(&table[..1], &[tree]), None);
     }
 
     #[test]

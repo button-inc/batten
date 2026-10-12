@@ -3,7 +3,7 @@
 //!
 //! Below `[prune] min_free_mb`: superseded units first, then live units least
 //! recently used first, until `max_free_mb` is free — never a unit a build holds,
-//! never the running engine, and never the working set. The watcher spans the
+//! never the running engine, and never a unit a live build has used. The watcher spans the
 //! whole run it is hosted by; the hook collects before each mediated call.
 
 // The rows this suite kills, declared beside the code they mutate and mirrored
@@ -119,7 +119,16 @@ fn request<'a>(
         need_bytes: need,
         deadline: None,
         wait: false,
+        live_since: None,
     }
+}
+
+/// [`request`], under a live build that started a minute ago: what it has used
+/// since is its own, as a running suite's is.
+fn request_under_a_live_build<'a>(trees: &'a [PathBuf], need: u64) -> batten::collect::Request<'a> {
+    let mut ask = request(trees, &[], need);
+    ask.live_since = Some(SystemTime::now() - Duration::from_secs(60));
+    ask
 }
 
 /// A directory holding one 64KiB file, both written `age` seconds ago: an
@@ -144,7 +153,7 @@ fn aged_dir(dir: &Path, age: u64) {
 /// THE INCREMENTAL CACHE IS RANKED (CLOUD-2197): measured on #1132, 8.1GB of
 /// `incremental` sat outside every pass while 865 units freed 159MB. A stale
 /// crate cache goes; one written inside the working set — the edit loop's own —
-/// stays. `#MUTANT incremental-unranked` leaves both.
+/// stays while a live build has used it. `#MUTANT incremental-unranked` leaves both.
 #[test]
 fn a_stale_incremental_cache_is_collected_and_a_fresh_one_kept() {
     let root = common::scratch("collect-incremental");
@@ -155,8 +164,8 @@ fn a_stale_incremental_cache_is_collected_and_a_fresh_one_kept() {
     aged_dir(&profile.join("incremental/stale-0aaaaaaaaaaaa"), 7200);
     aged_dir(&profile.join("incremental/fresh-0bbbbbbbbbbbb/s-new"), 1);
     let trees = [tree.clone()];
-    let units = batten::collect::collect(&request(&trees, &[], u64::MAX)).removed;
-    assert_eq!(units, 1, "only the stale cache is outside the working set");
+    let units = batten::collect::collect(&request_under_a_live_build(&trees, u64::MAX)).removed;
+    assert_eq!(units, 1, "only the stale cache is outside the live build");
     assert!(!profile.join("incremental/stale-0aaaaaaaaaaaa").exists());
     assert!(
         profile.join("incremental/fresh-0bbbbbbbbbbbb").exists(),
@@ -175,18 +184,15 @@ fn a_stale_test_scratch_entry_is_collected() {
     aged_dir(&tree.join("tmp/old-fixture"), 7200);
     aged_dir(&tree.join("tmp/live-fixture"), 1);
     let trees = [tree.clone()];
-    let units = batten::collect::collect(&request(&trees, &[], u64::MAX)).removed;
-    assert_eq!(
-        units, 1,
-        "only the stale fixture is outside the working set"
-    );
+    let units = batten::collect::collect(&request_under_a_live_build(&trees, u64::MAX)).removed;
+    assert_eq!(units, 1, "only the stale fixture is outside the live build");
     assert!(!tree.join("tmp/old-fixture").exists());
     assert!(tree.join("tmp/live-fixture").exists());
 }
 
 /// A BUILD INSIDE FRESH SCRATCH IS THE SCRATCH ENTRY'S, NOT A UNIT OF ITS OWN:
 /// a suite's fixture tree under `tmp/` carries units of any age, and the entry
-/// that holds them is what the working set judges. `#MUTANT scratch-unit-ranked`
+/// that holds them is what a live build's root judges. `#MUTANT scratch-unit-ranked`
 /// collects the nested unit.
 #[test]
 fn a_build_inside_fresh_scratch_is_never_collected() {
@@ -196,7 +202,7 @@ fn a_build_inside_fresh_scratch_is_never_collected() {
     unit(&nested, "fixture", "9999999999999999", 7200, 16);
     aged_dir(&tree.join("tmp/running-case"), 1);
     let trees = [tree.clone()];
-    let _ = batten::collect::collect(&request(&trees, &[], u64::MAX));
+    let _ = batten::collect::collect(&request_under_a_live_build(&trees, u64::MAX));
     assert!(
         present(&nested, "fixture", "9999999999999999"),
         "a unit inside a fresh scratch entry is the entry's"
@@ -269,20 +275,62 @@ fn a_unit_a_running_program_executes_is_never_collected() {
     );
 }
 
+/// A LIVE BUILD'S UNITS ARE ITS OWN (CLOUD-2197), however much is asked for.
+/// Measured on #1132: collecting toward `max_free_mb` walked oldest first into
+/// the `policy_modules` test binary built for the running suite. A unit used
+/// since a live build started stays; one used before it goes.
 #[test]
-fn the_working_set_is_never_collected() {
-    // Measured on #1132: collecting toward max_free_mb walked oldest first into
-    // the `policy_modules` test binary built for the running suite. A unit used
-    // inside the window stays, however much is asked for.
-    let root = common::scratch("collect-working-set");
+fn a_unit_used_since_a_live_build_started_is_never_collected() {
+    let root = common::scratch("collect-live-build");
     let profile = root.join("target/debug");
-    unit(&profile, "fresh", "eeeeeeeeeeeeeeee", 30, 4096);
-    unit(&profile, "stale", "ffffffffffffffff", 7200, 4096);
+    // A RUN OLDER THAN THE WINDOW THIS REPLACES: started two hours ago, it still
+    // holds a unit it read an hour ago.
+    unit(&profile, "in-use", "eeeeeeeeeeeeeeee", 3600, 4096);
+    unit(&profile, "stale", "ffffffffffffffff", 3 * 3600, 4096);
     let trees = [root.join("target")];
-    let units = batten::collect::collect(&request(&trees, &[], u64::MAX)).removed;
-    assert_eq!(units, 1, "only the unit outside the window goes");
-    assert!(present(&profile, "fresh", "eeeeeeeeeeeeeeee"));
+    let mut ask = request(&trees, &[], u64::MAX);
+    ask.live_since = Some(SystemTime::now() - Duration::from_secs(2 * 3600));
+    let pass = batten::collect::collect(&ask);
+    assert_eq!(pass.removed, 1, "only the unit no live build used goes");
+    assert!(present(&profile, "in-use", "eeeeeeeeeeeeeeee"));
     assert!(!present(&profile, "stale", "ffffffffffffffff"));
+    assert!(pass.held.live, "and the pass says a live build stopped it");
+}
+
+/// NO LIVE BUILD, NO ROOT: a unit used a minute ago is collectable once nothing
+/// is running, which the age window refused, so a pressed volume was not freed.
+#[test]
+fn with_no_live_build_a_recent_unit_is_collected() {
+    let root = common::scratch("collect-no-live-build");
+    let profile = root.join("target/debug");
+    unit(&profile, "recent", "abababababababab", 60, 4096);
+    let trees = [root.join("target")];
+    let pass = batten::collect::collect(&request(&trees, &[], u64::MAX));
+    assert_eq!(pass.removed, 1);
+    assert!(!present(&profile, "recent", "abababababababab"));
+}
+
+/// THE CHECKOUT'S BUILD IS A ROOT (CLOUD-2232): `target/release/batten` is what
+/// the installed engine hands every call to, so it survives with nothing
+/// running it. It shares its inode with the unit's artifact, as cargo's uplift
+/// does.
+#[test]
+fn the_checkout_build_is_never_collected() {
+    let repo = common::scratch("collect-checkout-build");
+    common::init_repo(&repo);
+    let profile = repo.join("target/release");
+    let artifact = unit(&profile, "batten", "cdcdcdcdcdcdcdcd", 3 * 3600, 4096);
+    std::fs::hard_link(&artifact, profile.join("batten")).unwrap();
+    let mut config = rules("target");
+    config.min_free_mb = Some(10);
+    config.max_free_mb = Some(1 << 30);
+    let done =
+        batten::collect::collect_toward_max(&repo, &config, &[], 0, &mut || Ok(0), None, false);
+    assert!(done.is_some());
+    assert!(
+        present(&profile, "batten", "cdcdcdcdcdcdcdcd"),
+        "the build the installed engine follows is never collected"
+    );
 }
 
 #[test]
