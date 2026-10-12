@@ -20048,9 +20048,15 @@ fn record_asked_at(
     if harness.question_tool() != Some(raw_tool) {
         return 0;
     }
-    facts::payload_in(result)
-        .and_then(|payload| asked::record(root, &payload, now).ok())
-        .unwrap_or(0)
+    let Some(payload) = facts::payload_in(result) else {
+        return 0;
+    };
+    // EVERY checkout the answer belongs in, never a directory that is not one
+    // (`asked::ledger_roots`): a ledger no commit carries is an answer lost.
+    asked::ledger_roots(root)
+        .iter()
+        .filter_map(|ledger| asked::record(ledger, &payload, now).ok())
+        .sum()
 }
 
 /// [`record_asked`] reached from the integration tier, for

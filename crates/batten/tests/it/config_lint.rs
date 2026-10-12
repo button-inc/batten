@@ -276,6 +276,42 @@ fn an_answered_question_admits_the_weakening_it_names() {
     );
 }
 
+/// A session standing ABOVE its checkouts — a workspace whose parent holds
+/// several repositories — records the answer into the checkout beneath that
+/// declares Batten, never into the parent, which no commit carries and no gate
+/// reads. Measured 2026-10-12: three answers lost that way, the gate refusing
+/// after each.
+#[test]
+fn an_answer_recorded_above_the_checkout_lands_in_the_checkout() {
+    let parent = common::scratch_outside_tree("asked-workspace", "parent");
+    let consumer = parent.join("consumer");
+    fs::rename(weakening_pr("lint-admit-workspace", None), &consumer).unwrap();
+    let plain = parent.join("plain");
+    fs::create_dir_all(&plain).unwrap();
+    common::git_in(&plain, &["init", "-q"]);
+
+    assert_eq!(
+        ask(&parent, "Admit it"),
+        1,
+        "recorded once, in the checkout"
+    );
+    assert!(
+        !parent.join(batten::asked::LEDGER).exists(),
+        "a directory that is not a checkout gets no ledger"
+    );
+    assert!(
+        !plain.join(batten::asked::LEDGER).exists(),
+        "a repository that does not declare Batten gets no ledger"
+    );
+    let out = lint(&consumer, &["--config-from", "origin/main"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stdout(&out));
+    assert!(
+        stdout(&out).contains(&format!("admitted {PAIR} (asked)")),
+        "{}",
+        stdout(&out)
+    );
+}
+
 /// The mirror, without which the case above is satisfied by a lint that admits
 /// on any recorded question at all.
 #[test]

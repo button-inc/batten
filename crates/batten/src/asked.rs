@@ -158,6 +158,41 @@ pub fn entries(result: &serde_json::Value, at: u64, head: Option<&str>) -> Vec<E
         .collect()
 }
 
+/// The roots whose ledgers an answer recorded at `anchor` belongs in.
+///
+/// **An anchor that is a Batten checkout is the one root, as it always was.**
+/// Otherwise the session is standing ABOVE its checkouts — a workspace whose
+/// parent directory holds several repositories, which is where a host that
+/// registers its hooks at that parent runs them — and the answer goes to every
+/// repository directly beneath that declares a `batten.toml`.
+///
+/// Measured 2026-10-12: the hook resolved such a parent as its own root and wrote
+/// three answers to a ledger at the parent, which is not a repository, so no
+/// commit carried them and no gate read them; the gate refused, the question was
+/// asked again, and the answer was lost again. Writing into each checkout beneath
+/// is safe because an entry admits only the `<smell-id> <key>` pairs its question
+/// quotes verbatim, so a line in a checkout it is not about admits nothing there.
+#[must_use]
+pub fn ledger_roots(anchor: &Path) -> Vec<std::path::PathBuf> {
+    let checkout = |dir: &Path| {
+        dir.join(crate::config::CONFIG_FILE).is_file() || crate::git::repo_root(dir).is_ok()
+    };
+    if checkout(anchor) {
+        return vec![anchor.to_path_buf()];
+    }
+    let Ok(children) = std::fs::read_dir(anchor) else {
+        return Vec::new();
+    };
+    let mut roots: Vec<std::path::PathBuf> = children
+        .filter_map(|child| Some(child.ok()?.path()))
+        .filter(|dir| {
+            dir.join(crate::config::CONFIG_FILE).is_file() && crate::git::repo_root(dir).is_ok()
+        })
+        .collect();
+    roots.sort();
+    roots
+}
+
 /// Append every entry in `result` to the ledger under `root`.
 ///
 /// # Errors
