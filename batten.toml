@@ -15137,6 +15137,25 @@ kind = "document"
 target = "release-plz.toml"
 
 [[verdict]]
+id = "release wire wrong"
+gloss = "a workflow breaks the release path: a second poster, writer, dispatcher or tag writer, or a gate missing"
+class = """
+`main`'s pin names only a release that is published, immutable, complete and \
+verified, and half of what keeps it so is the workflow shape (CLOUD-2033): one \
+poster of the `release-path` status, one dispatcher of the build, one publisher, \
+every writer of the trunk serialised in `main-writer` and frozen while a release \
+is in flight, every upload draft-guarded, no workflow that creates or deletes a \
+tag, and `final` sealed against an unverified pin until the server requires the \
+status. The subject names the wire that is wrong; `rules/commits.md` states the \
+release path it belongs to.
+"""
+
+[[verdict.route]]
+id = "rule read first"
+kind = "document"
+target = "rules/commits.md"
+
+[[verdict]]
 id = "config carry duplicate"
 gloss = "a retired second bot is back on ecosystems the first already owns"
 class = """

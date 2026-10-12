@@ -37,12 +37,12 @@
 // carried: "a version bound to an undeclared input is a violation" policy/release-tracking.rego kind:mechanism
 // carried: "an input declared nowhere but passed as a step key is not a declaration" policy/release-tracking.rego kind:mechanism
 // carried: "a deeper but valid input indentation still declares the input" policy/release-tracking.rego kind:mechanism
-// carried: "a dropped tag-resolution step is a violation" policy/release-tracking.rego kind:mechanism
-// carried: "a dropped tag-resolution step does not also report the refresh" policy/release-tracking.rego kind:mechanism
+// changed: "a dropped tag-resolution step is a violation" policy/release-tracking.rego the release is recorded by `release-artifacts.yml`'s `land` job, which publishes the tag it is dispatched with (CLOUD-2033): the version is a declared dispatch input, so there is no resolver to drop
+// changed: "a dropped tag-resolution step does not also report the refresh" policy/release-tracking.rego the same move: no resolver, so the refresh is judged against the job's first invocation
 // carried: "a dropped tag refresh is a violation" policy/release-tracking.rego kind:mechanism
-// carried: "a tag refresh after the resolver is a violation" policy/release-tracking.rego kind:mechanism
+// changed: "a tag refresh after the resolver is a violation" policy/release-tracking.rego the refresh must precede the job's first invocation instead, `a_tag_refresh_after_the_first_invocation_is_a_violation`
 // carried: "a fetch without --tags is not a refresh" policy/release-tracking.rego kind:mechanism
-// carried: "a comment quoting the resolver is not the resolver" policy/release-tracking.rego kind:mechanism
+// changed: "a comment quoting the resolver is not the resolver" policy/release-tracking.rego no resolver remains; a comment quoting the refresh is still not the refresh, `a_comment_quoting_the_refresh_does_not_satisfy_the_refresh_rule`
 // carried: "a comment quoting the refresh does not satisfy the refresh rule" policy/release-tracking.rego kind:mechanism
 // carried: "a dropped tag-exists probe on the backfill path is a violation" policy/release-tracking.rego kind:mechanism
 // carried: "the release path is not asked for a tag-exists probe" policy/release-tracking.rego kind:mechanism
@@ -74,7 +74,7 @@ use std::path::{Path, PathBuf};
 
 use batten::rules::{self, Rule};
 
-const RELEASE: &str = ".github/workflows/release-plz.yml";
+const RELEASE: &str = ".github/workflows/release-artifacts.yml";
 const BACKFILL: &str = ".github/workflows/linear-release-backfill.yml";
 
 /// The `[[pattern]]` rows the module reads, taken from the committed config so
@@ -93,35 +93,39 @@ const PATTERNS: &[&str] = &[
     "tag-exists-probe",
 ];
 
-/// The release path, reduced to the nodes the module judges. TWO JOBS, and the
-/// first one is not decoration: a cache-warm job whose checkout comes FIRST and
-/// carries no `fetch-depth` is what made a file-global depth probe pass for the
-/// wrong reason.
-const CLEAN_RELEASE: &str = r#"name: release-plz
+/// The release path, reduced to the nodes the module judges: `land` records the
+/// release it publishes, named by the dispatch input the cut sent (CLOUD-2033).
+/// TWO JOBS, and the first one is not decoration: a build job whose checkout
+/// comes FIRST and carries no `fetch-depth` is what made a file-global depth
+/// probe pass for the wrong reason.
+const CLEAN_RELEASE: &str = r#"name: release-artifacts
 on:
-  push:
-    branches: [main]
+  workflow_dispatch:
+    inputs:
+      tag:
+        required: true
+        type: string
+      sha:
+        required: true
+        type: string
 jobs:
-  cache-warm:
+  checksums:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-  release-plz:
+  land:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          ref: main
           fetch-depth: 0
-      - run: mise run release
-      - name: Refresh tags after release-plz pushed one
+      - run: mise run batten -- release land-state
+      - name: Fetch the release tag (f) left on main
         run: git fetch --force --tags origin
-      - name: Resolve the release tag this push shipped
-        id: release-tag
-        run: echo "tag=$(git tag --points-at HEAD | grep -E '^v[0-9]' | head -n1)" >>"$GITHUB_OUTPUT"
       - name: Release tracking requires its credential
-        if: steps.release-tag.outputs.tag != ''
         env:
           LINEAR_ACCESS_KEY: ${{ secrets.LINEAR_ACCESS_KEY }}
         run: |
@@ -130,19 +134,17 @@ jobs:
             exit 1
           fi
       - name: Record the release in Linear
-        if: steps.release-tag.outputs.tag != ''
         uses: linear/linear-release-action@17b8c24f8ceb2b98cabaf1965ff83c55dd596fac # v0.15.1
         with:
           access_key: ${{ secrets.LINEAR_ACCESS_KEY }}
           command: sync
-          version: ${{ steps.release-tag.outputs.tag }}
+          version: ${{ inputs.tag }}
       - name: Complete the Linear release
-        if: steps.release-tag.outputs.tag != ''
         uses: linear/linear-release-action@17b8c24f8ceb2b98cabaf1965ff83c55dd596fac # v0.15.1
         with:
           access_key: ${{ secrets.LINEAR_ACCESS_KEY }}
           command: complete
-          version: ${{ steps.release-tag.outputs.tag }}
+          version: ${{ inputs.tag }}
 "#;
 
 /// The backfill path: the version is a declared `workflow_dispatch` input, and
@@ -496,20 +498,43 @@ fn fetch_depth_0_on_a_job_that_does_not_invoke_the_action_is_not_enough() {
     );
     let found = release_with("depth-elsewhere", &moved);
     assert!(
-        found.contains(&format!("{RELEASE}#shallow-checkout:16")),
+        found.contains(&format!(
+            "{RELEASE}#shallow-checkout:{}",
+            land_checkout_line()
+        )),
         "{found:?}"
     );
+}
+
+/// The 1-based line of the `land` job's checkout in [`CLEAN_RELEASE`].
+fn land_checkout_line() -> usize {
+    let lines: Vec<&str> = CLEAN_RELEASE.lines().collect();
+    let job = lines
+        .iter()
+        .position(|line| *line == "  land:")
+        .expect("the land job");
+    lines
+        .iter()
+        .skip(job)
+        .position(|line| line.contains("uses: actions/checkout@"))
+        .expect("its checkout")
+        + job
+        + 1
 }
 
 // --- the version binding, per profile -----------------------------------------
 
 #[test]
-fn a_version_not_bound_to_the_resolved_tag_is_a_violation() {
+fn a_version_not_bound_to_the_dispatched_tag_is_a_violation() {
     for (name, version) in [
         ("literal", "          version: v0.0.77"),
         (
             "undeclared-step",
             "          version: ${{ steps.nonesuch.outputs.tag }}",
+        ),
+        (
+            "undeclared-input",
+            "          version: ${{ inputs.nonesuch }}",
         ),
     ] {
         let found = release_with(name, &replace_line(CLEAN_RELEASE, "version: ", version));
@@ -560,42 +585,29 @@ fn a_deeper_but_valid_input_indentation_still_declares_the_input() {
     assert!(found.is_empty(), "{found:?}");
 }
 
-// --- the release path's tag source and its refresh ----------------------------
-
-#[test]
-fn a_dropped_tag_resolution_step_is_one_finding() {
-    let found = release_with(
-        "drop-resolver",
-        &drop_step(CLEAN_RELEASE, "Resolve the release tag this push shipped"),
-    );
-    assert!(has(&found, RELEASE, "tag-source-missing"), "{found:?}");
-    assert!(
-        !any_token(&found, "tag-refresh-missing"),
-        "one cause, one finding: {found:?}"
-    );
-}
+// --- the land job's refresh ----------------------------------------------------
 
 #[test]
 fn a_dropped_tag_refresh_is_a_violation() {
     let found = release_with(
         "drop-refresh",
-        &drop_step(CLEAN_RELEASE, "Refresh tags after release-plz pushed one"),
+        &drop_step(CLEAN_RELEASE, "Fetch the release tag (f) left on main"),
     );
     assert!(has(&found, RELEASE, "tag-refresh-missing"), "{found:?}");
 }
 
-/// THE DEFECT THE PROGRAM EXISTED FOR: a refresh after the resolver updates a ref
-/// set nothing reads again. `#MUTANT refresh-order-ignored` reddens exactly here.
+/// A refresh after the first invocation updates a tag set the sync has already
+/// read. `#MUTANT refresh-order-ignored` reddens exactly here.
 #[test]
-fn a_tag_refresh_after_the_resolver_is_a_violation() {
+fn a_tag_refresh_after_the_first_invocation_is_a_violation() {
     let late = insert(
-        &drop_step(CLEAN_RELEASE, "Refresh tags after release-plz pushed one"),
-        |l| l.contains("git tag --points-at HEAD"),
+        &drop_step(CLEAN_RELEASE, "Fetch the release tag (f) left on main"),
+        |l| l == "      - name: Complete the Linear release",
         &[
             "      - name: Refresh tags too late",
             "        run: git fetch --force --tags origin",
         ],
-        false,
+        true,
     );
     let found = release_with("late-refresh", &late);
     assert!(has(&found, RELEASE, "tag-refresh-missing"), "{found:?}");
@@ -614,24 +626,11 @@ fn a_fetch_without_tags_is_not_a_refresh() {
     assert!(has(&found, RELEASE, "tag-refresh-missing"), "{found:?}");
 }
 
-/// A comment quoting the resolver above the refresh must not become the resolver.
-#[test]
-fn a_comment_quoting_the_resolver_is_not_the_resolver() {
-    let quoted = insert(
-        CLEAN_RELEASE,
-        |l| l == "      - run: mise run release",
-        &["      # `git tag --points-at HEAD` is what the resolver below runs."],
-        true,
-    );
-    let found = release_with("quoted-resolver", &quoted);
-    assert!(found.is_empty(), "{found:?}");
-}
-
 #[test]
 fn a_comment_quoting_the_refresh_does_not_satisfy_the_refresh_rule() {
     let quoted = insert(
-        &drop_step(CLEAN_RELEASE, "Refresh tags after release-plz pushed one"),
-        |l| l == "      - run: mise run release",
+        &drop_step(CLEAN_RELEASE, "Fetch the release tag (f) left on main"),
+        |l| l == "      - run: mise run batten -- release land-state",
         &["      # run: git fetch --force --tags origin"],
         true,
     );

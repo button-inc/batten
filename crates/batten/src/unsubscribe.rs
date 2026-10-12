@@ -355,6 +355,7 @@ pub fn drop_subscription(
         headers: &headers,
         body: Some(bytes.as_slice()),
         patch: false,
+        delete: false,
         direct: false,
     };
     let Ok(answers) = crate::fetch::spend(&[call]) else {

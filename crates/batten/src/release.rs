@@ -997,8 +997,39 @@ pub fn run(
             };
             run_backfill(&request, out, err)
         }
-        crate::cli::ReleaseCommand::Install => Err(anyhow::anyhow!(
-            "release install is answered by the engine's own dispatch, never here"
+        crate::cli::ReleaseCommand::Discard { tag } => {
+            crate::release_state::run_discard(&tag, out, err)
+        }
+        crate::cli::ReleaseCommand::InFlight { workflow } => {
+            crate::release_state::run_in_flight(&workflow, out, err)
+        }
+        crate::cli::ReleaseCommand::LandState { tag, sha } => {
+            crate::release_state::run_land_state(&tag, &sha, out, err)
+        }
+        crate::cli::ReleaseCommand::BumpUnusable {
+            tag,
+            branch,
+            changelog,
+        } => crate::release_state::run_bump_unusable(&tag, (&branch, &changelog), out, err),
+        crate::cli::ReleaseCommand::Cut {
+            tag,
+            sha,
+            changelog,
+            workflow,
+        } => crate::release_state::run_cut(&tag, &sha, (&changelog, &workflow), out, err),
+        crate::cli::ReleaseCommand::Pin { at } => {
+            crate::release_state::run_pin(at.as_deref(), out, err)
+        }
+        crate::cli::ReleaseCommand::Settings { probe, last_run } => {
+            crate::release_guard::run_settings(probe, last_run.as_deref(), out, err)
+        }
+        crate::cli::ReleaseCommand::Guard { tag, sha } => {
+            crate::release_state::run_guard(&tag, &sha, out, err)
+        }
+        crate::cli::ReleaseCommand::Install
+        | crate::cli::ReleaseCommand::Verify { .. }
+        | crate::cli::ReleaseCommand::Path { .. } => Err(anyhow::anyhow!(
+            "release install, verify and path are answered by the engine's own dispatch, never here"
         )),
     }
 }

@@ -27,7 +27,8 @@ ci-drift` polices `batten.toml`'s `[ci]` projection of it against the live
   a set that predated `final`, read by nothing and gated by nothing (CLOUD-350).
 - **Semver + changelog are automated.** `release-plz` reads commits since the
   last release and bumps version + `CHANGELOG.md` (`feat`→minor, `fix`→patch,
-  `!`/`BREAKING CHANGE`→major). Do **not** hand-edit version or changelog.
+  `!`/`BREAKING CHANGE`→major) in the release PR. Do **not** hand-edit version or
+  changelog. It no longer tags or publishes anything: see "Release path" below.
 - **Below `0.1.0` those arrows do not fire — every release is a patch.** Cargo's
   SemVer gives `0.0.x` no compatibility guarantee, so release-plz bumps the
   patch whatever the type says. Measured: the `feat!` that reversed the exit
@@ -84,6 +85,54 @@ ci-drift` polices `batten.toml`'s `[ci]` projection of it against the live
   `claimed-keys --refs-first-only` is the one authority on the extraction; do not
   re-derive the trailer scan, or the speculation boundary it carries is lost and a
   speculatively linearized branch gets a sibling's rows demanded of it.
+
+## Release path
+
+**`main`'s engine pin, `install.sh` and `action.yml` only ever name a release
+that is published, immutable, complete and verified** (CLOUD-2033). That holds
+under every way `main` can be written, by one written process and a gate at each
+step of it.
+
+- **P1. Only the release PR changes the pin and version, and nothing else.**
+  A release head differs from its merge-base only in `Cargo.toml`, `Cargo.lock`,
+  a `CHANGELOG.md` and the `engine` line of `batten.toml`. The predicate that
+  grades it is always `main`'s code: `ci` builds the trunk beside the head
+  (`git worktree add trunk-predicate origin/main`) and grades the pull request's
+  HEAD SHA, never the synthetic merge ref.
+- **P2. `release-path` is the server-side gate.** One commit status, posted only
+  by `batten release path <sha> --post` (**G2**) — from `ci`, from `land`, and
+  once from the release guard's probe seeding. Success means the pin is inherited
+  from the merge-base, or the head is release-shaped and pins a release **G1**
+  (`batten release verify`) verified as published, whose tag commit is in the
+  head's history. Before B2 the server requires only `final`, so `ci` runs it
+  with `--seal`, which fails `final` on an unverified pin.
+- **P3. The release path itself.** Every writer of `main` — the human and bot
+  landers, the cut, and the release's `land` job — runs in one
+  `concurrency: main-writer` group with `queue: max`, and every lander and the
+  cut first runs `batten release in-flight`, the freeze. The **cut**
+  (`auto-release-land.yml`) runs only when the release guard's `settings` job is
+  green: it bumps an unusable version (`batten release bump-unusable`) and stops,
+  or runs `batten release cut`, which discards any stale draft, drafts vX at the
+  release head and dispatches `release-artifacts.yml` with that tag and sha. The
+  build legs check out the sha and upload only through `batten release guard`.
+  `land` checks out `main`, decides its branch with `batten release land-state`,
+  verifies the draft, publishes it as a non-latest pre-release, posts
+  `release-path`, fast-forwards `main` with `RELEASE_PLZ_TOKEN`, and only then
+  marks it latest and records it in Linear. `cleanup` discards a draft only when
+  a BUILD job failed. Every release deletion is `batten release discard`.
+- **P4. Failure costs a version number, never safety.** A failure before publish
+  deletes the draft and its tag, and the version is reused. A failure after
+  publish leaves a non-latest immutable pre-release nothing pins; "Re-run failed
+  jobs" resumes it while `main` is still behind it, and the landers hold for it.
+  A version burned or left as a stray tag is bumped past.
+- **P5. Installers resolve a pin, never latest.** `install.sh`: `BATTEN_VERSION`,
+  else the named ref's pin, else the pin of the repository it runs in, else
+  `main`'s. `action.yml`: the pin at its own ref.
+
+The gates: **G1** `release verify`, **G2** `release path`, **G3** the
+`release wire wrong` clauses of `policy/ci-parity.rego` over the workflow shape,
+**G4** `release-guard.yml` — `batten release settings --probe`, which proves
+hourly that the server refuses a commit without `release-path`.
 
 ## Commit identity: which authority wins, and why the question keeps returning
 

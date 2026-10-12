@@ -1053,6 +1053,24 @@ const MAY_ANSWER_COULD_NOT_LOOK: &[&str] = &[
     // Retiring `[tasks.checksums]`, on the same terms: it reads the release's
     // own assets from the forge remote this corpus does not name.
     "release sums",
+    // G1 (CLOUD-2033), on the same terms: it reads the release and its tag from
+    // the forge remote this corpus does not name.
+    "release verify",
+    // G2 (CLOUD-2033): it grades against `origin/main`, which the corpus does
+    // not carry, and posts to the forge remote it does not name.
+    "release path",
+    // The release path's verbs (CLOUD-2033), on the same terms: each reads the
+    // forge remote the corpus does not name.
+    "release discard",
+    "release in-flight",
+    "release land-state",
+    "release bump-unusable",
+    "release guard",
+    "release cut",
+    "release settings",
+    // `release pin` reads the corpus's own `batten.toml`, which may not exist,
+    // and that is could-not-look rather than a pin.
+    "release pin",
 ];
 
 /// One entry per leaf verb of [`SURFACE`], asserted total by
@@ -2671,6 +2689,80 @@ const CENSUS: &[Verb] = &[
     Verb {
         path: "release sums",
         args: &["--manifest", "SHA256SUMS", "v0.0.1"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "release verify",
+        args: &["v0.0.1"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "release path",
+        args: &["HEAD"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "release discard",
+        args: &["v0.0.1"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "release in-flight",
+        args: &["--workflow", "release-artifacts.yml"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "release land-state",
+        args: &["v0.0.1", "--sha", "HEAD"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "release bump-unusable",
+        args: &[
+            "v0.0.1",
+            "--branch",
+            "release",
+            "--changelog",
+            "CHANGELOG.md",
+        ],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "release guard",
+        args: &["v0.0.1", "--sha", "HEAD"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "release cut",
+        args: &[
+            "v0.0.1",
+            "--sha",
+            "HEAD",
+            "--changelog",
+            "CHANGELOG.md",
+            "--workflow",
+            "release-artifacts.yml",
+        ],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "release pin",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "release settings",
+        args: &[],
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },

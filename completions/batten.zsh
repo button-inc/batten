@@ -1051,6 +1051,220 @@ trace\:"Add everything"))' \
 '::tag -- The release'\''s tag; empty or absent is the latest release:_default' \
 && ret=0
 ;;
+(verify)
+_arguments "${_arguments_options[@]}" : \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--draft[Verify a draft, read through the assets API, rather than a published, immutable release]' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+':tag -- The release'\''s tag:_default' \
+&& ret=0
+;;
+(path)
+_arguments "${_arguments_options[@]}" : \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--post[Post the verdict as the release-path commit status on the graded head]' \
+'--seal[Exit 1 when the verdict is failure and the head is not release-shaped or the release guard'\''s settings are not green]' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+':sha -- The head commit graded:_default' \
+&& ret=0
+;;
+(discard)
+_arguments "${_arguments_options[@]}" : \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+':tag -- The release'\''s tag:_default' \
+&& ret=0
+;;
+(in-flight)
+_arguments "${_arguments_options[@]}" : \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+&& ret=0
+;;
+(land-state)
+_arguments "${_arguments_options[@]}" : \
+'--sha=[The commit the build was dispatched with]:sha:_default' \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+':tag -- The release'\''s tag:_default' \
+&& ret=0
+;;
+(bump-unusable)
+_arguments "${_arguments_options[@]}" : \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+':tag -- The release'\''s tag:_default' \
+&& ret=0
+;;
+(guard)
+_arguments "${_arguments_options[@]}" : \
+'--sha=[The commit the build was dispatched with]:sha:_default' \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+':tag -- The release'\''s tag:_default' \
+&& ret=0
+;;
 (backfill)
 _arguments "${_arguments_options[@]}" : \
 '*--tag=[A release tag to record (repeatable); absent, every tag the pattern selects, oldest first]:tag:_default' \
@@ -1104,6 +1318,34 @@ _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
 (sums)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(verify)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(path)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(discard)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(in-flight)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(land-state)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(bump-unusable)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(guard)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -9071,6 +9313,34 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
+(verify)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(path)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(discard)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(in-flight)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(land-state)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(bump-unusable)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(guard)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
 (backfill)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
@@ -12436,6 +12706,13 @@ _batten__subcmd__help__subcmd__release_commands() {
     local commands; commands=(
 'install:Decide whether install.sh, the release matrix and the binstall manifest agree on every asset name, and that no binary is committed' \
 'sums:Hash a published release'\''s own assets into a checksum manifest, never the manifest itself' \
+'verify:Exit 0 only if a release carries every asset, its checksums match, and it is published and immutable at its own tag' \
+'path:Print whether a head may write main\: its pin is inherited, or it changes only the release paths to a verified published release' \
+'discard:Delete a draft release and its tag; do nothing for no release; refuse a published one' \
+'in-flight:Exit 0 when no release is in flight, 1 naming the one that is' \
+'land-state:Print the land job'\''s branch for a release\: skip-to-f, resume-at-d, burned, draft-ok, draft-bad or absent' \
+'bump-unusable:Move a burned or stray-tagged version to the next one in all four release paths' \
+'guard:Exit 0 only when a build of the commit may upload into the release\: a draft that targets it' \
 'backfill:Dispatch a backfill workflow once per release tag, oldest first, waiting on each run and stopping at the first that does not succeed' \
     )
     _describe -t commands 'batten help release commands' commands "$@"
@@ -12445,15 +12722,50 @@ _batten__subcmd__help__subcmd__release__subcmd__backfill_commands() {
     local commands; commands=()
     _describe -t commands 'batten help release backfill commands' commands "$@"
 }
+(( $+functions[_batten__subcmd__help__subcmd__release__subcmd__bump-unusable_commands] )) ||
+_batten__subcmd__help__subcmd__release__subcmd__bump-unusable_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help release bump-unusable commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__release__subcmd__discard_commands] )) ||
+_batten__subcmd__help__subcmd__release__subcmd__discard_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help release discard commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__release__subcmd__guard_commands] )) ||
+_batten__subcmd__help__subcmd__release__subcmd__guard_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help release guard commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__release__subcmd__in-flight_commands] )) ||
+_batten__subcmd__help__subcmd__release__subcmd__in-flight_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help release in-flight commands' commands "$@"
+}
 (( $+functions[_batten__subcmd__help__subcmd__release__subcmd__install_commands] )) ||
 _batten__subcmd__help__subcmd__release__subcmd__install_commands() {
     local commands; commands=()
     _describe -t commands 'batten help release install commands' commands "$@"
 }
+(( $+functions[_batten__subcmd__help__subcmd__release__subcmd__land-state_commands] )) ||
+_batten__subcmd__help__subcmd__release__subcmd__land-state_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help release land-state commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__release__subcmd__path_commands] )) ||
+_batten__subcmd__help__subcmd__release__subcmd__path_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help release path commands' commands "$@"
+}
 (( $+functions[_batten__subcmd__help__subcmd__release__subcmd__sums_commands] )) ||
 _batten__subcmd__help__subcmd__release__subcmd__sums_commands() {
     local commands; commands=()
     _describe -t commands 'batten help release sums commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__release__subcmd__verify_commands] )) ||
+_batten__subcmd__help__subcmd__release__subcmd__verify_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help release verify commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__help__subcmd__sbom_commands] )) ||
 _batten__subcmd__help__subcmd__sbom_commands() {
@@ -14052,6 +14364,13 @@ _batten__subcmd__release_commands() {
     local commands; commands=(
 'install:Decide whether install.sh, the release matrix and the binstall manifest agree on every asset name, and that no binary is committed' \
 'sums:Hash a published release'\''s own assets into a checksum manifest, never the manifest itself' \
+'verify:Exit 0 only if a release carries every asset, its checksums match, and it is published and immutable at its own tag' \
+'path:Print whether a head may write main\: its pin is inherited, or it changes only the release paths to a verified published release' \
+'discard:Delete a draft release and its tag; do nothing for no release; refuse a published one' \
+'in-flight:Exit 0 when no release is in flight, 1 naming the one that is' \
+'land-state:Print the land job'\''s branch for a release\: skip-to-f, resume-at-d, burned, draft-ok, draft-bad or absent' \
+'bump-unusable:Move a burned or stray-tagged version to the next one in all four release paths' \
+'guard:Exit 0 only when a build of the commit may upload into the release\: a draft that targets it' \
 'backfill:Dispatch a backfill workflow once per release tag, oldest first, waiting on each run and stopping at the first that does not succeed' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
@@ -14062,11 +14381,33 @@ _batten__subcmd__release__subcmd__backfill_commands() {
     local commands; commands=()
     _describe -t commands 'batten release backfill commands' commands "$@"
 }
+(( $+functions[_batten__subcmd__release__subcmd__bump-unusable_commands] )) ||
+_batten__subcmd__release__subcmd__bump-unusable_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten release bump-unusable commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__release__subcmd__discard_commands] )) ||
+_batten__subcmd__release__subcmd__discard_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten release discard commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__release__subcmd__guard_commands] )) ||
+_batten__subcmd__release__subcmd__guard_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten release guard commands' commands "$@"
+}
 (( $+functions[_batten__subcmd__release__subcmd__help_commands] )) ||
 _batten__subcmd__release__subcmd__help_commands() {
     local commands; commands=(
 'install:Decide whether install.sh, the release matrix and the binstall manifest agree on every asset name, and that no binary is committed' \
 'sums:Hash a published release'\''s own assets into a checksum manifest, never the manifest itself' \
+'verify:Exit 0 only if a release carries every asset, its checksums match, and it is published and immutable at its own tag' \
+'path:Print whether a head may write main\: its pin is inherited, or it changes only the release paths to a verified published release' \
+'discard:Delete a draft release and its tag; do nothing for no release; refuse a published one' \
+'in-flight:Exit 0 when no release is in flight, 1 naming the one that is' \
+'land-state:Print the land job'\''s branch for a release\: skip-to-f, resume-at-d, burned, draft-ok, draft-bad or absent' \
+'bump-unusable:Move a burned or stray-tagged version to the next one in all four release paths' \
+'guard:Exit 0 only when a build of the commit may upload into the release\: a draft that targets it' \
 'backfill:Dispatch a backfill workflow once per release tag, oldest first, waiting on each run and stopping at the first that does not succeed' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
@@ -14077,30 +14418,85 @@ _batten__subcmd__release__subcmd__help__subcmd__backfill_commands() {
     local commands; commands=()
     _describe -t commands 'batten release help backfill commands' commands "$@"
 }
+(( $+functions[_batten__subcmd__release__subcmd__help__subcmd__bump-unusable_commands] )) ||
+_batten__subcmd__release__subcmd__help__subcmd__bump-unusable_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten release help bump-unusable commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__release__subcmd__help__subcmd__discard_commands] )) ||
+_batten__subcmd__release__subcmd__help__subcmd__discard_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten release help discard commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__release__subcmd__help__subcmd__guard_commands] )) ||
+_batten__subcmd__release__subcmd__help__subcmd__guard_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten release help guard commands' commands "$@"
+}
 (( $+functions[_batten__subcmd__release__subcmd__help__subcmd__help_commands] )) ||
 _batten__subcmd__release__subcmd__help__subcmd__help_commands() {
     local commands; commands=()
     _describe -t commands 'batten release help help commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__release__subcmd__help__subcmd__in-flight_commands] )) ||
+_batten__subcmd__release__subcmd__help__subcmd__in-flight_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten release help in-flight commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__release__subcmd__help__subcmd__install_commands] )) ||
 _batten__subcmd__release__subcmd__help__subcmd__install_commands() {
     local commands; commands=()
     _describe -t commands 'batten release help install commands' commands "$@"
 }
+(( $+functions[_batten__subcmd__release__subcmd__help__subcmd__land-state_commands] )) ||
+_batten__subcmd__release__subcmd__help__subcmd__land-state_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten release help land-state commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__release__subcmd__help__subcmd__path_commands] )) ||
+_batten__subcmd__release__subcmd__help__subcmd__path_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten release help path commands' commands "$@"
+}
 (( $+functions[_batten__subcmd__release__subcmd__help__subcmd__sums_commands] )) ||
 _batten__subcmd__release__subcmd__help__subcmd__sums_commands() {
     local commands; commands=()
     _describe -t commands 'batten release help sums commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__release__subcmd__help__subcmd__verify_commands] )) ||
+_batten__subcmd__release__subcmd__help__subcmd__verify_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten release help verify commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__release__subcmd__in-flight_commands] )) ||
+_batten__subcmd__release__subcmd__in-flight_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten release in-flight commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__release__subcmd__install_commands] )) ||
 _batten__subcmd__release__subcmd__install_commands() {
     local commands; commands=()
     _describe -t commands 'batten release install commands' commands "$@"
 }
+(( $+functions[_batten__subcmd__release__subcmd__land-state_commands] )) ||
+_batten__subcmd__release__subcmd__land-state_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten release land-state commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__release__subcmd__path_commands] )) ||
+_batten__subcmd__release__subcmd__path_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten release path commands' commands "$@"
+}
 (( $+functions[_batten__subcmd__release__subcmd__sums_commands] )) ||
 _batten__subcmd__release__subcmd__sums_commands() {
     local commands; commands=()
     _describe -t commands 'batten release sums commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__release__subcmd__verify_commands] )) ||
+_batten__subcmd__release__subcmd__verify_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten release verify commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__sbom_commands] )) ||
 _batten__subcmd__sbom_commands() {

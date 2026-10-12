@@ -106,7 +106,17 @@ fn repeat_refusal(payload: &str) -> Option<String> {
 
 /// One firing, whatever the store says.
 fn refusal_once(payload: &str) -> Option<String> {
-    let run = run_with_stdin(&root(), &["adjudicate", "--harness", "exit-code"], payload);
+    // A HOME THAT RESOLVES `serena` (CLOUD-2229): the memories row is refused
+    // only where its read route can be taken, and this suite measures that
+    // refusal. Every other row reads nothing from the home.
+    let mut command = common::batten();
+    command.env("HOME", common::serena_home());
+    let run = common::stdin_run(
+        &mut command,
+        &root(),
+        &["adjudicate", "--harness", "exit-code"],
+        payload,
+    );
     if run.status.code() == Some(2) {
         Some(stderr(&run).trim().to_owned())
     } else {

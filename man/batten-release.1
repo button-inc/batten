@@ -19,6 +19,27 @@ Decide whether install.sh, the release matrix and the binstall manifest agree on
 batten\-release\-sums(1)
 Hash a published release\*(Aqs own assets into a checksum manifest, never the manifest itself
 .TP
+batten\-release\-verify(1)
+Exit 0 only if a release carries every asset, its checksums match, and it is published and immutable at its own tag
+.TP
+batten\-release\-path(1)
+Print whether a head may write main: its pin is inherited, or it changes only the release paths to a verified published release
+.TP
+batten\-release\-discard(1)
+Delete a draft release and its tag; do nothing for no release; refuse a published one
+.TP
+batten\-release\-in\-flight(1)
+Exit 0 when no release is in flight, 1 naming the one that is
+.TP
+batten\-release\-land\-state(1)
+Print the land job\*(Aqs branch for a release: skip\-to\-f, resume\-at\-d, burned, draft\-ok, draft\-bad or absent
+.TP
+batten\-release\-bump\-unusable(1)
+Move a burned or stray\-tagged version to the next one in all four release paths
+.TP
+batten\-release\-guard(1)
+Exit 0 only when a build of the commit may upload into the release: a draft that targets it
+.TP
 batten\-release\-backfill(1)
 Dispatch a backfill workflow once per release tag, oldest first, waiting on each run and stopping at the first that does not succeed
 .TP

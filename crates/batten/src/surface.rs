@@ -3382,6 +3382,99 @@ const RELEASE_MANIFEST: FlagDecl = FlagDecl {
     )
 };
 
+/// `release verify`'s tag (CLOUD-2033): required, because "the latest release"
+/// is exactly what an installer must never resolve.
+const VERIFY_TAG: FlagDecl = FlagDecl::positional("tag", "The release's tag");
+
+/// `--draft` on `release verify`: verify a draft rather than a published release.
+const VERIFY_DRAFT: FlagDecl = FlagDecl::switch(
+    "draft",
+    "draft",
+    "Verify a draft, read through the assets API, rather than a published, immutable release",
+);
+
+/// `release path`'s head (CLOUD-2033 G2): the SHA graded, never a merge ref.
+const PATH_SHA: FlagDecl = FlagDecl::positional("sha", "The head commit graded");
+
+/// `--post` on `release path`: post the verdict as the `release-path` status.
+const PATH_POST: FlagDecl = FlagDecl::switch(
+    "post",
+    "post",
+    "Post the verdict as the release-path commit status on the graded head",
+);
+
+/// The tag `release discard`, `land-state` and `bump-unusable` act on.
+const RELEASE_STATE_TAG: FlagDecl = FlagDecl::positional("tag", "The release's tag");
+
+/// `--sha <sha>` on `release land-state`: the commit the build was dispatched with.
+const LAND_STATE_SHA: FlagDecl = FlagDecl {
+    required: true,
+    ..FlagDecl::valued("sha", "sha", "The commit the build was dispatched with")
+};
+
+/// `--seal <workflow>` on `release path`: exit 1 under the pre-B2 seal
+/// `final` runs, reading the settings from that guard workflow's last run.
+const PATH_SEAL: FlagDecl = FlagDecl::valued(
+    "seal",
+    "seal",
+    "Exit 1 when the verdict is failure and the head is not release-shaped or this release-guard workflow's last settings job is not green",
+);
+
+/// `--strict` on `release path`: the landers' refusal of a failure verdict.
+const PATH_STRICT: FlagDecl =
+    FlagDecl::switch("strict", "strict", "Exit 1 when the verdict is failure");
+
+/// A required `--<long> <value>` flag with no env equivalent.
+const fn required(id: &'static str, long: &'static str, help: &'static str) -> FlagDecl {
+    FlagDecl {
+        required: true,
+        ..FlagDecl::valued(id, long, help)
+    }
+}
+
+/// `--workflow <file>` on the release path's verbs: a workflow named by file,
+/// which is the consumer's fact.
+const RELEASE_WORKFLOW: FlagDecl = required(
+    "workflow",
+    "workflow",
+    "The workflow's file name under .github/workflows",
+);
+
+/// `--branch <branch>` on `release bump-unusable`.
+const RELEASE_BRANCH: FlagDecl = required(
+    "branch",
+    "branch",
+    "The release branch the bump is committed onto",
+);
+
+/// `--changelog <path>` on `release bump-unusable` and `release cut`.
+const RELEASE_CHANGELOG: FlagDecl = required(
+    "changelog",
+    "changelog",
+    "The changelog carrying the release's `## [X]` section",
+);
+
+/// `--at <rev>` on `release pin`.
+const PIN_AT: FlagDecl = FlagDecl::valued(
+    "at",
+    "at",
+    "Read the pin at this revision rather than the working tree",
+);
+
+/// `--probe` on `release settings`.
+const SETTINGS_PROBE: FlagDecl = FlagDecl::switch(
+    "probe",
+    "probe",
+    "Offer the probe branch a status-less fast-forward and require a ruleset refusal",
+);
+
+/// `--last-run <workflow>` on `release settings`.
+const SETTINGS_LAST_RUN: FlagDecl = FlagDecl::valued(
+    "last_run",
+    "last-run",
+    "Answer from the settings job of this guard workflow's last completed run on the trunk",
+);
+
 /// `--out-dir <dir>` on `release sums`.
 const RELEASE_OUT_DIR: FlagDecl = FlagDecl::valued(
     "out_dir",
@@ -4252,6 +4345,110 @@ pub const SURFACE: &[CommandDecl] = &[
             RELEASE_OUT_DIR,
             RELEASE_NAMES,
         ],
+    },
+    // G1 (CLOUD-2033): whether a release is fully and correctly published.
+    // `write`, as `record release` is: it writes the release's record before it
+    // grades it, and it reaches the network.
+    CommandDecl {
+        path: "release verify",
+        id: "release.verify",
+        about: "Exit 0 only if a release carries every asset, its checksums match, and it is published and immutable at its own tag",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Write,
+        flags: &[VERIFY_TAG, VERIFY_DRAFT],
+    },
+    // G2 (CLOUD-2033): the one predicate a write of `main` is graded by.
+    // `write`: `--post` posts a commit status, and G1 under it writes a record.
+    CommandDecl {
+        path: "release path",
+        id: "release.path",
+        about: "Print whether a head may write main: its pin is inherited, or it changes only the release paths to a verified published release",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Write,
+        flags: &[PATH_SHA, PATH_POST, PATH_SEAL, PATH_STRICT],
+    },
+    // The release path's verbs (CLOUD-2033 P3, P4). Each is one tested branch
+    // a workflow `case`s on.
+    CommandDecl {
+        path: "release discard",
+        id: "release.discard",
+        about: "Delete a draft release and its tag; do nothing for no release; refuse a published one",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Write,
+        flags: &[RELEASE_STATE_TAG],
+    },
+    CommandDecl {
+        path: "release in-flight",
+        id: "release.in_flight",
+        about: "Exit 0 when no release is in flight, 1 naming the one that is",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Read,
+        flags: &[RELEASE_WORKFLOW],
+    },
+    CommandDecl {
+        path: "release land-state",
+        id: "release.land_state",
+        about: "Print the land job's branch for a release: skip-to-f, resume-at-d, burned, draft-ok, draft-bad or absent",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Read,
+        flags: &[RELEASE_STATE_TAG, LAND_STATE_SHA],
+    },
+    CommandDecl {
+        path: "release bump-unusable",
+        id: "release.bump_unusable",
+        about: "Move a burned or stray-tagged version to the next one in all four release paths, as one commit on the release branch",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Write,
+        flags: &[RELEASE_STATE_TAG, RELEASE_BRANCH, RELEASE_CHANGELOG],
+    },
+    CommandDecl {
+        path: "release guard",
+        id: "release.guard",
+        about: "Exit 0 only when a build of the commit may upload into the release: a draft that targets it",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Read,
+        flags: &[RELEASE_STATE_TAG, LAND_STATE_SHA],
+    },
+    CommandDecl {
+        path: "release cut",
+        id: "release.cut",
+        about: "Discard any draft of the version, draft it at the release head and dispatch its build",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Write,
+        flags: &[
+            RELEASE_STATE_TAG,
+            LAND_STATE_SHA,
+            RELEASE_CHANGELOG,
+            RELEASE_WORKFLOW,
+        ],
+    },
+    CommandDecl {
+        path: "release pin",
+        id: "release.pin",
+        about: "Print the release batten.toml pins, in the working tree or at a revision",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Read,
+        flags: &[PIN_AT],
+    },
+    // G4 (CLOUD-2033): `write`, because `--probe` makes a commit and offers it
+    // to the server.
+    CommandDecl {
+        path: "release settings",
+        id: "release.settings",
+        about: "Exit 0 only when the rulesets and release settings the release path rests on hold",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Write,
+        flags: &[SETTINGS_PROBE, SETTINGS_LAST_RUN],
     },
     // The release pipeline's backfill sweep, retiring `[tasks.release-backfill]`
     // (CLOUD-843). `unclassified` rather than `write`: every dispatch starts a

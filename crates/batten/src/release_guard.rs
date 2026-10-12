@@ -1,0 +1,382 @@
+//! G4: whether the server gate the release path rests on actually holds
+//! (CLOUD-2033).
+//!
+//! `batten release settings [--probe]` reads the repository's rulesets and
+//! release settings and names every item still owed:
+//!
+//! * the trunk's ruleset requires the `release-path` status, pinned to one
+//!   source, and refuses non-fast-forward writes;
+//! * a separate probe ruleset on [`PROBE_BRANCH`] requires exactly the same
+//!   `release-path` entry, so the probe measures the rule that guards the trunk;
+//! * a tag ruleset on `v*` restricts updates;
+//! * no ruleset among them has a bypass actor;
+//! * immutable releases are enabled.
+//!
+//! With `--probe` it then proves the rule is enforced rather than declared: it
+//! makes a commit on the probe branch's tip that carries no status and asks the
+//! server to fast-forward the branch to it. Only a ruleset refusal passes; an
+//! accepted write, or a refusal for any other reason, is "the server gate does
+//! not hold" (CLOUD-853's class, measured continuously).
+//!
+//! [`owed`] and [`probe_holds`] are pure over what the shell read.
+
+use crate::release::Get;
+
+/// The branch the probe ruleset guards.
+pub const PROBE_BRANCH: &str = "release-path-probe";
+
+/// One required-status entry: its context and the source pinned to it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Required {
+    /// The status context.
+    pub context: String,
+    /// The App id the status must come from, if one is pinned.
+    pub integration_id: Option<u64>,
+}
+
+/// What G4 read about the repository's settings.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Facts {
+    /// The trunk ruleset's `release-path` entry, if it requires one.
+    pub trunk_requires: Option<Required>,
+    /// Whether the trunk's rules refuse a non-fast-forward write.
+    pub trunk_non_fast_forward: bool,
+    /// The probe ruleset's `release-path` entry, if it requires one.
+    pub probe_requires: Option<Required>,
+    /// Whether a ruleset on `v*` tags restricts updates.
+    pub tags_restrict_updates: bool,
+    /// The rulesets carrying a bypass actor, by name.
+    pub bypassed: Vec<String>,
+    /// Whether immutable releases are enabled.
+    pub immutable_releases: bool,
+}
+
+/// Every item still owed, each a pointer; empty when the server gate holds.
+//MUTANT-SUITE crates/batten/tests/it/release_verify.rs
+//MUTANT probe-entry-unmatched|s@^    } else if facts.probe_requires != facts.trunk_requires {$@    } else if false {@|settings_name_every_owed_item
+//MUTANT bypass-actor-admitted|s@^    owed.extend(facts.bypassed.iter().map(@    owed.extend(facts.bypassed.iter().take(0).map(@|settings_name_every_owed_item
+#[must_use]
+pub fn owed(facts: &Facts) -> Vec<String> {
+    let mut owed = Vec::new();
+    if facts.trunk_requires.is_none() {
+        owed.push(String::from(
+            "the trunk's ruleset does not require the release-path status",
+        ));
+    }
+    if !facts.trunk_non_fast_forward {
+        owed.push(String::from(
+            "the trunk's ruleset does not refuse a non-fast-forward write",
+        ));
+    }
+    if facts.probe_requires.is_none() {
+        owed.push(format!(
+            "no ruleset on {PROBE_BRANCH} requires the release-path status"
+        ));
+    } else if facts.probe_requires != facts.trunk_requires {
+        owed.push(format!(
+            "{PROBE_BRANCH}'s release-path entry differs from the trunk's, so the probe measures another rule"
+        ));
+    }
+    if !facts.tags_restrict_updates {
+        owed.push(String::from("no tag ruleset on v* restricts updates"));
+    }
+    owed.extend(
+        facts
+            .bypassed
+            .iter()
+            .map(|name| format!("the ruleset {name} has a bypass actor")),
+    );
+    if !facts.immutable_releases {
+        owed.push(String::from("immutable releases are not enabled"));
+    }
+    owed
+}
+
+/// Whether the probe's write was refused by a ruleset: a 422 whose body is a
+/// rule violation, never "not a fast forward" and never an accepted write.
+//MUTANT probe-any-refusal-passes|s@^    status == 422 \&\& body.contains("rule") \&\& !body.contains("fast forward")$@    status != 200@|the_probe_passes_only_on_a_ruleset_refusal
+#[must_use]
+pub fn probe_holds(status: u16, body: &str) -> bool {
+    let body = body.to_ascii_lowercase();
+    status == 422 && body.contains("rule") && !body.contains("fast forward")
+}
+
+/// The forge's answer at `path` parsed as JSON, `Ok(None)` on a 404, or the
+/// could-not-look pointer.
+fn json_at(get: Get<'_>, path: &str) -> Result<Option<serde_json::Value>, String> {
+    let answer = get(path).ok_or_else(|| format!("{path} did not answer"))?;
+    if answer.status == 404 {
+        return Ok(None);
+    }
+    if !answer.is_reading() {
+        return Err(format!("{path} answered {}", answer.status));
+    }
+    serde_json::from_str(&answer.body)
+        .map(Some)
+        .map_err(|_| format!("{path} is not JSON"))
+}
+
+/// The `release-path` entry in one ruleset's rules, if it requires one.
+fn release_path_entry(rules: &[serde_json::Value]) -> Option<Required> {
+    rules
+        .iter()
+        .filter(|rule| {
+            rule.get("type").and_then(serde_json::Value::as_str) == Some("required_status_checks")
+        })
+        .filter_map(|rule| rule.pointer("/parameters/required_status_checks"))
+        .filter_map(serde_json::Value::as_array)
+        .flatten()
+        .find(|check| {
+            check.get("context").and_then(serde_json::Value::as_str)
+                == Some(crate::release_path::CONTEXT)
+        })
+        .map(|check| Required {
+            context: crate::release_path::CONTEXT.to_owned(),
+            integration_id: check
+                .get("integration_id")
+                .and_then(serde_json::Value::as_u64),
+        })
+}
+
+/// Whether `conditions` target `refs/heads/<branch>` (or the default branch,
+/// when `branch` is the trunk) by an include pattern.
+fn targets(ruleset: &serde_json::Value, wanted: &[String]) -> bool {
+    ruleset
+        .pointer("/conditions/ref_name/include")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .any(|pattern| wanted.iter().any(|want| want == pattern))
+}
+
+/// Read every fact [`owed`] decides over.
+///
+/// # Errors
+///
+/// The could-not-look pointer.
+pub fn read(slug: &str, trunk: &str, get: Get<'_>) -> Result<Facts, String> {
+    let list = format!("repos/{slug}/rulesets?includes_parents=false&per_page=100");
+    let listed = json_at(get, &list)?.ok_or_else(|| format!("{list} answered 404"))?;
+    let mut facts = Facts::default();
+    let trunk_names = [
+        String::from("~DEFAULT_BRANCH"),
+        format!("refs/heads/{trunk}"),
+    ];
+    let probe_names = [format!("refs/heads/{PROBE_BRANCH}")];
+    for summary in listed.as_array().into_iter().flatten() {
+        let Some(id) = summary.get("id").and_then(serde_json::Value::as_u64) else {
+            continue;
+        };
+        let path = format!("repos/{slug}/rulesets/{id}");
+        let ruleset = json_at(get, &path)?.ok_or_else(|| format!("{path} answered 404"))?;
+        if ruleset
+            .get("enforcement")
+            .and_then(serde_json::Value::as_str)
+            != Some("active")
+        {
+            continue;
+        }
+        let name = ruleset
+            .get("name")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("unnamed")
+            .to_owned();
+        let target = ruleset
+            .get("target")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("branch");
+        let rules: Vec<serde_json::Value> = ruleset
+            .get("rules")
+            .and_then(serde_json::Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let has = |kind: &str| {
+            rules
+                .iter()
+                .any(|rule| rule.get("type").and_then(serde_json::Value::as_str) == Some(kind))
+        };
+        let guards_trunk = target == "branch" && targets(&ruleset, &trunk_names);
+        let guards_probe = target == "branch" && targets(&ruleset, &probe_names);
+        let guards_tags = target == "tag" && targets(&ruleset, &[String::from("refs/tags/v*")]);
+        if guards_trunk {
+            facts.trunk_requires = facts.trunk_requires.or_else(|| release_path_entry(&rules));
+            facts.trunk_non_fast_forward |= has("non_fast_forward");
+        }
+        if guards_probe {
+            facts.probe_requires = facts.probe_requires.or_else(|| release_path_entry(&rules));
+        }
+        if guards_tags {
+            facts.tags_restrict_updates |= has("update");
+        }
+        let bypassed = ruleset
+            .get("bypass_actors")
+            .and_then(serde_json::Value::as_array)
+            .is_none_or(|actors| !actors.is_empty());
+        if (guards_trunk || guards_probe || guards_tags) && bypassed {
+            facts.bypassed.push(name);
+        }
+    }
+    let immutable = format!("repos/{slug}/immutable-releases");
+    facts.immutable_releases = json_at(get, &immutable)?.is_some_and(|value| {
+        value.get("enabled").and_then(serde_json::Value::as_bool) != Some(false)
+    });
+    Ok(facts)
+}
+
+/// The probe: a status-less commit on the probe branch's tip, offered to the
+/// server as a fast-forward. `Ok(Some(why))` when the gate does not hold,
+/// `Ok(None)` when a ruleset refused the write.
+fn probe(slug: &str, trunk: &str, get: Get<'_>) -> Result<Option<String>, String> {
+    let ref_path = format!("repos/{slug}/git/ref/heads/{PROBE_BRANCH}");
+    let sha_of = |value: &serde_json::Value| {
+        value
+            .pointer("/object/sha")
+            .and_then(serde_json::Value::as_str)
+            .map(ToOwned::to_owned)
+    };
+    let tip = if let Some(found) = json_at(get, &ref_path)? {
+        sha_of(&found).ok_or_else(|| format!("{ref_path} names no commit"))?
+    } else {
+        // SEEDED ONCE, at the trunk's head, which the workflow has just graded
+        // and posted `release-path: success` on (its single permitted post).
+        let trunk_path = format!("repos/{slug}/git/ref/heads/{trunk}");
+        let trunk_ref =
+            json_at(get, &trunk_path)?.ok_or_else(|| format!("{trunk_path} answered 404"))?;
+        let head = sha_of(&trunk_ref).ok_or_else(|| format!("{trunk_path} names no commit"))?;
+        let body = serde_json::json!({ "ref": format!("refs/heads/{PROBE_BRANCH}"), "sha": head });
+        match crate::rest::post_json(&format!("repos/{slug}/git/refs"), &body) {
+            Some(answer) if (200..300).contains(&answer.status) => head,
+            Some(answer) => {
+                return Err(format!("seeding {PROBE_BRANCH} answered {}", answer.status));
+            }
+            None => return Err(format!("seeding {PROBE_BRANCH} did not answer")),
+        }
+    };
+    let commit_path = format!("repos/{slug}/git/commits/{tip}");
+    let commit =
+        json_at(get, &commit_path)?.ok_or_else(|| format!("{commit_path} answered 404"))?;
+    let tree = commit
+        .pointer("/tree/sha")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| format!("{commit_path} names no tree"))?;
+    let body = serde_json::json!({
+        "message": "release-path probe: a commit no status was ever posted on",
+        "tree": tree,
+        "parents": [tip],
+    });
+    let made = crate::rest::post_json(&format!("repos/{slug}/git/commits"), &body)
+        .filter(|answer| (200..300).contains(&answer.status))
+        .ok_or_else(|| String::from("the probe commit could not be made"))?;
+    let made: serde_json::Value = serde_json::from_str(&made.body)
+        .map_err(|_| String::from("the probe commit is not JSON"))?;
+    let sha = made
+        .get("sha")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| String::from("the probe commit carries no sha"))?;
+    let write = serde_json::json!({ "sha": sha, "force": false });
+    let answer = crate::rest::patch_json(
+        &format!("repos/{slug}/git/refs/heads/{PROBE_BRANCH}"),
+        &write,
+    )
+    .ok_or_else(|| String::from("the probe write did not answer"))?;
+    if probe_holds(answer.status, &answer.body) {
+        Ok(None)
+    } else {
+        Ok(Some(format!(
+            "the server gate does not hold: a commit with no release-path status was answered {}, not a ruleset refusal",
+            answer.status
+        )))
+    }
+}
+
+/// `batten release settings [--probe] [--last-run <workflow>]`: exit 0 when
+/// nothing is owed (and, with `--probe`, the server refused the probe for
+/// `release-path`), 1 naming every owed item, 3 when it could not look. With
+/// `--last-run`, the answer is instead whether the `settings` job of that
+/// guard workflow's last completed run on the trunk succeeded — the read the
+/// cut and the release PR gate on, which needs no administration credential.
+///
+/// # Errors
+///
+/// Only a failed write to `out` or `err`.
+pub fn run_settings(
+    with_probe: bool,
+    last_run: Option<&str>,
+    out: &mut dyn std::io::Write,
+    err: &mut dyn std::io::Write,
+) -> anyhow::Result<crate::ExitCode> {
+    let Some(slug) = crate::repo_slug(std::path::Path::new(".")) else {
+        writeln!(
+            err,
+            "batten: release settings: could not look: no forge remote names the repository"
+        )?;
+        return Ok(crate::ExitCode::Internal);
+    };
+    let trunk = match crate::worktree::declared_trunk(std::path::Path::new(".")) {
+        Ok(Some(trunk)) => trunk.short,
+        Ok(None) => {
+            writeln!(
+                err,
+                "batten: release settings: could not look: {}",
+                crate::worktree::NO_TRUNK
+            )?;
+            return Ok(crate::ExitCode::Internal);
+        }
+        Err(why) => {
+            writeln!(err, "batten: release settings: could not look: {why}")?;
+            return Ok(crate::ExitCode::Internal);
+        }
+    };
+    let get = |path: &str| crate::rest::get(path, None);
+    if let Some(workflow) = last_run {
+        return match crate::release_state::settings_green(&slug, &trunk, workflow, &get) {
+            Ok(true) => {
+                writeln!(
+                    out,
+                    "release settings: {workflow}'s last settings job is green"
+                )?;
+                Ok(crate::ExitCode::Success)
+            }
+            Ok(false) => {
+                writeln!(
+                    err,
+                    "release settings: {workflow}'s last settings job is not green"
+                )?;
+                Ok(crate::ExitCode::Violation)
+            }
+            Err(why) => {
+                writeln!(err, "batten: release settings: could not look: {why}")?;
+                Ok(crate::ExitCode::Internal)
+            }
+        };
+    }
+    let mut items = match read(&slug, &trunk, &get) {
+        Ok(facts) => owed(&facts),
+        Err(why) => {
+            writeln!(err, "batten: release settings: could not look: {why}")?;
+            return Ok(crate::ExitCode::Internal);
+        }
+    };
+    if with_probe {
+        match probe(&slug, &trunk, &get) {
+            Ok(None) => writeln!(
+                out,
+                "release settings: the probe was refused for release-path"
+            )?,
+            Ok(Some(why)) => items.push(why),
+            Err(why) => {
+                writeln!(err, "batten: release settings: could not look: {why}")?;
+                return Ok(crate::ExitCode::Internal);
+            }
+        }
+    }
+    if items.is_empty() {
+        writeln!(out, "release settings: the server gate holds")?;
+        return Ok(crate::ExitCode::Success);
+    }
+    for item in items {
+        writeln!(err, "release settings: owed: {item}")?;
+    }
+    Ok(crate::ExitCode::Violation)
+}

@@ -45,6 +45,24 @@
 #MUTANT bare-cargo-statement-unread|s@^\tstartswith(trimmed, "cargo ")$@\tfalse@|a_test_cargo_body_that_is_the_statement_is_read
 #MUTANT wrapped-cargo-statement-unread|s@^\tstartswith(cmd, "cargo ")$@\tfalse@|a_test_cargo_body_the_step_cache_wraps_is_read
 #MUTANT wrapper-read-as-the-statement|s@^\tnot contains(trimmed, " step run ")$@\ttrue@|a_test_cargo_body_the_step_cache_wraps_is_read
+#
+#MUTANT rogue-release-path-poster|s@^\tnot release_path_poster\[path\] == name$@\tfalse@|only_the_predicate_posts_release_path
+#MUTANT early-latest-admitted|s@^\tnot latest_allowed(path, name, i)$@\tfalse@|latest_is_set_only_after_the_fast_forward
+#MUTANT main-writer-unserialised|s@^\tnot serialised(job)$@\tfalse@|every_main_writer_is_serialised
+#MUTANT clobber-unguarded|s@^\tnot guarded_before(path, name, i)$@\tfalse@|every_clobber_is_draft_guarded_and_every_delete_is_discard
+#MUTANT workflow-creates-tag|s@^\twrites_a_tag(step_text(step))$@\tfalse@|no_workflow_creates_a_release_tag
+#MUTANT freeze-check-dropped|s@^\tnot contains(job_text(path, name), "release in-flight")$@\tfalse@|every_lander_and_the_cut_check_the_freeze
+#MUTANT cut-ungated|s@^\tnot contains(job_text(path, name), gate)$@\tfalse@|the_cut_and_release_pr_are_gated_on_settings
+#MUTANT release-pr-ungated|s@^\tnot contains(job_text(path, name), "release settings")$@\tfalse@|the_cut_and_release_pr_are_gated_on_settings
+#MUTANT land-checks-out-sha|s@^\tnot checks_out_main(job)$@\tfalse@|land_checks_out_main_and_patches_with_the_pat
+#MUTANT land-patch-unprivileged|s@^\tnot uses_the_pat(step)$@\tfalse@|land_checks_out_main_and_patches_with_the_pat
+#MUTANT second-dispatcher|s@^\tpath != ".github/workflows/auto-release-land.yml"$@\tfalse@|only_the_cut_dispatches_release_artifacts
+#MUTANT predicate-from-head|s@^\tnot graded_by_the_trunk(step)$@\tfalse@|ci_grades_with_mains_predicate
+#MUTANT predicate-on-merge-ref|s@^\tnot names_the_head_sha(step)$@\tfalse@|ci_grades_the_pr_head_sha
+#MUTANT cleanup-on-land-failure|s@^\t"land" in needs_of(job)$@\tfalse@|cleanup_runs_only_on_build_failure
+#MUTANT final-ignores-unverified-pin|s@^\tnot final_sealed$@\tfalse@|final_fails_on_an_unverified_pin_before_b2
+#MUTANT publish-without-prerelease|s@^\tpublishes_bare(step_text(step))$@\tfalse@|a_publish_or_draft_without_its_flag_is_refused
+#MUTANT bump-push-unprivileged|s@^\tnot pushes_with_the_pat(step)$@\tfalse@|the_cut_pushes_the_bump_with_the_pat
 #MUTANT-SUITE crates/batten/tests/it/ci_parity.rs
 
 # METADATA
@@ -81,6 +99,8 @@ rules contains "cargo spelling wrong"
 rules contains "path reach dead"
 
 rules contains "job list loose"
+
+rules contains "release ship other"
 
 # --- the manifest, and the guard ----------------------------------------------
 
@@ -1030,6 +1050,378 @@ violation contains {
 	some name, job in workflow[path].jobs
 	builds_a_release_artifact(job)
 	not provisions_from_a_list(job)
+}
+
+# --- the release path (CLOUD-2033 G3) -----------------------------------------
+#
+# `main`'s pin names only a release that is published, immutable, complete and
+# verified, and the WORKFLOW SHAPE is half of what keeps it so: one poster of the
+# `release-path` status, one dispatcher of the build, one publisher, every writer
+# of `main` serialised and frozen while a release is in flight, no workflow that
+# creates or deletes a tag. Each clause below is one of those, named in the
+# subject, all under one verdict: the class is "the release path's wiring is
+# wrong", and which wire is the pointer.
+#
+# VACUOUS UNTIL THE TREE RUNS THE PATH: a tree with no `release-artifacts.yml`
+# has no release path to wire, so nothing here applies to it.
+
+release_artifacts := ".github/workflows/release-artifacts.yml"
+
+release_path_adopted if workflow[release_artifacts]
+
+step_text(step) := body_text(object.get(step, "run", ""))
+
+job_steps(path, name) := object.get(workflow[path].jobs[name], "steps", [])
+
+job_text(path, name) := concat("\n", [step_text(step) | some step in job_steps(path, name)])
+
+# A step's body AND its environment: a one-line `ci step` hands its route and
+# fields over in `env:`, so the ref a step writes is often named only there.
+step_all(step) := concat("\n", array.concat([step_text(step)], [value |
+	some _, value in object.get(step, "env", {})
+	is_string(value)
+]))
+
+needs_of(job) := job.needs if is_array(job.needs)
+
+needs_of(job) := [job.needs] if is_string(job.needs)
+
+needs_of(job) := [] if not job.needs
+
+release_wire(path, property) := {
+	"rule": "release ship other",
+	"verdict": "release wire wrong",
+	"subjects": [{"path": path}, {"artifact": property}],
+}
+
+# A job writes the trunk: a ref write to `heads/main`, or the fast-forward action.
+writes_main(path, name) if {
+	some step in job_steps(path, name)
+	contains(step_all(step), "git/refs/heads/main")
+}
+
+writes_main(path, name) if {
+	some step in job_steps(path, name)
+	startswith(object.get(step, "uses", ""), "sequoia-pgp/fast-forward@")
+}
+
+# The cut: a job that dispatches the build — through the verb that drafts and
+# dispatches, or directly.
+dispatches_build(path, name) if {
+	some step in job_steps(path, name)
+	contains(step_text(step), "release cut")
+}
+
+dispatches_build(path, name) if {
+	some step in job_steps(path, name)
+	contains(step_text(step), "gh workflow run release-artifacts.yml")
+}
+
+dispatches_build(path, name) if {
+	some step in job_steps(path, name)
+	contains(step_text(step), "release-artifacts.yml/dispatches")
+}
+
+# THE ONE POSTER of `release-path`: the predicate, in `ci`, in `land`, and in
+# the release guard's one-time probe seeding.
+release_path_poster := {
+	".github/workflows/ci.yml": "batten-check",
+	".github/workflows/release-artifacts.yml": "land",
+	".github/workflows/release-guard.yml": "settings",
+}
+
+posts_release_path(step) if {
+	text := step_text(step)
+	contains(text, "release path")
+	contains(text, "--post")
+}
+
+posts_release_path(step) if {
+	text := step_text(step)
+	contains(text, "statuses/")
+	contains(text, "release-path")
+}
+
+violation contains release_wire(path, sprintf("release-path is posted by %s", [name])) if {
+	release_path_adopted
+	some path, doc in workflow
+	some name, job in doc.jobs
+	some step in object.get(job, "steps", [])
+	posts_release_path(step)
+	not release_path_poster[path] == name
+}
+
+# `latest` MOVES ONLY AFTER `main` DOES: in `land`, after its ref write, and in
+# the release guard's `pinned` re-application.
+marks_latest(step) if contains(replace(step_text(step), "--latest=false", ""), "--latest")
+
+latest_allowed(path, name, i) if {
+	path == release_artifacts
+	name == "land"
+	some j, earlier in job_steps(path, name)
+	contains(step_all(earlier), "git/refs/heads/main")
+	j < i
+}
+
+latest_allowed(path, name, _) if {
+	path == ".github/workflows/release-guard.yml"
+	name == "pinned"
+}
+
+violation contains release_wire(path, sprintf("%s marks a release latest before main reaches it", [name])) if {
+	release_path_adopted
+	some path, doc in workflow
+	some name, _ in doc.jobs
+	some i, step in job_steps(path, name)
+	marks_latest(step)
+	not latest_allowed(path, name, i)
+}
+
+# EVERY WRITER OF `main` SHARES ONE GROUP, FIFO.
+serialised(job) if {
+	job.concurrency.group == "main-writer"
+	job.concurrency["cancel-in-progress"] == false
+	job.concurrency.queue == "max"
+}
+
+main_writer(path, name) if writes_main(path, name)
+
+main_writer(path, name) if dispatches_build(path, name)
+
+violation contains release_wire(path, sprintf("%s writes main outside main-writer", [name])) if {
+	release_path_adopted
+	some path, doc in workflow
+	some name, job in doc.jobs
+	main_writer(path, name)
+	not serialised(job)
+}
+
+# EVERY `--clobber` UPLOAD IS DRAFT-GUARDED: a build of one commit never fills a
+# draft for another, and a published release's assets are never replaced.
+guarded_before(path, name, i) if {
+	some j, earlier in job_steps(path, name)
+	j < i
+	contains(step_text(earlier), "release guard")
+}
+
+violation contains release_wire(path, sprintf("%s uploads with --clobber unguarded", [name])) if {
+	release_path_adopted
+	some path, doc in workflow
+	some name, _ in doc.jobs
+	some i, step in job_steps(path, name)
+	contains(step_text(step), "--clobber")
+	not guarded_before(path, name, i)
+}
+
+# NO WORKFLOW CREATES OR DELETES A TAG: a `v*` tag exists only for a release —
+# on a draft at most, deleted with it by `release discard`; on a published
+# release, created by the publish and locked by immutability.
+reads_tags_only(text) if contains(text, "--points-at")
+
+reads_tags_only(text) if contains(text, "--list")
+
+reads_tags_only(text) if contains(text, "--contains")
+
+writes_a_tag(text) if contains(text, "gh release delete")
+
+writes_a_tag(text) if {
+	contains(text, "git tag ")
+	not reads_tags_only(text)
+}
+
+writes_a_tag(text) if {
+	contains(text, "refs/tags/")
+	contains(text, "POST")
+}
+
+writes_a_tag(text) if {
+	contains(text, "git push")
+	contains(text, "refs/tags")
+}
+
+writes_a_tag(text) if contains(text, "mise run release ")
+
+writes_a_tag(text) if {
+	some line in split(text, "\n")
+	endswith(trim_space(line), "mise run release")
+}
+
+violation contains release_wire(path, sprintf("%s creates or deletes a tag", [name])) if {
+	release_path_adopted
+	some path, doc in workflow
+	some name, _ in doc.jobs
+	some step in job_steps(path, name)
+	writes_a_tag(step_text(step))
+}
+
+# THE FREEZE: every lander and the cut read it inside `main-writer`. `land` is
+# the release itself, the one writer the freeze exists to protect.
+freeze_owed(path, name) if {
+	writes_main(path, name)
+	path != release_artifacts
+}
+
+freeze_owed(path, name) if dispatches_build(path, name)
+
+violation contains release_wire(path, sprintf("%s writes main without the release freeze", [name])) if {
+	release_path_adopted
+	some path, doc in workflow
+	some name, _ in doc.jobs
+	freeze_owed(path, name)
+	not contains(job_text(path, name), "release in-flight")
+}
+
+# THE CUT IS GATED ON THE SETTINGS, THE FREEZE AND THE UNUSABLE-VERSION BUMP, and
+# so is opening the release PR: nothing is readied or cut before B2.
+cut_gates := ["release settings", "release in-flight", "release bump-unusable"]
+
+violation contains release_wire(path, sprintf("the cut %s has no %s", [name, gate])) if {
+	release_path_adopted
+	some path, doc in workflow
+	some name, _ in doc.jobs
+	dispatches_build(path, name)
+	some gate in cut_gates
+	not contains(job_text(path, name), gate)
+}
+
+violation contains release_wire(path, sprintf("%s opens the release PR without the settings gate", [name])) if {
+	release_path_adopted
+	some path, doc in workflow
+	some name, _ in doc.jobs
+	contains(job_text(path, name), "mise run release-pr")
+	not contains(job_text(path, name), "release settings")
+}
+
+# `land` CHECKS OUT `main`, so every predicate it runs is `main`'s code, and
+# moves the ref with the PAT, so the push fires workflows.
+checks_out_main(job) if {
+	some step in job.steps
+	startswith(object.get(step, "uses", ""), "actions/checkout@")
+	step["with"].ref == "main"
+}
+
+uses_the_pat(step) if {
+	some _, value in object.get(step, "env", {})
+	value == "${{ secrets.RELEASE_PLZ_TOKEN }}"
+}
+
+violation contains release_wire(release_artifacts, "land checks out something other than main") if {
+	release_path_adopted
+	job := workflow[release_artifacts].jobs.land
+	not checks_out_main(job)
+}
+
+violation contains release_wire(release_artifacts, "land moves main without RELEASE_PLZ_TOKEN") if {
+	release_path_adopted
+	some step in job_steps(release_artifacts, "land")
+	contains(step_all(step), "git/refs/heads/main")
+	not uses_the_pat(step)
+}
+
+# The bump is a commit the cut writes onto the release branch: with the PAT, so
+# the move fires the CI that grades the bumped head.
+pushes_with_the_pat(step) if uses_the_pat(step)
+
+writes_the_bump(step) if contains(step_text(step), "release bump-unusable")
+
+writes_the_bump(step) if contains(step_text(step), "git push")
+
+violation contains release_wire(path, sprintf("the cut %s pushes the bump without RELEASE_PLZ_TOKEN", [name])) if {
+	release_path_adopted
+	some path, doc in workflow
+	some name, _ in doc.jobs
+	dispatches_build(path, name)
+	some step in job_steps(path, name)
+	writes_the_bump(step)
+	not pushes_with_the_pat(step)
+}
+
+# ONE DISPATCHER of the build: the cut.
+violation contains release_wire(path, sprintf("%s dispatches release-artifacts", [name])) if {
+	release_path_adopted
+	some path, doc in workflow
+	some name, _ in doc.jobs
+	dispatches_build(path, name)
+	path != ".github/workflows/auto-release-land.yml"
+}
+
+# `ci` GRADES WITH `main`'s PREDICATE, ON THE PR HEAD SHA: a worktree of the
+# trunk built by `--manifest-path`, and an argument bound to the head SHA —
+# never `HEAD`, which is the synthetic merge commit.
+graded_by_the_trunk(step) if {
+	contains(step_text(step), "--manifest-path")
+	contains(step_text(step), "--config-from origin/main")
+	some other in job_steps(".github/workflows/ci.yml", "batten-check")
+	contains(step_text(other), "git worktree add")
+	contains(step_text(other), "origin/main")
+}
+
+names_the_head_sha(step) if {
+	some var, value in object.get(step, "env", {})
+	value == "${{ github.event.pull_request.head.sha }}"
+	contains(step_text(step), sprintf("--arg-env %s ", [var]))
+}
+
+violation contains release_wire(".github/workflows/ci.yml", "ci grades release-path with the head's own predicate") if {
+	release_path_adopted
+	some step in job_steps(".github/workflows/ci.yml", "batten-check")
+	posts_release_path(step)
+	not graded_by_the_trunk(step)
+}
+
+violation contains release_wire(".github/workflows/ci.yml", "ci grades release-path on something other than the PR head SHA") if {
+	release_path_adopted
+	some step in job_steps(".github/workflows/ci.yml", "batten-check")
+	posts_release_path(step)
+	not names_the_head_sha(step)
+}
+
+# `cleanup` DISCARDS ON A BUILD FAILURE ONLY: never after `land`, so recovery by
+# re-running `land` always finds its draft.
+violation contains release_wire(release_artifacts, sprintf("%s discards after land", [name])) if {
+	release_path_adopted
+	some name, job in workflow[release_artifacts].jobs
+	name != "land"
+	contains(job_text(release_artifacts, name), "release discard")
+	"land" in needs_of(job)
+}
+
+# THE PRE-B2 SEAL: `final` needs a job that runs the predicate with `--seal`, so
+# before the server requires `release-path` no head pinning an unverified
+# release passes the one check it does require.
+final_sealed if {
+	ci := workflow[".github/workflows/ci.yml"]
+	some name in needs_of(ci.jobs.final)
+	some step in object.get(ci.jobs[name], "steps", [])
+	contains(step_text(step), "release path")
+	contains(step_text(step), "--seal")
+}
+
+violation contains release_wire(".github/workflows/ci.yml", "final does not fail on an unverified pin") if {
+	release_path_adopted
+	workflow[".github/workflows/ci.yml"]
+	not final_sealed
+}
+
+# A PUBLISH IS A NON-LATEST PRE-RELEASE, and a create is a draft: nothing is
+# visible before it is complete, and nothing is latest before `main` pins it.
+publishes_bare(text) if {
+	contains(text, "gh release edit")
+	contains(text, "--draft=false")
+	not contains(text, "--prerelease")
+}
+
+publishes_bare(text) if {
+	contains(text, "gh release create")
+	not contains(text, "--draft")
+}
+
+violation contains release_wire(path, sprintf("%s publishes without --prerelease or creates without --draft", [name])) if {
+	release_path_adopted
+	some path, doc in workflow
+	some name, _ in doc.jobs
+	some step in job_steps(path, name)
+	publishes_bare(step_text(step))
 }
 
 # --- could not look -----------------------------------------------------------

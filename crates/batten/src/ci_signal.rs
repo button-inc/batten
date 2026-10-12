@@ -116,7 +116,7 @@ fn tsv(cell: &str) -> String {
 }
 
 /// An RFC 3339 instant in epoch seconds, or `None` where it does not parse.
-fn epoch(instant: &str) -> Option<i64> {
+pub(crate) fn epoch(instant: &str) -> Option<i64> {
     crate::landed::second_of(instant)
 }
 

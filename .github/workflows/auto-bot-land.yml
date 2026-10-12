@@ -151,6 +151,8 @@ permissions:
   # already records that it cannot carry `checks:read` — and it carries no Issues
   # permission either. This grant is what the ambient token needs instead.
   issues: write
+  # The release freeze reads release-artifacts runs (CLOUD-2033).
+  actions: read
 
 # One constant group, not a per-SHA key. A cron tick and a `workflow_run` tick can
 # reach the same PR at the same moment, and a per-SHA group would let both ready it
@@ -196,6 +198,14 @@ jobs:
       startsWith(github.event.workflow_run.head_branch, 'sbom-actions/')))
     runs-on: ubuntu-latest
     timeout-minutes: 3 # budget: p95=52s x3 measured=2026-08-19
+    # EVERY WRITER OF `main` SERIALISES IN ONE GROUP (CLOUD-2033 P3), the
+    # workflow-level group above notwithstanding: that one keeps two ticks of
+    # this lane apart, this one keeps this lane apart from the cut, the
+    # release's `land` and the human lander.
+    concurrency:
+      group: main-writer
+      cancel-in-progress: false
+      queue: max
     env:
       REPO: ${{ github.repository }}
       # The author half of the same test, applied in the resolve step below where
@@ -285,10 +295,12 @@ jobs:
             echo "draft=$draft"
           } >> "$GITHUB_OUTPUT"
       # The default ref, never the PR head — the predicates must be the ones
-      # committed to trunk, and no credential outlives the step.
+      # committed to trunk, and no credential outlives the step. Full history,
+      # because the release predicate grades the head against its merge-base.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         if: steps.target.outputs.num != ''
         with:
+          fetch-depth: 0
           persist-credentials: false
       - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5 (CLOUD-404 retry fix, now a release)
         with:
@@ -643,8 +655,30 @@ jobs:
             2) echo "linked=false" >> "$GITHUB_OUTPUT" ;;
             *) exit "$verdict" ;;
           esac
-      - name: Fast-forward main to the tested SHA
+      # THE RELEASE FREEZE AND THE RELEASE PREDICATE (CLOUD-2033). A release in
+      # flight holds this lane — an ordinary outcome, retried on the next tick —
+      # and a head whose G2 verdict is failure is never written. Exit 3 from
+      # either is could-not-look and fails the run.
+      - name: Is a release in flight?
         if: steps.closes.outputs.linked == 'true'
+        id: freeze
+        env:
+          BATTEN_GITHUB_TOKEN: ${{ github.token }}
+        run: batten ci step --verdict clear --on 0=yes --on 1=no -- batten release in-flight --workflow release-artifacts.yml
+      - name: Fetch the head the release predicate grades
+        if: steps.freeze.outputs.clear == 'yes'
+        env:
+          PR_REF: refs/pull/${{ steps.target.outputs.num }}/head
+        run: batten ci step --arg-env PR_REF -- git fetch origin
+      - name: Does the head pass the release predicate?
+        if: steps.freeze.outputs.clear == 'yes'
+        id: release
+        env:
+          BATTEN_GITHUB_TOKEN: ${{ github.token }}
+          SHA: ${{ steps.target.outputs.sha }}
+        run: batten ci step --verdict passes --on 0=yes --on 1=no --arg-env SHA -- batten release path --strict
+      - name: Fast-forward main to the tested SHA
+        if: steps.closes.outputs.linked == 'true' && steps.freeze.outputs.clear == 'yes' && steps.release.outputs.passes == 'yes'
         env:
           GH_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}
           PR_NUM: ${{ steps.target.outputs.num }}

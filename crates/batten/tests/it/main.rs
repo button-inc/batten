@@ -361,6 +361,7 @@ mod release_install;
 mod release_provision_parity;
 mod release_token_precedence;
 mod release_tracking;
+mod release_verify;
 #[cfg(unix)]
 mod released;
 mod remedy_authorship;

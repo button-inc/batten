@@ -2315,6 +2315,7 @@ fn post_all(
             body: Some(body),
             direct: false,
             patch: false,
+            delete: false,
         })
         .collect();
     crate::fetch::spend(&calls)

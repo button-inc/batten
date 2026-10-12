@@ -4004,12 +4004,143 @@ expression: stdout_of(&output)
           "subcommands": []
         },
         {
+          "path": "release bump-unusable",
+          "id": "release.bump_unusable",
+          "about": "Move a burned or stray-tagged version to the next one in all four release paths",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "tag",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The release's tag"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "path": "release discard",
+          "id": "release.discard",
+          "about": "Delete a draft release and its tag; do nothing for no release; refuse a published one",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "tag",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The release's tag"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "path": "release guard",
+          "id": "release.guard",
+          "about": "Exit 0 only when a build of the commit may upload into the release: a draft that targets it",
+          "effect": "read",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "sha",
+              "short": null,
+              "long": "sha",
+              "takes_value": true,
+              "positional": false,
+              "help": "The commit the build was dispatched with"
+            },
+            {
+              "name": "tag",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The release's tag"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "path": "release in-flight",
+          "id": "release.in_flight",
+          "about": "Exit 0 when no release is in flight, 1 naming the one that is",
+          "effect": "read",
+          "data_channel": false,
+          "flags": [],
+          "subcommands": []
+        },
+        {
           "path": "release install",
           "id": "release.install",
           "about": "Decide whether install.sh, the release matrix and the binstall manifest agree on every asset name, and that no binary is committed",
           "effect": "unclassified",
           "data_channel": false,
           "flags": [],
+          "subcommands": []
+        },
+        {
+          "path": "release land-state",
+          "id": "release.land_state",
+          "about": "Print the land job's branch for a release: skip-to-f, resume-at-d, burned, draft-ok, draft-bad or absent",
+          "effect": "read",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "sha",
+              "short": null,
+              "long": "sha",
+              "takes_value": true,
+              "positional": false,
+              "help": "The commit the build was dispatched with"
+            },
+            {
+              "name": "tag",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The release's tag"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "path": "release path",
+          "id": "release.path",
+          "about": "Print whether a head may write main: its pin is inherited, or it changes only the release paths to a verified published release",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "post",
+              "short": null,
+              "long": "post",
+              "takes_value": false,
+              "positional": false,
+              "help": "Post the verdict as the release-path commit status on the graded head"
+            },
+            {
+              "name": "seal",
+              "short": null,
+              "long": "seal",
+              "takes_value": false,
+              "positional": false,
+              "help": "Exit 1 when the verdict is failure and the head is not release-shaped or the release guard's settings are not green"
+            },
+            {
+              "name": "sha",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The head commit graded"
+            }
+          ],
           "subcommands": []
         },
         {
@@ -4050,6 +4181,32 @@ expression: stdout_of(&output)
               "takes_value": true,
               "positional": true,
               "help": "The release's tag; empty or absent is the latest release"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "path": "release verify",
+          "id": "release.verify",
+          "about": "Exit 0 only if a release carries every asset, its checksums match, and it is published and immutable at its own tag",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "draft",
+              "short": null,
+              "long": "draft",
+              "takes_value": false,
+              "positional": false,
+              "help": "Verify a draft, read through the assets API, rather than a published, immutable release"
+            },
+            {
+              "name": "tag",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The release's tag"
             }
           ],
           "subcommands": []
@@ -5227,6 +5384,18 @@ expression: stdout_of(&output)
     {
       "id": "record.show",
       "path": "record show"
+    },
+    {
+      "id": "release.guard",
+      "path": "release guard"
+    },
+    {
+      "id": "release.in_flight",
+      "path": "release in-flight"
+    },
+    {
+      "id": "release.land_state",
+      "path": "release land-state"
     },
     {
       "id": "show",

@@ -64,8 +64,17 @@ pub struct Kept {
     ino: u64,
 }
 
-/// The files no collection removes: the running executable and the `batten` on
-/// `PATH`, canonicalised (CLOUD-2197 §5).
+/// The files no collection removes: the running executable, the `batten` on
+/// `PATH`, and every program running on this host, canonicalised (CLOUD-2197 §5).
+///
+/// EVERY RUNNING PROGRAM, not only this one. A test runner holds no
+/// `.cargo-lock` while it executes the binary it built, so its tree reads as
+/// idle: measured on #1132, a hook collecting toward `max_free_mb` during a
+/// nextest run removed every `it-*` test binary, and the run failed to exec
+/// thousands of cases. A unit carrying an executable a process is running is
+/// in use, whatever the lock says.
+//MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
+//MUTANT running-program-collected|s@^        .chain(running_programs())$@        .chain(Vec::<PathBuf>::new())@|a_unit_a_running_program_executes_is_never_collected
 #[must_use]
 pub fn engine_paths() -> Vec<PathBuf> {
     let running = std::env::current_exe().ok();
@@ -77,8 +86,28 @@ pub fn engine_paths() -> Vec<PathBuf> {
     running
         .into_iter()
         .chain(installed)
+        .chain(running_programs())
         .filter(|path| path.exists())
         .map(|path| crate::git::canonical(&path))
+        .collect()
+}
+
+/// The executable of every process this user can see (`/proc/<pid>/exe`).
+/// Empty where `/proc` is not there: the other kept paths still hold.
+fn running_programs() -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return Vec::new();
+    };
+    entries
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .bytes()
+                .all(|b| b.is_ascii_digit())
+        })
+        .filter_map(|entry| std::fs::read_link(entry.path().join("exe")).ok())
         .collect()
 }
 
@@ -148,14 +177,28 @@ fn units_in(tree: &Path) -> Vec<Unit> {
     units
 }
 
-/// The newest atime among a fingerprint directory's files: the last time cargo
-/// read this unit's fingerprint, which is every build that used it.
+/// The newest atime OR mtime among a fingerprint directory's files: the last
+/// time cargo read this unit's fingerprint, or rewrote it.
+///
+/// BOTH, BECAUSE A REBUILD WRITES WITHOUT READING. [`rearm`] pushes a
+/// survivor's atime behind its mtime so the next read refreshes it, and cargo
+/// rebuilding a unit under the same hash rewrites the fingerprint files, which
+/// moves their mtime and leaves that old atime. Read by atime alone, the
+/// freshest build ranked least recently used: measured on #1132, a collection
+/// right after `cargo test` built removed the test binary nextest was about to
+/// run, and 2,087 cases failed to exec it.
+//MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
+//MUTANT rebuild-ranked-stale|s@^            let meta = entry.metadata().ok()?;$@            let meta = entry.metadata().ok().filter(\|_\| false)?;@|a_unit_just_rebuilt_is_not_least_recently_used
 fn last_use(fingerprint: &Path) -> SystemTime {
     std::fs::read_dir(fingerprint)
         .into_iter()
         .flatten()
         .filter_map(Result::ok)
-        .filter_map(|entry| entry.metadata().ok()?.accessed().ok())
+        .filter_map(|entry| {
+            let meta = entry.metadata().ok()?;
+            let read = meta.accessed().ok()?;
+            Some(meta.modified().map_or(read, |written| read.max(written)))
+        })
         .max()
         .unwrap_or(SystemTime::UNIX_EPOCH)
 }
@@ -287,6 +330,18 @@ fn rearm_file(path: &Path) -> std::io::Result<()> {
     std::fs::File::open(path)?.set_times(std::fs::FileTimes::new().set_accessed(modified))
 }
 
+/// Units used this recently are the working set, never collected (CLOUD-2197).
+///
+/// Collecting toward `max_free_mb` walks oldest first, and with need enough it
+/// reaches what was built minutes ago: measured on #1132, a hook collecting
+/// during a nextest run removed the `policy_modules` test binary built for that
+/// same run, before nextest executed it, and its 20 cases failed to exec. A
+/// volume that cannot be brought above the minimum without the working set is
+/// the pre-step check's refusal to make, never a deletion of the build in use.
+//MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
+//MUTANT working-set-collected|s@^        if unit.last_use >= working_set {$@        if false {@|the_working_set_is_never_collected
+pub const WORKING_SET: std::time::Duration = std::time::Duration::from_mins(10);
+
 /// How a collection is asked for.
 #[derive(Debug, Clone)]
 pub struct Request<'a> {
@@ -333,8 +388,16 @@ pub fn collect(request: &Request<'_>) -> (u64, usize) {
     }
     let mut live: Vec<Unit> = locks.iter().flat_map(|(tree, _)| units_in(tree)).collect();
     live.sort_by_key(|unit| unit.last_use);
+    let working_set = SystemTime::now()
+        .checked_sub(WORKING_SET)
+        .unwrap_or(SystemTime::UNIX_EPOCH);
     for unit in live {
         if freed >= request.need_bytes || past(request.deadline) {
+            break;
+        }
+        // THE WORKING SET IS NEVER COLLECTED: units are oldest first, so the
+        // first one used inside the window ends the pass.
+        if unit.last_use >= working_set {
             break;
         }
         let Some(_held) = crate::prune::claim(&unit.tree, &unit.profile) else {

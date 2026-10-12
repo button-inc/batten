@@ -1,0 +1,16 @@
+# actionlint's own configuration.
+#
+# ONE IGNORE, AND IT IS actionlint LAGGING THE PLATFORM, NOT A WAIVED FINDING
+# (CLOUD-2033). GitHub's workflow syntax documents a third `concurrency` key,
+# `queue` — `single` (the default: one pending run, replaced by the next) or
+# `max` (up to 100 pending runs, FIFO; `max` with `cancel-in-progress: true` is a
+# validation error). Read 2026-10-12 at
+# docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax.
+# actionlint 1.7.12, the newest release, knows only `group` and
+# `cancel-in-progress`, so it refuses the key every writer of `main` needs to
+# queue rather than cancel one another. The pattern names that one message and
+# nothing wider; delete this file when actionlint learns the key.
+paths:
+  .github/workflows/**/*.yml:
+    ignore:
+      - 'unexpected key "queue" for "concurrency" section'

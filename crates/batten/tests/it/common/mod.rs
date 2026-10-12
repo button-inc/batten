@@ -1524,6 +1524,29 @@ pub(crate) fn without_session_handlers(config: &str) -> String {
     out
 }
 
+/// A home whose `.claude.json` declares a `serena` server, so the
+/// `claude-code-local` MCP source resolves it (CLOUD-2229): the memories row is
+/// refused only where its read route can be taken.
+///
+/// ONE PER PROCESS, written once, and READ-ONLY to every case: it is not a
+/// scratch directory any case owns, so it lives outside `scratch` (whose names
+/// are per case) under this process's own temporary name.
+pub(crate) fn serena_home() -> PathBuf {
+    static HOME: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    HOME.get_or_init(|| {
+        let home =
+            std::env::temp_dir().join(format!("batten-it-serena-home-{}", std::process::id()));
+        std::fs::create_dir_all(&home).expect("create the serena home");
+        std::fs::write(
+            home.join(".claude.json"),
+            r#"{"mcpServers":{"serena":{"url":"http://127.0.0.1:9/mcp"}}}"#,
+        )
+        .expect("write the home's MCP wiring");
+        home
+    })
+    .clone()
+}
+
 /// Run `command` in `dir` with `args`, writing `input` to its stdin and closing
 /// it, and capture its output. Refuses a fall-through BEFORE the spawn, since it
 /// runs below `Batten`'s own methods.
@@ -1532,7 +1555,7 @@ pub(crate) fn without_session_handlers(config: &str) -> String {
     reason = "stays, and test-only: this IS the spawn-and-pipe harness, and taking the command lets the two entry points above share one body rather than drifting apart — the founding reason this module exists"
 )]
 #[must_use]
-fn stdin_run(command: &mut Command, dir: &Path, args: &[&str], input: &str) -> Output {
+pub(crate) fn stdin_run(command: &mut Command, dir: &Path, args: &[&str], input: &str) -> Output {
     use std::io::Write as _;
     use std::process::Stdio;
 

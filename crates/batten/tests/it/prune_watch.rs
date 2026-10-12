@@ -289,7 +289,7 @@ fn the_least_recently_used_live_unit_goes_first() {
     let root = common::scratch("collect-lru");
     let (one, two) = (root.join("a/target"), root.join("b/target"));
     unit(&one.join("debug"), "alpha", "1111111111111111", 3600, 4096);
-    unit(&two.join("debug"), "beta", "2222222222222222", 60, 4096);
+    unit(&two.join("debug"), "beta", "2222222222222222", 1800, 4096);
     let trees = [one.clone(), two.clone()];
     let (_, units) = batten::collect::collect(&request(&trees, &[], 1));
     assert_eq!(units, 1, "one unit frees the one byte asked for");
@@ -300,6 +300,91 @@ fn the_least_recently_used_live_unit_goes_first() {
     assert!(
         present(&two.join("debug"), "beta", "2222222222222222"),
         "the newer one stays"
+    );
+}
+
+#[test]
+fn a_unit_a_running_program_executes_is_never_collected() {
+    // Measured on #1132: a hook collecting during a nextest run removed the
+    // test binaries nextest was executing; no `.cargo-lock` was held. The
+    // unit's binary here is a running `sleep`, and it is the only unit.
+    let root = common::scratch("collect-running");
+    let profile = root.join("target/debug");
+    unit(&profile, "runner", "5555555555555555", 7200, 16);
+    let binary = profile.join("deps/runner-5555555555555555");
+    std::fs::copy("/bin/sleep", &binary).unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    #[expect(
+        clippy::disallowed_types,
+        reason = "stays, and test-only: the case needs a process executing the unit's own binary, which `common::batten` cannot be"
+    )]
+    let mut running = std::process::Command::new(&binary)
+        .arg("30")
+        .spawn()
+        .unwrap();
+    let kept = batten::collect::kept(&batten::collect::engine_paths());
+    let trees = [root.join("target")];
+    let _ = batten::collect::collect(&request(&trees, &kept, u64::MAX));
+    let survived = binary.exists();
+    let _ = running.kill();
+    let _ = running.wait();
+    assert!(
+        survived,
+        "a binary a process is executing is never collected"
+    );
+}
+
+#[test]
+fn the_working_set_is_never_collected() {
+    // Measured on #1132: collecting toward max_free_mb walked oldest first into
+    // the `policy_modules` test binary built for the running suite. A unit used
+    // inside the window stays, however much is asked for.
+    let root = common::scratch("collect-working-set");
+    let profile = root.join("target/debug");
+    unit(&profile, "fresh", "eeeeeeeeeeeeeeee", 30, 4096);
+    unit(&profile, "stale", "ffffffffffffffff", 7200, 4096);
+    let trees = [root.join("target")];
+    let (_, units) = batten::collect::collect(&request(&trees, &[], u64::MAX));
+    assert_eq!(units, 1, "only the unit outside the window goes");
+    assert!(present(&profile, "fresh", "eeeeeeeeeeeeeeee"));
+    assert!(!present(&profile, "stale", "ffffffffffffffff"));
+}
+
+#[test]
+fn a_unit_just_rebuilt_is_not_least_recently_used() {
+    // Measured on #1132: a re-armed unit cargo then rebuilt under the same hash
+    // has an old atime and a fresh mtime, and read by atime alone it was the
+    // first collected: the test binary nextest was about to run.
+    let root = common::scratch("collect-rebuilt");
+    let (one, two) = (root.join("a/target"), root.join("b/target"));
+    unit(
+        &one.join("debug"),
+        "rebuilt",
+        "3333333333333333",
+        7200,
+        4096,
+    );
+    let fingerprint = one.join("debug/.fingerprint/rebuilt-3333333333333333/lib-rebuilt");
+    std::fs::File::options()
+        .write(true)
+        .open(&fingerprint)
+        .unwrap()
+        .set_modified(SystemTime::now())
+        .unwrap();
+    unit(&two.join("debug"), "idle", "4444444444444444", 1800, 4096);
+    let trees = [one.clone(), two.clone()];
+    let (_, units) = batten::collect::collect(&request(&trees, &[], 1));
+    assert_eq!(units, 1);
+    assert!(
+        present(&one.join("debug"), "rebuilt", "3333333333333333"),
+        "the unit cargo just rewrote stays"
+    );
+    assert!(
+        !present(&two.join("debug"), "idle", "4444444444444444"),
+        "the one nothing has touched for a minute goes"
     );
 }
 
@@ -384,7 +469,13 @@ fn collection_stops_at_max_free() {
 fn a_collection_re_arms_the_survivors() {
     let root = common::scratch("collect-rearm");
     let tree = root.join("target");
-    unit(&tree.join("debug"), "keepme", "5555555555555555", 60, 4096);
+    unit(
+        &tree.join("debug"),
+        "keepme",
+        "5555555555555555",
+        1800,
+        4096,
+    );
     let trees = [tree.clone()];
     let _ = batten::collect::collect(&request(&trees, &[], 0));
     let file = tree.join("debug/.fingerprint/keepme-5555555555555555/lib-keepme");
@@ -425,7 +516,7 @@ fn a_shared_inode_is_not_counted_until_its_last_name_goes() {
     let tree = root.join("target");
     let profile = tree.join("debug");
     let older = unit(&profile, "shared", "7777777777777777", 3600, 1 << 20);
-    unit(&profile, "next", "8888888888888888", 60, 4096);
+    unit(&profile, "next", "8888888888888888", 1800, 4096);
     std::fs::hard_link(&older, root.join("second-name")).unwrap();
     let trees = [tree.clone()];
     let _ = batten::collect::collect(&request(&trees, &[], 1 << 20));
@@ -441,7 +532,7 @@ fn the_running_engine_is_never_collected() {
     let tree = root.join("target");
     let profile = tree.join("release");
     let engine = unit(&profile, "batten", "9999999999999999", 7200, 4096);
-    unit(&profile, "other", "aaaaaaaaaaaaaaaa", 60, 4096);
+    unit(&profile, "other", "aaaaaaaaaaaaaaaa", 1800, 4096);
     let installed = root.join("installed-batten");
     std::fs::hard_link(&engine, &installed).unwrap();
     let kept = batten::collect::kept(&[installed]);
@@ -476,7 +567,7 @@ fn a_sibling_worktrees_units_are_ranked_with_the_checkouts() {
         &repo.join("target/debug"),
         "near",
         "cccccccccccccccc",
-        60,
+        1800,
         3 << 20,
     );
     let mut rules = rules("target", 1);
@@ -664,6 +755,42 @@ fn a_sweep_that_cannot_be_brought_above_the_minimum_stops_before_building() {
     // Anti-vacuity: with room, the sweep is not stopped for disk.
     let roomy = sweep("500");
     assert!(!common::stderr(&roomy).contains("min_free_mb"));
+}
+
+#[test]
+fn a_lap_whose_volume_cannot_be_freed_stops_before_the_gate() {
+    // CLOUD-2197. A step the volume cannot hold never starts: below
+    // `min_free_mb` the collector runs first, and a volume it cannot bring
+    // back above the minimum refuses the step before the gate spends a build.
+    let dir = hooked("land-step-exhausted", true);
+    let marker = dir.join("gate-ran");
+    let gate = dir.join("gate.sh");
+    std::fs::write(&gate, format!("#!/bin/sh\n: > '{}'\n", marker.display())).unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&gate, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let verify = |free: &str| {
+        common::batten()
+            .current_dir(&dir)
+            .args(["land", "verify"])
+            .env("LAND_VERIFY", &gate)
+            .env("TARGET_PRUNE_FREE_MB", free)
+            .output()
+            .expect("the binary runs")
+    };
+    let stopped = verify("5");
+    let said = common::stderr(&stopped);
+    assert_eq!(stopped.status.code(), Some(2), "{said}");
+    assert!(
+        said.contains("land verify: disk-collected "),
+        "the collection ran first: {said}"
+    );
+    assert!(said.contains("min_free_mb 100"), "{said}");
+    assert!(!marker.exists(), "the gate never started");
+    // Anti-vacuity: with room, the gate runs.
+    let roomy = verify("500");
+    assert!(marker.exists(), "{}", common::stderr(&roomy));
 }
 
 #[test]

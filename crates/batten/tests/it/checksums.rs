@@ -320,41 +320,44 @@ fn the_release_artifacts_run_only_by_dispatch() {
     );
 }
 
-/// The other half: the job that tags the release dispatches the artifacts for
-/// the tag it shipped, after resolving it, and only when it shipped one.
+/// The other half (CLOUD-2033): the CUT dispatches the artifacts, with the tag
+/// it drafted and the release head it drafted it at, and only after it created
+/// that draft — never the job that once tagged `HEAD` after the push.
 #[test]
-fn the_release_job_dispatches_the_artifacts_for_the_tag_it_shipped() {
+fn the_cut_dispatches_the_artifacts_for_the_draft_it_created() {
     use yaml_rust2::{Yaml, YamlLoader};
-    let text = std::fs::read_to_string(common::at_root(".github/workflows/release-plz.yml"))
-        .expect("the release workflow");
+    let text = std::fs::read_to_string(common::at_root(".github/workflows/auto-release-land.yml"))
+        .expect("the release-landing workflow");
     let docs = YamlLoader::load_from_str(&text).expect("the workflow parses as YAML");
-    let job = &docs[0]["jobs"]["release-plz"];
-    let steps = job["steps"].as_vec().expect("release-plz has steps");
+    let job = &docs[0]["jobs"]["cut"];
+    let steps = job["steps"].as_vec().expect("the cut has steps");
     let field = |step: &Yaml, key: &str| step[key].as_str().unwrap_or_default().to_owned();
-    let resolved = steps
+    let drafted = steps
         .iter()
-        .position(|step| field(step, "id") == "release-tag")
-        .expect("a step resolves the shipped tag");
+        .position(|step| {
+            field(step, "run").contains("gh release create \"$TAG\" --draft --target \"$SHA\"")
+        })
+        .expect("a step creates the draft at the release head");
     let dispatch = steps
         .iter()
         .position(|step| field(step, "run").contains("gh workflow run release-artifacts.yml"))
         .expect("a step dispatches release-artifacts");
+    assert!(dispatch > drafted, "the dispatch follows the draft");
+    let run = field(&steps[dispatch], "run");
     assert!(
-        dispatch > resolved,
-        "the dispatch follows the tag's resolution"
-    );
-    let step = &steps[dispatch];
-    assert_eq!(field(step, "if"), "steps.release-tag.outputs.tag != ''");
-    assert!(
-        step["env"]["FIELD"]
-            .as_str()
-            .is_some_and(|value| value == "tag=${{ steps.release-tag.outputs.tag }}"),
-        "the dispatch names the shipped tag"
+        run.contains("-f tag=\"$TAG\"") && run.contains("-f sha=\"$SHA\""),
+        "the dispatch names the draft's tag and its release head: {run}"
     );
     assert_eq!(
         job["permissions"]["actions"].as_str(),
         Some("write"),
         "the job token may dispatch a workflow"
+    );
+    let release = std::fs::read_to_string(common::at_root(".github/workflows/release-plz.yml"))
+        .expect("the release workflow");
+    assert!(
+        !release.contains("gh workflow run release-artifacts.yml"),
+        "release-plz no longer dispatches anything"
     );
 }
 

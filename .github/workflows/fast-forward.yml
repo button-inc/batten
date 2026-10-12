@@ -64,6 +64,7 @@ concurrency:
 permissions:
   contents: write
   pull-requests: write
+  actions: read # the release freeze reads release-artifacts runs (CLOUD-2033)
 
 env:
   # Restores locked installs, which `[settings] lockfile = false` turns off along
@@ -102,6 +103,15 @@ jobs:
       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
     runs-on: ubuntu-latest
     timeout-minutes: 5 # budget: grandfathered measured=2026-08-10
+    # EVERY WRITER OF `main` SERIALISES IN ONE GROUP (CLOUD-2033 P3). The cut,
+    # the release's `land` and both landers share `main-writer`, so the freeze
+    # this job reads cannot change under it; `queue: max` keeps every pending
+    # landing in FIFO order rather than cancelling all but the newest, and
+    # nothing in the group waits on anything while holding it.
+    concurrency:
+      group: main-writer
+      cancel-in-progress: false
+      queue: max
     steps:
       # A DRAFT HEAD GRADES NO CHECKS, so "required checks green" is vacuous on
       # it and the ruleset lets the push through (CLOUD-853, measured on #624).
@@ -244,8 +254,11 @@ jobs:
       # THE SETUP IS PAID LAST ON PURPOSE. The two refusals above are one
       # `gh api` call each, so a draft or an unreviewed fork head is turned away
       # before this job installs anything.
+      # `fetch-depth: 0`: the release predicate below grades the head against
+      # its merge-base with `main`, which a shallow graft cannot answer.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          fetch-depth: 0
           persist-credentials: false
       - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5
         with:
@@ -299,6 +312,33 @@ jobs:
           )" >/dev/null
           echo "::error:: refusing #$PR at $head_sha: $why (CLOUD-1570)"
           exit 1
+
+      # THE RELEASE FREEZE AND THE RELEASE PREDICATE (CLOUD-2033). While a
+      # release is in flight — a build running, a young draft, or a published
+      # release `main` has not reached yet — no lander moves `main`, so the
+      # landing that release owes cannot be burned by a sibling's. And a head
+      # whose G2 verdict is failure — a pin change to a release that is not
+      # published, immutable and verified — is refused here as well as by the
+      # server. Both are the installed engine's, which is `main`'s pin.
+      - name: refuse while a release is in flight
+        env:
+          BATTEN_GITHUB_TOKEN: ${{ github.token }}
+        run: batten release in-flight --workflow release-artifacts.yml
+      - name: read the head as it is now
+        id: head
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ROUTE: repos/${{ github.repository }}/pulls/${{ github.event.issue.number }}
+        run: batten ci step --capture sha --arg-env ROUTE -- gh api --jq .head.sha
+      - name: fetch the head the release predicate grades
+        env:
+          PR_REF: refs/pull/${{ github.event.issue.number }}/head
+        run: batten ci step --arg-env PR_REF -- git fetch origin
+      - name: refuse a head the release predicate fails
+        env:
+          BATTEN_GITHUB_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ steps.head.outputs.sha }}
+        run: batten ci step --arg-env HEAD_SHA -- batten release path --strict
 
       # `# v1.0.0`, NOT `# v1`, and the difference is load-bearing rather than
       # pedantic (CLOUD-676). Upstream publishes exactly one tag — `v1.0.0` —

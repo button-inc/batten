@@ -112,8 +112,7 @@ fn a_source_pin_is_refused_on_the_landing_path() {
 }
 
 /// A fixture forge whose tag read answers 404 and whose release list carries
-/// `tag` as a draft: a release being built, as every release is between its
-/// release PR landing and its artifacts publishing (CLOUD-2138).
+/// `tag` as a draft.
 fn draft_forge(dir: &Path, tag: &str) -> PathBuf {
     let mut name = dir.file_name().unwrap().to_os_string();
     name.push(".forge");
@@ -131,13 +130,12 @@ fn draft_forge(dir: &Path, tag: &str) -> PathBuf {
     forge
 }
 
-/// THE PIN NAMES A DRAFT BEING BUILT, SO THE GATE WAITS, THEN SAYS IT COULD NOT
-/// LOOK (CLOUD-2138). Before this, fetching it answered 404 and the gate refused,
-/// failing every lander's `verify` until the release published — measured on
-/// v0.0.206. With the bound spent it is exit 3, never 2: nothing is wrong with
-/// the tree.
+/// A PIN NAMING A DRAFT IS NEVER WAITED ON (CLOUD-2033, retiring CLOUD-2138's
+/// wait). `main` pins a release only after `land` published and verified it, so
+/// a draft pin is a defect the gate reports at once rather than a build it sits
+/// out.
 #[test]
-fn a_pin_naming_an_unpublished_draft_is_waited_on_never_refused() {
+fn a_pin_naming_a_draft_is_never_waited_on() {
     let dir = repo(
         "engine-gate-draft",
         "version = 1\nengine = { release = \"v9.9.9\" }\n",
@@ -147,23 +145,15 @@ fn a_pin_naming_an_unpublished_draft_is_waited_on_never_refused() {
         .state_dir(&data_dir(&dir))
         .args(["engine", "gate"])
         .env("BATTEN_REST_FIXTURE", &forge)
-        .env("BATTEN_ENGINE_DRAFT_WAITS", "1")
-        .env("BATTEN_ENGINE_DRAFT_WAIT_SECONDS", "0")
         .current_dir(&dir)
         .output()
         .expect("run batten");
-    assert_eq!(output.status.code(), Some(3), "{}", text(&output));
-    assert!(
-        text(&output).contains(
-            "engine pin v9.9.9 is a draft its release has not published yet; waited 1 time(s)"
-        ),
-        "{}",
-        text(&output)
-    );
+    assert!(!output.status.success(), "{}", text(&output));
+    assert!(!text(&output).contains("waited"), "{}", text(&output));
 }
 
-/// ANTI-VACUITY: a pin already fetched is a published release, so the gate never
-/// asks the forge about drafts and judges it as before.
+/// ANTI-VACUITY: a pin already fetched is a published release, so the gate
+/// judges it as before.
 #[test]
 fn a_cached_pin_is_judged_without_asking_about_drafts() {
     let dir = repo(
@@ -176,8 +166,6 @@ fn a_cached_pin_is_judged_without_asking_about_drafts() {
         .state_dir(&data_dir(&dir))
         .args(["engine", "gate"])
         .env("BATTEN_REST_FIXTURE", &forge)
-        .env("BATTEN_ENGINE_DRAFT_WAITS", "1")
-        .env("BATTEN_ENGINE_DRAFT_WAIT_SECONDS", "0")
         .current_dir(&dir)
         .output()
         .expect("run batten");

@@ -8491,11 +8491,71 @@ fn protected_mutation(policy: &Policy, command: &str) -> Decision {
                             return Decision::Deny(unknown_program_refusal(program, path));
                         }
                     }
+                    // AND THE PROGRAM TEXT IT RUNS (CLOUD-2231). The operand walk
+                    // above was kept narrow on purpose — a word that merely
+                    // MENTIONS a guarded path is not one the program acts on — and
+                    // that left the interpreter's own script outside it: the value
+                    // of `-c`/`-e`, and the heredoc fed to `python3 -`. Both are
+                    // code, so a protected path named there is one the program
+                    // reads or writes. Scoped to THIS unclassified program's script
+                    // text only, so `echo`, a `for` word or a commit message still
+                    // mentions freely — the false positive that reverted the wide
+                    // scan cannot recur here.
+                    if own.is_none()
+                        && let Some(path) = script_texts(&arguments, &segment.stdin_text)
+                            .into_iter()
+                            .find_map(|text| protected_in_text(policy, &text))
+                    {
+                        return Decision::Deny(unknown_program_refusal(program, &path));
+                    }
                 }
             }
         }
     }
     Decision::Allow
+}
+
+/// The script an interpreter runs from its argv or its stdin: the value after
+/// `-c`, `-e`, `--command` or `--eval`, and every stdin text its segment binds.
+fn script_texts(arguments: &[&str], stdin: &[String]) -> Vec<String> {
+    let mut texts: Vec<String> = arguments
+        .windows(2)
+        .filter(|pair| matches!(pair[0], "-c" | "-e" | "-E" | "--command" | "--eval"))
+        .map(|pair| pair[1].to_owned())
+        .collect();
+    texts.extend(stdin.iter().cloned());
+    texts
+}
+
+/// The first protected path a script names, split on the characters that
+/// cannot be part of a path a program spells as a literal.
+//MUTANT-SUITE crates/batten/src/hook.rs
+//MUTANT script-text-unread|s@^        .find(\x7cword\x7c protects(policy, word))$@        .find(\x7c_\x7c false)@|an_interpreter_script_naming_a_protected_path_is_refused
+fn protected_in_text(policy: &Policy, text: &str) -> Option<String> {
+    text.split(|c: char| {
+        c.is_whitespace()
+            || matches!(
+                c,
+                '\'' | '"'
+                    | '`'
+                    | '('
+                    | ')'
+                    | ','
+                    | ';'
+                    | '['
+                    | ']'
+                    | '{'
+                    | '}'
+                    | '='
+                    | '<'
+                    | '>'
+                    | '|'
+                    | '&'
+            )
+    })
+    .filter(|word| !word.is_empty())
+    .find(|word| protects(policy, word))
+    .map(ToOwned::to_owned)
 }
 
 /// Refuse a protected path named by a program neither table classifies.
@@ -8938,6 +8998,16 @@ struct Segment {
     /// is not a redirection — and heredoc BODIES are gone by the time this is
     /// set, so prose in a body cannot set it either.
     input_redirect: bool,
+    /// The text this span's own stdin redirections hand it: every heredoc body
+    /// and here-string bound here.
+    ///
+    /// **Read by one gate only, and only as PROGRAM TEXT** (CLOUD-2231). An
+    /// unclassified interpreter handed `python3 - <<'EOF'` runs its body as
+    /// code, so a protected path named there is a path that code acts on — the
+    /// same fact an operand states, in a place argv never shows. Measured: a
+    /// write to a registered policy module through exactly that shape was
+    /// admitted while `python3 /dev/null <module>` was refused.
+    stdin_text: Vec<String>,
     /// Each CONSTITUENT command's own words, where a newline joined several into
     /// this one segment.
     ///
@@ -9479,6 +9549,10 @@ fn flatten_command(
         raw: node.source_text(source).to_owned(),
         terminator: after,
         input_redirect: redirects.iter().any(binds_stdin),
+        stdin_text: redirects
+            .iter()
+            .filter_map(|redirect| stdin_text(redirect, source))
+            .collect(),
         construct,
         nested: false,
         grouped: false,
@@ -9691,6 +9765,18 @@ fn descend_word(word: &rable::Node, source: &str, out: &mut Vec<Segment>) {
 fn descend_redirect(redirect: &rable::Node, source: &str, out: &mut Vec<Segment>) {
     if let rable::NodeKind::Redirect { target, .. } = &redirect.kind {
         descend_word(target, source, out);
+    }
+}
+
+/// The text a stdin redirection hands its command: a heredoc's body, or a
+/// here-string's word unquoted. A file redirect (`<`) hands a path, not text.
+fn stdin_text(redirect: &rable::Node, source: &str) -> Option<String> {
+    match &redirect.kind {
+        rable::NodeKind::HereDoc { content, .. } => Some(content.clone()),
+        rable::NodeKind::Redirect { op, target, .. } if op == "<<<" => {
+            Some(unquote(target.source_text(source)))
+        }
+        _ => None,
     }
 }
 
@@ -14006,6 +14092,37 @@ deny contains "refused by themodule" if {
     /// reads: `path write refused` glosses as "a mutating verb was aimed at a
     /// path the config protects", and this arm's own composer says the boundary
     /// does not know what the program does and will not guess.
+    #[test]
+    fn an_interpreter_script_naming_a_protected_path_is_refused() {
+        // CLOUD-2231, the measured shapes: the path lives only in the program
+        // text, never in argv, and both were admitted.
+        for command in [
+            "python3 -c \"open('.serena/memories/core.md','a').close()\"",
+            "python3 - <<'EOF'\nopen('.serena/memories/core.md', 'a').close()\nEOF\n",
+            "node -e 'require(\"fs\").writeFileSync(\".serena/memories/core.md\", \"\")'",
+            "ruby <<< 'File.write(\".serena/memories/core.md\", \"\")'",
+        ] {
+            let refused = denial(guarded(command));
+            assert_eq!(
+                refused.verdict(),
+                Some(crate::verdict::Native::ProgramUnknown.id()),
+                "{command}"
+            );
+        }
+        // THE MENTIONS THE WIDE SCAN WRONGLY REFUSED stay allowed: a known
+        // program's words, and an unknown program's ordinary argument.
+        for command in [
+            "echo \"see .serena/memories/core.md\"",
+            "frobnicate --note 'mentions .serena/memories/core.md'",
+            "python3 -c \"print(1)\"",
+        ] {
+            assert!(
+                matches!(guarded(command), Decision::Allow),
+                "{command} only mentions the path"
+            );
+        }
+    }
+
     #[test]
     fn an_unknown_program_refusal_is_a_different_class_from_a_declared_mutation() {
         let unknown = denial(guarded("frobnicate .serena/memories/core.md"));

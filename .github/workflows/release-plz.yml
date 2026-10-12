@@ -567,7 +567,7 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
-      actions: write # dispatch release-artifacts for the tag this push shipped (CLOUD-2121)
+      actions: read # the release guard's last settings run (CLOUD-2033)
     env:
       GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}
       # A BOOLEAN, NEVER THE SECRET: a step's `if:` cannot read `secrets`, so the
@@ -627,189 +627,30 @@ jobs:
       # credential. It travels as `GIT_CONFIG_*` environment on the two steps
       # that clone, which git reads as configuration, so no step writes a global
       # config and no later step inherits the credential.
-      - run: mise run release
+      # THIS JOB NO LONGER TAGS, PUBLISHES, DISPATCHES OR TRACKS (CLOUD-2033).
+      # `mise run release` tagged `HEAD` and created a draft on every push to
+      # `main`, so `main` pinned an unpublished tag from the push until the build
+      # published it — on every one of the 13 pin moves in 30 days. The release
+      # is cut now from the release PR's head BEFORE it lands
+      # (`auto-release-land.yml`'s cut), built and published by
+      # `release-artifacts.yml`, whose `land` job moves `main`, marks it latest
+      # and records it in Linear. `release-plz.toml` turns off its tag and its
+      # GitHub release.
+      #
+      # NOTHING IS OPENED OR REFRESHED BEFORE B2: the release PR is gated on the
+      # release guard's `settings` job being green on `main`, built from the
+      # tree because the verb ships there first.
+      - name: Is the release guard's settings job green on main?
+        id: settings
         env:
-          GIT_CONFIG_COUNT: 1
-          GIT_CONFIG_KEY_0: url.https://x-access-token:${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}@github.com/.insteadOf
-          GIT_CONFIG_VALUE_0: https://github.com/
+          BATTEN_GITHUB_TOKEN: ${{ github.token }}
+        run: mise run batten -- ci step --verdict green --on 0=true --on 1=false -- mise run batten -- release settings --last-run release-guard.yml
       - run: mise run release-pr
+        if: steps.settings.outputs.green == 'true'
         env:
           GIT_CONFIG_COUNT: 1
           GIT_CONFIG_KEY_0: url.https://x-access-token:${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}@github.com/.insteadOf
           GIT_CONFIG_VALUE_0: https://github.com/
-      # CLOUD-618. THE TAG IS PUSHED FROM A CLONE THIS CHECKOUT CANNOT SEE, so
-      # without this step the resolver below finds nothing and every tracking step
-      # skips — green, silent, and wrong.
-      #
-      # `release-plz release` creates and pushes the tag from its own temporary
-      # clone (the same temp dir the `insteadOf` credential above exists for), so
-      # the ref never enters the runner's working copy and nothing refreshes tags
-      # between those two events.
-      #
-      # MEASURED at `v0.0.110`, run 32665754952 on 2026-08-23. The annotated tag
-      # was created 20:53:13Z — inside the `mise run release` step, which ran
-      # 20:53:12–20:53:15 — and it points at `0159dbd`, which IS this checkout's
-      # own HEAD. `git tag --points-at HEAD` at 20:54:21Z still returned nothing,
-      # the summary step logged `TAG:` empty, and all three steps below concluded
-      # `skipped`. The `batten` pipeline held 0 releases across the 32 tagged
-      # releases from `v0.0.78` to `v0.0.110`.
-      #
-      # AFTER `release-pr`, NOT BEFORE IT, and that is load-bearing rather than
-      # arbitrary: `release-pr` takes its baseline from the latest release tag
-      # this checkout carries (`release-plz.toml`'s `git_only`, CLOUD-1991), so
-      # fetching earlier would silently move that baseline from the previous tag
-      # to the one just pushed. That is a different change and does not belong
-      # in this one.
-      #
-      # No `shell:` key, so the default `bash -e {0}` applies and a failed fetch
-      # FAILS the step. That is the point: the alternative is a resolver guessing
-      # from a tag set it could not refresh, which is the failure this replaces.
-      - name: Refresh tags after release-plz pushed one
-        run: git fetch --force --tags origin
-      # CLOUD-618. WHICH TAG DID THIS PUSH SHIP, COMPUTED IN EXACTLY ONE PLACE.
-      # The expression below used to live inline in the summary step; both it and
-      # the two tracking steps read it now, so the answer cannot differ between
-      # what Linear records and what the run summary prints. Git stays the source
-      # of truth for what shipped — Linear receives a projection, never a second
-      # list.
-      #
-      # THE EMPTY CASE IS AN EMPTY VALUE, never a failure: no release tag at
-      # HEAD prints nothing, `--capture` writes `tag=` for it, and every consumer
-      # below is written to handle the empty string. `git tag --list` filters to
-      # release tags itself, so there is no pipeline whose status could hide one.
-      - name: Resolve the release tag this push shipped
-        id: release-tag
-        run: mise run batten -- ci step --capture tag -- git tag --points-at HEAD --list v[0-9]*
-      # THE ARTIFACTS ARE DISPATCHED, BECAUSE A DRAFT FIRES NOTHING (CLOUD-2121).
-      # release-plz creates the release as a draft so it is never visible without
-      # its binaries, and GitHub triggers no workflow on `created` for a draft —
-      # measured on v0.0.206, which had no release-artifacts run at all and stayed
-      # a draft while `main` pinned it. `workflow_dispatch` is one of the events a
-      # job token may still start, so the job that tagged the release is the one
-      # that sends it to be built, checksummed and published.
-      - name: Build, checksum and publish the release this push shipped
-        if: steps.release-tag.outputs.tag != ''
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          FIELD: tag=${{ steps.release-tag.outputs.tag }}
-        run: mise run batten -- ci step --arg-env FIELD -- gh workflow run release-artifacts.yml --ref main -f
-      # THE SCHEMA IS A RELEASE ASSET, SO A STALE BINARY CAN REASON ABOUT THE
-      # WORLD IT IS BEHIND (CLOUD-1572).
-      #
-      # `config::schema()` is derived from the very types `parse` deserializes
-      # into, so each release's schema is the exact statement of what that
-      # release could read. Publishing it per tag is what turns
-      # `min_batten_version` from a claim into something checkable: a build below
-      # a config's floor knows it is stale from its own version alone, and the
-      # asset is where anything that needs to know WHAT it is missing can fetch
-      # the floor release's schema without cloning this repository.
-      #
-      # Uploaded rather than only committed: `schema/batten.schema.json` in the
-      # tree is HEAD's, which is the unreleased schema for most of a cycle. The
-      # asset is the released one, addressable by the version a consumer names.
-      #
-      # `--clobber` so a re-run is idempotent; a release that already carries the
-      # asset is not a failure.
-      - name: Publish the config schema as a release asset
-        if: steps.release-tag.outputs.tag != ''
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ steps.release-tag.outputs.tag }}
-          SCHEMA: schema/batten.schema.json
-        run: mise run batten -- ci step --arg-env TAG --arg-env SCHEMA -- gh release upload --clobber
-
-      # An empty secret must FAIL a tagged push, never skip tracking quietly. The
-      # silent form is the one that costs a release: the job stays green, the
-      # summary still prints its list, and nothing anywhere says the release was
-      # never recorded. `LINEAR_ACCESS_KEY` is asserted to exist; nothing in this
-      # tree can confirm it, so this step is where a wrong assertion surfaces.
-      - name: Release tracking requires its credential
-        if: steps.release-tag.outputs.tag != ''
-        env:
-          LINEAR_ACCESS_KEY: ${{ secrets.LINEAR_ACCESS_KEY }}
-        # An empty key means this tagged push would ship untracked: set the
-        # secret, do not remove this guard.
-        run: mise run batten -- ci step --require-env LINEAR_ACCESS_KEY -- true
-      # TWO INVOCATIONS, AND THE SECOND IS NOT OPTIONAL. `sync` records the
-      # release object and attaches the `CLOUD-*` issues whose identifiers appear
-      # in the tag's commit range. The `batten` pipeline is `type: scheduled`, so
-      # `sync` alone leaves the release STARTED and it never reaches Released;
-      # `complete` is what marks it done. A continuous pipeline would not need the
-      # second step, and ours is not one.
-      #
-      # `github_token` is deliberately not passed — the action defaults it to
-      # `${{ github.token }}`, and the job's existing `contents: write` already
-      # covers the `contents: read` it wants. `id-token: write` is NOT added here
-      # for the reason this file's header gives: a permission no step uses is a
-      # zizmor excessive-permissions finding, not a security posture.
-      #
-      # Both are SHA-pinned with the trailing version comment every other `uses:`
-      # in this repo carries — zizmor's `unpinned-uses` reds on the floating `@v0`
-      # upstream publishes, and the bot's `github-actions` manager needs the
-      # comment to track the pin. `mise run release-tracking-check` holds all of
-      # this shape, so dropping either invocation fails the gate rather than
-      # silently shipping an untracked release.
-      - name: Record the release in Linear
-        if: steps.release-tag.outputs.tag != ''
-        uses: linear/linear-release-action@0a25abab892a91062ebf42260dbb2ce6277aa205 # v0.16.0
-        with:
-          access_key: ${{ secrets.LINEAR_ACCESS_KEY }}
-          command: sync
-          version: ${{ steps.release-tag.outputs.tag }}
-      - name: Complete the Linear release
-        if: steps.release-tag.outputs.tag != ''
-        uses: linear/linear-release-action@0a25abab892a91062ebf42260dbb2ce6277aa205 # v0.16.0
-        with:
-          access_key: ${{ secrets.LINEAR_ACCESS_KEY }}
-          command: complete
-          version: ${{ steps.release-tag.outputs.tag }}
-      # CLOUD-174. `Done` on this board means released, and Linear's GitHub
-      # integration cannot supply that transition — it triggers on PR events, and
-      # "a tag now contains this commit" is not one. So the list of issues a
-      # release finished had no home, and the move was reliably forgotten.
-      #
-      # CLOUD-192 made this the ONLY path to Done rather than a reminder
-      # competing with an automation that had already fired. The integration used
-      # to key Done on the MERGE, a whole release cycle early — measured
-      # 2026-08-13, CLOUD-499 read Done at merge time with `main` 50 commits past
-      # v0.0.62 — so this step's output was advice about issues the board had
-      # already closed. The merged event now maps to In Review, and what this
-      # prints is the promotion nothing else performs.
-      #
-      # `done-check` is the gate on the other side of that: it refuses a Done
-      # that no tag contains, so a promotion skipped here is a failing check
-      # rather than silent drift. It is not run in this job — it needs board
-      # payloads piped in, and no tracker credential exists to fetch them.
-      #
-      # Read-only on purpose: this is the "what would move" form, and it needs no
-      # credential. Performing the move needs a Linear token that does not exist
-      # yet; printing the list needs nothing, and puts it in the run summary
-      # instead of nowhere.
-      #
-      # Tags are available because the checkout above is fetch-depth 0. A default
-      # checkout has none, and every tag would look absent.
-      #
-      # TWO STEPS AND NO SHELL (CLOUD-843). `ci step --summary` fences what
-      # `released` prints into the run summary, `--arg-env` hands it the tag as
-      # one argument, and `--stdin /dev/null` is the refs-only arm: it reports
-      # what the tag shipped and decides nothing, because this job holds no
-      # tracker credential to fetch the payloads the deciding arm needs. The
-      # sweep that decides is `batten board sweep` (CLOUD-825), run from a session
-      # that can read the board. The step's `if:` is the empty-tag branch.
-      - name: Report which issues this release shipped
-        if: steps.release-tag.outputs.tag != ''
-        env:
-          # CLOUD-618 replaced this step's inline `git tag --points-at` copy with
-          # the shared output, so the summary and the Linear release record can
-          # never disagree about which tag shipped. Read through `env:` rather
-          # than interpolated into the body: an expression expanded into a `run:`
-          # is zizmor's template-injection finding, and the step above this one
-          # already carries the same shape for the same reason.
-          TAG: ${{ steps.release-tag.outputs.tag }}
-        run: mise run batten -- ci step --summary "Issues this release tag shipped - move any still In Review to Done, the only transition that sets Done, which done-check refuses early" --stdin /dev/null --arg-env TAG -- mise run released
-      - name: Say that this push shipped nothing
-        if: steps.release-tag.outputs.tag == ''
-        run: mise run batten -- ci step --summary "No release tag at HEAD - this push shipped nothing" -- true
 
       # THE ENGINE PIN MOVES WITH THE VERSION, IN THE RELEASE PR ITSELF (CLOUD-2063).
       # `batten.toml` pins `engine = { release = "v<X>" }`, and every build checks

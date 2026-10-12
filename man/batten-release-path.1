@@ -1,0 +1,22 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-release-path 1  batten 
+.SH NAME
+batten\-release\-path \- Print whether a head may write main: its pin is inherited, or it changes only the release paths to a verified published release
+.SH SYNOPSIS
+\fBbatten release path\fR [\fB\-\-post\fR] [\fB\-\-seal\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIsha\fR> 
+.SH DESCRIPTION
+Print whether a head may write main: its pin is inherited, or it changes only the release paths to a verified published release
+.SH OPTIONS
+.TP
+\fB\-\-post\fR
+Post the verdict as the release\-path commit status on the graded head
+.TP
+\fB\-\-seal\fR
+Exit 1 when the verdict is failure and the head is not release\-shaped or the release guard\*(Aqs settings are not green
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fIsha\fR>
+The head commit graded

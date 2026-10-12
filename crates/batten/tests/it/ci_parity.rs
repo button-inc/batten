@@ -1304,3 +1304,406 @@ fn a_tree_with_no_verify_task_is_not_this_rows_business() {
         findings(&root)
     );
 }
+
+// ---------------------------------------------------------------------------
+// The release path's wiring (CLOUD-2033 G3). One sound tree carrying every
+// workflow the path names, and one case per clause, each breaking exactly one
+// wire and asserting `release wire wrong`.
+// ---------------------------------------------------------------------------
+
+const RELEASE_CI: &str = r#"
+name: CI
+on:
+  pull_request:
+    types: [opened, ready_for_review]
+jobs:
+  ci:
+    name: ci
+    runs-on: ubuntu-latest
+    steps:
+      - name: Landing lease precondition
+        run: |
+          "$RUNNER_TEMP/batten-bin/batten" lease guard \
+            "$LEASE_HEAD_SHA" "$LEASE_HEAD_REF" "$LEASE_RUN_ID" || exit 0
+      - run: mise run lint
+      - run: mise exec -- cargo nextest run --workspace
+  musl:
+    name: musl
+    runs-on: ubuntu-latest
+    steps:
+      - name: Landing lease precondition
+        run: |
+          "$RUNNER_TEMP/batten-bin/batten" lease guard \
+            "$LEASE_HEAD_SHA" "$LEASE_HEAD_REF" "$LEASE_RUN_ID" || exit 0
+      - run: mise run test:musl
+  batten-check:
+    name: batten-check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Landing lease precondition
+        run: |
+          "$RUNNER_TEMP/batten-bin/batten" lease guard \
+            "$LEASE_HEAD_SHA" "$LEASE_HEAD_REF" "$LEASE_RUN_ID" || exit 0
+      - run: git worktree add trunk-predicate origin/main
+      - env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: batten ci step --arg-env HEAD_SHA -- batten --config-from origin/main release path --post --seal release-guard.yml --manifest-path trunk-predicate/Cargo.toml
+  final:
+    name: final
+    runs-on: ubuntu-latest
+    needs: [ci, batten-check]
+    steps:
+      - run: echo done
+"#;
+
+const RELEASE_ARTIFACTS: &str = r"
+name: release-artifacts
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        required: true
+        type: string
+      sha:
+        required: true
+        type: string
+jobs:
+  dist:
+    runs-on: ubuntu-latest
+    steps:
+      - run: batten ci step --arg-env SHA --arg-env TAG -- batten release guard --sha
+      - run: batten ci step --arg-env TAG --arg-env ARCHIVE -- gh release upload --clobber
+  cleanup:
+    needs: [dist]
+    if: failure()
+    runs-on: ubuntu-latest
+    steps:
+      - run: batten ci step --arg-env TAG -- batten release discard
+  land:
+    needs: dist
+    runs-on: ubuntu-latest
+    concurrency:
+      group: main-writer
+      cancel-in-progress: false
+      queue: max
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: main
+      - run: batten ci step --arg-env TAG -- gh release edit --draft=false --prerelease --latest=false
+      - run: batten ci step --arg-env SHA -- batten release path --post
+      - env:
+          GH_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
+          ROUTE: repos/acme/widgets/git/refs/heads/main
+        run: batten ci step --arg-env ROUTE -- gh api -X PATCH -F force=false
+      - run: batten ci step --arg-env TAG -- gh release edit --prerelease=false --latest
+";
+
+const RELEASE_CUT: &str = r#"
+name: auto-release-land
+on:
+  schedule:
+    - cron: "0 * * * *"
+jobs:
+  cut:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: main-writer
+      cancel-in-progress: false
+      queue: max
+    steps:
+      - run: batten release settings --last-run release-guard.yml
+      - run: batten release in-flight --workflow release-artifacts.yml
+      - env:
+          BATTEN_GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
+        run: batten ci step --arg-env TAG -- batten release bump-unusable --branch release --changelog CHANGELOG.md
+      - run: batten ci step --arg-env SHA --arg-env TAG -- batten release cut --changelog CHANGELOG.md --workflow release-artifacts.yml --sha
+"#;
+
+const RELEASE_LANDER: &str = r"
+name: fast-forward
+on:
+  issue_comment:
+    types: [created]
+jobs:
+  fast-forward:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: main-writer
+      cancel-in-progress: false
+      queue: max
+    steps:
+      - run: batten release in-flight --workflow release-artifacts.yml
+      - run: batten ci step --arg-env HEAD_SHA -- batten release path --strict
+      - uses: sequoia-pgp/fast-forward@ea7628bedcb0b0b96e94383ada458d812fca4979 # v1.0.0
+";
+
+const RELEASE_GUARD: &str = r#"
+name: release-guard
+on:
+  schedule:
+    - cron: "17 * * * *"
+jobs:
+  settings:
+    runs-on: ubuntu-latest
+    steps:
+      - run: batten ci step --arg-env GITHUB_SHA -- batten release path --post
+      - run: batten release settings --probe
+  pinned:
+    runs-on: ubuntu-latest
+    steps:
+      - run: batten ci step --arg-env PIN -- gh release edit --prerelease=false --latest
+"#;
+
+/// The sound tree, carrying the release path, with `edits` applied as
+/// `(workflow file, from, to)` replacements, each asserted to apply.
+fn release_tree(name: &str, edits: &[(&str, &str, &str)]) -> PathBuf {
+    let root = sound(name);
+    let mut files = vec![
+        ("ci.yml", RELEASE_CI.to_owned()),
+        ("release-artifacts.yml", RELEASE_ARTIFACTS.to_owned()),
+        ("auto-release-land.yml", RELEASE_CUT.to_owned()),
+        ("fast-forward.yml", RELEASE_LANDER.to_owned()),
+        ("release-guard.yml", RELEASE_GUARD.to_owned()),
+    ];
+    for (file, from, to) in edits {
+        let entry = files
+            .iter_mut()
+            .find(|(name, _)| name == file)
+            .expect("the edit names a fixture workflow");
+        assert!(
+            entry.1.contains(from),
+            "{file} carries the text the case edits: {from}"
+        );
+        entry.1 = entry.1.replacen(from, to, 1);
+    }
+    for (file, text) in files {
+        common::write(&root, &format!(".github/workflows/{file}"), &text);
+    }
+    common::write(
+        &root,
+        "mise.toml",
+        &manifest_with(
+            "CI_REQUIRED_CHECKS = \"ci,musl,final\"",
+            "CI_REQUIRED_CHECKS = \"ci,musl,batten-check,final\"",
+        ),
+    );
+    root
+}
+
+fn wire_wrong(name: &str, edits: &[(&str, &str, &str)]) -> bool {
+    verdicts_raised(&release_tree(name, edits)).contains(&String::from("release wire wrong"))
+}
+
+#[test]
+fn the_release_path_fixture_is_clean() {
+    let root = release_tree("release-sound", &[]);
+    let found = findings(&root);
+    assert!(
+        found.is_empty(),
+        "the sound release tree is clean: {found:?}"
+    );
+}
+
+#[test]
+fn only_the_predicate_posts_release_path() {
+    assert!(wire_wrong(
+        "release-rogue-poster",
+        &[(
+            "fast-forward.yml",
+            "      - run: batten release in-flight",
+            "      - run: batten release path HEAD --post\n      - run: batten release in-flight",
+        )],
+    ));
+}
+
+#[test]
+fn latest_is_set_only_after_the_fast_forward() {
+    assert!(wire_wrong(
+        "release-early-latest",
+        &[(
+            "release-artifacts.yml",
+            "      - run: batten ci step --arg-env SHA -- batten release path --post\n",
+            "      - run: batten ci step --arg-env SHA -- batten release path --post\n      - run: batten ci step --arg-env TAG -- gh release edit --latest\n",
+        )],
+    ));
+}
+
+#[test]
+fn every_main_writer_is_serialised() {
+    assert!(wire_wrong(
+        "release-unserialised",
+        &[("fast-forward.yml", "      queue: max\n", "")],
+    ));
+}
+
+#[test]
+fn every_clobber_is_draft_guarded_and_every_delete_is_discard() {
+    assert!(wire_wrong(
+        "release-unguarded",
+        &[(
+            "release-artifacts.yml",
+            "      - run: batten ci step --arg-env SHA --arg-env TAG -- batten release guard --sha\n",
+            "",
+        )],
+    ));
+    assert!(wire_wrong(
+        "release-gh-delete",
+        &[(
+            "release-guard.yml",
+            "      - run: batten release settings --probe",
+            "      - run: batten release settings --probe\n      - run: gh release delete v1.0.0 --cleanup-tag",
+        )],
+    ));
+}
+
+#[test]
+fn no_workflow_creates_a_release_tag() {
+    for (name, step) in [
+        ("release-git-tag", "      - run: git tag v1.0.0"),
+        ("release-mise-release", "      - run: mise run release"),
+        (
+            "release-tag-push",
+            "      - run: git push origin refs/tags/v1.0.0",
+        ),
+    ] {
+        assert!(
+            wire_wrong(
+                name,
+                &[(
+                    "release-guard.yml",
+                    "      - run: batten release settings --probe",
+                    &format!("      - run: batten release settings --probe\n{step}"),
+                )],
+            ),
+            "{step}"
+        );
+    }
+}
+
+#[test]
+fn every_lander_and_the_cut_check_the_freeze() {
+    assert!(wire_wrong(
+        "release-lander-unfrozen",
+        &[(
+            "fast-forward.yml",
+            "      - run: batten release in-flight --workflow release-artifacts.yml\n",
+            "",
+        )],
+    ));
+}
+
+#[test]
+fn the_cut_and_release_pr_are_gated_on_settings() {
+    assert!(wire_wrong(
+        "release-cut-ungated",
+        &[(
+            "auto-release-land.yml",
+            "      - run: batten release settings --last-run release-guard.yml\n",
+            "",
+        )],
+    ));
+    let root = release_tree("release-pr-ungated", &[]);
+    common::write(
+        &root,
+        ".github/workflows/release-plz.yml",
+        "name: release-plz\non:\n  push:\n    branches: [main]\njobs:\n  release-plz:\n    runs-on: ubuntu-latest\n    steps:\n      - run: mise run release-pr\n",
+    );
+    assert!(verdicts_raised(&root).contains(&String::from("release wire wrong")));
+}
+
+#[test]
+fn land_checks_out_main_and_patches_with_the_pat() {
+    assert!(wire_wrong(
+        "release-land-sha",
+        &[(
+            "release-artifacts.yml",
+            "          ref: main",
+            "          ref: ${{ inputs.sha }}",
+        )],
+    ));
+    assert!(wire_wrong(
+        "release-land-token",
+        &[(
+            "release-artifacts.yml",
+            "          GH_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}",
+            "          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
+        )],
+    ));
+}
+
+#[test]
+fn the_cut_pushes_the_bump_with_the_pat() {
+    assert!(wire_wrong(
+        "release-bump-token",
+        &[(
+            "auto-release-land.yml",
+            "          BATTEN_GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}",
+            "          BATTEN_GITHUB_TOKEN: ${{ github.token }}",
+        )],
+    ));
+}
+
+#[test]
+fn only_the_cut_dispatches_release_artifacts() {
+    assert!(wire_wrong(
+        "release-second-dispatcher",
+        &[(
+            "release-guard.yml",
+            "      - run: batten release settings --probe",
+            "      - run: batten release settings --probe\n      - run: gh workflow run release-artifacts.yml",
+        )],
+    ));
+}
+
+#[test]
+fn ci_grades_with_mains_predicate() {
+    assert!(wire_wrong(
+        "release-head-predicate",
+        &[("ci.yml", " --manifest-path trunk-predicate/Cargo.toml", "")],
+    ));
+}
+
+#[test]
+fn ci_grades_the_pr_head_sha() {
+    assert!(wire_wrong(
+        "release-merge-ref",
+        &[(
+            "ci.yml",
+            "HEAD_SHA: ${{ github.event.pull_request.head.sha }}",
+            "HEAD_SHA: ${{ github.sha }}",
+        )],
+    ));
+}
+
+#[test]
+fn cleanup_runs_only_on_build_failure() {
+    assert!(wire_wrong(
+        "release-cleanup-after-land",
+        &[(
+            "release-artifacts.yml",
+            "    needs: [dist]\n",
+            "    needs: [dist, land]\n",
+        )],
+    ));
+}
+
+#[test]
+fn final_fails_on_an_unverified_pin_before_b2() {
+    assert!(wire_wrong(
+        "release-unsealed",
+        &[("ci.yml", " --seal release-guard.yml", "")],
+    ));
+}
+
+#[test]
+fn a_publish_or_draft_without_its_flag_is_refused() {
+    assert!(wire_wrong(
+        "release-bare-publish",
+        &[(
+            "release-artifacts.yml",
+            "gh release edit --draft=false --prerelease --latest=false",
+            "gh release edit --draft=false",
+        )],
+    ));
+}

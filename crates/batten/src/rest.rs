@@ -667,7 +667,16 @@ impl Answer {
 /// here keeps its endpoint string byte for byte.
 #[must_use]
 pub fn get(path: &str, etag: Option<&str>) -> Option<Answer> {
-    exchange(path, etag, None, false)
+    exchange(path, etag, None, Method::ByBody)
+}
+
+/// One DELETE against the REST tier, or `None` where it could not be reached
+/// (CLOUD-2033: `release discard` deletes a draft and its tag). The status
+/// travels in the answer, because a 404 on a tag that is already gone is
+/// success to the one caller.
+#[must_use]
+pub fn delete(path: &str) -> Option<Answer> {
+    exchange(path, None, None, Method::Delete)
 }
 
 /// One POST against the REST tier, with no body.
@@ -677,7 +686,8 @@ pub fn get(path: &str, etag: Option<&str>) -> Option<Answer> {
 /// that could not stop a run must not also fail the job it is standing in.
 #[must_use]
 pub fn post(path: &str) -> bool {
-    exchange(path, None, Some(&[]), false).is_some_and(|answer| (200..300).contains(&answer.status))
+    exchange(path, None, Some(&[]), Method::ByBody)
+        .is_some_and(|answer| (200..300).contains(&answer.status))
 }
 
 /// One POST carrying a JSON body.
@@ -691,7 +701,7 @@ pub fn post(path: &str) -> bool {
 #[must_use]
 pub fn post_json(path: &str, body: &serde_json::Value) -> Option<Answer> {
     let encoded = serde_json::to_vec(body).ok()?;
-    exchange(path, None, Some(&encoded), false)
+    exchange(path, None, Some(&encoded), Method::ByBody)
 }
 
 /// One asset's BYTES, from an API-relative asset path, or `None` where the
@@ -714,7 +724,13 @@ pub fn post_json(path: &str, body: &serde_json::Value) -> Option<Answer> {
 /// suite's assets are text files it wrote — which is all a hash needs.
 #[must_use]
 pub fn download(path: &str) -> Option<(u16, Vec<u8>)> {
-    let url = format!("{API}/{path}");
+    // AN ABSOLUTE URL IS TAKEN AS GIVEN (CLOUD-2033): a published release's
+    // public download is what an installer fetches, and G1 hashes those bytes.
+    let url = if path.starts_with("https://") {
+        path.to_owned()
+    } else {
+        format!("{API}/{path}")
+    };
     if let Some(dir) = std::env::var_os(FIXTURE) {
         let answer = from_fixture(
             std::path::Path::new(&dir),
@@ -743,7 +759,7 @@ pub fn download(path: &str) -> Option<(u16, Vec<u8>)> {
 #[must_use]
 pub fn patch_json(path: &str, body: &serde_json::Value) -> Option<Answer> {
     let encoded = serde_json::to_vec(body).ok()?;
-    exchange(path, None, Some(&encoded), true)
+    exchange(path, None, Some(&encoded), Method::Patch)
 }
 
 /// Where a SUITE may put canned responses instead of the forge.
@@ -767,6 +783,24 @@ pub fn patch_json(path: &str, body: &serde_json::Value) -> Option<Answer> {
 /// nothing a consumer gains by setting it except responses they wrote
 /// themselves.
 const FIXTURE: &str = "BATTEN_REST_FIXTURE";
+
+/// One GET of `path` answered from the fixture directory `dir`, as [`get`]
+/// answers it when `BATTEN_REST_FIXTURE` names `dir` — for a library caller
+/// that cannot set the environment (this crate forbids the `unsafe` that
+/// `set_var` needs).
+#[must_use]
+pub fn fixture_get(dir: &std::path::Path, path: &str) -> Option<Answer> {
+    from_fixture(
+        dir,
+        &Request {
+            method: "GET",
+            url: &format!("{API}/{path}"),
+            body: None,
+        },
+        None,
+        crate::now_unix(),
+    )
+}
 
 /// One request as the fixture seam sees it.
 struct Request<'a> {
@@ -882,13 +916,23 @@ fn canned(raw: &str, now: u64) -> Answer {
     }
 }
 
-fn exchange(path: &str, etag: Option<&str>, body: Option<&[u8]>, patching: bool) -> Option<Answer> {
+/// The method an exchange overrides its body's default with: a body is a POST
+/// and none a GET, unless this says `PATCH` (a body) or `DELETE` (none).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Method {
+    ByBody,
+    Patch,
+    Delete,
+}
+
+fn exchange(path: &str, etag: Option<&str>, body: Option<&[u8]>, chosen: Method) -> Option<Answer> {
     let now = crate::now_unix();
     let url = format!("{API}/{path}");
     if let Some(dir) = std::env::var_os(FIXTURE) {
         let method = match body {
-            Some(_) if patching => "PATCH",
+            Some(_) if chosen == Method::Patch => "PATCH",
             Some(_) => "POST",
+            None if chosen == Method::Delete => "DELETE",
             None => "GET",
         };
         return from_fixture(
@@ -907,7 +951,8 @@ fn exchange(path: &str, etag: Option<&str>, body: Option<&[u8]>, patching: bool)
         url: &url,
         headers: &headers,
         body,
-        patch: patching,
+        patch: chosen == Method::Patch,
+        delete: chosen == Method::Delete,
         // PROXIED, which is the ordinary path. `direct` exists so a credential
         // can be proved against the forge with the proxy out of the way
         // (`fetch::get_direct`); a forge REST call is not that question, and

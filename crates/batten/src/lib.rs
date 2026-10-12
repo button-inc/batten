@@ -142,6 +142,10 @@ pub mod redirect;
 pub mod refusal;
 pub mod register;
 pub mod release;
+pub mod release_guard;
+pub mod release_path;
+pub mod release_state;
+pub mod release_verify;
 pub mod released;
 pub mod remedy;
 pub mod render;
@@ -527,6 +531,22 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         // retired onto (`sums`, `backfill`) are `release.rs`'s.
         Some(Command::Release { command }) => match command {
             cli::ReleaseCommand::Install => run_release(&overrides, out, err),
+            cli::ReleaseCommand::Verify { tag, draft } => {
+                run_release_verify(&tag, draft, mode, &overrides, out, err)
+            }
+            cli::ReleaseCommand::Path {
+                sha,
+                post,
+                seal,
+                strict,
+            } => run_release_path(
+                &sha,
+                (post, seal.as_deref(), strict),
+                mode,
+                &overrides,
+                out,
+                err,
+            ),
             other => release::run(other, out, err),
         },
         Some(Command::Bench { command }) => run_bench(command, out, err),
@@ -950,54 +970,6 @@ fn engine_pin(
     Ok(ExitCode::Success)
 }
 
-/// Wait while the pinned release is a draft being built (CLOUD-2138).
-///
-/// **THE WINDOW IS STRUCTURAL.** Every build refuses a pin other than its own
-/// version, so the release PR moves the pin in the commit that bumps the version,
-/// and `main` pins vX from the moment it lands — while vX is a draft until its
-/// artifacts are built, checksummed and published. Fetching it in that window
-/// answers 404, and refusing then failed every lander's `verify` for the whole
-/// build. A draft is a release being built, not a missing one, so the gate asks
-/// again after one pause, up to a bounded count.
-///
-/// `None` once the tag is no longer a draft, published or absent alike: the
-/// fetch that follows decides either. `Some(waits)` when the bound ran out with
-/// the draft still a draft — could-not-look, never a verdict about the tree.
-//MUTANT draft-pin-not-awaited|s@^        if !release::is_draft(slug, tag, \&get) {$@        if true {@|a_pin_naming_an_unpublished_draft_is_waited_on_never_refused
-fn await_published(tag: &str) -> Option<u32> {
-    // The forge's owner/name: the repository URL's last two segments, the same
-    // URL `engine::release_url` downloads the release from.
-    let mut segments = env!("CARGO_PKG_REPOSITORY")
-        .trim_end_matches('/')
-        .rsplit('/');
-    let name = segments.next().unwrap_or_default();
-    let owner = segments.next().unwrap_or_default();
-    let slug = format!("{owner}/{name}");
-    let slug = slug.as_str();
-    let get = |path: &str| rest::get(path, None);
-    let bound = draft_wait_count("BATTEN_ENGINE_DRAFT_WAITS", 30);
-    let pause = draft_wait_count("BATTEN_ENGINE_DRAFT_WAIT_SECONDS", 60);
-    let mut waited = 0;
-    loop {
-        if !release::is_draft(slug, tag, &get) {
-            return None;
-        }
-        if waited >= bound {
-            return Some(waited);
-        }
-        pr_watch::pause_until(f64::from(pause), &std::sync::atomic::AtomicBool::new(false));
-        waited += 1;
-    }
-}
-
-/// A count from `name`, or `default` when it is unset or unreadable.
-fn draft_wait_count(name: &str, default: u32) -> u32 {
-    std::env::var(name)
-        .ok()
-        .and_then(|raw| raw.trim().parse::<u32>().ok())
-        .unwrap_or(default)
-}
-
 /// `batten engine gate` (CLOUD-2063): the pin as the landing path judges it.
 ///
 /// - A SOURCE pin never lands: it names a build only this branch can make.
@@ -1031,17 +1003,12 @@ fn engine_gate(root: &Path, lanes: &[String], out: &mut dyn Write) -> Result<Exi
     let Some(tag) = pin.release.as_deref() else {
         return Ok(ExitCode::Success);
     };
+    // NO DRAFT WAIT (CLOUD-2033 retires CLOUD-2138's). `main` used to pin vX
+    // from the moment the release PR landed, while vX was still a draft being
+    // built, so this gate waited out the build. The release path closes that
+    // window: `land` moves `main` only after it published and verified vX, so a
+    // pin naming a draft is a defect the fetch below reports, never a wait.
     let cache = state::repo_state_dir(root)?;
-    if !engine::cached_release(&cache, tag).is_file()
-        && let Some(waited) = await_published(tag)
-    {
-        writeln!(
-            out,
-            "{} engine pin {tag} is a draft its release has not published yet; waited {waited} time(s) for its release-artifacts run",
-            config_path.display()
-        )?;
-        return Ok(ExitCode::Internal);
-    }
     let binary = engine::pinned_release(&cache, env!("CARGO_PKG_REPOSITORY"), tag)?;
     // The pinned engine must decide as itself: never update itself mid-gate.
     let published = [(String::from(ENGINE_UPDATED), String::from("1"))];
@@ -12436,6 +12403,10 @@ fn run_land_replay(
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
     let ReplayAsk { resolve, propose } = ask;
+    // The pre-step admission `land verify` takes, before a replay writes (CLOUD-2197).
+    if !disk_admits(root, "land replay", err)? {
+        return Ok(ExitCode::Violation);
+    }
     let (replayed, candidates) = if propose {
         land::replay_proposing(root, url, reference, branch, resolve)?
     } else {
@@ -12521,6 +12492,8 @@ fn disk_watch<'a>(
     }))
 }
 
+//MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
+//MUTANT pre-step-check-skipped|s@^    if !disk_admits(root, "land verify", err)? {$@    if false \&\& !disk_admits(root, "land verify", err)? {@|a_lap_whose_volume_cannot_be_freed_stops_before_the_gate
 fn run_land_verify(
     root: &Path,
     bet: &speculation::Bet,
@@ -12537,6 +12510,13 @@ fn run_land_verify(
             "::error:: land verify: $LAND_VERIFY names no command, and this engine does not know what verifying means in this repository"
         )?;
         return Ok(ExitCode::Usage);
+    }
+    // A STEP THE VOLUME CANNOT HOLD NEVER STARTS (CLOUD-2197): below `[prune]
+    // min_free_mb` the collector runs first, and a volume it cannot bring back
+    // above the minimum refuses the gate as the environment's failure, before
+    // the gate spends its minutes dying of a full disk.
+    if !disk_admits(root, "land verify", err)? {
+        return Ok(ExitCode::Violation);
     }
     // A HEAD THE GATE ALREADY PROVED IS ANSWERED FROM ITS RECEIPT (CLOUD-1891),
     // with the same line a run would print, so the lap reads identically.
@@ -16920,7 +16900,7 @@ fn run_hook(
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
-    let Some((raw, mut envelope)) = read_envelope(harness, mode, err)? else {
+    let Some((raw, mut envelope, spilled, _spool)) = read_envelope(harness, mode, err)? else {
         return Ok(ExitCode::Success);
     };
     // THE WRITE TARGET IS READ AS THE REPOSITORY READS IT (CLOUD-1133), and this
@@ -17008,7 +16988,7 @@ fn run_hook(
     // same `Fix::Run`, which is the safe direction and a visible one.
     if envelope.event == hook::Event::PostTool {
         record_post_tool(overrides, &envelope, harness, &mut advice);
-        rewrite_post_tool(harness, &envelope, out, &mut advice)?;
+        rewrite_post_tool(harness, &envelope, &spilled, out, &mut advice)?;
     }
     // THE SAME CORRECTION AGAIN, ONE SELECTOR LATER (CLOUD-924). The paragraph
     // above records CLOUD-312 finding that "command-less" had stopped meaning
@@ -17492,17 +17472,63 @@ fn read_envelope(
     harness: hook::Harness,
     mode: Mode,
     err: &mut dyn Write,
-) -> Result<Option<(String, hook::Envelope)>> {
-    let mut raw = String::new();
-    if std::io::stdin().read_to_string(&mut raw).is_err() {
-        output::message(mode, Verbosity::Normal, err, UNREADABLE_STDIN)?;
+) -> Result<Option<HookRead>> {
+    // STREAMED, NEVER HELD WHOLE (CLOUD-2224). Measured: reading a 50 MB payload
+    // whole peaked at 150 MiB; streamed, at the process baseline. The bound is
+    // the default one, because the configured bound lives under the authority
+    // root, which is pinned from this very envelope (CLOUD-2204): a leaf over the
+    // default spills, and `rewrite_post_tool` points at it.
+    let spool = std::env::temp_dir().join(format!("batten-hook-{}", std::process::id()));
+    // SPILL ONLY WHAT MEMORY CANNOT HOLD: a result between the bound and this
+    // still reaches `bound_result`, whose view addresses lines; past it, the
+    // leaf never enters memory and is pointed at whole.
+    let bound = capture::result_max_tokens(None).max(SPILL_TOKENS);
+    let read = stream_input::read(std::io::stdin().lock(), &spool, bound, o200k::tokens);
+    let Ok(streamed) = read else {
+        let _ = std::fs::remove_dir_all(&spool);
+        // STDIN THAT WOULD NOT READ IS NOT A PAYLOAD THAT WOULD NOT DECODE: an
+        // I/O failure anywhere in the chain is the first, anything else the second.
+        let unreadable = read.as_ref().err().is_some_and(|problem| {
+            problem
+                .chain()
+                .any(<dyn std::error::Error>::is::<std::io::Error>)
+        });
+        let said = if unreadable {
+            UNREADABLE_STDIN
+        } else {
+            UNDECODABLE_PAYLOAD
+        };
+        output::message(mode, Verbosity::Normal, err, said)?;
         return Ok(None);
-    }
-    let Some(envelope) = hook::decode(harness, &raw) else {
+    };
+    let _ = std::fs::remove_file(&streamed.raw);
+    let Some(envelope) = hook::decode_value(harness, &streamed.value) else {
+        let _ = std::fs::remove_dir_all(&spool);
         output::message(mode, Verbosity::Normal, err, UNDECODABLE_PAYLOAD)?;
         return Ok(None);
     };
-    Ok(Some((raw, envelope)))
+    // The document handlers read: the host's own, minus any spilled leaf, which
+    // holds its marker. Small by construction, since every large leaf spilled.
+    let raw = serde_json::to_string(&streamed.value).unwrap_or_default();
+    Ok(Some((raw, envelope, streamed.spilled, Spool(spool))))
+}
+
+/// The result size, in `o200k` tokens, past which a leaf spills to a file
+/// instead of being held: about 4 MB of text, a fiftieth of the 150 MiB peak
+/// measured reading a 50 MB payload whole (CLOUD-2224).
+const SPILL_TOKENS: u64 = 1_000_000;
+
+/// One hook payload, read streaming (CLOUD-2224): the document handlers read,
+/// the decoded envelope, the result leaves too large to hold, and their spool.
+type HookRead = (String, hook::Envelope, Vec<stream_input::Spilled>, Spool);
+
+/// The hook's spool directory, removed when the call is answered on any path.
+struct Spool(PathBuf);
+
+impl Drop for Spool {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
 }
 
 /// Can this call proceed with no rules at all, because no rule could have had
@@ -18705,6 +18731,7 @@ fn runs_engine(command: &str) -> bool {
 fn rewrite_post_tool(
     harness: hook::Harness,
     envelope: &hook::Envelope,
+    spilled: &[stream_input::Spilled],
     out: &mut dyn Write,
     advice: &mut Vec<advisory::Advice>,
 ) -> Result<()> {
@@ -18713,7 +18740,11 @@ fn rewrite_post_tool(
     // first JSON document on stdout and drops the rest.
     let collapsed = collapse_seen_output(envelope);
     let current = collapsed.as_ref().unwrap_or(&envelope.result);
-    let bounded = if reads_a_view(envelope) {
+    // A SPILLED RESULT IS ALREADY BOUNDED (CLOUD-2224): its bulk never entered
+    // memory, so it is pointed at from its files rather than measured here.
+    let bounded = if !spilled.is_empty() {
+        point_at_spills(current, spilled)
+    } else if reads_a_view(envelope) {
         None
     } else {
         bound_result(current)
@@ -18736,6 +18767,65 @@ fn rewrite_post_tool(
         (None, None) => {}
     }
     Ok(())
+}
+
+/// Store each spilled leaf from its file and put a pointer in its place
+/// (CLOUD-2224): the result keeps the host's shape and loses only the bulk the
+/// streamed read never held. `None` with no repository to store into, which
+/// leaves the marker as `bound_result` leaves an over-bound leaf: unrewritten.
+//MUTANT-SUITE crates/batten/tests/it/result_bound.rs
+//MUTANT spilled-leaf-unpointed|s@^    let bounded = if !spilled.is_empty() {$@    let bounded = if false {@|a_result_too_large_to_hold_reaches_the_model_as_a_pointer
+fn point_at_spills(
+    result: &serde_json::Value,
+    spilled: &[stream_input::Spilled],
+) -> Option<(serde_json::Value, refusal::Refusal)> {
+    fn replace(value: &mut serde_json::Value, marker: &str, line: &str) {
+        match value {
+            serde_json::Value::String(text) if text == marker => line.clone_into(text),
+            serde_json::Value::Array(items) => items
+                .iter_mut()
+                .for_each(|item| replace(item, marker, line)),
+            serde_json::Value::Object(fields) => {
+                fields
+                    .values_mut()
+                    .for_each(|field| replace(field, marker, line));
+            }
+            _ => {}
+        }
+    }
+    let root = git::repo_root(hook_authority_root()).ok()?;
+    let mut stored = Vec::new();
+    for spill in spilled {
+        let capture = capture::store_file(&root, capture::Stream::Response, &spill.path).ok()?;
+        stored.push((spill, capture));
+    }
+    // THE HANDLE ON THE LINE: the pointer arm renders a generic route, so the
+    // address of the stored leaf has to be a subject or nothing can follow it.
+    let subjects: Vec<verdict::Subject> = stored
+        .iter()
+        .flat_map(|(spill, capture)| {
+            [
+                verdict::artifact(&format!("{}({}B)", spill.pointer, spill.bytes)),
+                verdict::artifact(&capture.handle()),
+            ]
+        })
+        .collect();
+    let route = stored
+        .first()
+        .map(|(_, capture)| format!("batten capture show {} --raw", capture.handle()))
+        .unwrap_or_default();
+    let pointer = refusal::Refusal::engine(
+        verdict::Native::OutputPointNow,
+        &subjects,
+        refusal::Fix::Run(route),
+    )
+    .with_severity(refusal::Severity::Note);
+    let line = pointer.render_finding(refusal::Arm::Pointer);
+    let mut bounded = result.clone();
+    for (spill, _) in &stored {
+        replace(&mut bounded, &stream_input::marker(&spill.pointer), &line);
+    }
+    Some((bounded, pointer))
 }
 
 /// Whether this call reads a capture view, the route the bound's own pointer
@@ -23893,6 +23983,304 @@ impl<'a> CheckScope<'a> {
             }
         }
     }
+}
+
+/// `batten release verify <tag> [--draft]` (CLOUD-2033 G1): exit 0 only if the
+/// release is fully and correctly published. See [`release_verify`].
+fn run_release_verify(
+    tag: &str,
+    draft: bool,
+    mode: Mode,
+    overrides: &Overrides,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    match release_verdict(tag, draft, mode, overrides).1 {
+        release_verify::Verdict::Verified => {
+            writeln!(
+                out,
+                "release verify: {tag} is complete, its checksums match"
+            )?;
+            Ok(ExitCode::Success)
+        }
+        release_verify::Verdict::Refused(refused) => {
+            for refusal in refused {
+                writeln!(err, "{}", refusal.line())?;
+            }
+            Ok(ExitCode::Violation)
+        }
+        release_verify::Verdict::CouldNotLook(why) => {
+            writeln!(err, "batten: release verify: could not look: {why}")?;
+            Ok(ExitCode::Internal)
+        }
+    }
+}
+
+/// G1 read and judged: the release as read, where it could be, and the verdict.
+fn release_verdict(
+    tag: &str,
+    draft: bool,
+    mode: Mode,
+    overrides: &Overrides,
+) -> (Option<release_verify::Release>, release_verify::Verdict) {
+    let Some(slug) = repo_slug(Path::new(".")) else {
+        return (
+            None,
+            release_verify::Verdict::CouldNotLook(String::from(
+                "no forge remote names the repository",
+            )),
+        );
+    };
+    let get = |path: &str| rest::get(path, None);
+    let release = match release_verify::read(&slug, tag, &get) {
+        Ok(release) => release,
+        Err(why) => return (None, release_verify::Verdict::CouldNotLook(why)),
+    };
+    let missing = release_assets_missing(tag, mode, overrides);
+    let mut fetch = |asset: &release::Asset| {
+        release_verify::fetch(&slug, tag, release.draft, asset, &rest::download)
+    };
+    let verdict = release_verify::judge(&release, draft, missing, &mut fetch);
+    (Some(release), verdict)
+}
+
+/// `batten release path <sha> [--post] [--seal]` (CLOUD-2033 G2): the one
+/// predicate a write of `main` is graded by. Exit 0 when a verdict was printed
+/// (and posted, with `--post`), 3 when it could not look or could not post.
+/// With `--seal`, exit 1 when [`release_path::seals`] holds — the pre-B2 seal
+/// `final` runs. See [`release_path`].
+fn run_release_path(
+    sha: &str,
+    (post, seal, strict): (bool, Option<&str>, bool),
+    mode: Mode,
+    overrides: &Overrides,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let here = Path::new(".");
+    let (verdict, shaped) = release_path_verdict(here, sha, mode, overrides);
+    if let release_path::Verdict::CouldNotLook(why) = &verdict {
+        writeln!(err, "batten: release path: could not look: {why}")?;
+        return Ok(ExitCode::Internal);
+    }
+    let state = verdict.state().unwrap_or("failure");
+    writeln!(
+        out,
+        "release path: {state} at {sha}: {}",
+        verdict.description()
+    )?;
+    // `--strict` is the landers' refusal: a failure verdict is exit 1.
+    let verdict_code = if strict && matches!(verdict, release_path::Verdict::Failure(_)) {
+        ExitCode::Violation
+    } else {
+        ExitCode::Success
+    };
+    let Some(slug) = repo_slug(here) else {
+        if !post && seal.is_none() {
+            return Ok(verdict_code);
+        }
+        writeln!(
+            err,
+            "batten: release path: could not post: no forge remote names the repository"
+        )?;
+        return Ok(ExitCode::Internal);
+    };
+    if post && let Some(code) = post_release_path(&slug, sha, &verdict, out, err)? {
+        return Ok(code);
+    }
+    let Some(guard) = seal else {
+        return Ok(verdict_code);
+    };
+    let get = |path: &str| rest::get(path, None);
+    let settings = worktree::declared_trunk(here)
+        .map_err(|why| why.to_string())
+        .and_then(|trunk| trunk.ok_or_else(|| worktree::NO_TRUNK.to_owned()))
+        .and_then(|trunk| release_state::settings_green(&slug, &trunk.short, guard, &get));
+    match settings {
+        Ok(green) if release_path::seals(&verdict, shaped, green) => {
+            writeln!(
+                err,
+                "release path: sealed at {sha}: an unverified pin may not pass `final` until the release guard's settings are green, and then only on a release-shaped head"
+            )?;
+            Ok(ExitCode::Violation)
+        }
+        Ok(_) => Ok(verdict_code),
+        Err(why) => {
+            writeln!(err, "batten: release path: could not look: {why}")?;
+            Ok(ExitCode::Internal)
+        }
+    }
+}
+
+/// Post `verdict` as the `release-path` status on `sha`: `None` when posted,
+/// or the exit code of a post that failed.
+fn post_release_path(
+    slug: &str,
+    sha: &str,
+    verdict: &release_path::Verdict,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<Option<ExitCode>> {
+    let state = verdict.state().unwrap_or("failure");
+    let mut description = verdict.description();
+    // The forge caps a status description at 140 characters.
+    if description.chars().count() > 140 {
+        description = description.chars().take(139).collect::<String>() + "…";
+    }
+    let body = serde_json::json!({
+        "state": state,
+        "context": release_path::CONTEXT,
+        "description": description,
+    });
+    match rest::post_json(&format!("repos/{slug}/statuses/{sha}"), &body) {
+        Some(answer) if (200..300).contains(&answer.status) => {
+            writeln!(out, "release path: posted {state} to {sha}")?;
+            Ok(None)
+        }
+        Some(answer) => {
+            writeln!(
+                err,
+                "batten: release path: could not post: the forge answered {}",
+                answer.status
+            )?;
+            Ok(Some(ExitCode::Internal))
+        }
+        None => {
+            writeln!(
+                err,
+                "batten: release path: could not post: the forge did not answer"
+            )?;
+            Ok(Some(ExitCode::Internal))
+        }
+    }
+}
+
+/// G2's reads, then [`release_path::judge`] over them, with whether the head
+/// is release-shaped.
+fn release_path_verdict(
+    here: &Path,
+    sha: &str,
+    mode: Mode,
+    overrides: &Overrides,
+) -> (release_path::Verdict, bool) {
+    use release_path::Verdict::CouldNotLook;
+    let trunk = match worktree::declared_trunk(here) {
+        Ok(Some(trunk)) => trunk.tracking,
+        Ok(None) => return (CouldNotLook(worktree::NO_TRUNK.to_owned()), false),
+        Err(why) => return (CouldNotLook(why.to_string()), false),
+    };
+    let base = match git::merge_base_of(here, sha, &trunk) {
+        Ok(Some(base)) => base,
+        Ok(None) => {
+            return (
+                CouldNotLook(format!("{sha} shares no history with {trunk}")),
+                false,
+            );
+        }
+        Err(why) => return (CouldNotLook(why.to_string()), false),
+    };
+    let side = |rev: &str| -> std::result::Result<(release_path::Side, String), String> {
+        let config = git::show(here, rev, "batten.toml").map_err(|why| why.to_string())?;
+        let manifest = git::show(here, rev, "Cargo.toml").map_err(|why| why.to_string())?;
+        Ok((
+            release_path::Side {
+                pin: release_path::pin_of(&config),
+                version: release_path::version_of(&manifest),
+            },
+            config,
+        ))
+    };
+    let ((base_side, base_config), (head_side, head_config)) = match (side(&base), side(sha)) {
+        (Ok(base), Ok(head)) => (base, head),
+        (Err(why), _) | (_, Err(why)) => return (CouldNotLook(why), false),
+    };
+    let changed = match git::paths_changed_between(here, &base, sha) {
+        Ok(changed) => changed,
+        Err(why) => return (CouldNotLook(why.to_string()), false),
+    };
+    let other_config_change = release_path::without_engine_line(&base_config)
+        != release_path::without_engine_line(&head_config);
+    let mut verify = |tag: &str| match release_verdict(tag, false, mode, overrides) {
+        (Some(release), release_verify::Verdict::Verified) => Ok(
+            release_path::Published::Verified(release.tag_commit.unwrap_or(release.target)),
+        ),
+        (_, release_verify::Verdict::Refused(refused)) => Ok(release_path::Published::Refused(
+            refused.iter().map(release_verify::Refusal::line).collect(),
+        )),
+        (_, release_verify::Verdict::CouldNotLook(why)) => Err(why),
+        (None, release_verify::Verdict::Verified) => {
+            Err(String::from("a verified release that was never read"))
+        }
+    };
+    let mut is_ancestor =
+        |commit: &str| git::is_ancestor(here, commit, sha).map_err(|why| why.to_string());
+    let verdict = release_path::judge(
+        &base_side,
+        &head_side,
+        &changed,
+        other_config_change,
+        &mut verify,
+        &mut is_ancestor,
+    );
+    (
+        verdict,
+        release_path::release_shaped(&changed, other_config_change),
+    )
+}
+
+/// The names `policy/release-assets.rego` demands that release `tag` lacks: the
+/// release's record written, then that one rule run over it (CLOUD-2033). The
+/// set is the module's, never restated.
+fn release_assets_missing(
+    tag: &str,
+    mode: Mode,
+    overrides: &Overrides,
+) -> Result<Vec<String>, String> {
+    const RULE: &str = "release grade other";
+    if release::run_record(Some(tag), release_verify::SUMS, &mut std::io::sink())
+        .map_err(|why| why.to_string())?
+        != ExitCode::Success
+    {
+        return Err(format!("the release {tag} could not be recorded"));
+    }
+    let only = [String::from(RULE)];
+    let mut json = Vec::new();
+    run_rules(
+        &mut json,
+        &mut std::io::sink(),
+        mode,
+        overrides,
+        rules::run_static_over,
+        RunRequest::read_only(
+            true,
+            &only,
+            CheckScope::of(false, None).map_err(|why| why.to_string())?,
+        ),
+    )
+    .map_err(|why| why.to_string())?;
+    let findings: serde_json::Value =
+        serde_json::from_slice(&json).map_err(|_| format!("`{RULE}` did not answer in JSON"))?;
+    let mut missing = Vec::new();
+    for finding in findings.as_array().into_iter().flatten() {
+        match finding.get("verdict").and_then(serde_json::Value::as_str) {
+            Some("release ship missing") => missing.extend(
+                finding
+                    .get("subjects")
+                    .and_then(serde_json::Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|subject| {
+                        subject.get("artifact").and_then(serde_json::Value::as_str)
+                    })
+                    .map(ToOwned::to_owned),
+            ),
+            Some("release read partial") => {
+                return Err(format!("`{RULE}` could not read what a release must carry"));
+            }
+            _ => {}
+        }
+    }
+    Ok(missing)
 }
 
 /// `check`'s dispatch, extracted so [`run`]'s match stays inside its line budget.

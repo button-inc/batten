@@ -12,9 +12,14 @@ name: release-assets
 # `land` watches a PR's check-runs — so a workflow failing on 100% of its
 # invocations was indistinguishable from one that had never fired.
 #
-# Failure here is actionable, not informational: re-run release-artifacts.yml
-# via workflow_dispatch against the named tag. Uploads are --clobber idempotent,
-# so topping up a partial release is safe.
+# Failure here is actionable, not informational, and the remedy depends on the
+# release's state (CLOUD-2033). A DRAFT is rebuilt by dispatching
+# release-artifacts.yml with the draft's `tag` and its target `sha`; its uploads
+# are guarded `--clobber`, so topping one up is safe. A PUBLISHED release is
+# immutable: the guard refuses every upload into it, so a re-run changes nothing,
+# and a published release missing an asset is recovered by a forward release
+# under the next version. A failed `land` job is recovered with "Re-run failed
+# jobs" on its release-artifacts run.
 
 on:
   # ONCE PER RELEASE, ON A TRIGGER THIS FAILURE CANNOT SILENCE (CLOUD-1777).
@@ -26,13 +31,12 @@ on:
   # roughly one release in thirty, and only whichever is latest on a Monday.
   # v0.0.159 shipped 1 asset of 18 and nothing would have said so for four days.
   #
-  # `release-plz` is `on: push` to `main`, WHICH IS THE WHOLE POINT. A push
-  # event is not suppressed by the recursion guard that stops a release created
-  # with `GITHUB_TOKEN` from firing `release-artifacts.yml` — the guard that let
-  # v0.0.159 ship with no run at all to notice, as against a failed one. A gate
-  # reached through the `release` event therefore shares a trigger with the
-  # failure it watches, and goes silent in exactly the case it exists to catch.
-  # This trigger does not.
+  # `release-artifacts` IS THE WORKFLOW THAT PUBLISHES NOW (CLOUD-2033), so its
+  # completion is the event to ask on — success or failure. It used to be
+  # `release-plz`, which tagged and drafted on every push to `main`; that job no
+  # longer releases anything. A gate reached through the `release` event would
+  # share a trigger with the failure it watches, and go silent in exactly the
+  # case it exists to catch; a `workflow_run` completion does not.
   #
   # zizmor flags workflow_run as dangerous because it runs privileged and is
   # usually paired with checking out and executing content the triggering run
@@ -44,11 +48,12 @@ on:
   # it, and this audit refused it — correctly, and that refusal is why the
   # arm has this shape.
   #
-  # `release-plz` is `on: push: branches: [main]`, so only a write-access push
-  # can fire this at all — a fork cannot reach it, which is the safe subset of
-  # `workflow_run` rather than the `pull_request`-fed shape the audit is about.
+  # `release-artifacts` is `on: workflow_dispatch` alone, so only a
+  # write-access actor can fire this at all — a fork cannot reach it, which is
+  # the safe subset of `workflow_run` rather than the `pull_request`-fed shape
+  # the audit is about.
   workflow_run: # zizmor: ignore[dangerous-triggers]
-    workflows: [release-plz]
+    workflows: [release-artifacts]
     types: [completed]
   schedule:
     # Mondays, 06:30 UTC — after lock-currency, same weekly slot. A BACKSTOP

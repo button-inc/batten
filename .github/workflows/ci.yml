@@ -683,9 +683,11 @@ jobs:
     timeout-minutes: 30 # budget: p95=600s x3 measured=2026-09-04
     # `actions: write` is here for one call and one only: cancelling THIS run
     # when the landing lease does not authorise this branch (CLOUD-420).
+    # `statuses: write` is the `release-path` post (CLOUD-2033 P2).
     permissions:
       contents: read
       actions: write
+      statuses: write
     steps:
       # CLOUD-420: THE LANDING LEASE, FIRST, for the reason the `ci` job states
       # at length. `ci-local-parity` property 7 asserts this is step one of every
@@ -815,6 +817,34 @@ jobs:
           # does, and this job never cross-compiles. Set but empty means "assert
           # the submodule, no rust targets"; unset would take the default pair.
           DOCTOR_TARGETS: ""
+      # THE RELEASE PREDICATE, AS `main`'s CODE, ON THE PULL REQUEST'S HEAD SHA
+      # (CLOUD-2033 P1, P2). Never `HEAD`: this checkout is the synthetic
+      # `refs/pull/N/merge` commit, the wrong SHA to post on and the wrong diff
+      # to grade. And never the head's own predicate: a pull request that edits
+      # `release_path.rs` is graded by the predicate it has not changed yet, so
+      # the trunk is checked out beside the head and built from there, sharing
+      # this job's target directory, with the trunk's config.
+      #
+      # `--seal` IS THE PRE-B2 SEAL. Until the server requires `release-path`,
+      # `final` is the only check it requires, so this step fails it — through
+      # this job, which `final` needs — on a G2 failure for a head that is not
+      # release-shaped, or for any head while the release guard's settings are
+      # not green.
+      #
+      # THE ONE EXCEPTION IS B1 ITSELF: its trunk has no `release path` verb, so
+      # nothing is posted and nothing is sealed. That is harmless while the
+      # status is not required, and B1 changes no pin.
+      - name: Check out the trunk's predicate beside the head
+        run: git worktree add trunk-predicate origin/main
+      - name: Grade the head with the trunk's predicate, post release-path, and seal final
+        if: hashFiles('trunk-predicate/crates/batten/src/release_path.rs') != ''
+        env:
+          BATTEN_GITHUB_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          # The job's own target directory, so the trunk's build reuses every
+          # dependency the head's build above already compiled.
+          CARGO_TARGET_DIR: ${{ github.workspace }}/target
+        run: mise run batten -- ci step --arg-env HEAD_SHA -- cargo run --quiet --manifest-path trunk-predicate/Cargo.toml -p batten -- --config-from origin/main release path --post --seal release-guard.yml
 
   # TRANSITIONAL, AND ONLY FOR THE FAST-FORWARD THAT RETIRES IT (CLOUD-843). The
   # bats suites are ported to the compiled tiers `test:cargo` runs, whose cases carry the

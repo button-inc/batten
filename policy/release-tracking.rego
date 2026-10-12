@@ -2,8 +2,9 @@
 # and bound to the tag, on the release path and the backfill path alike (CLOUD-618,
 # CLOUD-1026; ported off `mise-tasks/release-tracking-check.sh` under CLOUD-1717).
 #
-# `release-plz.yml` publishes a tag, and until CLOUD-618 nothing told Linear it
-# existed. The wiring then ran ZERO times: `release-plz release` pushes the tag from
+# A release is published by `release-artifacts.yml`'s `land` job (CLOUD-2033;
+# until then `release-plz.yml` tagged it), and until CLOUD-618 nothing told Linear
+# it existed. The wiring then ran ZERO times: `release-plz release` pushes the tag from
 # its own temporary clone, so `git tag --points-at HEAD` in the outer checkout
 # answered empty and every tracking step skipped (`v0.0.110`, run 32665754952). A
 # gate that holds every node and misses the ORDER of two of them certifies a broken
@@ -13,24 +14,26 @@
 # document (CLOUD-452). `line_sources` is that kind now: this module walks the
 # workflow's lines, so the row collapses into it as the program's own header said.
 #
-# TWO SUBJECTS, ONE SET OF SHAPES, per profile. `push` resolves its tag from git;
-# `dispatch` (`linear-release-backfill.yml`) is named by an operator through a
-# `workflow_dispatch` input. Everything the two share is asserted of both.
+# TWO SUBJECTS, ONE SET OF SHAPES, per profile. `land` (`release-artifacts.yml`,
+# CLOUD-2033) records the release it has just published, named by the dispatch
+# input the cut sent; `dispatch` (`linear-release-backfill.yml`) is named by an
+# operator through a `workflow_dispatch` input. Everything the two share is
+# asserted of both.
 #
 # EACH SHAPE FAILS SILENTLY, which is why each is here:
 #   * `unpinned`             — a ref that is not a 40-hex SHA plus `# vX.Y.Z`
-#   * `version-unbound`      — `version:` not a declared step output (push) or a
-#                              declared dispatch input (dispatch); an undeclared
-#                              name expands to the empty string at run time
+#   * `version-unbound`      — `version:` not a declared dispatch input; an
+#                              undeclared name expands to the empty string at run
+#                              time
 #   * `sync-missing`, `complete-missing` — the pipeline is scheduled, so `sync`
 #                              alone leaves the release started forever
 #   * `precondition-missing` — no `-z` test on `LINEAR_ACCESS_KEY`
 #   * `shallow-checkout`     — an invoking job without `fetch-depth: 0` attaches
 #                              NOTHING and says so nowhere; asked per job, because
 #                              file-global was a pass earned in another job
-#   * `tag-source-missing`   — push: no `git tag --points-at HEAD` resolver writing
-#                              `$GITHUB_OUTPUT`
-#   * `tag-refresh-missing`  — push: no `git fetch … --tags` BEFORE the resolver
+#   * `tag-refresh-missing`  — land: no `git fetch … --tags` in the invoking job
+#                              BEFORE the first invocation; the tag is created by
+#                              the publish, after this job's checkout
 #   * `tag-unverified`       — dispatch: no `rev-parse … refs/tags/` probe, so a
 #                              typo mints a release record
 #   * `ref-unbound`          — dispatch: the checkout's `ref:` is not a declared
@@ -52,7 +55,7 @@
 #
 #MUTANT-SUITE crates/batten/tests/it/release_tracking.rs
 #MUTANT unpinned-sha-passes|s@^\tnot regex.match(data.batten.patterns\["action-sha-pin"\], call.ref)$@\tfalse@|a_sha_pin_without_its_version_comment_is_a_violation
-#MUTANT refresh-order-ignored|s@^\ti < resolver$@\ttrue@|a_tag_refresh_after_the_resolver_is_a_violation
+#MUTANT refresh-order-ignored|s@^\ti < first$@\ttrue@|a_tag_refresh_after_the_first_invocation_is_a_violation
 
 # METADATA
 # description: |
@@ -69,7 +72,7 @@ rules contains "release wire other"
 
 # Consumer paths in a consumer module, which is where rule 1 puts them.
 profiles := {
-	".github/workflows/release-plz.yml": "push",
+	".github/workflows/release-artifacts.yml": "land",
 	".github/workflows/linear-release-backfill.yml": "dispatch",
 }
 
@@ -159,12 +162,8 @@ step_line(path, start, stop, u) := u + 1 if count(step_lines(path, start, stop, 
 
 # --- is the version bound? ------------------------------------------------------
 
-bound(path, "push", version) if {
-	some m in regex.find_all_string_submatch_n(data.batten.patterns["gha-step-output"], version, 1)
-	step_declared(path, m[1])
-}
-
-bound(path, "dispatch", version) if {
+bound(path, profile, version) if {
+	profile in {"land", "dispatch"}
 	some m in regex.find_all_string_submatch_n(data.batten.patterns["gha-dispatch-input"], version, 1)
 	input_declared(path, m[2])
 }
@@ -222,39 +221,17 @@ checkout_line(path, job) := min(lines) + 1 if {
 
 # --- the release path's own shapes ----------------------------------------------
 
-resolver_at(path) := min({i | some i, line in code(path); contains(line, "git tag --points-at HEAD")})
-
-# The resolver's own STEP, bounded the way `calls` bounds a step (review of
-# #962): a job header or a sequence item on either side.
-resolver_step(path) := [start, stop] if {
-	u := resolver_at(path)
-	bounds := boundaries(path)
-	start := max({b | some b in bounds; b <= u} | {-1})
-	stop := min({b | some b in bounds; b > u} | {count(raw(path))})
-}
-
-# THE OUTPUT WRITE MUST BE IN THE RESOLVER'S OWN STEP. A write anywhere in the
-# file used to satisfy this, so a resolver that stopped writing its output beside
-# another step that still appends to `$GITHUB_OUTPUT` left
-# `steps.release-tag.outputs.tag` empty and every tracking step skipped — the
-# silent failure the gate exists for. `fetch-depth` is per-job for the same reason.
-sourced(path) if {
-	[start, stop] := resolver_step(path)
-	some i, line in code(path)
-	i >= start
-	i < stop
-	regex.match(data.batten.patterns["gha-output-write"], line)
-}
-
-# THE REFRESH MUST BE IN THE RESOLVER'S OWN JOB, ahead of it. File-wide line
-# numbers let a refresh in an EARLIER job satisfy this while the resolver's job
-# still read stale tags; each job is its own checkout.
-refreshed(path) if {
-	resolver := resolver_at(path)
-	[start, _] := job_span(path, job_of(path, resolver))
+# THE REFRESH MUST BE IN THE INVOKING JOB, AHEAD OF ITS FIRST INVOCATION. `land`
+# checks out `main` before (c) publishes and so creates the tag; a job that never
+# refreshes its tags hands the action a range whose end it cannot see, and the
+# sync attaches nothing. File-wide line numbers would let a refresh in another job
+# satisfy this, and each job is its own checkout.
+refreshed(path, job) if {
+	first := min({call.line - 1 | some call in calls(path); call.job == job})
+	[start, _] := job_span(path, job)
 	some i, line in code(path)
 	i > start
-	i < resolver
+	i < first
 	regex.match(data.batten.patterns["git-tag-refresh"], line)
 }
 
@@ -325,21 +302,12 @@ violation contains {
 violation contains {
 	"rule": "release wire other",
 	"verdict": "release wire missing",
-	"subjects": [at(path, "tag-source-missing", 0)],
+	"subjects": [at(path, "tag-refresh-missing", checkout_line(path, job))],
 } if {
-	some path, "push" in profiles
+	some path, "land" in profiles
 	raw(path)
-	not sourced(path)
-}
-
-violation contains {
-	"rule": "release wire other",
-	"verdict": "release wire missing",
-	"subjects": [at(path, "tag-refresh-missing", resolver_at(path) + 1)],
-} if {
-	some path, "push" in profiles
-	sourced(path)
-	not refreshed(path)
+	some job in {call.job | some call in calls(path)}
+	not refreshed(path, job)
 }
 
 violation contains {
@@ -426,7 +394,7 @@ deny contains finding if {
 # the compiled engine. Paths are literals, never the `profiles` rule in key
 # position, which regorus did not resolve inside a helper (`sbom-actions.rego`).
 
-push_path := ".github/workflows/release-plz.yml"
+push_path := ".github/workflows/release-artifacts.yml"
 
 dispatch_path := ".github/workflows/linear-release-backfill.yml"
 

@@ -2155,6 +2155,85 @@ pub enum ReleaseCommand {
         /// The poll COUNT per tag before a run reads as never finishing.
         max_polls: Option<String>,
     },
+    /// Whether a release is fully and correctly published (CLOUD-2033 G1).
+    ///
+    /// APPENDED LAST, for the reason every enum here records.
+    Verify {
+        /// The release's tag; required, never "latest".
+        tag: String,
+        /// Verify a draft rather than a published, immutable release.
+        draft: bool,
+    },
+    /// The one predicate a write of `main` is graded by (CLOUD-2033 G2).
+    ///
+    /// APPENDED LAST, for the reason every enum here records.
+    Path {
+        /// The head graded, never `HEAD` of a merge ref.
+        sha: String,
+        /// Post the verdict as the `release-path` commit status.
+        post: bool,
+        /// Exit 1 under the pre-B2 seal `final` runs, reading the settings
+        /// from the last run of this release-guard workflow.
+        seal: Option<String>,
+        /// Exit 1 on a failure verdict: the landers' refusal.
+        strict: bool,
+    },
+    /// Delete a draft and its tag; never a published release (CLOUD-2033).
+    Discard {
+        /// The release's tag.
+        tag: String,
+    },
+    /// Whether a release is in flight, the landers' freeze (CLOUD-2033).
+    InFlight {
+        /// The build workflow's file, whose runs are titled by their tag.
+        workflow: String,
+    },
+    /// `land`'s branch for a release, as one line (CLOUD-2033).
+    LandState {
+        /// The release's tag.
+        tag: String,
+        /// The commit the build was dispatched with.
+        sha: String,
+    },
+    /// Move an unusable version to the next one (CLOUD-2033).
+    BumpUnusable {
+        /// The release's tag.
+        tag: String,
+        /// The release branch the bump is committed onto.
+        branch: String,
+        /// The changelog whose heading moves with the version.
+        changelog: String,
+    },
+    /// Whether a build may upload into a release (CLOUD-2033).
+    Guard {
+        /// The release's tag.
+        tag: String,
+        /// The commit the build checked out.
+        sha: String,
+    },
+    /// Draft a release at its head and dispatch its build (CLOUD-2033).
+    Cut {
+        /// The release's tag.
+        tag: String,
+        /// The release head the draft targets.
+        sha: String,
+        /// The changelog whose section is the release's notes.
+        changelog: String,
+        /// The build workflow's file.
+        workflow: String,
+    },
+    /// The release a `batten.toml` pins (CLOUD-2033).
+    Pin {
+        /// Read the pin at this revision rather than the working tree.
+        at: Option<String>,
+    },
+    /// Whether the server gate the release path rests on holds (CLOUD-2033 G4).
+    Settings {
+        /// Prove it: offer the probe branch a status-less fast-forward.
+        probe: bool,
+        /// Answer instead from the last completed run of this guard workflow.
+        last_run: Option<String>,
+    },
 }
 
 /// The `ci` sub-verbs.
@@ -2740,6 +2819,48 @@ fn release_of(matches: &ArgMatches) -> Option<ReleaseCommand> {
             dry_run: flag(matches, "dry_run"),
             poll_interval: matches.get_one::<String>("poll_interval").cloned(),
             max_polls: matches.get_one::<String>("max_polls").cloned(),
+        }),
+        ("verify", matches) => Some(ReleaseCommand::Verify {
+            tag: matches.get_one::<String>("tag")?.clone(),
+            draft: flag(matches, "draft"),
+        }),
+        ("path", matches) => Some(ReleaseCommand::Path {
+            sha: matches.get_one::<String>("sha")?.clone(),
+            post: flag(matches, "post"),
+            seal: matches.get_one::<String>("seal").cloned(),
+            strict: flag(matches, "strict"),
+        }),
+        ("discard", matches) => Some(ReleaseCommand::Discard {
+            tag: matches.get_one::<String>("tag")?.clone(),
+        }),
+        ("in-flight", matches) => Some(ReleaseCommand::InFlight {
+            workflow: matches.get_one::<String>("workflow")?.clone(),
+        }),
+        ("land-state", matches) => Some(ReleaseCommand::LandState {
+            tag: matches.get_one::<String>("tag")?.clone(),
+            sha: matches.get_one::<String>("sha")?.clone(),
+        }),
+        ("bump-unusable", matches) => Some(ReleaseCommand::BumpUnusable {
+            tag: matches.get_one::<String>("tag")?.clone(),
+            branch: matches.get_one::<String>("branch")?.clone(),
+            changelog: matches.get_one::<String>("changelog")?.clone(),
+        }),
+        ("guard", matches) => Some(ReleaseCommand::Guard {
+            tag: matches.get_one::<String>("tag")?.clone(),
+            sha: matches.get_one::<String>("sha")?.clone(),
+        }),
+        ("cut", matches) => Some(ReleaseCommand::Cut {
+            tag: matches.get_one::<String>("tag")?.clone(),
+            sha: matches.get_one::<String>("sha")?.clone(),
+            changelog: matches.get_one::<String>("changelog")?.clone(),
+            workflow: matches.get_one::<String>("workflow")?.clone(),
+        }),
+        ("pin", matches) => Some(ReleaseCommand::Pin {
+            at: matches.get_one::<String>("at").cloned(),
+        }),
+        ("settings", matches) => Some(ReleaseCommand::Settings {
+            probe: flag(matches, "probe"),
+            last_run: matches.get_one::<String>("last_run").cloned(),
         }),
         _ => None,
     }

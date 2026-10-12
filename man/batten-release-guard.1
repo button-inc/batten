@@ -1,0 +1,19 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-release-guard 1  batten 
+.SH NAME
+batten\-release\-guard \- Exit 0 only when a build of the commit may upload into the release: a draft that targets it
+.SH SYNOPSIS
+\fBbatten release guard\fR [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-sha\fR> <\fItag\fR> 
+.SH DESCRIPTION
+Exit 0 only when a build of the commit may upload into the release: a draft that targets it
+.SH OPTIONS
+.TP
+\fB\-\-sha\fR \fI<sha>\fR
+The commit the build was dispatched with
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fItag\fR>
+The release\*(Aqs tag

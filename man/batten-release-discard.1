@@ -1,0 +1,16 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-release-discard 1  batten 
+.SH NAME
+batten\-release\-discard \- Delete a draft release and its tag; do nothing for no release; refuse a published one
+.SH SYNOPSIS
+\fBbatten release discard\fR [\fB\-h\fR|\fB\-\-help\fR] <\fItag\fR> 
+.SH DESCRIPTION
+Delete a draft release and its tag; do nothing for no release; refuse a published one
+.SH OPTIONS
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fItag\fR>
+The release\*(Aqs tag

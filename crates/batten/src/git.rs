@@ -3897,6 +3897,72 @@ pub fn merge_base(dir: &Path, base_ref: &str) -> Result<Option<String>> {
         .map(|found| found.detach().to_string()))
 }
 
+/// Where two named revisions diverged, or `None` when either does not resolve
+/// or they share no history (CLOUD-2033 G2). [`merge_base`] with an explicit
+/// head, because `release path` grades a SHA it is handed, never `HEAD`.
+///
+/// # Errors
+///
+/// When the repository cannot be opened.
+pub fn merge_base_of(dir: &Path, one: &str, other: &str) -> Result<Option<String>> {
+    let repo = open(dir)?;
+    let (Ok(one), Ok(other)) = (repo.rev_parse_single(one), repo.rev_parse_single(other)) else {
+        return Ok(None);
+    };
+    Ok(repo
+        .merge_base(one.detach(), other.detach())
+        .ok()
+        .map(|found| found.detach().to_string()))
+}
+
+/// Whether `ancestor` is `descendant` or reachable from it (CLOUD-2033 G2), or
+/// `None` when `ancestor` is not in this clone.
+///
+/// **Not a merged-ness answer.** It asks whether a release's tag commit is in
+/// the history of the head that pins it — a burned release, built from a commit
+/// that never reached this head, is the one it exists to refuse. An absent
+/// object is `None`, which the caller reads as could-not-look.
+///
+/// # Errors
+///
+/// When the repository cannot be opened.
+pub fn is_ancestor(dir: &Path, ancestor: &str, descendant: &str) -> Result<Option<bool>> {
+    let repo = open(dir)?;
+    let (Ok(ancestor), Ok(descendant)) = (
+        repo.rev_parse_single(ancestor),
+        repo.rev_parse_single(descendant),
+    ) else {
+        return Ok(None);
+    };
+    let ancestor = ancestor.detach();
+    Ok(Some(
+        repo.merge_base(ancestor, descendant.detach())
+            .is_ok_and(|found| found.detach() == ancestor),
+    ))
+}
+
+/// The paths whose blob differs between two revisions, added and removed
+/// included (CLOUD-2033 G2), over the same tree walk [`base_delta`] uses.
+///
+/// # Errors
+///
+/// When the repository cannot be opened or either revision is not a tree.
+pub fn paths_changed_between(dir: &Path, from: &str, to: &str) -> Result<BTreeSet<String>> {
+    let repository = open(dir)?;
+    let mut before: BTreeMap<String, gix::ObjectId> = BTreeMap::new();
+    walk_blob_ids(&repository, from, "**", |path, id| {
+        before.insert(path.to_owned(), id);
+    })?;
+    let mut changed = BTreeSet::new();
+    walk_blob_ids(&repository, to, "**", |path, id| {
+        if before.remove(path) != Some(id) {
+            changed.insert(path.to_owned());
+        }
+    })?;
+    changed.extend(before.into_keys());
+    Ok(changed)
+}
+
 /// The patch identity of the branch's whole change against a declared base REF
 /// (CLOUD-1484), as a bare hex string.
 ///

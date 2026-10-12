@@ -691,6 +691,12 @@ mod tests {
                 // stored and open nothing.
                 "record fold".to_owned(),
                 "record show".to_owned(),
+                // The release path's four readers (CLOUD-2033): each asks the
+                // forge or git a question and prints one answer; none writes.
+                "release guard".to_owned(),
+                "release in-flight".to_owned(),
+                "release land-state".to_owned(),
+                "release pin".to_owned(),
                 // CLOUD-1180's recovered `agent` slice. BOTH the noun and its
                 // leaf are read, and that is the row's §2 predicate rather than
                 // an accident: `show` is the read band under CLOUD-1184's
@@ -1261,10 +1267,26 @@ mod tests {
             // The backfill sweep (CLOUD-843, retiring `release-backfill`): every
             // dispatch runs the consumer's own workflow, so it is unclassified.
             "release backfill".to_owned(),
+            // The release path's verbs (CLOUD-2033). Off the allowlist:
+            // `bump-unusable` commits onto the release branch, `cut` drafts and
+            // dispatches, `discard` deletes, `path` posts a status, `settings`
+            // makes the probe commit, `verify` writes the release's record.
+            // `guard`, `in-flight`, `land-state` and `pin` only read, and are on
+            // the read-only allowlist above.
+            "release bump-unusable".to_owned(),
+            "release cut".to_owned(),
+            "release discard".to_owned(),
+            "release guard".to_owned(),
+            "release in-flight".to_owned(),
             "release install".to_owned(),
+            "release land-state".to_owned(),
+            "release path".to_owned(),
+            "release pin".to_owned(),
+            "release settings".to_owned(),
             // The checksum manifest (CLOUD-843, retiring `checksums`): a forge
             // read and a file write, off the allowlist.
             "release sums".to_owned(),
+            "release verify".to_owned(),
             // The SBOM producer (CLOUD-843): a write verb, off the allowlist.
             "sbom".to_owned(),
             // The API-compatibility noun (CLOUD-1050), ported off

@@ -1,0 +1,1201 @@
+//! The release path's decisions (CLOUD-2033 P3, P4): which release may be
+//! deleted, whether one is in flight, where a `land` job resumes, and when a
+//! version is unusable and how it is bumped.
+//!
+//! Each verb is a thin shell over one pure function here, so every branch a
+//! workflow `case`s on is driven alone by a test:
+//!
+//! * `batten release discard vX` — [`discard`];
+//! * `batten release in-flight` — [`in_flight`];
+//! * `batten release land-state vX --sha S` — [`land_state`];
+//! * `batten release bump-unusable vX` — [`unusable`], then [`bump`].
+
+use crate::release::Get;
+
+/// What the forge holds under one tag.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Found {
+    /// No release carries the tag.
+    Absent,
+    /// A draft, by its release id.
+    Draft(u64),
+    /// A published release.
+    Published,
+}
+
+/// One deletion `discard` performs, in order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Step {
+    /// Delete the draft release with this id.
+    DeleteRelease(u64),
+    /// Delete `refs/tags/vX`; a 404 is success.
+    DeleteTag,
+}
+
+/// The deletions `discard` performs, or `Err` when it must refuse.
+///
+/// A draft loses itself and then its tag. No release means nothing is deleted,
+/// so a tag left behind by a deleted immutable release is never touched. A
+/// published release is refused and left intact.
+///
+/// # Errors
+///
+/// The refusal pointer, for a published release.
+//MUTANT-SUITE crates/batten/tests/it/release_verify.rs
+//MUTANT discard-deletes-published|s@^        Found::Published => Err(PUBLISHED.to_owned()),$@        Found::Published => Ok(vec![Step::DeleteTag]),@|discard_refuses_a_published_release
+//MUTANT discard-deletes-orphan-tag|s@^        Found::Absent => Ok(Vec::new()),$@        Found::Absent => Ok(vec![Step::DeleteTag]),@|discard_leaves_an_orphan_tag_alone
+pub fn discard(found: &Found) -> Result<Vec<Step>, String> {
+    const PUBLISHED: &str = "it is published; a published release is never discarded";
+    match found {
+        Found::Absent => Ok(Vec::new()),
+        Found::Draft(id) => Ok(vec![Step::DeleteRelease(*id), Step::DeleteTag]),
+        Found::Published => Err(PUBLISHED.to_owned()),
+    }
+}
+
+/// How long a draft counts as in flight: the gap between dispatch and queue.
+pub const DRAFT_WINDOW_SECS: u64 = 10 * 60;
+
+/// How long a failed `land` holds the landers, by default (`land_hold`).
+pub const LAND_HOLD_SECS: u64 = 6 * 60 * 60;
+
+/// A published pre-release that is not latest, as the freeze reads it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Pending {
+    /// Its tag.
+    pub tag: String,
+    /// Whether `main` contains its tag commit.
+    pub main_contains: bool,
+    /// Whether `main` is an ancestor of its tag commit.
+    pub main_behind: bool,
+    /// Seconds since its `land` job concluded as failed, or `None` where no
+    /// failed conclusion was read (still running, or never failed).
+    pub land_failed_ago: Option<u64>,
+}
+
+/// What the freeze reads.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Flight {
+    /// A `release-artifacts` run is queued or in progress, by its title.
+    pub active_run: Option<String>,
+    /// Drafts, by tag and age in seconds.
+    pub drafts: Vec<(String, u64)>,
+    /// Published, non-latest pre-releases.
+    pub pending: Vec<Pending>,
+    /// How long a failed `land` holds.
+    pub land_hold: u64,
+}
+
+/// Whether a release is in flight, naming it and the arm that holds, or `None`.
+//MUTANT freeze-ignores-pending-land|s@^        if pending.main_contains \x7c\x7c !pending.main_behind {$@        if true {@|a_pending_land_is_in_flight_until_its_hold_expires
+#[must_use]
+pub fn in_flight(flight: &Flight) -> Option<String> {
+    if let Some(run) = &flight.active_run {
+        return Some(format!("a release-artifacts run is building: {run}"));
+    }
+    if let Some((tag, age)) = flight
+        .drafts
+        .iter()
+        .find(|(_, age)| *age < DRAFT_WINDOW_SECS)
+    {
+        return Some(format!("{tag} is a draft {age}s old"));
+    }
+    for pending in &flight.pending {
+        if pending.main_contains || !pending.main_behind {
+            continue;
+        }
+        match pending.land_failed_ago {
+            Some(ago) if ago >= flight.land_hold => {}
+            _ => {
+                return Some(format!(
+                    "{} is published and main has not reached it: its land is still owed",
+                    pending.tag
+                ));
+            }
+        }
+    }
+    None
+}
+
+/// What `land`'s step (a) reads about vX.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Read {
+    /// No release carries the tag.
+    Absent,
+    /// A draft: its `target_commitish`.
+    Draft {
+        /// What the draft says it was built from.
+        target: String,
+    },
+    /// A published release: its tag commit.
+    Published {
+        /// What its tag points at, or `None` where it points at nothing.
+        tag_commit: Option<String>,
+    },
+}
+
+/// The facts `land-state` decides over, read by the shell.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LandFacts {
+    /// The release as read.
+    pub read: Read,
+    /// The release's tag.
+    pub tag: String,
+    /// The `sha` input the build was dispatched with.
+    pub sha: String,
+    /// Whether `main` contains the commit in question (the tag commit when
+    /// published, the target when a draft).
+    pub main_contains: bool,
+    /// Whether `main` is an ancestor of that commit.
+    pub main_behind: bool,
+    /// The commit `refs/tags/vX` points at, if the ref exists.
+    pub tag_ref: Option<String>,
+    /// The pin and version at the draft's target, as `git show` read them.
+    pub pin_at_target: Option<String>,
+    /// The version at the draft's target.
+    pub version_at_target: Option<String>,
+}
+
+/// `land`'s branch, as one line the workflow `case`s on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LandState {
+    /// Published at S and `main` contains it: skip to (f).
+    SkipToF,
+    /// Published at S and `main` is behind it: resume at (d).
+    ResumeAtD,
+    /// Published otherwise.
+    Burned,
+    /// A draft every assertion of (a) holds for.
+    DraftOk,
+    /// A draft an assertion of (a) fails for.
+    DraftBad(String),
+    /// No release.
+    Absent,
+}
+
+impl LandState {
+    /// The exact line printed.
+    #[must_use]
+    pub fn line(&self) -> String {
+        match self {
+            Self::SkipToF => String::from("skip-to-f"),
+            Self::ResumeAtD => String::from("resume-at-d"),
+            Self::Burned => String::from("burned"),
+            Self::DraftOk => String::from("draft-ok"),
+            Self::DraftBad(why) => format!("draft-bad {why}"),
+            Self::Absent => String::from("absent"),
+        }
+    }
+}
+
+/// Whether `text` is a full 40-hex commit id.
+fn full_sha(text: &str) -> bool {
+    text.len() == 40 && text.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+/// `land`'s step (a), decided.
+//MUTANT land-state-resume-as-burned|s@^            } else if at_sha \&\& facts.main_behind {$@            } else if false {@|land_state_resumes_a_published_release_main_is_behind
+#[must_use]
+pub fn land_state(facts: &LandFacts) -> LandState {
+    match &facts.read {
+        Read::Absent => LandState::Absent,
+        Read::Published { tag_commit } => {
+            let at_sha = tag_commit.as_deref() == Some(facts.sha.as_str());
+            if at_sha && facts.main_contains {
+                LandState::SkipToF
+            } else if at_sha && facts.main_behind {
+                LandState::ResumeAtD
+            } else {
+                LandState::Burned
+            }
+        }
+        Read::Draft { target } => {
+            let version = facts.tag.trim_start_matches('v');
+            if !full_sha(target) || *target != facts.sha {
+                LandState::DraftBad(format!("its target {target} is not {}", facts.sha))
+            } else if facts.tag_ref.as_ref().is_some_and(|at| at != target) {
+                LandState::DraftBad(format!("refs/tags/{} is at another commit", facts.tag))
+            } else if facts.pin_at_target.as_deref() != Some(facts.tag.as_str())
+                || facts.version_at_target.as_deref() != Some(version)
+            {
+                LandState::DraftBad(format!(
+                    "the pin and version at {target} are not {} and {version}",
+                    facts.tag
+                ))
+            } else if !facts.main_behind {
+                LandState::DraftBad(format!("main is not an ancestor of {target}"))
+            } else {
+                LandState::DraftOk
+            }
+        }
+    }
+}
+
+/// Whether a build of `sha` may upload into the release vX: only into a draft
+/// whose target is `sha`, so a build of one commit never fills a draft for
+/// another and never replaces a published release's assets.
+///
+/// # Errors
+///
+/// The refusal pointer.
+//MUTANT published-release-overwritten|s@^        Read::Published { .. } => Err(PUBLISHED.to_owned()),$@        Read::Published { .. } => Ok(()),@|guard_refuses_a_published_release_and_a_foreign_draft
+pub fn guard(read: &Read, sha: &str) -> Result<(), String> {
+    const PUBLISHED: &str = "it is published, and a published release's assets are never replaced";
+    match read {
+        Read::Draft { target } if target == sha => Ok(()),
+        Read::Draft { target } => Err(format!("the draft targets {target}, not {sha}")),
+        Read::Published { .. } => Err(PUBLISHED.to_owned()),
+        Read::Absent => Err(String::from("no release carries the tag")),
+    }
+}
+
+/// Why a version cannot be released again.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Unusable {
+    /// A published release whose tag commit `main` cannot reach.
+    Burned,
+    /// `refs/tags/vX` exists and no release carries it.
+    StrayTag,
+}
+
+/// Whether vX is unusable: burned, or a stray tag.
+///
+/// `reachable` is whether `main` reaches a published release's tag commit.
+//MUTANT stray-tag-not-unusable|s@^        Found::Absent if tag_exists => Some(Unusable::StrayTag),$@        Found::Absent if false => Some(Unusable::StrayTag),@|a_stray_tag_is_unusable
+#[must_use]
+pub fn unusable(found: &Found, reachable: bool, tag_exists: bool) -> Option<Unusable> {
+    match found {
+        Found::Published if !reachable => Some(Unusable::Burned),
+        Found::Absent if tag_exists => Some(Unusable::StrayTag),
+        _ => None,
+    }
+}
+
+/// The next patch version: `0.0.214` → `0.0.215`, or `None` for a version
+/// that is not three dot-separated numbers.
+#[must_use]
+pub fn next_version(version: &str) -> Option<String> {
+    let mut parts: Vec<u64> = version
+        .split('.')
+        .map(str::parse)
+        .collect::<Result<_, _>>()
+        .ok()?;
+    if parts.len() != 3 {
+        return None;
+    }
+    parts[2] += 1;
+    Some(format!("{}.{}.{}", parts[0], parts[1], parts[2]))
+}
+
+/// The four files a bump moves, as text in and text out.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Files {
+    /// `Cargo.toml`.
+    pub manifest: String,
+    /// `Cargo.lock`.
+    pub lock: String,
+    /// `batten.toml`.
+    pub config: String,
+    /// `crates/batten/CHANGELOG.md`.
+    pub changelog: String,
+}
+
+/// Move X to X+1 in all four release paths, in one change: `Cargo.toml`'s
+/// version, every `Cargo.lock` entry of a workspace package at X, the pin, and
+/// the changelog's `## [X]` heading with its compare link.
+///
+/// # Errors
+///
+/// The pointer naming the file that does not carry X where it must.
+//MUTANT bump-keeps-changelog-heading|s@^    let changelog = bump_heading(\&files.changelog, from, \&to)$@    let changelog = Some(files.changelog.clone())@|an_unusable_version_bumps_all_four_paths
+pub fn bump(files: &Files, from: &str, packages: &[String]) -> Result<(String, Files), String> {
+    let to = next_version(from).ok_or_else(|| format!("{from} is not a patch version"))?;
+    let old_line = format!("version = \"{from}\"");
+    let new_line = format!("version = \"{to}\"");
+    if !files.manifest.lines().any(|line| line.trim() == old_line) {
+        return Err(format!("Cargo.toml does not carry {old_line}"));
+    }
+    let manifest = files.manifest.replacen(&old_line, &new_line, 1);
+    let lock = bump_lock(&files.lock, packages, &old_line, &new_line);
+    let old_pin = format!("release = \"v{from}\"");
+    if !files.config.contains(&old_pin) {
+        return Err(format!("batten.toml does not pin v{from}"));
+    }
+    let config = files
+        .config
+        .replacen(&old_pin, &format!("release = \"v{to}\""), 1);
+    let changelog = bump_heading(&files.changelog, from, &to)
+        .ok_or_else(|| format!("the changelog has no ## [{from}] heading"))?;
+    Ok((
+        to,
+        Files {
+            manifest,
+            lock,
+            config,
+            changelog,
+        },
+    ))
+}
+
+/// `Cargo.lock` with each named package's `version = "X"` line moved.
+fn bump_lock(lock: &str, packages: &[String], old_line: &str, new_line: &str) -> String {
+    let mut ours = false;
+    let mut out: Vec<String> = Vec::new();
+    for line in lock.lines() {
+        if line == "[[package]]" {
+            ours = false;
+        } else if let Some(name) = line
+            .strip_prefix("name = \"")
+            .and_then(|rest| rest.strip_suffix('"'))
+        {
+            ours = packages.iter().any(|package| package == name);
+        }
+        if ours && line == old_line {
+            out.push(new_line.to_owned());
+        } else {
+            out.push(line.to_owned());
+        }
+    }
+    let mut text = out.join("\n");
+    if lock.ends_with('\n') {
+        text.push('\n');
+    }
+    text
+}
+
+/// The changelog with its `## [X]` heading, and that heading's compare link,
+/// moved to X+1, or `None` where no such heading exists.
+fn bump_heading(changelog: &str, from: &str, to: &str) -> Option<String> {
+    let opener = format!("## [{from}]");
+    let mut found = false;
+    let lines: Vec<String> = changelog
+        .lines()
+        .map(|line| {
+            if !found && line.starts_with(&opener) {
+                found = true;
+                line.replacen(&opener, &format!("## [{to}]"), 1).replacen(
+                    &format!("...v{from})"),
+                    &format!("...v{to})"),
+                    1,
+                )
+            } else {
+                line.to_owned()
+            }
+        })
+        .collect();
+    if !found {
+        return None;
+    }
+    let mut text = lines.join("\n");
+    if changelog.ends_with('\n') {
+        text.push('\n');
+    }
+    Some(text)
+}
+
+/// The forge's answer at `path` parsed as JSON, `Ok(None)` on a 404, or the
+/// could-not-look pointer.
+fn json_at(get: Get<'_>, path: &str) -> Result<Option<serde_json::Value>, String> {
+    let answer = get(path).ok_or_else(|| format!("{path} did not answer"))?;
+    if answer.status == 404 {
+        return Ok(None);
+    }
+    if !answer.is_reading() {
+        return Err(format!("{path} answered {}", answer.status));
+    }
+    serde_json::from_str(&answer.body)
+        .map(Some)
+        .map_err(|_| format!("{path} is not JSON"))
+}
+
+/// What the forge holds under `tag`: a published release by its tag read, a
+/// draft from the release list, or neither.
+///
+/// # Errors
+///
+/// The could-not-look pointer.
+pub fn read_found(slug: &str, tag: &str, get: Get<'_>) -> Result<Found, String> {
+    if json_at(get, &format!("repos/{slug}/releases/tags/{tag}"))?.is_some() {
+        return Ok(Found::Published);
+    }
+    let list = format!("repos/{slug}/releases?per_page=100");
+    let listed = json_at(get, &list)?.ok_or_else(|| format!("{list} answered 404"))?;
+    let entry = listed
+        .as_array()
+        .ok_or_else(|| format!("{list} is not a release list"))?
+        .iter()
+        .find(|entry| entry.get("tag_name").and_then(serde_json::Value::as_str) == Some(tag));
+    let Some(entry) = entry else {
+        return Ok(Found::Absent);
+    };
+    if entry.get("draft").and_then(serde_json::Value::as_bool) != Some(true) {
+        return Ok(Found::Published);
+    }
+    entry
+        .get("id")
+        .and_then(serde_json::Value::as_u64)
+        .map(Found::Draft)
+        .ok_or_else(|| format!("the draft {tag} carries no id"))
+}
+
+/// Whether `refs/tags/<tag>` exists.
+///
+/// # Errors
+///
+/// The could-not-look pointer.
+pub fn tag_exists(slug: &str, tag: &str, get: Get<'_>) -> Result<bool, String> {
+    Ok(json_at(get, &format!("repos/{slug}/git/ref/tags/{tag}"))?.is_some())
+}
+
+/// Whether the `settings` job of the latest completed run of the release guard
+/// `workflow` on the trunk concluded success. No run is not green.
+///
+/// # Errors
+///
+/// The could-not-look pointer.
+pub fn settings_green(
+    slug: &str,
+    trunk: &str,
+    workflow: &str,
+    get: Get<'_>,
+) -> Result<bool, String> {
+    let runs = format!(
+        "repos/{slug}/actions/workflows/{workflow}/runs?branch={trunk}&status=completed&per_page=1"
+    );
+    let Some(listed) = json_at(get, &runs)? else {
+        return Ok(false);
+    };
+    let Some(id) = listed
+        .get("workflow_runs")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|runs| runs.first())
+        .and_then(|run| run.get("id"))
+        .and_then(serde_json::Value::as_u64)
+    else {
+        return Ok(false);
+    };
+    let path = format!("repos/{slug}/actions/runs/{id}/jobs?per_page=100");
+    let jobs = json_at(get, &path)?.ok_or_else(|| format!("{path} answered 404"))?;
+    Ok(jobs
+        .get("jobs")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .any(|job| {
+            job.get("name").and_then(serde_json::Value::as_str) == Some("settings")
+                && job.get("conclusion").and_then(serde_json::Value::as_str) == Some("success")
+        }))
+}
+
+/// Whether `main` contains `commit`, and whether `main` is behind it, by the
+/// forge's compare: `(contains, behind)`.
+fn compare(slug: &str, main: &str, commit: &str, get: Get<'_>) -> Result<(bool, bool), String> {
+    let path = format!("repos/{slug}/compare/{main}...{commit}");
+    let value = json_at(get, &path)?.ok_or_else(|| format!("{path} answered 404"))?;
+    match value.get("status").and_then(serde_json::Value::as_str) {
+        Some("identical" | "behind") => Ok((true, false)),
+        Some("ahead") => Ok((false, true)),
+        Some("diverged") => Ok((false, false)),
+        _ => Err(format!("{path} carries no status")),
+    }
+}
+
+/// Seconds since the `land` job of the build titled for `tag` concluded as
+/// failed, or `None` where no such conclusion was read.
+fn land_failed_ago(
+    slug: &str,
+    tag: &str,
+    runs: &[serde_json::Value],
+    now: i64,
+    get: Get<'_>,
+) -> Result<Option<u64>, String> {
+    let field = |value: &serde_json::Value, key: &str| {
+        value
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .map(ToOwned::to_owned)
+    };
+    let Some(run) = runs.iter().find(|run| {
+        field(run, "display_title")
+            .is_some_and(|title| title.split_whitespace().any(|word| word == tag))
+    }) else {
+        return Ok(None);
+    };
+    let id = run
+        .get("id")
+        .and_then(serde_json::Value::as_u64)
+        .ok_or_else(|| format!("the build run for {tag} carries no id"))?;
+    let path = format!("repos/{slug}/actions/runs/{id}/jobs?per_page=100");
+    let jobs = json_at(get, &path)?.ok_or_else(|| format!("{path} answered 404"))?;
+    let failed = jobs
+        .get("jobs")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|job| field(job, "name").as_deref() == Some("land"))
+        .filter(|job| field(job, "conclusion").as_deref() == Some("failure"))
+        .filter_map(|job| field(job, "completed_at").and_then(|at| crate::ci_signal::epoch(&at)))
+        .max();
+    Ok(failed.map(|at| u64::try_from(now.saturating_sub(at)).unwrap_or(0)))
+}
+
+/// Everything the freeze reads, from the forge: the build `workflow`'s runs,
+/// titled by their tag, and the releases.
+///
+/// # Errors
+///
+/// The could-not-look pointer: any read that did not answer.
+pub fn read_flight(
+    slug: &str,
+    (main, workflow): (&str, &str),
+    now: i64,
+    land_hold: u64,
+    get: Get<'_>,
+) -> Result<Flight, String> {
+    let runs_path = format!("repos/{slug}/actions/workflows/{workflow}/runs?per_page=30");
+    let runs = json_at(get, &runs_path)?
+        .and_then(|value| value.get("workflow_runs").cloned())
+        .and_then(|runs| runs.as_array().cloned())
+        .unwrap_or_default();
+    let status = |run: &serde_json::Value| {
+        run.get("status")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_owned()
+    };
+    let active_run = runs
+        .iter()
+        .find(|run| status(run) != "completed")
+        .map(|run| {
+            run.get("display_title")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("untitled")
+                .to_owned()
+        });
+    let list = format!("repos/{slug}/releases?per_page=30");
+    let listed = json_at(get, &list)?.ok_or_else(|| format!("{list} answered 404"))?;
+    let latest = json_at(get, &format!("repos/{slug}/releases/latest"))?.and_then(|value| {
+        value
+            .get("tag_name")
+            .and_then(serde_json::Value::as_str)
+            .map(ToOwned::to_owned)
+    });
+    let mut drafts = Vec::new();
+    let mut pending = Vec::new();
+    for entry in listed.as_array().into_iter().flatten() {
+        let tag = entry
+            .get("tag_name")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+        let flag = |key: &str| entry.get(key).and_then(serde_json::Value::as_bool) == Some(true);
+        if flag("draft") {
+            let created = entry
+                .get("created_at")
+                .and_then(serde_json::Value::as_str)
+                .and_then(crate::ci_signal::epoch)
+                .ok_or_else(|| format!("the draft {tag} carries no created_at"))?;
+            drafts.push((tag, u64::try_from(now.saturating_sub(created)).unwrap_or(0)));
+        } else if flag("prerelease") && latest.as_deref() != Some(tag.as_str()) {
+            let commit = crate::release_verify::tag_commit(slug, &tag, get)
+                .ok_or_else(|| format!("the pre-release {tag} has no readable tag"))?;
+            let (main_contains, main_behind) = compare(slug, main, &commit, get)?;
+            let land_failed_ago = land_failed_ago(slug, &tag, &runs, now, get)?;
+            pending.push(Pending {
+                tag,
+                main_contains,
+                main_behind,
+                land_failed_ago,
+            });
+        }
+    }
+    Ok(Flight {
+        active_run,
+        drafts,
+        pending,
+        land_hold,
+    })
+}
+
+/// The forge slug, or the could-not-look line printed and `None`.
+fn slug_or_say(verb: &str, err: &mut dyn std::io::Write) -> std::io::Result<Option<String>> {
+    let slug = crate::repo_slug(std::path::Path::new("."));
+    if slug.is_none() {
+        writeln!(
+            err,
+            "batten: release {verb}: could not look: no forge remote names the repository"
+        )?;
+    }
+    Ok(slug)
+}
+
+/// The trunk's tracking ref and short name, or the could-not-look pointer.
+fn trunk() -> Result<(String, String), String> {
+    match crate::worktree::declared_trunk(std::path::Path::new(".")) {
+        Ok(Some(trunk)) => Ok((trunk.tracking, trunk.short)),
+        Ok(None) => Err(crate::worktree::NO_TRUNK.to_owned()),
+        Err(why) => Err(why.to_string()),
+    }
+}
+
+/// `batten release discard <tag>`: a draft and its tag deleted, nothing
+/// deleted for no release, a published release refused.
+///
+/// # Errors
+///
+/// Only a failed write to `out` or `err`.
+pub fn run_discard(
+    tag: &str,
+    out: &mut dyn std::io::Write,
+    err: &mut dyn std::io::Write,
+) -> anyhow::Result<crate::ExitCode> {
+    let Some(slug) = slug_or_say("discard", err)? else {
+        return Ok(crate::ExitCode::Internal);
+    };
+    let get = |path: &str| crate::rest::get(path, None);
+    let found = match read_found(&slug, tag, &get) {
+        Ok(found) => found,
+        Err(why) => {
+            writeln!(err, "batten: release discard: could not look: {why}")?;
+            return Ok(crate::ExitCode::Internal);
+        }
+    };
+    let steps = match discard(&found) {
+        Ok(steps) => steps,
+        Err(why) => {
+            writeln!(err, "release discard: {tag}: {why}")?;
+            return Ok(crate::ExitCode::Violation);
+        }
+    };
+    if steps.is_empty() {
+        writeln!(
+            out,
+            "release discard: no release is tagged {tag}; nothing deleted"
+        )?;
+        return Ok(crate::ExitCode::Success);
+    }
+    for step in steps {
+        let (path, gone_is_fine) = match step {
+            Step::DeleteRelease(id) => (format!("repos/{slug}/releases/{id}"), false),
+            Step::DeleteTag => (format!("repos/{slug}/git/refs/tags/{tag}"), true),
+        };
+        match crate::rest::delete(&path) {
+            Some(answer) if (200..300).contains(&answer.status) => {}
+            Some(answer) if gone_is_fine && matches!(answer.status, 404 | 422) => {}
+            Some(answer) => {
+                writeln!(
+                    err,
+                    "batten: release discard: could not delete {path}: the forge answered {}",
+                    answer.status
+                )?;
+                return Ok(crate::ExitCode::Internal);
+            }
+            None => {
+                writeln!(err, "batten: release discard: could not delete {path}")?;
+                return Ok(crate::ExitCode::Internal);
+            }
+        }
+    }
+    writeln!(out, "release discard: deleted the draft {tag} and its tag")?;
+    Ok(crate::ExitCode::Success)
+}
+
+/// `batten release in-flight --workflow <file>`: exit 0 when nothing is in
+/// flight, 1 naming what is, 3 when it could not look. `workflow` is the build
+/// workflow's file, whose runs are titled by their tag.
+///
+/// # Errors
+///
+/// Only a failed write to `out` or `err`.
+pub fn run_in_flight(
+    workflow: &str,
+    out: &mut dyn std::io::Write,
+    err: &mut dyn std::io::Write,
+) -> anyhow::Result<crate::ExitCode> {
+    let Some(slug) = slug_or_say("in-flight", err)? else {
+        return Ok(crate::ExitCode::Internal);
+    };
+    let get = |path: &str| crate::rest::get(path, None);
+    let now = i64::try_from(crate::now_unix()).unwrap_or(i64::MAX);
+    let flight = trunk()
+        .and_then(|(_, short)| read_flight(&slug, (&short, workflow), now, LAND_HOLD_SECS, &get));
+    match flight.map(|flight| in_flight(&flight)) {
+        Ok(None) => {
+            writeln!(out, "release in-flight: nothing is in flight")?;
+            Ok(crate::ExitCode::Success)
+        }
+        Ok(Some(why)) => {
+            writeln!(err, "release in-flight: {why}")?;
+            Ok(crate::ExitCode::Violation)
+        }
+        Err(why) => {
+            writeln!(err, "batten: release in-flight: could not look: {why}")?;
+            Ok(crate::ExitCode::Internal)
+        }
+    }
+}
+
+/// `land`'s step (a) facts, read from the forge and the local clone.
+fn land_facts(slug: &str, tag: &str, sha: &str, get: Get<'_>) -> Result<LandFacts, String> {
+    let (tracking, _) = trunk()?;
+    let here = std::path::Path::new(".");
+    let read = read_release(slug, tag, get)?;
+    let commit = match &read {
+        Read::Absent => None,
+        Read::Draft { target } => Some(target.clone()),
+        Read::Published { tag_commit } => tag_commit.clone(),
+    };
+    let ancestry = |ancestor: &str, descendant: &str| {
+        crate::git::is_ancestor(here, ancestor, descendant)
+            .map(|answer| answer == Some(true))
+            .map_err(|why| why.to_string())
+    };
+    let (main_contains, main_behind) = match &commit {
+        Some(commit) => (ancestry(commit, &tracking)?, ancestry(&tracking, commit)?),
+        None => (false, false),
+    };
+    let at = |path: &str| {
+        commit
+            .as_deref()
+            .and_then(|commit| crate::git::show(here, commit, path).ok())
+    };
+    Ok(LandFacts {
+        tag_ref: matches!(read, Read::Draft { .. })
+            .then(|| crate::release_verify::tag_commit(slug, tag, get))
+            .flatten(),
+        pin_at_target: at("batten.toml").and_then(|config| crate::release_path::pin_of(&config)),
+        version_at_target: at("Cargo.toml")
+            .and_then(|manifest| crate::release_path::version_of(&manifest)),
+        read,
+        tag: tag.to_owned(),
+        sha: sha.to_owned(),
+        main_contains,
+        main_behind,
+    })
+}
+
+/// `batten release land-state <tag> --sha <sha>`: exactly one line `land`
+/// `case`s on, exit 0, or exit 3 when it could not look.
+///
+/// # Errors
+///
+/// Only a failed write to `out` or `err`.
+pub fn run_land_state(
+    tag: &str,
+    sha: &str,
+    out: &mut dyn std::io::Write,
+    err: &mut dyn std::io::Write,
+) -> anyhow::Result<crate::ExitCode> {
+    let Some(slug) = slug_or_say("land-state", err)? else {
+        return Ok(crate::ExitCode::Internal);
+    };
+    let get = |path: &str| crate::rest::get(path, None);
+    match land_facts(&slug, tag, sha, &get) {
+        Ok(facts) => {
+            writeln!(out, "{}", land_state(&facts).line())?;
+            Ok(crate::ExitCode::Success)
+        }
+        Err(why) => {
+            writeln!(err, "batten: release land-state: could not look: {why}")?;
+            Ok(crate::ExitCode::Internal)
+        }
+    }
+}
+
+/// The release as `guard` and `land-state` read it.
+fn read_release(slug: &str, tag: &str, get: Get<'_>) -> Result<Read, String> {
+    Ok(match read_found(slug, tag, get)? {
+        Found::Absent => Read::Absent,
+        Found::Draft(_) => Read::Draft {
+            target: crate::release_verify::read(slug, tag, get)?.target,
+        },
+        Found::Published => Read::Published {
+            tag_commit: crate::release_verify::tag_commit(slug, tag, get),
+        },
+    })
+}
+
+/// `batten release guard <tag> --sha <sha>`: exit 0 only when a build of
+/// `sha` may upload into vX, 1 when it may not, 3 when it could not look.
+///
+/// # Errors
+///
+/// Only a failed write to `out` or `err`.
+pub fn run_guard(
+    tag: &str,
+    sha: &str,
+    out: &mut dyn std::io::Write,
+    err: &mut dyn std::io::Write,
+) -> anyhow::Result<crate::ExitCode> {
+    let Some(slug) = slug_or_say("guard", err)? else {
+        return Ok(crate::ExitCode::Internal);
+    };
+    let get = |path: &str| crate::rest::get(path, None);
+    match read_release(&slug, tag, &get).map(|read| guard(&read, sha)) {
+        Ok(Ok(())) => {
+            writeln!(out, "release guard: {tag} is a draft of {sha}")?;
+            Ok(crate::ExitCode::Success)
+        }
+        Ok(Err(why)) => {
+            writeln!(err, "release guard: {tag}: {why}")?;
+            Ok(crate::ExitCode::Violation)
+        }
+        Err(why) => {
+            writeln!(err, "batten: release guard: could not look: {why}")?;
+            Ok(crate::ExitCode::Internal)
+        }
+    }
+}
+
+/// The workspace's own package names, from `Cargo.lock`'s path-sourced entries
+/// (those without a `source` line).
+fn workspace_packages(lock: &str) -> Vec<String> {
+    let mut packages = Vec::new();
+    for block in lock.split("[[package]]").skip(1) {
+        if block.lines().any(|line| line.starts_with("source = ")) {
+            continue;
+        }
+        if let Some(name) = block.lines().find_map(|line| {
+            line.strip_prefix("name = \"")
+                .and_then(|rest| rest.strip_suffix('"'))
+        }) {
+            packages.push(name.to_owned());
+        }
+    }
+    packages
+}
+
+/// The sha a forge answer names under `key`, or the could-not-look pointer.
+fn sha_in(answer: Option<crate::rest::Answer>, what: &str, key: &str) -> Result<String, String> {
+    let answer = answer.ok_or_else(|| format!("{what} did not answer"))?;
+    if !(200..300).contains(&answer.status) {
+        return Err(format!("{what} answered {}", answer.status));
+    }
+    let value: serde_json::Value =
+        serde_json::from_str(&answer.body).map_err(|_| format!("{what} is not JSON"))?;
+    value
+        .pointer(key)
+        .and_then(serde_json::Value::as_str)
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| format!("{what} names no {key}"))
+}
+
+/// Whether vX is unusable, read from the forge and the local trunk.
+fn judge_unusable(slug: &str, tag: &str, get: Get<'_>) -> Result<Option<Unusable>, String> {
+    let found = read_found(slug, tag, get)?;
+    let reachable = match &found {
+        Found::Published => {
+            let (tracking, _) = trunk()?;
+            crate::release_verify::tag_commit(slug, tag, get).is_some_and(|commit| {
+                crate::git::is_ancestor(std::path::Path::new("."), &commit, &tracking)
+                    .ok()
+                    .flatten()
+                    == Some(true)
+            })
+        }
+        _ => true,
+    };
+    Ok(unusable(&found, reachable, tag_exists(slug, tag, get)?))
+}
+
+/// Commit `files` onto `branch`'s head through the forge's git-data API and
+/// move the branch to it, fast-forward only. No checkout of the branch is made
+/// and nothing on it runs: the four texts were read with `git show`.
+fn commit_onto(
+    slug: &str,
+    (branch, head): (&str, &str),
+    files: &[(&str, &str)],
+    message: &str,
+    get: Get<'_>,
+) -> Result<String, String> {
+    let commit_path = format!("repos/{slug}/git/commits/{head}");
+    let base_tree = json_at(get, &commit_path)?
+        .and_then(|commit| {
+            commit
+                .pointer("/tree/sha")
+                .and_then(serde_json::Value::as_str)
+                .map(ToOwned::to_owned)
+        })
+        .ok_or_else(|| format!("{commit_path} names no tree"))?;
+    let mut entries = Vec::new();
+    for (path, text) in files {
+        let body = serde_json::json!({ "content": text, "encoding": "utf-8" });
+        let blob = sha_in(
+            crate::rest::post_json(&format!("repos/{slug}/git/blobs"), &body),
+            &format!("the blob for {path}"),
+            "/sha",
+        )?;
+        entries.push(
+            serde_json::json!({ "path": path, "mode": "100644", "type": "blob", "sha": blob }),
+        );
+    }
+    let tree = sha_in(
+        crate::rest::post_json(
+            &format!("repos/{slug}/git/trees"),
+            &serde_json::json!({ "base_tree": base_tree, "tree": entries }),
+        ),
+        "the bumped tree",
+        "/sha",
+    )?;
+    let commit = sha_in(
+        crate::rest::post_json(
+            &format!("repos/{slug}/git/commits"),
+            &serde_json::json!({ "message": message, "tree": tree, "parents": [head] }),
+        ),
+        "the bump commit",
+        "/sha",
+    )?;
+    let moved = crate::rest::patch_json(
+        &format!("repos/{slug}/git/refs/heads/{branch}"),
+        &serde_json::json!({ "sha": commit, "force": false }),
+    )
+    .ok_or_else(|| format!("moving {branch} did not answer"))?;
+    if (200..300).contains(&moved.status) {
+        Ok(commit)
+    } else {
+        Err(format!("moving {branch} answered {}", moved.status))
+    }
+}
+
+/// `batten release bump-unusable <tag> --branch <branch> --changelog <path>`:
+/// when vX is burned or a stray tag, move the four release paths to X+1 in one
+/// commit on the release branch — made through the forge, so the credential
+/// that moves the branch is the one that fires its CI — and print `bumped vX
+/// vY`; otherwise print `usable vX` and change nothing. Exit 3 when it could
+/// not look.
+///
+/// # Errors
+///
+/// Only a failed write to `out` or `err`.
+pub fn run_bump_unusable(
+    tag: &str,
+    (branch, changelog): (&str, &str),
+    out: &mut dyn std::io::Write,
+    err: &mut dyn std::io::Write,
+) -> anyhow::Result<crate::ExitCode> {
+    let Some(slug) = slug_or_say("bump-unusable", err)? else {
+        return Ok(crate::ExitCode::Internal);
+    };
+    let get = |path: &str| crate::rest::get(path, None);
+    let why = match judge_unusable(&slug, tag, &get) {
+        Ok(Some(why)) => why,
+        Ok(None) => {
+            writeln!(out, "usable {tag}")?;
+            return Ok(crate::ExitCode::Success);
+        }
+        Err(why) => {
+            writeln!(err, "batten: release bump-unusable: could not look: {why}")?;
+            return Ok(crate::ExitCode::Internal);
+        }
+    };
+    let here = std::path::Path::new(".");
+    let paths = ["Cargo.toml", "Cargo.lock", "batten.toml", changelog];
+    let read = (|| -> Result<(String, Vec<String>), String> {
+        let ref_path = format!("repos/{slug}/git/ref/heads/{branch}");
+        let head = json_at(&get, &ref_path)?
+            .and_then(|found| {
+                found
+                    .pointer("/object/sha")
+                    .and_then(serde_json::Value::as_str)
+                    .map(ToOwned::to_owned)
+            })
+            .ok_or_else(|| format!("{ref_path} names no commit"))?;
+        let texts = paths
+            .iter()
+            .map(|path| crate::git::show(here, &head, path).map_err(|why| why.to_string()))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok((head, texts))
+    })();
+    let (head, texts) = match read {
+        Ok(read) => read,
+        Err(why) => {
+            writeln!(err, "batten: release bump-unusable: could not look: {why}")?;
+            return Ok(crate::ExitCode::Internal);
+        }
+    };
+    let [manifest, lock, config, log]: [String; 4] = texts
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("four paths read"))?;
+    let packages = workspace_packages(&lock);
+    let files = Files {
+        manifest,
+        lock,
+        config,
+        changelog: log,
+    };
+    let (to, bumped) = match bump(&files, tag.trim_start_matches('v'), &packages) {
+        Ok(bumped) => bumped,
+        Err(why) => {
+            writeln!(err, "release bump-unusable: {tag}: {why}")?;
+            return Ok(crate::ExitCode::Violation);
+        }
+    };
+    let reason = match why {
+        Unusable::Burned => "burned",
+        Unusable::StrayTag => "a stray tag",
+    };
+    let message = format!("chore(release): {tag} is {reason}; bump to v{to}");
+    let written = [
+        (paths[0], bumped.manifest.as_str()),
+        (paths[1], bumped.lock.as_str()),
+        (paths[2], bumped.config.as_str()),
+        (paths[3], bumped.changelog.as_str()),
+    ];
+    match commit_onto(&slug, (branch, &head), &written, &message, &get) {
+        Ok(commit) => {
+            writeln!(out, "bumped {tag} v{to} at {commit} ({tag} is {reason})")?;
+            Ok(crate::ExitCode::Success)
+        }
+        Err(why) => {
+            writeln!(err, "batten: release bump-unusable: could not write: {why}")?;
+            Ok(crate::ExitCode::Internal)
+        }
+    }
+}
+
+/// The body of the changelog's `## [version]` section — every line after its
+/// heading up to the next `## [` heading — or `None` where there is none.
+//MUTANT notes-section-unbounded|s@^            if line.starts_with("## \[") {$@            if false {@|the_notes_are_the_versions_own_section
+#[must_use]
+pub fn section(changelog: &str, version: &str) -> Option<String> {
+    let opener = format!("## [{version}]");
+    let mut lines = changelog
+        .lines()
+        .skip_while(|line| !line.starts_with(&opener));
+    lines.next()?;
+    let mut body = Vec::new();
+    for line in lines {
+        if line.starts_with("## [") {
+            break;
+        }
+        body.push(line);
+    }
+    Some(body.join("\n").trim().to_owned())
+}
+
+/// Delete whatever `discard` says to for `tag`: `Ok(Ok(n))` deletions made,
+/// `Ok(Err(why))` a refusal, `Err` could-not-look.
+fn perform_discard(slug: &str, tag: &str, get: Get<'_>) -> Result<Result<usize, String>, String> {
+    let steps = match discard(&read_found(slug, tag, get)?) {
+        Ok(steps) => steps,
+        Err(why) => return Ok(Err(why)),
+    };
+    let made = steps.len();
+    for step in steps {
+        let (path, gone_is_fine) = match step {
+            Step::DeleteRelease(id) => (format!("repos/{slug}/releases/{id}"), false),
+            Step::DeleteTag => (format!("repos/{slug}/git/refs/tags/{tag}"), true),
+        };
+        match crate::rest::delete(&path) {
+            Some(answer) if (200..300).contains(&answer.status) => {}
+            Some(answer) if gone_is_fine && matches!(answer.status, 404 | 422) => {}
+            Some(answer) => return Err(format!("{path} answered {}", answer.status)),
+            None => return Err(format!("{path} did not answer")),
+        }
+    }
+    Ok(Ok(made))
+}
+
+/// `batten release cut <tag> --sha <sha> --changelog <path> --workflow <file>`
+/// (P3.1): discard any draft of vX, create the draft at the release head with
+/// the changelog section the head carries, and dispatch the build workflow with
+/// that tag and sha. It creates no tag — a draft's tag is GitHub's, made at
+/// publish — and runs nothing from the head: the notes are read with `git
+/// show`.
+///
+/// # Errors
+///
+/// Only a failed write to `out` or `err`.
+pub fn run_cut(
+    tag: &str,
+    sha: &str,
+    (changelog, workflow): (&str, &str),
+    out: &mut dyn std::io::Write,
+    err: &mut dyn std::io::Write,
+) -> anyhow::Result<crate::ExitCode> {
+    let Some(slug) = slug_or_say("cut", err)? else {
+        return Ok(crate::ExitCode::Internal);
+    };
+    let get = |path: &str| crate::rest::get(path, None);
+    let cut = (|| -> Result<Result<(), String>, String> {
+        let (_, trunk) = trunk()?;
+        if let Err(why) = perform_discard(&slug, tag, &get)? {
+            return Ok(Err(why));
+        }
+        let text = crate::git::show(std::path::Path::new("."), sha, changelog)
+            .map_err(|why| why.to_string())?;
+        let Some(notes) = section(&text, tag.trim_start_matches('v')) else {
+            return Ok(Err(format!(
+                "{changelog} at {sha} has no section for {tag}"
+            )));
+        };
+        let body = serde_json::json!({
+            "tag_name": tag,
+            "target_commitish": sha,
+            "name": tag,
+            "body": notes,
+            "draft": true,
+        });
+        sha_in(
+            crate::rest::post_json(&format!("repos/{slug}/releases"), &body),
+            &format!("the draft {tag}"),
+            "/tag_name",
+        )?;
+        let dispatch = serde_json::json!({ "ref": trunk, "inputs": { "tag": tag, "sha": sha } });
+        let path = format!("repos/{slug}/actions/workflows/{workflow}/dispatches");
+        match crate::rest::post_json(&path, &dispatch) {
+            Some(answer) if (200..300).contains(&answer.status) => Ok(Ok(())),
+            Some(answer) => Err(format!("{path} answered {}", answer.status)),
+            None => Err(format!("{path} did not answer")),
+        }
+    })();
+    match cut {
+        Ok(Ok(())) => {
+            writeln!(
+                out,
+                "release cut: {tag} drafted at {sha}; {workflow} dispatched"
+            )?;
+            Ok(crate::ExitCode::Success)
+        }
+        Ok(Err(why)) => {
+            writeln!(err, "release cut: {tag}: {why}")?;
+            Ok(crate::ExitCode::Violation)
+        }
+        Err(why) => {
+            writeln!(err, "batten: release cut: could not look: {why}")?;
+            Ok(crate::ExitCode::Internal)
+        }
+    }
+}
+
+/// `batten release pin [--at <rev>]`: print the release `batten.toml` pins, in
+/// the working tree or at `rev`; exit 1 when it pins none.
+///
+/// # Errors
+///
+/// Only a failed write to `out` or `err`.
+pub fn run_pin(
+    at: Option<&str>,
+    out: &mut dyn std::io::Write,
+    err: &mut dyn std::io::Write,
+) -> anyhow::Result<crate::ExitCode> {
+    let text = match at {
+        Some(rev) => crate::git::show(std::path::Path::new("."), rev, "batten.toml")
+            .map_err(|why| why.to_string()),
+        None => std::fs::read_to_string("batten.toml").map_err(|why| why.to_string()),
+    };
+    let text = match text {
+        Ok(text) => text,
+        Err(why) => {
+            writeln!(err, "batten: release pin: could not look: {why}")?;
+            return Ok(crate::ExitCode::Internal);
+        }
+    };
+    if let Some(pin) = crate::release_path::pin_of(&text) {
+        writeln!(out, "{pin}")?;
+        Ok(crate::ExitCode::Success)
+    } else {
+        writeln!(err, "release pin: batten.toml pins no release")?;
+        Ok(crate::ExitCode::Violation)
+    }
+}

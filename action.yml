@@ -2,6 +2,9 @@ name: Batten
 description: Run Batten's policy checks over a repository, with no configuration.
 author: Button Inc.
 
+#MUTANT-SUITE crates/batten/tests/it/install_script.rs
+#MUTANT action-reads-cargo-version|s@^          version=$(awk -F'"' '/^engine.*$@          version=$(awk -F'"' '/^version = /{print $2; exit}' "$manifest")@|the_action_installs_its_refs_pin
+
 # The shipped GitHub Action (CLOUD-68). A composite action, at the repository
 # root so `uses: button-inc/batten@<ref>` resolves and so Dependabot's existing
 # `github-actions` ecosystem at `/` already keeps the pinned `uses:` below current.
@@ -105,16 +108,18 @@ runs:
           exit 1
         }
 
-        # awk with `exit`, never `sed … | head -n1`: under `pipefail` an early
-        # exiting consumer can SIGPIPE the producer and turn a successful read
-        # into a failed pipeline. Same idiom `mise-tasks/ci-local-parity.sh` uses to
-        # read a single manifest key.
+        # THE PIN AT THIS REF, NEVER THE MANIFEST'S VERSION (CLOUD-2033): the
+        # manifest names the version the next release will carry, and the pin
+        # names a release that is published, immutable and verified. awk with
+        # `exit`, never `sed … | head -n1`: under `pipefail` an early-exiting
+        # consumer can SIGPIPE the producer and fail a successful read.
         version="$INPUT_VERSION"
         if [ -z "$version" ]; then
-          version=$(awk -F'"' '/^version = /{print $2; exit}' "$manifest")
+          version=$(awk -F'"' '/^engine[ \t]*=[ \t]*[{][ \t]*release[ \t]*=/{print $2; exit}' "$ACTION_PATH/batten.toml")
+          version="${version#v}"
         fi
         [ -n "$version" ] || {
-          echo "::error::batten: could not read a version from $manifest and none was supplied." >&2
+          echo "::error::batten: $ACTION_PATH/batten.toml pins no release and none was supplied." >&2
           exit 1
         }
 

@@ -124,6 +124,41 @@ fn an_oversized_result_becomes_a_pointer_to_a_view_of_its_text() {
 }
 
 #[test]
+fn a_result_too_large_to_hold_reaches_the_model_as_a_pointer() {
+    // CLOUD-2224. Past the spill floor the leaf is streamed to a file and never
+    // held, so it reaches the model as a pointer to the stored bytes, and those
+    // bytes are the whole leaf.
+    let dir = repo("result-bound-spilled");
+    let body = payload(400_000);
+    let posted = post_tool(&dir, &read_result(&body));
+    assert_eq!(posted.status.code(), Some(0), "{}", common::stderr(&posted));
+    let said = String::from_utf8_lossy(&posted.stdout);
+    assert!(
+        said.contains("updatedToolOutput"),
+        "the result is replaced: {said}"
+    );
+    assert!(said.contains("output point now"), "{said}");
+    assert!(
+        !said.contains("payload line 399999"),
+        "no byte of the bulk reaches the model"
+    );
+    // THE ROUTE'S HANDLE, `response:<digest>`, not the pointer's generic hint.
+    let handle = said.split("response:").nth(1).map_or_else(
+        || panic!("the pointer names the stored leaf: {said}"),
+        |rest| {
+            let digest: String = rest.chars().take_while(char::is_ascii_hexdigit).collect();
+            format!("response:{digest}")
+        },
+    );
+    let shown = common::run(&dir, &["capture", "show", &handle, "--raw"]);
+    assert!(
+        String::from_utf8_lossy(&shown.stdout).contains("payload line 399999 of the log"),
+        "the stored leaf is whole: {}",
+        common::stderr(&shown)
+    );
+}
+
+#[test]
 fn following_the_pointer_returns_text_not_another_pointer() {
     // CLOUD-2228. The pointer's route is `read <view>`, and the view of an
     // oversized result is itself over the bound, so reading it was bounded

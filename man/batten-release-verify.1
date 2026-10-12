@@ -1,0 +1,19 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-release-verify 1  batten 
+.SH NAME
+batten\-release\-verify \- Exit 0 only if a release carries every asset, its checksums match, and it is published and immutable at its own tag
+.SH SYNOPSIS
+\fBbatten release verify\fR [\fB\-\-draft\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fItag\fR> 
+.SH DESCRIPTION
+Exit 0 only if a release carries every asset, its checksums match, and it is published and immutable at its own tag
+.SH OPTIONS
+.TP
+\fB\-\-draft\fR
+Verify a draft, read through the assets API, rather than a published, immutable release
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fItag\fR>
+The release\*(Aqs tag

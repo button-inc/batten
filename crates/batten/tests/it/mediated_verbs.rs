@@ -1050,13 +1050,26 @@ fn read_payload(path: &str) -> String {
 }
 
 fn read_verdict(path: &str) -> Option<i32> {
-    run_with_stdin(
+    read_with_serena(path).status.code()
+}
+
+/// A home whose `.claude.json` declares a `serena` server, so the
+/// `claude-code-local` source resolves it (CLOUD-2229): the memories row is
+/// refused only where its read route can actually be taken.
+fn serena_home() -> std::path::PathBuf {
+    crate::common::serena_home()
+}
+
+/// A `Read` of `path` adjudicated with a resolvable `serena`.
+fn read_with_serena(path: &str) -> std::process::Output {
+    let mut command = crate::common::batten();
+    command.env("HOME", serena_home());
+    crate::common::stdin_run(
+        &mut command,
         &root(),
         &["adjudicate", "--harness", "exit-code"],
         &read_payload(path),
     )
-    .status
-    .code()
 }
 
 #[test]
@@ -1066,11 +1079,7 @@ fn a_generic_read_of_a_memory_is_refused_and_names_the_tool_that_answers() {
         Some(2),
         "a generic file read of a memory is refused"
     );
-    let refusal = stderr(&run_with_stdin(
-        &root(),
-        &["adjudicate", "--harness", "exit-code"],
-        &read_payload(GUARDED),
-    ));
+    let refusal = stderr(&read_with_serena(GUARDED));
     // Pointer-only: the path and the class, never a byte of the memory.
     assert!(refusal.contains(GUARDED), "names the path: {refusal}");
     // ITS OWN CLASS, WITH THE ROUTE ON THE LINE (CLOUD-1929). It refused under
