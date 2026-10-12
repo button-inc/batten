@@ -161,6 +161,7 @@ fn units_in(tree: &Path) -> Vec<Unit> {
         // which spent the hook's whole deadline before the first removal, so the
         // collector freed nothing at 6MB free while every call waited on it.
         let index = artifact_index(&profile);
+        units.extend(caches_in(tree, &profile));
         for entry in entries.filter_map(Result::ok) {
             let fingerprint = entry.path();
             let name = entry.file_name().to_string_lossy().into_owned();
@@ -177,6 +178,74 @@ fn units_in(tree: &Path) -> Vec<Unit> {
         }
     }
     units
+}
+
+/// The regrowable caches a profile holds, one unit each: every
+/// `incremental/<crate>-<hash>` directory (CLOUD-2197).
+///
+/// MEASURED ON #1132, THE BYTES WERE HERE: a pass removed 865 units and freed
+/// 159MB while `incremental` held 8.1GB across three profiles — a unit took its
+/// `deps` artifacts, fingerprint and `build/` directory and never its
+/// incremental cache, so the collector could not reach the volume's largest
+/// class. Ranked with the units by last use, behind the same profile lock and
+/// the same working set, so the edit loop's own cache is never the one taken —
+/// the defect the retired escalation had, dropping `incremental` first.
+//MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
+//MUTANT incremental-unranked|s@^        units.extend(caches_in(tree, \&profile));$@@|a_stale_incremental_cache_is_collected_and_a_fresh_one_kept
+fn caches_in(tree: &Path, profile: &Path) -> Vec<Unit> {
+    let Ok(entries) = std::fs::read_dir(profile.join("incremental")) else {
+        return Vec::new();
+    };
+    entries
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+        .map(|entry| Unit {
+            tree: tree.to_path_buf(),
+            profile: profile.to_path_buf(),
+            last_use: newest_write(&entry.path()),
+            fingerprint: entry.path(),
+            artifacts: Vec::new(),
+        })
+        .collect()
+}
+
+/// The test scratch a tree holds, one unit per entry under `tmp/`: cargo's
+/// `CARGO_TARGET_TMPDIR`, which integration suites fill with fixtures and
+/// nothing removes until the next run's setup — measured at 4.1GB on #1132.
+/// No build lock covers it; the working set keeps a running suite's fixtures.
+//MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
+//MUTANT scratch-unranked|s@^    live.extend(scratch);$@    drop(scratch);@|a_stale_test_scratch_entry_is_collected
+fn scratch_in(tree: &Path) -> Vec<Unit> {
+    let scratch = tree.join("tmp");
+    let Ok(entries) = std::fs::read_dir(&scratch) else {
+        return Vec::new();
+    };
+    entries
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_type().is_ok_and(|kind| !kind.is_symlink()))
+        .map(|entry| Unit {
+            tree: tree.to_path_buf(),
+            profile: scratch.clone(),
+            last_use: newest_write(&entry.path()),
+            fingerprint: entry.path(),
+            artifacts: Vec::new(),
+        })
+        .collect()
+}
+
+/// The newest mtime of `path` and its immediate children: when a cache or a
+/// fixture was last written. Shallow on purpose — a session or fixture writes
+/// its own directory, and a full walk would spend the hook's deadline.
+fn newest_write(path: &Path) -> SystemTime {
+    let own = std::fs::metadata(path)
+        .and_then(|meta| meta.modified())
+        .unwrap_or(SystemTime::UNIX_EPOCH);
+    std::fs::read_dir(path)
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+        .filter_map(|entry| entry.metadata().ok()?.modified().ok())
+        .fold(own, std::cmp::max)
 }
 
 /// The newest atime OR mtime among a fingerprint directory's files: the last
@@ -388,11 +457,23 @@ pub fn collect(request: &Request<'_>) -> (u64, usize) {
         removed += units;
         freed += bytes;
     }
+    let scratch: Vec<Unit> = locks
+        .iter()
+        .flat_map(|(tree, _)| scratch_in(tree))
+        .collect();
     let mut live: Vec<Unit> = locks.iter().flat_map(|(tree, _)| units_in(tree)).collect();
+    live.extend(scratch);
     live.sort_by_key(|unit| unit.last_use);
     let working_set = SystemTime::now()
         .checked_sub(WORKING_SET)
         .unwrap_or(SystemTime::UNIX_EPOCH);
+    // WHY A PASS REMOVED WHAT IT DID, counted (CLOUD-2197's trace): measured on
+    // #1132, a pass over hundreds of units older than the working set removed
+    // none, and nothing said which guard stopped it.
+    let mut why = Skipped {
+        candidates: live.len(),
+        ..Skipped::default()
+    };
     for unit in live {
         if freed >= request.need_bytes || past(request.deadline) {
             break;
@@ -400,9 +481,11 @@ pub fn collect(request: &Request<'_>) -> (u64, usize) {
         // THE WORKING SET IS NEVER COLLECTED: units are oldest first, so the
         // first one used inside the window ends the pass.
         if unit.last_use >= working_set {
+            why.working_set = true;
             break;
         }
         let Some(_held) = crate::prune::claim(&unit.tree, &unit.profile) else {
+            why.held += 1;
             continue;
         };
         if unit
@@ -410,6 +493,7 @@ pub fn collect(request: &Request<'_>) -> (u64, usize) {
             .iter()
             .any(|artifact| is_kept(artifact, request.kept))
         {
+            why.kept += 1;
             continue;
         }
         // THE FINGERPRINT FIRST: a collection cut off mid-unit leaves a unit with
@@ -423,7 +507,32 @@ pub fn collect(request: &Request<'_>) -> (u64, usize) {
     for (tree, _) in &locks {
         rearm(tree);
     }
+    if crate::disk_watch::tracing() {
+        let line = crate::disk_watch::trace_line(
+            "disk-pass",
+            &[
+                u64::try_from(locks.len()).unwrap_or(u64::MAX),
+                u64::try_from(why.candidates).unwrap_or(u64::MAX),
+                u64::try_from(why.held).unwrap_or(u64::MAX),
+                u64::try_from(why.kept).unwrap_or(u64::MAX),
+                u64::from(why.working_set),
+                u64::try_from(removed).unwrap_or(u64::MAX),
+                request.need_bytes / (1024 * 1024),
+            ],
+        );
+        let _ = std::io::Write::write_all(&mut std::io::stderr(), format!("{line}\n").as_bytes());
+    }
     (freed, removed)
+}
+
+/// What a pass passed over, for the trace: `disk-pass <trees> <candidates>
+/// <held> <kept> <stopped_at_working_set> <removed> <need_mb>`.
+#[derive(Debug, Default)]
+struct Skipped {
+    candidates: usize,
+    held: usize,
+    kept: usize,
+    working_set: bool,
 }
 
 /// Collect if free space is below the declared minimum (CLOUD-2197).

@@ -159,7 +159,10 @@ fn a_source_pin_without_a_stamp_is_refused() {
         "engine-pin-source-unstamped",
         &format!("version = 1\nengine = {{ source = \"{digest}\" }}\n"),
     );
-    let binary = private_binary(&dir);
+    // AN INSTALLED ENGINE, OUTSIDE THE CHECKOUT: one built inside it is that
+    // tree's own build and satisfies its source pin (CLOUD-2232).
+    let installed = common::scratch("engine-pin-source-unstamped-installed");
+    let binary = private_binary(&installed);
     let output = run(&binary, &dir, &["config", "show"]);
     let said = text(&output);
     assert!(

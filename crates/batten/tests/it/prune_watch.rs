@@ -122,6 +122,68 @@ fn request<'a>(
     }
 }
 
+/// A directory holding one 64KiB file, both written `age` seconds ago: an
+/// incremental session or a test fixture, as the collector dates it.
+fn aged_dir(dir: &Path, age: u64) {
+    std::fs::create_dir_all(dir).unwrap();
+    let file = dir.join("payload");
+    std::fs::write(&file, vec![7_u8; 64 * 1024]).unwrap();
+    let when = SystemTime::now() - Duration::from_secs(age);
+    for path in [&file, dir] {
+        std::fs::File::open(path)
+            .unwrap()
+            .set_times(
+                std::fs::FileTimes::new()
+                    .set_modified(when)
+                    .set_accessed(when),
+            )
+            .unwrap();
+    }
+}
+
+/// THE INCREMENTAL CACHE IS RANKED (CLOUD-2197): measured on #1132, 8.1GB of
+/// `incremental` sat outside every pass while 865 units freed 159MB. A stale
+/// crate cache goes; one written inside the working set — the edit loop's own —
+/// stays. `#MUTANT incremental-unranked` leaves both.
+#[test]
+fn a_stale_incremental_cache_is_collected_and_a_fresh_one_kept() {
+    let root = common::scratch("collect-incremental");
+    let tree = root.join("target");
+    let profile = tree.join("debug");
+    std::fs::create_dir_all(profile.join(".fingerprint")).unwrap();
+    aged_dir(&profile.join("incremental/stale-0aaaaaaaaaaaa/s-old"), 7200);
+    aged_dir(&profile.join("incremental/stale-0aaaaaaaaaaaa"), 7200);
+    aged_dir(&profile.join("incremental/fresh-0bbbbbbbbbbbb/s-new"), 1);
+    let trees = [tree.clone()];
+    let (_, units) = batten::collect::collect(&request(&trees, &[], u64::MAX));
+    assert_eq!(units, 1, "only the stale cache is outside the working set");
+    assert!(!profile.join("incremental/stale-0aaaaaaaaaaaa").exists());
+    assert!(
+        profile.join("incremental/fresh-0bbbbbbbbbbbb").exists(),
+        "the working set's cache is never taken"
+    );
+}
+
+/// TEST SCRATCH IS RANKED TOO: cargo's `CARGO_TARGET_TMPDIR` held 4.1GB of
+/// fixtures on #1132 that nothing removed until the next run's setup. A stale
+/// fixture goes; a running suite's fresh one stays. `#MUTANT scratch-unranked`
+/// leaves both.
+#[test]
+fn a_stale_test_scratch_entry_is_collected() {
+    let root = common::scratch("collect-scratch");
+    let tree = root.join("target");
+    aged_dir(&tree.join("tmp/old-fixture"), 7200);
+    aged_dir(&tree.join("tmp/live-fixture"), 1);
+    let trees = [tree.clone()];
+    let (_, units) = batten::collect::collect(&request(&trees, &[], u64::MAX));
+    assert_eq!(
+        units, 1,
+        "only the stale fixture is outside the working set"
+    );
+    assert!(!tree.join("tmp/old-fixture").exists());
+    assert!(tree.join("tmp/live-fixture").exists());
+}
+
 #[test]
 fn the_least_recently_used_live_unit_goes_first() {
     let root = common::scratch("collect-lru");
