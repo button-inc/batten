@@ -3098,9 +3098,14 @@ value = { literal = "-" }
 id = "positive-count"
 regex = '^[1-9][0-9]*$'
 
+# THE REST SPELLING OF THE SAME READ (CLOUD-2233). `gh pr view` is GraphQL, which
+# a Claude Code session is refused with a 403 — measured 2026-10-12 — so in that
+# host this recorder could never refresh, and `issue file same`'s closes-the-row
+# exemption kept reading a body fetched before the PR closed the row. `gh api
+# repos/<o>/<r>/pulls/<n> --jq .body` prints the same raw body from the same forge.
 [[pattern]]
 id = "gh-pr-body-fetch"
-regex = 'gh[[:space:]]+pr[[:space:]]+view\b[^|;&]*--jq[[:space:]]+\.body\b'
+regex = 'gh[[:space:]]+(pr[[:space:]]+view|api[[:space:]]+repos/[^[:space:]|;&]+/pulls/[0-9]+)\b[^|;&]*--jq[[:space:]]+\.body\b'
 
 # A shell program resolves a sibling at RUN TIME, so the repo-relative path a
 # retirement deletes never appears in the caller's text and both of
