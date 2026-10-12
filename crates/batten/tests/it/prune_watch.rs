@@ -279,6 +279,25 @@ fn the_least_recently_used_live_unit_goes_first() {
 }
 
 #[test]
+fn a_collected_unit_takes_its_artifacts() {
+    // The fingerprint alone is a few bytes; the artifacts are the unit's size.
+    let root = common::scratch("collect-artifacts");
+    let tree = root.join("target");
+    let artifact = unit(
+        &tree.join("debug"),
+        "heavy",
+        "abababababababab",
+        3600,
+        1 << 20,
+    );
+    let trees = [tree.clone()];
+    let (freed, units) = batten::collect::collect(&request(&trees, &[], 1));
+    assert_eq!(units, 1);
+    assert!(!artifact.exists(), "the unit's deps artifact went with it");
+    assert!(freed >= 1 << 20, "and its bytes were counted: {freed}");
+}
+
+#[test]
 fn a_superseded_unit_goes_before_an_older_live_one() {
     let root = common::scratch("collect-superseded");
     let tree = root.join("target");

@@ -124,6 +124,11 @@ fn units_in(tree: &Path) -> Vec<Unit> {
         let Ok(entries) = std::fs::read_dir(&fingerprints) else {
             continue;
         };
+        // ONE LISTING PER PROFILE, NOT PER UNIT. Measured on #1132: re-reading
+        // `deps/` for each unit was thousands of units times ~7,000 entries,
+        // which spent the hook's whole deadline before the first removal, so the
+        // collector freed nothing at 6MB free while every call waited on it.
+        let index = artifact_index(&profile);
         for entry in entries.filter_map(Result::ok) {
             let fingerprint = entry.path();
             let name = entry.file_name().to_string_lossy().into_owned();
@@ -132,7 +137,7 @@ fn units_in(tree: &Path) -> Vec<Unit> {
             };
             units.push(Unit {
                 tree: tree.to_path_buf(),
-                artifacts: artifacts_of(&profile, &name, hash),
+                artifacts: artifacts_of(&index, &profile, &name, hash),
                 last_use: last_use(&fingerprint),
                 profile: profile.clone(),
                 fingerprint,
@@ -154,11 +159,15 @@ fn last_use(fingerprint: &Path) -> SystemTime {
         .unwrap_or(SystemTime::UNIX_EPOCH)
 }
 
-/// A unit's artifacts: the `deps/`, `examples/` and top-level files whose names
-/// carry `-<hash>`, and its `build/<name>` directory.
-fn artifacts_of(profile: &Path, name: &str, hash: &str) -> Vec<PathBuf> {
-    let marker = format!("-{hash}");
-    let mut artifacts = Vec::new();
+/// A profile's files, keyed by each `-`-separated token of their names (up to
+/// the first `.`), so a unit's hash is one lookup.
+type ArtifactIndex = std::collections::HashMap<String, Vec<PathBuf>>;
+
+/// List a profile's `deps/`, `examples/` and top-level files once.
+//MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
+//MUTANT artifacts-unindexed|s@^                    index.entry(token.to_owned()).or_default().push(entry.path());$@@|a_collected_unit_takes_its_artifacts
+fn artifact_index(profile: &Path) -> ArtifactIndex {
+    let mut index = ArtifactIndex::new();
     for dir in [
         profile.join("deps"),
         profile.join("examples"),
@@ -168,12 +177,29 @@ fn artifacts_of(profile: &Path, name: &str, hash: &str) -> Vec<PathBuf> {
             continue;
         };
         for entry in entries.filter_map(Result::ok) {
+            if !entry.file_type().is_ok_and(|kind| kind.is_file()) {
+                continue;
+            }
             let file = entry.file_name().to_string_lossy().into_owned();
-            if file.contains(&marker) && entry.file_type().is_ok_and(|kind| kind.is_file()) {
-                artifacts.push(entry.path());
+            let mut seen = std::collections::HashSet::new();
+            for token in file.split('-').skip(1) {
+                let token = token.split('.').next().unwrap_or(token);
+                if seen.insert(token) {
+                    index
+                        .entry(token.to_owned())
+                        .or_default()
+                        .push(entry.path());
+                }
             }
         }
     }
+    index
+}
+
+/// A unit's artifacts: the indexed files whose names carry `-<hash>`, and its
+/// `build/<name>` directory.
+fn artifacts_of(index: &ArtifactIndex, profile: &Path, name: &str, hash: &str) -> Vec<PathBuf> {
+    let mut artifacts = index.get(hash).cloned().unwrap_or_default();
     let build = profile.join("build").join(name);
     if build.is_dir() {
         artifacts.push(build);
