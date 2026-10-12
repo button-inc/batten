@@ -34,6 +34,7 @@ use crate::common;
 
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
+use std::os::unix::fs::PermissionsExt;
 #[expect(
     clippy::disallowed_types,
     reason = "stays, and test-only: the import both spawns below need, annotated at every site the way the other suites in this directory are"
@@ -59,7 +60,10 @@ const REPO: &str = "example/pkg";
 fn tarball(dir: &std::path::Path) -> Vec<u8> {
     let stage = dir.join("stage");
     std::fs::create_dir_all(&stage).unwrap();
-    std::fs::write(stage.join("batten"), "#!/bin/sh\necho \"ran $*\"\n").unwrap();
+    let stub = stage.join("batten");
+    std::fs::write(&stub, "#!/bin/sh\necho \"ran $*\"\n").unwrap();
+    // Executable, as the binary in a real release archive is.
+    std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
     let archive = dir.join("payload.tar.gz");
     #[expect(
         clippy::disallowed_types,
