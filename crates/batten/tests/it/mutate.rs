@@ -130,7 +130,6 @@ use common::{stderr, stdout};
 /// `Selection`, which every arm produces.
 // Unix only, with `toy_repo`: the gate is a bash program the tier executes, and
 // off unix nothing reaches it (`-D warnings` refuses a const nothing reads).
-#[cfg(unix)]
 const TOY_GATE: &str = r#"#!/usr/bin/env bash
 #MISE description="Gate: the toy"
 #MUTANT-SUITE tests/toy.rs
@@ -145,7 +144,6 @@ exit 0
 ///
 /// `CARGO_MANIFEST_DIR` is the STAGED tree, because the sweep runs `cargo` there
 /// — so the tier executes the mutated gate, never the source tree's.
-#[cfg(unix)]
 const GATE_HELPER: &str = r#"fn gate(input: &str) -> Option<i32> {
     std::process::Command::new(concat!(env!("CARGO_MANIFEST_DIR"), "/mise-tasks/@GATE@"))
         .arg(input)
@@ -158,7 +156,6 @@ const GATE_HELPER: &str = r#"fn gate(input: &str) -> Option<i32> {
 /// The mutation the toy suite catches: the gate stops refusing anything.
 // Unix only, with `toy_repo`: these describe the toy fixture, and off unix
 // nothing reaches it (`-D warnings` refuses a const nothing reads).
-#[cfg(unix)]
 const CAUGHT: &str = "#MUTANT limit-ignored|s/^LIMIT=10$/LIMIT=999/|over_the_limit";
 
 /// The package every toy carries, so `cargo test` has something to build.
@@ -205,14 +202,12 @@ fn track(root: &Path) {
 }
 
 /// The helper that runs the staged gate `mise-tasks/<gate>`.
-#[cfg(unix)]
 fn runs(gate: &str) -> String {
     GATE_HELPER.replace("@GATE@", gate)
 }
 
 /// One libtest case. Its NAME is what a row's filter selects, so a row names a
 /// case by a substring of the function, as libtest matches it.
-#[cfg(unix)]
 fn case(name: &str, body: &str) -> String {
     format!("\n#[test]\nfn {name}() {{\n    {body}\n}}\n")
 }
@@ -220,7 +215,6 @@ fn case(name: &str, body: &str) -> String {
 /// Two cases, so a filter can name one of them and `total > 1` holds. `prefix`
 /// keeps two suites in one package apart: `cargo test -- <filter>` runs every
 /// test target, so two suites sharing a case name would both be selected.
-#[cfg(unix)]
 fn toy_suite(gate: &str, prefix: &str) -> String {
     format!(
         "{}{}{}",
@@ -239,7 +233,6 @@ fn toy_suite(gate: &str, prefix: &str) -> String {
 /// A toy repository carrying one gate, one suite and the declared rows.
 ///
 /// Unix only: the gate is a bash program the tier executes.
-#[cfg(unix)]
 fn toy_repo(name: &str, rows: &[&str]) -> PathBuf {
     let root = toy(name);
     let mut gate = String::from(TOY_GATE);
@@ -1053,12 +1046,10 @@ fn an_uncommitted_case_is_still_covered_because_the_working_tree_is_the_subject(
 /// A row `other`'s suite cannot catch: dropping `pipefail` changes nothing the
 /// suite observes. So the sweep exits non-zero exactly when `other` is swept,
 /// which is what lets a case tell "narrowed" from "swept everything and passed".
-#[cfg(unix)]
 const OTHER_SURVIVES: &str = "#MUTANT pipefail-dropped|s/^set -uo pipefail$/set -u/|other_refuses";
 
 /// `toy_repo` plus a second gate, `other`, whose one row survives, committed as
 /// the base a change is measured against.
-#[cfg(unix)]
 fn two_gate_repo(name: &str) -> PathBuf {
     let root = toy_repo(name, &[CAUGHT]);
     let gate = TOY_GATE
@@ -1078,7 +1069,6 @@ fn two_gate_repo(name: &str) -> PathBuf {
 /// `other`'s suite. Its case names share no substring with `toy`'s, because
 /// `cargo test -- <filter>` runs every target: `toy_suite`'s `other_` prefix
 /// would leave `toy`'s `over_the_limit` naming a case of each.
-#[cfg(unix)]
 fn other_suite(tail: &str) -> String {
     format!(
         "{}{}{}{tail}",
@@ -1148,7 +1138,6 @@ fn a_change_to_a_suite_sweeps_its_gate() {
 
 /// `sweep_since` with a runner registry declared, and optionally the registered
 /// runner to run instead of the declared one.
-#[cfg(unix)]
 fn sweep_registered(
     root: &Path,
     gates: &str,
@@ -1178,7 +1167,6 @@ fn sweep_registered(
 
 /// The Rust gate both cases below change: one row that can never apply, so a
 /// sweep that reaches it with the declared runner fails.
-#[cfg(unix)]
 fn rust_gate_repo(name: &str) -> PathBuf {
     let root = two_gate_repo(name);
     let rusty = "//MUTANT-SUITE tests/other.rs\n//MUTANT never-applies|s@^absent$@gone@|no_case\n";
@@ -1196,9 +1184,13 @@ fn rust_gate_repo(name: &str) -> PathBuf {
 /// A change to a Rust gate whose source a registered runner owns is that
 /// runner's, never the declared runner's (CLOUD-1746): the declared sweep does
 /// not reach the row, and says which runner judges the change.
-#[cfg(unix)]
 #[test]
 fn a_change_to_a_rust_gate_is_judged_by_its_registered_runner() {
+    // THE TOY GATES ARE `sh` SCRIPTS: off unix there is no gate to sweep, and
+    // the case compiles everywhere so the other target type-checks it.
+    if !cfg!(unix) {
+        return;
+    }
     let root = rust_gate_repo("since-rust");
     let (code, out, err) = sweep_registered(
         &root,
@@ -1224,9 +1216,13 @@ fn a_change_to_a_rust_gate_is_judged_by_its_registered_runner() {
 
 /// With no runner registered, the declared runner owns every source, Rust
 /// included, so the same change reaches the row and its failure is reported.
-#[cfg(unix)]
 #[test]
 fn a_rust_gate_with_no_registered_runner_is_swept_by_the_declared_one() {
+    // THE TOY GATES ARE `sh` SCRIPTS: off unix there is no gate to sweep, and
+    // the case compiles everywhere so the other target type-checks it.
+    if !cfg!(unix) {
+        return;
+    }
     let root = rust_gate_repo("since-rust-declared");
     let (code, out, err) = sweep_registered(&root, "toy,other,engine-rusty", "HEAD", "", None);
     assert_ne!(code, 0, "{out}{err}");
@@ -1238,9 +1234,13 @@ fn a_rust_gate_with_no_registered_runner_is_swept_by_the_declared_one() {
 /// `PATH` holds only the directory of the `cargo` running this suite, which
 /// carries no `cargo-mutants`, so the case does not depend on what the host
 /// installed.
-#[cfg(unix)]
 #[test]
 fn a_registered_runner_that_does_not_resolve_cannot_look() {
+    // THE TOY GATES ARE `sh` SCRIPTS: off unix there is no gate to sweep, and
+    // the case compiles everywhere so the other target type-checks it.
+    if !cfg!(unix) {
+        return;
+    }
     let root = rust_gate_repo("since-rust-runner");
     let cargo = PathBuf::from(env!("CARGO"));
     let only_cargo = cargo.parent().expect("cargo lives in a directory");
@@ -1262,7 +1262,6 @@ fn a_registered_runner_that_does_not_resolve_cannot_look() {
 
 /// A `command` runner (CLOUD-2211) over the changed Rust gate: `[mutate]
 /// command` names a stub that records its argv and exits `code`.
-#[cfg(unix)]
 fn sweep_command(name: &str, code: i32) -> (PathBuf, i32, String, String) {
     let root = rust_gate_repo(name);
     write(
@@ -1285,9 +1284,13 @@ fn sweep_command(name: &str, code: i32) -> (PathBuf, i32, String, String) {
     (root, status, out, err)
 }
 
-#[cfg(unix)]
 #[test]
 fn a_command_runner_exit_zero_is_caught() {
+    // THE TOY GATES ARE `sh` SCRIPTS: off unix there is no gate to sweep, and
+    // the case compiles everywhere so the other target type-checks it.
+    if !cfg!(unix) {
+        return;
+    }
     let (root, code, out, err) = sweep_command("command-caught", 0);
     assert_eq!(code, 0, "{out}{err}");
     assert!(
@@ -1301,9 +1304,13 @@ fn a_command_runner_exit_zero_is_caught() {
     );
 }
 
-#[cfg(unix)]
 #[test]
 fn a_command_runner_exit_two_is_survived() {
+    // THE TOY GATES ARE `sh` SCRIPTS: off unix there is no gate to sweep, and
+    // the case compiles everywhere so the other target type-checks it.
+    if !cfg!(unix) {
+        return;
+    }
     let (_, code, out, err) = sweep_command("command-survived", 2);
     assert_eq!(code, 2, "{out}{err}");
     assert!(out.contains("command SURVIVED (exit 2)"), "{out}{err}");
@@ -1311,9 +1318,13 @@ fn a_command_runner_exit_two_is_survived() {
 
 /// Exit 1 is a crash's code (an uncaught exception), never a survivor and
 /// never every mutant caught.
-#[cfg(unix)]
 #[test]
 fn a_command_runner_that_errors_cannot_look() {
+    // THE TOY GATES ARE `sh` SCRIPTS: off unix there is no gate to sweep, and
+    // the case compiles everywhere so the other target type-checks it.
+    if !cfg!(unix) {
+        return;
+    }
     let (_, code, out, err) = sweep_command("command-errored", 1);
     assert_eq!(code, 3, "{out}{err}");
     assert!(
@@ -1322,9 +1333,13 @@ fn a_command_runner_that_errors_cannot_look() {
     );
 }
 
-#[cfg(unix)]
 #[test]
 fn a_command_entry_without_a_declared_argv_is_refused() {
+    // THE TOY GATES ARE `sh` SCRIPTS: off unix there is no gate to sweep, and
+    // the case compiles everywhere so the other target type-checks it.
+    if !cfg!(unix) {
+        return;
+    }
     let root = rust_gate_repo("command-undeclared");
     let (code, out, err) = sweep_registered(
         &root,
@@ -1340,9 +1355,13 @@ fn a_command_entry_without_a_declared_argv_is_refused() {
 /// A WHOLE sweep with a runner registered still leaves that runner's rows alone:
 /// no change narrows anything here, so only the row filter keeps the declared
 /// runner off the Rust row it cannot apply.
-#[cfg(unix)]
 #[test]
 fn a_registered_runners_rows_are_never_swept_by_the_declared_runner() {
+    // THE TOY GATES ARE `sh` SCRIPTS: off unix there is no gate to sweep, and
+    // the case compiles everywhere so the other target type-checks it.
+    if !cfg!(unix) {
+        return;
+    }
     let root = rust_gate_repo("whole-rust-registered");
     let answer = common::batten()
         .args(["mutate", "sweep"])
@@ -1359,9 +1378,13 @@ fn a_registered_runners_rows_are_never_swept_by_the_declared_runner() {
 }
 
 /// An id no runner carries is a usage error, never an empty registry.
-#[cfg(unix)]
 #[test]
 fn an_unknown_runner_is_refused() {
+    // THE TOY GATES ARE `sh` SCRIPTS: off unix there is no gate to sweep, and
+    // the case compiles everywhere so the other target type-checks it.
+    if !cfg!(unix) {
+        return;
+    }
     let root = rust_gate_repo("since-rust-unknown");
     let (code, out, err) = sweep_registered(&root, "toy,other", "HEAD", "mutmut=**/*.py", None);
     assert_eq!(code, 1, "{out}{err}");

@@ -835,7 +835,7 @@ fn install_installs_the_consumers_pin() {
     fixture.release_json_for("v0.0.4", Some(fixture.digest.as_str()));
     let consumer = fixture.dir.join("consumer");
     fs::create_dir_all(&consumer).unwrap();
-    common::git_in(&consumer, &["init", "-q"]);
+    common::init_repo(&consumer);
     fs::write(
         consumer.join("batten.toml"),
         "version = 1\nengine = { release = \"v0.0.4\" }\n",

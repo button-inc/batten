@@ -440,7 +440,7 @@ fn a_consumers_pin_that_is_not_published_is_refused() {
     let host_url = host(|base| release_routes(base, &asset, &archive));
     let consumer = dir.join("consumer");
     std::fs::create_dir_all(&consumer).unwrap();
-    common::git_in(&consumer, &["init", "-q"]);
+    common::init_repo(&consumer);
     std::fs::write(
         consumer.join("batten.toml"),
         "version = 1\nengine = { release = \"v0.0.3\" }\n",

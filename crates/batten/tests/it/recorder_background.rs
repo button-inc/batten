@@ -17,7 +17,8 @@ const FETCH: &str = "gh pr view 1 --json body --jq .body";
 
 fn repo(name: &str) -> PathBuf {
     let root = common::scratch(name);
-    common::git_in(&root, &["init", "--quiet", "--initial-branch", "work"]);
+    common::init_repo(&root);
+    common::git_in(&root, &["symbolic-ref", "HEAD", "refs/heads/work"]);
     std::fs::write(root.join("seed.txt"), "seed\n").expect("seed");
     common::git_in(&root, &["add", "-A"]);
     common::git_in(&root, &["commit", "--quiet", "-m", "base"]);
