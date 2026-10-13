@@ -2672,8 +2672,24 @@ pub fn turn(
 ///
 /// A released lease counts as idle for the same reason: the tombstone says the
 /// holder handed it back, so the ref exists but nobody is holding it.
+///
+/// **So does a lease nobody ELSE is holding** (CLOUD-2248). `holder` is this
+/// clone: its own lapsed lease is not a rival — a `land` killed mid-lap leaves
+/// exactly that, and reading it as "not idle" made the clone wait on itself for
+/// every lap of three runs, with nothing on the ref but its own dead body. An
+/// expired lease is a rival nobody is beating, and `cooling` is only asked once
+/// [`turn`] has already answered `Take` — so an expiry reached here has sat its
+/// corroborating beat, and no skew reads it. What still holds the cooldown is
+/// another clone with a LIVE lease, or another clone reserved `next` behind it:
+/// those are somebody else, and the slot is theirs to have.
 #[must_use]
-pub fn cooling(poisoned_at: Option<&str>, trunk_now: &str, observed: &Observed) -> bool {
+pub fn cooling(
+    poisoned_at: Option<&str>,
+    trunk_now: &str,
+    observed: &Observed,
+    holder: &str,
+    now: i64,
+) -> bool {
     let Some(at) = poisoned_at else {
         return false;
     };
@@ -2685,7 +2701,11 @@ pub fn cooling(poisoned_at: Option<&str>, trunk_now: &str, observed: &Observed) 
     // strand a single-agent fleet.
     match observed {
         Observed::Absent => false,
-        Observed::Held { body, .. } => !body.released(),
+        Observed::Held { body, .. } => {
+            let rival_holds = !body.released() && !body.expired(now) && body.holder != holder;
+            let rival_waits = !body.next.is_empty() && body.next != holder;
+            rival_holds || rival_waits
+        }
         // A ref nobody can read is NOT evidence the pool is idle, and reading it
         // as idle would let the one agent that just poisoned CI take the lease on
         // the strength of a failed parse. `turn` already answers `Wait` for this
@@ -4440,16 +4460,18 @@ mod tests {
                 ..Body::default()
             },
         };
+        let me = "this-clone";
+        let now = 1_700_000_000;
         assert!(
-            cooling(Some("trunk-1"), "trunk-1", &held),
+            cooling(Some("trunk-1"), "trunk-1", &held, me, now),
             "same trunk and somebody is holding: the cooldown holds"
         );
         assert!(
-            !cooling(Some("trunk-1"), "trunk-2", &held),
+            !cooling(Some("trunk-1"), "trunk-2", &held, me, now),
             "the trunk moved, so the claim is about a base that is no longer trunk"
         );
         assert!(
-            !cooling(Some("trunk-1"), "trunk-1", &Observed::Absent),
+            !cooling(Some("trunk-1"), "trunk-1", &Observed::Absent, me, now),
             "nobody is waiting, so waiting buys nothing — and a surviving cooldown \
              would strand a single-agent fleet after one red matrix"
         );
@@ -4464,11 +4486,13 @@ mod tests {
                         ..Body::default()
                     },
                 },
+                me,
+                now,
             ),
             "a tombstone is the holder handing it back: the ref exists, nobody holds it"
         );
         assert!(
-            !cooling(None, "trunk-1", &held),
+            !cooling(None, "trunk-1", &held, me, now),
             "and an agent that poisoned nothing is never held back"
         );
         assert!(
@@ -4479,8 +4503,81 @@ mod tests {
                     sha: String::from("cccc"),
                     why: String::from("not a lease"),
                 },
+                me,
+                now,
             ),
             "a ref nobody can read is not evidence the pool is idle"
+        );
+    }
+
+    /// The pool is idle unless somebody ELSE holds or waits (CLOUD-2248).
+    ///
+    /// Fails by: reading any unreleased body as a rival, which is what made a
+    /// clone whose own `land` was killed wait on its own lapsed lease for every
+    /// lap; or by reading every lapsed body as idle, which would let a clone that
+    /// poisoned CI jump a waiter reserved behind the dead holder.
+    #[test]
+    fn a_poison_cooldown_never_waits_on_this_clone_or_a_holder_nobody_is_beating() {
+        let me = "this-clone";
+        let now = 1_700_000_000;
+        let lease = |holder: &str, expires: i64, next: &str| Observed::Held {
+            sha: String::from("aaaa"),
+            body: Body {
+                holder: String::from(holder),
+                expires,
+                next: String::from(next),
+                ..Body::default()
+            },
+        };
+        assert!(
+            !cooling(
+                Some("trunk-1"),
+                "trunk-1",
+                &lease(me, now - 600, ""),
+                me,
+                now
+            ),
+            "this clone's own lapsed lease is nobody else waiting: the measured self-deadlock"
+        );
+        assert!(
+            !cooling(
+                Some("trunk-1"),
+                "trunk-1",
+                &lease("someone-else", now - 600, ""),
+                me,
+                now
+            ),
+            "a lease nobody is beating holds no slot for anyone"
+        );
+        assert!(
+            cooling(
+                Some("trunk-1"),
+                "trunk-1",
+                &lease("someone-else", now - 600, "a-third-clone"),
+                me,
+                now
+            ),
+            "a lapsed holder with a rival reserved behind it: that rival is owed the slot"
+        );
+        assert!(
+            !cooling(
+                Some("trunk-1"),
+                "trunk-1",
+                &lease(me, now - 600, me),
+                me,
+                now
+            ),
+            "this clone reserved behind its own lapsed lease is still nobody else"
+        );
+        assert!(
+            cooling(
+                Some("trunk-1"),
+                "trunk-1",
+                &lease("someone-else", now + 600, ""),
+                me,
+                now
+            ),
+            "a rival with a live lease is somebody else: the cooldown holds"
         );
     }
 

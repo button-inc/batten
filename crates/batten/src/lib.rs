@@ -14309,7 +14309,7 @@ fn run_lease_acquire(
             // what keeps the two separable — folding it into `turn` would put a
             // local file inside a decision every other clone must be able to
             // reproduce from the ref alone.
-            if let Some(reason) = still_cooling(root, &local, &observed) {
+            if let Some(reason) = still_cooling(root, &local, &observed, &holder, now) {
                 writeln!(out, "lease: {reason}")?;
                 return Ok(ExitCode::Violation);
             }
@@ -14395,11 +14395,17 @@ fn ask_the_holder_to_stand_down(
 /// ref that will not read answers `None`: a could-not-look is not evidence this
 /// clone is still poisoned, and holding it back on one would strand a clone over
 /// a ref that was renamed or pruned.
-fn still_cooling(root: &Path, local: &lease::Local, observed: &lease::Observed) -> Option<String> {
+fn still_cooling(
+    root: &Path,
+    local: &lease::Local,
+    observed: &lease::Observed,
+    holder: &str,
+    now: i64,
+) -> Option<String> {
     let (tracking, at) = local.poisoned()?;
     let trunk = git::resolve_ref(root, &tracking).ok().flatten()?;
     // Pointer-only: the ref and the position, never the lease body.
-    lease::cooling(Some(&at), &trunk, observed).then(|| {
+    lease::cooling(Some(&at), &trunk, observed, holder, now).then(|| {
         format!("cooling — this clone reddened the matrix on {tracking} at {at}, which is still trunk, and the pool is not idle")
     })
 }
