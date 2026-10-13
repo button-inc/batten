@@ -448,6 +448,12 @@ impl Bundle {
             .map(Vec::as_slice)
     }
 
+    /// Whether this bundle evaluates as cached bytecode (CLOUD-2236).
+    #[must_use]
+    pub fn is_bytecode(&self) -> bool {
+        matches!(self.evaluator, Evaluator::Compiled(_))
+    }
+
     /// The enabling rule's id.
     #[must_use]
     pub fn id(&self) -> &str {
@@ -1740,8 +1746,11 @@ const CACHE_FORMAT: &str = "batten-policy-rvm-1";
 
 /// The entry for row `id`, in the repository's state directory: one file per
 /// row, overwritten on a miss, so the cache never grows past the row count.
+//MUTANT cache-root-relative|s@repo_state_dir(\&root.canonicalize().ok()?)@repo_state_dir(root)@|a_warm_load_from_the_working_directory_compiles_no_engine
 fn cache_path(root: &Path, id: &str) -> Option<std::path::PathBuf> {
-    let dir = crate::state::repo_state_dir(root).ok()?;
+    // Canonical first: the hook hands `.`, and the state directory is named
+    // from the repository's own directory, which `.` does not carry.
+    let dir = crate::state::repo_state_dir(&root.canonicalize().ok()?).ok()?;
     Some(
         dir.join("policy")
             .join(format!("{}.rvm", blake3::hash(id.as_bytes()).to_hex())),
@@ -1871,6 +1880,7 @@ fn entry_point(package: &[String], rule: &str) -> String {
     path
 }
 
+//MUTANT bootstrap-entry-fixed|s@candidates.iter().find_map(@candidates.iter().take(1).find_map(@|the_repositorys_bundles_answer_alike_compiled_and_interpreted
 impl Compiled {
     /// Compile `bundle`'s interpreter to bytecode, or `None` where the bytecode
     /// compiler cannot express a rule it defines.
@@ -1883,10 +1893,14 @@ impl Compiled {
                 candidates.push((package.clone(), rule.to_owned()));
             }
         }
-        let first = candidates.first().map(|(p, r)| entry_point(p, r))?;
-        let policy = engine
-            .compile_with_entrypoint(&first.as_str().into())
-            .ok()?;
+        // regorus prepares the whole rule set whichever entry point it is
+        // handed, but refuses one the bundle does not define, so the first
+        // defined candidate stands in for all of them.
+        let policy = candidates.iter().find_map(|(package, rule)| {
+            engine
+                .compile_with_entrypoint(&entry_point(package, rule).as_str().into())
+                .ok()
+        })?;
         let rules = policy.get_rules();
         let entries: BTreeSet<(Vec<String>, String)> = candidates
             .into_iter()

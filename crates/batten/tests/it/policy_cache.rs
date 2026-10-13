@@ -130,6 +130,25 @@ fn a_warm_load_compiles_no_engine() {
     }
 }
 
+/// The hook loads with the root `.`, and a cache keyed by the repository's
+/// directory name must resolve that too, or every live call is a miss.
+#[test]
+fn a_warm_load_from_the_working_directory_compiles_no_engine() {
+    let root = root_with("cwd", ANSWERS_EVERY_RULE);
+    // nextest runs each case in its own process, so the move is this case's.
+    std::env::set_current_dir(&root).expect("enter the scratch root");
+    let here = std::path::Path::new(".");
+    let _cold = load(here, policy::ModuleChecks::SkipOnHotPath);
+    let before = policy::engines_constructed();
+    let warm = load(here, policy::ModuleChecks::SkipOnHotPath);
+    assert_eq!(
+        policy::engines_constructed() - before,
+        0,
+        "a load rooted at `.` must find the entry its previous load wrote"
+    );
+    assert!(warm.is_bytecode());
+}
+
 #[test]
 fn an_edited_module_is_not_answered_from_stale_bytecode() {
     let root = root_with("edited", ANSWERS_EVERY_RULE);
@@ -158,6 +177,7 @@ fn bytecode_answers_as_the_interpreter_does() {
     let root = root_with("agree", ANSWERS_EVERY_RULE);
     let interpreted = load(&root, policy::ModuleChecks::Run);
     let compiled = load(&root, policy::ModuleChecks::SkipOnHotPath);
+    assert!(compiled.is_bytecode() && !interpreted.is_bytecode());
     let mut refused = 0;
     for input in CALLS {
         let (denied, approved, rewritten) = decided(&compiled, input);
@@ -204,6 +224,16 @@ fn the_repositorys_bundles_answer_alike_compiled_and_interpreted() {
     assert!(
         !compiled.is_empty(),
         "this repository enables mediated policy"
+    );
+    let interpreted_ids: Vec<&str> = compiled
+        .iter()
+        .filter(|bundle| !bundle.is_bytecode())
+        .map(policy::Bundle::id)
+        .collect();
+    assert!(
+        interpreted_ids.is_empty(),
+        "every mediated bundle here compiles to bytecode; these fell back to the \
+         interpreter, so the hot path still parses them per call: {interpreted_ids:?}"
     );
     let calls = [
         "{}".to_owned(),
