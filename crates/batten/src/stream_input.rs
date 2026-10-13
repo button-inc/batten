@@ -66,6 +66,44 @@ pub fn marker(pointer: &str) -> String {
     format!("\u{0}batten-spilled:{pointer}\u{0}")
 }
 
+/// The largest spilled leaf [`restore`] reads back, in bytes.
+///
+/// The recorders that judge a call's response (the board's write record above
+/// all) read the tracker's own JSON, which is kilobytes; a leaf past this stays
+/// a marker, so the memory bound CLOUD-2224 bought still holds for the bulk.
+pub const RESTORE_MAX_BYTES: u64 = 1 << 20;
+
+/// `value` with each spilled leaf at or under [`RESTORE_MAX_BYTES`] put back
+/// from its file, for the recorders.
+///
+/// A recorder reading the marker recorded the call as answering nothing: on
+/// #1132 every `save_issue` whose response spilled was written to the board
+/// record as `unready`, and the filed-row guard then refused every edit
+/// (CLOUD-2224's regression). What reaches the MODEL is still the pointer.
+#[must_use]
+pub fn restore(value: &Value, spilled: &[Spilled]) -> Value {
+    fn put(value: &mut Value, marker: &str, text: &str) {
+        match value {
+            Value::String(leaf) if leaf == marker => text.clone_into(leaf),
+            Value::Array(items) => items.iter_mut().for_each(|item| put(item, marker, text)),
+            Value::Object(fields) => fields
+                .values_mut()
+                .for_each(|field| put(field, marker, text)),
+            _ => {}
+        }
+    }
+    let mut restored = value.clone();
+    for spill in spilled
+        .iter()
+        .filter(|spill| spill.bytes <= RESTORE_MAX_BYTES)
+    {
+        if let Ok(text) = std::fs::read_to_string(&spill.path) {
+            put(&mut restored, &marker(&spill.pointer), &text);
+        }
+    }
+    restored
+}
+
 /// Every byte the parser pulls is also written to the spool.
 struct Tee<R, W> {
     inner: R,
@@ -372,6 +410,37 @@ mod tests {
             spooled,
             sent.trim_start_matches('\u{feff}'),
             "byte for byte, BOM aside"
+        );
+    }
+
+    /// A recorder sees the response the tracker sent, not the marker that
+    /// stands in for it on the way to the model; a leaf past the cap stays a
+    /// marker (CLOUD-2224's regression, task #31 on #1132).
+    #[test]
+    fn a_spilled_leaf_is_restored_for_the_recorders_up_to_the_cap() {
+        let dir = scratch("restore");
+        let big = "word ".repeat(40_000);
+        let read = super::read(payload(&big).as_bytes(), &dir, 1000, |text| {
+            text.split_whitespace().count() as u64
+        })
+        .expect("reads");
+        let restored = restore(&read.value, &read.spilled);
+        assert_eq!(
+            restored["tool_response"]["file"]["content"],
+            big.as_str(),
+            "the recorder reads the whole leaf"
+        );
+        assert_eq!(
+            read.value["tool_response"]["file"]["content"],
+            marker("/file/content"),
+            "the model-facing value keeps its marker"
+        );
+        let mut huge = read.spilled.clone();
+        huge[0].bytes = RESTORE_MAX_BYTES + 1;
+        assert_eq!(
+            restore(&read.value, &huge)["tool_response"]["file"]["content"],
+            marker("/file/content"),
+            "a leaf past the cap is never read back"
         );
     }
 }

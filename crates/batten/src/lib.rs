@@ -17161,7 +17161,16 @@ fn run_hook(
     // become the reason work stops; the retry will simply deny again with the
     // same `Fix::Run`, which is the safe direction and a visible one.
     if envelope.event == hook::Event::PostTool {
-        record_post_tool(overrides, &envelope, harness, &mut advice);
+        // THE RECORDERS READ THE RESPONSE THE HOST SENT (CLOUD-2224's
+        // regression): a spilled leaf is put back for them, up to the cap, while
+        // `rewrite_post_tool` still points the model at it.
+        if spilled.is_empty() {
+            record_post_tool(overrides, &envelope, harness, &mut advice);
+        } else {
+            let mut recorded = envelope.clone();
+            recorded.result = stream_input::restore(&envelope.result, &spilled);
+            record_post_tool(overrides, &recorded, harness, &mut advice);
+        }
         rewrite_post_tool(harness, &envelope, &spilled, out, &mut advice)?;
     }
     // THE SAME CORRECTION AGAIN, ONE SELECTOR LATER (CLOUD-924). The paragraph
