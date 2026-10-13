@@ -363,7 +363,10 @@ gix-diff = { version = "0.67", default-features = false }
 # Closure measured in a scratch crate outside this tree, so measuring it did not
 # vendor the thing being decided: `foldhash`, `hashbrown`, `memchr`, all three
 # already resolved here. Apache-2.0, already in `deny.toml`'s allow-list.
-imara-diff = { version = "0.2", default-features = false }
+# `unified_diff` is code within the crate and adds no dependency (its feature
+# list is empty): the printer `mutate::in_diff_patch` writes cargo-mutants'
+# `--in-diff` patch with, so no `git diff` is spawned (CLOUD-2255).
+imara-diff = { version = "0.2", default-features = false, features = ["unified_diff"] }
 # Git's pkt-line framing, for the landing lease's compare-and-swap (CLOUD-1274).
 #
 # `blocking-io` IS THE WHOLE FEATURE SET, and what it does NOT pull is the point:

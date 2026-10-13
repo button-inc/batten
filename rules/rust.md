@@ -62,8 +62,12 @@ its verdict in the `#[expect(..., reason = "...")]` on the line it describes.
 There is no census table and no count to maintain: `#[expect]` rather than
 `#[allow]` means a **deleted** spawn with a stale annotation is red too, so the
 inventory self-cleans in both directions (CLOUD-743, the mechanism CLOUD-320
-shipped without). A new spawn is not forbidden — it is an inventory row, and the
-annotation is where you write down whether it stays and why.
+shipped without). **A new spawn is refused**: `spawn add other` denies any
+escape added under `crates/batten/src` against `origin/main`, with no override
+route. The annotation records why an EXISTING site stays; it never admits one —
+an author writing their own reason is the judged party answering the gate. A
+spawn the crate can replace in process is a defect, not an inventory row
+(CLOUD-2255 removed `sed` and `git` from the mutation runner on that ground).
 
 **On a deny, find the related sites with Serena's `find_referencing_symbols` over
 `std::process::Command` — not `grep`.** rust-analyzer is live here and does true

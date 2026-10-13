@@ -1474,31 +1474,15 @@ pub fn run_registered(
             .extend(run_command(root, registry, &sources)?);
         return Ok(result);
     }
-    let diff = spawn(
-        root,
-        Program::Git,
-        &[
-            String::from("diff"),
-            String::from("--no-color"),
-            String::from("--no-ext-diff"),
-            base.to_owned(),
-            String::from("--"),
-        ]
-        .into_iter()
-        .chain(sources.iter().cloned())
-        .collect::<Vec<_>>(),
-        &[],
-        HOUSEKEEPING_BOUND,
-    )?;
-    if !diff.passed() {
-        bail!("mutate: `git diff {base}` failed, so the change cannot be named to cargo-mutants");
-    }
+    let diff = in_diff_patch(root, base, &sources).with_context(|| {
+        format!("mutate: the change since {base} cannot be named to cargo-mutants")
+    })?;
     let staged = Staged::new(root, work.to_path_buf())?;
     let runs = work.join("cargo-mutants");
     fs::create_dir_all(&runs)
         .with_context(|| format!("mutate: could not create {}", runs.display()))?;
     let patch = runs.join("change.diff");
-    crate::durable::replace(&patch, diff.output)
+    crate::durable::replace(&patch, diff)
         .with_context(|| format!("mutate: could not write {}", patch.display()))?;
     for (index, source) in sources.iter().enumerate() {
         let Some(scope) = test_scope(root, source) else {
@@ -1983,6 +1967,43 @@ impl Ran {
     }
 }
 
+/// The unified patch `cargo mutants --in-diff` reads: each changed source's
+/// bytes at `base` against its working bytes, written in process (CLOUD-2255).
+///
+/// It was `git diff <base> -- <sources>`, spawned, on the reason that `gix`
+/// writes no unified patch; `imara-diff` (already the crate's diff engine) does,
+/// and [`crate::git::read_at`] reads the base blob with no argv. A source absent
+/// at `base` diffs from empty, a deleted one to empty, as `git diff` shows them.
+///
+/// # Errors
+///
+/// When `root` is not a repository this binary can open, or `base` resolves to
+/// something that is not a tree.
+pub fn in_diff_patch(root: &Path, base: &str, sources: &[String]) -> Result<String> {
+    use std::fmt::Write as _;
+    let mut patch = String::new();
+    for source in sources {
+        let before = match crate::git::read_at(root, base, source)? {
+            crate::git::BaseBlob::Found { text, .. } => text,
+            _ => String::new(),
+        };
+        let after = fs::read_to_string(root.join(source)).unwrap_or_default();
+        if before == after {
+            continue;
+        }
+        let input = imara_diff::InternedInput::new(before.as_str(), after.as_str());
+        let diff = imara_diff::Diff::compute(imara_diff::Algorithm::Histogram, &input);
+        let printer = imara_diff::BasicLineDiffPrinter(&input.interner);
+        let _ = writeln!(patch, "--- a/{source}\n+++ b/{source}");
+        let _ = write!(
+            patch,
+            "{}",
+            diff.unified_diff(&printer, imara_diff::UnifiedDiffConfig::default(), &input)
+        );
+    }
+    Ok(patch)
+}
+
 /// The programs this module runs, CLOSED (CLOUD-1924).
 ///
 /// `spawn` took the program as a free string, so its one `#[expect]` covered
@@ -1997,10 +2018,6 @@ enum Program<'a> {
     Cargo,
     /// The consumer's declared suite runner, re-run against the mutant: the verb.
     Suite(&'a str),
-    /// Writes the unified diff `cargo mutants --in-diff` reads (CLOUD-1746).
-    /// `gix` computes a tree delta but writes no unified patch, and a second
-    /// patch writer would be a second reading of what changed.
-    Git,
     /// The consumer's own mutation tool, `[mutate] command`'s first element
     /// (CLOUD-2211): committed in the reviewed authority, like a suite runner.
     Command(&'a str),
@@ -2010,7 +2027,6 @@ impl Program<'_> {
     const fn name(&self) -> &str {
         match self {
             Program::Cargo => "cargo",
-            Program::Git => "git",
             Program::Suite(program) | Program::Command(program) => program,
         }
     }
@@ -2032,7 +2048,7 @@ fn spawn(
     let program = program.name();
     #[expect(
         clippy::disallowed_types,
-        reason = "stays: staging a tree and re-running a suite against it IS this module's effect (CLOUD-1267), and `Program` is the closed set it may run — sed and cargo each document on their variant why no in-process route exists, and a suite is the consumer's declared runner (CLOUD-1924)"
+        reason = "stays: staging a tree and re-running a suite against it IS this module's effect (CLOUD-1267), and `Program` is the closed set it may run — cargo documents on its variant why no in-process route exists, and a suite or command is the consumer's declared runner (CLOUD-1924, CLOUD-2255)"
     )]
     let mut command = std::process::Command::new(program);
     command.args(args).current_dir(dir);

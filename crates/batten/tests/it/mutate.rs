@@ -471,6 +471,38 @@ fn the_in_process_applier_matches_sed_on_every_declared_row() {
     );
 }
 
+/// THE `--in-diff` PATCH IS WRITTEN IN PROCESS (CLOUD-2255): each changed source
+/// against its bytes at the base, `---`/`+++` headed and hunked as `git diff`
+/// prints it, a new file diffed from empty, and an unchanged one left out.
+#[test]
+fn the_in_diff_patch_is_written_without_git() {
+    let root = common::scratch("mutate-in-diff-patch");
+    common::git_in(&root, &["init", "--quiet", "--initial-branch", "work"]);
+    common::git_in(&root, &["config", "user.email", "t@example.com"]);
+    common::git_in(&root, &["config", "user.name", "t"]);
+    common::write(&root, "a.rs", "one\ntwo\nthree\n");
+    common::write(&root, "same.rs", "kept\n");
+    common::git_in(&root, &["add", "-A"]);
+    common::git_in(&root, &["commit", "--quiet", "-m", "base"]);
+    common::write(&root, "a.rs", "one\nTWO\nthree\n");
+    common::write(&root, "new.rs", "fresh\n");
+
+    let sources = ["a.rs", "new.rs", "same.rs"].map(String::from);
+    let patch = batten::mutate::in_diff_patch(&root, "HEAD", &sources).expect("write the patch");
+    assert!(
+        patch.contains("--- a/a.rs\n+++ b/a.rs\n@@ -1,3 +1,3 @@\n one\n-two\n+TWO\n three\n"),
+        "{patch}"
+    );
+    assert!(
+        patch.contains("--- a/new.rs\n+++ b/new.rs\n@@ -1,0 +1,1 @@\n+fresh\n"),
+        "{patch}"
+    );
+    assert!(
+        !patch.contains("same.rs"),
+        "an unchanged source is left out: {patch}"
+    );
+}
+
 /// A ROW APPLIES WITHOUT SPAWNING, WITH SED'S MEANING (CLOUD-2255): the first match
 /// on each line, `&` the whole match, `\&` a literal ampersand, `\x7c` a pipe, an
 /// escaped delimiter literal; anything outside the one-substitution subset is
