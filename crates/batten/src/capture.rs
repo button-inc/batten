@@ -2201,6 +2201,7 @@ pub fn evict_to_budget(repo_root: &Path, config: Option<&CaptureConfig>) -> Resu
 /// # Errors
 ///
 /// As [`evict_to_budget`].
+//MUTANT reread-ranked-by-first-row|s@^            latest.insert(found.digest.as_str(), (at, is_builtin_result(row)));$@            latest.entry(found.digest.as_str()).or_insert((at, is_builtin_result(row)));@|a_response_read_again_is_as_new_as_its_latest_call
 pub fn evict_to_budget_in(dir: &Path, config: Option<&CaptureConfig>) -> Result<usize> {
     let max_bytes = config
         .and_then(|held| held.max_bytes)
@@ -2241,28 +2242,38 @@ pub fn evict_to_budget_in(dir: &Path, config: Option<&CaptureConfig>) -> Result<
         .iter()
         .map(|record| (record.digest.as_str(), record))
         .collect();
-    let mut taken: std::collections::HashSet<&str> = std::collections::HashSet::new();
-    let mut candidates: Vec<Capture> = Vec::new();
+    // A DIGEST IS AS OLD AS ITS LATEST ROW. A response is content-addressed, so a
+    // re-read returning the same bytes appends a row naming a digest an older row
+    // already named; ranked by its first row, the capture just stored and pointed
+    // at was the store's oldest and went first, and the pointer printed for it
+    // named nothing (a tracker row read twice, then `capture show`).
+    let mut latest: std::collections::HashMap<&str, (usize, bool)> =
+        std::collections::HashMap::new();
+    for (at, row) in ordered.iter().enumerate() {
+        if let Some(found) = row
+            .digest
+            .as_deref()
+            .and_then(|digest| by_digest.get(digest))
+        {
+            latest.insert(found.digest.as_str(), (at, is_builtin_result(row)));
+        }
+    }
     // A BUILT-IN TOOL'S RESULT GOES FIRST (CLOUD-2223). Those are stored so a
     // bounded result can be re-read, not because a gate selects them, and they
     // arrive on every call; evicted in plain append order they pushed out the
     // tracker reads `ready lint`, `claim check` and the Stop checklist resolve
     // within minutes. Everything the store held before 2223 keeps its order.
-    for builtin_pass in [true, false] {
-        for row in &ordered {
-            if is_builtin_result(row) != builtin_pass {
-                continue;
-            }
-            let Some(digest) = row.digest.as_deref() else {
-                continue;
-            };
-            if let Some(found) = by_digest.get(digest)
-                && taken.insert(found.digest.as_str())
-            {
-                candidates.push((*found).clone());
-            }
-        }
-    }
+    let mut ranked: Vec<(&str, usize, bool)> = latest
+        .into_iter()
+        .map(|(digest, (at, builtin))| (digest, at, builtin))
+        .collect();
+    ranked.sort_by_key(|&(_, at, builtin)| (!builtin, at));
+    let taken: std::collections::HashSet<&str> =
+        ranked.iter().map(|&(digest, _, _)| digest).collect();
+    let mut candidates: Vec<Capture> = ranked
+        .iter()
+        .filter_map(|&(digest, _, _)| by_digest.get(digest).map(|found| (*found).clone()))
+        .collect();
     for record in &held {
         if !taken.contains(record.digest.as_str()) {
             candidates.push(record.clone());
@@ -3067,6 +3078,37 @@ mod tests {
             .collect();
         assert!(!left.contains(&old.digest), "the newest was evicted");
         assert!(left.contains(&new.digest));
+    }
+
+    #[test]
+    fn a_response_read_again_is_as_new_as_its_latest_call() {
+        // Content-addressed: the second read of an unchanged row stores the same
+        // digest and appends a second row. Ranked by its first row it was the
+        // oldest and was evicted the moment it was pointed at.
+        let root = scratch_store("evict-reread");
+        let reread = store_in(&root, Stream::Response, b"the same row").unwrap();
+        let other = store_in(&root, Stream::Response, b"another row").unwrap();
+        for digest in [&reread.digest, &other.digest, &reread.digest] {
+            record_call_in(&root, &row("s", Some(digest), None)).unwrap();
+        }
+        let one = CaptureConfig {
+            inline_max_bytes: None,
+            result_max_tokens: None,
+            max_bytes: None,
+            max_records: Some(1),
+        };
+        assert_eq!(evict_to_budget_in(&root, Some(&one)).unwrap(), 1);
+        let left: Vec<String> = list_in(&root)
+            .unwrap()
+            .into_iter()
+            .filter(|held| held.stream == Stream::Response.as_str())
+            .map(|held| held.digest)
+            .collect();
+        assert_eq!(
+            left,
+            vec![reread.digest],
+            "the re-read response was evicted"
+        );
     }
 
     #[test]
