@@ -2705,6 +2705,12 @@ pub fn cooling(poisoned_at: Option<&str>, trunk_now: &str, observed: &Observed) 
 /// corroborating beat, and no skew reads it. What still holds the cooldown is
 /// another clone with a LIVE lease, or another clone reserved `next` behind it:
 /// those are somebody else, and the slot is theirs to have.
+// Each rival clause, dropped. Either alone clears the measured self-deadlock,
+// so each is pinned by its own assertion: a lapsed rival nobody is beating, and
+// this clone's own live lease (CLOUD-2248).
+//MUTANT-SUITE crates/batten/src/lease.rs
+//MUTANT cooling-waits-on-a-dead-holder|s@!body.expired(now) \&\& body.holder != holder;@body.holder != holder;@|a_poison_cooldown_never_waits_on_this_clone_or_a_holder_nobody_is_beating
+//MUTANT cooling-waits-on-itself|s@ \&\& body.holder != holder;@;@|a_poison_cooldown_never_waits_on_this_clone_or_a_holder_nobody_is_beating
 #[must_use]
 pub fn cooling_for(
     poisoned_at: Option<&str>,
@@ -4565,6 +4571,16 @@ mod tests {
                 now
             ),
             "a lease nobody is beating holds no slot for anyone"
+        );
+        assert!(
+            !cooling_for(
+                Some("trunk-1"),
+                "trunk-1",
+                &lease(me, now + 600, ""),
+                me,
+                now
+            ),
+            "this clone is never its own rival, live lease or not"
         );
         assert!(
             cooling_for(
