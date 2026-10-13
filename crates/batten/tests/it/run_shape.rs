@@ -907,6 +907,15 @@ fn a_backgrounded_call_redirecting_its_own_output_is_refused() {
 }
 
 #[test]
+fn a_stream_merge_writes_no_file() {
+    // `2>&1` and `>&2` duplicate a descriptor; the merged stream still goes
+    // where the harness captures it, so there is no second file (CLOUD-2239).
+    let root = fixture("background-merge");
+    allowed_background(&root, "cargo build 2>&1", true);
+    allowed_background(&root, "cargo build >&2", true);
+}
+
+#[test]
 fn a_foreground_redirect_is_not_this_rule() {
     // Nothing is captured for a foreground call, so a redirect there discards
     // no output anyone was going to read.

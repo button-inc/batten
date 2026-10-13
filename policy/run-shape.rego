@@ -95,6 +95,7 @@ rules contains "redirect write unread"
 #MUTANT-SUITE crates/batten/tests/it/run_shape.rs
 #MUTANT process-poll-unread|s@^\tcount(process_probes) > 0$@\tfalse@|a_backgrounded_wait_polling_a_process_is_refused
 #MUTANT mise-background-unread|s@^\tinput.call\["run-in-background"\] != true$@\ttrue@|a_backgrounded_mise_run_is_allowed
+#MUTANT stream-merge-read-as-write|s@"2>>", "1>"@"2>>", "2>&1", ">&2", "1>"@|a_stream_merge_writes_no_file
 #MUTANT redirect-background-unread|s@^\tinput.call\["run-in-background"\] == true$@\ttrue@|a_foreground_redirect_is_not_this_rule
 #MUTANT task-output-poll-unread|s@^\tregex.match(data.batten.patterns\["harness-task-output"\], word)$@\tfalse@|a_backgrounded_wait_polling_a_task_output_file_is_refused
 #MUTANT bracket-is-an-exit|s@^\tcondition_program(segment) in {"pgrep", "pkill", "ps", "jobs"}$@\tcondition_program(segment) in {"pgrep", "pkill", "ps", "jobs"}; not contains(segment.raw, "[")@|a_bracketed_pattern_is_refused_just_the_same
@@ -265,7 +266,10 @@ violation contains {
 	output_redirect(word)
 }
 
-output_redirect(word) if word in {">", ">>", "&>", "&>>", "2>", "2>>", "2>&1", ">&2", "1>", "1>>"}
+# ONLY A REDIRECTION THAT OPENS A FILE (CLOUD-2239). `2>&1` and `>&2` duplicate
+# a descriptor: the merged stream still reaches the output the harness captures,
+# so they write no second file. `> log 2>&1` stays refused through its `>`.
+output_redirect(word) if word in {">", ">>", "&>", "&>>", "2>", "2>>", "1>", "1>>"}
 
 # ---------------------------------------------------------------------------
 # CLOUD-613's terms, over `input.call.segments`.
@@ -1022,6 +1026,27 @@ test_a_mention_of_mise_is_not_a_call if {
 }
 
 test_a_backgrounded_call_redirecting_its_own_output_is_refused if {
+	some v in violation with input as {"call": {
+		"command": "cargo build > /tmp/log 2>&1",
+		"run-in-background": true,
+		"programs": [prog("cargo", ["build"])],
+		"segments": [seg(["cargo", "build", ">", "/tmp/log", "2>&1"], null, false)],
+	}}
+	v.rule == "redirect write unread"
+}
+
+# A DESCRIPTOR DUPLICATION OPENS NO FILE (CLOUD-2239): the merged stream is
+# still the one the harness captures.
+test_a_backgrounded_stream_merge_is_not_a_file_write if {
+	count(violation) == 0 with input as {"call": {
+		"command": "cargo build 2>&1 >&2",
+		"run-in-background": true,
+		"programs": [prog("cargo", ["build"])],
+		"segments": [seg(["cargo", "build", "2>&1", ">&2"], null, false)],
+	}}
+}
+
+test_a_file_redirect_beside_a_merge_is_still_refused if {
 	some v in violation with input as {"call": {
 		"command": "cargo build > /tmp/log 2>&1",
 		"run-in-background": true,
