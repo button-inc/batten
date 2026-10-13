@@ -56,6 +56,67 @@
 
 use crate::common;
 
+/// THE ACTION INSTALLS THE RELEASE ITS REF PINS, NEVER THE MANIFEST'S VERSION
+/// (CLOUD-2033). `action.yml` resolves the version from `batten.toml`'s
+/// `engine = { release = … }` beside it; the manifest names the release the
+/// NEXT cut will carry, which may not exist. The resolution lines are read out
+/// of the committed `action.yml` and run against a scratch action directory
+/// whose two files disagree, so the case judges the shipped text.
+#[cfg(unix)]
+#[test]
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays, and test-only: the action's own shell lines are what is under test, and `sh` is the program that runs them"
+)]
+fn the_action_installs_its_refs_pin() {
+    let action = std::fs::read_to_string(common::at_root("action.yml")).expect("read action.yml");
+    let lines: Vec<&str> = action.lines().collect();
+    let start = lines
+        .iter()
+        .position(|line| line.trim() == r#"version="$INPUT_VERSION""#)
+        .expect("the action resolves its version");
+    let end = start
+        + lines
+            .get(start..)
+            .and_then(|rest| rest.iter().position(|line| line.trim() == "fi"))
+            .expect("the resolution's `if` closes");
+    let resolution: Vec<&str> = lines
+        .get(start..=end)
+        .unwrap_or_default()
+        .iter()
+        .map(|line| line.trim_start())
+        .collect();
+
+    let dir = common::scratch("action-version-from-pin");
+    common::write(
+        &dir,
+        "Cargo.toml",
+        "[workspace.package]\nversion = \"9.9.9\"\n",
+    );
+    common::write(
+        &dir,
+        "batten.toml",
+        "version = 1\nengine = { release = \"v1.2.3\" }\n",
+    );
+    let script = format!(
+        "set -eu\nmanifest=\"$ACTION_PATH/Cargo.toml\"\n{}\nprintf '%s' \"$version\"\n",
+        resolution.join("\n")
+    );
+    let output = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(&script)
+        .env("ACTION_PATH", &dir)
+        .env("INPUT_VERSION", "")
+        .output()
+        .expect("run the action's resolution");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "1.2.3",
+        "the pin, not the manifest's version: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 #[test]
 fn install_sh_is_the_generated_bootstrap() {
     let path = common::at_root("install.sh");
