@@ -31,6 +31,74 @@ fn exec(dir: &Path, args: &[&str]) -> Output {
         .expect("run batten exec")
 }
 
+/// The processes whose command line carries `marker`, read from `/proc`.
+#[cfg(target_os = "linux")]
+fn carrying(marker: &str) -> Vec<String> {
+    std::fs::read_dir("/proc")
+        .expect("read /proc")
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .bytes()
+                .all(|b| b.is_ascii_digit())
+        })
+        .filter(|entry| {
+            std::fs::read(entry.path().join("cmdline"))
+                .is_ok_and(|line| String::from_utf8_lossy(&line).contains(marker))
+        })
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect()
+}
+
+/// A CHILD IS NEVER ABANDONED BY AN ERROR (CLOUD-2238).
+///
+/// The live spool's directory is a regular file here, so opening the spool —
+/// after the spawn, before the wait — fails. `exec` used to return that error
+/// past a child it never signalled; measured, a supervisor left that way held
+/// the landing lock and kept building on a full disk for 1h47m.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_teed_child_is_reaped_when_its_output_cannot_be_written() {
+    let dir = repo("reap-on-error");
+    let data = common::scratch("exec-reap-on-error-data");
+    let captures = data
+        .join(env!("CARGO_PKG_NAME"))
+        .join(batten::state::derive_repo_name(&dir).expect("derive the repo state segment"))
+        .join("captures");
+    std::fs::create_dir_all(&captures).expect("create the capture store");
+    std::fs::write(captures.join("live"), "not a directory").expect("block the spool");
+    // A duration no other process carries, so `sleep`'s own argv is the marker.
+    let marker = format!("3599.{}", std::process::id());
+    let output = common::batten()
+        .args(["exec", "--", "sleep", &marker])
+        .current_dir(&dir)
+        .env("XDG_DATA_HOME", &data)
+        .output()
+        .expect("run batten exec");
+    let survivors = carrying(&marker);
+    for pid in &survivors {
+        #[expect(
+            clippy::disallowed_types,
+            reason = "stays: a survivor the case found is ended so a red run leaks no process"
+        )]
+        let _ = std::process::Command::new("kill")
+            .args(["-9", pid])
+            .status();
+    }
+    assert_ne!(
+        output.status.code(),
+        Some(0),
+        "the spool could not open, so exec failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        survivors.is_empty(),
+        "exec returned its error and left {survivors:?} running"
+    );
+}
+
 /// `false` as the child: if the verb ran it, the exit is `1`, so a `0` proves
 /// the child never started.
 #[test]

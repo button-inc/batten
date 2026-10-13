@@ -1238,6 +1238,75 @@ impl GroupRecord {
     }
 }
 
+/// Ends the supervised child on every exit that is not the clean one
+/// (CLOUD-2238): an error returned between the spawn and the end of the drain,
+/// or an unwind through it.
+///
+/// **MEASURED, AND IT HELD THE LANDING LOCK FOR 1H47M.** A spool write failed
+/// with ENOSPC, the tee thread returned, the direct child died of the pipe it
+/// lost, and `exec` returned the tee's error past a group it never signalled:
+/// `land lap` and its `mutate sweep` kept building on a full disk until a manual
+/// `pkill`. The only reaper ran on `land`'s abandon path.
+///
+/// Its owned group when Batten leads one, which reaches the grandchildren; the
+/// direct child alone otherwise, because that group is the caller's. TERM, then
+/// KILL to whatever is still there, as [`cancel_owned_group`] does.
+struct Reaper {
+    /// The child's pid, which is also its group's id when Batten owns one.
+    child: u32,
+    /// Whether Batten owns the child's group.
+    grouped: bool,
+    /// Whether to act on drop: cleared by [`Reaper::disarm`] on the clean exit.
+    armed: bool,
+}
+
+impl Reaper {
+    /// Armed over a just-spawned `child`.
+    const fn arm(child: u32, decision: GroupDecision) -> Self {
+        Self {
+            child,
+            grouped: decision.groups(),
+            armed: true,
+        }
+    }
+
+    /// The clean exit: the child was waited and its output collected.
+    fn disarm(mut self) {
+        self.armed = false;
+    }
+}
+
+//MUTANT unwind-skips-reap|s@^        if !self.armed {$@        if true {@|a_panic_between_spawn_and_wait_reaps_the_child
+impl Drop for Reaper {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        let pid = self.child.to_string();
+        if self.grouped {
+            let _ = terminate_group(&pid);
+            let _ = escalate_group(&pid);
+        } else {
+            end_process(self.child);
+        }
+    }
+}
+
+/// `SIGKILL` one process: the direct child of a group Batten does not own.
+#[cfg(unix)]
+fn end_process(pid: u32) {
+    if let Some(pid) = i32::try_from(pid)
+        .ok()
+        .and_then(rustix::process::Pid::from_raw)
+    {
+        let _ = rustix::process::kill_process(pid, rustix::process::Signal::KILL);
+    }
+}
+
+/// No signals off unix; the child dies with its console.
+#[cfg(not(unix))]
+fn end_process(_pid: u32) {}
+
 /// The signals Batten forwards to a group it owns.
 ///
 /// The four job-control signals a caller sends *on purpose*. Deliberately not
@@ -2623,6 +2692,10 @@ fn run_one(
     // line — two `Drain::spawn` calls, two `Spool::open` calls — is the file IO
     // that used to sit between the child existing and the forwarder existing.
     // The registry is already installed; this only tells it which group.
+    // ARMED BEFORE ANY `?` (CLOUD-2238): from here to the clean return, an
+    // error or an unwind ends the child rather than abandoning it.
+    //MUTANT tee-error-abandons-child|s@^    let reaper = Reaper::arm(child.id(), decision);$@    let reaper = Reaper::arm(0, decision);@|a_teed_child_is_reaped_when_its_output_cannot_be_written
+    let reaper = Reaper::arm(child.id(), decision);
     forwarding.adopt(child.id())?;
 
     // A missing pipe is unreachable — both were just requested as `piped()` — but
@@ -2696,6 +2769,7 @@ fn run_one(
         out_spool.seal(repo_root, Stream::Stdout, &out_bytes)?,
         err_spool.seal(repo_root, Stream::Stderr, &err_bytes)?,
     ];
+    reaper.disarm();
 
     // A signal Batten was SENT outranks whatever the child died of. A child that
     // ignored TERM and fell to the escalated KILL must not report `137` to a
@@ -2852,6 +2926,33 @@ fn report_bundle(
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// An unwind between the spawn and the wait ends the child (CLOUD-2238):
+    /// the reaper is a `Drop`, so a panic cannot skip it the way an early
+    /// return skipped the abandon path's reaper.
+    #[cfg(unix)]
+    #[test]
+    fn a_panic_between_spawn_and_wait_reaps_the_child() {
+        #[expect(
+            clippy::disallowed_types,
+            reason = "the case needs a real child in a group of its own to reap"
+        )]
+        let mut builder = Command::new("sleep");
+        builder.arg("3600");
+        lead_group(&mut builder);
+        let mut child = builder.spawn().expect("spawn sleep");
+        let id = child.id();
+        let unwound = std::panic::catch_unwind(move || {
+            let _reaper = Reaper::arm(id, GroupDecision::OWNED);
+            std::panic::resume_unwind(Box::new("between the spawn and the wait"));
+        });
+        assert!(unwound.is_err());
+        let status = child.wait().expect("reap the child");
+        assert!(
+            status.code().is_none(),
+            "the child exited on its own rather than being ended: {status:?}"
+        );
+    }
 
     #[test]
     fn an_empty_command_is_a_usage_error_never_a_verdict() {
