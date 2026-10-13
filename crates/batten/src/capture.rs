@@ -3070,3 +3070,15 @@ mod tests {
         );
     }
 }
+
+/*
+The mutation CLOUD-2237's Ready block declares: the writer skips a publish, which
+is the defect restored in the one shape a sed row can spell without a `|` (the
+first commit still publishes, every later one is skipped). The named case is the
+one that asserts a commit made under a held lock is readable with no later one.
+
+The suite is this file's own unit tier, as `landed.rs` declares for itself.
+
+#MUTANT-SUITE crates/batten/src/capture.rs
+#MUTANT publish-skipped|s@^        // Unconditional: the rename is the atomicity, and a skipped publish has$@        if self.written > 5 { return Ok(()); }@|a_reader_never_sees_past_the_watermark
+*/
