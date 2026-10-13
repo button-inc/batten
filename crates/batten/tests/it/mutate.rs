@@ -864,6 +864,36 @@ fn a_sweep_reports_its_row_count_and_each_rows_time() {
     );
 }
 
+/// A ROW SEEN CAUGHT IS NOT RUN AGAIN WHILE NOTHING IT READS HAS CHANGED
+/// (CLOUD-2253): cargo-mutants' `--iterate`, for the declared runner. The second
+/// sweep of an unchanged tree judges nothing; a change to the row's source makes
+/// the row run again.
+#[cfg(unix)]
+#[test]
+fn a_caught_row_is_not_run_again_until_its_inputs_change() {
+    let root = two_task_repo("task-recorded");
+    let (code, out, err) = sweep(&root, "task-a");
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(!err.contains("(recorded)"), "the first sweep judges: {err}");
+
+    let (code, out, err) = sweep(&root, "task-a");
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(
+        err.contains("caught (recorded)"),
+        "the second sweep skips the recorded row: {err}"
+    );
+    assert!(out.contains("every one caught"), "{out}");
+
+    let manifest = root.join("mise.toml");
+    let text = std::fs::read_to_string(&manifest).expect("read the manifest");
+    std::fs::write(&manifest, format!("{text}\n# touched\n")).expect("touch the source");
+    let (_, _, err) = sweep(&root, "task-a");
+    assert!(
+        !err.contains("(recorded)"),
+        "a changed source runs its row again: {err}"
+    );
+}
+
 /// The census half: a block that declares rows and is absent from the set is
 /// `uncovered`, so an inline task cannot declare a mutation nobody sweeps.
 #[cfg(unix)]

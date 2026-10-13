@@ -3254,6 +3254,83 @@ fn unreported(run: &Selection, suite: &Suite, row: &Row) -> Option<Verdict> {
     }
 }
 
+/// Where the sweep records each row it saw caught, under its work directory.
+///
+/// CARGO-MUTANTS' `--iterate`, FOR THE DECLARED RUNNER (CLOUD-2253). Measured on
+/// #1132: 173 changed rows at ~47s each, past the two-hour limit every time, and
+/// a killed sweep kept nothing, so every lap paid the whole set again. A row
+/// recorded caught under the same key is skipped, so a killed sweep resumes and
+/// an unchanged row is never re-run. Like `--iterate` it is a heuristic: the key
+/// is the row, its source and its suite, so a change elsewhere in what the case
+/// exercises does not invalidate it. CI starts with no record, which keeps the
+/// full sweep the confirmation.
+const CAUGHT_RECORD: &str = "caught.tsv";
+
+/// A row's key: its script, the bytes it mutates, and the bytes of its suite.
+fn row_key(root: &Path, gate: &Gate, row: &Row) -> String {
+    let mut material = row.script.clone().into_bytes();
+    material.push(0);
+    material.extend(std::fs::read(root.join(&row.source)).unwrap_or_default());
+    material.push(0);
+    if let Some(suite) = gate.suite_for(row) {
+        material.extend(std::fs::read(root.join(suite.path())).unwrap_or_default());
+    }
+    crate::provision::digest(&material)
+}
+
+/// The keys recorded caught; an unreadable record is an empty one.
+fn recorded_caught(record: &Path) -> std::collections::HashSet<String> {
+    std::fs::read_to_string(record)
+        .map(|text| text.lines().map(str::to_owned).collect())
+        .unwrap_or_default()
+}
+
+/// Append one caught key. Best effort: a key not recorded is a row run again.
+fn record_caught(record: &Path, key: &str) {
+    use std::io::Write as _;
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(record)
+    {
+        let _ = writeln!(file, "{key}");
+    }
+}
+
+/// BUILD ONCE, BEFORE ANY ROW IS TIMED (CLOUD-1910). Best effort: a build that
+/// fails leaves every Cargo row to report `suite-did-not-run` on its own, which
+/// is the honest verdict, so nothing is decided here. NOT AT ALL when every
+/// Cargo row is already recorded caught (CLOUD-2253): the build is minutes and
+/// no row would use it.
+fn build_if_owed(
+    root: &Path,
+    names: &[String],
+    registry: &Registry,
+    caught: &std::collections::HashSet<String>,
+    staged: &Staged,
+) {
+    let owed = names
+        .iter()
+        .filter_map(|name| resolve(root, name))
+        .any(|gate| {
+            gate.rows.iter().any(|row| {
+                registry.declares(row)
+                    && !caught.contains(&row_key(root, &gate, row))
+                    && matches!(gate.suite_for(row), Some(Suite::Cargo { .. }))
+            })
+        });
+    if owed {
+        let args = vec![String::from("test"), String::from("--no-run")];
+        let _ = spawn(
+            staged.dir(),
+            Program::Cargo,
+            &args,
+            &suite_env(root),
+            build_bound(),
+        );
+    }
+}
+
 /// Sweep the enforced set.
 ///
 /// # Errors
@@ -3301,28 +3378,10 @@ pub fn sweep_owned(
         "mutate sweep: {total} row(s) across {} gate(s)",
         names.len()
     );
+    let record = work.join(CAUGHT_RECORD);
+    let caught = recorded_caught(&record);
     let mut staged = Staged::new(root, work)?;
-    // BUILD ONCE, BEFORE ANY ROW IS TIMED (CLOUD-1910). Best effort: a build that
-    // fails leaves every Cargo row to report `suite-did-not-run` on its own, which
-    // is the honest verdict, so nothing is decided here.
-    if names
-        .iter()
-        .filter_map(|name| resolve(root, name))
-        .any(|gate| {
-            gate.suites()
-                .into_iter()
-                .any(|suite| matches!(suite, Suite::Cargo { .. }))
-        })
-    {
-        let args = vec![String::from("test"), String::from("--no-run")];
-        let _ = spawn(
-            staged.dir(),
-            Program::Cargo,
-            &args,
-            &suite_env(root),
-            build_bound(),
-        );
-    }
+    build_if_owed(root, names, registry, &caught, &staged);
     let mut findings = Vec::new();
     let mut declared = 0;
     for name in names {
@@ -3372,8 +3431,20 @@ pub fn sweep_owned(
         }
         for row in gate.rows.iter().filter(|row| registry.declares(row)) {
             declared += 1;
+            let key = row_key(root, &gate, row);
+            if caught.contains(&key) {
+                let _ = writeln!(
+                    progress,
+                    "mutate sweep: row {declared}/{total} {name} {} caught (recorded) 0s",
+                    row.slug
+                );
+                continue;
+            }
             let started = std::time::Instant::now();
             let verdict = judge_row(root, &mut staged, &gate, row)?;
+            if verdict == Verdict::Caught {
+                record_caught(&record, &key);
+            }
             let _ = writeln!(
                 progress,
                 "mutate sweep: row {declared}/{total} {name} {} {verdict} {}s",
