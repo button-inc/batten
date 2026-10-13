@@ -1018,24 +1018,28 @@ pub enum LiveRead {
 ///
 /// ## What the lock protects, which is less than it looks
 ///
-/// Not the data. The spool has **one** writer, appending, so the bytes need no
-/// mutual exclusion; what needs it is the *watermark*, because a reader that saw
-/// a torn length would read a range nobody promised. So the discipline is: append
-/// the bytes and flush them, then take the lock, publish the new length, release.
-/// A reader takes a shared lock, reads the length, and reads only that far — and
-/// because the length is published strictly after the bytes it covers, every byte
-/// under the watermark is already durable.
+/// Not the data, and not the watermark either. The spool has **one** writer,
+/// appending, so the bytes need no mutual exclusion; and the watermark is
+/// published by [`crate::durable::replace`] — temp, sync, rename — so a reader
+/// sees the old length or the new one, never a torn one. The discipline is:
+/// append the bytes and flush them, then publish the new length. Because the
+/// length is published strictly after the bytes it covers, every byte under the
+/// watermark is already durable.
 ///
-/// A writer that cannot take the lock **skips the publish** rather than waiting:
-/// the watermark then lags by one chunk and the next publish carries both. That
-/// is what keeps a reader's contention off the child's critical path.
+/// **The writer publishes every commit and never takes the lock** (CLOUD-2237).
+/// It used to `try_lock` and skip the publish when a reader held it, on the
+/// theory that "the next publish carries both" — but a command that speaks once
+/// and then goes quiet has no next publish, so its only line stayed unreadable
+/// for as long as it ran. Measured: a 20 s CI read of `""` under full-suite load.
+/// The lock stays a reader's: an exclusive holder (an operator, a test) still
+/// reads as [`LiveRead::Busy`], and a reader never waits on the child.
 #[derive(Debug)]
 pub struct Spool {
     /// The append-only data file.
     data: std::fs::File,
     /// Where the data file lives, for removal at seal.
     data_path: PathBuf,
-    /// The lock file guarding the watermark.
+    /// The readers' lock file, removed at seal; the writer never takes it.
     lock_path: PathBuf,
     /// The published length.
     watermark_path: PathBuf,
@@ -1090,8 +1094,8 @@ impl Spool {
     ///
     /// # Errors
     ///
-    /// Returns an error when the append fails. A lock the writer could not take
-    /// is **not** an error — see the type's docs.
+    /// Returns an error when the append or the publish fails. A reader holding
+    /// the lock delays nothing — see the type's docs.
     pub fn commit(&mut self, bytes: &[u8]) -> Result<()> {
         self.data
             .write_all(bytes)
@@ -1100,30 +1104,9 @@ impl Spool {
             .flush()
             .with_context(|| format!("flush the spool {}", self.data_path.display()))?;
         self.written += bytes.len() as u64;
-
-        let lock = std::fs::OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .open(&self.lock_path)
-            .with_context(|| format!("open the spool lock {}", self.lock_path.display()))?;
-        // Fully qualified for `journal.rs`'s reason: `std::fs::File::try_lock`
-        // was stabilized under the same name, and an inherent method would
-        // silently win over the trait once the MSRV moves.
-        match fs4::FileExt::try_lock(&lock) {
-            Ok(()) => {}
-            // The watermark lags one chunk and the next publish carries both.
-            // Waiting here would put a reader's contention on the child's path.
-            Err(fs4::TryLockError::WouldBlock) => return Ok(()),
-            Err(fs4::TryLockError::Error(err)) => {
-                return Err(anyhow::Error::from(err))
-                    .with_context(|| format!("take the spool lock {}", self.lock_path.display()));
-            }
-        }
-        let published =
-            crate::durable::replace(&self.watermark_path, format!("{}\n", self.written));
-        drop(lock);
-        published
+        // Unconditional: the rename is the atomicity, and a skipped publish has
+        // no later one to carry it when the command goes quiet (CLOUD-2237).
+        crate::durable::replace(&self.watermark_path, format!("{}\n", self.written))
             .with_context(|| format!("publish the watermark {}", self.watermark_path.display()))
     }
 
@@ -2829,13 +2812,10 @@ mod tests {
             LiveRead::Busy
         );
 
-        // The commit succeeds and the publish is skipped: waiting here would put
-        // a reader's contention on the child's critical path.
+        // The commit is PUBLISHED although a reader holds the lock: the rename is
+        // the atomicity, and a command that speaks once and goes quiet has no
+        // later publish to carry a skipped one (CLOUD-2237).
         spool.commit(b"-second").unwrap();
-        assert!(
-            std::fs::metadata(dir.join("stdout@unit")).unwrap().len() > 5,
-            "the bytes did land"
-        );
         drop(held);
 
         let LiveRead::Bytes(seen) =
@@ -2844,8 +2824,8 @@ mod tests {
             panic!("the lock is free again");
         };
         assert_eq!(
-            seen, b"first",
-            "the watermark lagged, so the reader must lag with it"
+            seen, b"first-second",
+            "a commit made while a reader held the lock is readable with no later commit"
         );
         // IDEMPOTENT: the same range re-read is the same bytes, which is what
         // makes "more context" a repeatable question rather than a stream to
@@ -2857,7 +2837,7 @@ mod tests {
         };
         assert_eq!(again, seen);
 
-        // And the next publish carries both chunks, so nothing is lost by lagging.
+        // And the next publish extends it.
         spool.commit(b"-third").unwrap();
         let LiveRead::Bytes(all) = read_live_in(&dir, LiveStream::STDOUT, "unit", 0, 4096).unwrap()
         else {
@@ -2868,6 +2848,21 @@ mod tests {
             live_watermark_in(&dir, LiveStream::STDOUT, "unit"),
             Some(all.len() as u64)
         );
+
+        // The one way the file still runs ahead of the watermark: bytes appended
+        // and not yet published, the instant between `flush` and `replace`. A
+        // reader must stop at the published length.
+        let mut ahead = std::fs::OpenOptions::new()
+            .append(true)
+            .open(dir.join("stdout@unit"))
+            .unwrap();
+        std::io::Write::write_all(&mut ahead, b"-unpublished").unwrap();
+        let LiveRead::Bytes(bounded) =
+            read_live_in(&dir, LiveStream::STDOUT, "unit", 0, 4096).unwrap()
+        else {
+            panic!("the lock is free");
+        };
+        assert_eq!(bounded, all, "the reader stops at the watermark");
     }
 
     #[test]
