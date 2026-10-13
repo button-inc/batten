@@ -4033,12 +4033,18 @@ reason = "Run the command alone in the call, with `run_in_background` and no red
 [[rule.verdict]]
 program = "mise"
 subcommands = ["run"]
+#
+# `commit` and the verbs that commit for you run the hooks, and a hook refusing
+# is the verdict (CLOUD-2234). Measured: a pre-commit `cargo fmt --check`
+# refused a backgrounded `git commit -F - <<'EOF'`, the `git log --oneline -1`
+# on the line after `EOF` ran anyway, and the call reported exit 0 over the
+# PREVIOUS commit — the next commit swept the staged files in under its message.
 
 # The mutating VCS verbs. The read-only ones (`log`, `show`, `diff`, `status`)
 # carry no verdict and compose freely, which is why this is an allow-list.
 [[rule.verdict]]
 program = "git"
-subcommands = ["push", "fetch", "rebase"]
+subcommands = ["push", "fetch", "rebase", "commit", "merge", "cherry-pick", "revert", "am"]
 
 # A build tool has far more verdict subcommands than query ones, so this is the
 # inverse reading: everything except the queries. A bare `cargo` names no action

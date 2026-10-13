@@ -9173,6 +9173,7 @@ impl Separator {
 /// at all on the next becomes a discarded status — which is a decision about
 /// that rule's reach and not about this parser. Changing it here would have been
 /// a behaviour change smuggled inside a substrate change.
+//MUTANT newline-node-unsequenced|s@        if position + 1 < reading.len()@        if false \&\& position + 1 < reading.len()@|a_commit_followed_by_a_newline_has_its_status_replaced
 fn segments(command: &str) -> crate::facts::Look<Vec<Segment>> {
     // `extglob` off: this is a pre-execution gate over what an agent wrote, and
     // the shell that will run it is not guaranteed to have the option set.
@@ -9231,8 +9232,25 @@ fn segments(command: &str) -> crate::facts::Look<Vec<Segment>> {
         .as_ref()
         .map_or((&nodes, command), |(text, parsed)| (parsed, text.as_str()));
     let mut out: Vec<Segment> = Vec::new();
-    for node in reading {
+    for (position, node) in reading.iter().enumerate() {
+        let first = out.len();
         flatten(node, source, None, &mut out);
+        // A NEWLINE BETWEEN TWO TOP-LEVEL COMMANDS IS A `;` (CLOUD-2234). The
+        // joined reading folds such lines into one segment, but a heredoc keeps
+        // the parse as written, and there the next command is its own node: the
+        // element before it ended with no terminator, so a verdict on it read as
+        // the list's last and its replaced status went unseen. Measured: a
+        // refused `git commit -F - <<'EOF'` with `git log` after `EOF`
+        // reported exit 0.
+        if position + 1 < reading.len()
+            && let Some(last) = out[first..]
+                .iter_mut()
+                .rev()
+                .find(|segment| !segment.nested)
+            && last.terminator.is_none()
+        {
+            last.terminator = Some(Separator::Semi);
+        }
     }
     // Where the join happened, `flatten` gave every segment one `lines` entry
     // over the FUSED words. Replace it with the per-line reading, segment by

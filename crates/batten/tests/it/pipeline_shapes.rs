@@ -174,6 +174,23 @@ fn a_verdict_followed_by_a_newline_has_its_status_replaced() {
     assert!(!cause_backgrounded("mise run verify\necho \"exit=$?\"").contains("exit=$?"));
 }
 
+/// A commit's status is its hooks' verdict (CLOUD-2234). The measured shape: a
+/// heredoc-fed commit with a query on the line after its terminator, which
+/// reported exit 0 while a pre-commit hook had refused the commit.
+#[test]
+fn a_commit_followed_by_a_newline_has_its_status_replaced() {
+    assert!(
+        cause_backgrounded("git commit -q -F - <<'EOF'\nfix: x\n\nbody\nEOF\ngit log --oneline -1")
+            .contains("verdict carry other")
+    );
+    assert!(
+        cause_backgrounded("git merge --ff-only topic; git log").contains("verdict carry other")
+    );
+    // Guarded, or alone, it keeps its status.
+    assert_allowed_backgrounded("git commit -q -F - <<'EOF'\nfix: x\nEOF");
+    assert_allowed_backgrounded("git commit -q -F msg.txt && git log --oneline -1");
+}
+
 /// The discriminating allows for CLOUD-986: the rule keys on the verdict whose
 /// status was replaced, never on the trailing line.
 #[test]
