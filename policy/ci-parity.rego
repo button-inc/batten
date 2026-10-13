@@ -1282,12 +1282,50 @@ freeze_owed(path, name) if {
 
 freeze_owed(path, name) if dispatches_build(path, name)
 
+# THE FREEZE IS OWED ONCE THE PINNED ENGINE CAN RUN IT (2026-10-13). A lane
+# writing `main` runs the engine `main` pins, and `release in-flight` first
+# ships in the release this path cuts: demanding the step under an older pin
+# breaks every writer of `main`, which `engine-pin-check` refuses for exactly
+# that reason, and the two gates deadlocked the branch adopting the path. A
+# source pin builds the tree's own engine, which carries the verb.
+freeze_from := [0, 0, 215]
+
+freeze_runnable if not input.tree.documents["batten.toml"].engine.release
+
+freeze_runnable if {
+	tag := input.tree.documents["batten.toml"].engine.release
+	parts := [to_number(part) | some part in split(trim_prefix(tag, "v"), ".")]
+	count(parts) == 3
+	not older(parts, freeze_from)
+}
+
+older(a, b) if a[0] < b[0]
+
+older(a, b) if {
+	a[0] == b[0]
+	a[1] < b[1]
+}
+
+older(a, b) if {
+	a[0] == b[0]
+	a[1] == b[1]
+	a[2] < b[2]
+}
+
+test_the_freeze_waits_for_the_pin_that_carries_it if {
+	not freeze_runnable with input as {"tree": {"documents": {"batten.toml": {"engine": {"release": "v0.0.214"}}}}}
+	freeze_runnable with input as {"tree": {"documents": {"batten.toml": {"engine": {"release": "v0.0.215"}}}}}
+	freeze_runnable with input as {"tree": {"documents": {"batten.toml": {"engine": {"release": "v0.1.0"}}}}}
+	freeze_runnable with input as {"tree": {"documents": {"batten.toml": {"engine": {"source": "abc"}}}}}
+}
+
 violation contains {
 	"rule": "release ship other",
 	"verdict": "release wire wrong",
 	"subjects": [{"path": path}, {"artifact": sprintf("%s writes main without the release freeze", [name])}],
 } if {
 	release_path_adopted
+	freeze_runnable
 	some path, doc in workflow
 	some name, _ in doc.jobs
 	freeze_owed(path, name)

@@ -9384,6 +9384,9 @@ sources = [
   "mise.toml",
   "release-plz.toml",
   "renovate.json5",
+  # The engine pin, which decides whether a `main` writer can run the release
+  # freeze yet: the lanes run the engine `main` pins (2026-10-13).
+  "batten.toml",
 ]
 line_sources = [
   ".github/workflows/*.yml",
