@@ -509,6 +509,54 @@ fn the_repository_as_it_stands_is_clean() {
     );
 }
 
+/// AGENTS.md's numbered steps under one `## ` heading, the heading excluded.
+fn numbered_steps(text: &str, heading: &str) -> Vec<String> {
+    let mut steps: Vec<String> = Vec::new();
+    for line in text
+        .lines()
+        .skip_while(|line| !line.starts_with(heading))
+        .skip(1)
+        .take_while(|line| !line.starts_with("## "))
+    {
+        let numbered = line
+            .split_once(". ")
+            .is_some_and(|(n, _)| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
+        match steps.last_mut() {
+            _ if numbered => steps.push(line.to_owned()),
+            Some(step) if line.starts_with("   ") => {
+                step.push(' ');
+                step.push_str(line.trim());
+            }
+            _ => {}
+        }
+    }
+    steps
+}
+
+/// The workflow contract names `land` as the one step after pushing, never the
+/// `verify` and `linear-check` each of its laps already runs (CLOUD-2240): an
+/// agent following the steps as written ran an hour-long `verify` twice.
+//MUTANT workflow-step-restored|s@^    let steps = numbered_steps(\&text, CONTRACT);$@    let steps = [vec![String::from("2. **`mise run verify` green before readying.**")], numbered_steps(\&text, CONTRACT)].concat();@|the_workflow_contract_lands_without_prescribing_its_parts
+#[test]
+fn the_workflow_contract_lands_without_prescribing_its_parts() {
+    const CONTRACT: &str = "## Workflow contract";
+    let text = fs::read_to_string(at_root("AGENTS.md")).expect("AGENTS.md is readable");
+    let steps = numbered_steps(&text, CONTRACT);
+    assert!(
+        steps.iter().any(|step| step.contains("`mise run land`")),
+        "the workflow contract names no `mise run land` step: {steps:?}"
+    );
+    for part in ["mise run verify", "mise run linear-check"] {
+        assert!(
+            !steps.iter().any(|step| step
+                .split_once(".**")
+                .map_or(step.as_str(), |(head, _)| head)
+                .contains(part)),
+            "the workflow contract prescribes `{part}` as a step of its own: {steps:?}"
+        );
+    }
+}
+
 /// The skill teaches the legend the engine prints, byte for byte (CLOUD-2145):
 /// the pre-1050 example it carried taught a format no refusal had used since.
 #[test]

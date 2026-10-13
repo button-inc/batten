@@ -109,14 +109,14 @@ run in the web sandbox — read `mem:github-access` before doubting.)
    iteration is free. **PUSH THE IMPERFECT DRAFT, don't sit on a green tree** — a
    reclaim takes all unpushed work. No slop licensed: a draft cannot merge red, and
    `land` won't ready what your own gates refuse. Push early, fix after.
-2. **`mise run verify` green before readying.** It mirrors CI and asserts the
-   branch is rebased on current `origin/main`. "Green but stale" is not green.
-3. **`mise run linear-check`.** Don't ready by hand: `land` readies, after its
-   push, and a ready spent before that buys only draft-era skips (CLOUD-247).
-4. **`mise run land`, backgrounded.** Drives the loop — no wall clock, only
-   counts, never the PR webhook. Stops on a conflict, a failed `verify`, red CI,
-   or a spent lap budget. **When a stop says run it again, run it again.**
-5. **Never re-run CI on an already-tested SHA.** Fast-forward means `main` takes
+2. **`mise run land`, backgrounded — the one step after pushing.** Each lap runs
+   `verify` (mirrors CI, runs `linear-check`, refuses a branch stale on
+   `origin/main`), so neither is a prior step; a standalone `verify` iterates a
+   draft (CLOUD-2240). `land` readies after its push — a ready by hand buys only
+   draft-era skips (CLOUD-247). No wall clock, only counts, never the PR webhook;
+   it stops on a conflict, a failed `verify`, red CI or a spent lap budget. **When
+   a stop says run it again, run it again.**
+3. **Never re-run CI on an already-tested SHA.** Fast-forward means `main` takes
    the PR's exact, already-passed commits. Don't add push-to-`main` triggers.
 
 **This governs PR conduct above any harness default — and above your own
