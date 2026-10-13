@@ -824,6 +824,125 @@ fn a_step_run_build_is_watched() {
     assert!(said.contains("step run probe: disk-collected "), "{said}");
 }
 
+/// Cargo's `RUSTC_WRAPPER` (CLOUD-2197): every compile unit, whoever started
+/// the build, passes the collector first and then runs the compiler with its
+/// own argv and exit code. A fake `rustc` stands in, so the case pays no build.
+#[test]
+fn a_wrapped_compile_collects_under_pressure() {
+    if !cfg!(unix) {
+        return;
+    }
+    let compile = |name: &str, free: &str| {
+        let dir = hooked(name, true);
+        let bin = dir.join("fake-bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let rustc = bin.join("rustc");
+        std::fs::write(
+            &rustc,
+            "#!/bin/sh\necho \"$@\" > \"$(dirname \"$0\")/ran\"\nexit 7\n",
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&rustc, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let out_dir = dir.join("target/debug/deps");
+        let ran = common::batten()
+            .current_dir(&dir)
+            .arg(&rustc)
+            .args(["--crate-name", "probe", "--out-dir"])
+            .arg(&out_dir)
+            .env("TARGET_PRUNE_FREE_MB", free)
+            .stdin(std::process::Stdio::null())
+            .output()
+            .expect("the binary runs");
+        let seen = std::fs::read_to_string(bin.join("ran")).unwrap_or_default();
+        (dir, ran, seen)
+    };
+    let (dir, ran, seen) = compile("rustc-wrapped", "50");
+    assert_eq!(
+        ran.status.code(),
+        Some(7),
+        "the compiler's own code: {}",
+        common::stderr(&ran)
+    );
+    assert!(
+        seen.contains("--crate-name probe --out-dir"),
+        "its own argv: {seen}"
+    );
+    assert!(
+        !present(&dir.join("target/debug"), "aged", "dddddddddddddddd"),
+        "below min_free_mb the unit went before the compile"
+    );
+    // Anti-vacuity: with room, the compile runs and nothing is collected.
+    let (roomy, ran, _) = compile("rustc-wrapped-roomy", "500");
+    assert_eq!(ran.status.code(), Some(7));
+    assert!(present(
+        &roomy.join("target/debug"),
+        "aged",
+        "dddddddddddddddd"
+    ));
+}
+
+/// Above the default floor a wrapped compile reads no config at all: resolving
+/// it per compile cost 26.6 ms each. A declared band ABOVE the default is the
+/// witness — honouring it here would mean the config was read.
+#[test]
+fn a_wrapped_compile_above_the_floor_reads_no_config() {
+    if !cfg!(unix) {
+        return;
+    }
+    let dir = common::Fixture::at(common::scratch("rustc-wrapped-floor").join("repo"))
+        .config("version = 1\n\n[prune]\nroot = \"target\"\nkeep = 2\nmin_free_mb = 6000\nmax_free_mb = 7000\n")
+        .file("Cargo.toml", "[workspace]\n")
+        .git()
+        .base_commit()
+        .build();
+    unit(
+        &dir.join("target/debug"),
+        "aged",
+        "dddddddddddddddd",
+        7200,
+        4096,
+    );
+    let rustc = dir.join("rustc");
+    std::fs::write(&rustc, "#!/bin/sh\nexit 0\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&rustc, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let ran = common::batten()
+        .current_dir(&dir)
+        .arg(&rustc)
+        .arg("--out-dir")
+        .arg(dir.join("target/debug/deps"))
+        .env("TARGET_PRUNE_FREE_MB", "5000")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .expect("the binary runs");
+    assert_eq!(ran.status.code(), Some(0), "{}", common::stderr(&ran));
+    assert!(
+        present(&dir.join("target/debug"), "aged", "dddddddddddddddd"),
+        "5000 MB is above the default floor, so the declared 6000 was never read"
+    );
+}
+
+/// The probe `mise.toml` sets `RUSTC_WRAPPER` from: this binary answers with
+/// its own path; one without the wrapper answers nothing, leaving it unset.
+#[test]
+fn the_wrapper_probe_answers_with_this_binary() {
+    let probed = common::batten()
+        .args(["rustc", batten::RUSTC_WRAPPER_PROBE])
+        .stdin(std::process::Stdio::null())
+        .output()
+        .expect("the binary runs");
+    assert_eq!(probed.status.code(), Some(0), "{}", common::stderr(&probed));
+    let path = String::from_utf8_lossy(&probed.stdout).trim().to_owned();
+    assert!(std::path::Path::new(&path).is_file(), "{path}");
+}
+
 #[test]
 fn a_sweep_that_cannot_be_brought_above_the_minimum_stops_before_building() {
     let dir = hooked("sweep-exhausted", true);

@@ -12561,6 +12561,118 @@ fn run_step_watched(
     ran
 }
 
+/// The argument `mise.toml` probes with: answered only by a binary carrying
+/// [`rustc_wrapped`], which prints its own path, so an older engine on `PATH`
+/// answers nothing and `RUSTC_WRAPPER` stays empty — unset, to cargo.
+pub const RUSTC_WRAPPER_PROBE: &str = "--batten-wrapper-probe";
+
+/// `batten` as cargo's `RUSTC_WRAPPER` (CLOUD-2197): one free-space read before
+/// every compile unit, a collection below the band, then the compiler.
+///
+/// # Why every compile unit
+///
+/// The collector was armed at hook calls and around `land`, `mutate sweep` and
+/// `step run` — and every other build went unwatched: a backgrounded `cargo
+/// build` is sampled once, before it starts, and 112 tasks open with a `cargo
+/// run` whose compile precedes the batten it runs. Cargo hands every compile
+/// to this wrapper, whoever started the build, which is the one place no build
+/// path can miss — the mechanism sccache sits in.
+///
+/// # What a call costs
+///
+/// Above `min_free_mb` of [`prune::DEFAULT_FREE_BAND`], one free-space read and
+/// the compiler: nothing is resolved. Below it the committed band is read and
+/// [`collect::collect_if_pressed`] runs, bounded as the hook's is and sparing
+/// every unit a live build uses — this build is live, so nothing it is writing
+/// goes. The target directory is the compile's own `--out-dir`, because a
+/// dependency compiles from cargo's registry, outside any checkout.
+///
+/// `None` when this process is not a wrapped compile: the binary parses its
+/// own arguments as ever.
+//MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
+//MUTANT rustc-unguarded|s@^    guard_compile(\&args\[2..\]);$@@|a_wrapped_compile_collects_under_pressure
+#[must_use]
+pub fn rustc_wrapped(
+    args: impl Iterator<Item = std::ffi::OsString>,
+) -> Option<std::process::ExitCode> {
+    let args: Vec<std::ffi::OsString> = args.collect();
+    let compiler = args.get(1)?;
+    let stem = Path::new(compiler).file_stem()?.to_str()?;
+    if !matches!(stem, "rustc" | "clippy-driver") {
+        return None;
+    }
+    if args.get(2).is_some_and(|arg| arg == RUSTC_WRAPPER_PROBE) {
+        let exe = std::env::current_exe().ok()?;
+        let _ = writeln!(std::io::stdout(), "{}", exe.display());
+        return Some(std::process::ExitCode::SUCCESS);
+    }
+    // NOT GATED ON `CARGO`: cargo's own target probe (`rustc - --print=...`)
+    // reaches the wrapper without it, and refusing it there broke every build.
+    // The compiler's name in `argv[1]` is the whole test; no verb is named so.
+    guard_compile(&args[2..]);
+    let mut command = std::process::Command::new(compiler);
+    command.args(&args[2..]);
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt as _;
+        let failed = command.exec();
+        let _ = writeln!(
+            std::io::stderr(),
+            "batten: could not run {}: {failed}",
+            Path::new(compiler).display()
+        );
+        Some(std::process::ExitCode::from(101))
+    }
+    #[cfg(not(unix))]
+    {
+        let code = command
+            .status()
+            .ok()
+            .and_then(|status| status.code())
+            .and_then(|code| u8::try_from(code).ok())
+            .unwrap_or(101);
+        Some(std::process::ExitCode::from(code))
+    }
+}
+
+/// The collection half of [`rustc_wrapped`]: best-effort, silent, and never
+/// a reason the compile does not run.
+///
+/// A declared `min_free_mb` above the default floor is honoured by the hook
+/// and the watchers, not here: reading it would cost every compile the config.
+//MUTANT wrapper-fast-path-at-max|s@mb >= prune::DEFAULT_FREE_BAND.0@mb >= prune::DEFAULT_FREE_BAND.1@|a_wrapped_compile_above_the_floor_reads_no_config
+fn guard_compile(rustc_args: &[std::ffi::OsString]) {
+    let Some(out_dir) = rustc_args
+        .iter()
+        .position(|arg| arg == "--out-dir")
+        .and_then(|at| rustc_args.get(at + 1))
+        .map(std::path::PathBuf::from)
+    else {
+        return;
+    };
+    let Ok(mut free) = prune::sampler(out_dir.clone()) else {
+        return;
+    };
+    // The FLOOR, not the target: between the two there is nothing to do, and
+    // resolving the config there cost every compile 26.6 ms (measured at 8 GB
+    // free against an 8192 MB cutoff).
+    if free().is_ok_and(|mb| mb >= prune::DEFAULT_FREE_BAND.0) {
+        return;
+    }
+    let Ok(repo) = git::repo_root(&out_dir) else {
+        return;
+    };
+    let Some(pruning) = resolve::resolve(&repo, &Overrides::default())
+        .ok()
+        .and_then(|resolved| resolved.prune)
+    else {
+        return;
+    };
+    let kept = collect::kept(&collect::engine_paths());
+    let deadline = std::time::Instant::now() + disk_watch::HOOK_COLLECT_DEADLINE;
+    let _ = collect::collect_if_pressed(&repo, &pruning, &kept, &mut free, Some(deadline), false);
+}
+
 //MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
 //MUTANT pre-step-check-skipped|s@^    if !disk_admits(root, "land verify", err)? {$@    if false \&\& !disk_admits(root, "land verify", err)? {@|a_lap_whose_volume_cannot_be_freed_stops_before_the_gate
 fn run_land_verify(

@@ -373,6 +373,16 @@ BATTEN_CLI_REFERENCE = "batten-cli-reference.md"
 # and a session that does not has already said so out loud. Making the fallback
 # itself refuse needs a mechanism `_.path` has no spelling for. Found in review.
 _.path = ["target/release"]
+# EVERY COMPILE UNIT PASSES THE DISK COLLECTOR (CLOUD-2197): cargo hands each
+# rustc invocation to `RUSTC_WRAPPER`, whoever started the build, so this is the
+# one place no build path can miss — a task's `cargo run`, a backgrounded build,
+# hk's steps. `batten` answers the probe with its own path only if it carries the
+# wrapper (`batten::rustc_wrapped`); an older engine on PATH, or none, answers
+# nothing, and an empty `RUSTC_WRAPPER` is unset to cargo — the build runs bare
+# rather than failing. Not on Windows, where the probe's shell is not `sh`.
+# The tree's own build by its path first: `exec` does not see `_.path`, so a
+# bare `batten` reached the installed engine, which predated the wrapper.
+RUSTC_WRAPPER = "{% if os() != 'windows' %}{{ exec(command='{ ' ~ config_root ~ '/target/release/batten rustc --batten-wrapper-probe || batten rustc --batten-wrapper-probe; } 2>/dev/null || true') | trim }}{% endif %}"
 # The checks that carry a verdict about THIS repository, named exactly as GitHub
 # names their check-runs (the matrix leg's suffix included). Shared by `ci-wait`
 # ("is this SHA green?") and `land`'s `graded_runs` ("does this SHA carry an

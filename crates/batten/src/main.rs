@@ -21,6 +21,11 @@ fn main() -> ExitCode {
     if let Some(failure) = batten::provision::launched(std::env::args_os()) {
         return report(&failure, Mode::default(), &mut io::stderr());
     }
+    // AS CARGO'S `RUSTC_WRAPPER`, for the same reason and before the same
+    // parsing (CLOUD-2197): everything after the compiler's path is rustc's.
+    if let Some(code) = batten::rustc_wrapped(std::env::args_os()) {
+        return code;
+    }
     // Resolved before parsing, and from the raw argument list, because a *usage*
     // error must still be reported — and at that point `clap` has refused to
     // produce any parsed value to read the mode from.
