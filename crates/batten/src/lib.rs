@@ -567,7 +567,7 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
                 step,
                 args,
                 command,
-            } => crate::step::run_step(&step, &args, &command, err),
+            } => run_step_watched(&step, &args, &command, err),
         },
         // The §8 chain supplies the `[sbom]` declarations from the committed
         // authority alone; the tree is the repository root's.
@@ -12529,6 +12529,36 @@ fn disk_watcher<'a>(
         free_mb: Box::new(free_mb),
         kept: collect::kept(&collect::engine_paths()),
     })
+}
+
+/// `batten step run` with the disk watcher alive around its command
+/// (CLOUD-2197). A step's build is not a tool call, so no hook sees it, and a
+/// `verify` making no calls for an hour filled the disk under a collector that
+/// was armed and never asked (2026-10-13). Every heavy build `verify` runs —
+/// clippy, the test build, semver, deny, the cross and darwin links — goes
+/// through this verb, so watching here covers them without a wrapper per task.
+//MUTANT step-run-unwatched|s@^        .and_then(\x7croot\x7c disk_watcher(root, prune_rules.as_ref()));$@        .and_then(\x7c_\x7c None::<disk_watch::DiskWatch<'_>>);@|a_step_run_build_is_watched
+fn run_step_watched(
+    step: &str,
+    args: &[String],
+    command: &[String],
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let root = git::worktree_root(Path::new(".")).ok();
+    let prune_rules = root
+        .as_deref()
+        .and_then(|root| resolve::resolve(root, &Overrides::default()).ok())
+        .and_then(|resolved| resolved.prune);
+    let watch = root
+        .as_deref()
+        .and_then(|root| disk_watcher(root, prune_rules.as_ref()));
+    let (ran, lines) = disk_watch::around(watch, || {
+        crate::step::run_step(step, args, command, &mut *err)
+    });
+    for line in &lines {
+        let _ = writeln!(err, "step run {step}: {line}");
+    }
+    ran
 }
 
 //MUTANT-SUITE crates/batten/tests/it/prune_watch.rs

@@ -648,23 +648,42 @@ fn wait_for(done: impl Fn() -> bool) {
     panic!("the watcher did not act within `WAIT_POLLS` polls");
 }
 
-/// THE MIRROR: a band undeclared is the arm switched off, and nothing goes.
+/// A band undeclared is the DEFAULT band, never the arm switched off
+/// (CLOUD-2197): with the keys held for a release pin, "off" let a branch's
+/// own `verify` fill the disk. This replaces a mirror that asserted nothing
+/// went while its body returned before the watcher's first sample.
 #[test]
-fn an_undeclared_band_watches_nothing() {
-    let repo = common::scratch("prune-watch-unbanded");
-    common::init_repo(&repo);
-    let profile = repo.join("target/debug");
-    unit(&profile, "stale", "eeeeeeeeeeeeeeee", 7200, 2 << 20);
-    let config = rules("target");
-    let watch = batten::disk_watch::DiskWatch {
-        repo: repo.clone(),
-        config: &config,
-        free_mb: Box::new(|| Ok(1)),
-        kept: Vec::new(),
+fn an_undeclared_band_watches_at_the_default() {
+    let watched = |name: &str, free: u64| {
+        let repo = common::scratch(name);
+        common::init_repo(&repo);
+        let profile = repo.join("target/debug");
+        unit(&profile, "stale", "eeeeeeeeeeeeeeee", 7200, 2 << 20);
+        let config = rules("target");
+        let samples = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = std::sync::Arc::clone(&samples);
+        let watch = batten::disk_watch::DiskWatch {
+            repo: repo.clone(),
+            config: &config,
+            free_mb: Box::new(move || {
+                counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(free)
+            }),
+            kept: Vec::new(),
+        };
+        let ((), lines) = batten::disk_watch::around(Some(watch), || {
+            wait_for(|| {
+                samples.load(std::sync::atomic::Ordering::SeqCst) >= 2
+                    || !present(&profile, "stale", "eeeeeeeeeeeeeeee")
+            });
+        });
+        (present(&profile, "stale", "eeeeeeeeeeeeeeee"), lines)
     };
-    let ((), lines) = batten::disk_watch::around(Some(watch), || {});
-    assert!(lines.is_empty(), "{lines:?}");
-    assert!(present(&profile, "stale", "eeeeeeeeeeeeeeee"));
+    let (kept, lines) = watched("prune-watch-default-band", 1);
+    assert!(!kept, "1 MB free is under the default floor: {lines:?}");
+    // Anti-vacuity: above the default floor, the watcher samples and keeps.
+    let (kept, lines) = watched("prune-watch-default-roomy", 5000);
+    assert!(kept, "5000 MB free is above the default floor: {lines:?}");
 }
 
 // --- the hook's caller (CLOUD-2197) -------------------------------------------
@@ -773,6 +792,36 @@ fn a_session_start_re_arms_every_fingerprint() {
         after.modified().unwrap(),
         "atime re-armed to mtime"
     );
+}
+
+/// A `step run` build is watched (CLOUD-2197): it is not a tool call, so only
+/// the watcher around it can collect while it runs. The step waits, bounded,
+/// for the aged unit to go — which only the watcher can make happen.
+#[test]
+fn a_step_run_build_is_watched() {
+    if !cfg!(unix) {
+        return;
+    }
+    let dir = hooked("step-run-watched", true);
+    let profile = dir.join("target/debug");
+    let waits = "for i in $(seq 1 400); do \
+                 [ -e target/debug/.fingerprint/aged-dddddddddddddddd ] || exit 0; \
+                 sleep 0.05; done; exit 1";
+    let ran = common::batten()
+        .current_dir(&dir)
+        .args(["step", "run", "probe", "--", "sh", "-c", waits])
+        .env("TARGET_PRUNE_FREE_MB", "50")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .expect("the binary runs");
+    let said = common::stderr(&ran);
+    assert_eq!(
+        ran.status.code(),
+        Some(0),
+        "the unit went while it ran: {said}"
+    );
+    assert!(!present(&profile, "aged", "dddddddddddddddd"), "{said}");
+    assert!(said.contains("step run probe: disk-collected "), "{said}");
 }
 
 #[test]
