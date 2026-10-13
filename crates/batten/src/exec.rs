@@ -1276,7 +1276,7 @@ impl Reaper {
     }
 }
 
-//MUTANT unwind-skips-reap|s@^        if !self.armed {$@        if true {@|a_panic_between_spawn_and_wait_reaps_the_child
+//MUTANT unwind-skips-reap|s@^        if !self.armed {$@        if true {@|a_teed_child_is_reaped_when_its_output_cannot_be_written
 impl Drop for Reaper {
     fn drop(&mut self) {
         if !self.armed {
@@ -2309,64 +2309,25 @@ pub(crate) fn detached(program: &Path, args: &[String], env: &[(&str, &str)]) {
     clippy::disallowed_types,
     reason = "stays: becoming the named program IS the verb, on `provision::become_process`'s reading — there is no in-process form of somebody else's binary (CLOUD-320)"
 )]
-pub fn become_argv(argv: &[String]) -> Result<std::convert::Infallible> {
+pub fn become_argv<S: AsRef<std::ffi::OsStr>>(argv: &[S]) -> Result<std::convert::Infallible> {
     use std::os::unix::process::CommandExt as _;
     // An empty argv is unreachable — the surface declares the trailing list
     // `num_args(1..)` — and is a refusal rather than a panic, because a launch
     // line nobody named must never read as a launch that happened.
     let Some((program, rest)) = argv.split_first() else {
         return Err(UsageError::raise(
-            "mcp spawn: no launch line to become, so nothing was started".to_owned(),
+            "no launch line to become, so nothing was started".to_owned(),
         ));
     };
+    let program = program.as_ref();
     let mut command = Command::new(program);
     command.args(rest);
     // `exec` returns only on failure, so reaching the next line IS the error.
     let failed = command.exec();
     Err(UsageError::raise(format!(
-        "mcp spawn: could not become `{program}`: {failed}"
+        "could not become `{}`: {failed}",
+        Path::new(program).display()
     )))
-}
-
-/// Become the compiler cargo handed `batten` as its `RUSTC_WRAPPER`
-/// (CLOUD-2197), with its own argv: the compile's code is the process's.
-///
-/// Where a process cannot be replaced, the compiler runs as a child and its
-/// status is taken — a wrapper is a launcher, on `provision::become_process`'s
-/// reading, and no supervisor guarantee is promised to cargo.
-#[expect(
-    clippy::disallowed_types,
-    reason = "stays: running the compiler cargo named IS the wrapper's job, and there is no in-process form of rustc"
-)]
-#[must_use]
-pub fn become_compiler(
-    compiler: &std::ffi::OsStr,
-    args: &[std::ffi::OsString],
-) -> std::process::ExitCode {
-    let mut command = Command::new(compiler);
-    command.args(args);
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt as _;
-        // `exec` returns only on failure, so reaching the next line IS the error.
-        let failed = command.exec();
-        let _ = writeln!(
-            std::io::stderr(),
-            "batten: could not run {}: {failed}",
-            Path::new(compiler).display()
-        );
-        std::process::ExitCode::from(101)
-    }
-    #[cfg(not(unix))]
-    {
-        let code = command
-            .status()
-            .ok()
-            .and_then(|status| status.code())
-            .and_then(|code| u8::try_from(code).ok())
-            .unwrap_or(101);
-        std::process::ExitCode::from(code)
-    }
 }
 
 /// The same, where a process cannot be replaced.
@@ -2386,7 +2347,7 @@ pub fn become_compiler(
 ///
 /// Always.
 #[cfg(not(unix))]
-pub fn become_argv(argv: &[String]) -> Result<std::convert::Infallible> {
+pub fn become_argv<S: AsRef<std::ffi::OsStr>>(argv: &[S]) -> Result<std::convert::Infallible> {
     let _ = argv;
     Err(UsageError::raise(
         "mcp spawn: this host cannot replace a process, and the launch guarantee is that no \
@@ -2926,33 +2887,6 @@ fn report_bundle(
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-
-    /// An unwind between the spawn and the wait ends the child (CLOUD-2238):
-    /// the reaper is a `Drop`, so a panic cannot skip it the way an early
-    /// return skipped the abandon path's reaper.
-    #[cfg(unix)]
-    #[test]
-    fn a_panic_between_spawn_and_wait_reaps_the_child() {
-        #[expect(
-            clippy::disallowed_types,
-            reason = "the case needs a real child in a group of its own to reap"
-        )]
-        let mut builder = Command::new("sleep");
-        builder.arg("3600");
-        lead_group(&mut builder);
-        let mut child = builder.spawn().expect("spawn sleep");
-        let id = child.id();
-        let unwound = std::panic::catch_unwind(move || {
-            let _reaper = Reaper::arm(id, GroupDecision::OWNED);
-            std::panic::resume_unwind(Box::new("between the spawn and the wait"));
-        });
-        assert!(unwound.is_err());
-        let status = child.wait().expect("reap the child");
-        assert!(
-            status.code().is_none(),
-            "the child exited on its own rather than being ended: {status:?}"
-        );
-    }
 
     #[test]
     fn an_empty_command_is_a_usage_error_never_a_verdict() {

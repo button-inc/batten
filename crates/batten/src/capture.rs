@@ -1570,12 +1570,9 @@ fn copy_counted(source: &Path, out: &mut impl Write) -> Result<(usize, usize)> {
             break;
         }
         let piece = chunk.get(..read).unwrap_or_default();
-        #[expect(
-            clippy::naive_bytecount,
-            reason = "a view section's line count, once per spilled chunk; the bytecount crate is not a dependency and this is not a hot loop"
-        )]
-        let found = piece.iter().filter(|byte| **byte == b'\n').count();
-        newlines += found;
+        newlines += piece
+            .iter()
+            .fold(0, |count, byte| count + usize::from(*byte == b'\n'));
         bytes += read;
         out.write_all(piece)?;
     }

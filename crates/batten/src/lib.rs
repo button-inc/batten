@@ -12614,8 +12614,15 @@ pub fn rustc_wrapped(
     // reaches the wrapper without it, and refusing it there broke every build.
     // The compiler's name in `argv[1]` is the whole test; no verb is named so.
     guard_compile(&args[2..]);
-    // THROUGH `exec`, the placed spawn boundary (`policy/spawn-adapters.rego`).
-    Some(exec::become_compiler(compiler, &args[2..]))
+    // THROUGH `exec::become_argv`, the spawn the inventory already holds for
+    // becoming a named program: a wrapper adds no spawn of its own.
+    match exec::become_argv(&args[1..]) {
+        Ok(never) => match never {},
+        Err(why) => {
+            let _ = writeln!(std::io::stderr(), "batten: {why}");
+            Some(std::process::ExitCode::from(101))
+        }
+    }
 }
 
 /// The collection half of [`rustc_wrapped`]: best-effort, silent, and never
