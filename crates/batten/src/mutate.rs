@@ -530,6 +530,9 @@ pub enum Verdict {
     FilterNamesEveryCase { want: String },
     /// The script would not apply.
     UnappliableMutation,
+    /// Applying the script outlived its bound, so whether it applies is unknown
+    /// (CLOUD-2246): never [`Verdict::UnappliableMutation`], which blames the row.
+    MutationTimedOut { seconds: u64 },
     /// The script changed nothing, so it proves nothing.
     InertMutation,
     /// The diff touched only declaration lines: a pattern spelled literally
@@ -576,6 +579,7 @@ impl Verdict {
                 | Verdict::CaseErrored { .. }
                 | Verdict::CaseAlreadyRed { .. }
                 | Verdict::UnappliableMutation
+                | Verdict::MutationTimedOut { .. }
                 | Verdict::RunnerAbsent
                 | Verdict::RunnerOverlap
                 | Verdict::RunnerErrored { .. }
@@ -605,6 +609,9 @@ impl fmt::Display for Verdict {
                 write!(out, "filter-names-every-case ({want})")
             }
             Verdict::UnappliableMutation => write!(out, "unappliable-mutation"),
+            Verdict::MutationTimedOut { seconds } => {
+                write!(out, "mutation-timed-out ({seconds}s)")
+            }
             Verdict::InertMutation => write!(out, "inert-mutation"),
             Verdict::SelfMutatingRow => write!(out, "self-mutating-row"),
             Verdict::RunnerAbsent => write!(out, "runner-absent"),
@@ -1176,7 +1183,7 @@ impl RunnerKind {
 //MUTANT declared-runner-takes-globs|s@^            if kind == RunnerKind::Declared {$@            if false {@|a_registry_naming_no_runner_or_giving_the_declared_one_globs_is_refused
 //MUTANT declared-suites-unscoped|s@^        if has_extension(suite, "rs")$@        if false@|a_sources_scope_is_its_own_tests_and_every_suite_it_declares
 //MUTANT missed-unread|s@^    let missed: Vec<String> = lines("missed.txt")@    let missed: Vec<String> = lines("absent.txt")@|a_missed_mutant_is_a_survivor_named_by_pointer_alone
-//MUTANT failed-run-reads-caught|s@^        } else if !ran.ok \&\& found.is_empty() {$@        } else if false {@|a_failed_run_with_nothing_missed_is_never_every_mutant_caught
+//MUTANT failed-run-reads-caught|s@^        } else if !ran.passed() \&\& found.is_empty() {$@        } else if false {@|a_failed_run_with_nothing_missed_is_never_every_mutant_caught
 //MUTANT-SUITE crates/batten/tests/it/mutate.rs
 /// Which registered runner owns which sources.
 ///
@@ -1360,7 +1367,8 @@ pub fn unresolvable(root: &Path, registry: &Registry) -> Vec<Finding> {
                         .is_some_and(|program| resolves(root, program));
                 }
             };
-            !spawn(root, Program::Cargo, &args, &[], HOUSEKEEPING_BOUND).is_ok_and(|ran| ran.ok)
+            !spawn(root, Program::Cargo, &args, &[], HOUSEKEEPING_BOUND)
+                .is_ok_and(|ran| ran.passed())
         })
         .map(|kind| Finding {
             gate: kind.id().to_owned(),
@@ -1383,19 +1391,17 @@ fn resolves(root: &Path, program: &str) -> bool {
 
 /// What a `command` runner's exit says (CLOUD-2211): 0 caught, 2 survived, and
 /// anything else — 1 included, which is a crash's code — could-not-look.
-//MUTANT command-exit-unread|s@^    match ran.code {$@    match Some(0) {@|a_command_runner_exit_two_is_survived
-//MUTANT command-error-read-as-caught|s@^        code => Verdict::RunnerErrored { code },$@        _ => Verdict::Caught,@|a_command_runner_that_errors_cannot_look
+//MUTANT command-exit-unread|s@^    match ran.outcome {$@    match Outcome::Passed {@|a_command_runner_exit_two_is_survived
+//MUTANT command-error-read-as-caught|s@^        Outcome::Failed(code) => Verdict::RunnerErrored { code },$@        Outcome::Failed(_) => Verdict::Caught,@|a_command_runner_that_errors_cannot_look
 #[must_use]
 fn command_verdict(ran: &Ran) -> Verdict {
-    if ran.timed_out {
-        return Verdict::RunnerErrored { code: None };
-    }
-    match ran.code {
-        Some(0) => Verdict::Caught,
-        Some(2) => Verdict::Survived {
+    match ran.outcome {
+        Outcome::Passed => Verdict::Caught,
+        Outcome::Failed(Some(2)) => Verdict::Survived {
             want: String::from("exit 2"),
         },
-        code => Verdict::RunnerErrored { code },
+        Outcome::Failed(code) => Verdict::RunnerErrored { code },
+        Outcome::TimedOut => Verdict::RunnerErrored { code: None },
     }
 }
 
@@ -1477,7 +1483,7 @@ pub fn run_registered(
         &[],
         HOUSEKEEPING_BOUND,
     )?;
-    if !diff.ok {
+    if !diff.passed() {
         bail!("mutate: `git diff {base}` failed, so the change cannot be named to cargo-mutants");
     }
     let staged = Staged::new(root, work.to_path_buf())?;
@@ -1639,14 +1645,14 @@ impl Outcomes {
                     .map(|pointer| at(pointer, Verdict::SuiteTimedOut { seconds: 0 })),
             )
             .collect();
-        if ran.timed_out {
+        if ran.outcome == Outcome::TimedOut {
             found.push(at(
                 source,
                 Verdict::SuiteTimedOut {
                     seconds: runner_bound().as_secs(),
                 },
             ));
-        } else if !ran.ok && found.is_empty() {
+        } else if !ran.passed() && found.is_empty() {
             found.push(at(
                 source,
                 if self.baseline_failed {
@@ -1931,17 +1937,17 @@ fn reconcile(dir: &Path, tracked: &std::collections::BTreeSet<String>) -> Result
 // Spawning.
 // ---------------------------------------------------------------------------
 
-/// What one spawned program answered.
-#[derive(Debug)]
-pub struct Ran {
-    /// Whether it exited zero.
-    pub ok: bool,
-    /// Its exit code, `None` for a child ended by a signal. Read by the
-    /// `command` runner, whose whole contract is the code (CLOUD-2211).
-    pub code: Option<i32>,
-    /// Its combined output, which is scanned for case lines and never reported.
-    pub output: String,
-    /// Whether [`suite_bound`] expired and this process killed the child
+/// How one spawned program ended (CLOUD-2246): one answer, where `ok`, `code`
+/// and `timed_out` were three fields whose readers combined them in different
+/// orders, and `apply` read a timeout as the row's own refusal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Outcome {
+    /// It exited zero.
+    Passed,
+    /// It exited non-zero, with its code, `None` for a child ended by a signal.
+    /// The `command` runner's whole contract is the code (CLOUD-2211).
+    Failed(Option<i32>),
+    /// Its bound expired and this process killed the child
     /// (CLOUD-1860).
     ///
     /// **CARRIED RATHER THAN INFERRED, because inferring it is the defect.** A
@@ -1950,7 +1956,24 @@ pub struct Ran {
     /// that is present, reachable and green. That sends whoever reads the sweep
     /// to repair a declaration which is already correct, and it is how 109 of 341
     /// declared mutations sat unlooked-at while the verb reported coverage.
-    pub timed_out: bool,
+    TimedOut,
+}
+
+/// What one spawned program answered.
+#[derive(Debug)]
+pub struct Ran {
+    /// How it ended.
+    pub outcome: Outcome,
+    /// Its combined output, which is scanned for case lines and never reported.
+    pub output: String,
+}
+
+impl Ran {
+    /// Whether it exited zero.
+    #[must_use]
+    pub fn passed(&self) -> bool {
+        self.outcome == Outcome::Passed
+    }
 }
 
 /// The programs this module runs, CLOSED (CLOUD-1924).
@@ -2101,11 +2124,16 @@ fn spawn(
     let _ = forwarded;
     let (status, timed_out) =
         waited.with_context(|| format!("mutate: could not wait for {program}"))?;
-    // The ONE place a `Ran` may say `timed_out`: `finish` describes a child that
+    // The ONE place a `Ran` may say `TimedOut`: `finish` describes a child that
     // reached its own exit, and only the bound expiring here makes that untrue.
-    Ok(Ran {
-        timed_out,
-        ..finish(status, &out_path, &err_path, &capture)
+    let ran = finish(status, &out_path, &err_path, &capture);
+    Ok(if timed_out {
+        Ran {
+            outcome: Outcome::TimedOut,
+            ..ran
+        }
+    } else {
+        ran
     })
 }
 
@@ -2233,15 +2261,15 @@ fn finish(
     // directory, and failing a sweep over housekeeping would trade a real
     // verdict for tidiness.
     let _ = fs::remove_dir_all(capture);
-    Ran {
-        ok: status.success(),
-        code: status.code(),
-        output,
-        // The ordinary path. The hang path above overrides it, and it is the ONE
-        // caller that may: a `Ran` built anywhere else describes a child that
-        // reached its own exit.
-        timed_out: false,
-    }
+    // The ordinary path. The hang path above overrides it, and it is the ONE
+    // caller that may: a `Ran` built anywhere else describes a child that
+    // reached its own exit.
+    let outcome = if status.success() {
+        Outcome::Passed
+    } else {
+        Outcome::Failed(status.code())
+    };
+    Ran { outcome, output }
 }
 
 /// Distinguishes concurrent captures within one process; the pid separates
@@ -2284,6 +2312,17 @@ static CAPTURE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new
 /// file operations over an already-staged tree; a minute is generous and a hang
 /// here is a real defect rather than a slow build.
 const HOUSEKEEPING_BOUND: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// [`HOUSEKEEPING_BOUND`] for applying a row, overridable by
+/// `BATTEN_MUTATE_HOUSEKEEPING_TIMEOUT` as the suite bounds are, so a case can
+/// drive the timed-out arm without waiting a minute (CLOUD-2246).
+fn housekeeping_bound() -> std::time::Duration {
+    std::env::var("BATTEN_MUTATE_HOUSEKEEPING_TIMEOUT")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|seconds| *seconds > 0)
+        .map_or(HOUSEKEEPING_BOUND, std::time::Duration::from_secs)
+}
 
 fn suite_bound(suite: &Suite) -> std::time::Duration {
     let declared = match suite {
@@ -2528,7 +2567,7 @@ fn run_suite(staged: &Staged, root: &Path, suite: &Suite, want: &str) -> Selecti
     let selection = match suite {
         Suite::Cargo { .. } => Selection {
             selected: libtest_lines(&ran.output),
-            ok: ran.ok && !ran.output.contains("error: could not compile"),
+            ok: ran.passed() && !ran.output.contains("error: could not compile"),
             reach: Reach::of(libtest_ran(&ran.output), false),
         },
         Suite::Tofu { .. } => tofu_verdict(&ran.output, want),
@@ -2539,7 +2578,7 @@ fn run_suite(staged: &Staged, root: &Path, suite: &Suite, want: &str) -> Selecti
         Suite::Pytest { .. } => pytest_verdict(&fs::read_to_string(&junit).unwrap_or_default()),
     };
     let _ = fs::remove_file(&junit);
-    if ran.timed_out {
+    if ran.outcome == Outcome::TimedOut {
         return Selection {
             reach: Reach::TimedOut,
             ..selection
@@ -2919,15 +2958,26 @@ fn total_cases(root: &Path, suite: &Suite) -> usize {
 /// next argument as the suffix, so the no-suffix spelling consumes the script on
 /// a Mac. The backup is removed rather than kept — it exists only to satisfy the
 /// one form both seds accept.
-fn apply(staged: &Staged, row: &Row) -> Result<bool> {
+///
+/// `None` when it applied, else the verdict: a sed that exits non-zero refused
+/// the row, and one that outlived its bound said nothing about it (CLOUD-2246).
+//MUTANT apply-timeout-read-as-refusal|s@^        Outcome::Failed(_) => Some(Verdict::UnappliableMutation),$@        Outcome::Failed(_) \x7c Outcome::TimedOut => Some(Verdict::UnappliableMutation),@|a_mutation_whose_sed_times_out_is_not_unappliable
+fn apply(staged: &Staged, row: &Row) -> Result<Option<Verdict>> {
     let args = vec![
         String::from("-i.bak"),
         row.script.clone(),
         row.source.clone(),
     ];
-    let ran = spawn(staged.dir(), Program::Sed, &args, &[], HOUSEKEEPING_BOUND)?;
+    let bound = housekeeping_bound();
+    let ran = spawn(staged.dir(), Program::Sed, &args, &[], bound)?;
     let _ = std::fs::remove_file(staged.dir().join(format!("{}.bak", row.source)));
-    Ok(ran.ok)
+    Ok(match ran.outcome {
+        Outcome::Passed => None,
+        Outcome::Failed(_) => Some(Verdict::UnappliableMutation),
+        Outcome::TimedOut => Some(Verdict::MutationTimedOut {
+            seconds: bound.as_secs(),
+        }),
+    })
 }
 
 /// Whether the mutation changed anything, and whether it changed anything but a
@@ -3036,8 +3086,8 @@ fn judge_row(root: &Path, staged: &mut Staged, gate: &Gate, row: &Row) -> Result
         });
     }
 
-    if !apply(staged, row)? {
-        return Ok(Verdict::UnappliableMutation);
+    if let Some(refused) = apply(staged, row)? {
+        return Ok(refused);
     }
     let (changed, code_lines) = diff_shape(root, staged, &row.source);
     if !changed {
@@ -3628,10 +3678,12 @@ mod tests {
 
     fn ran(ok: bool) -> Ran {
         Ran {
-            ok,
-            code: Some(i32::from(!ok)),
+            outcome: if ok {
+                Outcome::Passed
+            } else {
+                Outcome::Failed(Some(1))
+            },
             output: String::new(),
-            timed_out: false,
         }
     }
 

@@ -351,6 +351,40 @@ fn a_suite_that_hangs_is_ended_by_the_sweeps_own_bound() {
     );
 }
 
+/// A SED THAT OUTLIVES ITS BOUND SAID NOTHING ABOUT THE ROW (CLOUD-2246).
+///
+/// `apply` read the spawn's `ok` alone, and a killed child is not ok, so a
+/// hung sed reported `unappliable-mutation` — blaming a row that is correct.
+/// The `sed` first on `PATH` here hangs; the suite's clean run never calls it.
+#[cfg(unix)]
+#[test]
+fn a_mutation_whose_sed_times_out_is_not_unappliable() {
+    let root = toy_repo("sed-hangs", &[CAUGHT]);
+    let bin = common::scratch("mutate-sed-hangs-bin");
+    write_program(&bin, "sed", "#!/bin/sh\nexec sleep 3600\n");
+    let path = std::env::join_paths(std::iter::once(bin).chain(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    )))
+    .expect("join PATH");
+    let answer = common::batten()
+        .args(["mutate", "sweep"])
+        .current_dir(&root)
+        .env("MUTANT_GATES", "toy")
+        .env("MUTANT_TASKS", "mise.toml")
+        .env("PATH", path)
+        .env("BATTEN_MUTATE_HOUSEKEEPING_TIMEOUT", "2")
+        .output()
+        .expect("run batten mutate");
+    let out = stdout(&answer);
+    assert_eq!(
+        answer.status.code(),
+        Some(3),
+        "a timeout is could-not-look: {out}"
+    );
+    assert!(out.contains("mutation-timed-out"), "{out}");
+    assert!(!out.contains("unappliable-mutation"), "{out}");
+}
+
 /// THE SWEEP'S OWN SIGNAL REACHES ITS SUITE (CLOUD-2059).
 ///
 /// The suite leads a process group of its own so the bound can end it whole —
