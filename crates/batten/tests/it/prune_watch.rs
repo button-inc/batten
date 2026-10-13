@@ -125,7 +125,7 @@ fn request<'a>(
 
 /// [`request`], under a live build that started a minute ago: what it has used
 /// since is its own, as a running suite's is.
-fn request_under_a_live_build<'a>(trees: &'a [PathBuf], need: u64) -> batten::collect::Request<'a> {
+fn request_under_a_live_build(trees: &[PathBuf], need: u64) -> batten::collect::Request<'_> {
     let mut ask = request(trees, &[], need);
     ask.live_since = Some(SystemTime::now() - Duration::from_secs(60));
     ask
@@ -296,7 +296,7 @@ fn a_test_binary_a_live_run_built_is_never_collected() {
     unit(&profile, "stale", "ffffffffffffffff", 3 * 3600, 4096);
     let trees = [root.join("target")];
     let mut ask = request(&trees, &[], u64::MAX);
-    ask.live_since = Some(SystemTime::now() - Duration::from_secs(2 * 3600));
+    ask.live_since = Some(SystemTime::now() - Duration::from_hours(2));
     let pass = batten::collect::collect(&ask);
     assert_eq!(pass.removed, 1, "only the unit no live run reads goes");
     assert!(present(&profile, "in-use", "eeeeeeeeeeeeeeee"));
@@ -315,7 +315,7 @@ fn a_library_a_finished_compile_used_is_collected_under_a_live_run() {
     unit(&profile, "linted", "abcdabcdabcdabcd", 3600, 4096);
     let trees = [root.join("target")];
     let mut ask = request(&trees, &[], u64::MAX);
-    ask.live_since = Some(SystemTime::now() - Duration::from_secs(2 * 3600));
+    ask.live_since = Some(SystemTime::now() - Duration::from_hours(2));
     let pass = batten::collect::collect(&ask);
     assert_eq!(pass.removed, 1, "no lock holds it, and no run launches it");
     assert!(!present(&profile, "linted", "abcdabcdabcdabcd"));

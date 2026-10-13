@@ -12561,7 +12561,7 @@ fn run_step_watched(
     ran
 }
 
-/// The argument `mise.toml` probes with: answered only by a binary carrying
+/// The argument a consumer's task file probes with: answered only by a binary carrying
 /// [`rustc_wrapped`], which prints its own path, so an older engine on `PATH`
 /// answers nothing and `RUSTC_WRAPPER` stays empty — unset, to cargo.
 pub const RUSTC_WRAPPER_PROBE: &str = "--batten-wrapper-probe";
@@ -17050,9 +17050,6 @@ fn destructive_call_facts(
     (discards, singleton)
 }
 
-//MUTANT unloadable-config-admits-write|s@^                    return deny_unadjudicable(harness, \&envelope, \&unreadable, mode, out, err);$@                    return Err(unreadable);@|a_write_over_a_config_that_fails_validation_is_refused
-//MUTANT floor-swallows-the-refusal|s@                if recoverable_without_rules(\&envelope) {@                if true {@|a_command_is_still_refused_over_a_config_that_will_not_load
-//MUTANT floor-removed|s@                if recoverable_without_rules(\&envelope) {@                if false {@|a_read_still_answers_over_a_config_that_will_not_load
 //MUTANT advice-beside-the-grant|s@^    if !matches!(decision, hook::Decision::Preapproved(_)) || advice.is_empty() {$@    if true {@|a_preapproval_carries_the_calls_advice_in_one_document
 fn run_hook(
     harness: hook::Harness,
@@ -17226,33 +17223,9 @@ fn run_hook(
     // [`recoverable_without_rules`] carries the argument for which two shapes
     // pass and why every other one still refuses.
     let (policy, waivers, pruning) = if adjudicable {
-        match load_hook_config(overrides, harness) {
+        match hook_config_or_floor(overrides, harness, &envelope, &raw, mode, out, err)? {
             Ok(loaded) => loaded,
-            // EVERY LOAD FAULT, NOT ONLY A PARSE FAILURE (CLOUD-1917). This arm
-            // was guarded to a parse failure alone, and every other fault — a
-            // validator refusing a row, a skewed version — fell to
-            // `return Err(other)`, exit `1`, which a harness reads as a
-            // non-blocking hook error and RUNS THE CALL. Measured: a config whose
-            // one verdict carried an over-long `gloss` let a protected write
-            // through with no admission. Whatever the class, the rules this build
-            // is registered to enforce did not load, so nothing judged the call;
-            // the floor below still passes a read and the repair write.
-            Err(unreadable) => {
-                if let Some(code) = hand_to_checkout_build(&raw, out)? {
-                    return Ok(code);
-                }
-                if recoverable_without_rules(&envelope) {
-                    // THE SAME EMPTY POLICY THE HATCH HANDS BACK, and for the
-                    // same reason: there is no rule to apply, so there is
-                    // nothing for a gate to do. `declaring_nothing` carries
-                    // `protected: PathSet::empty()`, which is what lets the
-                    // repair write reach the file that is faulting — the
-                    // protected gate is not SUPPRESSED here, it has no table.
-                    (hook::Policy::declaring_nothing(harness), Vec::new(), None)
-                } else {
-                    return deny_unadjudicable(harness, &envelope, &unreadable, mode, out, err);
-                }
-            }
+            Err(code) => return Ok(code),
         }
     } else {
         (hook::Policy::declaring_nothing(harness), Vec::new(), None)
@@ -17924,6 +17897,58 @@ fn unadjudicable_remedy() -> Fix {
         engine::repair_at(&root, engine::REPAIR),
         engine::repair_at(&root, engine::REPAIR_PINNED),
     ))
+}
+
+/// What a hook call judges with: its policy, its waivers and its disk collector.
+type HookConfig = (hook::Policy, Vec<waiver::Waiver>, Option<prune::Prune>);
+
+/// The hook's config, or the floor over a config that will not load: a read
+/// and the repair write pass with no rules, and everything else is refused
+/// (CLOUD-1842, CLOUD-1917). `Err` carries the exit the call ends with.
+//MUTANT unloadable-config-admits-write|s@^                deny_unadjudicable(harness, envelope, \&unreadable, mode, out, err).map(Err)$@                Err(unreadable)@|a_write_over_a_config_that_fails_validation_is_refused
+//MUTANT floor-swallows-the-refusal|s@            if recoverable_without_rules(envelope) {@            if true {@|a_command_is_still_refused_over_a_config_that_will_not_load
+//MUTANT floor-removed|s@            if recoverable_without_rules(envelope) {@            if false {@|a_read_still_answers_over_a_config_that_will_not_load
+fn hook_config_or_floor(
+    overrides: &Overrides,
+    harness: hook::Harness,
+    envelope: &hook::Envelope,
+    raw: &str,
+    mode: Mode,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<Result<HookConfig, ExitCode>> {
+    match load_hook_config(overrides, harness) {
+        Ok(loaded) => Ok(Ok(loaded)),
+        // EVERY LOAD FAULT, NOT ONLY A PARSE FAILURE (CLOUD-1917). This arm
+        // was guarded to a parse failure alone, and every other fault — a
+        // validator refusing a row, a skewed version — fell to
+        // `return Err(other)`, exit `1`, which a harness reads as a
+        // non-blocking hook error and RUNS THE CALL. Measured: a config whose
+        // one verdict carried an over-long `gloss` let a protected write
+        // through with no admission. Whatever the class, the rules this build
+        // is registered to enforce did not load, so nothing judged the call;
+        // the floor below still passes a read and the repair write.
+        Err(unreadable) => {
+            if let Some(code) = hand_to_checkout_build(raw, out)? {
+                return Ok(Err(code));
+            }
+            if recoverable_without_rules(envelope) {
+                // THE SAME EMPTY POLICY THE HATCH HANDS BACK, and for the
+                // same reason: there is no rule to apply, so there is
+                // nothing for a gate to do. `declaring_nothing` carries
+                // `protected: PathSet::empty()`, which is what lets the
+                // repair write reach the file that is faulting — the
+                // protected gate is not SUPPRESSED here, it has no table.
+                Ok(Ok((
+                    hook::Policy::declaring_nothing(harness),
+                    Vec::new(),
+                    None,
+                )))
+            } else {
+                deny_unadjudicable(harness, envelope, &unreadable, mode, out, err).map(Err)
+            }
+        }
+    }
 }
 
 /// Hand a call this engine cannot judge to the hook authority's own checkout
@@ -22207,10 +22232,7 @@ fn load_policy(
 /// collector's band costs the pre-tool path nothing beyond the load it already
 /// pays (CLOUD-2197).
 //MUTANT no-config-mode-bundle-dropped|s@^        return Ok((hook::Policy::mode_default(harness)?, Vec::new(), None));$@        return Ok((hook::Policy::declaring_nothing(harness), Vec::new(), None));@|an_auto_mode_call_is_granted_where_no_authority_governs
-fn load_hook_config(
-    overrides: &Overrides,
-    harness: hook::Harness,
-) -> Result<(hook::Policy, Vec<waiver::Waiver>, Option<prune::Prune>)> {
+fn load_hook_config(overrides: &Overrides, harness: hook::Harness) -> Result<HookConfig> {
     let here = hook_authority_root();
     // THE FLAG IS CONSULTED BEFORE THE FILE (CLOUD-719). The zero-config
     // short-circuit below is correct in its own right — `batten hook` runs in

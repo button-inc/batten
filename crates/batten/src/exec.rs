@@ -2269,6 +2269,7 @@ pub fn become_argv(argv: &[String]) -> Result<std::convert::Infallible> {
     clippy::disallowed_types,
     reason = "stays: running the compiler cargo named IS the wrapper's job, and there is no in-process form of rustc"
 )]
+#[must_use]
 pub fn become_compiler(
     compiler: &std::ffi::OsStr,
     args: &[std::ffi::OsString],

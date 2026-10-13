@@ -195,6 +195,8 @@ fn row() -> Rule {
             "mise.toml",
             "release-plz.toml",
             "renovate.json5",
+            // The engine pin the release freeze waits for (`freeze_runnable`).
+            "batten.toml",
         ],
         "line_sources": [
             ".github/workflows/*.yml",

@@ -3955,7 +3955,7 @@
           "minimum": 0
         },
         "min_free_mb": {
-          "description": "Below this much free space, in MB, the disk collector runs (CLOUD-2197):\non every mediated call, and throughout `land` and `mutate sweep`. Nix's\n`min-free`. Declared with [`Prune::max_free_mb`] or not at all; absent,\nthe collector is off.",
+          "description": "Below this much free space, in MB, the disk collector runs (CLOUD-2197):\non every mediated call, and throughout `land` and `mutate sweep`. Nix's\n`min-free`. Declared with [`Prune::max_free_mb`] or not at all; absent,\nthe collector runs at [`DEFAULT_FREE_BAND`].",
           "type": [
             "integer",
             "null"

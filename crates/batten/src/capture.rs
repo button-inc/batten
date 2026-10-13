@@ -1483,24 +1483,6 @@ pub fn result_view_spilled(
         line: usize,
         spills: &'a [(String, PathBuf)],
     }
-    /// Copy `source` into `out`, returning its bytes and its line count.
-    fn copy_counted(source: &Path, out: &mut impl Write) -> Result<(usize, usize)> {
-        let mut file = std::fs::File::open(source)
-            .with_context(|| format!("read the spilled leaf {}", source.display()))?;
-        let mut chunk = vec![0_u8; 64 * 1024];
-        let (mut bytes, mut newlines) = (0usize, 0usize);
-        loop {
-            let read = std::io::Read::read(&mut file, &mut chunk)?;
-            if read == 0 {
-                break;
-            }
-            let piece = chunk.get(..read).unwrap_or_default();
-            newlines += piece.iter().filter(|byte| **byte == b'\n').count();
-            bytes += read;
-            out.write_all(piece)?;
-        }
-        Ok((bytes, newlines + 1))
-    }
     fn walk(pointer: &str, value: &serde_json::Value, at: &mut Walk<'_>) -> Result<()> {
         match value {
             serde_json::Value::Object(fields) if !fields.is_empty() => {
@@ -1532,12 +1514,11 @@ pub fn result_view_spilled(
         let pointer = if pointer.is_empty() { "/" } else { pointer };
         writeln!(at.out, "## {pointer}")?;
         at.line += 1;
-        let (bytes, lines) = match spilled {
-            Some(source) => copy_counted(source, &mut at.out)?,
-            None => {
-                at.out.write_all(body.as_bytes())?;
-                (body.len(), body.matches('\n').count() + 1)
-            }
+        let (bytes, lines) = if let Some(source) = spilled {
+            copy_counted(source, &mut at.out)?
+        } else {
+            at.out.write_all(body.as_bytes())?;
+            (body.len(), body.matches('\n').count() + 1)
         };
         at.index.push(ViewField {
             pointer: pointer.to_owned(),
@@ -1575,6 +1556,30 @@ pub fn result_view_spilled(
     std::fs::rename(&staging, &path)
         .with_context(|| format!("write the view {}", path.display()))?;
     Ok((path, at.index))
+}
+
+/// Copy `source` into `out`, returning its bytes and its line count.
+fn copy_counted(source: &Path, out: &mut impl Write) -> Result<(usize, usize)> {
+    let mut file = std::fs::File::open(source)
+        .with_context(|| format!("read the spilled leaf {}", source.display()))?;
+    let mut chunk = vec![0_u8; 64 * 1024];
+    let (mut bytes, mut newlines) = (0usize, 0usize);
+    loop {
+        let read = std::io::Read::read(&mut file, &mut chunk)?;
+        if read == 0 {
+            break;
+        }
+        let piece = chunk.get(..read).unwrap_or_default();
+        #[expect(
+            clippy::naive_bytecount,
+            reason = "a view section's line count, once per spilled chunk; the bytecount crate is not a dependency and this is not a hot loop"
+        )]
+        let found = piece.iter().filter(|byte| **byte == b'\n').count();
+        newlines += found;
+        bytes += read;
+        out.write_all(piece)?;
+    }
+    Ok((bytes, newlines + 1))
 }
 
 /// Where the view of the capture `digest` lives in the store `dir`.

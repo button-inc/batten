@@ -1046,11 +1046,7 @@ pub fn load(
             // `clippy::too_many_lines`: a nameable step lifted out whole, which is
             // the remedy `lib.rs` takes for the same lint rather than raising a cap.
             let sources: Vec<(String, String)> = preset_sources(rule, manifest, name)?;
-            let bundle = if checks == ModuleChecks::SkipOnHotPath {
-                compile_cached(root, &rule.id, &sources, &pattern_data)?
-            } else {
-                compile(&rule.id, &sources, &pattern_data)?
-            };
+            let bundle = compile_for(root, &rule.id, &sources, &pattern_data, checks)?;
             let declared = bundle.declared.clone();
             check_predicate_severity(rule, &declared, source_key)?;
             // A PRESET IS A MODULE TOO, and this branch's `continue` skipped the
@@ -1084,11 +1080,7 @@ pub fn load(
         // one engine from N sources, which is the whole of CLOUD-837. The hot
         // path reads it from the bytecode cache when nothing it is a function
         // of has changed (CLOUD-2236).
-        let bundle = if checks == ModuleChecks::SkipOnHotPath {
-            compile_cached(root, &rule.id, &sources, &pattern_data)?
-        } else {
-            compile(&rule.id, &sources, &pattern_data)?
-        };
+        let bundle = compile_for(root, &rule.id, &sources, &pattern_data, checks)?;
         let declared = bundle.declared.clone();
 
         // The pointer a bundle-level fault is reported against.
@@ -1114,6 +1106,23 @@ pub fn load(
         check_collapse(rules, &per_rule, &tokens)?;
     }
     Ok(bundles)
+}
+
+/// One row's bundle: from the bytecode cache on the hot path, whose loads skip
+/// every check that needs the interpreter's AST, and compiled from source
+/// everywhere else (CLOUD-2236).
+fn compile_for(
+    root: &Path,
+    id: &str,
+    sources: &[(String, String)],
+    pattern_data: &serde_json::Value,
+    checks: ModuleChecks,
+) -> Result<Bundle> {
+    if checks == ModuleChecks::SkipOnHotPath {
+        compile_cached(root, id, sources, pattern_data)
+    } else {
+        compile(id, sources, pattern_data)
+    }
 }
 
 /// Which of a preset's modules this row compiles, given the CI provider it
@@ -1377,7 +1386,7 @@ pub fn compile(
         // for the value that decides whether a refusal refuses.
         severity: crate::severity::RuleSeverity::Deny,
         predicate_severity: BTreeMap::new(),
-        evaluator: Evaluator::Interpreted(engine),
+        evaluator: Evaluator::Interpreted(Box::new(engine)),
         described: std::sync::OnceLock::new(),
     })
 }
@@ -1619,8 +1628,9 @@ impl Answer {
 /// How a bundle evaluates (CLOUD-2236).
 #[derive(Clone)]
 enum Evaluator {
-    /// The interpreter, compiled from source in this process.
-    Interpreted(regorus::Engine),
+    /// The interpreter, compiled from source in this process. Boxed: an
+    /// engine is several times the size of the shared bytecode handle.
+    Interpreted(Box<regorus::Engine>),
     /// Bytecode a previous call compiled and cached.
     Compiled(std::sync::Arc<Compiled>),
 }
@@ -1630,7 +1640,7 @@ impl Evaluator {
     /// the hot path, whose bundles nothing describes, tests or sweeps.
     fn engine(&self) -> Option<&regorus::Engine> {
         match self {
-            Self::Interpreted(engine) => Some(engine),
+            Self::Interpreted(engine) => Some(engine.as_ref()),
             Self::Compiled(_) => None,
         }
     }
@@ -1746,11 +1756,11 @@ const CACHE_FORMAT: &str = "batten-policy-rvm-1";
 
 /// The entry for row `id`, in the repository's state directory: one file per
 /// row, overwritten on a miss, so the cache never grows past the row count.
-//MUTANT cache-root-relative|s@repo_state_dir(\&root.canonicalize().ok()?)@repo_state_dir(root)@|a_warm_load_from_the_working_directory_compiles_no_engine
+//MUTANT cache-root-relative|s@repo_state_dir(\&crate::git::canonical(root))@repo_state_dir(root)@|a_warm_load_from_the_working_directory_compiles_no_engine
 fn cache_path(root: &Path, id: &str) -> Option<std::path::PathBuf> {
     // Canonical first: the hook hands `.`, and the state directory is named
     // from the repository's own directory, which `.` does not carry.
-    let dir = crate::state::repo_state_dir(&root.canonicalize().ok()?).ok()?;
+    let dir = crate::state::repo_state_dir(&crate::git::canonical(root)).ok()?;
     Some(
         dir.join("policy")
             .join(format!("{}.rvm", blake3::hash(id.as_bytes()).to_hex())),

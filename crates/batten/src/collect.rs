@@ -275,7 +275,9 @@ mod darwin {
     /// kernel.
     pub(super) fn pids(table: &[u8]) -> Vec<(i32, SystemTime)> {
         table
-            .chunks_exact(KINFO_PROC)
+            .as_chunks::<KINFO_PROC>()
+            .0
+            .iter()
             .filter_map(|entry| {
                 let pid = i32::from_le_bytes(entry.get(P_PID..P_PID + 4)?.try_into().ok()?);
                 let secs =

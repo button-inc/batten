@@ -88,15 +88,15 @@ fn load(root: &std::path::Path, checks: policy::ModuleChecks) -> policy::Bundle 
         .remove(0)
 }
 
-/// Everything a hook call reads off a bundle for `input`, in one comparable value.
-fn decided(
-    bundle: &policy::Bundle,
-    input: &str,
-) -> (
+/// What a hook call reads off a bundle: its refusals, grants and rewrites.
+type Decided = (
     Look<Vec<policy::Violation>>,
     Look<Vec<String>>,
     Look<Vec<policy::Rewrite>>,
-) {
+);
+
+/// Everything a hook call reads off a bundle for `input`, in one comparable value.
+fn decided(bundle: &policy::Bundle, input: &str) -> Decided {
     (
         policy::deny(bundle, input),
         policy::preapprove(bundle, input),
