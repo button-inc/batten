@@ -515,6 +515,30 @@ fn a_decision_offered_back_reaches_the_host_advisory_channel() {
     );
 }
 
+/// A DEFERRAL WITH NO ROW IS NAMED AT STOP, AND ONE NAMING ITS ROW IS NOT
+/// (CLOUD-2241), over the engine and the committed `[[pattern]]` rows.
+///
+/// `#MUTANT deferral-key-unchecked` reddens the keyed half.
+#[test]
+fn a_turn_deferring_unfiled_work_is_refused_at_stop() {
+    let unfiled = hook(
+        &repo("stop-posture-defer"),
+        &stop_payload("The remaining fix goes on the next branch.", false),
+    );
+    let stdout = stdout_of(&unfiled);
+    assert_eq!(unfiled.status.code(), Some(0), "advice only: {stdout}");
+    assert!(stdout.contains("turn ship unnamed"), "{stdout}");
+    let filed = hook(
+        &repo("stop-posture-defer-filed"),
+        &stop_payload(
+            "The remaining fix goes on the next branch, filed as CLOUD-2241.",
+            false,
+        ),
+    );
+    let stdout = stdout_of(&filed);
+    assert!(!stdout.contains("turn ship unnamed"), "{stdout}");
+}
+
 /// THE INFINITIVE OPENER, over the engine rather than the module's own suite
 /// (CLOUD-487).
 ///

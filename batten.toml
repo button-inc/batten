@@ -1982,6 +1982,15 @@ regex = "(?i)worth (noting|flagging|mentioning|naming)|one thing (I would|I['’
 id = "deferral-offered"
 regex = "Your call, |(?i:waiting on your call|both your call|a checkpoint with you|once you run|restart the session)"
 
+# CLOUD-2241: work promised to a later branch in a final message, which the turn
+# must file before it ends. The literals are the three witnessed on PR #1132
+# ("goes on the next branch", "ships on the next branch", "their own short
+# branches" reads as `separate branch` once named) and their direct spellings.
+# `turn-defer.rego` clears a message carrying any `ready-issue-key`.
+[[pattern]]
+id = "deferral-promised"
+regex = '(?i)\b(next branch|follow-?up|follow up|later branch|separate branch|in a later|after landing|goes on the|ships on the)\b'
+
 # CLOUD-323's two measured deferral shapes in a PR body, which `record derive
 # deferral --input shape=deferral-shape` matches per paragraph outside code
 # spans (CLOUD-843 moved the literal here from `[tasks.deferral-record]`).
@@ -7781,6 +7790,16 @@ no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused be
 kind = "policy"
 scope = "mediated_call"
 module = "policy/turn-ask.rego"
+severity = "deny"
+
+# CLOUD-2241: the unfiled deferral, the third end-of-turn tell, as its own row
+# and module for `turn ask early`'s reason.
+[[rule]]
+id = "turn ship unnamed"
+no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
+kind = "policy"
+scope = "mediated_call"
+module = "policy/turn-defer.rego"
 severity = "deny"
 
 # CLOUD-1131's write-time signal, and it is a `warn` by design rather than by
@@ -14167,6 +14186,20 @@ already made is not this; the pattern is forward-looking by measurement (CLOUD-1
 id = "module read first"
 kind = "document"
 target = "policy/turn-ask.rego"
+
+[[verdict]]
+id = "turn ship unnamed"
+gloss = "the turn deferred work to a later branch without naming the row that holds it"
+class = """
+Chat retains nothing across compaction, so a deferral stated only in the final \
+message is a lost one: AGENTS.md says what you decline to fix, you file. Name the \
+row that holds the deferred work in the message, or file it first (CLOUD-2241).
+"""
+
+[[verdict.route]]
+id = "issue file first"
+kind = "issue"
+target = "file the deferred work, or name the row that already holds it"
 
 [[verdict]]
 id = "prose report duplicate"
