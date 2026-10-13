@@ -107,6 +107,7 @@ mod checksums;
 mod ci_cache_declared;
 mod ci_hygiene;
 mod ci_parity;
+mod ci_signal;
 mod ci_slow_needed;
 mod ci_suite_lane;
 mod ci_suites;

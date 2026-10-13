@@ -69,7 +69,7 @@ use crate::rest::Answer;
 //MUTANT mismatch-never-recorded|s@^            .is_some_and(.bytes. digest(bytes) != .expected)$@            .is_none()@|a_byte_mismatch_is_refused_once_the_names_agree
 //MUTANT stale-record-survives-could-not-look|s@^            crate::record::clear_named(RECORD_VERB, FAMILY)?;$@@|an_unreadable_release_is_could_not_look_and_leaves_no_record
 //MUTANT-SUITE crates/batten/tests/it/release_backfill.rs
-//MUTANT backfill-trusts-the-dispatch|s@^                if conclusion != "success" {$@                if false {@|a_failed_run_stops_the_sweep_naming_the_tag
+//MUTANT backfill-trusts-the-dispatch|s@^                if !conclusion.publishes() {$@                if false {@|a_failed_run_stops_the_sweep_naming_the_tag
 //MUTANT backfill-lexical-order|s@^        tags.sort_by(.left, right. version_order(left, right));$@        tags.sort();@|the_repository_tags_are_swept_oldest_first_by_version
 
 /// The record family `record release` writes, and the one a module reads.
@@ -765,7 +765,7 @@ fn newest_run(slug: &str, workflow: &str, get: Get<'_>) -> Option<u64> {
 
 /// A run's `(status, conclusion)`, with an absent conclusion as the empty word,
 /// and the server's asked-for pause.
-fn run_state(slug: &str, id: u64, get: Get<'_>) -> (Option<(String, String)>, f64) {
+fn run_state(slug: &str, id: u64, get: Get<'_>) -> (Option<crate::forge::RunState>, f64) {
     let Some(answer) = get(&format!("repos/{slug}/actions/runs/{id}")) else {
         return (None, 0.0);
     };
@@ -775,15 +775,7 @@ fn run_state(slug: &str, id: u64, get: Get<'_>) -> (Option<(String, String)>, f6
     }
     let state = serde_json::from_str::<serde_json::Value>(&answer.body)
         .ok()
-        .and_then(|value| {
-            let status = value.get("status")?.as_str()?.to_owned();
-            let conclusion = value
-                .get("conclusion")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or_default()
-                .to_owned();
-            Some((status, conclusion))
-        });
+        .map(|value| crate::forge::RunState::of_row(&value));
     (state, floor)
 }
 
@@ -853,8 +845,9 @@ fn sweep_one(slug: &str, request: &Backfill, tag: &str, forge: &Forge<'_>) -> Re
         }
         let (state, floor) = run_state(slug, id, forge.get);
         match state {
-            Some((status, conclusion)) if status == "completed" => {
-                if conclusion != "success" {
+            Some(crate::forge::RunState::Completed(conclusion)) => {
+                if !conclusion.publishes() {
+                    let conclusion = conclusion.as_str();
                     return Err(format!(
                         "{tag} concluded `{conclusion}` in run {id}; read that run before \
                          re-running — a credential the action refuses fails every tag identically"

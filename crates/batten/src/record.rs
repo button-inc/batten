@@ -420,7 +420,9 @@ pub fn graded(runs: &[crate::checks_green::Run], answered: &[&str]) -> BTreeMap<
     }
     latest
         .into_iter()
-        .filter(|(_, run)| answers(answered, &run.conclusion))
+        // Concluded first (CLOUD-2243): a conclusion on a run that has not
+        // finished is not an answer, whatever the declared set holds.
+        .filter(|(_, run)| run.completed() && answers(answered, &run.conclusion))
         .map(|(name, run)| (name.to_owned(), run.conclusion.clone()))
         .collect()
 }

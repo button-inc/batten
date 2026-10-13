@@ -61,7 +61,7 @@ use serde_json::Value;
 
 use crate::error::UsageError;
 use crate::exit::ExitCode;
-use crate::forge::{self, Shape, Transport, Window};
+use crate::forge::{self, Conclusion, Shape, Transport, Window};
 use crate::forge_query::Produced;
 
 /// The divergence leaf, as a refusal names it.
@@ -165,7 +165,7 @@ fn refused(what: &str, endpoint: &str, status: Option<u16>) -> Produced {
 struct Run {
     id: String,
     branch: String,
-    conclusion: String,
+    state: forge::RunState,
     created: String,
     started: String,
     updated: String,
@@ -177,9 +177,10 @@ impl Run {
         Run {
             id: field(row, "id").unwrap_or_default(),
             branch: field(row, "head_branch").unwrap_or_else(|| String::from("-")),
-            conclusion: field(row, "conclusion")
-                .or_else(|| field(row, "status"))
-                .unwrap_or_else(|| String::from("-")),
+            // Classified from both fields (CLOUD-2243): an unfinished run is
+            // never concluded, where `status` used to stand in for a null
+            // `conclusion` and an in-progress run was graded.
+            state: forge::RunState::of_row(row),
             created: field(row, "created_at").unwrap_or_default(),
             started: field(row, "run_started_at").unwrap_or_default(),
             updated: field(row, "updated_at").unwrap_or_default(),
@@ -189,7 +190,7 @@ impl Run {
 
     /// A draft-era push: it spent no matrix and is never graded.
     fn skipped(&self) -> bool {
-        self.conclusion == "skipped"
+        self.state.conclusion() == Some(&Conclusion::Skipped)
     }
 }
 
@@ -281,10 +282,10 @@ fn attribute(
             run.branch == *branch && run.created.as_str() <= merged.as_str() && !run.skipped()
         }) {
             g += 1;
-            match run.conclusion.as_str() {
-                "success" => s += 1,
-                "failure" => f += 1,
-                "cancelled" => c += 1,
+            match run.state.conclusion() {
+                Some(Conclusion::Success) => s += 1,
+                Some(Conclusion::Failure) => f += 1,
+                Some(Conclusion::Cancelled) => c += 1,
                 _ => {}
             }
         }
@@ -309,7 +310,9 @@ fn attribute(
 fn cancellations(runs: &[Run], records: &mut Vec<String>) -> Vec<i64> {
     let mut latencies = Vec::new();
     for run in runs.iter().filter(|run| {
-        run.conclusion == "cancelled" && !run.started.is_empty() && !run.updated.is_empty()
+        run.state.conclusion() == Some(&Conclusion::Cancelled)
+            && !run.started.is_empty()
+            && !run.updated.is_empty()
     }) {
         let (Some(started), Some(updated)) = (epoch(&run.started), epoch(&run.updated)) else {
             continue;
@@ -342,7 +345,7 @@ fn job_queue(
     let (mut latencies, mut unreadable) = (Vec::new(), 0_u64);
     for run in runs
         .iter()
-        .filter(|run| !run.skipped() && run.conclusion != "-")
+        .filter(|run| !run.skipped() && run.state.conclusion().is_some())
     {
         let jobs_path = format!("repos/{slug}/actions/runs/{}/jobs", run.id);
         match forge::window_over(

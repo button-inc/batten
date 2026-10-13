@@ -182,9 +182,8 @@ impl PullState {
         match state.as_deref() {
             Some("merged") => Self::Merged,
             Some("closed") => Self::Closed,
-            Some("open") if draft => Self::Draft,
+            Some("open") | None if draft => Self::Draft,
             Some("open") => Self::Open,
-            None if draft => Self::Draft,
             _ => Self::Unknown,
         }
     }
@@ -193,6 +192,120 @@ impl PullState {
     #[must_use]
     pub fn is_finished(self) -> bool {
         matches!(self, Self::Merged | Self::Closed)
+    }
+}
+
+/// A check run's or workflow run's state, classified once from both of the
+/// forge's fields (CLOUD-2243). Its readers kept `status` and `conclusion` as
+/// strings, decided "finished" and "passed" each their own way, and one borrowed
+/// `status` into `conclusion`, so an in-progress run carried the conclusion
+/// `in_progress`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RunState {
+    /// Waiting for a runner: `queued`, `waiting`, `requested` or `pending`.
+    Queued,
+    /// Running, or any status this binary does not name: never concluded.
+    InProgress,
+    /// Finished, with its conclusion.
+    Completed(Conclusion),
+}
+
+/// How a completed run ended.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Conclusion {
+    /// `success`.
+    Success,
+    /// `neutral`.
+    Neutral,
+    /// `skipped`.
+    Skipped,
+    /// `failure`.
+    Failure,
+    /// `cancelled`.
+    Cancelled,
+    /// `timed_out`.
+    TimedOut,
+    /// `action_required`.
+    ActionRequired,
+    /// `stale`.
+    Stale,
+    /// A value this binary does not name, or none on a completed run.
+    Unknown(String),
+}
+
+impl RunState {
+    /// The only parse. A completed run with no conclusion is
+    /// [`Conclusion::Unknown`]; a conclusion is never borrowed from `status`.
+    //MUTANT null-conclusion-borrows-status|s@^            _ => Self::InProgress,$@            _ => Self::Completed(Conclusion::of(status.unwrap_or_default())),@|an_in_progress_run_is_never_concluded
+    #[must_use]
+    pub fn of(status: Option<&str>, conclusion: Option<&str>) -> Self {
+        match status {
+            Some("completed") => Self::Completed(Conclusion::of(conclusion.unwrap_or_default())),
+            Some("queued" | "waiting" | "requested" | "pending") => Self::Queued,
+            _ => Self::InProgress,
+        }
+    }
+
+    /// A forge JSON row's `status` and `conclusion`.
+    #[must_use]
+    pub fn of_row(row: &serde_json::Value) -> Self {
+        let text = |key: &str| row.get(key).and_then(serde_json::Value::as_str);
+        Self::of(text("status"), text("conclusion"))
+    }
+
+    /// The conclusion, where the run has one.
+    #[must_use]
+    pub const fn conclusion(&self) -> Option<&Conclusion> {
+        match self {
+            Self::Completed(conclusion) => Some(conclusion),
+            Self::Queued | Self::InProgress => None,
+        }
+    }
+}
+
+impl Conclusion {
+    /// A `conclusion` field's value.
+    #[must_use]
+    pub fn of(text: &str) -> Self {
+        match text {
+            "success" => Self::Success,
+            "neutral" => Self::Neutral,
+            "skipped" => Self::Skipped,
+            "failure" => Self::Failure,
+            "cancelled" => Self::Cancelled,
+            "timed_out" => Self::TimedOut,
+            "action_required" => Self::ActionRequired,
+            "stale" => Self::Stale,
+            other => Self::Unknown(other.to_owned()),
+        }
+    }
+
+    /// The forge's own token, as [`Conclusion::of`] read it.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Success => "success",
+            Self::Neutral => "neutral",
+            Self::Skipped => "skipped",
+            Self::Failure => "failure",
+            Self::Cancelled => "cancelled",
+            Self::TimedOut => "timed_out",
+            Self::ActionRequired => "action_required",
+            Self::Stale => "stale",
+            Self::Unknown(other) => other,
+        }
+    }
+
+    /// Whether a required check passes the merge gate: success or neutral.
+    #[must_use]
+    pub const fn passes_gate(&self) -> bool {
+        matches!(self, Self::Success | Self::Neutral)
+    }
+
+    /// Whether a release build may publish: success alone.
+    #[must_use]
+    pub const fn publishes(&self) -> bool {
+        matches!(self, Self::Success)
     }
 }
 

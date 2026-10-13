@@ -144,6 +144,25 @@ pub struct Run {
     pub id: u64,
 }
 
+impl Run {
+    /// Its state, classified from both fields (CLOUD-2243).
+    fn state(&self) -> crate::forge::RunState {
+        crate::forge::RunState::of(Some(&self.status), Some(&self.conclusion))
+    }
+
+    /// Whether it has concluded.
+    pub(crate) fn completed(&self) -> bool {
+        self.state().conclusion().is_some()
+    }
+
+    /// Whether its conclusion passes the merge gate: success or neutral.
+    fn passes_gate(&self) -> bool {
+        self.state()
+            .conclusion()
+            .is_some_and(crate::forge::Conclusion::passes_gate)
+    }
+}
+
 /// The roster and its two qualifiers, all of them the consumer's.
 ///
 /// None of these is a literal in this crate: a tracker's or a forge's vocabulary
@@ -197,17 +216,13 @@ impl std::fmt::Display for RosterError {
 /// cancelled run judged nothing, so an unorderable pair holding one falls to "no
 /// answer" rather than to red.
 fn rank(run: &Run, answered: &[String]) -> u8 {
-    if run.status != "completed" {
+    if !run.completed() {
         return 4;
     }
     if !answered.iter().any(|c| c == &run.conclusion) {
         return 3;
     }
-    if run.conclusion == "success" || run.conclusion == "neutral" {
-        1
-    } else {
-        2
-    }
+    if run.passes_gate() { 1 } else { 2 }
 }
 
 /// The ordering key for one run. ISO-8601 sorts lexicographically, so a string
@@ -260,7 +275,7 @@ fn rank(run: &Run, answered: &[String]) -> u8 {
 //MUTANT skip-outranks-a-concurrent-failure|s@run.completed_at.clone(),@String::new(),@|a_concurrent_skip_does_not_bury_the_failure_it_raced
 fn key(run: &Run) -> (bool, String, String, u64) {
     (
-        run.completed_at.is_empty() && run.status != "completed",
+        run.completed_at.is_empty() && !run.completed(),
         run.completed_at.clone(),
         run.started_at.clone(),
         run.id,
@@ -489,7 +504,7 @@ pub fn decide(runs: &[Run], roster: &Roster) -> Result<Verdict, RosterError> {
             }
             continue;
         };
-        if run.status != "completed" {
+        if !run.completed() {
             pending += 1;
             continue;
         }
@@ -505,7 +520,7 @@ pub fn decide(runs: &[Run], roster: &Roster) -> Result<Verdict, RosterError> {
             continue;
         }
         graded += 1;
-        if run.conclusion != "success" && run.conclusion != "neutral" {
+        if !run.passes_gate() {
             let finding = Finding {
                 check: name.clone(),
                 conclusion: run.conclusion.clone(),

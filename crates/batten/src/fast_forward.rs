@@ -44,6 +44,7 @@
 use anyhow::Result;
 
 use crate::error::UsageError;
+use crate::forge::{Conclusion, RunState};
 
 /// Runs per page when reading for the answer.
 ///
@@ -424,7 +425,7 @@ pub fn answer(ask: &Ask, since: &str, comment: &str) -> Answer {
 }
 
 /// The conclusion of the first completed run carrying `wanted`, inside the window.
-fn concluded(runs: &[serde_json::Value], since: &str, wanted: &str) -> Option<String> {
+fn concluded(runs: &[serde_json::Value], since: &str, wanted: &str) -> Option<Conclusion> {
     runs.iter().find_map(|run| {
         let created = run.get("created_at").and_then(serde_json::Value::as_str)?;
         if created < since {
@@ -436,15 +437,7 @@ fn concluded(runs: &[serde_json::Value], since: &str, wanted: &str) -> Option<St
         if title != wanted {
             return None;
         }
-        if run.get("status").and_then(serde_json::Value::as_str)? != "completed" {
-            return None;
-        }
-        Some(
-            run.get("conclusion")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("-")
-                .to_owned(),
-        )
+        RunState::of_row(run).conclusion().cloned()
     })
 }
 
@@ -467,11 +460,14 @@ fn concluded(runs: &[serde_json::Value], since: &str, wanted: &str) -> Option<St
 /// whether the merge actually happened must read the pull request's own terminal
 /// state, which is what the predecessor did and what this answer deliberately
 /// does not claim to be.
-fn grade(conclusion: &str) -> Answer {
+fn grade(conclusion: &Conclusion) -> Answer {
     match conclusion {
-        "success" => Answer::Accepted,
-        "failure" => Answer::Refused,
-        other => Answer::Unknown(other.to_owned()),
+        Conclusion::Success => Answer::Accepted,
+        Conclusion::Failure => Answer::Refused,
+        // A completed run with no conclusion keeps the placeholder it was
+        // always reported under.
+        other if other.as_str().is_empty() => Answer::Unknown(String::from("-")),
+        other => Answer::Unknown(other.as_str().to_owned()),
     }
 }
 
@@ -652,7 +648,7 @@ mod tests {
         );
         assert_eq!(
             concluded(&runs, "2026-09-03T23:00:00Z", "fast-forward #42 @1001"),
-            Some(String::from("failure")),
+            Some(Conclusion::Failure),
             "the same run inside the window is this lap's answer"
         );
     }
@@ -689,8 +685,8 @@ mod tests {
 
     #[test]
     fn only_failure_is_a_verdict_about_the_branch() {
-        assert_eq!(grade("success"), Answer::Accepted);
-        assert_eq!(grade("failure"), Answer::Refused);
+        assert_eq!(grade(&Conclusion::Success), Answer::Accepted);
+        assert_eq!(grade(&Conclusion::Failure), Answer::Refused);
         // **`skipped` IS NOT AN ACCEPTANCE, and this case asserted that it was**
         // for as long as `grade` said so. A skip merges nothing, and `Accepted`
         // reaches `Progress::Landed`, which retires the branch — so the pair
@@ -704,7 +700,7 @@ mod tests {
             "skipped",
         ] {
             assert_eq!(
-                grade(token),
+                grade(&Conclusion::of(token)),
                 Answer::Unknown(token.to_owned()),
                 "{token} is the bot not deciding, which is not the branch's fault"
             );

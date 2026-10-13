@@ -523,7 +523,9 @@ pub fn settings_green(
         .flatten()
         .any(|job| {
             job.get("name").and_then(serde_json::Value::as_str) == Some("settings")
-                && job.get("conclusion").and_then(serde_json::Value::as_str) == Some("success")
+                && crate::forge::RunState::of_row(job)
+                    .conclusion()
+                    .is_some_and(crate::forge::Conclusion::publishes)
         }))
 }
 
@@ -595,15 +597,9 @@ pub fn read_flight(
         .and_then(|value| value.get("workflow_runs").cloned())
         .and_then(|runs| runs.as_array().cloned())
         .unwrap_or_default();
-    let status = |run: &serde_json::Value| {
-        run.get("status")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or_default()
-            .to_owned()
-    };
     let active_run = runs
         .iter()
-        .find(|run| status(run) != "completed")
+        .find(|run| crate::forge::RunState::of_row(run).conclusion().is_none())
         .map(|run| {
             run.get("display_title")
                 .and_then(serde_json::Value::as_str)

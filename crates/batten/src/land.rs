@@ -3008,9 +3008,7 @@ pub fn spending(repo: &str, sha: &str) -> Option<Vec<Spending>> {
     let runs = document.get("workflow_runs")?.as_array()?;
     Some(
         runs.iter()
-            .filter(|run| {
-                run.get("status").and_then(serde_json::Value::as_str) != Some("completed")
-            })
+            .filter(|run| crate::forge::RunState::of_row(run).conclusion().is_none())
             .filter_map(|run| {
                 let id = run.get("id")?;
                 let id = id
