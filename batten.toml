@@ -248,10 +248,7 @@ mutation = "never write it by hand — it records a human's answers, so put the 
 glob = ".serena/memories/**"
 mutation = "use Serena's memory tools — `write_memory` to create, `edit_memory` to change in place, `rename_memory` to move (it is the only route that rewrites `mem:` referrers)"
 read = "read_memory"
-# `read_server = "serena"` (CLOUD-2229) is HELD until the release that carries
-# it: `main` pins v0.0.214, which does not know the key, and a config naming a
-# key its pinned release cannot read is refused at landing (CLOUD-2063). It
-# returns with the pin that can read it.
+read_server = "serena"
 
 [[redirect]]
 glob = "policy/**"
@@ -4033,15 +4030,15 @@ reason = "Run the command alone in the call, with `run_in_background` and no red
 [[rule.verdict]]
 program = "mise"
 subcommands = ["run"]
+
+# The mutating VCS verbs. The read-only ones (`log`, `show`, `diff`, `status`)
+# carry no verdict and compose freely, which is why this is an allow-list.
 #
 # `commit` and the verbs that commit for you run the hooks, and a hook refusing
 # is the verdict (CLOUD-2234). Measured: a pre-commit `cargo fmt --check`
 # refused a backgrounded `git commit -F - <<'EOF'`, the `git log --oneline -1`
 # on the line after `EOF` ran anyway, and the call reported exit 0 over the
 # PREVIOUS commit — the next commit swept the staged files in under its message.
-
-# The mutating VCS verbs. The read-only ones (`log`, `show`, `diff`, `status`)
-# carry no verdict and compose freely, which is why this is an allow-list.
 [[rule.verdict]]
 program = "git"
 subcommands = ["push", "fetch", "rebase", "commit", "merge", "cherry-pick", "revert", "am"]
@@ -10394,11 +10391,8 @@ keep = 2
 # consumed 2.6-4.3 GB, so 4096 MB is one build's worth of room and 8192 MB leaves
 # one build of headroom after a collection. Sized from that session, not from a
 # `BATTEN_DISK_TRACE=1` lap; a traced lap re-measures it.
-#
-# HELD UNTIL THE RELEASE THAT CARRIES THE COLLECTOR (CLOUD-2198 commit B):
-# `main` pins v0.0.214, which does not know these keys, and a config naming a
-# key its pinned release cannot read is refused at landing (CLOUD-2063). The
-# band, `min_free_mb = 4096` and `max_free_mb = 8192`, returns with that pin.
+min_free_mb = 4096
+max_free_mb = 8192
 
 # THE 2026-09-12 WARM RESCALE (CLOUD-1622's bundle). The rule-1 seam bundle added
 # `assertion_gates.rs` and took the live count to 255, eleven past a basis of 244
