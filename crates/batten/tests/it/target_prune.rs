@@ -287,11 +287,12 @@ fn target_prune_collects_to_max_free_without_a_floor() {
     }
 }
 
-/// THE ARM SWITCHED OFF: a `[prune]` with no band collects nothing and says so,
-/// at exit 0. The retired floor tables still load beside it, read and ignored,
-/// while the pin moves (CLOUD-2198's commit A).
+/// A `[prune]` declaring no band collects at the default one (CLOUD-2197): with
+/// it held, the collector a branch carried never armed and that branch's own
+/// `verify` filled the disk. The retired floor tables still load beside it,
+/// read and ignored, while the pin moves (CLOUD-2198's commit A).
 #[test]
-fn a_table_without_the_band_collects_nothing() {
+fn an_undeclared_band_collects_at_the_default() {
     let repo = Fixture::new("target-prune-unbanded")
         .config(
             "version = 1\n\n[prune]\nroot = \"target\"\nkeep = 2\n\n\
@@ -308,8 +309,11 @@ fn a_table_without_the_band_collects_nothing() {
     let output = prune(&repo, "1", &["-y"]);
     let said = said(&output);
     assert_eq!(output.status.code(), Some(0), "{said}");
-    assert!(said.contains("no min_free_mb/max_free_mb"), "{said}");
-    assert_eq!(survivors(&deps), 3, "{said}");
+    assert!(!said.contains("no min_free_mb/max_free_mb"), "{said}");
+    assert!(
+        survivors(&deps) < 3,
+        "1 MB free is under the default 4096 MB floor, so the superseded copy goes: {said}"
+    );
 }
 
 // --- the retention rule ------------------------------------------------------

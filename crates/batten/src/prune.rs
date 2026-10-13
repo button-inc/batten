@@ -83,7 +83,7 @@ pub struct Prune {
     /// Below this much free space, in MB, the disk collector runs (CLOUD-2197):
     /// on every mediated call, and throughout `land` and `mutate sweep`. Nix's
     /// `min-free`. Declared with [`Prune::max_free_mb`] or not at all; absent,
-    /// the collector is off.
+    /// the collector runs at [`DEFAULT_FREE_BAND`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min_free_mb: Option<u64>,
     /// Once triggered, the collector frees space until this much is free, in
@@ -93,6 +93,12 @@ pub struct Prune {
     pub max_free_mb: Option<u64>,
 }
 
+/// The band a `[prune]` table declaring none collects at, `(min_free_mb,
+/// max_free_mb)`: measured on #1132 (2026-10-12), each targeted build consumed
+/// 2.6-4.3 GB, so 4096 MB is one build's room and 8192 MB one build of headroom
+/// after a collection.
+pub const DEFAULT_FREE_BAND: (u64, u64) = (4096, 8192);
+
 fn default_root() -> String {
     String::from("target")
 }
@@ -101,6 +107,7 @@ const fn default_keep() -> usize {
     2
 }
 
+//MUTANT default-band-off|s@            _ => Some(DEFAULT_FREE_BAND),@            _ => None,@|an_undeclared_band_collects_at_the_default
 impl Prune {
     /// Validate the table at load.
     ///
@@ -131,12 +138,20 @@ impl Prune {
         Ok(())
     }
 
-    /// The collector's band, where both keys are declared (CLOUD-2197).
+    /// The collector's band (CLOUD-2197): the declared one, or
+    /// [`DEFAULT_FREE_BAND`] where `[prune]` declares none.
+    ///
+    /// **ON BY DEFAULT, because off was measured to fail.** A declared band is
+    /// a key the pinned release must read, so a branch carrying the collector
+    /// had to hold the keys until a release shipped them — and with them held
+    /// the collector it carried never armed, and that branch's own `verify`
+    /// filled the disk (2026-10-13, #1132). The band belongs to the code that
+    /// collects, so the code carries it; the keys only move it.
     #[must_use]
     pub const fn free_band(&self) -> Option<(u64, u64)> {
         match (self.min_free_mb, self.max_free_mb) {
             (Some(min), Some(max)) => Some((min, max)),
-            _ => None,
+            _ => Some(DEFAULT_FREE_BAND),
         }
     }
 }
