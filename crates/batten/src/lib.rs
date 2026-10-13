@@ -15815,7 +15815,7 @@ fn run_declared_sweep(
     // still carries exactly the tracked bytes.
     let work = root.join("target").join("mutate");
     std::fs::create_dir_all(&work)?;
-    let sweep = match mutate::sweep_owned(root, &names, work, registry) {
+    let sweep = match mutate::sweep_owned(root, &names, work, registry, err) {
         Ok(sweep) => sweep,
         Err(reason) => {
             writeln!(err, "::error:: mutate: {reason}")?;

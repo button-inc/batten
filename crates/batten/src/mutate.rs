@@ -3141,11 +3141,21 @@ fn unreported(run: &Selection, suite: &Suite, row: &Row) -> Option<Verdict> {
 ///
 /// A tree that cannot be staged is could-not-look (→ exit `3`).
 pub fn sweep(root: &Path, names: &[String], work: PathBuf) -> Result<Sweep> {
-    sweep_owned(root, names, work, &Registry::default())
+    sweep_owned(
+        root,
+        names,
+        work,
+        &Registry::default(),
+        &mut std::io::sink(),
+    )
 }
 
 /// [`sweep`], judging only the rows the declared runner owns under `registry`;
 /// a row another runner owns is that runner's ([`run_registered`]).
+///
+/// `progress` gets the row count before any row runs, then one line per row
+/// with its verdict and wall time (CLOUD-2253): a sweep that printed nothing
+/// for two hours could not be told apart from a hung one, nor its cost read.
 ///
 /// # Errors
 ///
@@ -3155,7 +3165,23 @@ pub fn sweep_owned(
     names: &[String],
     work: PathBuf,
     registry: &Registry,
+    progress: &mut dyn std::io::Write,
 ) -> Result<Sweep> {
+    let total: usize = names
+        .iter()
+        .filter_map(|name| resolve(root, name))
+        .map(|gate| {
+            gate.rows
+                .iter()
+                .filter(|row| registry.declares(row))
+                .count()
+        })
+        .sum();
+    let _ = writeln!(
+        progress,
+        "mutate sweep: {total} row(s) across {} gate(s)",
+        names.len()
+    );
     let mut staged = Staged::new(root, work)?;
     // BUILD ONCE, BEFORE ANY ROW IS TIMED (CLOUD-1910). Best effort: a build that
     // fails leaves every Cargo row to report `suite-did-not-run` on its own, which
@@ -3227,7 +3253,14 @@ pub fn sweep_owned(
         }
         for row in gate.rows.iter().filter(|row| registry.declares(row)) {
             declared += 1;
+            let started = std::time::Instant::now();
             let verdict = judge_row(root, &mut staged, &gate, row)?;
+            let _ = writeln!(
+                progress,
+                "mutate sweep: row {declared}/{total} {name} {} {verdict} {}s",
+                row.slug,
+                started.elapsed().as_secs()
+            );
             if verdict.is_finding() {
                 findings.push(Finding {
                     gate: name.clone(),

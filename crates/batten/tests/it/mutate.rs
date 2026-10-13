@@ -706,6 +706,33 @@ fn a_task_gate_sweeps_only_its_own_block() {
     );
 }
 
+/// THE SWEEP SAYS HOW FAR IT GOT (CLOUD-2253). On #1132 a sweep ran two hours,
+/// printed one line and was killed, so neither its row count nor any row's cost
+/// was known. The count comes before any row runs, then one line per row with its
+/// verdict and seconds, so a killed run still shows where it was.
+#[cfg(unix)]
+#[test]
+fn a_sweep_reports_its_row_count_and_each_rows_time() {
+    let root = two_task_repo("task-progress");
+    let (code, out, err) = sweep(&root, "task-a");
+    assert_eq!(code, 0, "{out}{err}");
+    let count = err
+        .find("mutate sweep: 1 row(s) across 1 gate(s)")
+        .unwrap_or_else(|| panic!("the count line: {err}"));
+    let row = err
+        .find("mutate sweep: row 1/1 task-a ")
+        .unwrap_or_else(|| panic!("the row line: {err}"));
+    assert!(count < row, "the count precedes the first row: {err}");
+    let line = err
+        .get(row..)
+        .and_then(|rest| rest.lines().next())
+        .unwrap_or_default();
+    assert!(
+        line.contains(" caught ") && line.ends_with('s'),
+        "the row line carries its verdict and seconds: {line}"
+    );
+}
+
 /// The census half: a block that declares rows and is absent from the set is
 /// `uncovered`, so an inline task cannot declare a mutation nobody sweeps.
 #[cfg(unix)]
