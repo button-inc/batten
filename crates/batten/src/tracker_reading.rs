@@ -353,7 +353,6 @@ fn pull_number(url: &str) -> Option<u64> {
 /// an attached pull request with no state under `.pulls`. An unread pull request
 /// must not be the cheapest route to Done.
 //MUTANT absent-state-recorded-closed|s@^            let Some(state) = state else {$@            let Some(state) = state.or(Some(\&Value::Null)) else {@|an_attached_pr_with_no_state_is_could_not_look
-//MUTANT draft-recorded-open|s@^                "draft"$@                "open"@|the_defect_a_draft_pull_request_refuses_named_as_a_draft
 fn done_pr(inputs: &BTreeMap<String, String>, stdin: &str) -> Result<String> {
     const FAMILY: &str = "done-pr";
     only(inputs, FAMILY, &[])?;
@@ -400,18 +399,27 @@ fn done_pr(inputs: &BTreeMap<String, String>, stdin: &str) -> Result<String> {
                     ),
                 ));
             };
-            let token = if state.get("draft").and_then(Value::as_bool) == Some(true) {
-                "draft"
-            } else if state.get("state").and_then(Value::as_str) == Some("open") {
-                "open"
-            } else {
-                "closed"
-            };
+            let token = pull_token(crate::forge::PullState::of(state));
             writeln!(record, "pull\t{id}\t{number}\t{token}")?;
         }
     }
     writeln!(record, "census\tissues={counted}")?;
     Ok(record)
+}
+
+/// A pull request's token on the `done-pr` record. An unknown state is written
+/// as `unknown`, which the module reads as open: could-not-look is never closed
+/// (CLOUD-2244).
+//MUTANT draft-recorded-open|s@^        PullState::Draft => "draft",$@        PullState::Draft => "open",@|the_defect_a_draft_pull_request_refuses_named_as_a_draft
+//MUTANT unknown-pull-reads-closed|s@^        PullState::Unknown => "unknown",$@        PullState::Unknown => "closed",@|an_unknown_pull_state_never_records_closed
+fn pull_token(state: crate::forge::PullState) -> &'static str {
+    use crate::forge::PullState;
+    match state {
+        PullState::Draft => "draft",
+        PullState::Open => "open",
+        PullState::Closed | PullState::Merged => "closed",
+        PullState::Unknown => "unknown",
+    }
 }
 
 /// Whether a payload carries `relations.duplicateOf` at all — an explicit `null`

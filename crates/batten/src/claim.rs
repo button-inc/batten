@@ -205,13 +205,7 @@ fn live_pull_request(value: &serde_json::Value) -> Option<String> {
         if !is_pull_request_url(url) {
             return None;
         }
-        let state = attachment
-            .get("state")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or_default()
-            .to_lowercase();
-        let merged = attachment.get("merged") == Some(&serde_json::Value::Bool(true));
-        if state == "merged" || state == "closed" || merged {
+        if crate::forge::PullState::of(attachment).is_finished() {
             return None;
         }
         Some(url.rsplit('/').next().unwrap_or(url).to_owned())

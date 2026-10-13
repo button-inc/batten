@@ -145,6 +145,57 @@ pub(crate) fn parse(text: &str) -> BTreeMap<String, String> {
     checks
 }
 
+/// A pull request's state, parsed once (CLOUD-2244). Two readers spelled it by
+/// hand and disagreed: one read `"OPEN"`, a missing state and any unknown word as
+/// closed, the permissive direction for a gate refusing a Done row with an open
+/// pull request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PullState {
+    /// Open and ready for review.
+    Open,
+    /// Open as a draft.
+    Draft,
+    /// Closed without merging.
+    Closed,
+    /// Merged.
+    Merged,
+    /// No state, or one this parse does not know: could-not-look, never closed.
+    Unknown,
+}
+
+impl PullState {
+    /// The state a forge or tracker payload carries: `merged: true` or a
+    /// `merged_at` reads as merged, then `state` case-insensitively, then
+    /// `draft: true` for an open one.
+    #[must_use]
+    pub fn of(pull: &serde_json::Value) -> Self {
+        let merged = pull.get("merged").and_then(serde_json::Value::as_bool) == Some(true)
+            || pull.get("merged_at").is_some_and(|at| !at.is_null());
+        if merged {
+            return Self::Merged;
+        }
+        let draft = pull.get("draft").and_then(serde_json::Value::as_bool) == Some(true);
+        let state = pull
+            .get("state")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_ascii_lowercase);
+        match state.as_deref() {
+            Some("merged") => Self::Merged,
+            Some("closed") => Self::Closed,
+            Some("open") if draft => Self::Draft,
+            Some("open") => Self::Open,
+            None if draft => Self::Draft,
+            _ => Self::Unknown,
+        }
+    }
+
+    /// Whether the pull request is finished: merged or closed.
+    #[must_use]
+    pub fn is_finished(self) -> bool {
+        matches!(self, Self::Merged | Self::Closed)
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {

@@ -50,7 +50,7 @@ done_pr_issues contains {"id": columns[1], "attached": columns[2]} if {
 	columns[0] == "issue"
 }
 
-# `pull\t<id>\t<number>\t<draft|open|closed>`.
+# `pull\t<id>\t<number>\t<draft|open|closed|unknown>`.
 done_pr_pulls contains {"id": columns[1], "number": columns[2], "state": columns[3]} if {
 	some line in done_pr_lines
 	columns := split(line, "\t")
@@ -114,6 +114,18 @@ violation contains {
 	pull.state == "draft"
 }
 
+# A state the reading could not parse is read as open: could-not-look is never
+# closed, and the pointer says which it was (CLOUD-2244).
+violation contains {
+	"rule": "issue ship other",
+	"verdict": "issue ship early",
+	"subjects": [{"artifact": sprintf("%s#%s:unknown", [pull.id, pull.number])}],
+} if {
+	not done_pr_torn
+	some pull in done_pr_pulls
+	pull.state == "unknown"
+}
+
 violation contains {
 	"rule": "issue ship other",
 	"verdict": "issue list partial",
@@ -152,6 +164,15 @@ test_done_pr_a_draft_refuses_named_as_a_draft if {
 		"census\tissues=1",
 	])
 	{entry.subjects[0].artifact | some entry in found} == {"ACME-1#368:draft"}
+}
+
+test_done_pr_an_unknown_state_refuses_as_open if {
+	found := violation with input as done_pr_tree([
+		"issue\tACME-1\t1",
+		"pull\tACME-1\t369\tunknown",
+		"census\tissues=1",
+	])
+	{entry.subjects[0].artifact | some entry in found} == {"ACME-1#369:unknown"}
 }
 
 test_done_pr_no_pull_at_all_refuses if {

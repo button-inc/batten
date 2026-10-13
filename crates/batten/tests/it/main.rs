@@ -449,6 +449,7 @@ mod tool_verdict_facts;
 mod tracked_absent;
 #[cfg(unix)]
 mod tracker_hygiene;
+mod tracker_reading;
 mod transcript_corpus;
 mod transcript_stop_reason;
 mod transcript_tool_result;
