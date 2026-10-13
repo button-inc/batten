@@ -11300,7 +11300,9 @@ fn bet_liveness(root: &Path, branch: &str, base: &str) -> speculation::Live {
     let Ok(observed) = lease::observe(&terms) else {
         return speculation::Live::Unreadable;
     };
-    let lease::Observed::Held { body, .. } = &observed else {
+    let now = i64::try_from(now_unix()).unwrap_or(i64::MAX);
+    // LIVE ONLY (CLOUD-2242): an expired or released body names nobody landing.
+    let Some(body) = observed.state(now).live() else {
         // Nobody holds it. Holding no lease with the base not yet on the trunk
         // can only mean the branch we bet on is gone — a base that actually
         // landed is caught one arm earlier, by the ancestry check.
@@ -11889,9 +11891,11 @@ fn place_the_bet(
 fn holder_head(root: &Path, branch: &str) -> Option<String> {
     let terms = lease::terms(root).ok()?;
     let observed = lease::observe(&terms).ok()?;
-    let lease::Observed::Held { body, .. } = &observed else {
-        return None;
-    };
+    // A LIVE HOLD ONLY (CLOUD-2242). Every lap of #1132 speculated on a branch
+    // whose lease had lapsed hours before, because a parsed body was read as a
+    // holder; the state makes `Live` the only spelling that bets.
+    let now = i64::try_from(now_unix()).unwrap_or(i64::MAX);
+    let body = observed.state(now).live()?;
     // WHOSE HOLD IS THIS (CLOUD-1779). `speculation::bettable` carries both
     // conjuncts — a different branch AND a different holder — because asking
     // only the first reads "is this hold about the branch I am landing", which
@@ -14379,9 +14383,27 @@ fn run_lease_status(
             return Ok(ExitCode::Internal);
         }
     };
-    let body = match &observed {
-        lease::Observed::Held { body, .. } => body,
-        lease::Observed::Absent => return lease_report(json, "unheld", &[], out),
+    // ONE MATCH OVER THE STATE (CLOUD-2242), where the body was extracted and
+    // then asked `released()` and `expired(now)` by hand. Released is a state of
+    // its own, so the tombstone can no longer render its sentinel expiry as a
+    // wall-clock duration, the predecessor's measured misreading.
+    let body = match observed.state(now) {
+        lease::Lease::Live { body, .. } => body,
+        lease::Lease::Absent => return lease_report(json, "unheld", &[], out),
+        lease::Lease::Released { body, .. } => {
+            return lease_report(json, "released", &[("holder", body.holder.clone())], out);
+        }
+        lease::Lease::Expired { body, .. } => {
+            return lease_report(
+                json,
+                "unheld",
+                &[
+                    ("holder", body.holder.clone()),
+                    ("free_for", (now - body.expires).to_string()),
+                ],
+                out,
+            );
+        }
         // Reported as what it is rather than as a hold. Every DECISION still
         // treats it as held; this is the one place the two can be told apart,
         // which is the whole reason it is a state and not a default body.
@@ -14399,7 +14421,7 @@ fn run_lease_status(
         // `Internal`, not `Violation`: this is a could-not-look about the ref,
         // never a verdict about the branch — the same class the unreadable-terms
         // arm above already takes.
-        lease::Observed::Garbage { .. } => {
+        lease::Lease::Garbage { .. } => {
             lease_report(json, "garbage", &[], out)?;
             writeln!(
                 err,
@@ -14408,24 +14430,6 @@ fn run_lease_status(
             return Ok(ExitCode::Internal);
         }
     };
-    // Checked BEFORE expiry, because a tombstone satisfies both: its expiry is the
-    // sentinel, so `now >= 0` is trivially true and the expired arm would render a
-    // wall-clock epoch as a duration — observed live, three times, in the
-    // predecessor.
-    if body.released() {
-        return lease_report(json, "released", &[("holder", body.holder.clone())], out);
-    }
-    if body.expired(now) {
-        return lease_report(
-            json,
-            "unheld",
-            &[
-                ("holder", body.holder.clone()),
-                ("free_for", (now - body.expires).to_string()),
-            ],
-            out,
-        );
-    }
     let mut fields = vec![
         ("holder", body.holder.clone()),
         ("branch", body.branch.clone()),
@@ -14537,12 +14541,9 @@ fn run_lease_peek(
             return Ok(ExitCode::Internal);
         }
     };
-    let lease::Observed::Held { body, .. } = &observed else {
+    let Some(body) = observed.state(now).live() else {
         return Ok(ExitCode::Success);
     };
-    if body.released() || body.expired(now) {
-        return Ok(ExitCode::Success);
-    }
     match field {
         "branch" => writeln!(out, "{}", body.branch)?,
         "head" => writeln!(out, "{}", body.head)?,
@@ -14596,7 +14597,7 @@ fn run_lease_held(
             return Ok(ExitCode::Internal);
         }
     };
-    let lease::Observed::Held { body, .. } = &observed else {
+    let Some(body) = observed.state(now).live() else {
         return Ok(ExitCode::Violation);
     };
     if body.holder != holder {
@@ -15207,19 +15208,22 @@ fn run_lease_release(
             return Ok(ExitCode::Internal);
         }
     };
-    let lease::Observed::Held { body, .. } = &observed else {
-        return Ok(ExitCode::Success);
+    let body = match observed.state(now) {
+        // Already handed over: re-tombstoning would mint a second release of the
+        // same lease and report an epoch-scale age for it. A release is
+        // idempotent in effect, so it must be idempotent in what it says too.
+        lease::Lease::Released { body, .. } if body.holder == holder => {
+            writeln!(out, "lease: already released")?;
+            return Ok(ExitCode::Success);
+        }
+        // Ours, live or lapsed: a lapsed hold is still released explicitly.
+        lease::Lease::Live { body, .. } | lease::Lease::Expired { body, .. }
+            if body.holder == holder =>
+        {
+            body
+        }
+        _ => return Ok(ExitCode::Success),
     };
-    if body.holder != holder {
-        return Ok(ExitCode::Success);
-    }
-    // Already handed over: re-tombstoning would mint a second release of the same
-    // lease and report an epoch-scale age for it. A release is idempotent in
-    // effect, so it must be idempotent in what it says too.
-    if body.released() {
-        writeln!(out, "lease: already released")?;
-        return Ok(ExitCode::Success);
-    }
     let dead = lease::tombstone(body);
     match lease::cas(terms, &observed, &dead, now) {
         Ok(lease::Outcome::Applied) => {
@@ -15261,15 +15265,12 @@ fn run_lease_reserve(
             return Ok(ExitCode::Internal);
         }
     };
-    let held = match &observed {
-        lease::Observed::Held { body, .. } if !body.released() && !body.expired(now) => body,
-        // Nothing to reserve behind, or a ref that is not a lease. Neither is an
-        // error: a free lease means the caller should be ACQUIRING, and a ref
-        // nobody can read is the health gate's finding rather than this one's.
-        _ => {
-            writeln!(out, "lease: no lease is held; acquire rather than reserve")?;
-            return Ok(ExitCode::Violation);
-        }
+    // Nothing to reserve behind, or a ref that is not a lease. Neither is an
+    // error: a free lease means the caller should be ACQUIRING, and a ref
+    // nobody can read is the health gate's finding rather than this one's.
+    let Some(held) = observed.state(now).live() else {
+        writeln!(out, "lease: no lease is held; acquire rather than reserve")?;
+        return Ok(ExitCode::Violation);
     };
     // Reserving behind yourself would authorise your own branch twice and admit
     // nobody, which is worse than doing nothing: it consumes the one slot.

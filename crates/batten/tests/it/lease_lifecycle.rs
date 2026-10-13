@@ -139,8 +139,8 @@ use crate::common;
 use common::{git_in, init_repo, scratch, write};
 
 use batten::lease::{
-    Authority, Body, Observed, Terms, authorises, authorises_this_clone, renewal, reservation,
-    tombstone,
+    Authority, Body, Lease, Observed, Terms, authorises, authorises_this_clone, renewal,
+    reservation, tombstone,
 };
 
 const HOLDER: &str = "clone-a";
@@ -333,7 +333,7 @@ fn a_tombstone_is_released_at_any_clock_and_still_names_who_left_it() {
     let stone = tombstone(&held("work", NOW + 60));
 
     assert!(
-        stone.released(),
+        matches!(observed(stone.clone()).state(NOW), Lease::Released { .. }),
         "a release is a declaration, not an expiry"
     );
     assert_eq!(
@@ -343,8 +343,14 @@ fn a_tombstone_is_released_at_any_clock_and_still_names_who_left_it() {
 
     // UNDER ANY CLOCK. The sentinel is what makes this true on a machine whose
     // clock disagrees with the holder's.
-    assert!(stone.expired(0));
-    assert!(stone.expired(i64::MAX));
+    assert!(matches!(
+        observed(stone.clone()).state(0),
+        Lease::Released { .. }
+    ));
+    assert!(matches!(
+        observed(stone).state(i64::MAX),
+        Lease::Released { .. }
+    ));
 }
 
 /// **A lease with zero seconds left has none.**
@@ -354,9 +360,15 @@ fn a_tombstone_is_released_at_any_clock_and_still_names_who_left_it() {
 /// second, so the releaser itself still saw it as held.
 #[test]
 fn expiry_is_inclusive_so_a_lease_with_no_time_left_is_not_held() {
-    let lease = held("work", NOW);
-    assert!(lease.expired(NOW), "zero seconds left is expired");
-    assert!(!lease.expired(NOW - 1), "one second left is not");
+    let lease = observed(held("work", NOW));
+    assert!(
+        matches!(lease.state(NOW), Lease::Expired { .. }),
+        "zero seconds left is expired"
+    );
+    assert!(
+        matches!(lease.state(NOW - 1), Lease::Live { .. }),
+        "one second left is not"
+    );
 }
 
 /// **THE FENCE demands MARGIN, and it is a DIFFERENT predicate from the
@@ -407,7 +419,7 @@ fn the_recorder_fails_open_where_the_fence_demands_a_beat_of_margin() {
         "one with less is not, even though it has not expired"
     );
     assert!(
-        !bare.expired(NOW),
+        matches!(observed(bare).state(NOW), Lease::Live { .. }),
         "and that is the point: it is unexpired AND too thin to act on"
     );
 }

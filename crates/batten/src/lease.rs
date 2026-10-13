@@ -1225,8 +1225,11 @@ impl Body {
     }
 
     /// Explicitly handed over, as opposed to merely lapsed. No clock involved.
+    ///
+    /// Private (CLOUD-2242): a reader outside this module asks
+    /// [`Observed::state`], never this.
     #[must_use]
-    pub const fn released(&self) -> bool {
+    const fn released(&self) -> bool {
         self.expires == 0
     }
 
@@ -1237,7 +1240,7 @@ impl Body {
     /// for one more second, so a release did not free the lease until the clock
     /// ticked — measured, as a release the releaser itself still saw as held.
     #[must_use]
-    pub const fn expired(&self, now: i64) -> bool {
+    const fn expired(&self, now: i64) -> bool {
         now >= self.expires
     }
 }
@@ -1374,6 +1377,79 @@ pub enum Observed {
     },
 }
 
+/// What a reading of the lease MEANS at one instant: exactly one state, decided
+/// once (CLOUD-2242).
+///
+/// [`Observed::Held`] is "a ref that parses", which includes a released
+/// tombstone and an expired body, and every reader re-derived liveness by hand —
+/// 43 sites asking `released() || expired(now)`. One forgot: `holder_head` took
+/// any parsed body as a live holder and every lap speculated on a branch whose
+/// lease had lapsed hours before. `Body::released` and `Body::expired` are
+/// private to this module, so a reader outside it cannot ask; it matches here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Lease<'a> {
+    /// No lease ref on the remote.
+    Absent,
+    /// Held by `body.holder` as of the instant asked.
+    Live {
+        /// The lease object's id.
+        sha: &'a str,
+        /// What it says.
+        body: &'a Body,
+    },
+    /// Lapsed: its expiry has passed without a release.
+    Expired {
+        /// The lease object's id.
+        sha: &'a str,
+        /// What it says.
+        body: &'a Body,
+    },
+    /// Explicitly handed over: the release tombstone.
+    Released {
+        /// The lease object's id.
+        sha: &'a str,
+        /// What it says.
+        body: &'a Body,
+    },
+    /// The ref carries no lease body: respected until it ages out.
+    Garbage {
+        /// The object the ref points at.
+        sha: &'a str,
+        /// Why it did not read as a lease.
+        why: &'a str,
+    },
+}
+
+impl Observed {
+    /// The one classification. Released before expired: the tombstone's expiry
+    /// is zero, so it is also expired, and a release is the more specific fact.
+    //MUTANT released-classified-live|s@^            Self::Held { sha, body } if body.released() => Lease::Released { sha, body },$@            Self::Held { sha, body } if body.released() => Lease::Live { sha, body },@|each_body_is_classified_into_exactly_one_state
+    //MUTANT expired-classified-live|s@^            Self::Held { sha, body } if body.expired(now) => Lease::Expired { sha, body },$@            Self::Held { sha, body } if body.expired(now) => Lease::Live { sha, body },@|an_expired_lease_places_no_bet
+    #[must_use]
+    pub fn state(&self, now: i64) -> Lease<'_> {
+        match self {
+            Self::Absent => Lease::Absent,
+            Self::Garbage { sha, why } => Lease::Garbage { sha, why },
+            Self::Held { sha, body } if body.released() => Lease::Released { sha, body },
+            Self::Held { sha, body } if body.expired(now) => Lease::Expired { sha, body },
+            Self::Held { sha, body } => Lease::Live { sha, body },
+        }
+    }
+}
+
+impl<'a> Lease<'a> {
+    /// The live holder's body, or `None` for every other state.
+    #[must_use]
+    pub const fn live(self) -> Option<&'a Body> {
+        match self {
+            Self::Live { body, .. } => Some(body),
+            Self::Absent | Self::Expired { .. } | Self::Released { .. } | Self::Garbage { .. } => {
+                None
+            }
+        }
+    }
+}
+
 /// May this branch spend a matrix right now?
 ///
 /// **The one question a runner can ask.** Every other verb answers about a CLONE
@@ -1416,21 +1492,17 @@ pub fn authorises(observed: Option<&Observed>, want: &str, now: i64) -> Authorit
     // writes and an older one rejects is not a lease the older one waits for, it
     // is one it ignores while landing. Anyone weighing that change reads both
     // arms, or reads half the consequence (CLOUD-1703).
-    let observed = match observed {
-        Observed::Held { body, .. } => body,
-        Observed::Garbage { .. } => {
+    let body = match observed.state(now) {
+        Lease::Live { body, .. } => body,
+        Lease::Garbage { .. } => {
             return Authority::Run(String::from(
                 "the lease does not parse; running rather than stopping the fleet",
             ));
         }
-        Observed::Absent => {
+        Lease::Absent | Lease::Expired { .. } | Lease::Released { .. } => {
             return Authority::Run(format!("no lease is held; {want} may run"));
         }
     };
-    let body = observed;
-    if body.released() || body.expired(now) {
-        return Authority::Run(format!("no lease is held; {want} may run"));
-    }
     if body.branch.is_empty() {
         return Authority::Run(String::from(
             "the lease names no branch; running rather than guessing",
@@ -1829,14 +1901,11 @@ pub fn terms(root: &Path) -> std::result::Result<Terms, TermsMissing> {
 /// owns anything, and the safe direction over a lease is the closed one.
 #[must_use]
 pub fn authorises_this_clone(observed: &Observed, holder: &str, now: i64) -> bool {
-    let body = match observed {
-        Observed::Absent => return true,
-        Observed::Garbage { .. } => return false,
-        Observed::Held { body, .. } => body,
+    let body = match observed.state(now) {
+        Lease::Absent | Lease::Expired { .. } | Lease::Released { .. } => return true,
+        Lease::Garbage { .. } => return false,
+        Lease::Live { body, .. } => body,
     };
-    if body.released() || body.expired(now) {
-        return true;
-    }
     body.holder == holder
 }
 
@@ -1857,13 +1926,13 @@ pub fn authorises_this_clone(observed: &Observed, holder: &str, now: i64) -> boo
 /// content of the two clauses.
 #[must_use]
 pub fn holds_now(observed: &Observed, holder: &str, now: i64) -> bool {
-    let Observed::Held { body, .. } = observed else {
-        // Absent is nobody's. Garbage has not SHOWN this clone owns anything,
-        // which is the same closed direction `authorises_this_clone` takes over
-        // a ref that will not parse.
-        return false;
-    };
-    !body.released() && !body.expired(now) && body.holder == holder
+    // Absent is nobody's. Garbage has not SHOWN this clone owns anything,
+    // which is the same closed direction `authorises_this_clone` takes over a
+    // ref that will not parse; a lapsed or released body is nobody's either.
+    observed
+        .state(now)
+        .live()
+        .is_some_and(|body| body.holder == holder)
 }
 
 /// The lease reading this run's recorder columns share.
@@ -1954,12 +2023,11 @@ pub fn adjudicate(asked: Asked, root: &Path, now: i64) -> Option<(i32, String)> 
         // preset compares the empty token against a branch name and finds them
         // unequal, which is the refusal standing rather than being waved.
         Asked::Successor => {
-            let next = match &observed {
-                Observed::Held { body, .. } if !body.released() && !body.expired(now) => {
-                    body.next.clone()
-                }
-                _ => String::new(),
-            };
+            let next = observed
+                .state(now)
+                .live()
+                .map(|body| body.next.clone())
+                .unwrap_or_default();
             Some((0, format!("{next}\n")))
         }
         Asked::Status => {
@@ -4042,6 +4110,46 @@ mod tests {
                 ..Body::default()
             },
         }
+    }
+
+    /// Every reading lands in exactly one state (CLOUD-2242): a tombstone is
+    /// released at any clock, a lapsed body is expired, an unexpired one live.
+    #[test]
+    fn each_body_is_classified_into_exactly_one_state() {
+        let now = 1000;
+        assert_eq!(Observed::Absent.state(now), Lease::Absent);
+        let garbage = Observed::Garbage {
+            sha: String::from("2222222222222222222222222222222222222222"),
+            why: String::from("no banner"),
+        };
+        assert!(matches!(garbage.state(now), Lease::Garbage { .. }));
+        let stone = body("host-1-aa", 0, "");
+        for clock in [0, now, i64::MAX] {
+            assert!(
+                matches!(stone.state(clock), Lease::Released { .. }),
+                "a tombstone is released at {clock}"
+            );
+        }
+        assert!(matches!(
+            body("host-1-aa", now, "").state(now),
+            Lease::Expired { .. }
+        ));
+        assert!(matches!(
+            body("host-1-aa", now + 1, "").state(now),
+            Lease::Live { .. }
+        ));
+    }
+
+    /// A lapsed or released lease names nobody landing, so nothing bets on it
+    /// (CLOUD-2242): `holder_head` and `bet_liveness` read exactly `live()`.
+    /// Measured on #1132: every lap speculated on a branch whose lease had
+    /// lapsed 4.8 hours before.
+    #[test]
+    fn an_expired_lease_places_no_bet() {
+        let now = 1000;
+        assert_eq!(body("host-1-aa", now - 1, "").state(now).live(), None);
+        assert_eq!(body("host-1-aa", 0, "").state(now).live(), None);
+        assert!(body("host-1-aa", now + 60, "").state(now).live().is_some());
     }
 
     fn with_successor(holder: &str, expires: i64, next: &str) -> Observed {
