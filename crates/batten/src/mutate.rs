@@ -530,9 +530,6 @@ pub enum Verdict {
     FilterNamesEveryCase { want: String },
     /// The script would not apply.
     UnappliableMutation,
-    /// Applying the script outlived its bound, so whether it applies is unknown
-    /// (CLOUD-2246): never [`Verdict::UnappliableMutation`], which blames the row.
-    MutationTimedOut { seconds: u64 },
     /// The script changed nothing, so it proves nothing.
     InertMutation,
     /// The diff touched only declaration lines: a pattern spelled literally
@@ -579,7 +576,6 @@ impl Verdict {
                 | Verdict::CaseErrored { .. }
                 | Verdict::CaseAlreadyRed { .. }
                 | Verdict::UnappliableMutation
-                | Verdict::MutationTimedOut { .. }
                 | Verdict::RunnerAbsent
                 | Verdict::RunnerOverlap
                 | Verdict::RunnerErrored { .. }
@@ -609,9 +605,6 @@ impl fmt::Display for Verdict {
                 write!(out, "filter-names-every-case ({want})")
             }
             Verdict::UnappliableMutation => write!(out, "unappliable-mutation"),
-            Verdict::MutationTimedOut { seconds } => {
-                write!(out, "mutation-timed-out ({seconds}s)")
-            }
             Verdict::InertMutation => write!(out, "inert-mutation"),
             Verdict::SelfMutatingRow => write!(out, "self-mutating-row"),
             Verdict::RunnerAbsent => write!(out, "runner-absent"),
@@ -725,6 +718,20 @@ fn lines_of(root: &Path, path: &str) -> Option<Vec<String>> {
 /// and gate-dead is the same shape `rules/policy-modules.md` opens with.
 fn declared(lines: &[String], marker: &str) -> Option<String> {
     lines.iter().find_map(|line| strip_marker(line, marker))
+}
+
+/// Every well-formed `#MUTANT` row in one source under `root`, for a census that
+/// applies them (CLOUD-2255): a malformed row is the sweep's to report.
+#[must_use]
+pub fn rows_of(root: &Path, source: &str) -> Vec<Row> {
+    lines_of(root, source)
+        .map(|lines| {
+            rows_in(&lines, source)
+                .into_iter()
+                .filter_map(std::result::Result::ok)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// The `#MUTANT` rows in one source, refusing a row that is not three fields.
@@ -1985,10 +1992,6 @@ impl Ran {
 /// a new variant a reviewer reads rather than a string nobody does.
 #[derive(Clone, Copy)]
 enum Program<'a> {
-    /// Applies a `#MUTANT` row, whose script IS a sed program: the declared row
-    /// language every module authors against. An in-process interpreter would be
-    /// a second implementation of it, drifting from the sed the author tested with.
-    Sed,
     /// Builds the staged tree's test binaries once before any row is timed
     /// (CLOUD-1910). There is no in-process compiler.
     Cargo,
@@ -2006,7 +2009,6 @@ enum Program<'a> {
 impl Program<'_> {
     const fn name(&self) -> &str {
         match self {
-            Program::Sed => "sed",
             Program::Cargo => "cargo",
             Program::Git => "git",
             Program::Suite(program) | Program::Command(program) => program,
@@ -2302,9 +2304,9 @@ static CAPTURE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new
 /// batten's own so it cannot collide with a namespace any runner owns.
 /// An explicit override applies to whichever kind is running — a reader setting
 /// it is answering for their own tree, not for this split.
-/// The bound for the sweep's own housekeeping — staging a git repository,
-/// applying a `sed` script — which is not a suite and must not borrow one's
-/// number (CLOUD-1860).
+/// The bound for the sweep's own housekeeping (probing a runner, writing the
+/// change's patch), which is not a suite and must not borrow one's number
+/// (CLOUD-1860).
 ///
 /// Named rather than inlined because the alternative is a bare `30` beside two
 /// calls that have nothing to do with a test runner, which is how the suite
@@ -2312,17 +2314,6 @@ static CAPTURE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new
 /// file operations over an already-staged tree; a minute is generous and a hang
 /// here is a real defect rather than a slow build.
 const HOUSEKEEPING_BOUND: std::time::Duration = std::time::Duration::from_secs(60);
-
-/// [`HOUSEKEEPING_BOUND`] for applying a row, overridable by
-/// `BATTEN_MUTATE_HOUSEKEEPING_TIMEOUT` as the suite bounds are, so a case can
-/// drive the timed-out arm without waiting a minute (CLOUD-2246).
-fn housekeeping_bound() -> std::time::Duration {
-    std::env::var("BATTEN_MUTATE_HOUSEKEEPING_TIMEOUT")
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-        .filter(|seconds| *seconds > 0)
-        .map_or(HOUSEKEEPING_BOUND, std::time::Duration::from_secs)
-}
 
 fn suite_bound(suite: &Suite) -> std::time::Duration {
     let declared = match suite {
@@ -2952,32 +2943,160 @@ fn total_cases(root: &Path, suite: &Suite) -> usize {
 // The sweep.
 // ---------------------------------------------------------------------------
 
-/// Apply one row's script to its source inside the staged tree.
+/// Apply one row's script to its source inside the staged tree, in process
+/// ([`substitute`], CLOUD-2255): no `sed`, so nothing can hang or differ between
+/// a GNU and a BSD host (CLOUD-282, CLOUD-2246).
 ///
-/// `sed -i.bak` and not the bare in-place flag (CLOUD-282): BSD sed reads the
-/// next argument as the suffix, so the no-suffix spelling consumes the script on
-/// a Mac. The backup is removed rather than kept — it exists only to satisfy the
-/// one form both seds accept.
-///
-/// `None` when it applied, else the verdict: a sed that exits non-zero refused
-/// the row, and one that outlived its bound said nothing about it (CLOUD-2246).
-//MUTANT apply-timeout-read-as-refusal|s@^        Outcome::Failed(_) => Some(Verdict::UnappliableMutation),$@        Outcome::Failed(_) \x7c Outcome::TimedOut => Some(Verdict::UnappliableMutation),@|a_mutation_whose_sed_times_out_is_not_unappliable
+/// `None` when it applied, else `unappliable-mutation`: a source that does not
+/// read, or a script outside the one-substitution subset.
 fn apply(staged: &Staged, row: &Row) -> Result<Option<Verdict>> {
-    let args = vec![
-        String::from("-i.bak"),
-        row.script.clone(),
-        row.source.clone(),
-    ];
-    let bound = housekeeping_bound();
-    let ran = spawn(staged.dir(), Program::Sed, &args, &[], bound)?;
-    let _ = std::fs::remove_file(staged.dir().join(format!("{}.bak", row.source)));
-    Ok(match ran.outcome {
-        Outcome::Passed => None,
-        Outcome::Failed(_) => Some(Verdict::UnappliableMutation),
-        Outcome::TimedOut => Some(Verdict::MutationTimedOut {
-            seconds: bound.as_secs(),
-        }),
-    })
+    let path = staged.dir().join(&row.source);
+    let Ok(before) = std::fs::read_to_string(&path) else {
+        return Ok(Some(Verdict::UnappliableMutation));
+    };
+    let Some(after) = substitute(&before, &row.script) else {
+        return Ok(Some(Verdict::UnappliableMutation));
+    };
+    std::fs::write(&path, after)
+        .with_context(|| format!("mutate: could not write the mutated {}", row.source))?;
+    Ok(None)
+}
+
+/// One row's `s<d>re<d>rep<d>` applied to `text` the way `sed` applies it: the
+/// first match on each line, with sed's basic-regex escapes and its `&`
+/// (CLOUD-2255).
+///
+/// IN-PROCESS, NO `sed`. The rows' grammar was sed's because `sed` ran them,
+/// spawned once per row; the subset every committed row uses is one
+/// substitution with no flags and no address, which the `regex` crate states
+/// exactly. Anything outside it (an address, a second command, a flag, a
+/// backreference in the pattern) is `None`, refused as unappliable rather than
+/// approximated.
+#[must_use]
+pub fn substitute(text: &str, script: &str) -> Option<String> {
+    let mut chars = script.chars();
+    if chars.next()? != 's' {
+        return None;
+    }
+    let delimiter = chars.next()?;
+    let rest: String = chars.collect();
+    let fields = split_unescaped(&rest, delimiter);
+    let [pattern, replacement, flags] = fields.as_slice() else {
+        return None;
+    };
+    if !flags.is_empty() {
+        return None;
+    }
+    let pattern = regex::Regex::new(&basic_to_rust(pattern, delimiter)?).ok()?;
+    let replacement = sed_replacement(replacement, delimiter);
+    let mut out = String::with_capacity(text.len());
+    for line in text.split_inclusive('\n') {
+        let (body, end) = line
+            .strip_suffix('\n')
+            .map_or((line, ""), |body| (body, "\n"));
+        out.push_str(&pattern.replacen(body, 1, replacement.as_str()));
+        out.push_str(end);
+    }
+    Some(out)
+}
+
+/// `text` split on each `delimiter` not preceded by a backslash, the escapes
+/// kept for the field's own reader.
+fn split_unescaped(text: &str, delimiter: char) -> Vec<String> {
+    let mut fields = vec![String::new()];
+    let mut escaped = false;
+    for c in text.chars() {
+        if !escaped && c == delimiter {
+            fields.push(String::new());
+            continue;
+        }
+        escaped = !escaped && c == '\\';
+        if let Some(field) = fields.last_mut() {
+            field.push(c);
+        }
+    }
+    fields
+}
+
+/// A sed basic regular expression as the `regex` crate spells it: `\(` `\)`
+/// `\{` `\}` `\|` `\+` `\?` are the operators and their bare forms literal, the
+/// reverse of the crate's; an escaped delimiter is the literal delimiter.
+fn basic_to_rust(pattern: &str, delimiter: char) -> Option<String> {
+    let mut out = String::with_capacity(pattern.len());
+    let mut chars = pattern.chars().peekable();
+    // `^` anchors only first (or first in a group) and `$` only last: anywhere
+    // else a basic regex reads them as themselves (`version=$(awk`, `"\[^"`).
+    let mut at_start = true;
+    while let Some(c) = chars.next() {
+        let starting = std::mem::replace(&mut at_start, false);
+        match c {
+            '^' if !starting => out.push_str("\\^"),
+            '$' if chars.peek().is_some() => out.push_str("\\$"),
+            '\\' => match chars.next()? {
+                '(' => {
+                    out.push('(');
+                    at_start = true;
+                }
+                op @ (')' | '{' | '}' | '|' | '+' | '?') => out.push(op),
+                'n' => out.push_str("\\n"),
+                't' => out.push_str("\\t"),
+                'x' => out.push_str("\\x"),
+                digit if digit.is_ascii_digit() => return None,
+                other if other == delimiter => out.push_str(&regex::escape(&other.to_string())),
+                other => {
+                    out.push('\\');
+                    out.push(other);
+                }
+            },
+            '(' | ')' | '{' | '}' | '|' | '+' | '?' => {
+                out.push('\\');
+                out.push(c);
+            }
+            _ => out.push(c),
+        }
+    }
+    Some(out)
+}
+
+/// A sed replacement as `regex` spells one: `&` is the whole match and `\&` a
+/// literal ampersand, `\1`…`\9` a group, `$` literal.
+fn sed_replacement(replacement: &str, delimiter: char) -> String {
+    let mut out = String::with_capacity(replacement.len());
+    let mut chars = replacement.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '&' => out.push_str("${0}"),
+            '$' => out.push_str("$$"),
+            '\\' => match chars.next() {
+                Some('n') => out.push('\n'),
+                Some('t') => out.push('\t'),
+                Some('x') => {
+                    let hex: String = chars.by_ref().take(2).collect();
+                    match u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32) {
+                        Some('$') => out.push_str("$$"),
+                        Some(byte) => out.push(byte),
+                        None => {
+                            out.push('x');
+                            out.push_str(&hex);
+                        }
+                    }
+                }
+                Some(digit) if digit.is_ascii_digit() => {
+                    out.push_str("${");
+                    out.push(digit);
+                    out.push('}');
+                }
+                Some('$') => out.push_str("$$"),
+                Some(other) if other == delimiter || other == '&' || other == '\\' => {
+                    out.push(other);
+                }
+                Some(other) => out.push(other),
+                None => out.push('\\'),
+            },
+            _ => out.push(c),
+        }
+    }
+    out
 }
 
 /// Whether the mutation changed anything, and whether it changed anything but a

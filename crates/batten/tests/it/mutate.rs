@@ -351,11 +351,13 @@ fn a_suite_that_hangs_is_ended_by_the_sweeps_own_bound() {
     );
 }
 
-/// A SED THAT OUTLIVES ITS BOUND SAID NOTHING ABOUT THE ROW (CLOUD-2246).
+/// A SED THAT HANGS SAYS NOTHING ABOUT THE ROW, BECAUSE NO SED RUNS (CLOUD-2246,
+/// CLOUD-2255).
 ///
-/// `apply` read the spawn's `ok` alone, and a killed child is not ok, so a
-/// hung sed reported `unappliable-mutation` — blaming a row that is correct.
-/// The `sed` first on `PATH` here hangs; the suite's clean run never calls it.
+/// `apply` read a spawned sed's `ok` alone, so a hung sed reported
+/// `unappliable-mutation` and blamed a correct row. The row is now applied in
+/// process: the `sed` first on `PATH` here hangs forever, and the sweep still
+/// applies the row and reports it caught.
 #[cfg(unix)]
 #[test]
 fn a_mutation_whose_sed_times_out_is_not_unappliable() {
@@ -372,17 +374,146 @@ fn a_mutation_whose_sed_times_out_is_not_unappliable() {
         .env("MUTANT_GATES", "toy")
         .env("MUTANT_TASKS", "mise.toml")
         .env("PATH", path)
-        .env("BATTEN_MUTATE_HOUSEKEEPING_TIMEOUT", "2")
         .output()
         .expect("run batten mutate");
     let out = stdout(&answer);
-    assert_eq!(
-        answer.status.code(),
-        Some(3),
-        "a timeout is could-not-look: {out}"
-    );
-    assert!(out.contains("mutation-timed-out"), "{out}");
+    assert_eq!(answer.status.code(), Some(0), "the row applied: {out}");
+    assert!(out.contains("every one caught"), "{out}");
     assert!(!out.contains("unappliable-mutation"), "{out}");
+}
+
+/// The tracked sources whose rows the declared runner applies: everything but
+/// the Rust sources `MUTANT_RUNNERS` gives cargo-mutants.
+fn declared_runner_sources(root: &Path) -> Vec<String> {
+    batten::git::tracked_paths(root)
+        .expect("list the tracked tree")
+        .into_iter()
+        .filter(|path| {
+            let rust = Path::new(path)
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("rs"));
+            !(path.starts_with("crates/") && rust)
+        })
+        .collect()
+}
+
+/// EVERY ROW THE DECLARED RUNNER SWEEPS STILL APPLIES, AND STILL CHANGES ITS FILE
+/// (CLOUD-2255). The rows were sed scripts run by `sed`; they are now applied in
+/// process, and this is the census that proves the conversion: a row that no
+/// longer applies, or applies and changes nothing, is named. Rust sources are
+/// cargo-mutants' (`MUTANT_RUNNERS`), so the declared runner never applies theirs.
+#[test]
+fn every_declared_row_applies_in_process_and_changes_its_file() {
+    let root = common::at_root("");
+    let mut broken = Vec::new();
+    let mut applied = 0;
+    for path in &declared_runner_sources(&root) {
+        let Ok(text) = std::fs::read_to_string(root.join(path)) else {
+            continue;
+        };
+        for row in batten::mutate::rows_of(&root, path) {
+            match batten::mutate::substitute(&text, &row.script) {
+                Some(after) if after != text => applied += 1,
+                Some(_) => broken.push(format!("{path} {} inert", row.slug)),
+                None => broken.push(format!("{path} {} unappliable", row.slug)),
+            }
+        }
+    }
+    assert!(applied > 0, "the census found rows to apply");
+    assert!(broken.is_empty(), "{applied} applied; broken: {broken:#?}");
+}
+
+/// THE IN-PROCESS APPLIER IS SED, BYTE FOR BYTE, ON EVERY DECLARED ROW (CLOUD-2255).
+///
+/// The differential that proves the conversion did not change what any row
+/// mutates: each row's script through the host's `sed` and through
+/// [`batten::mutate::substitute`] must produce identical bytes. A host with no
+/// `sed` skips, which is the only place one is still run, and only as the oracle.
+#[cfg(unix)]
+#[test]
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays, and test-only: `sed` is the oracle the in-process applier is compared against, never a route the engine takes"
+)]
+fn the_in_process_applier_matches_sed_on_every_declared_row() {
+    use std::process::{Command, Stdio};
+
+    let root = common::at_root("");
+    // sed READS A COPY BY PATH: piping the whole file to its stdin before reading
+    // its stdout deadlocks once the output pipe fills.
+    let copy = common::scratch("mutate-sed-oracle").join("source");
+    let mut differ = Vec::new();
+    for path in &declared_runner_sources(&root) {
+        let Ok(text) = std::fs::read_to_string(root.join(path)) else {
+            continue;
+        };
+        std::fs::write(&copy, &text).expect("copy the source");
+        for row in batten::mutate::rows_of(&root, path) {
+            let Ok(out) = Command::new("sed")
+                .arg("-e")
+                .arg(&row.script)
+                .arg(&copy)
+                .stdin(Stdio::null())
+                .stderr(Stdio::null())
+                .output()
+            else {
+                return;
+            };
+            let sed = String::from_utf8_lossy(&out.stdout).into_owned();
+            if batten::mutate::substitute(&text, &row.script).as_deref() != Some(sed.as_str()) {
+                differ.push(format!("{path} {}", row.slug));
+            }
+        }
+    }
+    assert!(
+        differ.is_empty(),
+        "the applier differs from sed: {differ:#?}"
+    );
+}
+
+/// A ROW APPLIES WITHOUT SPAWNING, WITH SED'S MEANING (CLOUD-2255): the first match
+/// on each line, `&` the whole match, `\&` a literal ampersand, `\x7c` a pipe, an
+/// escaped delimiter literal; anything outside the one-substitution subset is
+/// refused rather than approximated.
+#[test]
+fn a_mutation_row_applies_without_spawning() {
+    use batten::mutate::substitute;
+    assert_eq!(
+        substitute("a b a\nb a\n", "s@a@[&]@").as_deref(),
+        Some("[a] b a\nb [a]\n"),
+        "the first match per line, `&` is the match"
+    );
+    assert_eq!(
+        substitute("x\n", r"s@x@\&\x7c@").as_deref(),
+        Some("&|\n"),
+        "`\\&` is literal and `\\x7c` a pipe"
+    );
+    assert_eq!(
+        substitute("a|b (c)\n", r"s@b (c)@d@").as_deref(),
+        Some("a|d\n"),
+        "a bare paren is literal in a basic regex"
+    );
+    assert_eq!(
+        substitute("ab\n", r"s@\(a\)b@\1\1@").as_deref(),
+        Some("aa\n"),
+        "an escaped paren is a group, `\\1` its text"
+    );
+    assert_eq!(
+        substitute("a@b\n", r"s@a\@b@c@").as_deref(),
+        Some("c\n"),
+        "an escaped delimiter is literal"
+    );
+    assert_eq!(
+        substitute("v=$(a ^b)\n", r"s@^v=$(a ^b)$@w@").as_deref(),
+        Some("w\n"),
+        "`^` and `$` anchor only at the pattern's ends"
+    );
+    assert_eq!(substitute("a\n", "s@a@b@g"), None, "a flag is refused");
+    assert_eq!(
+        substitute("a\n", "/a/{n;s@a@b@}"),
+        None,
+        "an address is refused"
+    );
 }
 
 /// THE SWEEP'S OWN SIGNAL REACHES ITS SUITE (CLOUD-2059).

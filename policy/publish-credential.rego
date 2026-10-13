@@ -326,5 +326,5 @@ test_the_permission_named_in_a_comment_does_not_satisfy_it if {
 
 #MUTANT-SUITE crates/batten/tests/it/publish_credential.rs
 #MUTANT registry-token-passes|s@^\tsome hit in workflow_line$@\tfalse@|a_registry_token_in_any_workflow_is_refused
-#MUTANT absent-publish-key-read-as-false|s@^\tnot declared_publish$@\tfalse@|an_absent_publish_key_reads_as_publishing
+#MUTANT absent-publish-key-read-as-false|s@^\tcount(declared_publish) == 0$@\tfalse@|an_absent_publish_key_reads_as_publishing
 #MUTANT publishing-without-oidc-passes|s@^\tnot carries_oidc$@\tfalse@|publishing_on_without_oidc_is_refused

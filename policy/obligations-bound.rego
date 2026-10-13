@@ -64,6 +64,7 @@
 #MUTANT unbound-file-unread|s@^\tnot obligation_row.file in input.tree.tracked$@\tfalse@|an_obligation_naming_no_tracked_file_is_refused
 #MUTANT undeclared-slug-unread|s@^\tnot declares_slug(obligation_row)$@\tfalse@|an_obligation_whose_slug_no_row_declares_is_refused
 #MUTANT superseded-line-judged|s@^\trow\.stamp == latest\[row\.id\]$@\ttrue@|a_superseded_obligation_is_not_judged
+#MUTANT runner-ownership-unchecked|s@^\tregex.match(glob_pattern(trim_space(path_glob)), entry.file)$@\ttrue@|a_runner_token_on_a_file_it_does_not_own_is_refused
 #MUTANT unlanded-row-judged|s@^\tobligation_row\.id in closes$@\ttrue@|an_obligation_from_a_row_the_pr_does_not_close_is_not_judged
 
 # METADATA
@@ -218,6 +219,43 @@ obligation contains entry if {
 declares_slug(entry) if {
 	some line in input.tree.lines[entry.file]
 	contains(line, sprintf("MUTANT %v|", [entry.slug]))
+}
+
+# OR THE SLUG NAMES THE RUNNER THAT OWNS THE FILE (CLOUD-2255). A Ready block's
+# `mutation` for a source a registered runner owns is that runner's id
+# (`cargo-mutants`), and the obligation is that runner's outcome over the file:
+# demanding a hand-written `#MUTANT` row there is what put 654 sed rows in files
+# cargo-mutants already mutates. Ownership is read from the one authority,
+# `MUTANT_RUNNERS` in `mise.toml` (`<runner>=<glob>[,<glob>…]`, entries split by
+# `;`, `mutate::Registry`'s grammar), never restated here.
+declares_slug(entry) if {
+	some line in input.tree.lines["mise.toml"]
+	runners := runners_declared(line)
+	some declared in split(runners, ";")
+	owner := split(declared, "=")
+	trim_space(owner[0]) == entry.slug
+	some path_glob in split(owner[1], ",")
+	regex.match(glob_pattern(trim_space(path_glob)), entry.file)
+}
+
+# A `MUTANT_RUNNERS` glob as an anchored regex: `**/` any directories, `*` within
+# one segment, `.` literal. Spelled with `replace` because this engine's build
+# carries no `glob.match` (regorus without its `glob` feature), and calling it
+# errored the whole module into silence.
+glob_pattern(path_glob) := sprintf("^%s$", [segments]) if {
+	dots := replace(path_glob, ".", "\\.")
+	deep := replace(dots, "**/", "\u0000")
+	single := replace(deep, "*", "[^/]*")
+	segments := replace(single, "\u0000", "(.*/)?")
+}
+
+# The quoted value of `MUTANT_RUNNERS = "…"` on one manifest line.
+runners_declared(line) := value if {
+	key := "MUTANT_RUNNERS = \""
+	at := indexof(line, key)
+	at >= 0
+	rest := substring(line, at + count(key), -1)
+	value := substring(rest, 0, indexof(rest, "\""))
 }
 
 # An obligation whose file this repository does not track.

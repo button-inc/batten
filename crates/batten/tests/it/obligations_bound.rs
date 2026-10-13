@@ -106,7 +106,12 @@ fn row() -> Rule {
         "scope": "tree",
         "base": "origin/main",
         "delta_sources": ["**"],
-        "line_sources": ["crates/batten/tests/**/*.rs", "policy/*.rego"],
+        "line_sources": [
+            "crates/batten/tests/**/*.rs",
+            "policy/*.rego",
+            "mise.toml",
+            "crates/batten/src/**/*.rs"
+        ],
         "module": "policy/obligations-bound.rego",
         "severity": "deny",
     }))
@@ -232,6 +237,42 @@ fn an_obligation_whose_slug_no_row_declares_is_refused() {
             "#MUTANT other-slug|s@a@b@|the_case\n",
         )),
     );
+    assert_eq!(verdicts(&root), vec![UNBOUND.to_owned()]);
+}
+
+/// The manifest line declaring which runner owns which sources, in `mise.toml`'s
+/// own spelling (an inline `env` table).
+const RUNNERS: &str =
+    "[tasks.\"mutant:changed\"]\nenv = { MUTANT_RUNNERS = \"cargo-mutants=crates/**/*.rs\" }\n";
+
+/// AN OBLIGATION ON A RUNNER-OWNED FILE NAMES THE RUNNER (CLOUD-2255). The
+/// `mutation` of a Ready block whose test lives in a file `cargo-mutants` owns is
+/// `cargo-mutants`, so no hand-written `#MUTANT` row is demanded there.
+#[test]
+fn a_runner_token_resolves_for_a_file_the_runner_owns() {
+    let root = repo(
+        "obligations-runner-owned",
+        &[&line("1:crates/batten/src/x.rs:cargo-mutants")],
+        Some(("crates/batten/src/x.rs", "pub fn x() {}\n")),
+    );
+    fs::write(root.join("mise.toml"), RUNNERS).expect("write the manifest");
+    assert!(
+        verdicts(&root).is_empty(),
+        "the runner that owns the file answers the obligation: {:?}",
+        verdicts(&root)
+    );
+}
+
+/// THE SAME TOKEN ON A FILE THE RUNNER DOES NOT OWN IS UNBOUND: a bats suite is
+/// no runner's, so its obligation still needs a `#MUTANT` row.
+#[test]
+fn a_runner_token_on_a_file_it_does_not_own_is_refused() {
+    let root = repo(
+        "obligations-runner-unowned",
+        &[&line("1:tests/x.bats:cargo-mutants")],
+        Some(("tests/x.bats", "@test \"x\" { true; }\n")),
+    );
+    fs::write(root.join("mise.toml"), RUNNERS).expect("write the manifest");
     assert_eq!(verdicts(&root), vec![UNBOUND.to_owned()]);
 }
 

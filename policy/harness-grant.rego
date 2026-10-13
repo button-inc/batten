@@ -96,4 +96,4 @@ test_no_settings_file_answers_nothing if {
 }
 
 #MUTANT-SUITE crates/batten/tests/it/harness_grant.rs
-#MUTANT grant-unread|s@^\t"autoMode" in object.keys\(document\)$@\tfalse@|a_committed_grant_is_refused
+#MUTANT grant-unread|s@^\t"autoMode" in object.keys(document)$@\tfalse@|a_committed_grant_is_refused
