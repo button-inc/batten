@@ -12610,29 +12610,8 @@ pub fn rustc_wrapped(
     // reaches the wrapper without it, and refusing it there broke every build.
     // The compiler's name in `argv[1]` is the whole test; no verb is named so.
     guard_compile(&args[2..]);
-    let mut command = std::process::Command::new(compiler);
-    command.args(&args[2..]);
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt as _;
-        let failed = command.exec();
-        let _ = writeln!(
-            std::io::stderr(),
-            "batten: could not run {}: {failed}",
-            Path::new(compiler).display()
-        );
-        Some(std::process::ExitCode::from(101))
-    }
-    #[cfg(not(unix))]
-    {
-        let code = command
-            .status()
-            .ok()
-            .and_then(|status| status.code())
-            .and_then(|code| u8::try_from(code).ok())
-            .unwrap_or(101);
-        Some(std::process::ExitCode::from(code))
-    }
+    // THROUGH `exec`, the placed spawn boundary (`policy/spawn-adapters.rego`).
+    Some(exec::become_compiler(compiler, &args[2..]))
 }
 
 /// The collection half of [`rustc_wrapped`]: best-effort, silent, and never

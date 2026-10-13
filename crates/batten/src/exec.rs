@@ -2259,6 +2259,46 @@ pub fn become_argv(argv: &[String]) -> Result<std::convert::Infallible> {
     )))
 }
 
+/// Become the compiler cargo handed `batten` as its `RUSTC_WRAPPER`
+/// (CLOUD-2197), with its own argv: the compile's code is the process's.
+///
+/// Where a process cannot be replaced, the compiler runs as a child and its
+/// status is taken — a wrapper is a launcher, on `provision::become_process`'s
+/// reading, and no supervisor guarantee is promised to cargo.
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays: running the compiler cargo named IS the wrapper's job, and there is no in-process form of rustc"
+)]
+pub fn become_compiler(
+    compiler: &std::ffi::OsStr,
+    args: &[std::ffi::OsString],
+) -> std::process::ExitCode {
+    let mut command = Command::new(compiler);
+    command.args(args);
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt as _;
+        // `exec` returns only on failure, so reaching the next line IS the error.
+        let failed = command.exec();
+        let _ = writeln!(
+            std::io::stderr(),
+            "batten: could not run {}: {failed}",
+            Path::new(compiler).display()
+        );
+        std::process::ExitCode::from(101)
+    }
+    #[cfg(not(unix))]
+    {
+        let code = command
+            .status()
+            .ok()
+            .and_then(|status| status.code())
+            .and_then(|code| u8::try_from(code).ok())
+            .unwrap_or(101);
+        std::process::ExitCode::from(code)
+    }
+}
+
 /// The same, where a process cannot be replaced.
 ///
 /// **A refusal rather than a spawn**, and the difference from
