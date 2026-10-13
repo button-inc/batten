@@ -14405,7 +14405,7 @@ fn still_cooling(
     let (tracking, at) = local.poisoned()?;
     let trunk = git::resolve_ref(root, &tracking).ok().flatten()?;
     // Pointer-only: the ref and the position, never the lease body.
-    lease::cooling(Some(&at), &trunk, observed, holder, now).then(|| {
+    lease::cooling_for(Some(&at), &trunk, observed, holder, now).then(|| {
         format!("cooling — this clone reddened the matrix on {tracking} at {at}, which is still trunk, and the pool is not idle")
     })
 }

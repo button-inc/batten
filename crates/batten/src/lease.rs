@@ -2672,8 +2672,31 @@ pub fn turn(
 ///
 /// A released lease counts as idle for the same reason: the tombstone says the
 /// holder handed it back, so the ref exists but nobody is holding it.
+#[must_use]
+pub fn cooling(poisoned_at: Option<&str>, trunk_now: &str, observed: &Observed) -> bool {
+    let Some(at) = poisoned_at else {
+        return false;
+    };
+    // THE TRUNK MOVED — the claim was about a base that is no longer trunk.
+    if at != trunk_now {
+        return false;
+    }
+    // THE POOL IS IDLE — nobody is waiting, so waiting buys nothing and would
+    // strand a single-agent fleet.
+    match observed {
+        Observed::Absent => false,
+        Observed::Held { body, .. } => !body.released(),
+        // A ref nobody can read is NOT evidence the pool is idle, and reading it
+        // as idle would let the one agent that just poisoned CI take the lease on
+        // the strength of a failed parse. `turn` already answers `Wait` for this
+        // state; the cooldown agrees rather than arguing with it.
+        Observed::Garbage { .. } => true,
+    }
+}
+
+/// [`cooling`], asked by the clone `holder` at `now` (CLOUD-2248).
 ///
-/// **So does a lease nobody ELSE is holding** (CLOUD-2248). `holder` is this
+/// **A lease nobody ELSE is holding counts as idle too.** `holder` is this
 /// clone: its own lapsed lease is not a rival — a `land` killed mid-lap leaves
 /// exactly that, and reading it as "not idle" made the clone wait on itself for
 /// every lap of three runs, with nothing on the ref but its own dead body. An
@@ -2683,7 +2706,7 @@ pub fn turn(
 /// another clone with a LIVE lease, or another clone reserved `next` behind it:
 /// those are somebody else, and the slot is theirs to have.
 #[must_use]
-pub fn cooling(
+pub fn cooling_for(
     poisoned_at: Option<&str>,
     trunk_now: &str,
     observed: &Observed,
@@ -4460,18 +4483,16 @@ mod tests {
                 ..Body::default()
             },
         };
-        let me = "this-clone";
-        let now = 1_700_000_000;
         assert!(
-            cooling(Some("trunk-1"), "trunk-1", &held, me, now),
+            cooling(Some("trunk-1"), "trunk-1", &held),
             "same trunk and somebody is holding: the cooldown holds"
         );
         assert!(
-            !cooling(Some("trunk-1"), "trunk-2", &held, me, now),
+            !cooling(Some("trunk-1"), "trunk-2", &held),
             "the trunk moved, so the claim is about a base that is no longer trunk"
         );
         assert!(
-            !cooling(Some("trunk-1"), "trunk-1", &Observed::Absent, me, now),
+            !cooling(Some("trunk-1"), "trunk-1", &Observed::Absent),
             "nobody is waiting, so waiting buys nothing — and a surviving cooldown \
              would strand a single-agent fleet after one red matrix"
         );
@@ -4486,13 +4507,11 @@ mod tests {
                         ..Body::default()
                     },
                 },
-                me,
-                now,
             ),
             "a tombstone is the holder handing it back: the ref exists, nobody holds it"
         );
         assert!(
-            !cooling(None, "trunk-1", &held, me, now),
+            !cooling(None, "trunk-1", &held),
             "and an agent that poisoned nothing is never held back"
         );
         assert!(
@@ -4503,8 +4522,6 @@ mod tests {
                     sha: String::from("cccc"),
                     why: String::from("not a lease"),
                 },
-                me,
-                now,
             ),
             "a ref nobody can read is not evidence the pool is idle"
         );
@@ -4530,7 +4547,7 @@ mod tests {
             },
         };
         assert!(
-            !cooling(
+            !cooling_for(
                 Some("trunk-1"),
                 "trunk-1",
                 &lease(me, now - 600, ""),
@@ -4540,7 +4557,7 @@ mod tests {
             "this clone's own lapsed lease is nobody else waiting: the measured self-deadlock"
         );
         assert!(
-            !cooling(
+            !cooling_for(
                 Some("trunk-1"),
                 "trunk-1",
                 &lease("someone-else", now - 600, ""),
@@ -4550,7 +4567,7 @@ mod tests {
             "a lease nobody is beating holds no slot for anyone"
         );
         assert!(
-            cooling(
+            cooling_for(
                 Some("trunk-1"),
                 "trunk-1",
                 &lease("someone-else", now - 600, "a-third-clone"),
@@ -4560,7 +4577,7 @@ mod tests {
             "a lapsed holder with a rival reserved behind it: that rival is owed the slot"
         );
         assert!(
-            !cooling(
+            !cooling_for(
                 Some("trunk-1"),
                 "trunk-1",
                 &lease(me, now - 600, me),
@@ -4570,7 +4587,7 @@ mod tests {
             "this clone reserved behind its own lapsed lease is still nobody else"
         );
         assert!(
-            cooling(
+            cooling_for(
                 Some("trunk-1"),
                 "trunk-1",
                 &lease("someone-else", now + 600, ""),
