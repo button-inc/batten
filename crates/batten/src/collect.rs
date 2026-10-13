@@ -560,6 +560,18 @@ fn caches_in(tree: &Path, profile: &Path) -> Vec<Unit> {
         .collect()
 }
 
+/// Does a live run read this unit with no build lock held: the test scratch it
+/// writes, or an executable it may launch (a file with no extension, or `.exe`)?
+/// Libraries, metadata and caches are read only by a compile, under the lock.
+//MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
+//MUTANT run-root-ignores-executables|s@artifact.is_file() \&\& artifact.extension().is_none_or(\x7cext\x7c ext == "exe")@false@|a_test_binary_a_live_run_built_is_never_collected
+fn read_by_a_run(unit: &Unit) -> bool {
+    unit.profile == unit.tree.join("tmp")
+        || unit.artifacts.iter().any(|artifact| {
+            artifact.is_file() && artifact.extension().is_none_or(|ext| ext == "exe")
+        })
+}
+
 /// The test scratch a tree holds, one unit per entry under `tmp/`: cargo's
 /// `CARGO_TARGET_TMPDIR`, which integration suites fill with fixtures and
 /// nothing removes until the next run's setup — measured at 4.1GB on #1132.
@@ -781,7 +793,6 @@ pub struct Request<'a> {
 //MUTANT lru-order-reversed|s@^    live.sort_by_key(\x7cunit\x7c unit.last_use);$@    live.sort_by_key(\x7cunit\x7c std::cmp::Reverse(unit.last_use));@|the_least_recently_used_live_unit_goes_first
 //MUTANT collects-past-max-free|s@^        if freed >= request.need_bytes \x7c\x7c past(request.deadline) {$@        if past(request.deadline) {@|collection_stops_at_max_free
 //MUTANT held-tree-collected|s@^        let _building = match crate::prune::claim(\&unit.tree, \&unit.profile) {$@        let _building = match Ok::<(), PathBuf>(()) {@|a_tree_a_build_holds_is_never_collected
-//MUTANT live-root-ignored|s@^            .is_some_and(\x7csince\x7c unit.last_use >= since)$@            .is_some_and(\x7c_\x7c false)@|a_unit_used_since_a_live_build_started_is_never_collected
 //MUTANT engine-unit-collected|s@^            .any(\x7cartifact\x7c is_kept(artifact, request.kept))$@            .any(\x7c_\x7c false)@|the_running_engine_is_never_collected
 #[must_use]
 pub fn collect(request: &Request<'_>) -> Pass {
@@ -823,25 +834,40 @@ pub fn collect(request: &Request<'_>) -> Pass {
         if freed >= request.need_bytes || past(request.deadline) {
             break;
         }
-        // A LIVE BUILD'S UNITS ARE NEVER COLLECTED: units are oldest first, so
-        // the first one a live build has used ends the pass.
-        if request
-            .live_since
-            .is_some_and(|since| unit.last_use >= since)
-        {
-            why.live = true;
-            break;
-        }
+        // A LIVE BUILD'S UNITS ARE NEVER COLLECTED, AND THE ROOT IS CARGO'S OWN
+        // LOCK: a build holds its profile's `.cargo-lock` for exactly as long as
+        // it may read or write the profile, so a held profile is skipped whole.
+        //
+        // THE CLOCK ROOTS ONLY WHAT A RUN READS WITH NO LOCK HELD (2026-10-13).
+        // "Used since the earliest live cargo started" protected every unit an
+        // hour-long `verify` had touched in every tree — `target/clippy` long
+        // after clippy exited, the mutate and cross trees — and the pass ended
+        // at the first: `land` logged `disk-collected 0 0 0` until the volume
+        // was full. A library is read only while a compile holds the lock, so
+        // the lock is its root; what a live run still reads unlocked is an
+        // executable it may launch (a suite's queued test binary, the measured
+        // case) and the scratch it writes.
         let _building = match crate::prune::claim(&unit.tree, &unit.profile) {
             Ok(guards) => guards,
             Err(lock) => {
                 why.held += 1;
+                why.live |= request
+                    .live_since
+                    .is_some_and(|since| unit.last_use >= since);
                 if !held.locks.contains(&lock) {
                     held.locks.push(lock);
                 }
                 continue;
             }
         };
+        if request
+            .live_since
+            .is_some_and(|since| unit.last_use >= since)
+            && read_by_a_run(&unit)
+        {
+            why.live = true;
+            continue;
+        }
         if unit
             .artifacts
             .iter()

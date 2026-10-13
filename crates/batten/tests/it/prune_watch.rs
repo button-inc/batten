@@ -164,12 +164,19 @@ fn a_stale_incremental_cache_is_collected_and_a_fresh_one_kept() {
     aged_dir(&profile.join("incremental/stale-0aaaaaaaaaaaa"), 7200);
     aged_dir(&profile.join("incremental/fresh-0bbbbbbbbbbbb/s-new"), 1);
     let trees = [tree.clone()];
-    let units = batten::collect::collect(&request_under_a_live_build(&trees, u64::MAX)).removed;
-    assert_eq!(units, 1, "only the stale cache is outside the live build");
+    // A BOUNDED NEED, because a cache is a compile's input and its root is the
+    // compile's lock, not a run's clock: what keeps the edit loop's own cache
+    // is least-recently-used order, so the stale one is taken first and the
+    // pass stops there.
+    let units = batten::collect::collect(&request_under_a_live_build(&trees, 1)).removed;
+    assert_eq!(
+        units, 1,
+        "the least recently used cache goes first, and suffices"
+    );
     assert!(!profile.join("incremental/stale-0aaaaaaaaaaaa").exists());
     assert!(
         profile.join("incremental/fresh-0bbbbbbbbbbbb").exists(),
-        "the working set's cache is never taken"
+        "the edit loop's cache is the last one taken"
     );
 }
 
@@ -275,26 +282,43 @@ fn a_unit_a_running_program_executes_is_never_collected() {
     );
 }
 
-/// A LIVE BUILD'S UNITS ARE ITS OWN (CLOUD-2197), however much is asked for.
-/// Measured on #1132: collecting toward `max_free_mb` walked oldest first into
-/// the `policy_modules` test binary built for the running suite. A unit used
-/// since a live build started stays; one used before it goes.
+/// A LIVE RUN'S EXECUTABLES ARE ITS OWN (CLOUD-2197), however much is asked
+/// for. Measured on #1132: collecting toward `max_free_mb` walked oldest first
+/// into the `policy_modules` test binary built for the running suite, which no
+/// build lock covers once the suite is running its tests.
 #[test]
-fn a_unit_used_since_a_live_build_started_is_never_collected() {
+fn a_test_binary_a_live_run_built_is_never_collected() {
     let root = common::scratch("collect-live-build");
     let profile = root.join("target/debug");
-    // A RUN OLDER THAN THE WINDOW THIS REPLACES: started two hours ago, it still
-    // holds a unit it read an hour ago.
+    // A RUN STARTED TWO HOURS AGO still launches a binary it built an hour ago.
     unit(&profile, "in-use", "eeeeeeeeeeeeeeee", 3600, 4096);
+    std::fs::write(profile.join("deps/in_use-eeeeeeeeeeeeeeee"), b"elf").unwrap();
     unit(&profile, "stale", "ffffffffffffffff", 3 * 3600, 4096);
     let trees = [root.join("target")];
     let mut ask = request(&trees, &[], u64::MAX);
     ask.live_since = Some(SystemTime::now() - Duration::from_secs(2 * 3600));
     let pass = batten::collect::collect(&ask);
-    assert_eq!(pass.removed, 1, "only the unit no live build used goes");
+    assert_eq!(pass.removed, 1, "only the unit no live run reads goes");
     assert!(present(&profile, "in-use", "eeeeeeeeeeeeeeee"));
     assert!(!present(&profile, "stale", "ffffffffffffffff"));
-    assert!(pass.held.live, "and the pass says a live build stopped it");
+    assert!(pass.held.live, "and the pass says a live run kept it");
+}
+
+/// A LIBRARY IS A COMPILE'S, AND ITS ROOT IS THE COMPILE'S LOCK (2026-10-13):
+/// a live run's clock does not keep one. Measured: under an hour-long `verify`
+/// the clock kept every unit every tree had used — clippy's, long after it
+/// exited — and `land` collected nothing until the volume was full.
+#[test]
+fn a_library_a_finished_compile_used_is_collected_under_a_live_run() {
+    let root = common::scratch("collect-live-run-library");
+    let profile = root.join("target/clippy/debug");
+    unit(&profile, "linted", "abcdabcdabcdabcd", 3600, 4096);
+    let trees = [root.join("target")];
+    let mut ask = request(&trees, &[], u64::MAX);
+    ask.live_since = Some(SystemTime::now() - Duration::from_secs(2 * 3600));
+    let pass = batten::collect::collect(&ask);
+    assert_eq!(pass.removed, 1, "no lock holds it, and no run launches it");
+    assert!(!present(&profile, "linted", "abcdabcdabcdabcd"));
 }
 
 /// NO LIVE BUILD, NO ROOT: a unit used a minute ago is collectable once nothing
