@@ -59,15 +59,59 @@ pub const DRAFT_WINDOW_SECS: u64 = 10 * 60;
 /// How long a failed `land` holds the landers, by default (`land_hold`).
 pub const LAND_HOLD_SECS: u64 = 6 * 60 * 60;
 
+/// How a commit relates to `main`, one answer whichever source read it
+/// (CLOUD-2245). Two booleans spelled `identical` differently by the forge's
+/// compare and by local ancestry, and could not say "no commit" at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Relation {
+    /// `main` is the commit.
+    Identical,
+    /// `main` contains the commit and has moved past it.
+    MainAhead,
+    /// The commit contains `main`: `main` has not reached it yet.
+    MainBehind,
+    /// Neither contains the other.
+    Diverged,
+    /// There is no commit to relate.
+    Absent,
+}
+
+impl Relation {
+    /// The forge's `compare/{main}...{commit}` status, or `None` for one it
+    /// does not define. `ahead` and `behind` are the commit's, against `main`.
+    #[must_use]
+    pub fn of_compare(status: &str) -> Option<Self> {
+        match status {
+            "identical" => Some(Self::Identical),
+            "behind" => Some(Self::MainAhead),
+            "ahead" => Some(Self::MainBehind),
+            "diverged" => Some(Self::Diverged),
+            _ => None,
+        }
+    }
+
+    /// Local ancestry: whether the commit is an ancestor of `main`, and
+    /// whether `main` is an ancestor of the commit, or `None` for no commit.
+    //MUTANT identical-read-as-behind|s@^            Some((true, true)) => Self::Identical,$@            Some((true, true)) => Self::MainBehind,@|both_producers_agree_on_every_relation
+    #[must_use]
+    pub fn of_ancestry(pair: Option<(bool, bool)>) -> Self {
+        match pair {
+            None => Self::Absent,
+            Some((true, true)) => Self::Identical,
+            Some((true, false)) => Self::MainAhead,
+            Some((false, true)) => Self::MainBehind,
+            Some((false, false)) => Self::Diverged,
+        }
+    }
+}
+
 /// A published pre-release that is not latest, as the freeze reads it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Pending {
     /// Its tag.
     pub tag: String,
-    /// Whether `main` contains its tag commit.
-    pub main_contains: bool,
-    /// Whether `main` is an ancestor of its tag commit.
-    pub main_behind: bool,
+    /// How its tag commit relates to `main`.
+    pub relation: Relation,
     /// Seconds since its `land` job concluded as failed, or `None` where no
     /// failed conclusion was read (still running, or never failed).
     pub land_failed_ago: Option<u64>,
@@ -87,7 +131,7 @@ pub struct Flight {
 }
 
 /// Whether a release is in flight, naming it and the arm that holds, or `None`.
-//MUTANT freeze-ignores-pending-land|s@^        if pending.main_contains \x7c\x7c !pending.main_behind {$@        if true {@|a_pending_land_is_in_flight_until_its_hold_expires
+//MUTANT freeze-ignores-pending-land|s@^        if pending.relation != Relation::MainBehind {$@        if true {@|a_pending_land_is_in_flight_until_its_hold_expires
 #[must_use]
 pub fn in_flight(flight: &Flight) -> Option<String> {
     if let Some(run) = &flight.active_run {
@@ -101,7 +145,7 @@ pub fn in_flight(flight: &Flight) -> Option<String> {
         return Some(format!("{tag} is a draft {age}s old"));
     }
     for pending in &flight.pending {
-        if pending.main_contains || !pending.main_behind {
+        if pending.relation != Relation::MainBehind {
             continue;
         }
         match pending.land_failed_ago {
@@ -143,11 +187,9 @@ pub struct LandFacts {
     pub tag: String,
     /// The `sha` input the build was dispatched with.
     pub sha: String,
-    /// Whether `main` contains the commit in question (the tag commit when
-    /// published, the target when a draft).
-    pub main_contains: bool,
-    /// Whether `main` is an ancestor of that commit.
-    pub main_behind: bool,
+    /// How the commit in question (the tag commit when published, the target
+    /// when a draft) relates to `main`.
+    pub relation: Relation,
     /// The commit `refs/tags/vX` points at, if the ref exists.
     pub tag_ref: Option<String>,
     /// The pin and version at the draft's target, as `git show` read them.
@@ -194,19 +236,17 @@ fn full_sha(text: &str) -> bool {
 }
 
 /// `land`'s step (a), decided.
-//MUTANT land-state-resume-as-burned|s@^            } else if at_sha \&\& facts.main_behind {$@            } else if false {@|land_state_resumes_a_published_release_main_is_behind
+//MUTANT land-state-resume-as-burned|s@^                (true, Relation::MainBehind) => LandState::ResumeAtD,$@                (true, Relation::MainBehind) => LandState::Burned,@|land_state_resumes_a_published_release_main_is_behind
 #[must_use]
 pub fn land_state(facts: &LandFacts) -> LandState {
     match &facts.read {
         Read::Absent => LandState::Absent,
         Read::Published { tag_commit } => {
             let at_sha = tag_commit.as_deref() == Some(facts.sha.as_str());
-            if at_sha && facts.main_contains {
-                LandState::SkipToF
-            } else if at_sha && facts.main_behind {
-                LandState::ResumeAtD
-            } else {
-                LandState::Burned
+            match (at_sha, facts.relation) {
+                (true, Relation::Identical | Relation::MainAhead) => LandState::SkipToF,
+                (true, Relation::MainBehind) => LandState::ResumeAtD,
+                _ => LandState::Burned,
             }
         }
         Read::Draft { target } => {
@@ -222,7 +262,7 @@ pub fn land_state(facts: &LandFacts) -> LandState {
                     "the pin and version at {target} are not {} and {version}",
                     facts.tag
                 ))
-            } else if !facts.main_behind {
+            } else if !matches!(facts.relation, Relation::Identical | Relation::MainBehind) {
                 LandState::DraftBad(format!("main is not an ancestor of {target}"))
             } else {
                 LandState::DraftOk
@@ -487,17 +527,15 @@ pub fn settings_green(
         }))
 }
 
-/// Whether `main` contains `commit`, and whether `main` is behind it, by the
-/// forge's compare: `(contains, behind)`.
-fn compare(slug: &str, main: &str, commit: &str, get: Get<'_>) -> Result<(bool, bool), String> {
+/// How `commit` relates to `main`, by the forge's compare.
+fn compare(slug: &str, main: &str, commit: &str, get: Get<'_>) -> Result<Relation, String> {
     let path = format!("repos/{slug}/compare/{main}...{commit}");
     let value = json_at(get, &path)?.ok_or_else(|| format!("{path} answered 404"))?;
-    match value.get("status").and_then(serde_json::Value::as_str) {
-        Some("identical" | "behind") => Ok((true, false)),
-        Some("ahead") => Ok((false, true)),
-        Some("diverged") => Ok((false, false)),
-        _ => Err(format!("{path} carries no status")),
-    }
+    value
+        .get("status")
+        .and_then(serde_json::Value::as_str)
+        .and_then(Relation::of_compare)
+        .ok_or_else(|| format!("{path} carries no status"))
 }
 
 /// Seconds since the `land` job of the build titled for `tag` concluded as
@@ -599,12 +637,11 @@ pub fn read_flight(
         } else if flag("prerelease") && latest.as_deref() != Some(tag.as_str()) {
             let commit = crate::release_verify::tag_commit(slug, &tag, get)
                 .ok_or_else(|| format!("the pre-release {tag} has no readable tag"))?;
-            let (main_contains, main_behind) = compare(slug, main, &commit, get)?;
+            let relation = compare(slug, main, &commit, get)?;
             let land_failed_ago = land_failed_ago(slug, &tag, &runs, now, get)?;
             pending.push(Pending {
                 tag,
-                main_contains,
-                main_behind,
+                relation,
                 land_failed_ago,
             });
         }
@@ -750,10 +787,10 @@ fn land_facts(slug: &str, tag: &str, sha: &str, get: Get<'_>) -> Result<LandFact
             .map(|answer| answer == Some(true))
             .map_err(|why| why.to_string())
     };
-    let (main_contains, main_behind) = match &commit {
-        Some(commit) => (ancestry(commit, &tracking)?, ancestry(&tracking, commit)?),
-        None => (false, false),
-    };
+    let relation = Relation::of_ancestry(match &commit {
+        Some(commit) => Some((ancestry(commit, &tracking)?, ancestry(&tracking, commit)?)),
+        None => None,
+    });
     let at = |path: &str| {
         commit
             .as_deref()
@@ -769,8 +806,7 @@ fn land_facts(slug: &str, tag: &str, sha: &str, get: Get<'_>) -> Result<LandFact
         read,
         tag: tag.to_owned(),
         sha: sha.to_owned(),
-        main_contains,
-        main_behind,
+        relation,
     })
 }
 

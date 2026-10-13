@@ -418,7 +418,7 @@ fn the_read_takes_state_from_the_release_object_and_the_tag_ref() {
 // ---- The release path's verbs (P3, P4) --------------------------------------
 
 use batten::release_state::{
-    self, Files, Flight, Found, LandFacts, LandState, Pending, Read, Step, Unusable,
+    self, Files, Flight, Found, LandFacts, LandState, Pending, Read, Relation, Step, Unusable,
 };
 
 #[test]
@@ -451,8 +451,7 @@ fn quiet() -> Flight {
 fn owed(land_failed_ago: Option<u64>) -> Pending {
     Pending {
         tag: String::from("v1.0.1"),
-        main_contains: false,
-        main_behind: true,
+        relation: Relation::MainBehind,
         land_failed_ago,
     }
 }
@@ -504,8 +503,7 @@ fn a_pending_land_is_in_flight_until_its_hold_expires() {
     assert_eq!(release_state::in_flight(&expired), None);
     let landed = Flight {
         pending: vec![Pending {
-            main_contains: true,
-            main_behind: false,
+            relation: Relation::MainAhead,
             ..owed(None)
         }],
         ..quiet()
@@ -513,13 +511,55 @@ fn a_pending_land_is_in_flight_until_its_hold_expires() {
     assert_eq!(release_state::in_flight(&landed), None);
 }
 
+/// The forge's compare and local ancestry answer one `Relation` for one
+/// commit, and no commit is never read as diverged (CLOUD-2245).
+#[test]
+fn both_producers_agree_on_every_relation() {
+    for (status, pair, relation) in [
+        ("identical", (true, true), Relation::Identical),
+        ("behind", (true, false), Relation::MainAhead),
+        ("ahead", (false, true), Relation::MainBehind),
+        ("diverged", (false, false), Relation::Diverged),
+    ] {
+        assert_eq!(Relation::of_compare(status), Some(relation), "{status}");
+        assert_eq!(Relation::of_ancestry(Some(pair)), relation, "{pair:?}");
+    }
+    assert_eq!(Relation::of_compare("unknown"), None);
+    assert_eq!(Relation::of_ancestry(None), Relation::Absent);
+}
+
+/// `main` at the commit itself holds a pending release landed, a published one
+/// skipped to (f), and a draft's target reached, whichever source said so.
+#[test]
+fn an_identical_main_is_landed_on_every_reader() {
+    let landed = Flight {
+        pending: vec![Pending {
+            relation: Relation::Identical,
+            ..owed(None)
+        }],
+        ..quiet()
+    };
+    assert_eq!(release_state::in_flight(&landed), None);
+    let published = LandFacts {
+        relation: Relation::Identical,
+        ..facts(published_at(COMMIT))
+    };
+    assert_eq!(release_state::land_state(&published), LandState::SkipToF);
+    let draft = LandFacts {
+        relation: Relation::Identical,
+        ..facts(Read::Draft {
+            target: COMMIT.to_owned(),
+        })
+    };
+    assert_eq!(release_state::land_state(&draft), LandState::DraftOk);
+}
+
 fn facts(read: Read) -> LandFacts {
     LandFacts {
         read,
         tag: String::from("v1.0.1"),
         sha: COMMIT.to_owned(),
-        main_contains: false,
-        main_behind: true,
+        relation: Relation::MainBehind,
         tag_ref: None,
         pin_at_target: Some(String::from("v1.0.1")),
         version_at_target: Some(String::from("1.0.1")),
@@ -535,8 +575,7 @@ fn published_at(commit: &str) -> Read {
 #[test]
 fn land_state_skips_to_f_when_main_holds_the_release() {
     let landed = LandFacts {
-        main_contains: true,
-        main_behind: false,
+        relation: Relation::MainAhead,
         ..facts(published_at(COMMIT))
     };
     assert_eq!(release_state::land_state(&landed), LandState::SkipToF);
@@ -586,7 +625,7 @@ fn land_state_refuses_a_draft_an_assertion_fails_for() {
         ..facts(target.clone())
     };
     let main_ahead = LandFacts {
-        main_behind: false,
+        relation: Relation::MainAhead,
         ..facts(target)
     };
     for bad in [elsewhere, moved_tag, wrong_pin, main_ahead] {
