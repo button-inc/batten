@@ -5191,17 +5191,48 @@ fn commit_paths(repo: &gix::Repository, commit: &gix::Commit<'_>) -> Option<Vec<
 /// and putting it all on the policy input would make every landing rule depend on
 /// a shape built for a different reader. Three fields answer every landing
 /// question a gate has asked so far.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+///
+/// **ONE FACT, ONE FIELD (CLOUD-2247).** It carried the verdict as a string and
+/// a `landed` bool beside it, which is true for `nothing_to_land` too — a trap
+/// any reader of the bool fell into, as the landing module once did. The policy
+/// input still carries all three keys, derived here, so its bytes are unchanged.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LandingFact {
-    /// The verdict, rendered as its serialized token.
-    pub verdict: String,
-    /// Whether there is no unlanded content — [`Landing::is_landed`], which counts
-    /// `NothingToLand` as landed because a branch with nothing to land is not
-    /// outstanding work.
-    pub landed: bool,
+    /// The verdict.
+    pub verdict: Verdict,
     /// The head-side commits with no proof on the target. Shas only: the subject
     /// belongs to [`RangeCommit`] and a body belongs nowhere on this input.
     pub unlanded: Vec<String>,
+}
+
+impl LandingFact {
+    /// Whether there is no unlanded content: `landed` or `nothing_to_land`,
+    /// because a branch with nothing to land is not outstanding work.
+    #[must_use]
+    pub const fn is_landed(&self) -> bool {
+        matches!(self.verdict, Verdict::Landed | Verdict::NothingToLand)
+    }
+}
+
+//MUTANT nothing-to-land-read-as-landed|s@^            Verdict::NothingToLand => "nothing_to_land",$@            Verdict::NothingToLand => "landed",@|a_branch_with_nothing_to_land_is_not_landed
+impl serde::Serialize for LandingFact {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct as _;
+        let verdict = match self.verdict {
+            Verdict::Landed => "landed",
+            Verdict::PartiallyLanded => "partially_landed",
+            Verdict::NothingToLand => "nothing_to_land",
+            Verdict::NotLandedWithinWindow => "not_landed_within_window",
+        };
+        let mut fact = serializer.serialize_struct("LandingFact", 3)?;
+        fact.serialize_field("verdict", verdict)?;
+        fact.serialize_field("landed", &self.is_landed())?;
+        fact.serialize_field("unlanded", &self.unlanded)?;
+        fact.end()
+    }
 }
 
 /// Acquire the DECLARED landing targets, skipping every one that cannot be
@@ -5233,20 +5264,10 @@ pub fn landing_facts(dir: &Path, declared: &[String]) -> Result<BTreeMap<String,
         let Ok(scan) = landing(dir, target, "HEAD", Window::DEFAULT) else {
             continue;
         };
-        let Ok(verdict) = serde_json::to_value(scan.verdict) else {
-            continue;
-        };
-        // The verdict serializes as a string; anything else means the enum grew a
-        // payload, and guessing a rendering for it would put a shape on the policy
-        // input that no schema describes.
-        let Some(verdict) = verdict.as_str().map(ToOwned::to_owned) else {
-            continue;
-        };
         facts.insert(
             target.clone(),
             LandingFact {
-                verdict,
-                landed: scan.is_landed(),
+                verdict: scan.verdict,
                 unlanded: scan.unlanded().into_iter().map(ToOwned::to_owned).collect(),
             },
         );
@@ -6737,6 +6758,37 @@ mod tests {
         assert!(PatchId::parse(&"a".repeat(65)).is_err(), "over-long");
         assert!(PatchId::parse(&"g".repeat(64)).is_err(), "non-hex");
         assert!(PatchId::parse(&"A".repeat(64)).is_err(), "lowercase only");
+    }
+
+    /// Nothing to land is never `landed` on the policy input, and the input's
+    /// bytes are the ones the string-and-bool fact wrote (CLOUD-2247).
+    #[test]
+    fn a_branch_with_nothing_to_land_is_not_landed() {
+        let fact = |verdict| LandingFact {
+            verdict,
+            unlanded: vec![String::from("1111111")],
+        };
+        for (verdict, token, landed) in [
+            (Verdict::Landed, "landed", true),
+            (Verdict::PartiallyLanded, "partially_landed", false),
+            (Verdict::NothingToLand, "nothing_to_land", true),
+            (
+                Verdict::NotLandedWithinWindow,
+                "not_landed_within_window",
+                false,
+            ),
+        ] {
+            assert_eq!(
+                serde_json::to_string(&fact(verdict)).unwrap(),
+                format!(r#"{{"verdict":"{token}","landed":{landed},"unlanded":["1111111"]}}"#),
+            );
+            assert_eq!(
+                serde_json::to_value(verdict).unwrap(),
+                serde_json::json!(token),
+                "the token is the verdict's own serialization"
+            );
+        }
+        assert_ne!(fact(Verdict::NothingToLand).verdict, Verdict::Landed);
     }
 
     #[test]
