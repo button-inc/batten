@@ -2025,6 +2025,8 @@ fn json_array(output: &str) -> Option<Vec<serde_json::Value>> {
 /// of them does: one generated object wrong is the case failing. A validating
 /// case keeps the exact resource match, its trigger and its report being the
 /// same object.
+//MUTANT-SUITE crates/batten/tests/it/mutate.rs
+//MUTANT generated-case-any-pass|s@^        } else if verdicts.iter().all(\x7cv\x7c v == "pass") {$@        } else if verdicts.iter().any(\x7cv\x7c v == "pass") {@|a_generating_kyverno_case_fails_when_any_object_it_generates_does
 fn kyverno_verdict(output: &str, want: &str) -> Selection {
     let field = |key: &str| {
         want.split(',')
@@ -2062,8 +2064,6 @@ fn kyverno_verdict(output: &str, want: &str) -> Selection {
             None
         } else if verdicts.iter().any(|v| v == "error") {
             Some("error".to_owned())
-        //MUTANT-SUITE crates/batten/tests/it/mutate.rs
-        //MUTANT generated-case-any-pass|s@^        } else if verdicts.iter().all(\x7cv\x7c v == "pass") {$@        } else if verdicts.iter().any(\x7cv\x7c v == "pass") {@|a_generating_kyverno_case_fails_when_any_object_it_generates_does
         } else if verdicts.iter().all(|v| v == "pass") {
             Some("pass".to_owned())
         } else if verdicts.iter().all(|v| v == "pass" || v == "fail") {
