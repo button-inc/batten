@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.215](https://github.com/button-inc/batten/compare/v0.0.214...v0.0.215) - 2026-10-13
+
+### Fixed
+
+- *(lease)* keep cooling's signature; the holder-aware reading is cooling_for
+- *(lease)* a poison cooldown never waits on this clone or a dead holder
+- *(capture)* publish every live spool commit
+- *(verify)* repair the hook surface before the gate set judges it (CLOUD-2233)
+- *(wiring)* a merged-$HOME registration is reported as hook wire stray and never refuses landing (CLOUD-2233)
+- *(asked)* record an answer given above the checkout into the checkout (CLOUD-2203)
+- *(install)* the installer cases compile on every target and pass clippy (CLOUD-2203)
+- *(install)* carry every surviving installer behaviour into tested Rust (CLOUD-2203)
+- *(install)* take install.sh off the shell census exemption (CLOUD-2203)
+- *(release)* read the installable targets from the bootstrap's table (CLOUD-2203)
+
+### Other
+
+- *(lease)* declare the cooldown's two rival-clause mutants
+- *(capture)* declare the skipped-publish mutant
+- *(config-lint)* build the workspace fixtures in place
+- *(verify)* declare task-verify's mutant and read only the steps (CLOUD-2233)
+- *(install)* a TLS fixture that survives the full suite's load; a workspace fixture built through Fixture (CLOUD-2203)
+- *(install)* build the SHA256SUMS and matrix bodies with write!, not format!-collect (CLOUD-2203)
+- *(install)* pack the fixture stub executable, as a release archive's binary is (CLOUD-2203)
+- *(install)* drive the generated bootstrap end to end and pin its bytes (CLOUD-2203)
+
 ## [0.0.214](https://github.com/button-inc/batten/compare/v0.0.213...v0.0.214) - 2026-10-11
 
 ### Fixed
