@@ -41,10 +41,10 @@
 #MUTANT approximated-task-may-run-nowhere|s@\tnot approximated_task_runs_in_ci(task)@\tfalse@|a_declared_approximation_for_a_task_no_job_runs_is_refused
 #
 #MUTANT dist-list-unread|s@\tnot provisions_from_a_list(job)@\tfalse@|a_release_leg_that_installs_everything_is_refused
-#MUTANT sequence-body-unread|s@^body_text(run) := concat@body_text_retired(run) := concat@|a_sequence_body_is_read_entry_by_entry
+#MUTANT sequence-body-unread|s@^\ttext := concat(@\ttext := "" # concat(@|a_sequence_body_is_read_entry_by_entry
 #MUTANT bare-cargo-statement-unread|s@^\tstartswith(trimmed, "cargo ")$@\tfalse@|a_test_cargo_body_that_is_the_statement_is_read
 #MUTANT wrapped-cargo-statement-unread|s@^\tstartswith(cmd, "cargo ")$@\tfalse@|a_test_cargo_body_the_step_cache_wraps_is_read
-#MUTANT wrapper-read-as-the-statement|s@^\tnot contains(trimmed, " step run ")$@\ttrue@|a_test_cargo_body_the_step_cache_wraps_is_read
+#MUTANT wrapper-read-as-the-statement|s@^\tnot contains(trimmed, " -- step ")$@\ttrue@|a_test_cargo_body_the_step_cache_wraps_is_read
 #
 #MUTANT rogue-release-path-poster|s@^\tnot release_path_poster\[path\] == name$@\tfalse@|only_the_predicate_posts_release_path
 #MUTANT early-latest-admitted|s@^\tnot latest_allowed(path, name, i)$@\tfalse@|latest_is_set_only_after_the_fast_forward

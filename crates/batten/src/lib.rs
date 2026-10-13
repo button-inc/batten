@@ -22040,9 +22040,9 @@ fn push_capture_notice(advice: &mut Vec<advisory::Advice>, reason: &str) {
 /// <free_before_mb> <free_after_mb>` to stderr, band declared or not: the trace
 /// is what sizes the band.
 //MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
-//MUTANT hook-skips-collection|s@^        let collected = band.and_then(\x7cprune\x7c {$@        let collected = None::<collect::Collected>.and_then(\x7c_: \&prune::Prune\x7c {@|the_hook_collects_before_admitting_under_pressure
-//MUTANT session-rearm-skipped|s@^            collect::rearm(\&tree);$@@|a_session_start_re_arms_every_fingerprint
-//MUTANT trace-silent|s@^            let _ = writeln!(err, "disk-call {} {before} {after}", envelope.raw_tool);$@@|the_hook_traces_a_call_under_the_trace_variable
+//MUTANT hook-skips-collection|s@^    let collected = band.and_then(\x7cprune\x7c {$@    let collected = None::<collect::Collected>.and_then(\x7c_: \&prune::Prune\x7c {@|the_hook_collects_before_admitting_under_pressure
+//MUTANT session-rearm-skipped|s@^                collect::rearm(\&tree);$@@|a_session_start_re_arms_every_fingerprint
+//MUTANT trace-silent|s@^        let _ = writeln!(err, "disk-call {} {before} {after}", envelope.raw_tool);$@@|the_hook_traces_a_call_under_the_trace_variable
 fn collect_before_admitting(
     envelope: &hook::Envelope,
     pruning: Option<&prune::Prune>,

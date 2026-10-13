@@ -54,7 +54,7 @@ pub struct Facts {
 /// Every item still owed, each a pointer; empty when the server gate holds.
 //MUTANT-SUITE crates/batten/tests/it/release_verify.rs
 //MUTANT probe-entry-unmatched|s@^    } else if facts.probe_requires != facts.trunk_requires {$@    } else if false {@|settings_name_every_owed_item
-//MUTANT bypass-actor-admitted|s@^    owed.extend(facts.bypassed.iter().map(@    owed.extend(facts.bypassed.iter().take(0).map(@|settings_name_every_owed_item
+//MUTANT bypass-actor-admitted|s@^            .map(\x7cname\x7c format!("the ruleset {name} has a bypass actor")),$@            .take(0).map(\x7cname\x7c format!("the ruleset {name} has a bypass actor")),@|settings_name_every_owed_item
 #[must_use]
 pub fn owed(facts: &Facts) -> Vec<String> {
     let mut owed = Vec::new();

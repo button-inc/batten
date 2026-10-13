@@ -404,7 +404,7 @@ fn already_clean(record: &Path, receipt: &Path, asked: &str) -> bool {
 //MUTANT listing-order-wins|s@^        if let Some(run) = crate::checks_green::winner(.group, .owned) {$@        if let Some(run) = group.last().copied() {@|the_latest_run_per_name_wins_by_completion_then_start
 //MUTANT fanin-ungated|s@^        && !graded.contains_key(fanin)$@        \&\& false@|nothing_is_written_until_the_fan_in_has_answered
 //MUTANT spaced-name-kept|s@^        if name.chars().any(char::is_whitespace) {$@        if false {@|a_name_with_whitespace_is_dropped_and_counted_never_mangled
-//MUTANT unknown-commit-could-not-look|s@^    if answer.status == UNKNOWN_COMMIT {$@    if false {@|a_commit_the_forge_has_never_seen_records_nothing_and_passes
+//MUTANT unknown-commit-could-not-look|s@^    if crate::rest::declared_nothing_graded(answer.status) {$@    if false {@|a_commit_the_forge_has_never_seen_records_nothing_and_passes
 #[must_use]
 pub fn graded(runs: &[crate::checks_green::Run], answered: &[&str]) -> BTreeMap<String, String> {
     let owned: Vec<String> = answered.iter().map(|word| (*word).to_owned()).collect();

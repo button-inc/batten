@@ -8530,7 +8530,7 @@ fn script_texts(arguments: &[&str], stdin: &[String]) -> Vec<String> {
 /// The first protected path a script names, split on the characters that
 /// cannot be part of a path a program spells as a literal.
 //MUTANT-SUITE crates/batten/src/hook.rs
-//MUTANT script-text-unread|s@^        .find(\x7cword\x7c protects(policy, word))$@        .find(\x7c_\x7c false)@|an_interpreter_script_naming_a_protected_path_is_refused
+//MUTANT script-text-unread|s@^    .find(\x7cword\x7c protects(policy, word))$@    .find(\x7c_\x7c false)@|an_interpreter_script_naming_a_protected_path_is_refused
 fn protected_in_text(policy: &Policy, text: &str) -> Option<String> {
     text.split(|c: char| {
         c.is_whitespace()

@@ -645,7 +645,7 @@ type ArtifactIndex = std::collections::HashMap<String, Vec<PathBuf>>;
 
 /// List a profile's `deps/`, `examples/` and top-level files once.
 //MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
-//MUTANT artifacts-unindexed|s@^                    index.entry(token.to_owned()).or_default().push(entry.path());$@@|a_collected_unit_takes_its_artifacts
+//MUTANT artifacts-unindexed|s@^                        .push(entry.path());$@                        .clear();@|a_collected_unit_takes_its_artifacts
 fn artifact_index(profile: &Path) -> ArtifactIndex {
     let mut index = ArtifactIndex::new();
     for dir in [

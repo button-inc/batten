@@ -1470,7 +1470,7 @@ pub fn result_view(
 /// When the state root cannot be resolved, a spilled file cannot be read, or
 /// the view cannot be written.
 //MUTANT-SUITE crates/batten/tests/it/result_bound.rs
-//MUTANT spilled-section-unstreamed|s@^            Some(source) => copy_counted(source, \&mut at.out)?,$@            Some(_) => (0, 0),@|an_oversized_result_becomes_a_pointer_to_a_view_of_its_text
+//MUTANT spilled-section-unstreamed|s@^            copy_counted(source, \&mut at.out)?$@            (0, 0)@|an_oversized_result_becomes_a_pointer_to_a_view_of_its_text
 pub fn result_view_spilled(
     repo_root: &Path,
     capture: &Capture,

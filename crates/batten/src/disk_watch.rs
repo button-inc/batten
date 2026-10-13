@@ -84,7 +84,7 @@ impl std::fmt::Debug for DiskWatch<'_> {
 /// A repository with no declared band returns at once with no lines: the arm is
 /// off, as it is for a consumer with no `[prune]`.
 //MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
-//MUTANT arm-ends-with-the-gate|s@^    while !stop.load(Ordering::Relaxed) {$@    for _ in 0..1 {@|the_arm_watches_past_the_gate
+//MUTANT arm-ends-with-the-gate|s@^        while !stop.load(Ordering::Relaxed) {$@        for _ in 0..1 {@|the_arm_watches_past_the_gate
 pub fn watch<'scope>(
     scope: &'scope std::thread::Scope<'scope, '_>,
     watch: DiskWatch<'scope>,

@@ -1091,7 +1091,7 @@ pub fn run_bump_unusable(
 
 /// The body of the changelog's `## [version]` section — every line after its
 /// heading up to the next `## [` heading — or `None` where there is none.
-//MUTANT notes-section-unbounded|s@^            if line.starts_with("## \[") {$@            if false {@|the_notes_are_the_versions_own_section
+//MUTANT notes-section-unbounded|s@^        if line.starts_with("## \[") {$@        if false {@|the_notes_are_the_versions_own_section
 #[must_use]
 pub fn section(changelog: &str, version: &str) -> Option<String> {
     let opener = format!("## [{version}]");
