@@ -116,13 +116,13 @@ fn an_off_path_destination_declared_deliberate_is_admitted() {
 /// The repository path the TLS fixture serves the release from.
 const REPO: &str = "example/pkg";
 
-/// The release a ref's manifest names in the fixture, never this binary's own.
+/// The release a ref's `batten.toml` pins in the fixture, never this binary's own.
 const WANTED: &str = "v9.9.9";
 
 /// The bytes the fixture release ships as its binary.
 const SHIPPED: &[u8] = b"#!/bin/sh\necho the fixture release\n";
 
-/// Serve, over loopback TLS, a ref `main` whose manifest names [`WANTED`], and
+/// Serve, over loopback TLS, a ref `main` whose `batten.toml` pins [`WANTED`], and
 /// [`WANTED`]'s release for this build's target. Returns the host and the
 /// environment `engine install` needs to reach and trust it.
 fn ref_release_host(home: &Path) -> (common::TlsWww, Vec<(String, String)>) {
@@ -136,8 +136,8 @@ fn ref_release_host(home: &Path) -> (common::TlsWww, Vec<(String, String)>) {
     let repo = root.join(REPO);
     std::fs::create_dir_all(repo.join("main")).unwrap();
     std::fs::write(
-        repo.join("main").join("Cargo.toml"),
-        format!("[workspace.package]\nversion = \"{}\"\n", &WANTED[1..]),
+        repo.join("main").join("batten.toml"),
+        format!("version = 1\nengine = {{ release = \"{WANTED}\" }}\n"),
     )
     .unwrap();
 
@@ -192,7 +192,7 @@ fn ref_release_host(home: &Path) -> (common::TlsWww, Vec<(String, String)>) {
     (host, env)
 }
 
-/// `BATTEN_VERSION_FROM_REF` installs the release the ref's manifest names,
+/// `BATTEN_VERSION_FROM_REF` installs the release the ref's `batten.toml` pins,
 /// fetched and verified, rather than the binary that is running.
 #[test]
 fn the_version_comes_from_the_refs_manifest() {
@@ -272,7 +272,7 @@ fn an_explicitly_named_version_is_never_replaced_by_the_ref() {
     );
 }
 
-/// A ref whose manifest names no version is a refusal, never a quiet install of
+/// A ref whose `batten.toml` pins no release is a refusal, never a quiet install of
 /// whatever binary is running.
 #[test]
 fn a_ref_naming_no_version_installs_nothing() {
@@ -291,13 +291,13 @@ fn a_ref_naming_no_version_installs_nothing() {
         .collect();
     env.push(("BATTEN_INSTALL_DIR", &named_str));
     // `s_server -WWW` answers 200 with an error body for a path it cannot
-    // open, so this ref reads as a manifest that names no version.
+    // open, so this ref reads as a `batten.toml` that pins no release.
     env.push(("BATTEN_VERSION_FROM_REF", "absent"));
 
     let output = install(&home, std::slice::from_ref(&named), &env);
     assert_eq!(output.status.code(), Some(1), "{}", stdout(&output));
     assert!(
-        common::stderr(&output).contains("names no version"),
+        common::stderr(&output).contains("pins no release"),
         "{}",
         common::stderr(&output)
     );

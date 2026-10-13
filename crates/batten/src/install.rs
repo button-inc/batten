@@ -359,20 +359,27 @@ pub fn bootstrap_asset(name: &str) -> String {
 /// The committed `install.sh`, rendered (CLOUD-2203).
 ///
 /// **THE BARE MINIMUM TO INSTALL AND EXECUTE RELEASED RUST, and nothing else.**
-/// Detect the target, read the tag off the release web host's `latest`
-/// redirect (or `BATTEN_VERSION`), fetch `SHA256SUMS` and the archive from
-/// `releases/download` — never the API, whose anonymous budget a shared egress
-/// address spends — check the digest, and hand over to `engine install`, which
-/// places the binary and owns everything after. A refusal names the status and
-/// the URL that answered. Exit 1 is the release's fault: once a tag resolved, a
-/// download it does not serve, a missing digest, a digest that disagrees, or a
-/// platform no release builds. Exit 2 is could-not-look: a `latest` that does
-/// not answer — a private repository answers `404` to everything — or does not
-/// redirect to a tag. Every
+/// Detect the target, take the tag a `batten.toml` PINS — `BATTEN_VERSION`
+/// when named, else `BATTEN_VERSION_FROM_REF`'s pin, else the pin of the
+/// nearest `batten.toml` above the working directory, else `main`'s, read off
+/// the raw-file host — and never the latest release (CLOUD-2033): `main` only
+/// ever pins a release that is published, immutable, complete and verified,
+/// where "latest" is a moving answer no gate stands behind. Fetch `SHA256SUMS`
+/// and the archive from `releases/download` — never the API, whose anonymous
+/// budget a shared egress address spends — check the digest, and hand over to
+/// `engine install`, which places the binary and owns everything after. A
+/// refusal names the status and the URL that answered. Exit 1 is the release's
+/// fault: a fetched `batten.toml` that pins no release; once a tag resolved, a
+/// download it does not serve, a missing digest, a digest that disagrees; or a
+/// platform no release builds. Exit 2 is could-not-look: a `batten.toml` that
+/// does not answer — a private repository answers `404` to everything. Every
 /// request is bounded — a connect timeout, a total timeout, and three retries of
 /// a transient answer — so a stalled host fails the install rather than hanging
 /// it. TLS trust is curl's own reading of `CURL_CA_BUNDLE`, then `SSL_CERT_FILE`. `BATTEN_RELEASES` exists so a suite can serve the
 /// release from a fixture; nothing else is configurable here.
+//MUTANT-SUITE crates/batten/tests/it/install_web.rs
+//MUTANT install-falls-back-to-latest|s@^\tpin_of "$tmp/main.toml" \x7c\x7c$@\ttrue \x7c\x7c@|a_main_pinning_no_release_is_refused_never_latest
+//MUTANT consumer-pin-ignored|s@^\t\tif \[ -f "$dir/batten.toml" \]; then$@\t\tif false; then@|install_installs_the_consumers_pin
 #[must_use]
 pub fn render_bootstrap(name: &str, repository: &str) -> String {
     let asset = bootstrap_asset(name);
@@ -419,13 +426,46 @@ get() {{
 	*) fail "could not download $1: ${{got:-000}}" ;;
 	esac
 }}
+case "$base" in
+https://github.com/*) raw="https://raw.githubusercontent.com/${{base#https://github.com/}}" ;;
+*) raw="$base" ;;
+esac
+pin_of() {{
+	pin=
+	while IFS= read -r line || [ -n "$line" ]; do
+		case "$line" in
+		engine*release*\"*\"*)
+			line=${{line#*release}}
+			line=${{line#*\"}}
+			pin=${{line%%\"*}}
+			return 0
+			;;
+		esac
+	done <"$1"
+	return 1
+}}
 tag="${{BATTEN_VERSION:-}}"
+if [ -z "$tag" ] && [ -n "${{BATTEN_VERSION_FROM_REF:-}}" ]; then
+	get "$raw/$BATTEN_VERSION_FROM_REF/batten.toml" "$tmp/ref.toml"
+	pin_of "$tmp/ref.toml" ||
+		fail "batten.toml at $BATTEN_VERSION_FROM_REF pins no release, and this script never installs the latest one; set BATTEN_VERSION" 1
+	tag=$pin
+fi
 if [ -z "$tag" ]; then
-	get "$base/releases/latest" "$tmp/latest"
-	case "$got" in
-	*/releases/tag/?*) tag=${{got##*/}} ;;
-	*) fail "$base/releases/latest did not redirect to a release tag: $got" ;;
-	esac
+	dir=$PWD
+	while [ -n "$dir" ]; do
+		if [ -f "$dir/batten.toml" ]; then
+			pin_of "$dir/batten.toml" && tag=$pin
+			break
+		fi
+		dir=${{dir%/*}}
+	done
+fi
+if [ -z "$tag" ]; then
+	get "$raw/main/batten.toml" "$tmp/main.toml"
+	pin_of "$tmp/main.toml" ||
+		fail "$raw/main/batten.toml pins no release, and this script never installs the latest one; set BATTEN_VERSION" 1
+	tag=$pin
 fi
 asset="{asset}"
 get "$base/releases/download/$tag/SHA256SUMS" "$tmp/SHA256SUMS" 1

@@ -513,14 +513,20 @@ pub fn fetch_release(repository: &str, tag: &str) -> Result<Vec<u8>> {
     extract(&archive.body, &crate::dist::binary_file("batten", &target))
 }
 
-/// The release tag `reference`'s workspace manifest names, read off the
-/// repository's raw-file host — never the API, whose anonymous budget a shared
-/// egress address spends (CLOUD-2203).
+/// The release `reference`'s `batten.toml` pins, read off the repository's
+/// raw-file host — never the API, whose anonymous budget a shared egress
+/// address spends (CLOUD-2203).
+///
+/// **The pin, never the manifest's version (CLOUD-2033).** The workspace
+/// version names a release that may not be published yet — release-plz bumps
+/// it first — while `main`'s pin only ever names one that is published,
+/// immutable, complete and verified. A ref pinning no release is refused rather
+/// than answered with the latest one.
 ///
 /// # Errors
 ///
-/// A manifest that does not answer `200`, or names no version. An operator who
-/// named a ref asked for THAT release, so a ref that cannot be read is a
+/// A `batten.toml` that does not answer `200`, or pins no release. An operator
+/// who named a ref asked for THAT release, so a ref that cannot be read is a
 /// refusal rather than a quiet install of whatever binary is running.
 pub fn ref_release(repository: &str, reference: &str) -> Result<String> {
     let raw = repository.trim_end_matches('/').replacen(
@@ -528,23 +534,20 @@ pub fn ref_release(repository: &str, reference: &str) -> Result<String> {
         "https://raw.githubusercontent.com/",
         1,
     );
-    let url = format!("{raw}/{reference}/Cargo.toml");
+    let url = format!("{raw}/{reference}/batten.toml");
     let answer = crate::fetch::get(&url, &[])?;
     if answer.status != 200 {
         return Err(UsageError::raise(format!(
-            "engine install: {url} answered {}, so the release ref {reference} names is unknown; nothing was installed",
+            "engine install: {url} answered {}, so the release ref {reference} pins is unknown; nothing was installed",
             answer.status
         )));
     }
-    String::from_utf8_lossy(&answer.body)
-        .lines()
-        .find_map(|line| {
-            let version = line.strip_prefix("version = \"")?.strip_suffix('"')?;
-            Some(format!("v{version}"))
-        })
+    declared(&String::from_utf8_lossy(&answer.body))
+        .and_then(|pin| pin.release)
         .ok_or_else(|| {
             UsageError::raise(format!(
-                "engine install: {url} names no version; nothing was installed"
+                "engine install: {url} pins no release, and engine install never installs the \
+                 latest one; set BATTEN_VERSION to install a named release"
             ))
         })
 }

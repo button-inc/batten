@@ -820,8 +820,8 @@ fn engine_update(root: &Path, out: &mut dyn Write) -> Result<ExitCode> {
 /// placed where [`install::destination`] says, and the knobs the workflows
 /// already pass keep their meaning: `BATTEN_INSTALL_DIR` names the directory,
 /// `BATTEN_ALLOW_OFF_PATH=1` admits one `PATH` does not reach,
-/// `BATTEN_VERSION_FROM_REF` installs the release a ref's manifest names (this
-/// binary when the host answers that release is not published yet) unless
+/// `BATTEN_VERSION_FROM_REF` installs the release a ref's `batten.toml` pins
+/// (refused when that release is not published, CLOUD-2033) unless
 /// `BATTEN_VERSION` named one, which always wins ([`engine::pick_release`]), and
 /// `BATTEN_REQUIRE` refuses a binary that lacks the verb its caller is about to
 /// run.
@@ -866,9 +866,15 @@ fn engine_install(out: &mut dyn Write) -> Result<ExitCode> {
     let (tag, bytes) = match pick {
         engine::Pick::Fetched { tag, bytes } => (tag, bytes),
         engine::Pick::Running => (running, std::fs::read(std::env::current_exe()?)?),
+        // REFUSED, NEVER THE RUNNING BINARY (CLOUD-2033). A ref's pin names a
+        // release `main` only pins once it is published, so an unpublished one
+        // is a wrong pin, and installing whatever is running in its place is
+        // the "latest release" the invariant forbids.
         engine::Pick::Unpublished { wanted } => {
-            writeln!(out, "unpublished={wanted}")?;
-            (running, std::fs::read(std::env::current_exe()?)?)
+            return Err(UsageError::raise(format!(
+                "engine install: the release {wanted} that BATTEN_VERSION_FROM_REF pins is not \
+                 published; nothing was installed"
+            )));
         }
     };
     std::fs::create_dir_all(&dest).map_err(|why| {

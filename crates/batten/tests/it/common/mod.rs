@@ -2820,3 +2820,161 @@ pub(crate) fn spawn_copy(command: &mut std::process::Command) -> std::process::C
     }
     command.spawn().expect("run batten")
 }
+
+/// Write `ca.pem`/`ca.key` and a `cert.pem`/`key.pem` the CA signed, into `tls`.
+///
+/// A real CA rather than a self-signed leaf, which is the difference from the
+/// `curl`-era fixture: a verifier that must chain to a root will not accept an
+/// end-entity certificate as its own issuer, so the old shape would fail the
+/// trusted arm for a reason that has nothing to do with the property under test.
+pub(crate) fn mint_ca_and_server_certificate(tls: &Path) {
+    #[expect(
+        clippy::disallowed_types,
+        reason = "stays, and test-only: the import the spawn below needs, annotated at both sites the way every other openssl row in this file is"
+    )]
+    use std::process::Command;
+
+    let at = |name: &str| tls.join(name).to_str().unwrap().to_owned();
+    let openssl = |args: &[&str]| {
+        #[expect(
+            clippy::disallowed_types,
+            reason = "stays, and test-only: the fixture's key material has to be one nothing public signs, and `openssl` is what generates it"
+        )]
+        let run = Command::new("openssl")
+            .args(args)
+            .current_dir(tls)
+            .output()
+            .expect("openssl is required for the TLS fixture");
+        assert!(
+            run.status.success(),
+            "openssl {:?}: {}",
+            args.first(),
+            String::from_utf8_lossy(&run.stderr)
+        );
+    };
+
+    openssl(&[
+        "req",
+        "-x509",
+        "-newkey",
+        "rsa:2048",
+        "-nodes",
+        "-keyout",
+        &at("ca.key"),
+        "-out",
+        &at("ca.pem"),
+        "-days",
+        "1",
+        "-subj",
+        "/CN=Batten Fixture CA",
+        "-addext",
+        "basicConstraints=critical,CA:TRUE",
+        "-addext",
+        "keyUsage=critical,keyCertSign,cRLSign",
+    ]);
+    openssl(&[
+        "req",
+        "-newkey",
+        "rsa:2048",
+        "-nodes",
+        "-keyout",
+        &at("key.pem"),
+        "-out",
+        &at("csr.pem"),
+        "-subj",
+        "/CN=localhost",
+    ]);
+    // The SAN is what the verifier matches the URL's host against, so a
+    // certificate without it fails the trusted arm however well it chains.
+    std::fs::write(
+        tls.join("ext.cnf"),
+        "subjectAltName=DNS:localhost,IP:127.0.0.1\nbasicConstraints=critical,CA:FALSE\n\
+         extendedKeyUsage=serverAuth\n",
+    )
+    .unwrap();
+    openssl(&[
+        "x509",
+        "-req",
+        "-in",
+        &at("csr.pem"),
+        "-CA",
+        &at("ca.pem"),
+        "-CAkey",
+        &at("ca.key"),
+        "-CAcreateserial",
+        "-out",
+        &at("cert.pem"),
+        "-days",
+        "1",
+        "-extfile",
+        &at("ext.cnf"),
+    ]);
+}
+
+/// A loopback HTTPS host serving the files under `root`, by `openssl s_server
+/// -WWW`, with a certificate only the CA [`mint_ca_and_server_certificate`] wrote
+/// into `tls` signs. Killed on drop.
+///
+/// `-WWW` answers `200` for a file it cannot open, with the error as the body
+/// (`provision.rs` measured it), so a case served here can never see a `404`.
+pub(crate) struct TlsWww {
+    /// The loopback port it listens on.
+    pub(crate) port: u16,
+    child: std::process::Child,
+}
+
+impl Drop for TlsWww {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+/// Mint a CA into `tls` and serve `root` over HTTPS with it.
+pub(crate) fn tls_www(tls: &Path, root: &Path) -> TlsWww {
+    #[expect(
+        clippy::disallowed_types,
+        reason = "stays, and test-only: a re-terminating proxy's CA is only reproducible against a real TLS listener, and `openssl s_server` is what serves one on loopback"
+    )]
+    use std::process::{Command, Stdio};
+
+    mint_ca_and_server_certificate(tls);
+    let port = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    #[expect(
+        clippy::disallowed_types,
+        reason = "stays, and test-only: a loopback TLS listener the case starts and stops, so nothing leaves the machine"
+    )]
+    let child = Command::new("openssl")
+        .args(["s_server", "-accept", &port.to_string(), "-cert"])
+        .arg(tls.join("cert.pem"))
+        .arg("-key")
+        .arg(tls.join("key.pem"))
+        .args(["-WWW", "-quiet"])
+        .current_dir(root)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("start the local TLS listener");
+    let mut host = TlsWww { port, child };
+    // 600 x 50ms: under the full suite's load `s_server` measured slower than
+    // the 5s `provision.rs` allowed one listener alone. A listener that EXITED is
+    // reported at once rather than waited out.
+    for _ in 0..600 {
+        if std::net::TcpListener::bind(("127.0.0.1", port)).is_err() {
+            return host;
+        }
+        if let Ok(Some(status)) = host.child.try_wait() {
+            panic!("the TLS listener exited before it bound: {status}");
+        }
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "the interval of a bounded poll: the exit condition is `TcpListener::bind` failing because the listener took the port, and the 600-iteration bound turns a listener that never came up into a failed assertion rather than a hang (CLOUD-1177)"
+        )]
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    panic!("the TLS listener never came up");
+}
