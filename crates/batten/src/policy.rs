@@ -426,8 +426,10 @@ pub struct Bundle {
     severity: crate::severity::RuleSeverity,
     /// The `predicate_severity` table of the enabling row, if it declared one.
     predicate_severity: BTreeMap<String, crate::severity::RuleSeverity>,
-    /// The one compiled evaluator, ready to take an input document.
-    engine: regorus::Engine,
+    /// The one compiled evaluator, ready to take an input document: the
+    /// interpreter, or the bytecode a hook call loaded from [`Compiled`]'s
+    /// cache (CLOUD-2236).
+    evaluator: Evaluator,
     /// The engine's [`describe`] reading, taken once and never re-queried
     /// (CLOUD-1875) — `declared`'s rationale, one field over. Six callers read
     /// it, and each used to re-serialise every module's whole AST. The engine is
@@ -441,7 +443,7 @@ impl Bundle {
     /// This bundle's [`describe`] reading, computed on first use.
     fn described(&self) -> Option<&[Described]> {
         self.described
-            .get_or_init(|| describe(&self.engine).map(std::sync::Arc::new))
+            .get_or_init(|| describe(self.evaluator.engine()?).map(std::sync::Arc::new))
             .as_deref()
             .map(Vec::as_slice)
     }
@@ -488,6 +490,16 @@ impl Bundle {
     /// unfamiliar shape is this reader's limitation and not the module's fault.
     #[must_use]
     pub fn session_start_facts(&self) -> BTreeSet<&'static str> {
+        // Bytecode carries no AST, so its reading was taken when the cache
+        // entry was written, from the same source this would describe.
+        if let Evaluator::Compiled(compiled) = &self.evaluator {
+            return compiled
+                .facts
+                .iter()
+                .filter_map(|token| crate::facts::Fact::from_token(token))
+                .map(crate::facts::Fact::as_str)
+                .collect();
+        }
         let mut found = BTreeSet::new();
         let Some(described) = self.described() else {
             return found;
@@ -641,7 +653,7 @@ impl Clone for Bundle {
             packages: self.packages.clone(),
             severity: self.severity,
             predicate_severity: self.predicate_severity.clone(),
-            engine: self.engine.clone(),
+            evaluator: self.evaluator.clone(),
             described: self.described.clone(),
         }
     }
@@ -1028,7 +1040,11 @@ pub fn load(
             // `clippy::too_many_lines`: a nameable step lifted out whole, which is
             // the remedy `lib.rs` takes for the same lint rather than raising a cap.
             let sources: Vec<(String, String)> = preset_sources(rule, manifest, name)?;
-            let bundle = compile(&rule.id, &sources, &pattern_data)?;
+            let bundle = if checks == ModuleChecks::SkipOnHotPath {
+                compile_cached(root, &rule.id, &sources, &pattern_data)?
+            } else {
+                compile(&rule.id, &sources, &pattern_data)?
+            };
             let declared = bundle.declared.clone();
             check_predicate_severity(rule, &declared, source_key)?;
             // A PRESET IS A MODULE TOO, and this branch's `continue` skipped the
@@ -1059,8 +1075,14 @@ pub fn load(
 
         // EVERYTHING PAST THE READ IS PURE, and the split is what lets the
         // composition property be tested without a filesystem: `compile` builds
-        // one engine from N sources, which is the whole of CLOUD-837.
-        let bundle = compile(&rule.id, &sources, &pattern_data)?;
+        // one engine from N sources, which is the whole of CLOUD-837. The hot
+        // path reads it from the bytecode cache when nothing it is a function
+        // of has changed (CLOUD-2236).
+        let bundle = if checks == ModuleChecks::SkipOnHotPath {
+            compile_cached(root, &rule.id, &sources, &pattern_data)?
+        } else {
+            compile(&rule.id, &sources, &pattern_data)?
+        };
         let declared = bundle.declared.clone();
 
         // The pointer a bundle-level fault is reported against.
@@ -1311,6 +1333,7 @@ pub fn compile(
     let smoke = engine
         .eval_query(PACKAGE_QUERY.to_owned(), false)
         .map_err(|err| UsageError::raise(format!("`{pointer}` faults when evaluated: {err}")))?;
+    let smoke = Answer::of(&smoke);
 
     // WHAT THE BUNDLE PUBLISHES, read once. A bundle whose modules carry no
     // `rules` rule publishes nothing, which is exactly the pre-CLOUD-832 module
@@ -1348,7 +1371,7 @@ pub fn compile(
         // for the value that decides whether a refusal refuses.
         severity: crate::severity::RuleSeverity::Deny,
         predicate_severity: BTreeMap::new(),
-        engine,
+        evaluator: Evaluator::Interpreted(engine),
         described: std::sync::OnceLock::new(),
     })
 }
@@ -1365,12 +1388,12 @@ pub fn compile(
 /// whose value is neither a set nor an array decided nothing readable, and
 /// guessing it is empty is CLOUD-251's vacuous pass.
 fn collect_strings(
-    results: &regorus::QueryResults,
+    answer: &Answer,
     packages: &BTreeSet<Vec<String>>,
     rule_name: &str,
 ) -> Option<BTreeSet<String>> {
     let mut found = BTreeSet::new();
-    for value in package_members(results, packages, rule_name) {
+    for value in package_members(answer, packages, rule_name) {
         match value {
             regorus::Value::Set(items) => {
                 for item in items.iter() {
@@ -1406,22 +1429,19 @@ fn collect_strings(
 /// without reopening the free-string hole: a bare member is a class with no
 /// predicate id and no pointers, attributed to the enabling row, and it is held
 /// to the registry exactly as an attributed one is.
-fn collect_deny_messages(
-    results: &regorus::QueryResults,
-    packages: &BTreeSet<Vec<String>>,
-) -> Option<Vec<String>> {
-    collect_string_list(results, packages, DENY_RULE)
+fn collect_deny_messages(answer: &Answer, packages: &BTreeSet<Vec<String>>) -> Option<Vec<String>> {
+    collect_string_list(answer, packages, DENY_RULE)
 }
 
 /// Every string in a set- or array-valued rule named `rule` under the package,
 /// or `None` for a shape this gate cannot read.
 fn collect_string_list(
-    results: &regorus::QueryResults,
+    answer: &Answer,
     packages: &BTreeSet<Vec<String>>,
     rule: &str,
 ) -> Option<Vec<String>> {
     let mut messages = Vec::new();
-    for value in package_members(results, packages, rule) {
+    for value in package_members(answer, packages, rule) {
         match value {
             regorus::Value::Set(items) => {
                 for item in items.iter() {
@@ -1459,12 +1479,9 @@ fn collect_string_list(
 /// there would be satisfied by an invented one. A `subjects` that is present and
 /// is NOT a list of readable shapes is could-not-look, because a module speaking
 /// a dialect this decoder does not have is not a module reporting nothing.
-fn collect_violations(
-    results: &regorus::QueryResults,
-    packages: &BTreeSet<Vec<String>>,
-) -> Option<Vec<Violation>> {
+fn collect_violations(answer: &Answer, packages: &BTreeSet<Vec<String>>) -> Option<Vec<Violation>> {
     let mut violations = Vec::new();
-    for value in package_members(results, packages, VIOLATION_RULE) {
+    for value in package_members(answer, packages, VIOLATION_RULE) {
         let items: Vec<&regorus::Value> = match value {
             regorus::Value::Set(items) => items.iter().collect(),
             regorus::Value::Array(items) => items.iter().collect(),
@@ -1536,25 +1553,394 @@ fn read_subjects(value: &regorus::Value) -> Option<Vec<crate::verdict::Subject>>
 /// been a GRANT authored by a data file. The `data` document does not say which
 /// members are packages; the modules do, so the answer comes from them.
 fn package_members<'a>(
-    results: &'a regorus::QueryResults,
+    answer: &'a Answer,
     packages: &BTreeSet<Vec<String>>,
     rule_name: &str,
 ) -> Vec<&'a regorus::Value> {
-    let rule = regorus::Value::from(rule_name);
     let mut found = Vec::new();
-    for result in &results.result {
-        for expression in &result.expressions {
+    match answer {
+        Answer::Documents(roots) => {
+            let rule = regorus::Value::from(rule_name);
+            for root in roots {
+                for package in packages {
+                    if let Some(member) = at_package(root, package)
+                        .and_then(|value| value.as_object().ok())
+                        .and_then(|object| object.get(&rule))
+                    {
+                        found.push(member);
+                    }
+                }
+            }
+        }
+        // Addressed by (package, rule) already, so the helper-document defect
+        // above has no walk to enter: only a declared package's rule is read.
+        Answer::Members(members) => {
             for package in packages {
-                if let Some(member) = at_package(&expression.value, package)
-                    .and_then(|value| value.as_object().ok())
-                    .and_then(|object| object.get(&rule))
-                {
+                if let Some(member) = members.get(&(package.clone(), rule_name.to_owned())) {
                     found.push(member);
                 }
             }
         }
     }
     found
+}
+
+/// One evaluation's answer, in the shape its evaluator produced it.
+///
+/// The interpreter answers the whole `data.batten` document; bytecode answers
+/// each entry point, addressed by package and rule. [`package_members`] reads
+/// both, so every collector above decides from either without knowing which.
+enum Answer {
+    /// The `data.batten` documents of an interpreted query.
+    Documents(Vec<regorus::Value>),
+    /// Each defined `(package, rule)` entry point's value.
+    Members(BTreeMap<(Vec<String>, String), regorus::Value>),
+}
+
+impl Answer {
+    /// The documents an interpreted query returned.
+    fn of(results: &regorus::QueryResults) -> Self {
+        Self::Documents(
+            results
+                .result
+                .iter()
+                .flat_map(|result| result.expressions.iter().map(|e| e.value.clone()))
+                .collect(),
+        )
+    }
+}
+
+/// How a bundle evaluates (CLOUD-2236).
+#[derive(Clone)]
+enum Evaluator {
+    /// The interpreter, compiled from source in this process.
+    Interpreted(regorus::Engine),
+    /// Bytecode a previous call compiled and cached.
+    Compiled(std::sync::Arc<Compiled>),
+}
+
+impl Evaluator {
+    /// The interpreter, where this bundle has one. Bytecode is loaded only on
+    /// the hot path, whose bundles nothing describes, tests or sweeps.
+    fn engine(&self) -> Option<&regorus::Engine> {
+        match self {
+            Self::Interpreted(engine) => Some(engine),
+            Self::Compiled(_) => None,
+        }
+    }
+}
+
+/// Evaluate `bundle` over `input`, reading only the rules named (CLOUD-2236).
+///
+/// The interpreter evaluates the whole package whatever is asked; bytecode runs
+/// only the named rules' entry points, which is most of what it saves on a
+/// call that asks one question.
+///
+/// `None` is could-not-look: the input will not parse or the bundle faults.
+fn answer(bundle: &Bundle, input: &str, rules: &[&str]) -> Option<Answer> {
+    match &bundle.evaluator {
+        Evaluator::Interpreted(engine) => {
+            let mut engine = engine.clone();
+            engine.set_input_json(input).ok()?;
+            let results = engine.eval_query(PACKAGE_QUERY.to_owned(), false).ok()?;
+            Some(Answer::of(&results))
+        }
+        Evaluator::Compiled(compiled) => compiled.answer(input, rules),
+    }
+}
+
+/// A bundle's bytecode, and what its load read off the source (CLOUD-2236).
+///
+/// # Why a hook call loads this instead of compiling
+///
+/// Every mediated call is a fresh process, and every one re-parsed and
+/// re-compiled every enabled module and drove the smoke query over them:
+/// measured on this repository, `policy::compile` was 21% of a call's
+/// instructions and the smoke query 26%, and the parser raises an `anyhow`
+/// error per backtracked production — 2,526 per call, each capturing a
+/// backtrace under `RUST_BACKTRACE=1` (62 ms of a 205 ms p50). None of it
+/// depends on the call: it is a function of the module text, the pattern table
+/// and this binary. So the first call compiles as before, every check included,
+/// and writes the result; later calls deserialize it.
+///
+/// # What the key covers
+///
+/// [`cache_key`] digests the format, this binary's identity, the row id, every
+/// module's path and text, and the data document. A change to any of them is a
+/// different key, so a stale entry is never read — it is a miss, and the miss
+/// rewrites it. Nothing here weakens a check: [`compile`] still validates a
+/// bundle the first time its key is seen.
+///
+/// # What stays interpreted
+///
+/// A bundle the bytecode compiler cannot express — two tree-scope modules
+/// today, measured: a `some … in` it does not hoist, and a partial object rule
+/// with nested bracket keys — is simply not cached and keeps the interpreter.
+/// Answers agree where both run: `bytecode_answers_as_the_interpreter_does`.
+pub(crate) struct Compiled {
+    program: std::sync::Arc<regorus::rvm::program::Program>,
+    /// The pattern table, set as the VM's `data` exactly as `compile` sets it.
+    data: regorus::Value,
+    /// Every `(package, rule)` the bundle defines among the rules read.
+    entries: BTreeSet<(Vec<String>, String)>,
+    /// The session-start facts the bundle reads, from [`Bundle::session_start_facts`].
+    facts: Vec<String>,
+}
+
+/// [`compile`] on the hot path, through the bytecode cache (CLOUD-2236).
+///
+/// A hit skips the parse, the compile and the smoke query: the entry was
+/// written by a call that ran all three over exactly these sources. A miss runs
+/// [`compile`] unchanged, so a broken module is refused exactly as before, and
+/// then evaluates as bytecode — written for the next call, and used by this
+/// one, so the answer a call gets never depends on whether the cache was warm.
+/// A bundle the bytecode compiler cannot express stays interpreted.
+///
+/// The cache is best-effort by construction: an unwritable state directory or
+/// an unreadable entry is a miss, never an error.
+//MUTANT cache-never-read|s@read_cached(path, \&key@read_cached(Path::new("/"), \&key@|a_warm_load_compiles_no_engine
+fn compile_cached(
+    root: &Path,
+    id: &str,
+    sources: &[(String, String)],
+    data: &serde_json::Value,
+) -> Result<Bundle> {
+    let key = cache_key(id, sources, data);
+    let path = cache_path(root, id);
+    if let Some(bundle) = path
+        .as_deref()
+        .and_then(|path| read_cached(path, &key, id, sources, data))
+    {
+        return Ok(bundle);
+    }
+    let bundle = compile(id, sources, data)?;
+    let Some(compiled) = Compiled::from_bundle(&bundle, data) else {
+        return Ok(bundle);
+    };
+    if let Some(path) = path {
+        write_cached(&path, &key, &bundle, &compiled);
+    }
+    Ok(compiled.into_bundle(bundle))
+}
+
+/// What a cache entry's first line records beside the bytecode.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct CacheHeader {
+    /// [`cache_key`] of the inputs the entry was compiled from.
+    key: String,
+    declared: BTreeSet<String>,
+    packages: BTreeSet<Vec<String>>,
+    entries: BTreeSet<(Vec<String>, String)>,
+    facts: Vec<String>,
+}
+
+/// The cache format; a change to [`CacheHeader`] or to how bytecode is written
+/// bumps it, which makes every older entry a miss.
+const CACHE_FORMAT: &str = "batten-policy-rvm-1";
+
+/// The entry for row `id`, in the repository's state directory: one file per
+/// row, overwritten on a miss, so the cache never grows past the row count.
+fn cache_path(root: &Path, id: &str) -> Option<std::path::PathBuf> {
+    let dir = crate::state::repo_state_dir(root).ok()?;
+    Some(
+        dir.join("policy")
+            .join(format!("{}.rvm", blake3::hash(id.as_bytes()).to_hex())),
+    )
+}
+
+/// The digest an entry must carry to be read: everything the bytecode is a
+/// function of. This binary's identity is its size and modification time, so a
+/// rebuild at an unchanged version — a local build, or a regorus bump — is a
+/// miss too.
+//MUTANT cache-key-ignores-source|s@        field(source.as_bytes());@        let _ = source;@|an_edited_module_is_not_answered_from_stale_bytecode
+fn cache_key(id: &str, sources: &[(String, String)], data: &serde_json::Value) -> String {
+    let mut hasher = blake3::Hasher::new();
+    let mut field = |bytes: &[u8]| {
+        hasher.update(&(bytes.len() as u64).to_le_bytes());
+        hasher.update(bytes);
+    };
+    field(CACHE_FORMAT.as_bytes());
+    field(env!("CARGO_PKG_VERSION").as_bytes());
+    let binary = std::env::current_exe()
+        .and_then(std::fs::metadata)
+        .map(|meta| {
+            let modified = meta
+                .modified()
+                .ok()
+                .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                .map_or(0, |since| since.as_nanos());
+            format!("{}:{modified}", meta.len())
+        })
+        .unwrap_or_default();
+    field(binary.as_bytes());
+    field(id.as_bytes());
+    for (path, source) in sources {
+        field(path.as_bytes());
+        field(source.as_bytes());
+    }
+    field(data.to_string().as_bytes());
+    hasher.finalize().to_hex().to_string()
+}
+
+/// The cached bundle for `id`, when the entry at `path` was written from
+/// exactly these inputs.
+fn read_cached(
+    path: &Path,
+    key: &str,
+    id: &str,
+    sources: &[(String, String)],
+    data: &serde_json::Value,
+) -> Option<Bundle> {
+    let bytes = std::fs::read(path).ok()?;
+    let split = bytes.iter().position(|byte| *byte == b'\n')?;
+    let (head, body) = bytes.split_at(split);
+    let header: CacheHeader = serde_json::from_slice(head).ok()?;
+    if header.key != key {
+        return None;
+    }
+    // Only a whole program: a partial one is regorus asking to recompile.
+    let regorus::rvm::program::DeserializationResult::Complete(program) =
+        regorus::rvm::program::Program::deserialize_binary(body.get(1..)?).ok()?
+    else {
+        return None;
+    };
+    let compiled = Compiled {
+        program: std::sync::Arc::new(program),
+        data: regorus::Value::from_json_str(&data.to_string()).ok()?,
+        entries: header.entries,
+        facts: header.facts,
+    };
+    Some(Bundle {
+        id: id.to_owned(),
+        modules: sources
+            .iter()
+            .map(|(path, _)| Module { path: path.clone() })
+            .collect(),
+        declared: header.declared,
+        packages: header.packages,
+        severity: crate::severity::RuleSeverity::Deny,
+        predicate_severity: BTreeMap::new(),
+        evaluator: Evaluator::Compiled(std::sync::Arc::new(compiled)),
+        described: std::sync::OnceLock::new(),
+    })
+}
+
+/// Write the entry for `bundle`, atomically; a failure leaves the next call a
+/// miss, which costs it the compile and nothing else.
+fn write_cached(path: &Path, key: &str, bundle: &Bundle, compiled: &Compiled) {
+    let header = CacheHeader {
+        key: key.to_owned(),
+        declared: bundle.declared.clone(),
+        packages: bundle.packages.clone(),
+        entries: compiled.entries.clone(),
+        facts: compiled.facts.clone(),
+    };
+    let (Ok(mut bytes), Ok(program)) = (
+        serde_json::to_vec(&header),
+        compiled.program.serialize_binary(),
+    ) else {
+        return;
+    };
+    bytes.push(b'\n');
+    bytes.extend_from_slice(&program);
+    if let Some(dir) = path.parent()
+        && std::fs::create_dir_all(dir).is_ok()
+    {
+        let _ = crate::durable::replace(path, bytes);
+    }
+}
+
+/// The rule names any caller reads off a bundle's answer.
+const ANSWERED_RULES: [&str; 5] = [
+    DENY_RULE,
+    VIOLATION_RULE,
+    RULES_RULE,
+    PREAPPROVE_RULE,
+    REWRITE_RULE,
+];
+
+/// The entry point a `(package, rule)` pair compiles to.
+fn entry_point(package: &[String], rule: &str) -> String {
+    let mut path = String::from(PACKAGE_QUERY);
+    for segment in package {
+        path.push('.');
+        path.push_str(segment);
+    }
+    path.push('.');
+    path.push_str(rule);
+    path
+}
+
+impl Compiled {
+    /// Compile `bundle`'s interpreter to bytecode, or `None` where the bytecode
+    /// compiler cannot express a rule it defines.
+    fn from_bundle(bundle: &Bundle, data: &serde_json::Value) -> Option<Self> {
+        use regorus::languages::rego::compiler::Compiler;
+        let mut engine = bundle.evaluator.engine()?.clone();
+        let mut candidates = Vec::new();
+        for package in &bundle.packages {
+            for rule in ANSWERED_RULES {
+                candidates.push((package.clone(), rule.to_owned()));
+            }
+        }
+        let first = candidates.first().map(|(p, r)| entry_point(p, r))?;
+        let policy = engine
+            .compile_with_entrypoint(&first.as_str().into())
+            .ok()?;
+        let rules = policy.get_rules();
+        let entries: BTreeSet<(Vec<String>, String)> = candidates
+            .into_iter()
+            .filter(|(package, rule)| rules.contains_key(&entry_point(package, rule)))
+            .collect();
+        let names: Vec<String> = entries.iter().map(|(p, r)| entry_point(p, r)).collect();
+        let names: Vec<&str> = names.iter().map(String::as_str).collect();
+        let program = Compiler::compile_from_policy(&policy, &names).ok()?;
+        Some(Self {
+            program,
+            data: regorus::Value::from_json_str(&data.to_string()).ok()?,
+            entries,
+            facts: bundle
+                .session_start_facts()
+                .into_iter()
+                .map(str::to_owned)
+                .collect(),
+        })
+    }
+
+    /// `bundle` evaluating through this bytecode rather than its interpreter.
+    fn into_bundle(self, bundle: Bundle) -> Bundle {
+        Bundle {
+            evaluator: Evaluator::Compiled(std::sync::Arc::new(self)),
+            described: std::sync::OnceLock::new(),
+            ..bundle
+        }
+    }
+
+    /// Run the named rules' entry points over `input`.
+    fn answer(&self, input: &str, rules: &[&str]) -> Option<Answer> {
+        let mut vm = regorus::rvm::vm::RegoVM::new();
+        vm.load_program(self.program.clone());
+        // The interpreter's semantics, not the VM's defaults: a builtin error
+        // is an error, and no instruction budget cuts a module short — the
+        // interpreter has none, and a budget hit would read as a fault.
+        vm.set_strict_builtin_errors(true);
+        vm.set_max_instructions(usize::MAX);
+        vm.set_data(self.data.clone()).ok()?;
+        vm.set_input(regorus::Value::from_json_str(input).ok()?);
+        let mut members = BTreeMap::new();
+        for (package, rule) in &self.entries {
+            if !rules.contains(&rule.as_str()) {
+                continue;
+            }
+            let value = vm
+                .execute_entry_point_by_name(&entry_point(package, rule))
+                .ok()?;
+            if value != regorus::Value::Undefined {
+                members.insert((package.clone(), rule.clone()), value);
+            }
+        }
+        Some(Answer::Members(members))
+    }
 }
 
 /// The object a package occupies in a `data.batten` result, if the result has it.
@@ -1615,14 +2001,10 @@ fn relative_package(package: &str) -> Option<Vec<String>> {
 /// could not exercise.
 #[must_use]
 pub fn deny(bundle: &Bundle, input: &str) -> Look<Vec<Violation>> {
-    let mut engine = bundle.engine.clone();
-    if engine.set_input_json(input).is_err() {
-        return Look::CouldNotLook;
-    }
-    // ONE QUERY for both shapes, because the engine is the unit now: the whole
-    // `data.batten` document comes back once and is walked twice, rather than
-    // paying an evaluation per rule name.
-    let Ok(answered) = engine.eval_query(PACKAGE_QUERY.to_owned(), false) else {
+    // ONE EVALUATION for both shapes, because the engine is the unit now: the
+    // answer comes back once and is walked twice, rather than paying an
+    // evaluation per rule name.
+    let Some(answered) = answer(bundle, input, &[DENY_RULE, VIOLATION_RULE]) else {
         return Look::CouldNotLook;
     };
 
@@ -1659,11 +2041,7 @@ pub fn deny(bundle: &Bundle, input: &str) -> Look<Vec<Violation>> {
 /// pre-approval always names a declared, waivable, mutable predicate.
 #[must_use]
 pub fn preapprove(bundle: &Bundle, input: &str) -> Look<Vec<String>> {
-    let mut engine = bundle.engine.clone();
-    if engine.set_input_json(input).is_err() {
-        return Look::CouldNotLook;
-    }
-    let Ok(answered) = engine.eval_query(PACKAGE_QUERY.to_owned(), false) else {
+    let Some(answered) = answer(bundle, input, &[PREAPPROVE_RULE]) else {
         return Look::CouldNotLook;
     };
     let Some(ids) = collect_string_list(&answered, &bundle.packages, PREAPPROVE_RULE) else {
@@ -1701,11 +2079,7 @@ pub fn rewritable(key: &str) -> bool {
 /// The caller treats could-not-look as no rewrite: the call runs as written.
 #[must_use]
 pub fn rewrite(bundle: &Bundle, input: &str) -> Look<Vec<Rewrite>> {
-    let mut engine = bundle.engine.clone();
-    if engine.set_input_json(input).is_err() {
-        return Look::CouldNotLook;
-    }
-    let Ok(answered) = engine.eval_query(PACKAGE_QUERY.to_owned(), false) else {
+    let Some(answered) = answer(bundle, input, &[REWRITE_RULE]) else {
         return Look::CouldNotLook;
     };
     let mut found = Vec::new();
@@ -1755,13 +2129,19 @@ pub fn rewrite(bundle: &Bundle, input: &str) -> Look<Vec<Rewrite>> {
 /// package that simply does not define it.
 #[must_use]
 pub fn strings(bundle: &Bundle, input: &str, rule: &str) -> Look<Vec<String>> {
-    let mut engine = bundle.engine.clone();
+    // An arbitrary rule name has no entry point, so this reads the interpreter
+    // only — its callers load with every check, never from the cache.
+    let Some(engine) = bundle.evaluator.engine() else {
+        return Look::CouldNotLook;
+    };
+    let mut engine = engine.clone();
     if engine.set_input_json(input).is_err() {
         return Look::CouldNotLook;
     }
     let Ok(answered) = engine.eval_query(PACKAGE_QUERY.to_owned(), false) else {
         return Look::CouldNotLook;
     };
+    let answered = Answer::of(&answered);
     collect_string_list(&answered, &bundle.packages, rule).map_or(Look::CouldNotLook, Look::Is)
 }
 
@@ -3596,7 +3976,10 @@ pub fn test(bundle: &Bundle, input: &str, mediated: bool) -> Result<Look<Suite>>
         }
     }
 
-    let mut engine = bundle.engine.clone();
+    let Some(engine) = bundle.evaluator.engine() else {
+        return Ok(Look::CouldNotLook);
+    };
+    let mut engine = engine.clone();
     engine.set_enable_coverage(true);
     engine.set_input_json(input).map_err(|err| {
         UsageError::raise(format!(
@@ -3732,7 +4115,10 @@ fn names_a_list_operator(literal: &str) -> bool {
 /// A [`UsageError`] (exit `1`) when the composed set faults: a rule conflict or
 /// a recursion, refused where a config error belongs rather than at the gate.
 pub fn analyse(bundle: &Bundle) -> Result<Look<Analysis>> {
-    let mut engine = bundle.engine.clone();
+    let Some(engine) = bundle.evaluator.engine() else {
+        return Ok(Look::CouldNotLook);
+    };
+    let mut engine = engine.clone();
     engine.set_enable_coverage(true);
     if engine.set_input_json("{}").is_err() {
         return Ok(Look::CouldNotLook);

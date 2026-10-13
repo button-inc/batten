@@ -307,6 +307,7 @@ mod pipefail_grep;
 mod pipeline_shapes;
 mod plan_complete;
 mod pointer_only;
+mod policy_cache;
 mod policy_engine_count;
 mod policy_input_narrowing;
 mod policy_input_schema;

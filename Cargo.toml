@@ -575,6 +575,11 @@ regorus = { version = "0.11", default-features = false, features = [
   # other` was 154s of `enforce`'s ~290s. `lru` is a data structure and does no
   # IO, so `layer reach unsafe`'s closure is unaffected.
   "cache",
+  # The bytecode a hook call loads instead of re-parsing every module
+  # (CLOUD-2236): `policy::Compiled`. It adds `postcard` (a serde format) and
+  # `indexmap` (a data structure); neither does IO, so `layer reach unsafe`'s
+  # closure is unaffected.
+  "rvm",
 ] }
 # OS advisory locks (flock/fcntl/LockFileEx) for the findings store's shard-merge
 # (CLOUD-78). A crate rather than the syscall directly because the workspace
