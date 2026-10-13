@@ -78,7 +78,7 @@ violation contains {
 
 deferral_regex := `(?i)\b(next branch|follow-?up|follow up|later branch|separate branch|in a later|after landing|goes on the|ships on the)\b`
 
-key_regex := `CLOUD-[0-9]+`
+key_regex := `[A-Z][A-Z0-9]*-[0-9]+`
 
 deferred(text) := v if {
 	v := violation with input as {"call": {"final-message": text}}

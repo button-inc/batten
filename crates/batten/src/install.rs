@@ -530,7 +530,8 @@ pub fn destination(
 pub fn programs_in(script: &str) -> BTreeSet<String> {
     const SHELL: &[&str] = &[
         "set", "case", "esac", "if", "then", "else", "fi", "for", "do", "done", "in", "while",
-        "read", "trap", "echo", "exit", "fail", "get", "command", "true", "[", "]", ";;", "}", "{",
+        "read", "trap", "echo", "exit", "fail", "get", "pin_of", "break", "return", "command",
+        "true", "[", "]", ";;", "}", "{",
     ];
     let mut programs = BTreeSet::new();
     for line in script.lines() {

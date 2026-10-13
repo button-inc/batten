@@ -76,6 +76,7 @@ pub enum Relation {
     Absent,
 }
 
+//MUTANT identical-read-as-behind|s@^            Some((true, true)) => Self::Identical,$@            Some((true, true)) => Self::MainBehind,@|both_producers_agree_on_every_relation
 impl Relation {
     /// The forge's `compare/{main}...{commit}` status, or `None` for one it
     /// does not define. `ahead` and `behind` are the commit's, against `main`.
@@ -92,7 +93,6 @@ impl Relation {
 
     /// Local ancestry: whether the commit is an ancestor of `main`, and
     /// whether `main` is an ancestor of the commit, or `None` for no commit.
-    //MUTANT identical-read-as-behind|s@^            Some((true, true)) => Self::Identical,$@            Some((true, true)) => Self::MainBehind,@|both_producers_agree_on_every_relation
     #[must_use]
     pub fn of_ancestry(pair: Option<(bool, bool)>) -> Self {
         match pair {

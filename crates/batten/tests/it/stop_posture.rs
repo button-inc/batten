@@ -218,6 +218,33 @@ kind = "policy"
 scope = "mediated_call"
 module = "policy/turn-ask.rego"
 severity = "deny"
+
+[[pattern]]
+id = "deferral-promised"
+regex = '(?i)\b(next branch|follow-?up|follow up|later branch|separate branch|in a later|after landing|goes on the|ships on the)\b'
+
+[[pattern]]
+id = "ready-issue-key"
+regex = 'CLOUD-[0-9]+'
+
+[[verdict]]
+id = "turn ship unnamed"
+gloss = "the turn deferred work to a later branch without naming the row that holds it"
+class = """
+A deferral stated only in the final message is lost at compaction.
+"""
+
+[[verdict.route]]
+id = "issue file first"
+kind = "issue"
+target = "file the deferred work, or name the row that already holds it"
+
+[[rule]]
+id = "turn ship unnamed"
+kind = "policy"
+scope = "mediated_call"
+module = "policy/turn-defer.rego"
+severity = "deny"
 "#;
 
 fn repo(name: &str) -> PathBuf {
@@ -228,11 +255,15 @@ fn repo(name: &str) -> PathBuf {
     dir
 }
 
-/// Both committed end-of-turn modules, copied rather than re-typed: `CONFIG`
+/// The committed end-of-turn modules, copied rather than re-typed: `CONFIG`
 /// registers a row for each (CLOUD-1954), and a fixture carrying one would fail to
 /// load at the other's row rather than judge anything.
 fn install_modules(dir: &Path) {
-    for module in ["policy/stop-posture.rego", "policy/turn-ask.rego"] {
+    for module in [
+        "policy/stop-posture.rego",
+        "policy/turn-ask.rego",
+        "policy/turn-defer.rego",
+    ] {
         let source = common::at_root(module)
             .canonicalize()
             .expect("the committed module is where its row says it is");

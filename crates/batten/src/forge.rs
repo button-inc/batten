@@ -233,10 +233,10 @@ pub enum Conclusion {
     Unknown(String),
 }
 
+//MUTANT null-conclusion-borrows-status|s@^            _ => Self::InProgress,$@            _ => Self::Completed(Conclusion::of(status.unwrap_or_default())),@|an_in_progress_run_is_never_concluded
 impl RunState {
     /// The only parse. A completed run with no conclusion is
     /// [`Conclusion::Unknown`]; a conclusion is never borrowed from `status`.
-    //MUTANT null-conclusion-borrows-status|s@^            _ => Self::InProgress,$@            _ => Self::Completed(Conclusion::of(status.unwrap_or_default())),@|an_in_progress_run_is_never_concluded
     #[must_use]
     pub fn of(status: Option<&str>, conclusion: Option<&str>) -> Self {
         match status {

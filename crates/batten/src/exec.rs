@@ -2583,6 +2583,7 @@ fn dispatch(
 /// write to a shared stream on the completion path, or the bundle's own output
 /// would be ordered by the machine.
 //MUTANT escalation-unreported|s@^    if let Some(escalation) = escalated {$@    if let Some(escalation) = None::<Escalation> {@|a_second_signal_escalates_instead_of_being_swallowed
+//MUTANT tee-error-abandons-child|s@^    let reaper = Reaper::arm(child.id(), decision);$@    let reaper = Reaper::arm(0, decision);@|a_teed_child_is_reaped_when_its_output_cannot_be_written
 fn run_one(
     repo_root: &Path,
     run: u64,
@@ -2655,7 +2656,6 @@ fn run_one(
     // The registry is already installed; this only tells it which group.
     // ARMED BEFORE ANY `?` (CLOUD-2238): from here to the clean return, an
     // error or an unwind ends the child rather than abandoning it.
-    //MUTANT tee-error-abandons-child|s@^    let reaper = Reaper::arm(child.id(), decision);$@    let reaper = Reaper::arm(0, decision);@|a_teed_child_is_reaped_when_its_output_cannot_be_written
     let reaper = Reaper::arm(child.id(), decision);
     forwarding.adopt(child.id())?;
 

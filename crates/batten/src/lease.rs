@@ -1420,11 +1420,11 @@ pub enum Lease<'a> {
     },
 }
 
+//MUTANT released-classified-live|s@^            Self::Held { sha, body } if body.released() => Lease::Released { sha, body },$@            Self::Held { sha, body } if body.released() => Lease::Live { sha, body },@|each_body_is_classified_into_exactly_one_state
+//MUTANT expired-classified-live|s@^            Self::Held { sha, body } if body.expired(now) => Lease::Expired { sha, body },$@            Self::Held { sha, body } if body.expired(now) => Lease::Live { sha, body },@|an_expired_lease_places_no_bet
 impl Observed {
     /// The one classification. Released before expired: the tombstone's expiry
     /// is zero, so it is also expired, and a release is the more specific fact.
-    //MUTANT released-classified-live|s@^            Self::Held { sha, body } if body.released() => Lease::Released { sha, body },$@            Self::Held { sha, body } if body.released() => Lease::Live { sha, body },@|each_body_is_classified_into_exactly_one_state
-    //MUTANT expired-classified-live|s@^            Self::Held { sha, body } if body.expired(now) => Lease::Expired { sha, body },$@            Self::Held { sha, body } if body.expired(now) => Lease::Live { sha, body },@|an_expired_lease_places_no_bet
     #[must_use]
     pub fn state(&self, now: i64) -> Lease<'_> {
         match self {

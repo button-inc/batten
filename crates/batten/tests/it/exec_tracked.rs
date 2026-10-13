@@ -12,6 +12,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use common::StateHome as _;
 
 use std::path::{Path, PathBuf};
 use std::process::Output;
@@ -74,7 +75,7 @@ fn a_teed_child_is_reaped_when_its_output_cannot_be_written() {
     let output = common::batten()
         .args(["exec", "--", "sleep", &marker])
         .current_dir(&dir)
-        .env("XDG_DATA_HOME", &data)
+        .state_dir(&data)
         .output()
         .expect("run batten exec");
     let survivors = carrying(&marker);
