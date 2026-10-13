@@ -1600,6 +1600,51 @@ fn an_errored_kyverno_run_is_could_not_look() {
     assert_errored(&KYVERNO);
 }
 
+/// A `GeneratingPolicy` case, which `kyverno test -t` selects by its trigger
+/// (the Namespace) and reports by each object it generated (CLOUD-2252). The
+/// recordings are kyverno 1.19.1 over one policy generating three objects: all
+/// three pass, and, under a real mutation, one of the three failing.
+#[cfg(unix)]
+const KYVERNO_GENERATE: Native = Native {
+    subject: "policies/policy.yaml",
+    body: "apiVersion: policies.kyverno.io/v1\nkind: GeneratingPolicy\n",
+    want: "policy=add-tenant-quota,rule=add-tenant-quota,resource=tenant-small",
+    ..KYVERNO
+};
+
+/// The generating case's sweep, replaying the `kyverno-generate` recordings.
+#[cfg(unix)]
+fn generate_sweep(mutant: Mutant, case: &str) -> (i32, String, String) {
+    let (root, bin) = native_repo(&KYVERNO_GENERATE, mutant, case);
+    let stub =
+        native_stub(&KYVERNO_GENERATE).replace("mutate/kyverno'", "mutate/kyverno-generate'");
+    write_program(&bin, KYVERNO_GENERATE.arm, &stub);
+    sweep_with(&root, KYVERNO_GENERATE.subject, &bin)
+}
+
+/// ONE GENERATED OBJECT WRONG IS THE CASE FAILING. Before CLOUD-2252 no selector
+/// named a generating case at all (`names-no-case`); a reading that took any one
+/// passing object as the case's verdict would call this mutant survived, since
+/// two of its three objects still pass.
+#[cfg(unix)]
+#[test]
+fn a_generating_kyverno_case_fails_when_any_object_it_generates_does() {
+    let (code, out, err) = generate_sweep(Mutant::Kill, "generate-caught");
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(out.contains("every one caught"), "{out}");
+}
+
+/// The generating case is SELECTED: a mutation its objects cannot see survives,
+/// rather than reading `names-no-case`.
+#[cfg(unix)]
+#[test]
+fn a_generating_kyverno_case_is_selected_by_its_trigger() {
+    let (code, out, err) = generate_sweep(Mutant::Unread, "generate-survives");
+    assert_eq!(code, 2, "{out}{err}");
+    assert!(out.contains("SURVIVED"), "{out}");
+    assert!(!out.contains("names-no-case"), "{out}");
+}
+
 #[cfg(unix)]
 #[test]
 fn a_conftest_mutant_its_rule_fails_on_is_caught() {

@@ -2014,6 +2014,17 @@ fn json_array(output: &str) -> Option<Vec<serde_json::Value>> {
 /// what the test wants), and a policy that will not load prints an `ERROR:` line
 /// and then reports the case `Fail` with reason `Not found` — so a load error is
 /// the errored shape whatever the case line says.
+///
+/// **A GENERATING CASE IS SELECTED BY ITS TRIGGER AND REPORTED BY WHAT IT
+/// GENERATED** (CLOUD-2252). `-t` filters a `GeneratingPolicy` case by the
+/// resource that triggers it (a Namespace), while each result's `RESOURCE` is a
+/// generated object (`/tenant-quota`), so no selector matched both and every
+/// generating case read `names-no-case`. `-t` has already narrowed the output
+/// to the named case, so when no result names the selector's resource, the
+/// case is every result for that policy and rule, and it passes only when each
+/// of them does: one generated object wrong is the case failing. A validating
+/// case keeps the exact resource match, its trigger and its report being the
+/// same object.
 fn kyverno_verdict(output: &str, want: &str) -> Selection {
     let field = |key: &str| {
         want.split(',')
@@ -2027,18 +2038,39 @@ fn kyverno_verdict(output: &str, want: &str) -> Selection {
         .any(|line| line.trim_start().starts_with("ERROR:"));
     let results = json_array(output);
     let status = results.as_ref().and_then(|results| {
-        results
+        let named = |result: &serde_json::Value, key: &str| result[key].as_str().map(str::to_owned);
+        let case: Vec<&serde_json::Value> = results
             .iter()
-            .find(|result| {
-                let named = |key: &str| result[key].as_str().map(str::to_owned);
-                named("POLICY") == policy
-                    && named("RULE") == rule
-                    && resource.as_ref().is_some_and(|want| {
-                        named("RESOURCE")
-                            .is_some_and(|got| got == *want || got.ends_with(&format!("/{want}")))
-                    })
+            .filter(|result| named(result, "POLICY") == policy && named(result, "RULE") == rule)
+            .collect();
+        let exact: Vec<&serde_json::Value> = case
+            .iter()
+            .copied()
+            .filter(|result| {
+                resource.as_ref().is_some_and(|want| {
+                    named(result, "RESOURCE")
+                        .is_some_and(|got| got == *want || got.ends_with(&format!("/{want}")))
+                })
             })
-            .and_then(|result| result["RESULT"].as_str().map(str::to_ascii_lowercase))
+            .collect();
+        let chosen = if exact.is_empty() { case } else { exact };
+        let verdicts: Vec<String> = chosen
+            .iter()
+            .filter_map(|result| result["RESULT"].as_str().map(str::to_ascii_lowercase))
+            .collect();
+        if verdicts.is_empty() {
+            None
+        } else if verdicts.iter().any(|v| v == "error") {
+            Some("error".to_owned())
+        } else if verdicts.iter().all(|v| v == "pass") {
+            //MUTANT-SUITE crates/batten/tests/it/mutate.rs
+            //MUTANT generated-case-any-pass|s@^        } else if verdicts.iter().all(\x7cv\x7c v == "pass") {$@        } else if verdicts.iter().any(\x7cv\x7c v == "pass") {@|a_generating_kyverno_case_fails_when_any_object_it_generates_does
+            Some("pass".to_owned())
+        } else if verdicts.iter().all(|v| v == "pass" || v == "fail") {
+            Some("fail".to_owned())
+        } else {
+            verdicts.into_iter().next()
+        }
     });
     let errored = load_error || status.as_deref() == Some("error");
     let selected = usize::from(matches!(status.as_deref(), Some("pass" | "fail")));

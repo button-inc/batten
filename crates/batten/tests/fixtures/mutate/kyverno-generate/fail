@@ -1,0 +1,43 @@
+kyverno 1.19.1
+Loading test  ( policies/kyverno-test.yaml ) ...
+  Loading values/variables ...
+  Loading policies ...
+  Loading resources ...
+  Loading exceptions ...
+  Applying 1 policy to 2 resources with 0 exceptions ...
+  Checking results ...
+
+[
+  {
+    "ID": 1,
+    "Message": "Patched resource didn't match the generated resource in the test result\n(only in expeactedual)\n\nobject:\n    apiVersion: v1\n    kind: ResourceQuota\n    metadata:\n        labels:\n            app.kubernetes.io/managed-by: kyverno\n        name: tenant-quota\n        namespace: tenant-small\n    spec:\n        hard:\n            count/jobs.batch: \"10\"\n            limits.cpu: \"2\"\n            limits.ephemeral-storage: 4Gi\n            limits.memory: 4Gi\n            persistentvolumeclaims: \"5\"\n            pods: \"20\"\n            premium-rwo.storageclass.storage.k8s.io/requests.storage: \"0\"\n            requests.cpu: \"1\"\n            requests.ephemeral-storage: 2Gi\n            requests.memory: 2Gi\n            requests.storage: 20Gi\n            services.loadbalancers: \"01\"\n            services.nodeports: \"0\"\n",
+    "POLICY": "add-tenant-quota",
+    "REASON": "Resource diff",
+    "RESOURCE": "/tenant-quota",
+    "RESULT": "Fail",
+    "RULE": "add-tenant-quota"
+  },
+  {
+    "ID": 2,
+    "Message": "policy evaluated successfully",
+    "POLICY": "add-tenant-quota",
+    "REASON": "Ok",
+    "RESOURCE": "/tenant-priority",
+    "RESULT": "Pass",
+    "RULE": "add-tenant-quota"
+  },
+  {
+    "ID": 3,
+    "Message": "policy evaluated successfully",
+    "POLICY": "add-tenant-quota",
+    "REASON": "Ok",
+    "RESOURCE": "/tenant-limits",
+    "RESULT": "Pass",
+    "RULE": "add-tenant-quota"
+  }
+]
+
+
+Test Summary: 2 tests passed and 1 tests failed
+
+Error: 1 tests failed
