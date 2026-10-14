@@ -8545,6 +8545,28 @@ Dispatch the `code-review` skill over this branch's change, then retry. Readying
 is what starts CI, so an unreviewed head spends the matrix before anyone has \
 looked at it."""
 
+# A HAND-WRITTEN READY MUTATION FUNNELS THROUGH THE ONE GATED DOOR (CLOUD-2260).
+#
+# The rows above key on `gh pr ready`, and that was the only ready route they
+# saw: a `markPullRequestReadyForReview` mutation sent through `gh api` fires the
+# same `ready_for_review` and buys the same matrix with none of the receipts
+# asked for. Mirroring every receipt row onto it would be a second copy of each
+# predicate free to drift from the first, so this refuses the ROUTE and names
+# the door. The connector's `draft = false` route is the same hole and needs an
+# `input-draft` projection the pinned engine predates; its row lands with the
+# release that carries the projection.
+[[rule]]
+id = "review reach loose"
+kind = "shape"
+scope = "mediated_call"
+severity = "deny"
+pattern = "gh api"
+contains = "ReadyForReview"
+reason = """
+Ready through `mise run land` (or `gh pr ready`), not a hand-written GraphQL \
+mutation: those are the routes the review and verify receipts are checked on, \
+and this one would buy the CI matrix with neither."""
+
 # A third-party validator's verdict for a file it read (CLOUD-1171, the
 # adjudication half of `pkl-check`, `renovate-config-validator` and
 # `hook-profile-check`).

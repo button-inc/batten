@@ -4899,10 +4899,11 @@ fn run_receipt(
             check,
             or,
             key,
+            base,
             json,
         } => {
             let checks: Vec<String> = std::iter::once(check).chain(or).collect();
-            receipt::run_status_any(&checks, key, json, out)
+            receipt::run_status_any(&checks, key, base.as_deref(), json, out)
         }
         ReceiptCommand::Verified => receipt::run_verified(out),
     }
@@ -19906,6 +19907,7 @@ pub fn mint_receipts_for_test(
 /// authority — [`mcp::payload`] for JSON-RPC content blocks, [`facts::payload_in`]
 /// for the harness envelope. Every failure is silent, as the mint boundary has
 /// always been: the gate that reads the receipt simply denies again.
+//MUTANT completion-ignores-dispatch|s@^            && !store.join(format!("{after}.{suffix}")).is_file()$@            \&\& false@|a_completion_without_a_dispatch_of_this_change_mints_nothing
 fn mint_receipts(
     declared: &[crate::mint::Declared],
     tool: &str,
@@ -19942,18 +19944,18 @@ fn mint_receipts(
         // The branch is resolved only for a row that asked, which is the same
         // economy `receipt::verdicts` states one channel over: a caller must not
         // pay a git invocation for a question it never asks.
-        let filename = match mint.key {
+        let suffix = match mint.key {
             crate::mint::MintKey::Named => {
                 let Some(subject) = crate::mint::subject(mint, result) else {
                     continue;
                 };
-                format!("{}.{subject}", mint.name)
+                subject
             }
             crate::mint::MintKey::Branch => {
                 let Ok(Some(branch)) = git::current_branch(root) else {
                     continue;
                 };
-                format!("{}.{}", mint.name, branch.replace('/', "-"))
+                branch.replace('/', "-")
             }
             // KEYED TO THE CHANGE (CLOUD-1484).
             //
@@ -19986,9 +19988,20 @@ fn mint_receipts(
                 let Ok(Some(delta)) = git::branch_patch_id(root, base) else {
                     continue;
                 };
-                format!("{}.{delta}", mint.name)
+                delta
             }
         };
+        let store = git_dir.join("batten-receipts");
+        // THE PREREQUISITE, UNDER THE IDENTITY RESOLVED NOW (CLOUD-2261). A
+        // completion call names no change, so it attests one only when a dispatch
+        // of this change is already on file — and a commit between the two moves
+        // the key, so the earlier dispatch stops answering.
+        if let Some(after) = mint.after.as_deref()
+            && !store.join(format!("{after}.{suffix}")).is_file()
+        {
+            continue;
+        }
+        let filename = format!("{}.{suffix}", mint.name);
         // `root` is the ANCHOR the block above resolved, never the cwd — a
         // `{authority:…}` piece reads the workspace version from it, and reading
         // that from wherever the agent happens to be standing is the same defect
@@ -19996,7 +20009,7 @@ fn mint_receipts(
         let Some(record) = crate::mint::render(mint, result, now, &resolve, grammar, root) else {
             continue;
         };
-        let path = git_dir.join("batten-receipts").join(filename);
+        let path = store.join(filename);
         if let Some(parent) = path.parent()
             && std::fs::create_dir_all(parent).is_err()
         {

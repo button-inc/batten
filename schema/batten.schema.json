@@ -1644,6 +1644,14 @@
       "description": "One receipt this repository mints from a tool result.\n\nEvery column is a consumer's string or a closed enum; nothing here names a\ntracker, a tool or a field (non-negotiable rule 1).",
       "type": "object",
       "properties": {
+        "after": {
+          "description": "A receipt that must already be on file UNDER THE SAME KEY for this row to\nmint at all (CLOUD-2261): the name of another declared writer row.\n\n# Why a dispatch could not attest a completion\n\nA host that answers a skill dispatch with `Launching skill: <name>` has\nsaid only that the ask happened. A receipt minted there attests the\nreview was ASKED FOR over these bytes, and a gate reading it lets a change\nthrough that nobody finished reviewing. The completion is a DIFFERENT\ncall — the one the skill ends with — and that call names no change and no\nskill, so on its own it would attest that *some* review finished over\n*something*.\n\nThe two halves together are the attestation: the dispatch row selects\nwhich review over which change, and the completion row mints the receipt\na gate reads only when that dispatch is on file under the identity the\ncompletion resolves now. A change committed between the two moves the key,\nso the earlier dispatch no longer answers and the completion mints nothing.\n\nAbsent leaves the row judged exactly as before the column existed.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 1536
+        },
         "body": {
           "description": "The record's bytes, as a template over the closed placeholder vocabulary\n[`Piece`] documents.",
           "type": "string",
@@ -2564,6 +2572,11 @@
           "description": "The `state` a structured call moves its subject to (CLOUD-987).\n\nThe fourth and last member read out of [`Envelope::input`], on\n[`Field::InputId`]'s argument. `board-move-guard` (CLOUD-312's row 3)\nfires only when a call MOVES something rather than merely editing it, so\nwithout this the row would gate every edit — the same over-fire\n[`Field::InputId`] exists to prevent one key over.\n\nAPPENDED, never inserted, for the reason stated on [`Field::Prompt`].",
           "type": "string",
           "const": "input-state"
+        },
+        {
+          "description": "Whether a structured call sets its subject's `draft` flag (CLOUD-2260).\n\n`\"true\"` or `\"false\"`, [`Field::RunInBackground`]'s rendering and its\nsafety argument: a boolean projection of one named key cannot carry a\nsecret. It exists because readying a pull request is not only a shell\ncommand — a forge connector's update call setting `draft` to `false` fires\nthe same `ready_for_review` and buys the same CI matrix, and a gate keyed on\n`gh pr ready` alone left that route open.\n\nAPPENDED, never inserted, for the reason stated on [`Field::Prompt`].",
+          "type": "string",
+          "const": "input-draft"
         }
       ]
     },

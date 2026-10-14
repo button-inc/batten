@@ -2949,6 +2949,17 @@ pub enum Field {
     ///
     /// APPENDED, never inserted, for the reason stated on [`Field::Prompt`].
     InputState,
+    /// Whether a structured call sets its subject's `draft` flag (CLOUD-2260).
+    ///
+    /// `"true"` or `"false"`, [`Field::RunInBackground`]'s rendering and its
+    /// safety argument: a boolean projection of one named key cannot carry a
+    /// secret. It exists because readying a pull request is not only a shell
+    /// command — a forge connector's update call setting `draft` to `false` fires
+    /// the same `ready_for_review` and buys the same CI matrix, and a gate keyed on
+    /// `gh pr ready` alone left that route open.
+    ///
+    /// APPENDED, never inserted, for the reason stated on [`Field::Prompt`].
+    InputDraft,
 }
 
 impl Field {
@@ -3003,6 +3014,11 @@ impl Field {
                 .get("state")
                 .and_then(Value::as_str)
                 .map(ToOwned::to_owned),
+            Field::InputDraft => envelope
+                .input
+                .get("draft")
+                .and_then(Value::as_bool)
+                .map(|flag| flag.to_string()),
         };
         value.filter(|text| !text.is_empty())
     }

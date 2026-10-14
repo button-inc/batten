@@ -6196,6 +6196,16 @@ pub const SURFACE: &[CommandDecl] = &[
                 receipt_key_parser,
                 "head",
             ),
+            // `--base` (CLOUD-2260): the ref a `delta` receipt's identity is
+            // taken against, which the verb otherwise has no row to read. Named
+            // by the caller rather than defaulted, and a base that disagrees with
+            // the declaring row resolves another identity, which reads `missing`
+            // — so a drift between the two refuses rather than passes.
+            FlagDecl::valued(
+                "base",
+                "base",
+                "The ref a `--key delta` receipt's change identity is taken against",
+            ),
             JSON,
         ],
     },

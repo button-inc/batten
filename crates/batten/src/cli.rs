@@ -2043,6 +2043,9 @@ pub enum ReceiptCommand {
         /// Defaults to [`ReceiptKey::Head`], the only keying this verb had
         /// before, so every caller predating the flag is unchanged.
         key: ReceiptKey,
+        /// The ref a [`ReceiptKey::Delta`] receipt's identity is taken against
+        /// (CLOUD-2260); refused on any other keying.
+        base: Option<String>,
         /// Emit the verdict as byte-stable JSON instead of a pointer line.
         json: bool,
     },
@@ -2985,6 +2988,7 @@ fn receipt_of(matches: &ArgMatches) -> Option<ReceiptCommand> {
                 .get_one::<ReceiptKey>("key")
                 .copied()
                 .unwrap_or_default(),
+            base: matches.get_one::<String>("base").cloned(),
             json: flag(matches, "json"),
         }),
         "verified" => Some(ReceiptCommand::Verified),
@@ -3934,6 +3938,7 @@ mod tests {
                     check: "verify".to_owned(),
                     or: Vec::new(),
                     key: ReceiptKey::Head,
+                    base: None,
                     json: false,
                 }
             })
@@ -3966,6 +3971,7 @@ mod tests {
                     check: "claim".to_owned(),
                     or: Vec::new(),
                     key: ReceiptKey::Branch,
+                    base: None,
                     json: false,
                 }
             })
@@ -3987,6 +3993,7 @@ mod tests {
                     check: "claim".to_owned(),
                     or: vec!["bot".to_owned(), "carry".to_owned()],
                     key: ReceiptKey::Branch,
+                    base: None,
                     json: false,
                 }
             })

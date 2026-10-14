@@ -173,6 +173,28 @@ pub struct Declared {
     /// written. **This is the success predicate** — see the module doc.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub requires: Vec<String>,
+    /// A receipt that must already be on file UNDER THE SAME KEY for this row to
+    /// mint at all (CLOUD-2261): the name of another declared writer row.
+    ///
+    /// # Why a dispatch could not attest a completion
+    ///
+    /// A host that answers a skill dispatch with `Launching skill: <name>` has
+    /// said only that the ask happened. A receipt minted there attests the
+    /// review was ASKED FOR over these bytes, and a gate reading it lets a change
+    /// through that nobody finished reviewing. The completion is a DIFFERENT
+    /// call — the one the skill ends with — and that call names no change and no
+    /// skill, so on its own it would attest that *some* review finished over
+    /// *something*.
+    ///
+    /// The two halves together are the attestation: the dispatch row selects
+    /// which review over which change, and the completion row mints the receipt
+    /// a gate reads only when that dispatch is on file under the identity the
+    /// completion resolves now. A change committed between the two moves the key,
+    /// so the earlier dispatch no longer answers and the completion mints nothing.
+    ///
+    /// Absent leaves the row judged exactly as before the column existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after: Option<String>,
     /// Whether the record is replaced or appended.
     pub mode: MintMode,
     /// The record's bytes, as a template over the closed placeholder vocabulary
@@ -728,6 +750,30 @@ pub fn validate(mints: &[Declared]) -> anyhow::Result<()> {
             )));
         }
     }
+    // AN `after` NAMING NO WRITER KEYED THE SAME WAY can never be satisfied, so
+    // the row loads clean and mints nothing: its gate denies forever with a
+    // remedy that cannot clear it. "The same key" is the same `key` and
+    // `key_base`, because the prerequisite is looked up under THIS row's subject
+    // and a writer filing under another identity never wrote one there.
+    for mint in mints {
+        let Some(after) = mint.after.as_deref() else {
+            continue;
+        };
+        let keyed_alike = |writer: &&Declared| {
+            writer.mode != MintMode::Clear
+                && writer.name == after
+                && writer.name != mint.name
+                && writer.key == mint.key
+                && writer.key_base == mint.key_base
+        };
+        if !mints.iter().any(|writer| keyed_alike(&writer)) {
+            return Err(crate::error::UsageError::raise(format!(
+                "`[[mint]]` `{}` declares `after = \"{after}\"` and no other row of that name \
+                 writes a record under the same `key` and `key_base`, so it could never mint",
+                mint.name
+            )));
+        }
+    }
     // A CLEAR WITH NO WRITER removes a record nothing makes, so it loads clean and
     // does nothing: the inert-coverage shape this function exists to refuse.
     if let Some(orphan) = mints.iter().find(|clear| {
@@ -849,6 +895,46 @@ mod tests {
             "two clears"
         );
         assert!(validate(&[row("clear")]).is_err(), "a clear with no writer");
+    }
+
+    /// An `after` loads only beside a writer of that name keyed the same way
+    /// (CLOUD-2261).
+    ///
+    /// Fails by: dropping the key comparison. A prerequisite filed under another
+    /// identity is never on file under this row's, so the row would load clean
+    /// and mint nothing — its gate denying forever with an uncleanable remedy.
+    #[test]
+    fn an_after_loads_only_beside_a_writer_keyed_alike() {
+        let row = |name: &str, key: &str, after: Option<&str>| -> Declared {
+            let mut value = serde_json::json!({
+                "name": name, "tool": "T", "key": key, "mode": "replace", "body": "{now}",
+            });
+            if key == "delta" {
+                value["key_base"] = serde_json::json!("origin/main");
+            }
+            if let Some(after) = after {
+                value["after"] = serde_json::json!(after);
+            }
+            serde_json::from_value(value).expect("shape loads")
+        };
+        let asked = row("asked", "delta", None);
+        assert!(validate(&[asked.clone(), row("done", "delta", Some("asked"))]).is_ok());
+        assert!(
+            validate(&[row("done", "delta", Some("asked"))]).is_err(),
+            "no writer of that name"
+        );
+        assert!(
+            validate(&[
+                row("asked", "branch", None),
+                row("done", "delta", Some("asked"))
+            ])
+            .is_err(),
+            "a writer keyed otherwise files under another identity"
+        );
+        assert!(
+            validate(&[row("done", "delta", Some("done"))]).is_err(),
+            "a row cannot be its own prerequisite"
+        );
     }
 
     /// Each new load-time refusal fires, and a well-formed row still loads.
@@ -987,6 +1073,7 @@ mod tests {
             selects_at: None,
             selects: None,
             requires: vec!["id".to_owned()],
+            after: None,
             mode: MintMode::Replace,
             body: "{id} {authority:ready}".to_owned(),
         };

@@ -450,6 +450,11 @@
           "description": "The `state` a structured call moves its subject to (CLOUD-987).\n\nThe fourth and last member read out of [`Envelope::input`], on\n[`Field::InputId`]'s argument. `board-move-guard` (CLOUD-312's row 3)\nfires only when a call MOVES something rather than merely editing it, so\nwithout this the row would gate every edit — the same over-fire\n[`Field::InputId`] exists to prevent one key over.\n\nAPPENDED, never inserted, for the reason stated on [`Field::Prompt`].",
           "type": "string",
           "const": "input-state"
+        },
+        {
+          "description": "Whether a structured call sets its subject's `draft` flag (CLOUD-2260).\n\n`\"true\"` or `\"false\"`, [`Field::RunInBackground`]'s rendering and its\nsafety argument: a boolean projection of one named key cannot carry a\nsecret. It exists because readying a pull request is not only a shell\ncommand — a forge connector's update call setting `draft` to `false` fires\nthe same `ready_for_review` and buys the same CI matrix, and a gate keyed on\n`gh pr ready` alone left that route open.\n\nAPPENDED, never inserted, for the reason stated on [`Field::Prompt`].",
+          "type": "string",
+          "const": "input-draft"
         }
       ]
     },

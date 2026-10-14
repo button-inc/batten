@@ -330,6 +330,140 @@ fn the_identity_is_resolved_from_the_repo_root_and_not_the_cwd() {
 }
 
 // ---------------------------------------------------------------------------
+// DISPATCH IS NOT COMPLETION (CLOUD-2261): the receipt the gate reads is minted
+// by the call the review ENDS with, and only over a change it was asked about.
+// ---------------------------------------------------------------------------
+
+/// The committed shape: the `Skill` dispatch mints a `code-review-dispatched`
+/// record, and the review's closing `ReportFindings` call mints the receipt the
+/// ready row reads, `after` that record. Every receipt below is written by the
+/// engine through `adjudicate`; nothing here files one by hand.
+fn minting_fixture(name: &str) -> PathBuf {
+    common::Fixture::new(name)
+        .config(&format!(
+            "version = 1\n\n\
+             [[mint]]\nname = \"{RECEIPT}-dispatched\"\ntool = \"Skill\"\n\
+             selects_at = \"skill\"\nselects = \"{RECEIPT}\"\nkey = \"delta\"\n\
+             key_base = \"refs/remotes/origin/main\"\nmode = \"replace\"\n\
+             body = \"{{git:HEAD}} {{now}}\"\n\n\
+             [[mint]]\nname = \"{RECEIPT}\"\ntool = \"ReportFindings\"\n\
+             after = \"{RECEIPT}-dispatched\"\nkey = \"delta\"\n\
+             key_base = \"refs/remotes/origin/main\"\nmode = \"replace\"\n\
+             body = \"{{git:HEAD}} {{now}}\"\n\n\
+             [[rule]]\nid = \"review ask missing\"\nkind = \"receipt\"\n\
+             scope = \"mediated_call\"\nseverity = \"deny\"\npattern = \"gh pr ready\"\n\
+             checks = [\"{RECEIPT}\"]\nkey = \"delta\"\n\
+             key_base = \"refs/remotes/origin/main\"\n\
+             reason = \"run the code-review skill to completion\"\n"
+        ))
+        .file("README.md", "base\n")
+        .git()
+        .base_commit()
+        .build()
+}
+
+/// One post-tool event, as the host sends it.
+fn post(dir: &Path, tool: &str, input: &serde_json::Value, response: &serde_json::Value) {
+    let envelope = serde_json::json!({
+        "hook_event_name": "PostToolUse",
+        "tool_name": tool,
+        "tool_input": input,
+        "tool_response": response,
+    });
+    let output = run_with_stdin(
+        dir,
+        &["adjudicate", "--harness", "exit-code"],
+        &envelope.to_string(),
+    );
+    assert_eq!(output.status.code(), Some(0), "the post-tool hook ran");
+}
+
+/// The dispatch, answered as the live host answers it: prose, not JSON.
+fn dispatch(dir: &Path, skill: &str) {
+    post(
+        dir,
+        "Skill",
+        &serde_json::json!({"skill": skill}),
+        &serde_json::json!(format!("Launching skill: {skill}")),
+    );
+}
+
+/// The review's closing call, with nothing surviving verification.
+fn complete(dir: &Path) {
+    post(
+        dir,
+        "ReportFindings",
+        &serde_json::json!({"findings": [], "level": "high"}),
+        &serde_json::json!("Reported 0 findings"),
+    );
+}
+
+/// A DISPATCH ALONE DOES NOT ANSWER, and the completion after it does.
+///
+/// The gap the dispatch-minted receipt left: the ask over these bytes was
+/// provable, the finish was not, so `gh pr ready` went through over a review
+/// nobody completed.
+#[test]
+fn a_dispatched_review_answers_only_once_it_completes() {
+    let dir = minting_fixture("review-completion");
+    change(&dir, "fn a() {}\n");
+
+    dispatch(&dir, RECEIPT);
+    denied(&ready(&dir));
+    assert_ne!(
+        status(&dir).status.code(),
+        Some(0),
+        "dispatched, not completed"
+    );
+    complete(&dir);
+    allowed(&ready(&dir));
+    let answered = status(&dir);
+    assert_eq!(answered.status.code(), Some(0), "{}", stdout(&answered));
+}
+
+/// The question `land` asks before it readies (CLOUD-2260): the same receipt,
+/// read through the verb rather than the hook.
+fn status(dir: &Path) -> Output {
+    run_with_stdin(
+        dir,
+        &[
+            "receipt",
+            "status",
+            RECEIPT,
+            "--key",
+            "delta",
+            "--base",
+            "refs/remotes/origin/main",
+        ],
+        "",
+    )
+}
+
+/// A COMPLETION NAMES NO CHANGE, so without a dispatch of THIS change on file it
+/// mints nothing — neither with no dispatch at all, nor with one taken over an
+/// earlier change, nor with one of another skill. Declared mutation:
+/// `completion-ignores-dispatch`.
+#[test]
+fn a_completion_without_a_dispatch_of_this_change_mints_nothing() {
+    let dir = minting_fixture("review-completion-orphan");
+    change(&dir, "fn a() {}\n");
+
+    complete(&dir);
+    denied(&ready(&dir));
+
+    dispatch(&dir, "batten");
+    complete(&dir);
+    denied(&ready(&dir));
+
+    // Asked over one change, finished over another: the commit between them
+    // moved the key, so the earlier ask no longer answers.
+    dispatch(&dir, RECEIPT);
+    change(&dir, "fn a() {}\nfn b() {}\n");
+    complete(&dir);
+    denied(&ready(&dir));
+}
+
+// ---------------------------------------------------------------------------
 // COULD-NOT-LOOK IS A REFUSAL HERE, DELIBERATELY.
 // ---------------------------------------------------------------------------
 

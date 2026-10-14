@@ -1877,13 +1877,22 @@ struct StatusReport<'a> {
 /// A **detached HEAD under `--key branch`** is an internal error rather than a
 /// verdict, for [`branch_facts`]'s reason: a rebase detaches, and answering
 /// "not valid" there would make every rebase look like an unclaimed branch.
+//MUTANT delta-status-unread|s@^                    let verdict = named_validity(&facts.git_dir, check, &identity);$@                    let verdict = Validity::Valid;@|a_dispatched_review_answers_only_once_it_completes
 pub fn run_status(
     check: &str,
     key: ReceiptKey,
+    base: Option<&str>,
     json: bool,
     out: &mut dyn Write,
 ) -> Result<ExitCode> {
     validate_check_name(check)?;
+    // A BASE ON ANY OTHER KEYING IS READ BY NOTHING, and is refused for the
+    // reason `Rule::validate_delta_base` refuses it on a row.
+    if base.is_some() && key != ReceiptKey::Delta {
+        return Err(UsageError::raise(
+            "receipt status --base: a base is what a `delta` receipt's change identity is taken against, and no other keying reads one",
+        ));
+    }
     let facts = repo_facts()?;
     let (subject, verdict) = match key {
         // REFUSED FROM THIS VERB, and stated rather than left inert (CLOUD-987).
@@ -1899,16 +1908,29 @@ pub fn run_status(
                 "receipt status --key named: a named receipt is keyed on a subject the mediated call supplies, and this verb has none to give. It is read by `batten hook` from the declaring row's `key_from` projection.",
             ));
         }
-        // REFUSED FROM THIS VERB TOO, and for a reason one step past `named`'s
+        // REFUSED WITHOUT `--base`, and for a reason one step past `named`'s
         // (CLOUD-1547). A `delta` receipt's subject is an identity taken against
-        // the DECLARING ROW's `key_base`, and this verb is handed a check name
-        // and a keying — nothing that says which ref. Defaulting one would answer
-        // about a base the row never named, and two bases produce two identities
-        // for one change, which is the disagreement this keying exists to remove.
+        // the DECLARING ROW's `key_base`. Defaulting one would answer about a
+        // base the row never named, so the caller must name it (CLOUD-2260) —
+        // which is what lets `land` ask before it readies. A named base that
+        // disagrees with the row's resolves another identity and reads `missing`,
+        // so the two drifting refuses rather than passes.
+        //
+        // The identity is [`delta_subject`]'s, the one the hook path reads, and
+        // an absent identity is `missing` here for the reason it is there.
         ReceiptKey::Delta => {
-            return Err(UsageError::raise(
-                "receipt status --key delta: a delta receipt is keyed on the identity of this branch's change against the declaring row's `key_base`, and this verb has no row to read one from. It is read by `batten hook` from that row.",
-            ));
+            let Some(base) = base else {
+                return Err(UsageError::raise(
+                    "receipt status --key delta: a delta receipt is keyed on the identity of this branch's change against a base ref; name the declaring row's `key_base` with `--base`",
+                ));
+            };
+            match delta_subject(&facts.repo_root, base) {
+                Some(identity) => {
+                    let verdict = named_validity(&facts.git_dir, check, &identity);
+                    (identity, verdict)
+                }
+                None => ("-".to_owned(), Validity::Missing),
+            }
         }
         ReceiptKey::Head => {
             let statement = load_statement(&receipt_path(&facts.repo_root, check)?);
@@ -1987,6 +2009,7 @@ pub fn run_status(
 pub fn run_status_any(
     checks: &[String],
     key: ReceiptKey,
+    base: Option<&str>,
     json: bool,
     out: &mut dyn Write,
 ) -> Result<ExitCode> {
@@ -1995,7 +2018,7 @@ pub fn run_status_any(
             "receipt status: --json reports one receipt's verdict and --or asks about several; drop one of them",
         ));
     }
-    any_valid(checks, &mut |check| run_status(check, key, json, out))
+    any_valid(checks, &mut |check| run_status(check, key, base, json, out))
 }
 
 /// The walk [`run_status_any`] takes, over a judge the caller supplies, so the
