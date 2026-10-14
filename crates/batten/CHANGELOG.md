@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.216](https://github.com/button-inc/batten/compare/v0.0.215...v0.0.216) - 2026-10-13
+
+### Fixed
+
+- *(mutate)* generated-case-any-pass sits above kyverno_verdict, where rustfmt leaves it at column zero
+- *(mutate)* the generated-case-any-pass row sits at column zero
+- *(mutate)* select a GeneratingPolicy case by its trigger and fail it on any generated object
+
 ## [0.0.215](https://github.com/button-inc/batten/compare/v0.0.214...v0.0.215) - 2026-10-13
 
 ### Fixed
