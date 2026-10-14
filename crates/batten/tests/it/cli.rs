@@ -11006,7 +11006,7 @@ fn generate_hooks_refuses_the_contract_only_harness() {
     );
 }
 
-/// Drives a generated OpenCode plugin the way its host does: import the module,
+/// Drives a generated `OpenCode` plugin the way its host does: import the module,
 /// build the hooks with a project directory, and call `tool.execute.before`.
 #[cfg(unix)]
 const OPENCODE_DRIVER: &str = r#"const [plugin, tool, args] = process.argv.slice(2);
@@ -11034,7 +11034,7 @@ exit 0
 
 /// THE PLUGIN IS A GUARD ONLY IF EXIT 2 BECOMES A THROW (CLOUD-1942).
 ///
-/// OpenCode's `tool.execute.before` blocks a tool by throwing and by nothing
+/// `OpenCode`'s `tool.execute.before` blocks a tool by throwing and by nothing
 /// else, so a plugin that returned on a refusal would read as installed and
 /// allow every call. Run under the pinned Node against a fake engine on `PATH`:
 /// the refusal is thrown with the engine's reason, an allow passes, and an engine
@@ -11074,6 +11074,10 @@ fn a_generated_opencode_plugin_throws_the_engine_s_refusal() {
         ("read", r#"{"filePath":"notes.txt"}"#, "allowed"),
         ("task", r#"{"prompt":"x"}"#, "allowed"),
     ] {
+        #[expect(
+            clippy::disallowed_types,
+            reason = "the subject is the generated plugin running under the pinned Node, a program the batten door does not spawn; nothing here reaches the engine but the fake on PATH"
+        )]
         let output = std::process::Command::new("node")
             .arg(&driver)
             .arg(&plugin)
