@@ -407,11 +407,13 @@ fn a_hook_outside_the_checkout_hands_off_to_the_authoritys_build() {
     assert!(!dir.join("cargo-ran").exists(), "nothing built");
 }
 
-/// CLOUD-2220: a stale build of the checkout was told to `batten engine update`,
-/// which leaves an in-tree binary alone, so `mise exec -- batten` (resolving
-/// `target/release`) stayed refused. It is told to rebuild instead.
+/// A stale build of the checkout under a RELEASE pin is told to install the
+/// release, never to rebuild: a `cargo build` reports the tag's version without
+/// being the release, so the advice CLOUD-2220 first gave satisfied the pin with
+/// a binary it does not name. The pinned spelling, so it runs as the binary
+/// `_.path` resolves.
 #[test]
-fn a_stale_build_of_the_checkout_names_the_rebuild() {
+fn a_stale_build_of_the_checkout_names_the_release_update() {
     let dir = repo("engine-update-stale-checkout-build");
     let binary = private_binary(&dir);
     common::write(
@@ -421,8 +423,9 @@ fn a_stale_build_of_the_checkout_names_the_rebuild() {
     );
     let output = run(&binary, &dir, &["config", "show"], "");
     assert!(
-        text(&output).contains("mise exec -- cargo build --release -p batten"),
-        "the checkout's own build is rebuilt, not updated: {}",
+        text(&output).contains("`mise exec -- batten engine update`")
+            && !text(&output).contains("cargo build"),
+        "a release pin is repaired by the release, never by a build: {}",
         text(&output)
     );
 }

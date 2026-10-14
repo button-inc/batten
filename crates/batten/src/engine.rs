@@ -257,10 +257,6 @@ fn shell_word(word: &str) -> String {
 //MUTANT pin-unread|s@^    let Some(pin) = declared(text) else {$@    let Some(pin) = None::<Pin> else {@|a_release_pin_naming_another_build_is_refused_with_its_install
 //MUTANT stamp-trusted-when-absent|s@^            if stamp.as_deref() != Some(digest) {$@            if stamp.is_some() \&\& stamp.as_deref() != Some(digest) {@|a_source_pin_without_a_stamp_is_refused
 
-/// The repair for a stale build of the checkout it judges: the build itself,
-/// under the project's toolchain for [`REPAIR_PINNED`]'s reason.
-pub const REBUILD: &str = "mise exec -- cargo build --release -p batten";
-
 /// Whether the running binary lives inside the tree holding `source`, the
 /// config it was refused over — that tree's own build, not an installed engine.
 //MUTANT in-tree-build-updated|s@^        .is_some_and(\x7croot\x7c exe.starts_with(root))$@        .is_some_and(\x7c_\x7c false)@|a_stale_build_of_the_checkout_names_the_rebuild
@@ -327,12 +323,20 @@ pub fn check(text: &str, source: &str, stamp: impl FnOnce() -> Option<String>) -
         (Some(tag), None) => {
             let running = release();
             if tag != running {
-                // A BUILD OF THIS CHECKOUT IS REBUILT, NEVER UPDATED (CLOUD-2220).
-                // `follow_pin` leaves an in-tree binary alone (CLOUD-2063), so
-                // naming the update here sent a session to a verb that runs the
-                // same stale build: measured, `mise exec -- batten` resolved
-                // `target/release` at 0.0.213 under a 0.0.214 pin.
-                let repair = if built_in(source) { REBUILD } else { REPAIR };
+                // A RELEASE PIN IS REPAIRED BY THE RELEASE, NEVER BY A BUILD.
+                // CLOUD-2220 named `cargo build` here for a stale in-tree binary,
+                // and that build reports the tag's version without being the
+                // release: the pin is then satisfied by a binary it does not
+                // name. The update installs the pinned release over the running
+                // binary, in-tree included — measured 2026-10-14, `mise exec --
+                // batten engine update` replaced `target/release` at 0.0.215
+                // with the published 0.0.216. In-tree, the pinned spelling, so
+                // it runs as the binary `_.path` resolves.
+                let repair = if built_in(source) {
+                    REPAIR_PINNED
+                } else {
+                    REPAIR
+                };
                 return Err(UsageError::raise(format!(
                     "{source} pins batten {tag} and this engine is {running}: install the pin \
                      with `{repair}`"
