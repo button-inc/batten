@@ -1287,8 +1287,11 @@ freeze_owed(path, name) if dispatches_build(path, name)
 # ships in the release this path cuts: demanding the step under an older pin
 # breaks every writer of `main`, which `engine-pin-check` refuses for exactly
 # that reason, and the two gates deadlocked the branch adopting the path. A
-# source pin builds the tree's own engine, which carries the verb.
-freeze_from := [0, 0, 215]
+# source pin builds the tree's own engine, which carries the verb. 0.0.217
+# because 0.0.216 was cut without the path (measured 2026-10-14: its
+# `engine gate` names `release in-flight` absent), and the first release cut
+# after it lands is the one that carries it.
+freeze_from := [0, 0, 217]
 
 freeze_runnable if not input.tree.documents["batten.toml"].engine.release
 
@@ -1313,8 +1316,8 @@ older(a, b) if {
 }
 
 test_the_freeze_waits_for_the_pin_that_carries_it if {
-	not freeze_runnable with input as {"tree": {"documents": {"batten.toml": {"engine": {"release": "v0.0.214"}}}}}
-	freeze_runnable with input as {"tree": {"documents": {"batten.toml": {"engine": {"release": "v0.0.215"}}}}}
+	not freeze_runnable with input as {"tree": {"documents": {"batten.toml": {"engine": {"release": "v0.0.216"}}}}}
+	freeze_runnable with input as {"tree": {"documents": {"batten.toml": {"engine": {"release": "v0.0.217"}}}}}
 	freeze_runnable with input as {"tree": {"documents": {"batten.toml": {"engine": {"release": "v0.1.0"}}}}}
 	freeze_runnable with input as {"tree": {"documents": {"batten.toml": {"engine": {"source": "abc"}}}}}
 }
