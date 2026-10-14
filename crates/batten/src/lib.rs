@@ -11141,7 +11141,7 @@ fn unwind_lap(
                 } else {
                     writeln!(
                         out,
-                        "land: undo — the head is red, so its other runs are left to finish and report on this matrix"
+                        "land: undo — the head is red, so its other runs are not cancelled; a ready push to this branch would supersede them"
                     )?;
                 }
             }
