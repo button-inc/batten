@@ -548,7 +548,9 @@ pub fn register(root: &Path, repo: &Path, check: bool) -> Result<Registered> {
         return Ok(out);
     };
     let surface = match wiring.file {
-        hook::WiringFile::Key { path, .. } | hook::WiringFile::Whole(path) => path,
+        hook::WiringFile::Key { path, .. }
+        | hook::WiringFile::Whole(path)
+        | hook::WiringFile::Root(path) => path,
     };
     let path = root.join(surface);
     let mut document = match std::fs::read_to_string(&path) {
@@ -604,10 +606,16 @@ fn add_missing(
     let Some(root) = document.as_object_mut() else {
         return Vec::new();
     };
-    let events = root
-        .entry(event_key(file))
-        .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
-    let Some(events) = events.as_object_mut() else {
+    // A root-keyed file IS the event map, so the registrations go at its top
+    // level rather than under a key.
+    let events = match event_key(file) {
+        Some(key) => root
+            .entry(key)
+            .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()))
+            .as_object_mut(),
+        None => Some(root),
+    };
+    let Some(events) = events else {
         return Vec::new();
     };
     let mut added = Vec::new();
