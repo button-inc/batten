@@ -1408,51 +1408,31 @@ fn merge_carrying(
     (dir, repo, tip, work, trunk_two)
 }
 
-/// **`land` brings a merge-carrying branch onto a moved trunk with a merge
-/// (CLOUD-2054).** A replay cannot reproduce the branch's merge commit, and the
-/// refusal that stood here left a hand rewrite as the only route — measured on
-/// #1056, a squash that lost a breaking-change marker and 211 commits.
-#[test]
-fn a_merge_carrying_branch_over_a_moved_trunk_lands_as_a_merge() {
-    let (dir, _, tip, work, trunk) = merge_carrying("rebase-merge-lands", false);
-    let outcome = gitwrite::rebase_resolving(&dir, "refs/heads/work", "refs/heads/main", &[])
-        .expect("a merge-carrying branch is caught up, not refused");
-    let Rebase::Replayed { head, commits } = outcome else {
-        panic!("expected the branch to move, got {outcome:?}");
-    };
-    assert_eq!(
-        commits, 0,
-        "nothing was REPLAYED; the head moved by a merge"
-    );
-    let repo = gix::open(&dir).expect("reopen");
+/// The commits `trunk..head` holds that have more than one parent.
+fn merges_over(repo: &gix::Repository, trunk: gix::ObjectId, head: gix::ObjectId) -> usize {
+    repo.rev_walk([head])
+        .with_hidden([trunk])
+        .all()
+        .expect("walk")
+        .filter_map(Result::ok)
+        .filter(|info| info.parent_ids().count() > 1)
+        .count()
+}
+
+/// Assert `head` sits on `trunk` with no merge commit between, and holds the
+/// branch's file beside both of trunk's.
+fn assert_flat(dir: &Path, trunk: gix::ObjectId, head: &str) {
+    let repo = gix::open(dir).expect("reopen");
     let head: gix::ObjectId = head.parse().expect("head is a sha");
-    let parents: Vec<gix::ObjectId> = repo
-        .find_commit(head)
-        .expect("head reads")
-        .parent_ids()
-        .map(gix::Id::detach)
-        .collect();
     assert_eq!(
-        parents,
-        vec![tip, trunk],
-        "parents are [old tip, moved trunk]"
+        repo.merge_base(trunk, head).expect("merge base").detach(),
+        trunk,
+        "the head descends from the trunk"
     );
-    // Every original commit survives byte for byte: they are ancestors, unrewritten.
-    for original in [tip, work] {
-        assert_eq!(
-            repo.merge_base(original, head)
-                .expect("merge base")
-                .detach(),
-            original,
-            "{original} must be an unchanged ancestor of the new head"
-        );
-    }
     assert_eq!(
-        repo.rev_parse_single("refs/heads/work")
-            .expect("resolve")
-            .detach(),
-        head,
-        "the ref moved to the merge"
+        merges_over(&repo, trunk, head),
+        0,
+        "the trunk's ruleset refuses a merge commit"
     );
     let names = tree_names(&repo, head);
     for file in ["from-branch.txt", "from-main.txt", "from-main-again.txt"] {
@@ -1461,10 +1441,54 @@ fn a_merge_carrying_branch_over_a_moved_trunk_lands_as_a_merge() {
             "{file} missing: {names:?}"
         );
     }
+}
+
+/// **`land` FLATTENS a merge-carrying branch onto a moved trunk**, because the
+/// trunk's ruleset refuses a merge commit: the CLOUD-2054 merge of the moved
+/// base was green and undeliverable on #1132 (`GH013 ... must not contain merge
+/// commits`). The branch's own commit replays; the catch-up merge, whose change
+/// the trunk already holds, is skipped rather than written empty.
+#[test]
+fn a_merge_carrying_branch_over_a_moved_trunk_is_flattened() {
+    let (dir, _, _, _, trunk) = merge_carrying("rebase-merge-flattens", false);
+    let outcome = gitwrite::rebase_resolving(&dir, "refs/heads/work", "refs/heads/main", &[])
+        .expect("a merge-carrying branch is caught up, not refused");
+    let Rebase::Replayed { head, commits } = outcome else {
+        panic!("expected the branch to move, got {outcome:?}");
+    };
+    assert_eq!(
+        commits, 1,
+        "the branch's commit, and not the catch-up merge"
+    );
+    assert_flat(&dir, trunk, &head);
     assert!(
         dir.join("from-main-again.txt").is_file(),
         "the worktree was not caught up"
     );
+}
+
+/// **A BRANCH ALREADY ON THE TRUNK THAT CARRIES A MERGE IS NOT CURRENT.** It
+/// descends, so the old check said "nothing replayed", and the fast-forward was
+/// refused for the merge it carried, three laps running on #1132.
+#[test]
+fn a_branch_on_the_trunk_carrying_a_merge_is_flattened_not_current() {
+    let (dir, repo, tip, _, _) = merge_carrying("rebase-merge-on-trunk", false);
+    let trunk_one = repo
+        .find_commit(tip)
+        .expect("tip reads")
+        .parent_ids()
+        .nth(1)
+        .expect("the merge's second parent is the trunk it carried")
+        .detach();
+    point(&dir, "refs/heads/main", trunk_one);
+    let outcome = gitwrite::rebase_resolving(&dir, "refs/heads/work", "refs/heads/main", &[])
+        .expect("a merge-carrying branch is caught up, not refused");
+    let Rebase::Replayed { head, .. } = outcome else {
+        panic!("a merge on the trunk must still be flattened, got {outcome:?}");
+    };
+    let repo = gix::open(&dir).expect("reopen");
+    let head: gix::ObjectId = head.parse().expect("head is a sha");
+    assert_eq!(merges_over(&repo, trunk_one, head), 0);
 }
 
 /// The merge stops on a conflict exactly as a replay does, naming the tip and
