@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.217](https://github.com/button-inc/batten/compare/v0.0.216...v0.0.217) - 2026-10-14
+
+### Added
+
+- *(mint)* [**breaking**] mint the review receipt on completion, and let land ask for it
+
+### Fixed
+
+- *(mint)* run writer rows first, and let exclusive selectors share a prerequisite
+- *(mint)* refuse a prerequisite this call wrote, and return a claim a failed write could not spend
+- *(mint)* claim the prerequisite, judge it against the store before the call
+- *(mint)* spend the dispatch on its completion, and refuse what the review found
+- *(mint)* split the after check out of validate, and regenerate the surface
+- *(mutate)* a Kyverno case's verdict is a function of its set, and generated results are told apart by their shape
+
+### Other
+
+- *(mutate)* keep generate_sweep, so the two generating cases read as they did
+- *(mutate)* declare the fixture constants before the statements
+- *(mint)* hold the cross-row refusals in one helper
+- *(mutate)* baseline recordings for the hand-made Kyverno fixtures
+
 ## [0.0.216](https://github.com/button-inc/batten/compare/v0.0.215...v0.0.216) - 2026-10-13
 
 ### Fixed
