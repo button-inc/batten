@@ -1,0 +1,42 @@
+kyverno 1.19.1
+Loading test  ( policies/kyverno-test.yaml ) ...
+  Loading values/variables ...
+  Loading policies ...
+  Loading resources ...
+  Loading exceptions ...
+  Applying 1 policy to 2 resources with 0 exceptions ...
+  Checking results ...
+
+[
+  {
+    "ID": 1,
+    "Message": "policy evaluated successfully",
+    "POLICY": "add-tenant-quota",
+    "REASON": "Ok",
+    "RESOURCE": "/tenant-quota",
+    "RESULT": "Pass",
+    "RULE": "add-tenant-quota"
+  },
+  {
+    "ID": 2,
+    "Message": "policy evaluated successfully",
+    "POLICY": "add-tenant-quota",
+    "REASON": "Ok",
+    "RESOURCE": "/tenant-priority",
+    "RESULT": "Pass",
+    "RULE": "add-tenant-quota"
+  },
+  {
+    "ID": 3,
+    "Message": "policy evaluated successfully",
+    "POLICY": "add-tenant-quota",
+    "REASON": "Ok",
+    "RESOURCE": "/tenant-limits",
+    "RESULT": "Pass",
+    "RULE": "add-tenant-quota"
+  }
+]
+
+
+Test Summary: 3 tests passed and 0 tests failed
+
