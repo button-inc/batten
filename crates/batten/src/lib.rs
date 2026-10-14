@@ -15540,6 +15540,7 @@ fn run_registered_runner(
         kind,
         shard.as_deref(),
         &work,
+        err,
     ) {
         Ok(run) => run,
         Err(reason) => {
@@ -24614,8 +24615,8 @@ fn release_path_verdict(
         Ok(changed) => changed,
         Err(why) => return (CouldNotLook(why.to_string()), false),
     };
-    let other_config_change = release_path::without_engine_line(&base_config)
-        != release_path::without_engine_line(&head_config);
+    let other_config_change =
+        release_path::config_changed_beyond_engine(&base_config, &head_config);
     let mut verify = |tag: &str| match release_verdict(tag, false, mode, overrides) {
         (Some(release), release_verify::Verdict::Verified) => Ok(
             release_path::Published::Verified(release.tag_commit.unwrap_or(release.target)),

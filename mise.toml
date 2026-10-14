@@ -1734,7 +1734,11 @@ description = "Gate: every enforced gate this branch touched since origin/main h
 # 40s each, which a local gate cannot hold, and the owner ruled it a CI matrix.
 # A shard there also takes its slice of the declared gates, and the `ci` job
 # skips this step: the declared half ran that job past its bound on #1132.
-env = { MUTANT_CHANGED_SINCE = "origin/main", MUTANT_RUNNERS = "cargo-mutants=crates/**/*.rs" }
+# THE GLOBS ARE WHAT SHIPS: each crate's `src/` and its `build.rs`. `examples/`
+# is measurement tooling no test target compiles, which cargo-mutants could only
+# report as `no-suite` on every run (measured on #1132); left unowned, the
+# declared runner judges it, and it declares no rows.
+env = { MUTANT_CHANGED_SINCE = "origin/main", MUTANT_RUNNERS = "cargo-mutants=crates/*/src/**/*.rs,crates/*/build.rs" }
 run = "cargo run --quiet -p batten -- mutate sweep"
 
 [tasks."mutant-census"]

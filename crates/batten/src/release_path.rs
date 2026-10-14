@@ -189,6 +189,13 @@ pub fn pin_of(config: &str) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
+/// Whether `batten.toml` changed between `base` and `head` anywhere but its
+/// `engine` line: [`judge`]'s `other_config_change`.
+#[must_use]
+pub fn config_changed_beyond_engine(base: &str, head: &str) -> bool {
+    without_engine_line(base) != without_engine_line(head)
+}
+
 /// `Cargo.toml`'s workspace version, or its package version.
 #[must_use]
 pub fn version_of(manifest: &str) -> Option<String> {
@@ -204,7 +211,21 @@ pub fn version_of(manifest: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::version_of;
+    use super::{config_changed_beyond_engine, version_of};
+
+    /// Only the `engine` line may move in a release head's config.
+    #[test]
+    fn a_config_change_is_one_beyond_the_engine_line() {
+        let base = "version = 1\nengine = { release = \"v0.0.1\" }\n";
+        assert!(!config_changed_beyond_engine(
+            base,
+            "version = 1\nengine = { release = \"v0.0.2\" }\n"
+        ));
+        assert!(config_changed_beyond_engine(
+            base,
+            "version = 2\nengine = { release = \"v0.0.1\" }\n"
+        ));
+    }
 
     /// The workspace's version first, a package's otherwise, and nothing from
     /// a manifest that declares neither or does not parse.

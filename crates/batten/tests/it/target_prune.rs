@@ -310,6 +310,35 @@ fn target_prune_collects_to_max_free_without_a_floor() {
     }
 }
 
+/// THE BAND IS IN MEBIBYTES AND THE NEED IN BYTES: one MiB short of
+/// `max_free_mb` takes the two oldest of three 600 KiB units, since one frees
+/// too little, and leaves the third.
+#[test]
+fn a_mebibyte_short_takes_units_until_a_mebibyte_is_freed() {
+    let repo = repo("target-prune-mebibyte");
+    let profile = repo.join("target/debug");
+    live(&profile, "oldest", "aaaaaaaaaaaaaaaa", 7200, 600 << 10);
+    live(&profile, "middle", "bbbbbbbbbbbbbbbb", 7100, 600 << 10);
+    live(&profile, "newest", "cccccccccccccccc", 7000, 600 << 10);
+
+    let free = (MAX_FREE_MB - 1).to_string();
+    let output = prune(&repo, &free, &["-y"]);
+    let said = said(&output);
+    assert_eq!(output.status.code(), Some(0), "{said}");
+    assert!(
+        !profile.join("deps/oldest-aaaaaaaaaaaaaaaa").exists(),
+        "{said}"
+    );
+    assert!(
+        !profile.join("deps/middle-bbbbbbbbbbbbbbbb").exists(),
+        "600 KiB is short of the MiB asked for: {said}"
+    );
+    assert!(
+        profile.join("deps/newest-cccccccccccccccc").exists(),
+        "two units free the MiB: {said}"
+    );
+}
+
 /// A `[prune]` declaring no band collects at the default one (CLOUD-2197): with
 /// it held, the collector a branch carried never armed and that branch's own
 /// `verify` filled the disk. The retired floor tables still load beside it,

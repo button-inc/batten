@@ -10,6 +10,10 @@
 //! `o200k.bin`, little-endian `u32`s then bytes:
 //! `count`, `offsets[count + 1]` into the blob, `ranks[count]`, the blob — the
 //! entries sorted by their bytes, so a rank is a binary search over the blob.
+//!
+//! No test target compiles this file; what it writes is judged where it is
+//! read, by `o200k`'s parity case against tiktoken itself.
+//MUTANT-SUITE crates/batten/src/o200k.rs
 
 use std::io::Write as _;
 

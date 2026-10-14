@@ -1062,6 +1062,7 @@ pub fn trees(repo: &Path, prune: &crate::prune::Prune) -> Vec<PathBuf> {
 /// its own collection thread; the hook calls it through [`collect_if_pressed`].
 /// `None` where the band is undeclared.
 //MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
+//MUTANT-SUITE crates/batten/tests/it/target_prune.rs
 //MUTANT checkout-build-collected|s@^    kept.extend(crate::engine::checkout_build(repo).and_then(\x7cbuild\x7c identity(\&build)));$@@|the_checkout_build_is_never_collected
 pub fn collect_toward_max(
     repo: &Path,

@@ -1120,13 +1120,8 @@ pub const SHARD: &str = "MUTANT_SHARD";
 ///
 /// A value that is not `k/n` with `n > 0` and `k < n`.
 pub fn shard_of(names: &[String], shard: &str) -> Result<Vec<String>, String> {
-    let malformed = || format!("{SHARD}={shard} is not `k/n` with 0 <= k < n");
-    let (k, n) = shard.trim().split_once('/').ok_or_else(malformed)?;
-    let k: usize = k.trim().parse().map_err(|_| malformed())?;
-    let n: usize = n.trim().parse().map_err(|_| malformed())?;
-    if n == 0 || k >= n {
-        return Err(malformed());
-    }
+    let (k, n) = parse_shard(shard)
+        .ok_or_else(|| format!("{SHARD}={shard} is not `k/n` with 0 <= k < n"))?;
     let mut sorted = names.to_vec();
     sorted.sort();
     Ok(sorted
@@ -1450,6 +1445,7 @@ pub fn run_registered(
     kind: RunnerKind,
     shard: Option<&str>,
     work: &Path,
+    progress: &mut dyn std::io::Write,
 ) -> Result<Registered> {
     let mut result = Registered::default();
     for path in changed {
@@ -1484,7 +1480,48 @@ pub fn run_registered(
     let patch = runs.join("change.diff");
     crate::durable::replace(&patch, diff)
         .with_context(|| format!("mutate: could not write {}", patch.display()))?;
-    for (index, source) in sources.iter().enumerate() {
+    let shards: Vec<Option<Option<usize>>> = match shard {
+        None => vec![None; sources.len()],
+        Some(raw) => {
+            let (k, n) = parse_shard(raw)
+                .ok_or_else(|| anyhow::anyhow!("mutate: {SHARD} `{raw}` is not `<k>/<n>`"))?;
+            let mut list = vec![
+                String::from("mutants"),
+                String::from("--list"),
+                String::from("--no-shuffle"),
+                String::from("--in-diff"),
+                patch.to_string_lossy().into_owned(),
+            ];
+            for source in &sources {
+                list.extend([String::from("--file"), source.clone()]);
+            }
+            let listed = spawn(
+                staged.dir(),
+                Program::Cargo,
+                &list,
+                &suite_env(root),
+                build_bound(),
+            )?;
+            if !listed.passed() {
+                bail!("mutate: cargo-mutants could not list the change's mutants");
+            }
+            source_shards(&mutant_counts(&listed.output, &sources), k, n)
+                .into_iter()
+                .map(Some)
+                .collect()
+        }
+    };
+    let assigned = shards.iter().filter(|on| !matches!(on, Some(None))).count();
+    let mut position = 0usize;
+    for (index, (source, on)) in sources.iter().zip(shards).enumerate() {
+        // A source with no mutant on this shard is not run here at all: no
+        // build, no suite, no finding, which another shard carries.
+        let local = match on {
+            Some(None) => continue,
+            Some(Some(local)) => Some(local),
+            None => None,
+        };
+        position += 1;
         let Some(scope) = test_scope(root, source) else {
             result.findings.push(Finding {
                 gate: kind.id().to_owned(),
@@ -1519,16 +1556,19 @@ pub fn run_registered(
         // (`ci.yml`'s `mutants`) needs `ci`, whose suite has already passed,
         // which is the book's precondition; `--timeout` stands in for the
         // per-mutant bound the baseline would have measured.
-        if let Some(shard) = shard {
+        if let (Some(local), Some((_, n))) = (local, shard.and_then(parse_shard)) {
             args.extend([
                 String::from("--shard"),
-                shard.to_owned(),
+                format!("{local}/{n}"),
+                String::from("--sharding"),
+                String::from("round-robin"),
                 String::from("--baseline=skip"),
                 String::from("--timeout"),
                 SHARD_MUTANT_TIMEOUT_SECS.to_string(),
             ]);
         }
         args.extend([String::from("--"), String::from("-E"), scope]);
+        let started = std::time::Instant::now();
         let ran = spawn(
             staged.dir(),
             Program::Cargo,
@@ -1537,6 +1577,14 @@ pub fn run_registered(
             runner_bound(),
         )?;
         let outcome = read_outcomes(&output.join("mutants.out"));
+        // ONE LINE PER SOURCE (CLOUD-2253's progress, for this runner): a shard
+        // that printed nothing for two hours could not say where it was.
+        let _ = writeln!(
+            progress,
+            "mutate sweep: source {position}/{assigned} {source} {} mutant(s) {}s",
+            outcome.ran,
+            started.elapsed().as_secs()
+        );
         result.mutants += outcome.ran;
         result.findings.extend(outcome.findings(kind, source, &ran));
     }
@@ -1546,6 +1594,52 @@ pub fn run_registered(
 /// One mutant's test bound in a sharded run, which skips the baseline that
 /// would otherwise measure it: the book's CI recipe's `--timeout 300`.
 const SHARD_MUTANT_TIMEOUT_SECS: u64 = 300;
+
+/// `$MUTANT_SHARD`'s `k/n`, or `None` where it is not one (`k < n`, `n > 0`).
+#[must_use]
+pub fn parse_shard(shard: &str) -> Option<(usize, usize)> {
+    let (k, n) = shard.trim().split_once('/')?;
+    let (k, n) = (k.trim().parse().ok()?, n.trim().parse().ok()?);
+    (k < n).then_some((k, n))
+}
+
+/// The `--shard` each source's own run takes on shard `k` of `n`, so the
+/// matrix shares the whole change's mutants evenly: mutant `g` of the change,
+/// counted across the sources in order, belongs to shard `g % n`, which is
+/// `--sharding round-robin` within one source run offset by the mutants before
+/// it. `None` for a source with no mutant on this shard, which is not run.
+///
+/// ONE RUN PER SOURCE SHARDED ALONE PILED THE WORK ON THE LOW SHARDS: cargo-mutants'
+/// default `slice` hands a source of five mutants to shards 0 to 4, so on #1132
+/// shard 0 drew a mutant from nearly every one of 158 sources, ran past its
+/// 120-minute bound and reported nothing, while shard 15 finished in an hour.
+#[must_use]
+pub fn source_shards(counts: &[usize], k: usize, n: usize) -> Vec<Option<usize>> {
+    let mut before = 0usize;
+    counts
+        .iter()
+        .map(|&count| {
+            let local = (k + n - before % n) % n;
+            before += count;
+            (local < count).then_some(local)
+        })
+        .collect()
+}
+
+/// How many mutants cargo-mutants' `--list` names in each of `sources`, from
+/// its `<path>:<line>:<col>: <mutation>` lines.
+fn mutant_counts(listing: &str, sources: &[String]) -> Vec<usize> {
+    sources
+        .iter()
+        .map(|source| {
+            let prefix = format!("{source}:");
+            listing
+                .lines()
+                .filter(|line| line.starts_with(&prefix))
+                .count()
+        })
+        .collect()
+}
 
 /// How long one registered run over one source may take: a build per mutant.
 fn runner_bound() -> std::time::Duration {
@@ -1682,10 +1776,12 @@ impl Outcomes {
 /// The nextest filterset of the tests that judge `source`: its own tests, and
 /// every Rust suite it declares with `MUTANT-SUITE`, each inside its package.
 ///
-/// `None` when no cargo target compiles the source, so nothing could be named.
+/// `None` when no cargo target compiles the source and it declares no suite, so
+/// nothing could be named. A source no test target compiles (`build.rs`) is
+/// judged by the suites it declares: what it generates is what they read.
 #[must_use]
 pub fn test_scope(root: &Path, source: &str) -> Option<String> {
-    let mut terms = vec![tests_of(root, source)?];
+    let mut terms: Vec<String> = tests_of(root, source).into_iter().collect();
     for line in lines_of(root, source).unwrap_or_default() {
         let Some(suite) = strip_marker(&line, SUITE) else {
             continue;
@@ -1698,7 +1794,7 @@ pub fn test_scope(root: &Path, source: &str) -> Option<String> {
             terms.push(term);
         }
     }
-    Some(terms.join(" | "))
+    (!terms.is_empty()).then(|| terms.join(" | "))
 }
 
 /// The filterset term naming the tests compiled from `path`, inside its package.
@@ -3933,6 +4029,75 @@ mod tests {
         assert!(!registry.declares(&row_from("crates/batten/src/drain.rs")));
         assert!(registry.declares(&row_from("policy/filed-here.rego")));
         assert!(Registry::default().declares(&row_from("crates/batten/src/drain.rs")));
+    }
+
+    /// The committed globs own what ships and nothing else: a crate's `src/` and
+    /// its `build.rs`, never `examples/` (no test target compiles it).
+    #[test]
+    fn the_committed_globs_own_what_ships() {
+        let registry = Registry::parse("cargo-mutants=crates/*/src/**/*.rs,crates/*/build.rs")
+            .expect("parses");
+        for owned in [
+            "crates/batten/src/lib.rs",
+            "crates/batten/src/policy/presets/x.rs",
+            "crates/batten/build.rs",
+        ] {
+            assert_eq!(
+                registry.owner(owned).expect("one owner"),
+                RunnerKind::CargoMutants,
+                "{owned}"
+            );
+        }
+        assert_eq!(
+            registry
+                .owner("crates/batten/examples/hook-read-bench.rs")
+                .expect("one owner"),
+            RunnerKind::Declared
+        );
+    }
+
+    /// THE MATRIX SHARES THE CHANGE, NOT EACH SOURCE: every mutant of every
+    /// source lands on exactly one shard, and no shard carries more than one
+    /// more than another.
+    #[test]
+    fn each_mutant_of_the_change_lands_on_exactly_one_shard_evenly() {
+        let counts = [5usize, 0, 40, 1, 1, 17, 3];
+        let n = 16;
+        let mut per_shard = vec![0usize; n];
+        for (source, &count) in counts.iter().enumerate() {
+            let mut covered = 0;
+            for (k, load) in per_shard.iter_mut().enumerate() {
+                if let Some(local) = source_shards(&counts, k, n)[source] {
+                    assert!(local < count, "a run is only asked of a source with work");
+                    let ran = (count - local).div_ceil(n);
+                    covered += ran;
+                    *load += ran;
+                }
+            }
+            assert_eq!(covered, count, "source {source}'s mutants, each once");
+        }
+        let (least, most) = (
+            per_shard.iter().min().copied().unwrap_or_default(),
+            per_shard.iter().max().copied().unwrap_or_default(),
+        );
+        assert!(most - least <= 1, "evenly: {per_shard:?}");
+        assert_eq!(parse_shard(" 3/16 "), Some((3, 16)));
+        for bad in ["16/16", "0/0", "3", "x/16"] {
+            assert_eq!(parse_shard(bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_listing_counts_each_sources_mutants_by_its_path() {
+        let listing = "crates/a/src/x.rs:1:1: replace f -> u8 with 0\n\
+                       crates/a/src/x.rs:2:5: replace + with -\n\
+                       crates/a/src/xy.rs:3:1: replace g with ()\n";
+        let sources = [
+            String::from("crates/a/src/x.rs"),
+            String::from("crates/a/src/xy.rs"),
+            String::from("crates/a/src/z.rs"),
+        ];
+        assert_eq!(mutant_counts(listing, &sources), vec![2, 1, 0]);
     }
 
     #[test]
