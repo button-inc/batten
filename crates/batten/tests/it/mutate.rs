@@ -427,8 +427,8 @@ fn every_declared_row_applies_in_process_and_changes_its_file() {
 ///
 /// The differential that proves the conversion did not change what any row
 /// mutates: each row's script through the host's `sed` and through
-/// [`batten::mutate::substitute`] must produce identical bytes. A host with no
-/// `sed` skips, which is the only place one is still run, and only as the oracle.
+/// [`batten::mutate::substitute`] must produce identical bytes. This is the only
+/// place `sed` is still run, and only as the oracle; a host without it fails.
 #[cfg(unix)]
 #[test]
 #[expect(
@@ -449,16 +449,16 @@ fn the_in_process_applier_matches_sed_on_every_declared_row() {
         };
         std::fs::write(&copy, &text).expect("copy the source");
         for row in batten::mutate::rows_of(&root, path) {
-            let Ok(out) = Command::new("sed")
+            // A MISSING ORACLE FAILS, never skips: a unix host without `sed`
+            // would otherwise pass this case having compared nothing.
+            let out = Command::new("sed")
                 .arg("-e")
                 .arg(&row.script)
                 .arg(&copy)
                 .stdin(Stdio::null())
                 .stderr(Stdio::null())
                 .output()
-            else {
-                return;
-            };
+                .expect("`sed` is the oracle this case compares against");
             let sed = String::from_utf8_lossy(&out.stdout).into_owned();
             if batten::mutate::substitute(&text, &row.script).as_deref() != Some(sed.as_str()) {
                 differ.push(format!("{path} {}", row.slug));

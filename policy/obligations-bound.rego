@@ -241,12 +241,12 @@ declares_slug(entry) if {
 # A `MUTANT_RUNNERS` glob as an anchored regex: `**/` any directories, `*` within
 # one segment, `.` literal. Spelled with `replace` because this engine's build
 # carries no `glob.match` (regorus without its `glob` feature), and calling it
-# errored the whole module into silence.
-glob_pattern(path_glob) := sprintf("^%s$", [segments]) if {
+# errored the whole module into silence. Split on `**/` rather than swapped for
+# a sentinel: `opa fmt` re-renders a control-character sentinel as `\x00`,
+# which its own parser then refuses.
+glob_pattern(path_glob) := sprintf("^%s$", [concat("(.*/)?", parts)]) if {
 	dots := replace(path_glob, ".", "\\.")
-	deep := replace(dots, "**/", "\u0000")
-	single := replace(deep, "*", "[^/]*")
-	segments := replace(single, "\u0000", "(.*/)?")
+	parts := [replace(part, "*", "[^/]*") | some part in split(dots, "**/")]
 }
 
 # The quoted value of `MUTANT_RUNNERS = "…"` on one manifest line.
