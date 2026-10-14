@@ -12,7 +12,6 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
-#[cfg(target_os = "linux")]
 use common::StateHome as _;
 
 use std::path::{Path, PathBuf};
@@ -34,7 +33,6 @@ fn exec(dir: &Path, args: &[&str]) -> Output {
 }
 
 /// The processes whose command line carries `marker`, read from `/proc`.
-#[cfg(target_os = "linux")]
 fn carrying(marker: &str) -> Vec<String> {
     std::fs::read_dir("/proc")
         .expect("read /proc")
@@ -60,9 +58,14 @@ fn carrying(marker: &str) -> Vec<String> {
 /// after the spawn, before the wait — fails. `exec` used to return that error
 /// past a child it never signalled; measured, a supervisor left that way held
 /// the landing lock and kept building on a full disk for 1h47m.
-#[cfg(target_os = "linux")]
+///
+/// Linux only, decided by `cfg!` so both arms compile everywhere: the survivor
+/// census reads `/proc`.
 #[test]
 fn a_teed_child_is_reaped_when_its_output_cannot_be_written() {
+    if cfg!(not(target_os = "linux")) {
+        return;
+    }
     let dir = repo("reap-on-error");
     let data = common::scratch("exec-reap-on-error-data");
     let captures = data

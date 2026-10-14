@@ -2973,7 +2973,7 @@ fn apply(staged: &Staged, row: &Row) -> Result<Option<Verdict>> {
     let Some(after) = substitute(&before, &row.script) else {
         return Ok(Some(Verdict::UnappliableMutation));
     };
-    std::fs::write(&path, after)
+    crate::durable::replace(&path, after)
         .with_context(|| format!("mutate: could not write the mutated {}", row.source))?;
     Ok(None)
 }
@@ -3353,16 +3353,10 @@ fn recorded_caught(record: &Path) -> std::collections::HashSet<String> {
         .unwrap_or_default()
 }
 
-/// Append one caught key. Best effort: a key not recorded is a row run again.
+/// Append one caught key, whole-line so a torn tail never fuses two keys. Best
+/// effort: a key not recorded is a row run again.
 fn record_caught(record: &Path, key: &str) {
-    use std::io::Write as _;
-    if let Ok(mut file) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(record)
-    {
-        let _ = writeln!(file, "{key}");
-    }
+    let _ = crate::durable::append_whole_lines(record, &format!("{key}\n"));
 }
 
 /// BUILD ONCE, BEFORE ANY ROW IS TIMED (CLOUD-1910). Best effort: a build that

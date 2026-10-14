@@ -61,14 +61,17 @@ use crate::common;
 /// `engine = { release = … }` beside it; the manifest names the release the
 /// NEXT cut will carry, which may not exist. The resolution lines are read out
 /// of the committed `action.yml` and run against a scratch action directory
-/// whose two files disagree, so the case judges the shipped text.
-#[cfg(unix)]
+/// whose two files disagree, so the case judges the shipped text. Unix only,
+/// decided by `cfg!`: the lines are POSIX shell.
 #[test]
 #[expect(
     clippy::disallowed_types,
     reason = "stays, and test-only: the action's own shell lines are what is under test, and `sh` is the program that runs them"
 )]
 fn the_action_installs_its_refs_pin() {
+    if cfg!(not(unix)) {
+        return;
+    }
     let action = std::fs::read_to_string(common::at_root("action.yml")).expect("read action.yml");
     let lines: Vec<&str> = action.lines().collect();
     let start = lines

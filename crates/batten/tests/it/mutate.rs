@@ -477,7 +477,7 @@ fn the_in_process_applier_matches_sed_on_every_declared_row() {
 #[test]
 fn the_in_diff_patch_is_written_without_git() {
     let root = common::scratch("mutate-in-diff-patch");
-    common::git_in(&root, &["init", "--quiet", "--initial-branch", "work"]);
+    common::init_repo(&root);
     common::git_in(&root, &["config", "user.email", "t@example.com"]);
     common::git_in(&root, &["config", "user.name", "t"]);
     common::write(&root, "a.rs", "one\ntwo\nthree\n");

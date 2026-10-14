@@ -225,7 +225,7 @@ regex = '(?i)\b(next branch|follow-?up|follow up|later branch|separate branch|in
 
 [[pattern]]
 id = "ready-issue-key"
-regex = 'CLOUD-[0-9]+'
+regex = '[A-Z][A-Z0-9]*-[0-9]+'
 
 [[verdict]]
 id = "turn ship unnamed"
