@@ -61,7 +61,7 @@ on:
       - ".github/workflows/rust.yml"
 
 concurrency:
-  group: rust-${{ github.ref }}
+  group: rust-${{ github.ref }}-${{ github.event.pull_request.draft }}
   cancel-in-progress: true
 
 permissions:

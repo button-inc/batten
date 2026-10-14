@@ -59,7 +59,7 @@ on:
 # Supersede, don't accumulate: a landing lap rebases and pushes, and without this
 # the superseded SHA's run is paid out in full for a verdict nobody reads.
 concurrency:
-  group: test-${{ github.ref }}
+  group: test-${{ github.ref }}-${{ github.event.pull_request.draft }}
   cancel-in-progress: true
 
 permissions: {}

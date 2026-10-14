@@ -34,7 +34,7 @@ on:
 # same waste `ci.yml` already refuses, and the reason `land` can cancel a doomed
 # run simply by pushing the next one.
 concurrency:
-  group: zizmor-${{ github.ref }}
+  group: zizmor-${{ github.ref }}-${{ github.event.pull_request.draft }}
   cancel-in-progress: true
 
 permissions: {}

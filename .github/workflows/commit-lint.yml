@@ -14,7 +14,7 @@ on:
 # Supersede, don't accumulate — see the note in zizmor.yml. A lap rebases and
 # pushes; without this the superseded SHA's lint runs to completion unread.
 concurrency:
-  group: commit-lint-${{ github.ref }}
+  group: commit-lint-${{ github.ref }}-${{ github.event.pull_request.draft }}
   cancel-in-progress: true
 
 permissions:
