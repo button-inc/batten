@@ -1619,6 +1619,13 @@ const KYVERNO_GENERATE: Native = Native {
     ..KYVERNO
 };
 
+/// A sweep over [`KYVERNO_GENERATE`], under the name the two cases below have
+/// always called, so their bodies stay what they were.
+#[cfg(unix)]
+fn generate_sweep(mutant: Mutant, name: &str) -> (i32, String, String) {
+    native_sweep(&KYVERNO_GENERATE, mutant, name)
+}
+
 /// ONE GENERATED OBJECT WRONG IS THE CASE FAILING. Before CLOUD-2252 no selector
 /// named a generating case at all (`names-no-case`); a reading that took any one
 /// passing object as the case's verdict would call this mutant survived, since
@@ -1626,7 +1633,7 @@ const KYVERNO_GENERATE: Native = Native {
 #[cfg(unix)]
 #[test]
 fn a_generating_kyverno_case_fails_when_any_object_it_generates_does() {
-    let (code, out, err) = native_sweep(&KYVERNO_GENERATE, Mutant::Kill, "generate-caught");
+    let (code, out, err) = generate_sweep(Mutant::Kill, "generate-caught");
     assert_eq!(code, 0, "{out}{err}");
     assert!(out.contains("every one caught"), "{out}");
 }
@@ -1636,7 +1643,7 @@ fn a_generating_kyverno_case_fails_when_any_object_it_generates_does() {
 #[cfg(unix)]
 #[test]
 fn a_generating_kyverno_case_is_selected_by_its_trigger() {
-    let (code, out, err) = native_sweep(&KYVERNO_GENERATE, Mutant::Unread, "generate-survives");
+    let (code, out, err) = generate_sweep(Mutant::Unread, "generate-survives");
     assert_eq!(code, 2, "{out}{err}");
     assert!(out.contains("SURVIVED"), "{out}");
     assert!(!out.contains("names-no-case"), "{out}");
