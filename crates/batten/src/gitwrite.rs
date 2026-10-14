@@ -991,6 +991,34 @@ fn settle(
         paths.sort_unstable();
         paths.dedup();
 
+        // AN APPEND-ONLY PATH MERGES AS A UNION, as `.gitattributes` declares it
+        // (`merge=union`): the one auto-resolution this module takes, because it
+        // picks no side, and only where the repository said so. The engine's own
+        // merge reads no attribute, so `.batten/asked.jsonl`, appended on both
+        // sides, stopped the flattening of #1132 at its first append.
+        let unions = union_paths(dir);
+        let mut merged = Vec::new();
+        for path in paths
+            .iter()
+            .filter(|path| unions.contains(*path) && !resolutions.contains_key(*path))
+        {
+            let ours = blob_at(repo, trees[1], path).unwrap_or_default();
+            let theirs = blob_at(repo, trees[2], path).unwrap_or_default();
+            let blob = repo
+                .write_blob(union_of(&ours, &theirs))
+                .map_err(|err| anyhow::anyhow!("gitwrite: {path}'s union will not write: {err}"))?
+                .detach();
+            outcome
+                .tree
+                .upsert(path.as_str(), gix::objs::tree::EntryKind::Blob, blob)
+                .map_err(|err| anyhow::anyhow!("gitwrite: {path}'s union will not place: {err}"))?;
+            merged.push(path.clone());
+        }
+        paths.retain(|path| !merged.contains(path));
+        if paths.is_empty() {
+            return Ok(Settled::Clean(Vec::new()));
+        }
+
         // EVERY conflicting path must be named, never some of them. A partial
         // resolution would write a tree carrying the engine's own pick for the
         // paths the caller did not mention — the auto-resolution this module
@@ -1035,6 +1063,43 @@ fn settle(
         resolved = paths;
     }
     Ok(Settled::Clean(resolved))
+}
+
+/// The literal paths the worktree's `.gitattributes` gives `merge=union`.
+///
+/// Literal only: a pattern with a glob character is skipped rather than
+/// matched, so a union is never taken for a path the file did not name.
+fn union_paths(dir: &Path) -> std::collections::BTreeSet<String> {
+    // stream: the repository's own attributes file, a handful of lines.
+    let Ok(text) = std::fs::read_to_string(dir.join(".gitattributes")) else {
+        return std::collections::BTreeSet::new();
+    };
+    text.lines()
+        .filter(|line| !line.trim_start().starts_with('#'))
+        .filter_map(|line| {
+            let mut words = line.split_whitespace();
+            let pattern = words.next()?;
+            let literal = !pattern.contains(['*', '?', '[', '!']);
+            (literal && words.any(|word| word == "merge=union")).then(|| pattern.to_owned())
+        })
+        .collect()
+}
+
+/// Every line of `ours`, then each line of `theirs` that `ours` lacks, in order:
+/// what `merge=union` means for a record both sides only appended to.
+fn union_of(ours: &[u8], theirs: &[u8]) -> Vec<u8> {
+    let held: std::collections::HashSet<&[u8]> = ours.split(|byte| *byte == b'\n').collect();
+    let mut out = ours.to_vec();
+    if !out.is_empty() && !out.ends_with(b"\n") {
+        out.push(b'\n');
+    }
+    for line in theirs.split(|byte| *byte == b'\n') {
+        if !line.is_empty() && !held.contains(line) {
+            out.extend_from_slice(line);
+            out.push(b'\n');
+        }
+    }
+    out
 }
 
 /// Bring the worktree from the tree of `was` to the tree of `now`.

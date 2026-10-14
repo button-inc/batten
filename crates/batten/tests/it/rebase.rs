@@ -1491,6 +1491,67 @@ fn a_branch_on_the_trunk_carrying_a_merge_is_flattened_not_current() {
     assert_eq!(merges_over(&repo, trunk_one, head), 0);
 }
 
+/// **A path `.gitattributes` marks `merge=union` takes both sides' lines**
+/// rather than stopping: measured on #1132, `.batten/asked.jsonl`, appended on
+/// the branch and on `main`, stopped the flattening at its first append.
+#[test]
+fn a_union_path_appended_on_both_sides_replays_with_both() {
+    let (dir, repo) = init("rebase-union-append");
+    let attributes = "log.jsonl merge=union\n";
+    let base = commit(
+        &repo,
+        &[],
+        &[(".gitattributes", attributes), ("log.jsonl", "a\n")],
+    );
+    let trunk = commit(
+        &repo,
+        &[base],
+        &[(".gitattributes", attributes), ("log.jsonl", "a\nm\n")],
+    );
+    let ours: Files<'_> = &[(".gitattributes", attributes), ("log.jsonl", "a\nb\n")];
+    let work = commit(&repo, &[base], ours);
+    point(&dir, "refs/heads/main", trunk);
+    point(&dir, "refs/heads/work", work);
+    materialise(&dir, ours);
+    let outcome = gitwrite::rebase_resolving(&dir, "refs/heads/work", "refs/heads/main", &[])
+        .expect("a union path is merged, not refused");
+    let Rebase::Replayed { head, .. } = outcome else {
+        panic!("expected the branch to move, got {outcome:?}");
+    };
+    let repo = gix::open(&dir).expect("reopen");
+    let tree = repo
+        .find_commit(head.parse::<gix::ObjectId>().expect("sha"))
+        .expect("head reads")
+        .tree()
+        .expect("tree");
+    let entry = tree
+        .lookup_entry_by_path("log.jsonl")
+        .expect("lookup")
+        .expect("present");
+    let text = String::from_utf8(entry.object().expect("blob").data.clone()).expect("utf8");
+    assert_eq!(text, "a\nm\nb\n", "both sides' lines, the trunk's first");
+}
+
+/// A path with no union attribute still stops: the union is taken only where
+/// the repository declared it.
+#[test]
+fn a_path_without_the_union_attribute_still_stops() {
+    let (dir, repo) = init("rebase-union-undeclared");
+    let base = commit(&repo, &[], &[("log.jsonl", "a\n")]);
+    let trunk = commit(&repo, &[base], &[("log.jsonl", "a\nm\n")]);
+    let ours: Files<'_> = &[("log.jsonl", "a\nb\n")];
+    let work = commit(&repo, &[base], ours);
+    point(&dir, "refs/heads/main", trunk);
+    point(&dir, "refs/heads/work", work);
+    materialise(&dir, ours);
+    let outcome = gitwrite::rebase_resolving(&dir, "refs/heads/work", "refs/heads/main", &[])
+        .expect("a conflict is an answer, not an error");
+    assert!(
+        matches!(outcome, Rebase::Conflicted { .. }),
+        "an undeclared append must stop, got {outcome:?}"
+    );
+}
+
 /// The merge stops on a conflict exactly as a replay does, naming the tip and
 /// moving nothing.
 #[test]
