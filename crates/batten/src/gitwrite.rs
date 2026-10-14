@@ -249,6 +249,28 @@ pub fn carries(dir: &Path, candidate: &str, tip: &str) -> bool {
         .is_ok_and(|found| found.detach() == base)
 }
 
+/// The merge commits in `base..tip`, oldest last, or `None` where either rev
+/// will not resolve or the range will not walk (could-not-look).
+///
+/// A LINEAR TRUNK REFUSES THEM, so descending from the base is not linearity:
+/// measured on #1132, two merges sat in a branch that `land linear` passed as
+/// "built on origin/main", and every fast-forward was declined by the ruleset.
+#[must_use]
+pub fn merges_in(dir: &Path, base: &str, tip: &str) -> Option<Vec<String>> {
+    let repo = crate::git::open_for_write(dir).ok()?;
+    let resolve = |rev: &str| repo.rev_parse_single(rev).ok().map(gix::Id::detach);
+    let (base, tip) = (resolve(base)?, resolve(tip)?);
+    let walk = repo.rev_walk([tip]).with_hidden([base]).all().ok()?;
+    let mut merges = Vec::new();
+    for step in walk {
+        let info = step.ok()?;
+        if info.parent_ids().count() > 1 {
+            merges.push(info.id().to_hex().to_string());
+        }
+    }
+    Some(merges)
+}
+
 /// Replay `branch` onto `onto`, and update the worktree to match.
 ///
 /// The commits in `onto..branch` are replayed oldest first, each as a three-way
@@ -868,6 +890,30 @@ fn candidates(
 }
 
 /// The bytes at `path` in `tree`, or `None` when the path is absent there.
+/// The mode `path` has in `tree`, so a placed resolution keeps it: an upsert as
+/// a plain blob dropped `install.sh`'s executable bit.
+fn kind_at(
+    repo: &gix::Repository,
+    tree: gix::ObjectId,
+    path: &str,
+) -> Option<gix::objs::tree::EntryKind> {
+    let tree = repo.find_tree(tree).ok()?;
+    let entry = tree.lookup_entry_by_path(path).ok()??;
+    Some(entry.mode().kind())
+}
+
+/// [`kind_at`] in the commit being replayed, else in the running result, else a
+/// plain blob.
+fn resolved_kind(
+    repo: &gix::Repository,
+    trees: [gix::ObjectId; 3],
+    path: &str,
+) -> gix::objs::tree::EntryKind {
+    kind_at(repo, trees[2], path)
+        .or_else(|| kind_at(repo, trees[1], path))
+        .unwrap_or(gix::objs::tree::EntryKind::Blob)
+}
+
 fn blob_at(repo: &gix::Repository, tree: gix::ObjectId, path: &str) -> Option<Vec<u8>> {
     let tree = repo.find_tree(tree).ok()?;
     let entry = tree.lookup_entry_by_path(path).ok()??;
@@ -1010,7 +1056,7 @@ fn settle(
                 .detach();
             outcome
                 .tree
-                .upsert(path.as_str(), gix::objs::tree::EntryKind::Blob, blob)
+                .upsert(path.as_str(), resolved_kind(repo, trees, path), blob)
                 .map_err(|err| anyhow::anyhow!("gitwrite: {path}'s union will not place: {err}"))?;
             merged.push(path.clone());
         }
@@ -1055,7 +1101,7 @@ fn settle(
                 .detach();
             outcome
                 .tree
-                .upsert(path.as_str(), gix::objs::tree::EntryKind::Blob, blob)
+                .upsert(path.as_str(), resolved_kind(repo, trees, path), blob)
                 .map_err(|err| {
                     anyhow::anyhow!("gitwrite: {path}'s resolution will not place: {err}")
                 })?;

@@ -10159,15 +10159,42 @@ fn run_land_linear(
             return Ok(ExitCode::Internal); // the fetch did not complete
         }
     };
-    if gitwrite::carries(root, &tip, "HEAD") {
-        writeln!(out, "land linear: HEAD is built on {tracking} ({tip})")?;
-        Ok(ExitCode::Success)
-    } else {
+    if !gitwrite::carries(root, &tip, "HEAD") {
         writeln!(
             err,
             "::error:: land linear: HEAD is not rebased on the current {tracking} ({tip})"
         )?;
-        Ok(ExitCode::Violation)
+        return Ok(ExitCode::Violation);
+    }
+    // DESCENT IS NOT LINEARITY: the trunk refuses a merge commit, so a branch
+    // carrying one is refused here, before the matrix, not at the fast-forward.
+    match gitwrite::merges_in(root, &tip, "HEAD") {
+        None => {
+            writeln!(
+                err,
+                "::error:: land linear: {tracking}..HEAD will not walk, so its merge commits \
+                 cannot be counted"
+            )?;
+            Ok(ExitCode::Internal)
+        }
+        Some(merges) if !merges.is_empty() => {
+            writeln!(
+                err,
+                "::error:: land linear: HEAD carries {} merge commit(s) over {tracking}, which \
+                 the trunk refuses ({}); run `batten land replay {reference}` to flatten them",
+                merges.len(),
+                merges
+                    .iter()
+                    .map(|sha| &sha[..12])
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )?;
+            Ok(ExitCode::Violation)
+        }
+        Some(_) => {
+            writeln!(out, "land linear: HEAD is built on {tracking} ({tip})")?;
+            Ok(ExitCode::Success)
+        }
     }
 }
 

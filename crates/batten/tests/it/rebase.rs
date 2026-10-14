@@ -1491,6 +1491,38 @@ fn a_branch_on_the_trunk_carrying_a_merge_is_flattened_not_current() {
     assert_eq!(merges_over(&repo, trunk_one, head), 0);
 }
 
+/// **`land linear` COUNTS MERGES, NOT ONLY DESCENT**: a branch on the trunk that
+/// carries a merge is not linear, and `merges_in` names it; after the flattening
+/// replay it names none. Measured on #1132: two merges passed as "built on
+/// origin/main" and every fast-forward was refused.
+#[test]
+fn a_merge_on_the_branch_is_counted_and_the_flattened_branch_carries_none() {
+    let (dir, repo, tip, _, _) = merge_carrying("linear-counts-merges", false);
+    let trunk_one = repo
+        .find_commit(tip)
+        .expect("tip reads")
+        .parent_ids()
+        .nth(1)
+        .expect("the merge's second parent")
+        .detach();
+    point(&dir, "refs/heads/main", trunk_one);
+    assert!(gitwrite::carries(
+        &dir,
+        "refs/heads/main",
+        "refs/heads/work"
+    ));
+    assert_eq!(
+        gitwrite::merges_in(&dir, "refs/heads/main", "refs/heads/work"),
+        Some(vec![tip.to_hex().to_string()]),
+        "descends, and still carries the merge"
+    );
+    gitwrite::rebase_resolving(&dir, "refs/heads/work", "refs/heads/main", &[]).expect("flattened");
+    assert_eq!(
+        gitwrite::merges_in(&dir, "refs/heads/main", "refs/heads/work"),
+        Some(Vec::new())
+    );
+}
+
 /// **A path `.gitattributes` marks `merge=union` takes both sides' lines**
 /// rather than stopping: measured on #1132, `.batten/asked.jsonl`, appended on
 /// the branch and on `main`, stopped the flattening at its first append.
