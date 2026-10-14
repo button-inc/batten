@@ -1,0 +1,29 @@
+kyverno 1.19.1
+Loading test  ( policies/kyverno-test.yaml ) ...
+  Checking results ...
+
+[
+  {
+    "ID": 1,
+    "Message": "policy evaluated successfully",
+    "POLICY": "add-tenant-quota",
+    "REASON": "Ok",
+    "RESOURCE": "/tenant-small",
+    "RESULT": "Pass",
+    "RULE": "add-tenant-quota"
+  },
+  {
+    "ID": 2,
+    "Message": "Patched resource didn't match the generated resource in the test result",
+    "POLICY": "add-tenant-quota",
+    "REASON": "Resource diff",
+    "RESOURCE": "/tenant-quota",
+    "RESULT": "Fail",
+    "RULE": "add-tenant-quota"
+  }
+]
+
+
+Test Summary: 1 tests passed and 1 tests failed
+
+Error: 1 tests failed

@@ -2018,15 +2018,23 @@ fn json_array(output: &str) -> Option<Vec<serde_json::Value>> {
 /// **A GENERATING CASE IS SELECTED BY ITS TRIGGER AND REPORTED BY WHAT IT
 /// GENERATED** (CLOUD-2252). `-t` filters a `GeneratingPolicy` case by the
 /// resource that triggers it (a Namespace), while each result's `RESOURCE` is a
-/// generated object (`/tenant-quota`), so no selector matched both and every
-/// generating case read `names-no-case`. `-t` has already narrowed the output
-/// to the named case, so when no result names the selector's resource, the
-/// case is every result for that policy and rule, and it passes only when each
-/// of them does: one generated object wrong is the case failing. A validating
-/// case keeps the exact resource match, its trigger and its report being the
-/// same object.
+/// generated object, so no selector names both. Measured against kyverno
+/// 1.19.1, the two are told apart by the RECORDING, never by a failed match
+/// (CLOUD-2264): a generated object's `RESOURCE` carries no group, version or
+/// kind (`/tenant-quota`), a validated one's does (`v1/Pod/default/labelled`).
+/// Generated results are pooled, because `-t` has already narrowed them to the
+/// named trigger's case (measured with two Namespace triggers: selecting one
+/// never reports the other's objects); validated results must match the
+/// selector's resource exactly. A selector that matches neither names no case,
+/// so a typo is could-not-look rather than a verdict about other resources.
+///
+/// **THE CASE'S VERDICT IS A FUNCTION OF THE SET** ([`case_verdict`]): any
+/// error, else any fail, else all pass. The previous ladder fell back to the
+/// first verdict, so `[pass, fail, skip]` read pass.
 //MUTANT-SUITE crates/batten/tests/it/mutate.rs
-//MUTANT generated-case-any-pass|s@^        } else if verdicts.iter().all(\x7cv\x7c v == "pass") {$@        } else if verdicts.iter().any(\x7cv\x7c v == "pass") {@|a_generating_kyverno_case_fails_when_any_object_it_generates_does
+//MUTANT generated-case-any-pass|s@^    } else if any \&\& every_pass {$@    } else if any {@|a_case_verdict_is_independent_of_order
+//MUTANT generated-pool-ignores-fail-order|s@^        } else if v.eq_ignore_ascii_case("fail") {$@        } else if false {@|a_case_verdict_is_independent_of_order
+//MUTANT exact-shadow-restored|s@^        let chosen = if generated.is_empty() {$@        let chosen = if true {@|a_generating_kyverno_case_fails_when_any_object_it_generates_does
 fn kyverno_verdict(output: &str, want: &str) -> Selection {
     let field = |key: &str| {
         want.split(',')
@@ -2039,48 +2047,68 @@ fn kyverno_verdict(output: &str, want: &str) -> Selection {
         .lines()
         .any(|line| line.trim_start().starts_with("ERROR:"));
     let results = json_array(output);
+    let suffix = resource.as_ref().map(|want| format!("/{want}"));
     let status = results.as_ref().and_then(|results| {
-        let named = |result: &serde_json::Value, key: &str| result[key].as_str().map(str::to_owned);
-        let case: Vec<&serde_json::Value> = results
-            .iter()
-            .filter(|result| named(result, "POLICY") == policy && named(result, "RULE") == rule)
-            .collect();
-        let exact: Vec<&serde_json::Value> = case
-            .iter()
-            .copied()
-            .filter(|result| {
-                resource.as_ref().is_some_and(|want| {
-                    named(result, "RESOURCE")
-                        .is_some_and(|got| got == *want || got.ends_with(&format!("/{want}")))
+        let case = results.iter().filter(|result| {
+            result["POLICY"].as_str() == policy.as_deref()
+                && result["RULE"].as_str() == rule.as_deref()
+        });
+        let (generated, validated): (Vec<&serde_json::Value>, Vec<&serde_json::Value>) = case
+            .partition(|result| {
+                result["RESOURCE"]
+                    .as_str()
+                    .is_some_and(|got| got.starts_with('/'))
+            });
+        let chosen = if generated.is_empty() {
+            validated
+                .into_iter()
+                .filter(|result| {
+                    let got = result["RESOURCE"].as_str();
+                    got.is_some_and(|got| {
+                        resource.as_deref() == Some(got)
+                            || suffix.as_deref().is_some_and(|tail| got.ends_with(tail))
+                    })
                 })
-            })
-            .collect();
-        let chosen = if exact.is_empty() { case } else { exact };
-        let verdicts: Vec<String> = chosen
-            .iter()
-            .filter_map(|result| result["RESULT"].as_str().map(str::to_ascii_lowercase))
-            .collect();
-        if verdicts.is_empty() {
-            None
-        } else if verdicts.iter().any(|v| v == "error") {
-            Some("error".to_owned())
-        } else if verdicts.iter().all(|v| v == "pass") {
-            Some("pass".to_owned())
-        } else if verdicts.iter().all(|v| v == "pass" || v == "fail") {
-            Some("fail".to_owned())
+                .collect()
         } else {
-            verdicts.into_iter().next()
-        }
+            generated
+        };
+        case_verdict(chosen.iter().filter_map(|result| result["RESULT"].as_str()))
     });
-    let errored = load_error || status.as_deref() == Some("error");
-    let selected = usize::from(matches!(status.as_deref(), Some("pass" | "fail")));
+    let errored = load_error || status == Some("error");
+    let selected = usize::from(matches!(status, Some("pass" | "fail")));
     Selection {
         selected,
-        ok: status.as_deref() == Some("pass"),
+        ok: status == Some("pass"),
         reach: Reach::of(
             results.is_some() || output.contains("Test Summary:"),
             errored,
         ),
+    }
+}
+
+/// One case's verdict from its results' verdicts, by precedence and never by
+/// order (CLOUD-2264): any `error`, else any `fail`, else `pass` when every one
+/// passed. Only `skip` or `warn` verdicts, or none, are no verdict.
+fn case_verdict<'a>(verdicts: impl Iterator<Item = &'a str>) -> Option<&'static str> {
+    let (mut any, mut error, mut fail, mut every_pass) = (false, false, false, true);
+    for v in verdicts {
+        any = true;
+        if v.eq_ignore_ascii_case("error") {
+            error = true;
+        } else if v.eq_ignore_ascii_case("fail") {
+            fail = true;
+        }
+        every_pass &= v.eq_ignore_ascii_case("pass");
+    }
+    if error {
+        Some("error")
+    } else if fail {
+        Some("fail")
+    } else if any && every_pass {
+        Some("pass")
+    } else {
+        None
     }
 }
 

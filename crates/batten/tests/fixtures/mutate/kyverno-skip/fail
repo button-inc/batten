@@ -1,0 +1,27 @@
+kyverno 1.19.1
+Loading test  ( policies/kyverno-test.yaml ) ...
+  Checking results ...
+
+[
+  {
+    "ID": 1,
+    "Message": "policy evaluated successfully",
+    "POLICY": "add-tenant-quota",
+    "REASON": "Ok",
+    "RESOURCE": "/tenant-priority",
+    "RESULT": "Pass",
+    "RULE": "add-tenant-quota"
+  },
+  {
+    "ID": 2,
+    "Message": "rule skipped",
+    "POLICY": "add-tenant-quota",
+    "REASON": "Skip",
+    "RESOURCE": "/tenant-limits",
+    "RESULT": "Skip",
+    "RULE": "add-tenant-quota"
+  }
+]
+
+
+Test Summary: 1 tests passed and 0 tests failed

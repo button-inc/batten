@@ -1355,8 +1355,10 @@ fn an_owner_is_echoed_on_a_survivor_and_clears_nothing() {
 /// mutates, the declared suite, and the case the recorded output names.
 #[cfg(unix)]
 struct Native {
-    /// The recorded fixture directory and the stub's program name.
+    /// The stub's program name.
     arm: &'static str,
+    /// The recorded fixture directory under `tests/fixtures/mutate`.
+    fixtures: &'static str,
     /// The subject, repo-relative — also the gate's name (the file arm).
     subject: &'static str,
     /// What the subject holds above its sentinel lines.
@@ -1373,6 +1375,7 @@ struct Native {
 #[cfg(unix)]
 const TOFU: Native = Native {
     arm: "tofu",
+    fixtures: "tofu",
     subject: "main.tf",
     body: "locals {\n  limit = 10\n}\n",
     suite: "main.tftest.hcl",
@@ -1383,6 +1386,7 @@ const TOFU: Native = Native {
 #[cfg(unix)]
 const KYVERNO: Native = Native {
     arm: "kyverno",
+    fixtures: "kyverno",
     subject: "policies/policy.yaml",
     body: "apiVersion: kyverno.io/v1\nkind: ClusterPolicy\n",
     suite: "policies/kyverno-test.yaml",
@@ -1393,6 +1397,7 @@ const KYVERNO: Native = Native {
 #[cfg(unix)]
 const CONFTEST: Native = Native {
     arm: "conftest",
+    fixtures: "conftest",
     subject: "checks/limit.rego",
     body: "package main\n\nlimit := 10\n",
     suite: "checks/limit_test.rego",
@@ -1403,6 +1408,7 @@ const CONFTEST: Native = Native {
 #[cfg(unix)]
 const PYTEST: Native = Native {
     arm: "pytest",
+    fixtures: "pytest",
     subject: "limit.py",
     body: "LIMIT = 10\n",
     suite: "test_limit.py",
@@ -1428,7 +1434,7 @@ enum Mutant {
 /// report is the `--junitxml` file rather than the stream.
 #[cfg(unix)]
 fn native_stub(native: &Native) -> String {
-    let fixtures = common::at_root("crates/batten/tests/fixtures/mutate").join(native.arm);
+    let fixtures = common::at_root("crates/batten/tests/fixtures/mutate").join(native.fixtures);
     format!(
         "#!/bin/sh\n\
          state=pass\n\
@@ -1606,21 +1612,12 @@ fn an_errored_kyverno_run_is_could_not_look() {
 /// three pass, and, under a real mutation, one of the three failing.
 #[cfg(unix)]
 const KYVERNO_GENERATE: Native = Native {
+    fixtures: "kyverno-generate",
     subject: "policies/policy.yaml",
     body: "apiVersion: policies.kyverno.io/v1\nkind: GeneratingPolicy\n",
     want: "policy=add-tenant-quota,rule=add-tenant-quota,resource=tenant-small",
     ..KYVERNO
 };
-
-/// The generating case's sweep, replaying the `kyverno-generate` recordings.
-#[cfg(unix)]
-fn generate_sweep(mutant: Mutant, case: &str) -> (i32, String, String) {
-    let (root, bin) = native_repo(&KYVERNO_GENERATE, mutant, case);
-    let stub =
-        native_stub(&KYVERNO_GENERATE).replace("mutate/kyverno'", "mutate/kyverno-generate'");
-    write_program(&bin, KYVERNO_GENERATE.arm, &stub);
-    sweep_with(&root, KYVERNO_GENERATE.subject, &bin)
-}
 
 /// ONE GENERATED OBJECT WRONG IS THE CASE FAILING. Before CLOUD-2252 no selector
 /// named a generating case at all (`names-no-case`); a reading that took any one
@@ -1629,7 +1626,7 @@ fn generate_sweep(mutant: Mutant, case: &str) -> (i32, String, String) {
 #[cfg(unix)]
 #[test]
 fn a_generating_kyverno_case_fails_when_any_object_it_generates_does() {
-    let (code, out, err) = generate_sweep(Mutant::Kill, "generate-caught");
+    let (code, out, err) = native_sweep(&KYVERNO_GENERATE, Mutant::Kill, "generate-caught");
     assert_eq!(code, 0, "{out}{err}");
     assert!(out.contains("every one caught"), "{out}");
 }
@@ -1639,10 +1636,91 @@ fn a_generating_kyverno_case_fails_when_any_object_it_generates_does() {
 #[cfg(unix)]
 #[test]
 fn a_generating_kyverno_case_is_selected_by_its_trigger() {
-    let (code, out, err) = generate_sweep(Mutant::Unread, "generate-survives");
+    let (code, out, err) = native_sweep(&KYVERNO_GENERATE, Mutant::Unread, "generate-survives");
     assert_eq!(code, 2, "{out}{err}");
     assert!(out.contains("SURVIVED"), "{out}");
     assert!(!out.contains("names-no-case"), "{out}");
+}
+
+/// THE VERDICT IS A FUNCTION OF THE SET, NOT ITS ORDER (CLOUD-2264). The
+/// recording is `[pass, fail, skip]`; the ladder this replaced fell back to the
+/// first verdict and read it pass, so this mutant was SURVIVED.
+#[cfg(unix)]
+#[test]
+fn a_case_verdict_is_independent_of_order() {
+    const MIXED: Native = Native {
+        fixtures: "kyverno-mixed",
+        ..KYVERNO_GENERATE
+    };
+    let (code, out, err) = native_sweep(&MIXED, Mutant::Kill, "mixed-order");
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(out.contains("every one caught"), "{out}");
+
+    // And a case whose objects only pass or are skipped has no verdict: it is
+    // not selected, rather than read as a pass.
+    const SKIPPED: Native = Native {
+        fixtures: "kyverno-skip",
+        ..KYVERNO_GENERATE
+    };
+    let (code, out, err) = native_sweep(&SKIPPED, Mutant::Kill, "skip-only");
+    assert_eq!(code, 3, "{out}{err}");
+    assert!(out.contains("names-no-case"), "{out}");
+}
+
+/// A GENERATED OBJECT SHARING ITS TRIGGER'S NAME DOES NOT SHADOW ITS SIBLINGS
+/// (CLOUD-2264). The recording has `/tenant-small` passing and `/tenant-quota`
+/// failing, selected by `resource=tenant-small`; the exact-name filter this
+/// replaced judged only the first and called the mutant SURVIVED.
+#[cfg(unix)]
+#[test]
+fn a_generated_object_named_like_its_trigger_shadows_nothing() {
+    const COLLIDE: Native = Native {
+        fixtures: "kyverno-collide",
+        ..KYVERNO_GENERATE
+    };
+    let (code, out, err) = native_sweep(&COLLIDE, Mutant::Kill, "collide");
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(out.contains("every one caught"), "{out}");
+}
+
+/// A VALIDATING SELECTOR THAT NAMES NO RESULT NAMES NO CASE (CLOUD-2264). The
+/// recording's only result is `v1/Pod/default/labelled`; a typo'd resource used
+/// to fall back to every result for the policy and rule and read caught.
+#[cfg(unix)]
+#[test]
+fn a_typod_kyverno_selector_names_no_case() {
+    const TYPO: Native = Native {
+        want: "policy=require-team,rule=check-team,resource=labeled",
+        ..KYVERNO
+    };
+    let (code, out, err) = native_sweep(&TYPO, Mutant::Kill, "typo");
+    assert_eq!(code, 3, "{out}{err}");
+    assert!(out.contains("names-no-case"), "{out}");
+}
+
+/// EACH TRIGGER'S CASE IS ITS OWN (CLOUD-2264), recorded from gke-platform's
+/// add-tenant-quota suite with two Namespace triggers and `tenant-medium`'s
+/// expectation broken: selecting `tenant-medium` reports its failure, and
+/// selecting `tenant-small` (the `pass` recording) reports only its own three
+/// passing objects, so `-t` already narrows a generating case to its trigger.
+#[cfg(unix)]
+#[test]
+fn each_generating_trigger_is_judged_on_its_own_objects() {
+    const MEDIUM: Native = Native {
+        fixtures: "kyverno-generate-two",
+        want: "policy=add-tenant-quota,rule=add-tenant-quota,resource=tenant-medium",
+        ..KYVERNO_GENERATE
+    };
+    let (code, out, err) = native_sweep(&MEDIUM, Mutant::Kill, "two-medium");
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(out.contains("every one caught"), "{out}");
+    const SMALL: Native = Native {
+        fixtures: "kyverno-generate-two",
+        ..KYVERNO_GENERATE
+    };
+    let (code, out, err) = native_sweep(&SMALL, Mutant::Unread, "two-small");
+    assert_eq!(code, 2, "{out}{err}");
+    assert!(out.contains("SURVIVED"), "{out}");
 }
 
 #[cfg(unix)]
