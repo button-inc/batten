@@ -415,6 +415,12 @@ fn a_dispatched_review_answers_only_once_it_completes() {
         Some(0),
         "dispatched, not completed"
     );
+    // The record the completion must spend, located before it is spent, so the
+    // absence asserted below is not about a path nothing ever wrote.
+    let dispatched = dir
+        .join(".git/batten-receipts")
+        .join(format!("{RECEIPT}-dispatched.{}", identity(&dir)));
+    assert!(dispatched.exists(), "the dispatch minted its record");
     complete(&dir);
     allowed(&ready(&dir));
     let answered = status(&dir);
@@ -422,13 +428,68 @@ fn a_dispatched_review_answers_only_once_it_completes() {
 
     // The dispatch is spent by the completion it admitted, so it cannot answer
     // a second one. Declared mutation: `dispatch-not-spent`.
-    let dispatched = dir
-        .join(".git/batten-receipts")
-        .join(format!("{RECEIPT}-dispatched.{}", identity(&dir)));
     assert!(
         !dispatched.exists(),
         "the dispatch record outlived its completion"
     );
+}
+
+/// A PREREQUISITE IS WHAT AN EARLIER CALL LEFT, never what this call just wrote
+/// (CLOUD-2261). Here the writer and its dependent select the same dispatch,
+/// so one call writes the prerequisite and, read live, would satisfy the
+/// dependent too. Declared mutation: `prerequisite-read-live`.
+#[test]
+fn one_call_cannot_satisfy_its_own_prerequisite() {
+    let dir = common::Fixture::new("review-completion-same-call")
+        .config(&format!(
+            "version = 1\n\n\
+             [[mint]]\nname = \"{RECEIPT}-dispatched\"\ntool = \"Skill\"\n\
+             selects_at = \"skill\"\nselects = \"{RECEIPT}\"\nkey = \"delta\"\n\
+             key_base = \"refs/remotes/origin/main\"\nmode = \"replace\"\n\
+             body = \"{{now}}\"\n\n\
+             [[mint]]\nname = \"{RECEIPT}\"\ntool = \"Skill\"\n\
+             selects_at = \"skill\"\nselects = \"{RECEIPT}\"\n\
+             after = \"{RECEIPT}-dispatched\"\nkey = \"delta\"\n\
+             key_base = \"refs/remotes/origin/main\"\nmode = \"replace\"\n\
+             body = \"{{now}}\"\n"
+        ))
+        .file("README.md", "base\n")
+        .git()
+        .base_commit()
+        .build();
+    change(&dir, "fn a() {}\n");
+
+    dispatch(&dir, RECEIPT);
+    assert_ne!(
+        status(&dir).status.code(),
+        Some(0),
+        "one dispatch minted its own completion"
+    );
+}
+
+/// A BASE THAT DOES NOT RESOLVE IS THE CHECKOUT'S PROBLEM, NOT A VERDICT
+/// (CLOUD-2260). Reading it as `missing` would hand the caller a remedy, review
+/// again, that can never clear it. Declared mutation: `delta-base-unchecked`.
+#[test]
+fn an_unresolvable_base_is_refused_rather_than_read_missing() {
+    let dir = minting_fixture("review-status-bad-base");
+    change(&dir, "fn a() {}\n");
+    let output = run_with_stdin(
+        &dir,
+        &[
+            "receipt",
+            "status",
+            RECEIPT,
+            "--key",
+            "delta",
+            "--base",
+            "refs/remotes/origin/no-such-branch",
+        ],
+        "",
+    );
+    let text = stdout(&output);
+    assert_ne!(output.status.code(), Some(0), "{text}");
+    assert!(!text.contains("missing"), "a verdict was printed: {text}");
 }
 
 /// The question `land` asks before it readies (CLOUD-2260): the same receipt,

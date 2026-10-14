@@ -2073,7 +2073,13 @@ fn kyverno_verdict(output: &str, want: &str) -> Selection {
         } else {
             generated
         };
-        case_verdict(chosen.iter().filter_map(|result| result["RESULT"].as_str()))
+        // A selected result with no readable verdict is an error, never dropped:
+        // dropping it would let its siblings' passes decide the case.
+        case_verdict(
+            chosen
+                .iter()
+                .map(|result| result["RESULT"].as_str().unwrap_or("error")),
+        )
     });
     let errored = load_error || status == Some("error");
     let selected = usize::from(matches!(status, Some("pass" | "fail")));

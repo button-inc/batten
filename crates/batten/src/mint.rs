@@ -781,12 +781,35 @@ fn validate_across(mints: &[Declared]) -> anyhow::Result<()> {
         let Some(after) = mint.after.as_deref() else {
             continue;
         };
+        // The name becomes a path component under the receipt store, which the
+        // completion then removes: held to the rule every subject is held to.
+        if !crate::receipt::safe_subject(after) {
+            return Err(crate::error::UsageError::raise(format!(
+                "`[[mint]]` `{}` declares an `after` that is not a single safe path component",
+                mint.name
+            )));
+        }
         // A CLEAR gated on a prerequisite would end its record only while
         // another record happened to exist: a shape `after` does not define.
         if mint.mode == MintMode::Clear {
             return Err(crate::error::UsageError::raise(format!(
                 "`[[mint]]` `{}` is `mode = \"clear\"` and declares `after`; a prerequisite \
                  gates a record being written, never one being ended",
+                mint.name
+            )));
+        }
+        // ONE ROW PER PREREQUISITE: a completion spends the record it was
+        // admitted by, so a second row naming the same `after` would find it
+        // gone and never mint, decided by row order alone.
+        if mints
+            .iter()
+            .filter(|other| other.after.as_deref() == Some(after))
+            .count()
+            > 1
+        {
+            return Err(crate::error::UsageError::raise(format!(
+                "`[[mint]]` `{}` names `after = \"{after}\"`, as another row does; the first \
+                 to mint spends the record, so the other could never mint",
                 mint.name
             )));
         }
@@ -951,11 +974,22 @@ mod tests {
             validate(&[row("done", "delta", Some("done"))]).is_err(),
             "a row cannot be its own prerequisite"
         );
-        let mut clear = row("asked", "delta", Some("asked"));
+        // A distinct name, so only the clear refusal can fire: `done` has its
+        // writer and `asked` is keyed alike.
+        let mut clear = row("done", "delta", Some("asked"));
         clear.mode = MintMode::Clear;
         assert!(
-            validate(&[asked.clone(), clear]).is_err(),
+            validate(&[asked.clone(), row("done", "delta", None), clear]).is_err(),
             "a clear gated on a prerequisite"
+        );
+        assert!(
+            validate(&[
+                asked.clone(),
+                row("done", "delta", Some("asked")),
+                row("also", "delta", Some("asked")),
+            ])
+            .is_err(),
+            "two rows spending one prerequisite: the first would starve the second"
         );
     }
 

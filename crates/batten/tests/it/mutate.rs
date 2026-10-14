@@ -1705,7 +1705,7 @@ fn a_typod_kyverno_selector_names_no_case() {
     assert!(out.contains("names-no-case"), "{out}");
 }
 
-/// EACH TRIGGER'S CASE IS ITS OWN (CLOUD-2264), recorded from gke-platform's
+/// EACH TRIGGER'S CASE IS ITS OWN (CLOUD-2264), recorded from a consumer's
 /// add-tenant-quota suite with two Namespace triggers and `tenant-medium`'s
 /// expectation broken: selecting `tenant-medium` reports its failure, and
 /// selecting `tenant-small` (the `pass` recording) reports only its own three

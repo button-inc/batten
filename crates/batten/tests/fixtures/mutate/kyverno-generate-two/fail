@@ -10,7 +10,7 @@ Loading test  ( policies/kyverno-test.yaml ) ...
 [
   {
     "ID": 1,
-    "Message": "Patched resource didn't match the generated resource in the test result\n(only in expeactedual)\n\nobject:\n    apiVersion: v1\n    kind: ResourceQuota\n    metadata:\n        labels:\n            app.kubernetes.io/managed-by: kyverno\n        name: tenant-quota\n        namespace: tenant-medium\n    spec:\n        hard:\n            count/jobs.batch: \"20\"\n            limits.cpu: \"994\"\n            limits.ephemeral-storage: 8Gi\n            limits.memory: 8Gi\n            persistentvolumeclaims: \"10\"\n            pods: \"40\"\n            premium-rwo.storageclass.storage.k8s.io/requests.storage: \"0\"\n            requests.cpu: \"2\"\n            requests.ephemeral-storage: 4Gi\n            requests.memory: 4Gi\n            requests.storage: 50Gi\n            services.loadbalancers: \"0\"\n            services.nodeports: \"0\"\n",
+    "Message": "Patched resource didn't match the generated resource in the test result",
     "POLICY": "add-tenant-quota",
     "REASON": "Resource diff",
     "RESOURCE": "/tenant-quota",

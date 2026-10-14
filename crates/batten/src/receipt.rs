@@ -777,7 +777,8 @@ pub(crate) fn safe_subject(subject: &str) -> bool {
 /// function; that shared call IS the agreement.
 ///
 /// `None` is three things at once and they are one answer here: the base does not
-/// resolve, the identity could not be computed, and **the diff is empty**. A
+/// resolve (on the hook path; `receipt status` refuses that case first), the
+/// identity could not be computed, and **the diff is empty**. A
 /// branch that changed nothing has no identity — `cumulative_patch_id` refuses to
 /// mint one so two empty changes cannot compare equal — and the caller reads that
 /// as [`Validity::Missing`] rather than as could-not-look, for the reason stated
@@ -1855,7 +1856,9 @@ struct StatusReport<'a> {
 /// never the receipt payload; `json` swaps it for the same tokens as a named
 /// document. The subject is HEAD under [`ReceiptKey::Head`], the branch name
 /// under [`ReceiptKey::Branch`], and the change's patch identity under
-/// [`ReceiptKey::Delta`] — `-` when the change has none, which is an empty diff.
+/// [`ReceiptKey::Delta`] — `-` when the change has none: an empty diff, no
+/// shared history with the base, or an identity that could not be computed.
+/// A base that does not resolve is a usage error, never a verdict.
 ///
 /// **This is the whole point of the verb gaining a key** (CLOUD-741). A
 /// `receipt` rule is pinned to `RuleScope::MediatedCall`, so `batten check`
@@ -1878,6 +1881,7 @@ struct StatusReport<'a> {
 /// A **detached HEAD under `--key branch`** is an internal error rather than a
 /// verdict, for [`branch_facts`]'s reason: a rebase detaches, and answering
 /// "not valid" there would make every rebase look like an unclaimed branch.
+//MUTANT delta-base-unchecked|s@^            if git::resolve_ref(Path::new(&facts.repo_root), base)?.is_none() {$@            if false {@|an_unresolvable_base_is_refused_rather_than_read_missing
 //MUTANT delta-status-unread|s@^                    let verdict = named_validity(&facts.git_dir, check, &identity);$@                    let verdict = Validity::Valid;@|a_dispatched_review_answers_only_once_it_completes
 pub fn run_status(
     check: &str,
@@ -1928,11 +1932,9 @@ pub fn run_status(
             // A BASE THAT DOES NOT RESOLVE IS THE CHECKOUT, NOT THE CHANGE: a
             // mistyped ref or an unfetched trunk would otherwise read `missing`,
             // whose remedy (review again) can never clear it.
-            if git::resolve_ref(Path::new(&facts.repo_root), base)
-                .ok()
-                .flatten()
-                .is_none()
-            {
+            // A repository that cannot be read stays an error of its own: only
+            // a ref that resolves to nothing is the caller's to fix.
+            if git::resolve_ref(Path::new(&facts.repo_root), base)?.is_none() {
                 return Err(UsageError::raise(format!(
                     "receipt status --base {base}: the ref does not resolve in this checkout, so there is no change to judge; fetch it or name the declaring row's `key_base`"
                 )));
