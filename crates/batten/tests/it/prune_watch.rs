@@ -429,6 +429,51 @@ fn a_superseded_unit_goes_before_an_older_live_one() {
     );
 }
 
+/// **A PROFILE BEING BUILT KEEPS ITS OLD-LOOKING UNITS** while an idle profile
+/// has any. Under `relatime` a dependency every build reads keeps the time it was
+/// built, so by its own time it ranks first; measured on #1132, a lap removed
+/// 1,308 of 1,482 units that way while an idle 2 GB profile survived.
+#[test]
+fn an_idle_profiles_units_go_before_a_built_profiles_older_ones() {
+    let root = common::scratch("collect-idle-profile");
+    let tree = root.join("target");
+    unit(&tree.join("debug"), "dep", "4444444444444444", 7200, 4096);
+    unit(&tree.join("debug"), "fresh", "5555555555555555", 30, 4096);
+    unit(&tree.join("idle"), "stale", "6666666666666666", 3600, 4096);
+    let trees = [tree.clone()];
+    let _ = batten::collect::collect(&request(&trees, &[], 1));
+    assert!(
+        !present(&tree.join("idle"), "stale", "6666666666666666"),
+        "the idle profile's unit went first"
+    );
+    assert!(
+        present(&tree.join("debug"), "dep", "4444444444444444"),
+        "the built profile's older-looking dependency stayed"
+    );
+}
+
+/// **AN ARTIFACT NO FINGERPRINT NAMES GOES BEFORE ANY LIVE UNIT**: cargo reaches
+/// an artifact only through its fingerprint's hash, so it costs no rebuild.
+/// Measured on #1132: two ~300 MB `libbatten` rlibs two days old, 875 MB in all.
+#[test]
+fn an_artifact_no_fingerprint_names_is_collected_first() {
+    let root = common::scratch("collect-orphan-artifact");
+    let tree = root.join("target");
+    let deps = tree.join("debug/deps");
+    unit(&tree.join("debug"), "live", "7777777777777777", 7200, 4096);
+    artifact(&deps, "gone", "dddddddddddddddd", 60);
+    let trees = [tree.clone()];
+    let _ = batten::collect::collect(&request(&trees, &[], 1));
+    assert!(
+        !deps.join("libgone-dddddddddddddddd.rlib").exists(),
+        "the unreachable artifact went"
+    );
+    assert!(
+        present(&tree.join("debug"), "live", "7777777777777777"),
+        "and the oldest live unit was never reached"
+    );
+}
+
 #[test]
 fn collection_stops_at_max_free() {
     let root = common::scratch("collect-stops");

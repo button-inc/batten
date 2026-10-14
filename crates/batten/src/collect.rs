@@ -612,8 +612,6 @@ fn read_by_a_run(unit: &Unit) -> bool {
 /// `CARGO_TARGET_TMPDIR`, which integration suites fill with fixtures and
 /// nothing removes until the next run's setup — measured at 4.1GB on #1132.
 /// No build lock covers it; the working set keeps a running suite's fixtures.
-//MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
-//MUTANT scratch-unranked|s@^    live.extend(scratch);$@    drop(scratch);@|a_stale_test_scratch_entry_is_collected
 fn scratch_in(tree: &Path) -> Vec<Unit> {
     let scratch = tree.join("tmp");
     let Ok(entries) = std::fs::read_dir(&scratch) else {
@@ -880,12 +878,45 @@ pub struct Request<'a> {
     pub live_since: Option<SystemTime>,
 }
 
+/// The live units and scratch, in the order a pass takes them.
+///
+/// A PROFILE IS RANKED BY ITS LAST BUILD BEFORE ITS UNITS BY THEIRS
+/// (2026-10-14). A unit's own last use is its fingerprint's atime or mtime, and
+/// under `relatime` a read moves neither once the file has been read since it
+/// was written: a dependency every build reads looks as old as the day it was
+/// built. Measured on #1132, a land lap removed 1,308 of 1,482 units to free
+/// 4.1 GB, most of them the stable dependencies of the profiles the next lap
+/// built, while `mutate-cargo`, idle for two hours, kept 2 GB. A profile whose
+/// newest unit is recent is being built; its units go after every unit of an
+/// idle profile, and within a profile the oldest still go first.
+///
+/// Scratch is not a profile: each fixture keeps its own time, so one fresh
+/// fixture does not shield every stale one beside it.
+//MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
+//MUTANT scratch-unranked|s@^    live.extend(scratch);$@    drop(scratch);@|a_stale_test_scratch_entry_is_collected
+//MUTANT profile-unranked|s@^            built.get(\&unit.profile).copied().unwrap_or(unit.last_use),$@            unit.last_use,@|an_idle_profiles_units_go_before_a_built_profiles_older_ones
+fn ranked(mut live: Vec<Unit>, scratch: Vec<Unit>) -> Vec<Unit> {
+    let mut built: std::collections::HashMap<PathBuf, SystemTime> =
+        std::collections::HashMap::new();
+    for unit in &live {
+        let newest = built.entry(unit.profile.clone()).or_insert(unit.last_use);
+        *newest = (*newest).max(unit.last_use);
+    }
+    live.extend(scratch);
+    live.sort_by_key(|unit| {
+        (
+            built.get(&unit.profile).copied().unwrap_or(unit.last_use),
+            unit.last_use,
+        )
+    });
+    live
+}
+
 /// Collect: superseded units first, then live units oldest first, until
 /// `need_bytes` are freed or the deadline passes; then re-arm the survivors.
 /// Returns what it freed and removed, and what stopped it short.
 //MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
 //MUTANT reachability-pass-skipped|s@^        let (units, bytes) = crate::prune::reclaim_superseded(tree, request.keep_generations);$@        let (units, bytes) = (0, 0);@|a_superseded_unit_goes_before_an_older_live_one
-//MUTANT lru-order-reversed|s@^    live.sort_by_key(\x7cunit\x7c unit.last_use);$@    live.sort_by_key(\x7cunit\x7c std::cmp::Reverse(unit.last_use));@|the_least_recently_used_live_unit_goes_first
 //MUTANT collects-past-max-free|s@^        if freed >= request.need_bytes \x7c\x7c past(request.deadline) {$@        if past(request.deadline) {@|collection_stops_at_max_free
 //MUTANT held-tree-collected|s@^        let _building = match crate::prune::claim(\&unit.tree, \&unit.profile) {$@        let _building = match Ok::<(), PathBuf>(()) {@|a_tree_a_build_holds_is_never_collected
 //MUTANT engine-unit-collected|s@^            .any(\x7cartifact\x7c is_kept(artifact, request.kept))$@            .any(\x7c_\x7c false)@|the_running_engine_is_never_collected
@@ -915,9 +946,10 @@ pub fn collect(request: &Request<'_>) -> Pass {
         .iter()
         .flat_map(|(tree, _)| scratch_in(tree))
         .collect();
-    let mut live: Vec<Unit> = locks.iter().flat_map(|(tree, _)| units_in(tree)).collect();
-    live.extend(scratch);
-    live.sort_by_key(|unit| unit.last_use);
+    let live = ranked(
+        locks.iter().flat_map(|(tree, _)| units_in(tree)).collect(),
+        scratch,
+    );
     // WHY A PASS REMOVED WHAT IT DID, counted (CLOUD-2197's trace): measured on
     // #1132, a pass over hundreds of units older than the working set removed
     // none, and nothing said which guard stopped it.

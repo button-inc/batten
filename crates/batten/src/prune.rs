@@ -323,6 +323,15 @@ pub(crate) fn reclaim_superseded(root: &Path, keep: usize) -> (usize, u64) {
 ///
 /// Could-not-look reclaims NOTHING: an unreadable fingerprint directory would
 /// otherwise read as "no unit is live" and take every `.dwo` in the tree.
+///
+/// **EVERY HASHED ARTIFACT, NOT ONLY `.dwo`** (2026-10-14). A unit collected by
+/// fingerprint left its artifacts behind whenever they did not index to it:
+/// measured on #1132, `target/debug/deps` held two `libbatten-<hash>.rlib` of
+/// ~300 MB each from two days earlier with no fingerprint naming either, and
+/// 875 MB of such residue across two profiles while the collector was taking
+/// live units to find space. cargo addresses an artifact only through its
+/// fingerprint's hash, so one no fingerprint names is unreachable: removing it
+/// costs no rebuild.
 fn reclaim_orphaned_debuginfo(deps: &Path, fingerprints: &Path) -> (usize, u64) {
     let Ok(entries) = std::fs::read_dir(fingerprints) else {
         return (0, 0);
@@ -346,7 +355,10 @@ fn reclaim_orphaned_debuginfo(deps: &Path, fingerprints: &Path) -> (usize, u64) 
             continue;
         }
         let name = entry.file_name();
-        let Some(hash) = name.to_str().and_then(dwo_owner_hash) else {
+        let Some(hash) = name
+            .to_str()
+            .and_then(|name| dwo_owner_hash(name).or_else(|| artifact_hash(name)))
+        else {
             continue;
         };
         if !live.contains(hash) {
