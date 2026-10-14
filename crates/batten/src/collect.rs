@@ -149,6 +149,7 @@ pub enum Kept {
 /// (see [`processes`]), so there a running program is [`Kept::Named`].
 //MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
 //MUTANT running-program-collected|s@^        .chain(table.iter().filter_map(\x7cprocess\x7c process.exe.clone()))$@@|a_unit_a_running_program_executes_is_never_collected#[must_use]
+#[must_use]
 pub fn engine_kept() -> Vec<Kept> {
     let table = processes().unwrap_or_default();
     let running = std::env::current_exe().ok();
@@ -778,14 +779,47 @@ fn is_kept(path: &Path, kept: &[Kept]) -> bool {
 /// Take the collector's lock on `tree`: an exclusive `flock` on the directory
 /// itself, an existing inode, so taking it writes nothing at 0 bytes free.
 /// `None` when another collector holds it.
+///
+/// A LOCK THE PLATFORM REFUSES IS NOT ANOTHER COLLECTOR'S. Only `WouldBlock`
+/// says a collector holds the tree; an error from the lock call itself (a
+/// filesystem that cannot lock a directory) collects without exclusion, which
+/// [`remove_counted`] tolerates, rather than reading every tree as held and
+/// freeing nothing.
 fn lock_tree(tree: &Path, wait: bool) -> Option<std::fs::File> {
-    let dir = std::fs::File::open(tree).ok()?;
-    if wait {
-        dir.lock().ok()?;
+    let dir = open_handle(tree).ok()?;
+    let taken = if wait {
+        dir.lock().map_err(std::fs::TryLockError::Error)
     } else {
-        dir.try_lock().ok()?;
+        dir.try_lock()
+    };
+    match taken {
+        Ok(()) | Err(std::fs::TryLockError::Error(_)) => Some(dir),
+        Err(std::fs::TryLockError::WouldBlock) => None,
     }
-    Some(dir)
+}
+
+/// `path`, file or directory, opened for its lock or its times.
+///
+/// WINDOWS OPENS A DIRECTORY ONLY WITH BACKUP SEMANTICS and writes times only
+/// through a handle opened for writing; measured on #1132's `windows` job, a
+/// plain `File::open` read every tree as held and re-armed no survivor (the
+/// rule `perf.rs`'s sibling stamp records). Elsewhere a read-only handle does
+/// both, and is the only handle a directory takes.
+fn open_handle(path: &Path) -> std::io::Result<std::fs::File> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+        std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+            .open(path)
+    }
+    #[cfg(not(windows))]
+    {
+        std::fs::File::open(path)
+    }
 }
 
 /// Set every fingerprint file's atime to its mtime under `tree`, so the next
@@ -810,7 +844,7 @@ pub fn rearm(tree: &Path) {
 
 fn rearm_file(path: &Path) -> std::io::Result<()> {
     let modified = std::fs::metadata(path)?.modified()?;
-    std::fs::File::open(path)?.set_times(std::fs::FileTimes::new().set_accessed(modified))
+    open_handle(path)?.set_times(std::fs::FileTimes::new().set_accessed(modified))
 }
 
 /// How a collection is asked for.

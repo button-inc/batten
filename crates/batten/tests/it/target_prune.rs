@@ -247,14 +247,12 @@ fn live(profile: &Path, name: &str, hash: &str, age_seconds: u64, bytes: usize) 
     let file = fingerprint.join(format!("bin-{name}"));
     std::fs::write(&file, b"fingerprint").unwrap();
     let when = std::time::SystemTime::now() - std::time::Duration::from_secs(age_seconds);
-    std::fs::File::open(&file)
-        .unwrap()
-        .set_times(
-            std::fs::FileTimes::new()
-                .set_accessed(when)
-                .set_modified(when),
-        )
-        .unwrap();
+    common::set_times(
+        &file,
+        std::fs::FileTimes::new()
+            .set_accessed(when)
+            .set_modified(when),
+    );
 }
 
 /// THE COMMITTED `build` ROOT IS DECLARED BASIS-MOVING (CLOUD-2192). Losing the

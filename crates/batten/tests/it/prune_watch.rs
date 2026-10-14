@@ -85,14 +85,12 @@ fn unit(profile: &Path, name: &str, hash: &str, age: u64, bytes: usize) -> PathB
     let file = fingerprint.join(format!("lib-{name}"));
     std::fs::write(&file, b"fingerprint").unwrap();
     let when = SystemTime::now() - Duration::from_secs(age);
-    std::fs::File::open(&file)
-        .unwrap()
-        .set_times(
-            std::fs::FileTimes::new()
-                .set_accessed(when)
-                .set_modified(SystemTime::now() - Duration::from_secs(age + 10)),
-        )
-        .unwrap();
+    common::set_times(
+        &file,
+        std::fs::FileTimes::new()
+            .set_accessed(when)
+            .set_modified(SystemTime::now() - Duration::from_secs(age + 10)),
+    );
     let deps = profile.join("deps");
     std::fs::create_dir_all(&deps).unwrap();
     let artifact = deps.join(format!("lib{name}-{hash}.rlib"));
@@ -139,14 +137,12 @@ fn aged_dir(dir: &Path, age: u64) {
     std::fs::write(&file, vec![7_u8; 64 * 1024]).unwrap();
     let when = SystemTime::now() - Duration::from_secs(age);
     for path in [&file, dir] {
-        std::fs::File::open(path)
-            .unwrap()
-            .set_times(
-                std::fs::FileTimes::new()
-                    .set_modified(when)
-                    .set_accessed(when),
-            )
-            .unwrap();
+        common::set_times(
+            path,
+            std::fs::FileTimes::new()
+                .set_modified(when)
+                .set_accessed(when),
+        );
     }
 }
 

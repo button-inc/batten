@@ -379,8 +379,12 @@ fn a_repair_rooted_at_the_authority_reaches_a_shell_standing_outside_it() {
     // repository". The refusal names the repair rooted at the authority, and
     // the floor admits exactly that string — and no other root.
     let dir = fixture("adjudicate-floor-engine-rooted", PINS_ANOTHER_RELEASE);
-    let root = dir.canonicalize().expect("a canonical fixture root");
-    let rooted = format!("cd {} && batten engine update", root.display());
+    // The engine's own spelling of the root and of the `cd`: a bare
+    // `canonicalize` answers in Windows' verbatim `\\?\` form and an unquoted
+    // path splits at its spaces, so a hand-built string matched nothing on
+    // #1132's `windows` job (`git::canonical`'s CLOUD-2059 class).
+    let root = batten::git::canonical(&dir);
+    let rooted = batten::engine::repair_at(&root, "batten engine update");
     let refused = run_with_stdin(
         &dir,
         &["adjudicate", "--harness", "exit-code"],
@@ -393,7 +397,7 @@ fn a_repair_rooted_at_the_authority_reaches_a_shell_standing_outside_it() {
     );
     for repair in [
         rooted.clone(),
-        format!("cd {} && mise exec -- batten engine update", root.display()),
+        batten::engine::repair_at(&root, "mise exec -- batten engine update"),
     ] {
         assert_eq!(
             code_for(&dir, &command_envelope(&repair)),

@@ -1916,15 +1916,25 @@ mod tests {
             .join("repo");
         std::fs::create_dir_all(root.join("scripts")).expect("root");
         let root = crate::git::canonical(&root);
+        // THE SCRIPT MARKS ITS OWN DIRECTORY rather than printing it: `pwd`
+        // under Windows' `sh` prints `/c/...`, which no `Path` compares equal
+        // to (measured on #1132's `windows` job), while a relative file lands
+        // wherever the handler actually ran on every platform.
         let script = root.join("scripts").join("where.sh");
-        std::fs::write(&script, "#!/bin/sh\npwd\n").expect("script");
+        std::fs::write(&script, "#!/bin/sh\n: > ran-here\necho here\n").expect("script");
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;
             std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))
                 .expect("executable");
         }
-        let row = handler("w", Event::PreTool.as_str(), &["scripts/where.sh"]);
+        // Windows runs no `#!` script by itself, so `sh` runs it there, by the
+        // same root-relative path.
+        #[cfg(unix)]
+        let run: &[&str] = &["scripts/where.sh"];
+        #[cfg(not(unix))]
+        let run: &[&str] = &["sh", "scripts/where.sh"];
+        let row = handler("w", Event::PreTool.as_str(), run);
         let dispatched = dispatch(
             &root,
             std::slice::from_ref(&row),
@@ -1933,12 +1943,14 @@ mod tests {
             None,
             &Payload::from("{}"),
         );
+        let ran_at_root = root.join("ran-here").is_file();
         let _ = std::fs::remove_dir_all(root.parent().unwrap_or(&root));
         assert_eq!(
             dispatched.ran.first().map(|ran| ran.outcome.clone()),
-            Some(Outcome::Advise(root.display().to_string())),
-            "found under the root, and run with the root as its directory"
+            Some(Outcome::Advise("here".to_owned())),
+            "found under the root"
         );
+        assert!(ran_at_root, "and run with the root as its directory");
     }
 
     /// A handler's report and a broken contract each carry the handler's row

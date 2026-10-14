@@ -45,6 +45,30 @@ use std::process::{Command, Output};
 
 use batten::surface::{ROOT, SURFACE};
 
+/// Set `path`'s times, file or directory, on every platform the suite runs on.
+///
+/// WINDOWS WRITES TIMES ONLY THROUGH A HANDLE OPENED FOR WRITING, and opens a
+/// directory only with backup semantics: measured on #1132's `windows` job, a
+/// read-only `File::open` here failed thirty fixtures with `Access is denied`
+/// before the collector they set up ever ran. Elsewhere a read-only handle sets
+/// them, and is the only handle a directory takes.
+pub(crate) fn set_times(path: &Path, times: fs::FileTimes) {
+    #[cfg(windows)]
+    let handle = {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+        fs::OpenOptions::new()
+            .write(true)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+            .open(path)
+    };
+    #[cfg(not(windows))]
+    let handle = fs::File::open(path);
+    handle
+        .and_then(|handle| handle.set_times(times))
+        .unwrap_or_else(|error| panic!("set the times of {}: {error}", path.display()));
+}
+
 /// The scratch root inside this crate's `target/`, where fixtures that *are*
 /// repositories live.
 #[must_use]

@@ -34,6 +34,27 @@ fn read_result(content: &str) -> serde_json::Value {
     })
 }
 
+/// The view a pointer names, read from the hook's decoded JSON rather than its
+/// raw bytes: a Windows path's `\` is escaped there, and splitting the raw text
+/// on it cut the path at `C:` (measured on #1132's `windows` job).
+fn view_named(stdout: &[u8]) -> String {
+    fn find(value: &serde_json::Value) -> Option<String> {
+        match value {
+            serde_json::Value::String(text) => text
+                .split("; read ")
+                .nth(1)
+                .and_then(|rest| rest.lines().next())
+                .map(|path| path.trim().to_owned()),
+            serde_json::Value::Array(items) => items.iter().find_map(find),
+            serde_json::Value::Object(fields) => fields.values().find_map(find),
+            _ => None,
+        }
+    }
+    let answer: serde_json::Value =
+        serde_json::from_slice(stdout).expect("the hook answers one JSON document");
+    find(&answer).unwrap_or_else(|| panic!("the pointer names the view: {answer}"))
+}
+
 fn post_tool(dir: &Path, result: &serde_json::Value) -> std::process::Output {
     post_tool_on(dir, "claude-code", result)
 }
@@ -110,12 +131,8 @@ fn an_oversized_result_becomes_a_pointer_to_a_view_of_its_text() {
         "no byte of the payload reaches the model: {said}"
     );
     // THE VIEW HOLDS THE TEXT ON ITS OWN LINES, so a line range re-reads a slice.
-    let view = said
-        .split("; read ")
-        .nth(1)
-        .and_then(|rest| rest.split(['"', '\\']).next())
-        .unwrap_or_else(|| panic!("the pointer names the view: {said}"));
-    let text = std::fs::read_to_string(view).expect("the view exists");
+    let view = view_named(&posted.stdout);
+    let text = std::fs::read_to_string(&view).expect("the view exists");
     assert!(
         text.lines()
             .any(|line| line == "payload line 01999 of the log"),
@@ -204,13 +221,7 @@ fn following_the_pointer_returns_text_not_another_pointer() {
     // printed. Measured on #1132, every view over ~8KB.
     let dir = repo("result-bound-follow");
     let first = post_tool(&dir, &read_result(&payload(2000)));
-    let said = String::from_utf8_lossy(&first.stdout);
-    let view = said
-        .split("; read ")
-        .nth(1)
-        .and_then(|rest| rest.split(['"', '\\']).next())
-        .unwrap_or_else(|| panic!("the pointer names the view: {said}"))
-        .to_owned();
+    let view = view_named(&first.stdout);
     let text = std::fs::read_to_string(&view).expect("the view exists");
     let payload = serde_json::json!({
         "hook_event_name": "PostToolUse",
