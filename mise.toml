@@ -1738,11 +1738,13 @@ description = "Gate: every enforced gate this branch touched since origin/main h
 # 16-shard CI matrix that ran it where `verify` never did was tried on #1132 and
 # removed, because CI is where a proven change is confirmed, never where its
 # mutants are first run. It returns to admission when it runs here first, fast.
-# THE GLOBS ARE WHAT SHIPS: each crate's `src/` and its `build.rs`. `examples/`
+# THE GLOBS ARE WHAT SHIPS AND WHAT TESTS IT: each crate's `src/`, `build.rs`
+# and `tests/`, whose cases a Ready block's `cargo-mutants` obligation names
+# (`obligations-bound.rego` reads ownership from this line). `examples/`
 # is measurement tooling no test target compiles, which cargo-mutants could only
 # report as `no-suite` on every run (measured on #1132); left unowned, the
 # declared runner judges it, and it declares no rows.
-env = { MUTANT_CHANGED_SINCE = "origin/main", MUTANT_RUNNERS = "cargo-mutants=crates/*/src/**/*.rs,crates/*/build.rs" }
+env = { MUTANT_CHANGED_SINCE = "origin/main", MUTANT_RUNNERS = "cargo-mutants=crates/*/src/**/*.rs,crates/*/build.rs,crates/*/tests/**/*.rs" }
 run = "cargo run --quiet -p batten -- mutate sweep"
 
 [tasks."mutant-census"]

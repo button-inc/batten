@@ -4124,16 +4124,20 @@ mod tests {
         assert!(Registry::default().declares(&row_from("crates/batten/src/drain.rs")));
     }
 
-    /// The committed globs own what ships and nothing else: a crate's `src/` and
-    /// its `build.rs`, never `examples/` (no test target compiles it).
+    /// The committed globs own what ships and the cases that test it: a crate's
+    /// `src/`, its `build.rs` and its `tests/`, never `examples/` (no test target
+    /// compiles it).
     #[test]
     fn the_committed_globs_own_what_ships() {
-        let registry = Registry::parse("cargo-mutants=crates/*/src/**/*.rs,crates/*/build.rs")
-            .expect("parses");
+        let registry = Registry::parse(
+            "cargo-mutants=crates/*/src/**/*.rs,crates/*/build.rs,crates/*/tests/**/*.rs",
+        )
+        .expect("parses");
         for owned in [
             "crates/batten/src/lib.rs",
             "crates/batten/src/policy/presets/x.rs",
             "crates/batten/build.rs",
+            "crates/batten/tests/it/mutate.rs",
         ] {
             assert_eq!(
                 registry.owner(owned).expect("one owner"),
