@@ -199,10 +199,12 @@ jobs:
       # The clean fixture would exit 2 for a reason that has nothing to do with
       # the Action. Measured before the first run rather than discovered by it.
       #
-      # Three paths, and no more: the action definition, the manifest it reads
-      # its version and origin from, and the corpus it materializes. The corpus
-      # is inert on disk (every file carries `.in`), so it matches no glob a
-      # fixture declares.
+      # Four paths, and no more: the action definition, the manifest it reads
+      # its origin from, the `batten.toml` whose engine pin names the release
+      # it installs (CLOUD-2033), and the corpus it materializes. The corpus is
+      # inert on disk (every file carries `.in`), so it matches no glob a
+      # fixture declares, and `action/batten.toml` sits below the workspace
+      # root the fixture's config is read from, which is never walked up to.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           path: action
@@ -211,6 +213,7 @@ jobs:
           sparse-checkout: |
             action.yml
             Cargo.toml
+            batten.toml
             crates/batten/tests/fixtures/repos
 
       # The corpus commits its files with a trailing `.in` and materialization
@@ -317,6 +320,7 @@ jobs:
           sparse-checkout: |
             action.yml
             Cargo.toml
+            batten.toml
             crates/batten/tests/fixtures/repos
 
       # Each fixture gets its OWN directory, and the Action is pointed at it with
@@ -431,6 +435,7 @@ jobs:
           sparse-checkout: |
             action.yml
             Cargo.toml
+            batten.toml
             crates/batten/tests/fixtures/repos
 
       - name: Make the fixture directories
@@ -556,6 +561,7 @@ jobs:
           sparse-checkout: |
             action.yml
             Cargo.toml
+            batten.toml
             crates/batten/tests/fixtures/repos
 
       - name: Make the fixture directories
@@ -669,6 +675,7 @@ jobs:
           sparse-checkout: |
             action.yml
             Cargo.toml
+            batten.toml
             crates/batten/tests/fixtures/repos
 
       - name: Make the fixture directories
