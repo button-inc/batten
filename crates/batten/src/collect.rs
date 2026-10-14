@@ -739,7 +739,7 @@ fn remove_counted(path: &Path) -> u64 {
         let _ = std::fs::remove_dir(path);
         return freed;
     }
-    let (links, allocated) = allocation(&meta);
+    let (links, allocated) = allocation(path, &meta);
     if std::fs::remove_file(path).is_err() {
         return 0;
     }
@@ -747,13 +747,27 @@ fn remove_counted(path: &Path) -> u64 {
 }
 
 #[cfg(unix)]
-fn allocation(meta: &std::fs::Metadata) -> (u64, u64) {
+fn allocation(_path: &Path, meta: &std::fs::Metadata) -> (u64, u64) {
     use std::os::unix::fs::MetadataExt as _;
     (meta.nlink(), meta.blocks() * 512)
 }
 
-#[cfg(not(unix))]
-fn allocation(meta: &std::fs::Metadata) -> (u64, u64) {
+/// Windows' link count, from the same file information [`identity`] reads
+/// (`std` keeps it unstable there). Measured on #1132's `windows` job: read as
+/// a constant 1, a hardlinked file counted as freed and the pass stopped short.
+/// The handle is dropped before the caller removes the file, which Windows
+/// refuses while one is open; a count that cannot be read is the old 1.
+#[cfg(windows)]
+fn allocation(path: &Path, meta: &std::fs::Metadata) -> (u64, u64) {
+    let links = std::fs::File::open(path)
+        .ok()
+        .and_then(|file| winapi_util::file::information(&file).ok())
+        .map_or(1, |info| info.number_of_links());
+    (links, meta.len())
+}
+
+#[cfg(not(any(unix, windows)))]
+fn allocation(_path: &Path, meta: &std::fs::Metadata) -> (u64, u64) {
     (1, meta.len())
 }
 
