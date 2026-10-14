@@ -1853,8 +1853,9 @@ struct StatusReport<'a> {
 ///
 /// Prints the pointer line `<check> <subject> <verdict>` — byte-stable, and
 /// never the receipt payload; `json` swaps it for the same tokens as a named
-/// document. The subject is HEAD under [`ReceiptKey::Head`] and the branch name
-/// under [`ReceiptKey::Branch`].
+/// document. The subject is HEAD under [`ReceiptKey::Head`], the branch name
+/// under [`ReceiptKey::Branch`], and the change's patch identity under
+/// [`ReceiptKey::Delta`] — `-` when the change has none, which is an empty diff.
 ///
 /// **This is the whole point of the verb gaining a key** (CLOUD-741). A
 /// `receipt` rule is pinned to `RuleScope::MediatedCall`, so `batten check`
@@ -1924,6 +1925,18 @@ pub fn run_status(
                     "receipt status --key delta: a delta receipt is keyed on the identity of this branch's change against a base ref; name the declaring row's `key_base` with `--base`",
                 ));
             };
+            // A BASE THAT DOES NOT RESOLVE IS THE CHECKOUT, NOT THE CHANGE: a
+            // mistyped ref or an unfetched trunk would otherwise read `missing`,
+            // whose remedy (review again) can never clear it.
+            if git::resolve_ref(Path::new(&facts.repo_root), base)
+                .ok()
+                .flatten()
+                .is_none()
+            {
+                return Err(UsageError::raise(format!(
+                    "receipt status --base {base}: the ref does not resolve in this checkout, so there is no change to judge; fetch it or name the declaring row's `key_base`"
+                )));
+            }
             match delta_subject(&facts.repo_root, base) {
                 Some(identity) => {
                     let verdict = named_validity(&facts.git_dir, check, &identity);

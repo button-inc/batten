@@ -67,8 +67,14 @@ fn a_hand_written_ready_mutation_is_refused_and_a_plain_api_read_is_not() {
         refusing(&dir, mutation).as_deref(),
         Some("review reach loose")
     );
-    assert_ne!(
-        refusing(&dir, "gh api repos/o/r/pulls/1").as_deref(),
-        Some("review reach loose")
-    );
+    for read in [
+        "gh api repos/o/r/pulls/1",
+        "gh api graphql -f query='{repository(owner:\"o\",name:\"r\"){pullRequest(number:1){timelineItems(itemTypes:[READY_FOR_REVIEW_EVENT],first:5){nodes{... on ReadyForReviewEvent{createdAt}}}}}}'",
+    ] {
+        assert_ne!(
+            refusing(&dir, read).as_deref(),
+            Some("review reach loose"),
+            "{read}"
+        );
+    }
 }

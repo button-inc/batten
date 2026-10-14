@@ -419,6 +419,16 @@ fn a_dispatched_review_answers_only_once_it_completes() {
     allowed(&ready(&dir));
     let answered = status(&dir);
     assert_eq!(answered.status.code(), Some(0), "{}", stdout(&answered));
+
+    // The dispatch is spent by the completion it admitted, so it cannot answer
+    // a second one. Declared mutation: `dispatch-not-spent`.
+    let dispatched = dir
+        .join(".git/batten-receipts")
+        .join(format!("{RECEIPT}-dispatched.{}", identity(&dir)));
+    assert!(
+        !dispatched.exists(),
+        "the dispatch record outlived its completion"
+    );
 }
 
 /// The question `land` asks before it readies (CLOUD-2260): the same receipt,

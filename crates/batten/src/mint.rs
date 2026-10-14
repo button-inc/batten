@@ -781,14 +781,22 @@ fn validate_across(mints: &[Declared]) -> anyhow::Result<()> {
         let Some(after) = mint.after.as_deref() else {
             continue;
         };
-        let keyed_alike = |writer: &&Declared| {
+        // A CLEAR gated on a prerequisite would end its record only while
+        // another record happened to exist: a shape `after` does not define.
+        if mint.mode == MintMode::Clear {
+            return Err(crate::error::UsageError::raise(format!(
+                "`[[mint]]` `{}` is `mode = \"clear\"` and declares `after`; a prerequisite \
+                 gates a record being written, never one being ended",
+                mint.name
+            )));
+        }
+        if !mints.iter().any(|writer| {
             writer.mode != MintMode::Clear
                 && writer.name == after
                 && writer.name != mint.name
                 && writer.key == mint.key
                 && writer.key_base == mint.key_base
-        };
-        if !mints.iter().any(|writer| keyed_alike(&writer)) {
+        }) {
             return Err(crate::error::UsageError::raise(format!(
                 "`[[mint]]` `{}` declares `after = \"{after}\"` and no other row of that name \
                  writes a record under the same `key` and `key_base`, so it could never mint",
@@ -942,6 +950,12 @@ mod tests {
         assert!(
             validate(&[row("done", "delta", Some("done"))]).is_err(),
             "a row cannot be its own prerequisite"
+        );
+        let mut clear = row("asked", "delta", Some("asked"));
+        clear.mode = MintMode::Clear;
+        assert!(
+            validate(&[asked.clone(), clear]).is_err(),
+            "a clear gated on a prerequisite"
         );
     }
 

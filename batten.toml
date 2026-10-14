@@ -8561,7 +8561,7 @@ kind = "shape"
 scope = "mediated_call"
 severity = "deny"
 pattern = "gh api"
-contains = "ReadyForReview"
+contains = "markPullRequestReadyForReview"
 reason = """
 Ready through `mise run land` (or `gh pr ready`), not a hand-written GraphQL \
 mutation: those are the routes the review and verify receipts are checked on, \

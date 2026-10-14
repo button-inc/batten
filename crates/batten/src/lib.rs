@@ -19907,6 +19907,7 @@ pub fn mint_receipts_for_test(
 /// authority — [`mcp::payload`] for JSON-RPC content blocks, [`facts::payload_in`]
 /// for the harness envelope. Every failure is silent, as the mint boundary has
 /// always been: the gate that reads the receipt simply denies again.
+//MUTANT dispatch-not-spent|s@^        if written.is_ok()$@        if written.is_ok() \&\& false@|a_dispatched_review_answers_only_once_it_completes
 //MUTANT completion-ignores-dispatch|s@^            && !store.join(format!("{after}.{suffix}")).is_file()$@            \&\& false@|a_completion_without_a_dispatch_of_this_change_mints_nothing
 fn mint_receipts(
     declared: &[crate::mint::Declared],
@@ -20020,7 +20021,14 @@ fn mint_receipts(
             crate::mint::MintMode::Append => crate::durable::append(&path, &record),
             crate::mint::MintMode::Clear => clear_minted(&path),
         };
-        let _ = written;
+        // THE PREREQUISITE IS SPENT BY WHAT IT ADMITTED (CLOUD-2261). Left on
+        // file, one dispatch would answer every later completion over the same
+        // change — an abandoned review followed by any report would still mint.
+        if written.is_ok()
+            && let Some(after) = mint.after.as_deref()
+        {
+            let _ = clear_minted(&store.join(format!("{after}.{suffix}")));
+        }
     }
 }
 
