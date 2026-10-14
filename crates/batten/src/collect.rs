@@ -1112,4 +1112,76 @@ mod tests {
         assert_eq!(darwin::exec_path(&2i32.to_le_bytes()), None);
         assert_eq!(darwin::exec_path(&[1, 0]), None);
     }
+
+    /// THE HOST'S OWN TABLE, READ (CLOUD-2197). Every case above feeds a layout
+    /// by hand; this is the one that reads the real table, so a platform whose
+    /// reads fail is red here rather than "every unit live" in a collection.
+    /// Measured on #1132's macOS run: the collector kept no running binary and
+    /// read every unit live, which is what an unread table yields, and no case
+    /// read the table.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn the_host_table_names_this_process() {
+        #[cfg(target_os = "macos")]
+        darwin_reads_name_this_process();
+        let Some(table) = super::processes() else {
+            panic!("the host's process table did not read");
+        };
+        let Ok(me) = std::env::current_exe().and_then(std::fs::canonicalize) else {
+            panic!("this test binary has no path");
+        };
+        let mine: Vec<&Process> = table
+            .iter()
+            .filter(|process| std::fs::canonicalize(&process.exe).is_ok_and(|exe| exe == me))
+            .collect();
+        assert!(
+            !mine.is_empty(),
+            "{} processes, none executing {}",
+            table.len(),
+            me.display()
+        );
+        let now = SystemTime::now();
+        let hour = Duration::from_secs(3600);
+        assert!(
+            mine.iter()
+                .any(|process| process.started > now - hour && process.started <= now + hour),
+            "this process started within the hour: {mine:?}"
+        );
+    }
+
+    /// Each Darwin read [`super::processes`] makes, named, so the step that
+    /// fails is the message.
+    #[cfg(target_os = "macos")]
+    fn darwin_reads_name_this_process() {
+        use sysctl::Sysctl as _;
+        let raw = |ctl: &sysctl::Ctl, what: &str| match ctl.value() {
+            Ok(sysctl::CtlValue::Node(raw) | sysctl::CtlValue::Struct(raw)) => raw,
+            Ok(other) => panic!("`{what}` read as {other:?}"),
+            Err(error) => panic!("`{what}` did not read: {error}"),
+        };
+        let all = match sysctl::Ctl::new("kern.proc.all") {
+            Ok(ctl) => ctl,
+            Err(error) => panic!("`kern.proc.all` names no oid: {error}"),
+        };
+        let table = raw(&all, "kern.proc.all");
+        let pids = darwin::pids(&table);
+        let Ok(me) = i32::try_from(std::process::id()) else {
+            panic!("a pid past i32");
+        };
+        assert!(
+            pids.iter().any(|(pid, _)| *pid == me),
+            "{} bytes, {} pids, none {me}",
+            table.len(),
+            pids.len()
+        );
+        let args = raw(
+            &sysctl::Ctl::Oid(vec![1, 49, me]),
+            "kern.procargs2 <this pid>",
+        );
+        assert!(
+            darwin::exec_path(&args).is_some(),
+            "`kern.procargs2` held no exec path in {} bytes",
+            args.len()
+        );
+    }
 }
