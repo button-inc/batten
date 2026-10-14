@@ -208,6 +208,45 @@ pub fn splice(head: &str, modified: &[Modified]) -> String {
     out
 }
 
+/// Where each spliced base body sits in [`splice`]'s output, as 1-indexed
+/// inclusive line ranges, so a rustc location can be charged to the body that
+/// holds it. A body's start moves by what every earlier splice added or removed.
+#[must_use]
+pub fn spliced_lines<'a>(head: &str, modified: &'a [Modified]) -> Vec<(&'a str, usize, usize)> {
+    let mut ordered: Vec<&Modified> = modified.iter().collect();
+    ordered.sort_by_key(|edit| edit.head_body.0);
+    let spliced = splice(head, modified);
+    let mut shift: isize = 0;
+    let mut spans = Vec::new();
+    for edit in ordered {
+        let start = edit.head_body.0.saturating_add_signed(shift);
+        let first = spliced
+            .get(..start)
+            .map_or(1, |before| before.matches('\n').count() + 1);
+        let last = first + edit.base_body.matches('\n').count();
+        spans.push((edit.inner.as_str(), first, last));
+        let head_len = edit.head_body.1 - edit.head_body.0;
+        shift += isize::try_from(edit.base_body.len()).unwrap_or(isize::MAX)
+            - isize::try_from(head_len).unwrap_or(isize::MAX);
+    }
+    spans
+}
+
+/// The `path:line` locations rustc printed (`--> path:line:col`), relative to
+/// the tree it built in.
+fn compile_errors(output: &str) -> Vec<(String, usize)> {
+    output
+        .lines()
+        .filter_map(|line| {
+            let at = line.trim_start().strip_prefix("--> ")?;
+            let mut parts = at.rsplitn(3, ':');
+            let _column = parts.next()?;
+            let line_no = parts.next()?.parse().ok()?;
+            Some((parts.next()?.to_owned(), line_no))
+        })
+        .collect()
+}
+
 /// Every `.rs` blob at `rev`, by path.
 fn rust_files(root: &Path, rev: &str) -> Result<BTreeMap<String, String>> {
     let mut files = BTreeMap::new();
@@ -337,10 +376,6 @@ fn replay(
             .with_context(|| format!("test replay: clear {}", tree.display()))?;
     }
     crate::git::materialize_rev(root, "HEAD", &tree)?;
-    for (path, (head_text, modified)) in splices {
-        crate::durable::replace(tree.join(path), splice(head_text, modified))
-            .with_context(|| format!("test replay: splice {path}"))?;
-    }
     // THE BUILD LIVES UNDER THE CHECKOUT'S `target/`, THE TREE OUTSIDE IT (CLOUD-2196).
     // CLOUD-2096 moved the tree out because a checkout's scans walk it; the build
     // cache went with it, and there no reclaim could reach it: measured on #1132,
@@ -382,13 +417,75 @@ fn replay(
     // 159 modified tests ran past a two-hour bound. One union filter builds once
     // and each test is judged off its own result lines, so the verdicts are the
     // ones the per-test calls gave.
+    //
+    // A BODY THAT WILL NOT COMPILE IS CHARGED TO ITSELF, NEVER TO THE UNION.
+    // One base body HEAD's code cannot compile used to fail the shared build and
+    // so every modified test with it: measured on #1132, a body that only GAINED
+    // an assertion read as an expectation change because another file's base
+    // body named a removed helper. rustc's `--> path:line` locations are charged
+    // to the spliced bodies that hold them; those alone are findings, and the
+    // rest are rebuilt without them. An error no body holds keeps the old,
+    // conservative answer: every remaining test is a finding.
+    let mut splices = splices.clone();
+    let mut findings = Vec::new();
+    loop {
+        for (path, (head_text, modified)) in &splices {
+            crate::durable::replace(tree.join(path), splice(head_text, modified))
+                .with_context(|| format!("test replay: splice {path}"))?;
+        }
+        if splices.values().all(|(_, modified)| modified.is_empty()) {
+            return Ok(findings);
+        }
+        let outcome = run_union(&tree, &splices, &published);
+        if let Some((code, output)) = outcome.as_ref()
+            && *code == BUILD_FAILED
+            && output.contains(COMPILE_FAILED)
+        {
+            let charged = charge(&splices, &compile_errors(output));
+            if !charged.is_empty() {
+                for (path, inner) in charged {
+                    if let Some((_, modified)) = splices.get_mut(&path)
+                        && let Some(at) = modified.iter().position(|test| test.inner == inner)
+                    {
+                        let test = modified.remove(at);
+                        findings.push(Finding {
+                            key: format!("{path}::{}", test.inner),
+                            path: path.clone(),
+                            line: test.line,
+                            id: TEST_EXPECTATION_CHANGED,
+                        });
+                    }
+                }
+                continue;
+            }
+        }
+        for (path, (_, modified)) in &splices {
+            for test in modified {
+                if !passes(outcome.as_ref(), &test.inner)? {
+                    findings.push(Finding {
+                        key: format!("{path}::{}", test.inner),
+                        path: path.clone(),
+                        line: test.line,
+                        id: TEST_EXPECTATION_CHANGED,
+                    });
+                }
+            }
+        }
+        return Ok(findings);
+    }
+}
+
+/// Run every still-spliced test in one `nextest` call: its outcome, or `None`
+/// when it could not be spawned.
+fn run_union(
+    tree: &Path,
+    splices: &BTreeMap<String, (String, Vec<Modified>)>,
+    published: &[(String, Option<String>)],
+) -> Option<(i32, String)> {
     let tests: Vec<&str> = splices
         .values()
         .flat_map(|(_, modified)| modified.iter().map(|test| test.inner.as_str()))
         .collect();
-    if tests.is_empty() {
-        return Ok(Vec::new());
-    }
     let filter = tests
         .iter()
         .map(|inner| format!("test(/(^|::){inner}$/)"))
@@ -412,22 +509,26 @@ fn replay(
     // `piped_argv` because it runs the child IN `tree`: `run_in_env`'s root
     // names only where a capture is stored, and the child inherits this
     // process's directory — the checkout, whose HEAD test passes.
-    let outcome =
-        crate::exec::piped_argv(&tree, &argv, "", crate::exec::Diagnostics::Keep, &published);
-    let mut findings = Vec::new();
-    for (path, (_, modified)) in splices {
-        for test in modified {
-            if !passes(outcome.as_ref(), &test.inner)? {
-                findings.push(Finding {
-                    key: format!("{path}::{}", test.inner),
-                    path: path.clone(),
-                    line: test.line,
-                    id: TEST_EXPECTATION_CHANGED,
-                });
+    crate::exec::piped_argv(tree, &argv, "", crate::exec::Diagnostics::Keep, published)
+}
+
+/// The spliced bodies that hold a compile error's location, as `(path, inner)`.
+fn charge(
+    splices: &BTreeMap<String, (String, Vec<Modified>)>,
+    errors: &[(String, usize)],
+) -> std::collections::BTreeSet<(String, String)> {
+    let mut charged = std::collections::BTreeSet::new();
+    for (path, (head_text, modified)) in splices {
+        for (inner, first, last) in spliced_lines(head_text, modified) {
+            if errors
+                .iter()
+                .any(|(at, line)| at == path && (first..=last).contains(line))
+            {
+                charged.insert((path.clone(), inner.to_owned()));
             }
         }
     }
-    Ok(findings)
+    charged
 }
 
 /// `nextest`'s exit when a test it ran failed.
@@ -577,6 +678,49 @@ mod tests {
         );
         let changed = compare(BASE, &head);
         assert_eq!(splice(&head, &changed.modified), BASE);
+    }
+
+    /// A COMPILE ERROR IS CHARGED TO THE BODY THAT HOLDS IT. Two bodies change,
+    /// the earlier one's splice adds lines, and an error inside the later one is
+    /// charged to it alone: the span accounts for the earlier body's growth.
+    #[test]
+    fn a_compile_error_is_charged_to_the_spliced_body_that_holds_it() {
+        let base = BASE.replace(
+            "assert_eq!(1, 1);",
+            "assert_eq!(1, 1);\n        assert_eq!(2, 2);\n        assert_eq!(3, 3);",
+        );
+        let head = base
+            .replace(
+                "assert_eq!(1, 1);\n        assert_eq!(2, 2);\n        assert_eq!(3, 3);",
+                "assert_eq!(9, 9);",
+            )
+            .replace(
+                "assert_eq!(super::helper(), 1);",
+                "let _ = super::helper();",
+            );
+        let changed = compare(&base, &head);
+        assert_eq!(changed.modified.len(), 2, "both bodies changed");
+        let rendered = splice(&head, &changed.modified);
+        let helper_line = rendered
+            .lines()
+            .position(|line| line.contains("super::helper(), 1"))
+            .expect("the base body is spliced")
+            + 1;
+        let output = format!(
+            "error[E0425]: cannot find function `helper`\n   --> src/x.rs:{helper_line}:24\n"
+        );
+        assert_eq!(
+            compile_errors(&output),
+            [(String::from("src/x.rs"), helper_line)]
+        );
+        let mut by_path = BTreeMap::new();
+        by_path.insert(String::from("src/x.rs"), (head, changed.modified));
+        let blamed = charge(&by_path, &compile_errors(&output));
+        assert_eq!(
+            blamed.into_iter().collect::<Vec<_>>(),
+            [(String::from("src/x.rs"), String::from("tests::narrowed"))],
+            "only the body holding the error is charged"
+        );
     }
 
     #[test]
