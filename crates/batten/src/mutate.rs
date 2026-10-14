@@ -1425,6 +1425,20 @@ fn run_command(root: &Path, registry: &Registry, sources: &[String]) -> Result<O
     }))
 }
 
+/// Where a sweep runs: the checkout, the base its change is measured from, the
+/// committed registry, and the scratch directory a staged copy lives under.
+#[derive(Debug, Clone, Copy)]
+pub struct Site<'a> {
+    /// The checkout.
+    pub root: &'a Path,
+    /// The base the change is measured from.
+    pub base: &'a str,
+    /// The committed runner registry.
+    pub registry: &'a Registry,
+    /// The scratch directory the staged copy and each run's output live under.
+    pub work: &'a Path,
+}
+
 /// Run `kind` over the sources it owns that changed since `base`.
 ///
 /// For cargo-mutants, one invocation per source, `--in-diff` over the change
@@ -1438,15 +1452,18 @@ fn run_command(root: &Path, registry: &Registry, sources: &[String]) -> Result<O
 ///
 /// A tree that cannot be staged, or a diff that cannot be written.
 pub fn run_registered(
-    root: &Path,
-    base: &str,
+    site: &Site<'_>,
     changed: &std::collections::BTreeSet<String>,
-    registry: &Registry,
     kind: RunnerKind,
     shard: Option<&str>,
-    work: &Path,
     progress: &mut dyn std::io::Write,
 ) -> Result<Registered> {
+    let Site {
+        root,
+        base,
+        registry,
+        work,
+    } = *site;
     let mut result = Registered::default();
     for path in changed {
         if let Err(reason) = registry.owner(path) {
@@ -1480,46 +1497,16 @@ pub fn run_registered(
     let patch = runs.join("change.diff");
     crate::durable::replace(&patch, diff)
         .with_context(|| format!("mutate: could not write {}", patch.display()))?;
-    let shards: Vec<Option<Option<usize>>> = match shard {
-        None => vec![None; sources.len()],
-        Some(raw) => {
-            let (k, n) = parse_shard(raw)
-                .ok_or_else(|| anyhow::anyhow!("mutate: {SHARD} `{raw}` is not `<k>/<n>`"))?;
-            let mut list = vec![
-                String::from("mutants"),
-                String::from("--list"),
-                String::from("--no-shuffle"),
-                String::from("--in-diff"),
-                patch.to_string_lossy().into_owned(),
-            ];
-            for source in &sources {
-                list.extend([String::from("--file"), source.clone()]);
-            }
-            let listed = spawn(
-                staged.dir(),
-                Program::Cargo,
-                &list,
-                &suite_env(root),
-                build_bound(),
-            )?;
-            if !listed.passed() {
-                bail!("mutate: cargo-mutants could not list the change's mutants");
-            }
-            source_shards(&mutant_counts(&listed.output, &sources), k, n)
-                .into_iter()
-                .map(Some)
-                .collect()
-        }
-    };
-    let assigned = shards.iter().filter(|on| !matches!(on, Some(None))).count();
+    let shards = shard_plan(root, staged.dir(), &patch, &sources, shard)?;
+    let assigned = shards.iter().filter(|on| **on != Place::Off).count();
     let mut position = 0usize;
     for (index, (source, on)) in sources.iter().zip(shards).enumerate() {
         // A source with no mutant on this shard is not run here at all: no
         // build, no suite, no finding, which another shard carries.
         let local = match on {
-            Some(None) => continue,
-            Some(Some(local)) => Some(local),
-            None => None,
+            Place::Off => continue,
+            Place::On(local) => shard.and_then(parse_shard).map(|(_, n)| (local, n)),
+            Place::Unsharded => None,
         };
         position += 1;
         let Some(scope) = test_scope(root, source) else {
@@ -1535,60 +1522,141 @@ pub fn run_registered(
         };
         let output = runs.join(index.to_string());
         let _ = fs::remove_dir_all(&output);
-        let mut args = vec![
-            String::from("mutants"),
-            String::from("--in-place"),
-            String::from("--no-shuffle"),
-            String::from("--in-diff"),
-            patch.to_string_lossy().into_owned(),
-            String::from("--file"),
-            source.clone(),
-            String::from("--test-tool"),
-            String::from("nextest"),
-            String::from("--output"),
-            output.to_string_lossy().into_owned(),
-        ];
-        // A SHARD SKIPS THE BASELINE, as the book's CI recipe does
-        // (mutants.rs/shards.html). One invocation per source meant every shard
-        // built and tested 157 unmutated baselines, most for sources with no
-        // mutant in that shard: measured on #1132, the shards ran past their
-        // 120-minute bound and only one finished. The CI job that shards
-        // (`ci.yml`'s `mutants`) needs `ci`, whose suite has already passed,
-        // which is the book's precondition; `--timeout` stands in for the
-        // per-mutant bound the baseline would have measured.
-        if let (Some(local), Some((_, n))) = (local, shard.and_then(parse_shard)) {
-            args.extend([
-                String::from("--shard"),
-                format!("{local}/{n}"),
-                String::from("--sharding"),
-                String::from("round-robin"),
-                String::from("--baseline=skip"),
-                String::from("--timeout"),
-                SHARD_MUTANT_TIMEOUT_SECS.to_string(),
-            ]);
-        }
-        args.extend([String::from("--"), String::from("-E"), scope]);
+        let args = source_args(&patch, source, &output, local, scope);
         let started = std::time::Instant::now();
-        let ran = spawn(
+        let _ = writeln!(
+            progress,
+            "mutate sweep: source {position}/{assigned} {source} starting"
+        );
+        let ran = spawn_as(
             staged.dir(),
             Program::Cargo,
             &args,
             &suite_env(root),
             runner_bound(),
+            Said::Streamed,
         )?;
         let outcome = read_outcomes(&output.join("mutants.out"));
-        // ONE LINE PER SOURCE (CLOUD-2253's progress, for this runner): a shard
-        // that printed nothing for two hours could not say where it was.
+        // ONE LINE PER SOURCE (CLOUD-2253's progress, for this runner), AND ITS
+        // FINDINGS AS IT ENDS: on #1132 fifteen shards ran 111 minutes each,
+        // were stopped at their bound, and their logs held nothing of what they
+        // had judged, because every finding waited for the last source.
         let _ = writeln!(
             progress,
             "mutate sweep: source {position}/{assigned} {source} {} mutant(s) {}s",
             outcome.ran,
             started.elapsed().as_secs()
         );
+        let found = outcome.findings(kind, source, &ran);
+        for finding in &found {
+            let _ = writeln!(progress, "mutate sweep: {finding}");
+        }
         result.mutants += outcome.ran;
-        result.findings.extend(outcome.findings(kind, source, &ran));
+        result.findings.extend(found);
     }
     Ok(result)
+}
+
+/// Where one source's run sits on the sweep's shard.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Place {
+    /// The sweep is not sharded: the source runs whole.
+    Unsharded,
+    /// No mutant of the source is on this shard: it is not run here.
+    Off,
+    /// The source runs its own `--shard <local>/<n>`.
+    On(usize),
+}
+
+/// Each source's [`Place`] on `shard`: [`Place::Unsharded`] where the sweep is
+/// not sharded, else [`source_shards`] over the change's listed mutants.
+fn shard_plan(
+    root: &Path,
+    staged: &Path,
+    patch: &Path,
+    sources: &[String],
+    shard: Option<&str>,
+) -> Result<Vec<Place>> {
+    let Some(raw) = shard else {
+        return Ok(vec![Place::Unsharded; sources.len()]);
+    };
+    let (k, n) = parse_shard(raw)
+        .ok_or_else(|| anyhow::anyhow!("mutate: {SHARD} `{raw}` is not `<k>/<n>`"))?;
+    let mut list = vec![
+        String::from("mutants"),
+        String::from("--list"),
+        String::from("--no-shuffle"),
+        String::from("--in-diff"),
+        patch.to_string_lossy().into_owned(),
+    ];
+    for source in sources {
+        list.extend([String::from("--file"), source.clone()]);
+    }
+    let listed = spawn(
+        staged,
+        Program::Cargo,
+        &list,
+        &suite_env(root),
+        build_bound(),
+    )?;
+    if !listed.passed() {
+        bail!("mutate: cargo-mutants could not list the change's mutants");
+    }
+    Ok(source_shards(&mutant_counts(&listed.output, sources), k, n)
+        .into_iter()
+        .map(|local| local.map_or(Place::Off, Place::On))
+        .collect())
+}
+
+/// One source's cargo-mutants argv; `local` is its `--shard` as `(k, n)`.
+fn source_args(
+    patch: &Path,
+    source: &str,
+    output: &Path,
+    local: Option<(usize, usize)>,
+    scope: String,
+) -> Vec<String> {
+    let mut args = vec![
+        String::from("mutants"),
+        String::from("--in-place"),
+        String::from("--no-shuffle"),
+        String::from("--in-diff"),
+        patch.to_string_lossy().into_owned(),
+        String::from("--file"),
+        source.to_owned(),
+        String::from("--test-tool"),
+        String::from("nextest"),
+        String::from("--output"),
+        output.to_string_lossy().into_owned(),
+    ];
+    // A SHARD SKIPS THE BASELINE, as the book's CI recipe does
+    // (mutants.rs/shards.html). One invocation per source meant every shard
+    // built and tested 157 unmutated baselines, most for sources with no
+    // mutant in that shard: measured on #1132, the shards ran past their
+    // 120-minute bound and only one finished. The CI job that shards
+    // (`ci.yml`'s `mutants`) needs `ci`, whose suite has already passed,
+    // which is the book's precondition; `--timeout` stands in for the
+    // per-mutant bound the baseline would have measured.
+    if let Some((k, n)) = local {
+        args.extend([
+            String::from("--shard"),
+            format!("{k}/{n}"),
+            String::from("--sharding"),
+            String::from("round-robin"),
+            String::from("--baseline=skip"),
+            String::from("--timeout"),
+            SHARD_MUTANT_TIMEOUT_SECS.to_string(),
+        ]);
+    }
+    // `-v`: a line per mutant as it is judged, caught ones included, so the
+    // log says how far a run got against what it was given.
+    args.extend([
+        String::from("-v"),
+        String::from("--"),
+        String::from("-E"),
+        scope,
+    ]);
+    args
 }
 
 /// One mutant's test bound in a sharded run, which skips the baseline that
@@ -2159,6 +2227,29 @@ fn spawn(
     // reader of that distinction one level below the one that owns it.
     bound: std::time::Duration,
 ) -> Result<Ran> {
+    spawn_as(dir, program, args, env, bound, Said::Captured)
+}
+
+/// Where a spawned program's output goes.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Said {
+    /// Into [`Ran::output`], read once it has exited.
+    Captured,
+    /// Straight to this process's stderr, as it is written, for a runner whose
+    /// verdict is a file it writes (cargo-mutants' `mutants.out`): measured on
+    /// #1132, capturing it left fifteen shards' logs silent for 111 minutes and
+    /// lost every mutant they judged when their bound stopped them.
+    Streamed,
+}
+
+fn spawn_as(
+    dir: &Path,
+    program: Program<'_>,
+    args: &[String],
+    env: &[(String, String)],
+    bound: std::time::Duration,
+    said: Said,
+) -> Result<Ran> {
     let program = program.name();
     #[expect(
         clippy::disallowed_types,
@@ -2223,14 +2314,19 @@ fn spawn(
     })?;
     let out_path = capture.join("stdout");
     let err_path = capture.join("stderr");
-    command.stdout(std::process::Stdio::from(
-        fs::File::create(&out_path) // stream: a child's stdout sink
-            .with_context(|| format!("mutate: could not open {}", out_path.display()))?,
-    ));
-    command.stderr(std::process::Stdio::from(
-        fs::File::create(&err_path) // stream: a child's stderr sink
-            .with_context(|| format!("mutate: could not open {}", err_path.display()))?,
-    ));
+    if said == Said::Streamed {
+        command.stdout(std::process::Stdio::from(std::io::stderr()));
+        command.stderr(std::process::Stdio::from(std::io::stderr()));
+    } else {
+        command.stdout(std::process::Stdio::from(
+            fs::File::create(&out_path) // stream: a child's stdout sink
+                .with_context(|| format!("mutate: could not open {}", out_path.display()))?,
+        ));
+        command.stderr(std::process::Stdio::from(
+            fs::File::create(&err_path) // stream: a child's stderr sink
+                .with_context(|| format!("mutate: could not open {}", err_path.display()))?,
+        ));
+    }
     // A GROUP OF ITS OWN, AND THE SWEEP FORWARDS WHAT IT IS SENT. Leading a group
     // is what lets the teardown reach the suite's grandchildren; it also takes the
     // suite out of the group an outer runner signals — nextest's terminate, a

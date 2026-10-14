@@ -15532,16 +15532,13 @@ fn run_registered_runner(
         .filter(|shard| !shard.trim().is_empty());
     let work = root.join("target").join("mutate");
     std::fs::create_dir_all(&work)?;
-    let run = match mutate::run_registered(
+    let site = mutate::Site {
         root,
-        &base,
-        &changed,
+        base: &base,
         registry,
-        kind,
-        shard.as_deref(),
-        &work,
-        err,
-    ) {
+        work: &work,
+    };
+    let run = match mutate::run_registered(&site, &changed, kind, shard.as_deref(), err) {
         Ok(run) => run,
         Err(reason) => {
             writeln!(err, "::error:: mutate: {reason}")?;
