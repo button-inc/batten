@@ -1652,16 +1652,16 @@ fn a_case_verdict_is_independent_of_order() {
         fixtures: "kyverno-mixed",
         ..KYVERNO_GENERATE
     };
-    let (code, out, err) = native_sweep(&MIXED, Mutant::Kill, "mixed-order");
-    assert_eq!(code, 0, "{out}{err}");
-    assert!(out.contains("every one caught"), "{out}");
-
     // And a case whose objects only pass or are skipped has no verdict: it is
     // not selected, rather than read as a pass.
     const SKIPPED: Native = Native {
         fixtures: "kyverno-skip",
         ..KYVERNO_GENERATE
     };
+    let (code, out, err) = native_sweep(&MIXED, Mutant::Kill, "mixed-order");
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(out.contains("every one caught"), "{out}");
+
     let (code, out, err) = native_sweep(&SKIPPED, Mutant::Kill, "skip-only");
     assert_eq!(code, 3, "{out}{err}");
     assert!(out.contains("names-no-case"), "{out}");
@@ -1711,13 +1711,13 @@ fn each_generating_trigger_is_judged_on_its_own_objects() {
         want: "policy=add-tenant-quota,rule=add-tenant-quota,resource=tenant-medium",
         ..KYVERNO_GENERATE
     };
-    let (code, out, err) = native_sweep(&MEDIUM, Mutant::Kill, "two-medium");
-    assert_eq!(code, 0, "{out}{err}");
-    assert!(out.contains("every one caught"), "{out}");
     const SMALL: Native = Native {
         fixtures: "kyverno-generate-two",
         ..KYVERNO_GENERATE
     };
+    let (code, out, err) = native_sweep(&MEDIUM, Mutant::Kill, "two-medium");
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(out.contains("every one caught"), "{out}");
     let (code, out, err) = native_sweep(&SMALL, Mutant::Unread, "two-small");
     assert_eq!(code, 2, "{out}{err}");
     assert!(out.contains("SURVIVED"), "{out}");
