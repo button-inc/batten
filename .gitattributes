@@ -22,3 +22,9 @@
 # makes the checkout LF everywhere rather than only in the index. The repository
 # is already LF throughout, so this normalizes no committed bytes today.
 * text=auto eol=lf
+
+# APPEND-ONLY RECORDS MERGE AS A UNION. `.batten/asked.jsonl` gains one line
+# per ruling on every branch, so two branches appending is never a conflict:
+# measured on #1132, flattening the branch onto `main` stopped on it at the
+# first commit that appended. `union` keeps both sides' lines.
+.batten/asked.jsonl merge=union
