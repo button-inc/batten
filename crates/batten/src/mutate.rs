@@ -1064,11 +1064,7 @@ pub fn touched(
                 if !gate.rows.is_empty() && !gate.rows.iter().any(|row| registry.declares(row)) {
                     return false;
                 }
-                let by_source = gate.sources.iter().any(|path| changed.contains(path));
-                let by_suite = gate.suites().iter().any(|s| changed.contains(s.path()));
-                let dir = format!("{PRESETS}/{name}/");
-                let by_preset = changed.iter().any(|path| path.starts_with(&dir));
-                by_source || by_suite || by_preset
+                changed_by(&gate, name, changed)
             })
         })
         .cloned()
