@@ -3227,7 +3227,8 @@ transcript-path\t'The path to the session transcript'
 prompt\t'The prompt a subagent spawn commits a fresh context window to'
 run-in-background\t'Whether the host was asked to run this call in the background'
 input-id\t'The `id` a structured call names its subject by (CLOUD-987)'
-input-state\t'The `state` a structured call moves its subject to (CLOUD-987)'"
+input-state\t'The `state` a structured call moves its subject to (CLOUD-987)'
+input-draft\t'Whether a structured call sets its subject\'s `draft` flag (CLOUD-2260)'"
 complete -c batten -n "__fish_batten_using_subcommand payload; and __fish_seen_subcommand_from field" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
@@ -3324,6 +3325,7 @@ complete -c batten -n "__fish_batten_using_subcommand receipt; and __fish_seen_s
 branch\t'Keyed to the branch; every commit on it continues to serve the claim'
 named\t'Keyed to a value the CALL names, read through [`Rule::key_from`] (CLOUD-987)'
 delta\t'Keyed to the identity of the branch\'s whole CHANGE against [`Rule::key_base`] (CLOUD-1547) — the read side of [`crate::mint::MintKey::Delta`]'"
+complete -c batten -n "__fish_batten_using_subcommand receipt; and __fish_seen_subcommand_from status" -l base -d 'The ref a `--key delta` receipt\'s change identity is taken against' -r
 complete -c batten -n "__fish_batten_using_subcommand receipt; and __fish_seen_subcommand_from status" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"

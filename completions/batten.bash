@@ -10894,7 +10894,7 @@ _batten() {
                     return 0
                     ;;
                 --name)
-                    COMPREPLY=($(compgen -W "hook-event-name session-id tool-name command cwd stop-hook-active last-assistant-message transcript-path prompt run-in-background input-id input-state" -- "${cur}"))
+                    COMPREPLY=($(compgen -W "hook-event-name session-id tool-name command cwd stop-hook-active last-assistant-message transcript-path prompt run-in-background input-id input-state input-draft" -- "${cur}"))
                     return 0
                     ;;
                 --strictness)
@@ -12463,7 +12463,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__receipt__subcmd__status)
-            opts="-J -q -v -y -h --or --key --json --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
+            opts="-J -q -v -y -h --or --key --base --json --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -12475,6 +12475,10 @@ _batten() {
                     ;;
                 --key)
                     COMPREPLY=($(compgen -W "head branch named delta" -- "${cur}"))
+                    return 0
+                    ;;
+                --base)
+                    COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
                 --strictness)

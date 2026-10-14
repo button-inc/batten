@@ -3273,6 +3273,15 @@ const SHAPE_CENSUS: &[ShapeCase] = &[
         rule: "review open unnamed",
         site: CensusSite::Keyless,
     },
+    // CLOUD-2260: a hand-written ready mutation is refused, so every mediated
+    // ready goes through the rows keyed on `gh pr ready`.
+    ShapeCase {
+        call: CensusCall::Command(
+            "gh api graphql -f query='mutation{markPullRequestReadyForReview(input:{pullRequestId:\"PR_x\"}){clientMutationId}}'",
+        ),
+        rule: "review reach loose",
+        site: CensusSite::Checkout,
+    },
     // CLOUD-312 row 4. Decided by the tool name alone, under the readable server
     // spelling — the UUID and bare-name spellings are `connector_verbs.rs`'s.
     ShapeCase {

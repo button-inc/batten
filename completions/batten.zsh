@@ -5272,7 +5272,8 @@ transcript-path\:"The path to the session transcript"
 prompt\:"The prompt a subagent spawn commits a fresh context window to"
 run-in-background\:"Whether the host was asked to run this call in the background"
 input-id\:"The \`id\` a structured call names its subject by (CLOUD-987)"
-input-state\:"The \`state\` a structured call moves its subject to (CLOUD-987)"))' \
+input-state\:"The \`state\` a structured call moves its subject to (CLOUD-987)"
+input-draft\:"Whether a structured call sets its subject'\''s \`draft\` flag (CLOUD-2260)"))' \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
@@ -5431,6 +5432,7 @@ _arguments "${_arguments_options[@]}" : \
 branch\:"Keyed to the branch; every commit on it continues to serve the claim"
 named\:"Keyed to a value the CALL names, read through \[\`Rule\:\:key_from\`\] (CLOUD-987)"
 delta\:"Keyed to the identity of the branch'\''s whole CHANGE against \[\`Rule\:\:key_base\`\] (CLOUD-1547) — the read side of \[\`crate\:\:mint\:\:MintKey\:\:Delta\`\]"))' \
+'--base=[The ref a \`--key delta\` receipt'\''s change identity is taken against]:base:_default' \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \

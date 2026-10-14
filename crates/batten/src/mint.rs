@@ -750,11 +750,32 @@ pub fn validate(mints: &[Declared]) -> anyhow::Result<()> {
             )));
         }
     }
-    // AN `after` NAMING NO WRITER KEYED THE SAME WAY can never be satisfied, so
-    // the row loads clean and mints nothing: its gate denies forever with a
-    // remedy that cannot clear it. "The same key" is the same `key` and
-    // `key_base`, because the prerequisite is looked up under THIS row's subject
-    // and a writer filing under another identity never wrote one there.
+    validate_after(mints)?;
+    // A CLEAR WITH NO WRITER removes a record nothing makes, so it loads clean and
+    // does nothing: the inert-coverage shape this function exists to refuse.
+    if let Some(orphan) = mints.iter().find(|clear| {
+        clear.mode == MintMode::Clear
+            && !mints
+                .iter()
+                .any(|writer| writer.mode != MintMode::Clear && writer.name == clear.name)
+    }) {
+        return Err(crate::error::UsageError::raise(format!(
+            "`[[mint]]` `{}` is `mode = \"clear\"` and no row of that name writes the record, \
+             so it would clear nothing",
+            orphan.name
+        )));
+    }
+    Ok(())
+}
+
+/// Refuse an `after` naming no writer keyed the same way (CLOUD-2261).
+///
+/// Such a row can never be satisfied, so it loads clean and mints nothing: its
+/// gate denies forever with a remedy that cannot clear it. "The same key" is the
+/// same `key` and `key_base`, because the prerequisite is looked up under THIS
+/// row's subject and a writer filing under another identity never wrote one
+/// there.
+fn validate_after(mints: &[Declared]) -> anyhow::Result<()> {
     for mint in mints {
         let Some(after) = mint.after.as_deref() else {
             continue;
@@ -773,20 +794,6 @@ pub fn validate(mints: &[Declared]) -> anyhow::Result<()> {
                 mint.name
             )));
         }
-    }
-    // A CLEAR WITH NO WRITER removes a record nothing makes, so it loads clean and
-    // does nothing: the inert-coverage shape this function exists to refuse.
-    if let Some(orphan) = mints.iter().find(|clear| {
-        clear.mode == MintMode::Clear
-            && !mints
-                .iter()
-                .any(|writer| writer.mode != MintMode::Clear && writer.name == clear.name)
-    }) {
-        return Err(crate::error::UsageError::raise(format!(
-            "`[[mint]]` `{}` is `mode = \"clear\"` and no row of that name writes the record, \
-             so it would clear nothing",
-            orphan.name
-        )));
     }
     Ok(())
 }

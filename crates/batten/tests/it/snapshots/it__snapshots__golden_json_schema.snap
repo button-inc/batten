@@ -3286,6 +3286,14 @@ expression: stdout_of(&output)
           "data_channel": true,
           "flags": [
             {
+              "name": "base",
+              "short": null,
+              "long": "base",
+              "takes_value": true,
+              "positional": false,
+              "help": "The ref a `--key delta` receipt's change identity is taken against"
+            },
+            {
               "name": "check",
               "short": null,
               "long": null,
