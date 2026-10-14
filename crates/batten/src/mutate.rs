@@ -2075,11 +2075,7 @@ fn kyverno_verdict(output: &str, want: &str) -> Selection {
         };
         // A selected result with no readable verdict is an error, never dropped:
         // dropping it would let its siblings' passes decide the case.
-        case_verdict(
-            chosen
-                .iter()
-                .map(|result| result["RESULT"].as_str().unwrap_or("error")),
-        )
+        case_verdict(chosen.iter().copied().map(result_verdict))
     });
     let errored = load_error || status == Some("error");
     let selected = usize::from(matches!(status, Some("pass" | "fail")));
@@ -2091,6 +2087,13 @@ fn kyverno_verdict(output: &str, want: &str) -> Selection {
             errored,
         ),
     }
+}
+
+/// One result's verdict token, `error` when it carries none to read: a dropped
+/// result would let its siblings' passes decide the case.
+//MUTANT result-verdict-dropped|s@^    result\["RESULT"\].as_str().unwrap_or("error")$@    result["RESULT"].as_str().unwrap_or("pass")@|a_result_with_no_verdict_is_an_error
+fn result_verdict(result: &serde_json::Value) -> &str {
+    result["RESULT"].as_str().unwrap_or("error")
 }
 
 /// One case's verdict from its results' verdicts, by precedence and never by
@@ -2789,6 +2792,20 @@ fn engine_undeclared(root: &Path, censused: &BTreeMap<String, String>) -> usize 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A selected result with no readable verdict outranks its passing
+    /// siblings (CLOUD-2264), rather than vanishing from the set.
+    #[test]
+    fn a_result_with_no_verdict_is_an_error() {
+        let results = [
+            serde_json::json!({"RESULT": "Pass"}),
+            serde_json::json!({"RESULT": null}),
+        ];
+        assert_eq!(
+            case_verdict(results.iter().map(result_verdict)),
+            Some("error")
+        );
+    }
 
     /// The sweep's cargo cache is not the repository's, and this is the gate on
     /// it rather than the doc comment above `suite_env`.

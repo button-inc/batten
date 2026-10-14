@@ -19907,9 +19907,9 @@ pub fn mint_receipts_for_test(
 /// authority — [`mcp::payload`] for JSON-RPC content blocks, [`facts::payload_in`]
 /// for the harness envelope. Every failure is silent, as the mint boundary has
 /// always been: the gate that reads the receipt simply denies again.
-//MUTANT dispatch-not-spent|s@^                if std::fs::rename(store.join(&prerequisite), &claimed).is_err() {$@                if std::fs::copy(store.join(\&prerequisite), \&claimed).is_err() {@|a_dispatched_review_answers_only_once_it_completes
-//MUTANT prerequisite-read-live|s@^                if !before.contains(&prerequisite) {$@                if !store.join(\&prerequisite).is_file() {@|one_call_cannot_satisfy_its_own_prerequisite
-//MUTANT completion-ignores-dispatch|s@^                if !before.contains(&prerequisite) {$@                if false {@|a_completion_without_a_dispatch_of_this_change_mints_nothing
+//MUTANT dispatch-not-spent|s@^                clear_minted(&claimed)$@                std::fs::rename(\&claimed, \&original)@|a_dispatched_review_answers_only_once_it_completes
+//MUTANT prerequisite-read-live|s@^                if written_now.contains(&prerequisite) {$@                if false {@|one_call_cannot_satisfy_its_own_prerequisite
+//MUTANT completion-ignores-dispatch|s@^                if std::fs::rename(&original, &claimed).is_err() {$@                if std::fs::rename(\&original, \&claimed).is_err() \&\& false {@|a_completion_without_a_dispatch_of_this_change_mints_nothing
 fn mint_receipts(
     declared: &[crate::mint::Declared],
     tool: &str,
@@ -19926,22 +19926,11 @@ fn mint_receipts(
         .map_or(0, |since_epoch| since_epoch.as_secs());
     let resolve = |reference: &str| git::resolve_ref(root, reference).ok().flatten();
     let store = git_dir.join("batten-receipts");
-    // THE STORE AS IT STOOD BEFORE THIS CALL (CLOUD-2261). A prerequisite is a
-    // record an EARLIER call left; read after the loop starts, a writer row
-    // selecting this same call would satisfy its own dependent, and one dispatch
-    // would mint both halves. Read only when some row asks.
-    let before: std::collections::BTreeSet<String> =
-        if declared.iter().any(|mint| mint.after.is_some()) {
-            std::fs::read_dir(&store)
-                .map(|entries| {
-                    entries
-                        .filter_map(|entry| entry.ok()?.file_name().into_string().ok())
-                        .collect()
-                })
-                .unwrap_or_default()
-        } else {
-            std::collections::BTreeSet::new()
-        };
+    // WHAT THIS CALL WROTE (CLOUD-2261). A prerequisite is a record an EARLIER
+    // call left: a writer row and its dependent selecting the same call would
+    // otherwise let one dispatch mint both halves, on its first call or any
+    // later one that rewrites the prerequisite.
+    let mut written_now: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for mint in declared {
         if !rules::selects_tool_name(&mint.tool, tool) {
             continue;
@@ -20017,43 +20006,51 @@ fn mint_receipts(
         let Some(record) = crate::mint::render(mint, result, now, &resolve, grammar, root) else {
             continue;
         };
-        // THE PREREQUISITE, UNDER THE IDENTITY RESOLVED NOW, CLAIMED BEFORE THE
-        // WRITE (CLOUD-2261). A completion call names no change, so it attests
-        // one only when a dispatch of this change was already on file before this
-        // call — and a commit between the two moves the key. The claim is a
-        // rename, so of two completions racing for one dispatch exactly one
-        // takes it; the claim is dropped whatever the write does, so a failed
-        // completion leaves nothing for another to spend.
-        let claim = match mint.after.as_deref() {
-            None => None,
-            Some(after) => {
-                let prerequisite = format!("{after}.{suffix}");
-                if !before.contains(&prerequisite) {
-                    continue;
-                }
-                let claimed = store.join(format!("{prerequisite}.claimed-{}", std::process::id()));
-                if std::fs::rename(store.join(&prerequisite), &claimed).is_err() {
-                    continue;
-                }
-                Some(claimed)
-            }
-        };
-        let path = store.join(format!("{}.{suffix}", mint.name));
+        let filename = format!("{}.{suffix}", mint.name);
+        let path = store.join(&filename);
         if let Some(parent) = path.parent()
             && std::fs::create_dir_all(parent).is_err()
         {
             continue;
         }
+        // THE PREREQUISITE, UNDER THE IDENTITY RESOLVED NOW, CLAIMED BEFORE THE
+        // WRITE (CLOUD-2261). A completion call names no change, so it attests
+        // one only when a dispatch of this change is on file from an earlier
+        // call — and a commit between the two moves the key. The claim is a
+        // rename, so of two completions racing for one dispatch exactly one
+        // takes it.
+        let claim = match mint.after.as_deref() {
+            None => None,
+            Some(after) => {
+                let prerequisite = format!("{after}.{suffix}");
+                if written_now.contains(&prerequisite) {
+                    continue;
+                }
+                let original = store.join(&prerequisite);
+                let claimed = store.join(format!("{prerequisite}.claimed-{}", std::process::id()));
+                if std::fs::rename(&original, &claimed).is_err() {
+                    continue;
+                }
+                Some((claimed, original))
+            }
+        };
         let written = match mint.mode {
             crate::mint::MintMode::Replace => crate::durable::replace(&path, &record),
             crate::mint::MintMode::Append => crate::durable::append(&path, &record),
             crate::mint::MintMode::Clear => clear_minted(&path),
         };
-        let _ = written;
-        // THE PREREQUISITE IS SPENT BY WHAT IT ADMITTED. Left on file, one
-        // dispatch would answer every later completion over the same change.
-        if let Some(claimed) = claim {
-            let _ = clear_minted(&claimed);
+        if written.is_ok() {
+            written_now.insert(filename);
+        }
+        // SPENT BY WHAT IT ADMITTED, OR RETURNED. Left on file, one dispatch
+        // would answer every later completion over the same change; spent on a
+        // failed write, a review that really finished would leave no record.
+        if let Some((claimed, original)) = claim {
+            let _ = if written.is_ok() {
+                clear_minted(&claimed)
+            } else {
+                std::fs::rename(&claimed, &original)
+            };
         }
     }
 }

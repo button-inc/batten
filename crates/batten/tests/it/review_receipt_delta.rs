@@ -465,6 +465,14 @@ fn one_call_cannot_satisfy_its_own_prerequisite() {
         Some(0),
         "one dispatch minted its own completion"
     );
+    // Nor a later dispatch, whose prerequisite an earlier call DID leave: this
+    // call rewrites it, so it is still this call's own.
+    dispatch(&dir, RECEIPT);
+    assert_ne!(
+        status(&dir).status.code(),
+        Some(0),
+        "a second dispatch spent the record it had just rewritten"
+    );
 }
 
 /// A BASE THAT DOES NOT RESOLVE IS THE CHECKOUT'S PROBLEM, NOT A VERDICT
@@ -488,8 +496,13 @@ fn an_unresolvable_base_is_refused_rather_than_read_missing() {
         "",
     );
     let text = stdout(&output);
-    assert_ne!(output.status.code(), Some(0), "{text}");
-    assert!(!text.contains("missing"), "a verdict was printed: {text}");
+    let refusal = common::stderr(&output);
+    assert_ne!(output.status.code(), Some(0), "{text}{refusal}");
+    assert!(text.is_empty(), "a verdict was printed: {text}");
+    assert!(
+        refusal.contains("--base") && refusal.contains("does not resolve"),
+        "the refusal names the base: {refusal}"
+    );
 }
 
 /// The question `land` asks before it readies (CLOUD-2260): the same receipt,

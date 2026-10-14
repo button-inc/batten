@@ -798,18 +798,25 @@ fn validate_across(mints: &[Declared]) -> anyhow::Result<()> {
                 mint.name
             )));
         }
-        // ONE ROW PER PREREQUISITE: a completion spends the record it was
-        // admitted by, so a second row naming the same `after` would find it
-        // gone and never mint, decided by row order alone.
+        // ONE ROW PER PREREQUISITE PER CALL: a completion spends the record it
+        // was admitted by, so a second row selecting the SAME call and naming the
+        // same prerequisite would find it gone and never mint, decided by row
+        // order alone. Rows on different tools are alternative completions, of
+        // which the first to arrive spending the dispatch is the design.
         if mints
             .iter()
-            .filter(|other| other.after.as_deref() == Some(after))
+            .filter(|other| {
+                other.after.as_deref() == Some(after)
+                    && other.tool == mint.tool
+                    && other.key == mint.key
+                    && other.key_base == mint.key_base
+            })
             .count()
             > 1
         {
             return Err(crate::error::UsageError::raise(format!(
-                "`[[mint]]` `{}` names `after = \"{after}\"`, as another row does; the first \
-                 to mint spends the record, so the other could never mint",
+                "`[[mint]]` `{}` names `after = \"{after}\"` on the same tool and key as another \
+                 row; the first to mint spends the record, so the other could never mint",
                 mint.name
             )));
         }
@@ -990,6 +997,17 @@ mod tests {
             ])
             .is_err(),
             "two rows spending one prerequisite: the first would starve the second"
+        );
+        let mut elsewhere = row("also", "delta", Some("asked"));
+        elsewhere.tool = "Other".to_owned();
+        assert!(
+            validate(&[
+                asked.clone(),
+                row("done", "delta", Some("asked")),
+                elsewhere
+            ])
+            .is_ok(),
+            "alternative completions on different tools may share a prerequisite"
         );
     }
 
