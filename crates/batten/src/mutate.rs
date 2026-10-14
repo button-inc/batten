@@ -1345,10 +1345,8 @@ pub fn owned_changes(
 /// Whether each registered runner's program answers in `root`, as a finding per
 /// runner that does not (`runner-absent`, could-not-look).
 ///
-/// THE LOCAL HALF OF A RUNNER THAT RUNS ELSEWHERE. `verify` does not run
-/// cargo-mutants (a branch's mutants cost about 40s each, measured, and a CI
-/// matrix shards them); what it CAN decide is that the runner the registry
-/// names is pinned and resolves, so the CI job is not the first to find out.
+/// Checked before a registered runner is run (`$MUTANT_RUNNER`), so a runner
+/// that is not installed reads as could-not-look rather than as a clean sweep.
 #[must_use]
 pub fn unresolvable(root: &Path, registry: &Registry) -> Vec<Finding> {
     registry
@@ -1633,9 +1631,8 @@ fn source_args(
     // (mutants.rs/shards.html). One invocation per source meant every shard
     // built and tested 157 unmutated baselines, most for sources with no
     // mutant in that shard: measured on #1132, the shards ran past their
-    // 120-minute bound and only one finished. The CI job that shards
-    // (`ci.yml`'s `mutants`) needs `ci`, whose suite has already passed,
-    // which is the book's precondition; `--timeout` stands in for the
+    // 120-minute bound and only one finished. The book's precondition is a
+    // suite already green on the unmutated tree; `--timeout` stands in for the
     // per-mutant bound the baseline would have measured.
     if let Some((k, n)) = local {
         args.extend([

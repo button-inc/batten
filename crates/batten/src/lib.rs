@@ -15720,8 +15720,7 @@ fn run_mutate_sweep(
     // ONE SHARD IS A SLICE OF BOTH HALVES (CLOUD-1746). The declared runner's
     // gates cost a suite build per mutant, and 94 of them across 14 touched gates
     // ran the `ci` job past its 87-minute bound on #1132; so `$MUTANT_SHARD`
-    // slices them by gate exactly as it slices the registered runner's mutants,
-    // and the matrix that runs one runs both.
+    // slices them by gate exactly as it slices the registered runner's mutants.
     let shard = std::env::var(mutate::SHARD)
         .ok()
         .filter(|shard| !shard.trim().is_empty());
