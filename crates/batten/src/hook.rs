@@ -1921,6 +1921,8 @@ impl Harness {
                     honoured_on: &["PreToolUse"],
                     declared: Declaration::Yes,
                 },
+                // Unprobed, as every host is until a live probe answers.
+                rewrites_tool_output: Declaration::Unknown,
                 stop_vetoes_completion: false,
                 // The reference states a 60-second default and no timeout
                 // outcome, so nothing here claims it fails open.
@@ -1952,6 +1954,8 @@ impl Harness {
                 advisory: AdvisoryReach::unreachable(Declaration::Unknown),
                 // Nor any value that suppresses a prompt.
                 preapprove: PreapproveReach::unreachable(Declaration::Unknown),
+                // Unprobed, as every host is until a live probe answers.
+                rewrites_tool_output: Declaration::Unknown,
                 stop_vetoes_completion: false,
                 // The plugin waits for the engine; it sets no timeout of its own.
                 timeout_fails_open: false,
