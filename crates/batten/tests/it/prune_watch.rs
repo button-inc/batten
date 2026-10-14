@@ -270,7 +270,7 @@ fn a_unit_a_running_program_executes_is_never_collected() {
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
     let mut running = common::spawn_copy(&mut command);
-    let kept = batten::collect::kept(&batten::collect::engine_paths());
+    let kept = batten::collect::engine_kept();
     let trees = [root.join("target")];
     let _ = batten::collect::collect(&request(&trees, &kept, u64::MAX));
     let survived = binary.exists();

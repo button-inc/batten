@@ -3605,7 +3605,7 @@ fn collect_on_demand(
 ) -> Result<ExitCode> {
     let mut free = prune::sampler(here.join(&declared.root))?;
     let now = free()?;
-    let kept = collect::kept(&collect::engine_paths());
+    let kept = collect::engine_kept();
     let collected = collect::collect_toward_max(here, declared, &kept, now, &mut free, None, true);
     let Some(done) = collected else {
         return Ok(ExitCode::Success);
@@ -12600,7 +12600,7 @@ fn disk_watcher<'a>(
         repo: root.to_path_buf(),
         config,
         free_mb: Box::new(free_mb),
-        kept: collect::kept(&collect::engine_paths()),
+        kept: collect::engine_kept(),
     })
 }
 
@@ -12727,7 +12727,7 @@ fn guard_compile(rustc_args: &[std::ffi::OsString]) {
     else {
         return;
     };
-    let kept = collect::kept(&collect::engine_paths());
+    let kept = collect::engine_kept();
     let deadline = std::time::Instant::now() + disk_watch::HOOK_COLLECT_DEADLINE;
     let _ = collect::collect_if_pressed(&repo, &pruning, &kept, &mut free, Some(deadline), false);
 }
@@ -15801,7 +15801,7 @@ fn disk_admits(root: &Path, step: &str, err: &mut dyn Write) -> Result<bool> {
     if now >= min {
         return Ok(true);
     }
-    let kept = collect::kept(&collect::engine_paths());
+    let kept = collect::engine_kept();
     let mut after = now;
     if let Some(done) =
         collect::collect_toward_max(root, &prune, &kept, now, &mut free, None, false)
@@ -22167,7 +22167,7 @@ fn collect_before_admitting(
     };
     let before = if trace { free().unwrap_or(0) } else { 0 };
     let collected = band.and_then(|prune| {
-        let kept = collect::kept(&collect::engine_paths());
+        let kept = collect::engine_kept();
         let deadline = std::time::Instant::now() + disk_watch::HOOK_COLLECT_DEADLINE;
         collect::collect_if_pressed(&repo, prune, &kept, &mut free, Some(deadline), false)
     });

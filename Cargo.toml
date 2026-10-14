@@ -617,13 +617,14 @@ rustix = { version = "1.1", features = ["fs", "param", "process"] }
 # for the same reason, so the two ends of the pgroup protocol are implemented
 # against one set of semantics (CLOUD-455 is the prior-art gate).
 signal-hook = { version = "0.4", default-features = false, features = ["iterator"] }
-# The executable of every running process on macOS (CLOUD-2197): the collector
-# keeps a unit whose binary a process is executing, which a test runner holds no
-# lock over. `sysctl(3)` lives in libSystem, which every macOS binary already
-# links, and calling it is FFI that `unsafe_code = "forbid"` puts out of reach;
-# this crate is the safe wrapper, and `kern.proc.all` and `kern.procargs2` are
-# what Go's `x/sys/unix` reads for the same answer. Measured on #1132, every
-# other route fails: `sysinfo` links IOKit and CoreFoundation, which
+# Every running process on macOS (CLOUD-2197): the collector keeps a unit whose
+# binary a process is executing, which a test runner holds no lock over.
+# `sysctl(3)` lives in libSystem, which every macOS binary already links, and
+# calling it is FFI that `unsafe_code = "forbid"` puts out of reach; this crate
+# is the safe wrapper. It reaches `kern.proc.all` only by name: its read by oid
+# asks `oidfmt` first, which XNU refuses for that oid, and `kern.procargs2`
+# (the exec path) is reachable by neither, so a process is its `p_comm` — see
+# `collect.rs`'s macOS `processes`. Measured on #1132, every other route fails: `sysinfo` links IOKit and CoreFoundation, which
 # `darwin-link` cannot resolve without an Apple SDK; `libproc` runs bindgen
 # against the build host's SDK; `darwin-libproc` pins `memchr ~2.3`, which
 # cannot resolve beside `imara-diff`. Linux reads `/proc` with `std`, and

@@ -119,10 +119,19 @@ pub fn trace_line(kind: &str, fields: &[u64]) -> String {
 
 /// A file that must never be collected: the installed engine, the running
 /// executable, and every name hardlinked to them.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Kept {
-    dev: u64,
-    ino: u64,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Kept {
+    /// A file, by device and inode, which names it across its hardlinks.
+    File {
+        /// The device.
+        dev: u64,
+        /// The inode.
+        ino: u64,
+    },
+    /// A running program the process table names only by its kernel name
+    /// (macOS's `p_comm`, the executable's file name cut to 16 bytes): every
+    /// file whose name begins with it. Wider than the one file, never narrower.
+    Named(String),
 }
 
 /// The files no collection removes: the running executable, the `batten` on
@@ -134,40 +143,54 @@ pub struct Kept {
 /// nextest run removed every `it-*` test binary, and the run failed to exec
 /// thousands of cases. A unit carrying an executable a process is running is
 /// in use, whatever the lock says.
+///
+/// A PROGRAM THE TABLE NAMES ONLY BY NAME IS KEPT BY NAME. macOS gives each
+/// process's path only through `kern.procargs2`, which no safe crate reaches
+/// (see [`processes`]), so there a running program is [`Kept::Named`].
 //MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
-//MUTANT running-program-collected|s@^        .chain(running_programs())$@        .chain(Vec::<PathBuf>::new())@|a_unit_a_running_program_executes_is_never_collected
-#[must_use]
-pub fn engine_paths() -> Vec<PathBuf> {
+//MUTANT running-program-collected|s@^        .chain(table.iter().filter_map(\x7cprocess\x7c process.exe.clone()))$@@|a_unit_a_running_program_executes_is_never_collected#[must_use]
+pub fn engine_kept() -> Vec<Kept> {
+    let table = processes().unwrap_or_default();
     let running = std::env::current_exe().ok();
     let installed = std::env::var_os("PATH").and_then(|path| {
         std::env::split_paths(&path)
             .map(|dir| dir.join(crate::surface::BINARY))
             .find(|candidate| candidate.is_file())
     });
-    running
+    let paths: Vec<PathBuf> = running
         .into_iter()
         .chain(installed)
-        .chain(running_programs())
+        .chain(table.iter().filter_map(|process| process.exe.clone()))
         .filter(|path| path.exists())
         .map(|path| crate::git::canonical(&path))
-        .collect()
+        .collect();
+    let mut kept = kept(&paths);
+    let named = table
+        .into_iter()
+        .filter(|process| process.exe.is_none() && !process.name.is_empty())
+        .map(|process| Kept::Named(process.name));
+    kept.extend(named);
+    kept
 }
 
 /// A running process: the program it executes and when it started.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Process {
-    /// Its executable, as the process table names it.
-    pub exe: PathBuf,
+    /// Its executable, where the table names one: Linux's `/proc/<pid>/exe`,
+    /// Windows' `Path`. macOS's table names none.
+    pub exe: Option<PathBuf>,
+    /// Its program's name: the executable's file name, or on macOS the
+    /// kernel's `p_comm`, that name cut to 16 bytes.
+    pub name: String,
     /// When it started.
     pub started: SystemTime,
 }
 
-fn running_programs() -> Vec<PathBuf> {
-    processes()
-        .unwrap_or_default()
-        .into_iter()
-        .map(|process| process.exe)
-        .collect()
+/// The file name of `path`, on either separator: a Windows listing is parsed on
+/// every platform's suite.
+#[cfg(any(target_os = "linux", target_os = "android", windows, test))]
+fn program_name(path: &str) -> String {
+    path.rsplit(['/', '\\']).next().unwrap_or(path).to_owned()
 }
 
 /// Every process this user can see, from each platform's own process table, or
@@ -198,7 +221,11 @@ fn processes() -> Option<Vec<Process>> {
             let started = SystemTime::UNIX_EPOCH
                 + std::time::Duration::from_secs(boot)
                 + std::time::Duration::from_millis(since_boot.saturating_mul(1000) / ticks);
-            Some(Process { exe, started })
+            Some(Process {
+                name: program_name(&exe.to_string_lossy()),
+                exe: Some(exe),
+                started,
+            })
         })
         .collect();
     Some(table)
@@ -227,53 +254,56 @@ mod proc_stat {
     }
 }
 
-/// macOS reads `kern.proc.all` for every pid and its start, and
-/// `kern.procargs2` for each one's exec path: the reads Go's `x/sys/unix` makes.
+/// macOS reads `kern.proc.all`: every process's start and its `p_comm`.
+///
+/// BY NAME, AND NOTHING ELSE (measured on #1132's macOS run, which collected a
+/// running binary and read every unit live). XNU declares `kern.proc.all` and
+/// `kern.procargs2` with no format string (`bsd/kern/kern_sysctl.c`), and
+/// `sysctl.oidfmt` answers `ENOENT` for such an oid (`kern_newsysctl.c`); the
+/// `sysctl` crate asks `oidfmt` before every read by oid, so both reads failed
+/// and the table read as `None`. Its by-name read goes through `sysctlbyname`
+/// and asks nothing first, which reaches `kern.proc.all`. It cannot reach
+/// `kern.procargs2 <pid>`, the only path source: XNU's name lookup stops at a
+/// handler node, so the pid cannot be named (the crate's issue #51), and the
+/// FFI that would read it `unsafe_code = "forbid"` puts out of reach. So a
+/// process here is its `p_comm`, which [`Kept::Named`] keeps wide.
 #[cfg(target_os = "macos")]
 fn processes() -> Option<Vec<Process>> {
     use sysctl::Sysctl as _;
-    // `CTL_KERN` and `KERN_PROCARGS2`, from `<sys/sysctl.h>`.
-    const CTL_KERN: i32 = 1;
-    const KERN_PROCARGS2: i32 = 49;
-    let bytes = |ctl: &sysctl::Ctl| match ctl.value() {
-        Ok(sysctl::CtlValue::Node(raw) | sysctl::CtlValue::Struct(raw)) => Some(raw),
+    let ctl = sysctl::Ctl::new_with_type("kern.proc.all", sysctl::CtlType::Node, "").ok()?;
+    match ctl.value() {
+        Ok(sysctl::CtlValue::Node(raw) | sysctl::CtlValue::Struct(raw)) => {
+            Some(darwin::processes(&raw))
+        }
         _ => None,
-    };
-    let table = sysctl::Ctl::new("kern.proc.all")
-        .ok()
-        .and_then(|ctl| bytes(&ctl))?;
-    let table = darwin::pids(&table)
-        .into_iter()
-        .filter_map(|(pid, started)| {
-            let args = bytes(&sysctl::Ctl::Oid(vec![CTL_KERN, KERN_PROCARGS2, pid]))?;
-            let exe = darwin::exec_path(&args)?;
-            Some(Process { exe, started })
-        })
-        .collect();
-    Some(table)
+    }
 }
 
-/// The two Darwin layouts [`processes`] reads, as pure functions so every
-/// platform's suite checks them; only the `sysctl` calls are macOS's own.
+/// The Darwin layout [`processes`] reads, as a pure function so every
+/// platform's suite checks it; only the `sysctl` call is macOS's own.
 //MUTANT-SUITE crates/batten/src/collect.rs
-//MUTANT kinfo-pid-misread|s@^                let pid = i32::from_le_bytes(entry.get(P_PID..P_PID + 4)?.try_into().ok()?);$@                let pid = i32::from_le_bytes(entry.get(0..4)?.try_into().ok()?);@|a_kinfo_table_yields_each_pid
+//MUTANT kinfo-pid-misread|s@^                let pid = i32::from_le_bytes(entry.get(P_PID..P_PID + 4)?.try_into().ok()?);$@                let pid = i32::from_le_bytes(entry.get(0..4)?.try_into().ok()?);@|a_kinfo_table_yields_each_process
 //MUTANT kinfo-start-misread|s@^                    i64::from_le_bytes(entry.get(P_STARTTIME..P_STARTTIME + 8)?.try_into().ok()?);$@                    i64::from_le_bytes(entry.get(P_PID..P_PID + 8)?.try_into().ok()?);@|a_kinfo_table_yields_each_start
-//MUTANT procargs-argc-unskipped|s@^        let rest = args.get(4..)?;$@        let rest = args.get(0..)?;@|a_procargs_buffer_yields_its_exec_path
+//MUTANT kinfo-comm-misread|s@^                let comm = entry.get(P_COMM..P_COMM + MAXCOMLEN)?;$@                let comm = entry.get(P_COMM - 1..P_COMM - 1 + MAXCOMLEN)?;@|a_kinfo_table_yields_each_process
 #[cfg(any(target_os = "macos", test))]
 mod darwin {
-    use std::path::PathBuf;
+    use super::Process;
     use std::time::{Duration, SystemTime};
 
-    /// `sizeof(struct kinfo_proc)`, and the offsets of `kp_proc.p_starttime` (a
-    /// `timeval`: `i64` seconds, `i32` microseconds) and `kp_proc.p_pid`, on both
-    /// Apple triples, as Go's `ztypes_darwin_{amd64,arm64}.go` record them.
+    /// `sizeof(struct kinfo_proc)`, and the offsets in its `kp_proc` (an
+    /// `extern_proc`, `<sys/proc.h>`) of `p_starttime` (a `timeval`: `i64`
+    /// seconds, `i32` microseconds), `p_pid` and `p_comm`, on both Apple
+    /// triples, as Go's `ztypes_darwin_{amd64,arm64}.go` lay them out.
     const KINFO_PROC: usize = 648;
     const P_STARTTIME: usize = 0;
     const P_PID: usize = 40;
+    const P_COMM: usize = 243;
+    /// `MAXCOMLEN`: `p_comm` is this many bytes and a NUL.
+    const MAXCOMLEN: usize = 16;
 
-    /// Every live pid in a `kern.proc.all` table with its start; pid 0 is the
-    /// kernel.
-    pub(super) fn pids(table: &[u8]) -> Vec<(i32, SystemTime)> {
+    /// Every live process in a `kern.proc.all` table, by its `p_comm` and
+    /// start; pid 0 is the kernel.
+    pub(super) fn processes(table: &[u8]) -> Vec<Process> {
         table
             .as_chunks::<KINFO_PROC>()
             .0
@@ -291,20 +321,16 @@ mod darwin {
                 let started = SystemTime::UNIX_EPOCH
                     + Duration::from_secs(u64::try_from(secs).ok()?)
                     + Duration::from_micros(u64::try_from(micros).ok()?);
-                (pid > 0).then_some((pid, started))
+                let comm = entry.get(P_COMM..P_COMM + MAXCOMLEN)?;
+                let comm = comm.split(|byte| *byte == 0).next()?;
+                let name = String::from_utf8_lossy(comm).into_owned();
+                (pid > 0).then_some(Process {
+                    exe: None,
+                    name,
+                    started,
+                })
             })
             .collect()
-    }
-
-    /// The exec path in a `kern.procargs2` buffer: an `int argc`, then the path
-    /// the process was executed from, NUL-terminated.
-    pub(super) fn exec_path(args: &[u8]) -> Option<PathBuf> {
-        let rest = args.get(4..)?;
-        let path = rest.split(|byte| *byte == 0).next()?;
-        if path.is_empty() {
-            return None;
-        }
-        std::str::from_utf8(path).ok().map(PathBuf::from)
     }
 }
 
@@ -365,7 +391,8 @@ mod windows_table {
                     .ok()?
                     .checked_sub(FILETIME_TO_UNIX)?;
                 Some(Process {
-                    exe: PathBuf::from(path),
+                    exe: Some(PathBuf::from(path)),
+                    name: super::program_name(path),
                     started: SystemTime::UNIX_EPOCH + Duration::from_nanos(intervals * 100),
                 })
             })
@@ -430,17 +457,23 @@ pub fn earliest_build_start(processes: &[Process], trees: &[PathBuf]) -> Option<
         .collect();
     processes
         .iter()
-        .filter(|process| is_build(&process.exe, &trees))
+        .filter(|process| is_build(process, &trees))
         .map(|process| process.started)
         .min()
 }
 
-fn is_build(exe: &Path, trees: &[PathBuf]) -> bool {
-    let named = exe
+/// A build: a [`BUILD_PROGRAMS`] name (each under `p_comm`'s 16 bytes, so macOS
+/// names them whole), or an executable under one of `trees`.
+fn is_build(process: &Process, trees: &[PathBuf]) -> bool {
+    let named = Path::new(&process.name)
         .file_stem()
         .and_then(|stem| stem.to_str())
         .is_some_and(|stem| BUILD_PROGRAMS.contains(&stem));
-    named || trees.iter().any(|tree| exe.starts_with(tree))
+    named
+        || process
+            .exe
+            .as_ref()
+            .is_some_and(|exe| trees.iter().any(|tree| exe.starts_with(tree)))
 }
 
 /// The [`Kept`] identities of `paths` that exist.
@@ -453,7 +486,7 @@ pub fn kept(paths: &[PathBuf]) -> Vec<Kept> {
 fn identity(path: &Path) -> Option<Kept> {
     use std::os::unix::fs::MetadataExt as _;
     let meta = std::fs::metadata(path).ok()?;
-    Some(Kept {
+    Some(Kept::File {
         dev: meta.dev(),
         ino: meta.ino(),
     })
@@ -465,7 +498,7 @@ fn identity(path: &Path) -> Option<Kept> {
 fn identity(path: &Path) -> Option<Kept> {
     let file = std::fs::File::open(path).ok()?;
     let info = winapi_util::file::information(&file).ok()?;
-    Some(Kept {
+    Some(Kept::File {
         dev: info.volume_serial_number(),
         ino: info.file_index(),
     })
@@ -723,11 +756,23 @@ fn allocation(meta: &std::fs::Metadata) -> (u64, u64) {
     (1, meta.len())
 }
 
-/// Whether `path` is one of the kept files, by device and inode.
+/// Whether `path` is one of the kept files: by device and inode, or by a
+/// [`Kept::Named`] its file name begins with.
+//MUTANT-SUITE crates/batten/src/collect.rs
+//MUTANT kept-name-unmatched|s@^            .is_some_and(\x7cfile\x7c file.starts_with(name.as_str())),$@            .is_some_and(\x7cfile\x7c file == name.as_str()),@|a_program_named_only_keeps_every_file_its_name_begins
 fn is_kept(path: &Path, kept: &[Kept]) -> bool {
-    // No identity is read when nothing is kept: on Windows each read opens the
+    let named = kept.iter().any(|kept| match kept {
+        Kept::Named(name) => path
+            .file_name()
+            .and_then(|file| file.to_str())
+            .is_some_and(|file| file.starts_with(name.as_str())),
+        Kept::File { .. } => false,
+    });
+    // No identity is read when no file is kept: on Windows each read opens the
     // file, and a pass ranks thousands of artifacts.
-    !kept.is_empty() && identity(path).is_some_and(|id| kept.contains(&id))
+    named
+        || (kept.iter().any(|kept| matches!(kept, Kept::File { .. }))
+            && identity(path).is_some_and(|id| kept.contains(&id)))
 }
 
 /// Take the collector's lock on `tree`: an exclusive `flock` on the directory
@@ -1008,47 +1053,64 @@ pub fn collect_toward_max(
 
 #[cfg(test)]
 mod tests {
-    use super::{Process, darwin, earliest_build_start, proc_stat};
-    use std::path::PathBuf;
+    use super::{Kept, Process, darwin, earliest_build_start, proc_stat};
+    use std::path::{Path, PathBuf};
     use std::time::{Duration, SystemTime};
 
     fn at(secs: u64) -> SystemTime {
         SystemTime::UNIX_EPOCH + Duration::from_secs(secs)
     }
 
-    /// One `kinfo_proc`: `p_starttime` at offset 0, `p_pid` at 40, the rest
-    /// filler that must never be read.
-    fn kinfo(pid: i32, started: i64) -> Vec<u8> {
+    /// One `kinfo_proc`: `p_starttime` at offset 0, `p_pid` at 40, `p_comm` at
+    /// 243, the rest filler that must never be read; `p_nice`, the byte before
+    /// `p_comm`, is filler too.
+    fn kinfo(pid: i32, started: i64, comm: &str) -> Vec<u8> {
         let mut entry = vec![0xAA; 648];
         entry[0..8].copy_from_slice(&started.to_le_bytes());
         entry[8..12].copy_from_slice(&250_000_i32.to_le_bytes());
         entry[40..44].copy_from_slice(&pid.to_le_bytes());
+        entry[243..260].fill(0);
+        entry[243..243 + comm.len()].copy_from_slice(comm.as_bytes());
         entry
     }
 
     #[test]
-    fn a_kinfo_table_yields_each_pid() {
-        let table: Vec<u8> = [0, 1, 4242]
+    fn a_kinfo_table_yields_each_process() {
+        let table: Vec<u8> = [(0, "kernel_task"), (1, "launchd"), (4242, "cargo-nextest")]
             .into_iter()
-            .flat_map(|pid| kinfo(pid, 1_700_000_000))
+            .flat_map(|(pid, comm)| kinfo(pid, 1_700_000_000, comm))
             .collect();
-        let pids: Vec<i32> = darwin::pids(&table)
+        let names: Vec<String> = darwin::processes(&table)
             .into_iter()
-            .map(|(pid, _)| pid)
+            .map(|process| process.name)
             .collect();
-        assert_eq!(pids, vec![1, 4242], "pid 0 is the kernel");
+        assert_eq!(
+            names,
+            vec!["launchd", "cargo-nextest"],
+            "pid 0 is the kernel"
+        );
         assert!(
-            darwin::pids(&table[..647]).is_empty(),
-            "a short entry is no pid"
+            darwin::processes(&table[..647]).is_empty(),
+            "a short entry is no process"
+        );
+        let full = kinfo(9, 1_700_000_000, "runner-555555555");
+        assert_eq!(
+            darwin::processes(&full)[0].name,
+            "runner-555555555",
+            "a name of all 16 bytes has no NUL inside the field"
         );
     }
 
     #[test]
     fn a_kinfo_table_yields_each_start() {
-        let table = kinfo(7, 1_700_000_123);
+        let table = kinfo(7, 1_700_000_123, "rustc");
         assert_eq!(
-            darwin::pids(&table),
-            vec![(7, at(1_700_000_123) + Duration::from_millis(250))]
+            darwin::processes(&table),
+            vec![Process {
+                exe: None,
+                name: "rustc".to_owned(),
+                started: at(1_700_000_123) + Duration::from_millis(250),
+            }]
         );
     }
 
@@ -1074,7 +1136,8 @@ mod tests {
         assert_eq!(
             super::windows_table::parse(listing),
             vec![Process {
-                exe: PathBuf::from("C:\\Users\\u\\.cargo\\bin\\cargo.exe"),
+                exe: Some(PathBuf::from("C:\\Users\\u\\.cargo\\bin\\cargo.exe")),
+                name: "cargo.exe".to_owned(),
                 started: at(1_700_000_000),
             }]
         );
@@ -1084,7 +1147,13 @@ mod tests {
     fn the_earliest_build_is_the_root() {
         let tree = PathBuf::from("/nonexistent/repo/target");
         let process = |exe: &str, secs| Process {
-            exe: PathBuf::from(exe),
+            exe: Some(PathBuf::from(exe)),
+            name: super::program_name(exe),
+            started: at(secs),
+        };
+        let named = |name: &str, secs| Process {
+            exe: None,
+            name: name.to_owned(),
             started: at(secs),
         };
         let table = [
@@ -1098,90 +1167,65 @@ mod tests {
             Some(at(200)),
             "a test binary under the tree is a build; a shell and the engine are not"
         );
-        assert_eq!(earliest_build_start(&table[..1], &[tree]), None);
+        assert_eq!(
+            earliest_build_start(&table[..1], std::slice::from_ref(&tree)),
+            None
+        );
+        let macos = [
+            named("bash", 100),
+            named("cargo-nextest", 400),
+            named("batten", 50),
+        ];
+        assert_eq!(
+            earliest_build_start(&macos, &[tree]),
+            Some(at(400)),
+            "a process the table names only by name is a build by that name"
+        );
     }
 
+    /// A PROGRAM KNOWN ONLY BY NAME KEEPS EVERY FILE ITS NAME BEGINS (macOS's
+    /// `p_comm`, cut to 16 bytes), and nothing else.
     #[test]
-    fn a_procargs_buffer_yields_its_exec_path() {
-        let mut args = 2i32.to_le_bytes().to_vec();
-        args.extend_from_slice(b"/opt/target/debug/deps/it-0123\0\0\0it\0--exact\0");
-        assert_eq!(
-            darwin::exec_path(&args),
-            Some(PathBuf::from("/opt/target/debug/deps/it-0123"))
-        );
-        assert_eq!(darwin::exec_path(&2i32.to_le_bytes()), None);
-        assert_eq!(darwin::exec_path(&[1, 0]), None);
+    fn a_program_named_only_keeps_every_file_its_name_begins() {
+        let kept = [Kept::Named("runner-555555555".to_owned())];
+        assert!(super::is_kept(
+            Path::new("/t/debug/deps/runner-5555555555555555"),
+            &kept
+        ));
+        assert!(!super::is_kept(
+            Path::new("/t/debug/deps/runner-4444444444444444"),
+            &kept
+        ));
+        assert!(!super::is_kept(
+            Path::new("/t/debug/deps/runner-5555555555555555"),
+            &[]
+        ));
     }
 
     /// THE HOST'S OWN TABLE, READ (CLOUD-2197). Every case above feeds a layout
-    /// by hand; this is the one that reads the real table, so a platform whose
-    /// reads fail is red here rather than "every unit live" in a collection.
-    /// Measured on #1132's macOS run: the collector kept no running binary and
-    /// read every unit live, which is what an unread table yields, and no case
-    /// read the table.
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    /// by hand; this one reads the real table. Measured on #1132's macOS run:
+    /// every read of it failed, the collector kept no running binary and read
+    /// every unit live, and no case had read the table.
     #[test]
-    fn the_host_table_names_this_process() {
-        #[cfg(target_os = "macos")]
-        darwin_reads_name_this_process();
+    fn the_host_table_holds_this_process() {
         let Some(table) = super::processes() else {
             panic!("the host's process table did not read");
         };
         let Ok(me) = std::env::current_exe().and_then(std::fs::canonicalize) else {
             panic!("this test binary has no path");
         };
-        let mine: Vec<&Process> = table
-            .iter()
-            .filter(|process| std::fs::canonicalize(&process.exe).is_ok_and(|exe| exe == me))
-            .collect();
+        let file = me
+            .file_name()
+            .and_then(|file| file.to_str())
+            .unwrap_or_default();
         assert!(
-            !mine.is_empty(),
-            "{} processes, none executing {}",
+            table.iter().any(|process| match &process.exe {
+                Some(exe) => std::fs::canonicalize(exe).is_ok_and(|exe| exe == me),
+                None => !process.name.is_empty() && file.starts_with(process.name.as_str()),
+            }),
+            "{} processes, none running {}",
             table.len(),
             me.display()
-        );
-        let now = SystemTime::now();
-        let hour = Duration::from_secs(3600);
-        assert!(
-            mine.iter()
-                .any(|process| process.started > now - hour && process.started <= now + hour),
-            "this process started within the hour: {mine:?}"
-        );
-    }
-
-    /// Each Darwin read [`super::processes`] makes, named, so the step that
-    /// fails is the message.
-    #[cfg(target_os = "macos")]
-    fn darwin_reads_name_this_process() {
-        use sysctl::Sysctl as _;
-        let raw = |ctl: &sysctl::Ctl, what: &str| match ctl.value() {
-            Ok(sysctl::CtlValue::Node(raw) | sysctl::CtlValue::Struct(raw)) => raw,
-            Ok(other) => panic!("`{what}` read as {other:?}"),
-            Err(error) => panic!("`{what}` did not read: {error}"),
-        };
-        let all = match sysctl::Ctl::new("kern.proc.all") {
-            Ok(ctl) => ctl,
-            Err(error) => panic!("`kern.proc.all` names no oid: {error}"),
-        };
-        let table = raw(&all, "kern.proc.all");
-        let pids = darwin::pids(&table);
-        let Ok(me) = i32::try_from(std::process::id()) else {
-            panic!("a pid past i32");
-        };
-        assert!(
-            pids.iter().any(|(pid, _)| *pid == me),
-            "{} bytes, {} pids, none {me}",
-            table.len(),
-            pids.len()
-        );
-        let args = raw(
-            &sysctl::Ctl::Oid(vec![1, 49, me]),
-            "kern.procargs2 <this pid>",
-        );
-        assert!(
-            darwin::exec_path(&args).is_some(),
-            "`kern.procargs2` held no exec path in {} bytes",
-            args.len()
         );
     }
 }
