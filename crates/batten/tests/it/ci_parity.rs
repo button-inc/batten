@@ -605,10 +605,17 @@ fn an_approximation_whose_bodies_no_longer_share_the_triple_is_refused() {
             "for t in x86_64-pc-windows-gnu aarch64-apple-darwin; do",
         ),
     );
+    // BOTH halves: the stale declaration, AND the exemption withdrawn so the
+    // lane is owed to `verify` again. The anti-vacuity arm alone would hold a
+    // mutant that kept the exemption green.
     let raised = verdicts_raised(&root);
     assert!(
         raised.iter().any(|v| v == "task admit stale"),
         "an approximator that stopped covering the triple should be refused: {raised:?}"
+    );
+    assert!(
+        raised.iter().any(|v| v == "task run missing"),
+        "a stale approximation exempts nothing: {raised:?}"
     );
 }
 
@@ -626,6 +633,10 @@ fn an_approximator_verify_never_reaches_is_still_refused() {
     assert!(
         raised.iter().any(|v| v == "task admit stale"),
         "an approximator verify never reaches should be refused: {raised:?}"
+    );
+    assert!(
+        raised.iter().any(|v| v == "task run missing"),
+        "an unreached approximation exempts nothing: {raised:?}"
     );
 }
 
@@ -850,9 +861,12 @@ fn a_pull_request_job_missing_from_the_roster_is_refused() {
             "  extra:\n    name: extra\n    runs-on: ubuntu-latest\n    steps:\n      - run: mise run lint\n  final:",
         ),
     );
+    // THE ROSTER'S OWN VERDICT, never any finding: the extra job also trips
+    // other arms, which would hold a mutant of this one green.
+    let raised = verdicts_raised(&root);
     assert!(
-        !findings(&root).is_empty(),
-        "a pull_request job missing from the roster should be refused"
+        raised.iter().any(|v| v == "job list missing"),
+        "a pull_request job missing from the roster should be refused: {raised:?}"
     );
 }
 
@@ -1648,14 +1662,17 @@ fn the_cut_pushes_the_bump_with_the_pat() {
 
 #[test]
 fn only_the_cut_dispatches_release_artifacts() {
-    assert!(wire_wrong(
-        "release-second-dispatcher",
-        &[(
-            "release-guard.yml",
-            "      - run: batten release settings --probe",
-            "      - run: batten release settings --probe\n      - run: gh workflow run release-artifacts.yml",
-        )],
-    ));
+    // A SECOND COPY OF THE CUT, so the one-dispatcher arm is the only wire it
+    // breaks. A dispatcher bolted onto another job also owes the freeze, the
+    // cut's gates and serialisation, and those arms share the verdict: they
+    // would hold a mutant of this one green.
+    let root = release_tree("release-second-dispatcher", &[]);
+    common::write(&root, ".github/workflows/second-cut.yml", RELEASE_CUT);
+    let raised = verdicts_raised(&root);
+    assert!(
+        raised.iter().any(|v| v == "release wire wrong"),
+        "a second dispatcher of the build should be refused: {raised:?}"
+    );
 }
 
 #[test]

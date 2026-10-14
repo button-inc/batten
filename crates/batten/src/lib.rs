@@ -9246,6 +9246,69 @@ fn explain_json(
     })
 }
 
+/// Whether one policy module's own `test_<case>` rule passes under `root`'s
+/// committed config: `Some(true)` passed, `Some(false)` failed, `None` when no
+/// registered rule's module is `module` or the module declares no such test
+/// (CLOUD-2255).
+///
+/// THE MUTATION SWEEP'S REGO SUITE, IN PROCESS. A `#MUTANT` row in a module
+/// that names one of the module's own tests is judged by that test, the way
+/// `opa test --run` selects one: through the same load, input and evaluator
+/// `policy test` uses, over the staged (mutated) tree, so the registry data the
+/// module reads is supplied and nothing is spawned. Conftest, the other `.rego`
+/// suite, supplies none of it.
+///
+/// # Errors
+///
+/// When the config under `root` does not resolve or a bundle does not load:
+/// could-not-look, never a pass.
+pub fn policy_case(root: &Path, module: &str, case: &str) -> Result<Option<bool>> {
+    let config = resolve::resolve(root, &resolve::Overrides::default())?;
+    let Some(rule) = config.rules.iter().find(|rule| {
+        rule.kind == rules::RuleKind::Policy && rule.module.as_deref() == Some(module)
+    }) else {
+        return Ok(None);
+    };
+    // EVERY ROW LOADED, ONE EVALUATED: the registry check holds the declared
+    // verdicts against the raisers among the loaded bundles, so loading the one
+    // row would refuse every class another module raises.
+    let bundles = policy::load(
+        root,
+        &config.rules,
+        policy::Vocabulary {
+            patterns: &config.patterns,
+            verdicts: &config.verdicts,
+            words: (!config.vocabulary.is_empty()).then_some(&config.vocabulary),
+            recorders: &config.recorders,
+            registers: &config.registers,
+            traversals: &config.traversals,
+            records: &config.records,
+        },
+        policy::ModuleChecks::Run,
+        None,
+    )?;
+    let Some(bundle) = bundles.iter().find(|bundle| bundle.id() == rule.id) else {
+        return Ok(None);
+    };
+    let tracked = rules::tree_files(root)?;
+    let documents = rules::acquire_declared(std::slice::from_ref(rule), root, &tracked)?;
+    let (input, _) = suite_input(rule, &documents, &tracked)?;
+    let facts::Look::Is(suite) =
+        policy::test(bundle, &input, rule.scope == rules::RuleScope::MediatedCall)?
+    else {
+        return Ok(None);
+    };
+    let name = format!("test_{case}");
+    let named = |ids: &[policy::TestId]| ids.iter().any(|id| id.name == name);
+    Ok(if named(&suite.passed) {
+        Some(true)
+    } else if named(&suite.failed) {
+        Some(false)
+    } else {
+        None
+    })
+}
+
 // The length is the four report terms rendered in two output shapes, and the
 // exit derivation beneath them. Splitting the rendering out would separate the
 // terms from the verdict they feed, which is exactly the drift the exit

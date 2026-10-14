@@ -604,6 +604,10 @@ fn a_git_commit_inside_a_quoted_span_is_prose() {
     let root = fixture("quoted-span");
     allowed(&root, "echo \"git commit\"");
     allowed(&root, "echo 'git commit'");
+    // The single-quote pass's own discriminating spelling: a span with no
+    // separator is safe by program anchoring alone, so only a `;` inside one
+    // shows the scrub ran.
+    allowed(&root, "echo 'note; git commit -x'");
 }
 
 // carried: "a quoted span carrying a list separator is not a list" crates/batten/tests/it/run_shape.rs
@@ -776,11 +780,16 @@ fn a_backgrounded_wait_polling_a_task_output_file_is_refused() {
     // session, every result delivered twice by the completion notification that
     // fires anyway, none of them changing a decision — against a `PreToolUse`
     // registration that was wired, was asked, and answered allow.
+    //
+    // THE VERDICT, not the deny: without the probe the same call falls to
+    // `timer run refused`, so only `task watch duplicate` shows the file was read.
     let root = fixture("polls-a-task-output");
-    denied_background(
-        &root,
-        "until grep -q LAND_EXIT /tmp/claude-0/x/tasks/bamwztknb.output; do sleep 20; done",
-        true,
+    let command =
+        "until grep -q LAND_EXIT /tmp/claude-0/x/tasks/bamwztknb.output; do sleep 20; done";
+    let (deny, text) = hook_background(&root, command, true);
+    assert!(
+        deny && text.contains("task watch duplicate"),
+        "`{command}` should be refused as a duplicate watch: {text}"
     );
 }
 

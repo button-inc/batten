@@ -503,6 +503,30 @@ fn the_in_diff_patch_is_written_without_git() {
     );
 }
 
+/// A MODULE'S OWN TEST IS RUN IN PROCESS, AS `policy test` RUNS IT (CLOUD-2255):
+/// the case a `.rego` row names in its own module is judged by that `test_`
+/// rule, under the committed config's registry, with no conftest spawned.
+#[test]
+fn a_modules_own_test_is_run_in_process() {
+    let root = common::at_root("");
+    assert_eq!(
+        batten::policy_case(
+            &root,
+            "policy/run-shape.rego",
+            "a_backgrounded_bare_sleep_raises_only_the_timer"
+        )
+        .expect("the committed config resolves"),
+        Some(true),
+        "a committed module test passes"
+    );
+    assert_eq!(
+        batten::policy_case(&root, "policy/run-shape.rego", "no_such_case")
+            .expect("the committed config resolves"),
+        None,
+        "a name the module does not declare is no case"
+    );
+}
+
 /// A ROW APPLIES WITHOUT SPAWNING, WITH SED'S MEANING (CLOUD-2255): the first match
 /// on each line, `&` the whole match, `\&` a literal ampersand, `\x7c` a pipe, an
 /// escaped delimiter literal; anything outside the one-substitution subset is

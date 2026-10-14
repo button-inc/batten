@@ -257,6 +257,31 @@ fn live(profile: &Path, name: &str, hash: &str, age_seconds: u64, bytes: usize) 
         .unwrap();
 }
 
+/// THE COMMITTED `build` ROOT IS DECLARED BASIS-MOVING (CLOUD-2192). Losing the
+/// compiled build scripts makes the next build cold, so the repository's own
+/// `[[prune.regrowable]]` row says so; `#MUTANT build-root-declared-warm` turns
+/// it warm and this case reads the committed file.
+#[test]
+fn the_committed_build_root_is_basis_moving() {
+    let text = std::fs::read_to_string(common::at_root("batten.toml")).unwrap();
+    let config: toml::Value = toml::from_str(&text).unwrap();
+    let build = config
+        .get("prune")
+        .and_then(|prune| prune.get("regrowable"))
+        .and_then(toml::Value::as_array)
+        .and_then(|roots| {
+            roots
+                .iter()
+                .find(|root| root.get("name").and_then(toml::Value::as_str) == Some("build"))
+        })
+        .expect("the committed batten.toml declares a `build` regrowable root");
+    assert_eq!(
+        build.get("cold").and_then(toml::Value::as_bool),
+        Some(true),
+        "the `build` root is basis-moving: losing it makes the next build cold"
+    );
+}
+
 /// THE VERB IS ONE COLLECTION, and the spec's own case. Two live units of known
 /// size, free space one MiB short of `max_free_mb`: the older unit goes, the
 /// line is `disk-collected …`, and the exit is 0 — no floor, no basis, no

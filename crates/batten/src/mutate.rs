@@ -3175,6 +3175,11 @@ fn judge_row(root: &Path, staged: &mut Staged, gate: &Gate, row: &Row) -> Result
     // this row's suite may compose over it.
     staged.restore(root)?;
     staged.stage_subject(root, &row.source)?;
+    if declares_own_case(root, row)
+        && let Some(verdict) = judge_by_module(root, staged, row)?
+    {
+        return Ok(verdict);
+    }
     // The row's OWN source's suite, never merely the gate's first: a preset
     // gate is several modules, each naming where its cases live.
     let Some(suite) = gate.suite_for(row) else {
@@ -3255,6 +3260,53 @@ fn judge_row(root: &Path, staged: &mut Staged, gate: &Gate, row: &Row) -> Result
         });
     }
     Ok(Verdict::Caught)
+}
+
+/// Whether a `.rego` row's case is a `test_` rule the mutated module itself
+/// declares (CLOUD-2255): an exact name in the module's own text, never a guess
+/// at which suite a name belongs to.
+fn declares_own_case(root: &Path, row: &Row) -> bool {
+    has_extension(&row.source, "rego")
+        && lines_of(root, &row.source).is_some_and(|lines| {
+            let rule = format!("test_{} ", row.want);
+            lines.iter().any(|line| line.starts_with(&rule))
+        })
+}
+
+/// A row judged by its module's own test tier, in process ([`crate::policy_case`]),
+/// with the same three-step discipline as a suite: green before the mutation,
+/// a change that touches code, red after it. A fault is could-not-look, never a
+/// catch: a mutation that breaks the module's parse is not one its case caught.
+///
+/// `None` when the module is no registered row's (a preset's module is loaded
+/// another way), so the row falls to its declared suite rather than reading as
+/// naming no case.
+fn judge_by_module(root: &Path, staged: &mut Staged, row: &Row) -> Result<Option<Verdict>> {
+    let want = row.want.clone();
+    match crate::policy_case(staged.dir(), &row.source, &row.want) {
+        Ok(Some(true)) => {}
+        Ok(Some(false)) => return Ok(Some(Verdict::CaseAlreadyRed { want })),
+        Ok(None) => return Ok(None),
+        Err(_) => return Ok(Some(Verdict::SuiteDidNotRun { want })),
+    }
+    if let Some(refused) = apply(staged, row)? {
+        return Ok(Some(refused));
+    }
+    let (changed, code_lines) = diff_shape(root, staged, &row.source);
+    if !changed {
+        return Ok(Some(Verdict::InertMutation));
+    }
+    if code_lines == 0 {
+        return Ok(Some(Verdict::SelfMutatingRow));
+    }
+    Ok(Some(
+        match crate::policy_case(staged.dir(), &row.source, &row.want) {
+            Ok(Some(false)) => Verdict::Caught,
+            Ok(Some(true)) => Verdict::Survived { want },
+            Ok(None) => Verdict::NamesNoCase { want },
+            Err(_) => Verdict::SuiteDidNotRun { want },
+        },
+    ))
 }
 
 /// The could-not-look a run's reach names, or `None` where it reported cases.
