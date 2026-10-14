@@ -1004,6 +1004,11 @@ fn a_mutation_its_suite_catches_is_a_pass() {
     let (code, out, err) = sweep(&root, "toy");
     assert_eq!(code, 0, "{out}{err}");
     assert!(out.contains("every one caught"), "{out}");
+    // A Cargo row not yet recorded caught owes the up-front build, and says so.
+    assert!(
+        err.contains("mutate sweep: building the cargo suites"),
+        "the first sweep builds: {err}"
+    );
 
     // AND AGAIN OVER THE SAME ROOT, which is a second property carried by this
     // case rather than a second case, because `platform-gated-test-added` is a
@@ -1025,6 +1030,11 @@ fn a_mutation_its_suite_catches_is_a_pass() {
         "a second sweep over the persisted staged tree still runs: {out}{err}"
     );
     assert!(out.contains("every one caught"), "{out}");
+    // Every Cargo row is recorded caught now, so no build is owed (CLOUD-2253).
+    assert!(
+        !err.contains("mutate sweep: building the cargo suites"),
+        "the second sweep builds nothing: {err}"
+    );
 }
 
 #[cfg(unix)]

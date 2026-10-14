@@ -68,6 +68,9 @@ const REPO: &str = "acme/widgets";
 /// The tag every fixture release is cut from.
 const TAG: &str = "v9.9.9";
 
+/// The commit that tag and its release name.
+const TAGGED: &str = "0123456789abcdef0123456789abcdef01234567";
+
 /// Where the rule row reads the expected list from.
 const WORKFLOW_PATH: &str = ".github/workflows/release-artifacts.yml";
 
@@ -208,13 +211,30 @@ fn forge(name: &str, assets: &[String], manifest: Option<&str>) -> PathBuf {
         .enumerate()
         .map(|(index, (asset, _))| serde_json::json!({"id": 10 + index, "name": asset}))
         .collect();
-    let body = serde_json::json!({"tag_name": TAG, "assets": listing}).to_string();
+    // Published, immutable and tagged at its target, so `release verify` reads
+    // it as `record release` does and judges only what the module demands.
+    let body = serde_json::json!({
+        "tag_name": TAG,
+        "assets": listing,
+        "draft": false,
+        "immutable": true,
+        "target_commitish": TAGGED,
+    })
+    .to_string();
     write(
         &forge,
         "release",
         &format!("HTTP/2 200\ncontent-type: application/json\n\n{body}\n"),
     );
-    let mut routes = String::from("/releases/tags/\trelease\n/releases/latest\trelease\n");
+    write(
+        &forge,
+        "tag",
+        &format!(
+            "HTTP/2 200\ncontent-type: application/json\n\n{{\"object\":{{\"type\":\"commit\",\"sha\":\"{TAGGED}\"}}}}\n"
+        ),
+    );
+    let mut routes =
+        String::from("/releases/tags/\trelease\n/releases/latest\trelease\n/git/ref/tags/\ttag\n");
     for (index, (_, bytes)) in served.iter().enumerate() {
         let file = format!("asset.{}", 10 + index);
         write(
@@ -448,6 +468,47 @@ fn an_unreadable_release_is_could_not_look_and_leaves_no_record() {
     let (dir, forge) = pinned("download-fails", &assets);
     write(&forge, "asset.10", "HTTP/2 404\n\n{}");
     assert_eq!(produce(&dir, &forge, Some(TAG)).status.code(), Some(3));
+}
+
+/// `release verify` asks the same module (CLOUD-2033's G1): each name it
+/// demands that the release lacks is a refusal of its own, by name.
+#[test]
+fn release_verify_names_each_target_the_release_lacks() {
+    let dir = repo("verify-partial", Some(WORKFLOW));
+    let forge = forge(
+        "verify-partial",
+        &["batten-9.9.9-x86_64-unknown-linux-gnu.tar.gz".to_owned()],
+        None,
+    );
+    let verified = against(&dir, &forge, &["release", "verify", TAG]);
+    let text = said(&verified);
+    assert_eq!(verified.status.code(), Some(2), "{text}");
+    assert!(
+        text.lines().any(|line| {
+            line.starts_with("release verify: missing ") && line.contains("aarch64-apple-darwin")
+        }),
+        "the absent target is named: {text}"
+    );
+}
+
+/// And where the module cannot derive the list, `release verify` could not
+/// look: an unknown list demands nothing, so it is never read as complete.
+#[test]
+fn release_verify_could_not_look_where_the_list_cannot_be_derived() {
+    let assets = complete(&[]);
+    let dir = repo("verify-unlisted", None);
+    let forge = forge(
+        "verify-unlisted",
+        &assets,
+        Some(&manifest_over(&assets, None)),
+    );
+    let verified = against(&dir, &forge, &["release", "verify", TAG]);
+    let text = said(&verified);
+    assert_eq!(verified.status.code(), Some(3), "{text}");
+    assert!(
+        text.contains("could not read what a release must carry"),
+        "{text}"
+    );
 }
 
 #[test]

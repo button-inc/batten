@@ -3382,12 +3382,16 @@ fn record_caught(record: &Path, key: &str) {
 /// is the honest verdict, so nothing is decided here. NOT AT ALL when every
 /// Cargo row is already recorded caught (CLOUD-2253): the build is minutes and
 /// no row would use it.
+///
+/// SAID ON `progress` WHEN IT BUILDS: the build is minutes, so a sweep that
+/// paid it says so, and a sweep that skipped it is told apart by its silence.
 fn build_if_owed(
     root: &Path,
     names: &[String],
     registry: &Registry,
     caught: &std::collections::HashSet<String>,
     staged: &Staged,
+    progress: &mut dyn std::io::Write,
 ) {
     let owed = names
         .iter()
@@ -3400,6 +3404,10 @@ fn build_if_owed(
             })
         });
     if owed {
+        let _ = writeln!(
+            progress,
+            "mutate sweep: building the cargo suites the rows run under"
+        );
         let args = vec![String::from("test"), String::from("--no-run")];
         let _ = spawn(
             staged.dir(),
@@ -3461,7 +3469,7 @@ pub fn sweep_owned(
     let record = work.join(CAUGHT_RECORD);
     let caught = recorded_caught(&record);
     let mut staged = Staged::new(root, work)?;
-    build_if_owed(root, names, registry, &caught, &staged);
+    build_if_owed(root, names, registry, &caught, &staged, progress);
     let mut findings = Vec::new();
     let mut declared = 0;
     for name in names {

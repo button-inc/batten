@@ -554,6 +554,16 @@ fn every_check_is_reported_not_just_the_first_failure() {
     // harness declaring neither a fetched spelling nor the row that owes the
     // survey (CLOUD-472), which is a defect in the crate and not in a tree.
     assert!(text.contains("doctor: 6 check(s), 2 failed"), "got: {text}");
+    // AND EACH FAILURE IS LABELLED ON STDERR (CLOUD-2078), where an agent reads
+    // it: the class and the check it names, one finding per failing check.
+    let said = common::stderr(&output);
+    for check in ["config", "git-repo"] {
+        assert!(
+            said.lines()
+                .any(|line| line.contains("workspace state broken") && line.contains(check)),
+            "{check} is labelled: {said}"
+        );
+    }
 }
 
 // --- doctor never renders a policy verdict -----------------------------------

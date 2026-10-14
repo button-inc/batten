@@ -201,3 +201,24 @@ pub fn version_of(manifest: &str) -> Option<String> {
         .as_str()
         .map(ToOwned::to_owned)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::version_of;
+
+    /// The workspace's version first, a package's otherwise, and nothing from
+    /// a manifest that declares neither or does not parse.
+    #[test]
+    fn a_manifest_names_its_workspace_version_or_its_package_version() {
+        assert_eq!(
+            version_of("[workspace.package]\nversion = \"0.0.216\"\n").as_deref(),
+            Some("0.0.216")
+        );
+        assert_eq!(
+            version_of("[package]\nname = \"x\"\nversion = \"1.2.3\"\n").as_deref(),
+            Some("1.2.3")
+        );
+        assert_eq!(version_of("[workspace]\nmembers = []\n"), None);
+        assert_eq!(version_of("not = [toml"), None);
+    }
+}

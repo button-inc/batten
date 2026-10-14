@@ -374,6 +374,57 @@ fn release_path_posts_success_for_an_inherited_pin_on_the_graded_head() {
     );
 }
 
+/// A post the forge refuses is could-not-post, never "posted": the verdict
+/// printed is not the status the forge holds.
+#[test]
+fn release_path_reports_a_refused_post_rather_than_posting_it() {
+    let version = env!("CARGO_PKG_VERSION");
+    let repo = common::Fixture::new("release-path-refused-post")
+        .config(&format!(
+            "version = 1\nengine = {{ release = \"v{version}\" }}\n"
+        ))
+        .file(
+            "Cargo.toml",
+            &format!("[workspace.package]\nversion = \"{version}\"\n"),
+        )
+        .base_commit()
+        .file("src.txt", "work\n")
+        .work_commit()
+        .build();
+    common::git_in(
+        &repo,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/acme/widgets.git",
+        ],
+    );
+    let head = common::git_in(&repo, &["rev-parse", "HEAD"])
+        .trim()
+        .to_owned();
+    let forge = common::scratch("release-path-refused-forge");
+    common::write(
+        &forge,
+        "status",
+        "HTTP/2 500\ncontent-type: application/json\n\n{\"message\":\"no\"}\n",
+    );
+    common::write(&forge, "routes", "/statuses/\tstatus\n");
+    let output = common::batten()
+        .current_dir(&repo)
+        .env("BATTEN_REST_FIXTURE", &forge)
+        .args(["release", "path", &head, "--post"])
+        .output()
+        .expect("run release path");
+    assert_eq!(output.status.code(), Some(3), "{}", common::stderr(&output));
+    assert!(
+        common::stderr(&output).contains("could not post: the forge answered 500"),
+        "{}",
+        common::stderr(&output)
+    );
+    assert!(!common::stdout(&output).contains("posted"));
+}
+
 /// The read, over the fixture forge: the release object's `draft`,
 /// `immutable` and `target_commitish`, and the tag's commit peeled.
 #[test]

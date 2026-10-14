@@ -24529,6 +24529,7 @@ fn run_release_path(
 
 /// Post `verdict` as the `release-path` status on `sha`: `None` when posted,
 /// or the exit code of a post that failed.
+//MUTANT-SUITE crates/batten/tests/it/release_verify.rs
 fn post_release_path(
     slug: &str,
     sha: &str,
@@ -24646,6 +24647,7 @@ fn release_path_verdict(
 /// The names `policy/release-assets.rego` demands that release `tag` lacks: the
 /// release's record written, then that one rule run over it (CLOUD-2033). The
 /// set is the module's, never restated.
+//MUTANT-SUITE crates/batten/tests/it/release_assets.rs
 fn release_assets_missing(
     tag: &str,
     mode: Mode,
@@ -24673,27 +24675,30 @@ fn release_assets_missing(
         ),
     )
     .map_err(|why| why.to_string())?;
-    let findings: serde_json::Value =
+    let report: serde_json::Value =
         serde_json::from_slice(&json).map_err(|_| format!("`{RULE}` did not answer in JSON"))?;
+    // THE REPORT IS POINTER-ONLY: `{"findings": [...]}`, each a rule and a
+    // `path`, with no verdict and no subjects. This read once asked for both, so
+    // it found nothing and `release verify` never named a missing target
+    // (measured on #1132, by the mutants that survived it). The two answers are
+    // told apart by the pointer, as `release_assets.rs` pins on the text
+    // channel: `release read partial` points at the workflow it could not derive
+    // the list from, a path, and `release ship missing` at the asset, a name an
+    // uploaded asset cannot spell with a `/`.
     let mut missing = Vec::new();
-    for finding in findings.as_array().into_iter().flatten() {
-        match finding.get("verdict").and_then(serde_json::Value::as_str) {
-            Some("release ship missing") => missing.extend(
-                finding
-                    .get("subjects")
-                    .and_then(serde_json::Value::as_array)
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|subject| {
-                        subject.get("artifact").and_then(serde_json::Value::as_str)
-                    })
-                    .map(ToOwned::to_owned),
-            ),
-            Some("release read partial") => {
-                return Err(format!("`{RULE}` could not read what a release must carry"));
-            }
-            _ => {}
+    for finding in report
+        .get("findings")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let Some(path) = finding.get("path").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        if path.contains('/') {
+            return Err(format!("`{RULE}` could not read what a release must carry"));
         }
+        missing.push(path.to_owned());
     }
     Ok(missing)
 }
@@ -26559,6 +26564,7 @@ fn run_diagnose(json: bool, out: &mut dyn Write, err: &mut dyn Write) -> Result<
 /// the stdout data lines are untouched, and what an agent reads carries the
 /// labels. Full for the first item of each class in the invocation, the
 /// pointer for the rest, so one invocation states a definition once.
+//MUTANT-SUITE crates/batten/tests/it/doctor.rs
 fn print_labelled(err: &mut dyn Write, findings: &[refusal::Refusal]) -> Result<()> {
     let mut stated = std::collections::BTreeSet::new();
     for finding in findings {
@@ -27075,6 +27081,13 @@ mod tests {
             "{line}"
         );
         assert!(line.contains("will lose again"), "{line}");
+
+        // ONE LEASE WAIT IS THE OTHER READING: the fleet was saturated, so the
+        // advice is to run again rather than to read the laps.
+        ledger.lease_waits = 1;
+        let waited = land_spent_refusal(3, &ledger).render_finding(Arm::Full);
+        assert!(waited.contains("run this again"), "{waited}");
+        assert!(!waited.contains("will lose again"), "{waited}");
     }
 
     /// The default lease waits, at the shipped TTL, fit inside an hour, so the

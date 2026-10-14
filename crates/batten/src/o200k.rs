@@ -112,7 +112,6 @@ fn dfa() -> Option<&'static regex_automata::dfa::sparse::DFA<&'static [u8]>> {
 /// ends `\s+(?!\S)|\s+`; the DFA has `\s+` alone, so a whitespace run with no
 /// newline, two or more characters long and followed by a non-space, gives up
 /// its last character to the next piece — exactly what the lookahead does.
-/// A position nothing matches is skipped, as tiktoken skips it.
 //MUTANT-SUITE crates/batten/src/o200k.rs
 //MUTANT lookahead-untrimmed|s@^                        .is_some_and(\x7cnext\x7c !next.is_whitespace())$@                        .is_some_and(\x7c_\x7c false)@|counts_match_tiktoken
 fn pieces<'a>(
@@ -122,36 +121,42 @@ fn pieces<'a>(
     use regex_automata::dfa::Automaton as _;
     let mut at = 0;
     std::iter::from_fn(move || {
-        while at < text.len() {
-            let input = regex_automata::Input::new(text)
-                .range(at..)
-                .anchored(regex_automata::Anchored::Yes);
-            if let Ok(Some(found)) = dfa.try_search_fwd(&input)
-                && found.offset() > at
-            {
-                let mut end = found.offset();
-                let piece = text.get(at..end).unwrap_or_default();
-                let rest = text.get(end..).unwrap_or_default();
-                if piece.chars().all(char::is_whitespace)
-                    && !piece.contains(['\r', '\n'])
-                    && piece.chars().nth(1).is_some()
-                    && rest
-                        .chars()
-                        .next()
-                        .is_some_and(|next| !next.is_whitespace())
-                {
-                    end -= piece.chars().last().map_or(0, char::len_utf8);
-                }
-                let out = text.get(at..end).unwrap_or_default();
-                at = end;
-                return Some(out);
+        let remaining = text.get(at..).filter(|remaining| !remaining.is_empty())?;
+        let input = regex_automata::Input::new(text)
+            .range(at..)
+            .anchored(regex_automata::Anchored::Yes);
+        // EVERY POSITION MATCHES: each alternative of o200k's pattern consumes
+        // a character, and a probe over control, format, combining, private-use
+        // and separator characters found none the DFA fails at (measured on
+        // #1132). The skip-one-character fallback this replaces was therefore
+        // unreachable, and cargo-mutants' mutants of it could only survive. A
+        // DFA that cannot search at all ends the pieces with the rest whole.
+        let found = match dfa.try_search_fwd(&input) {
+            // `!=` rather than `>`: an anchored forward match never ends
+            // before `at`, so the two agree, and `>`'s `>=` mutant would be
+            // equivalent — a survivor no case could kill.
+            Ok(Some(found)) if found.offset() != at => found,
+            _ => {
+                at = text.len();
+                return Some(remaining);
             }
-            at += text
-                .get(at..)
-                .and_then(|rest| rest.chars().next())
-                .map_or(1, char::len_utf8);
+        };
+        let mut end = found.offset();
+        let piece = text.get(at..end).unwrap_or_default();
+        let rest = text.get(end..).unwrap_or_default();
+        if piece.chars().all(char::is_whitespace)
+            && !piece.contains(['\r', '\n'])
+            && piece.chars().nth(1).is_some()
+            && rest
+                .chars()
+                .next()
+                .is_some_and(|next| !next.is_whitespace())
+        {
+            end -= piece.chars().last().map_or(0, char::len_utf8);
         }
-        None
+        let out = text.get(at..end).unwrap_or_default();
+        at = end;
+        Some(out)
     })
 }
 
