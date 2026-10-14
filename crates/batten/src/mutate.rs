@@ -1511,8 +1511,22 @@ pub fn run_registered(
             String::from("--output"),
             output.to_string_lossy().into_owned(),
         ];
+        // A SHARD SKIPS THE BASELINE, as the book's CI recipe does
+        // (mutants.rs/shards.html). One invocation per source meant every shard
+        // built and tested 157 unmutated baselines, most for sources with no
+        // mutant in that shard: measured on #1132, the shards ran past their
+        // 120-minute bound and only one finished. The CI job that shards
+        // (`ci.yml`'s `mutants`) needs `ci`, whose suite has already passed,
+        // which is the book's precondition; `--timeout` stands in for the
+        // per-mutant bound the baseline would have measured.
         if let Some(shard) = shard {
-            args.extend([String::from("--shard"), shard.to_owned()]);
+            args.extend([
+                String::from("--shard"),
+                shard.to_owned(),
+                String::from("--baseline=skip"),
+                String::from("--timeout"),
+                SHARD_MUTANT_TIMEOUT_SECS.to_string(),
+            ]);
         }
         args.extend([String::from("--"), String::from("-E"), scope]);
         let ran = spawn(
@@ -1528,6 +1542,10 @@ pub fn run_registered(
     }
     Ok(result)
 }
+
+/// One mutant's test bound in a sharded run, which skips the baseline that
+/// would otherwise measure it: the book's CI recipe's `--timeout 300`.
+const SHARD_MUTANT_TIMEOUT_SECS: u64 = 300;
 
 /// How long one registered run over one source may take: a build per mutant.
 fn runner_bound() -> std::time::Duration {
