@@ -475,6 +475,41 @@ fn one_call_cannot_satisfy_its_own_prerequisite() {
     );
 }
 
+/// THE ORDER ROWS ARE DECLARED IN DECIDES NOTHING (CLOUD-2261). Here the
+/// dependent is declared before its writer, both on the same dispatch: on the
+/// second call an earlier record IS on file, and a dependent run first would
+/// claim it before this call's writer marked it as this call's own. Declared
+/// mutation: `dependent-before-writer`.
+#[test]
+fn a_dependent_declared_first_still_waits_for_its_writer() {
+    let dir = common::Fixture::new("review-completion-order")
+        .config(&format!(
+            "version = 1\n\n\
+             [[mint]]\nname = \"{RECEIPT}\"\ntool = \"Skill\"\n\
+             selects_at = \"skill\"\nselects = \"{RECEIPT}\"\n\
+             after = \"{RECEIPT}-dispatched\"\nkey = \"delta\"\n\
+             key_base = \"refs/remotes/origin/main\"\nmode = \"replace\"\n\
+             body = \"{{now}}\"\n\n\
+             [[mint]]\nname = \"{RECEIPT}-dispatched\"\ntool = \"Skill\"\n\
+             selects_at = \"skill\"\nselects = \"{RECEIPT}\"\nkey = \"delta\"\n\
+             key_base = \"refs/remotes/origin/main\"\nmode = \"replace\"\n\
+             body = \"{{now}}\"\n"
+        ))
+        .file("README.md", "base\n")
+        .git()
+        .base_commit()
+        .build();
+    change(&dir, "fn a() {}\n");
+
+    dispatch(&dir, RECEIPT);
+    dispatch(&dir, RECEIPT);
+    assert_ne!(
+        status(&dir).status.code(),
+        Some(0),
+        "a dependent declared first spent the dispatch an earlier call left"
+    );
+}
+
 /// A BASE THAT DOES NOT RESOLVE IS THE CHECKOUT'S PROBLEM, NOT A VERDICT
 /// (CLOUD-2260). Reading it as `missing` would hand the caller a remedy, review
 /// again, that can never clear it. Declared mutation: `delta-base-unchecked`.

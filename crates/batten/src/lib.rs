@@ -19908,6 +19908,7 @@ pub fn mint_receipts_for_test(
 /// for the harness envelope. Every failure is silent, as the mint boundary has
 /// always been: the gate that reads the receipt simply denies again.
 //MUTANT dispatch-not-spent|s@^                clear_minted(&claimed)$@                std::fs::rename(\&claimed, \&original)@|a_dispatched_review_answers_only_once_it_completes
+//MUTANT dependent-before-writer|s@^    ordered.sort_by_key(|mint| mint.after.is_some());$@    ordered.sort_by_key(|_| 0);@|a_dependent_declared_first_still_waits_for_its_writer
 //MUTANT prerequisite-read-live|s@^                if written_now.contains(&prerequisite) {$@                if false {@|one_call_cannot_satisfy_its_own_prerequisite
 //MUTANT completion-ignores-dispatch|s@^                if std::fs::rename(&original, &claimed).is_err() {$@                if std::fs::rename(\&original, \&claimed).is_err() \&\& false {@|a_completion_without_a_dispatch_of_this_change_mints_nothing
 fn mint_receipts(
@@ -19931,7 +19932,12 @@ fn mint_receipts(
     // otherwise let one dispatch mint both halves, on its first call or any
     // later one that rewrites the prerequisite.
     let mut written_now: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-    for mint in declared {
+    // WRITERS FIRST, whatever the declaration order: a dependent declared
+    // before its writer would otherwise claim an older record before this
+    // call's writer had marked it as this call's own.
+    let mut ordered: Vec<&crate::mint::Declared> = declared.iter().collect();
+    ordered.sort_by_key(|mint| mint.after.is_some());
+    for mint in ordered {
         if !rules::selects_tool_name(&mint.tool, tool) {
             continue;
         }

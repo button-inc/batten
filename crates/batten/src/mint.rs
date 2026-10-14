@@ -810,6 +810,12 @@ fn validate_across(mints: &[Declared]) -> anyhow::Result<()> {
                     && other.tool == mint.tool
                     && other.key == mint.key
                     && other.key_base == mint.key_base
+                    // The same path holding different values can never select
+                    // the same call, so those rows cannot race for the record.
+                    && !(other.selects_at == mint.selects_at
+                        && other.selects.is_some()
+                        && mint.selects.is_some()
+                        && other.selects != mint.selects)
             })
             .count()
             > 1
@@ -1008,6 +1014,30 @@ mod tests {
             ])
             .is_ok(),
             "alternative completions on different tools may share a prerequisite"
+        );
+        let selecting = |name: &str, value: &str| {
+            let mut selected = row(name, "delta", Some("asked"));
+            selected.selects_at = Some("kind".to_owned());
+            selected.selects = Some(value.to_owned());
+            selected
+        };
+        assert!(
+            validate(&[
+                asked.clone(),
+                selecting("done", "a"),
+                selecting("also", "b")
+            ])
+            .is_ok(),
+            "rows whose selectors exclude each other cannot race"
+        );
+        assert!(
+            validate(&[
+                asked.clone(),
+                selecting("done", "a"),
+                selecting("also", "a")
+            ])
+            .is_err(),
+            "rows selecting the same value would race"
         );
     }
 
