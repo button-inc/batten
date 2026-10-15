@@ -1260,40 +1260,62 @@ mod tests {
         );
     }
 
+    /// A `named` row takes its subject from exactly one non-empty source and
+    /// holds it to a shape that compiles; a row keyed otherwise declares neither
+    /// column (CLOUD-2294).
+    ///
+    /// Fails by: dropping any one arm. Two sources is a precedence nobody
+    /// declared, an uncompilable shape mints nothing forever, and either column
+    /// on a `delta` or `branch` row is read by nothing.
     #[test]
     fn a_named_row_takes_one_subject_source_and_a_shape_that_compiles() {
-        // CLOUD-2294's three load-time refusals, each beside the row it admits.
-        let named =
-            |key_from: Option<&str>, key_from_input: Option<&str>, key_shape: Option<&str>| {
-                Declared {
-                    name: "groom".to_owned(),
-                    tool: "Skill".to_owned(),
-                    key: MintKey::Named,
-                    key_from: key_from.map(str::to_owned),
-                    key_from_input: key_from_input.map(str::to_owned),
-                    key_shape: key_shape.map(str::to_owned),
-                    key_base: None,
-                    selects_at: None,
-                    selects: None,
-                    requires: Vec::new(),
-                    after: None,
-                    mode: MintMode::Replace,
-                    body: "{now}".to_owned(),
-                }
-            };
-        let refused = |row: Declared| validate(&[row]).unwrap_err().to_string();
+        let row = |columns: serde_json::Value| -> Declared {
+            let mut value = serde_json::json!({
+                "name": "groom", "tool": "Skill", "mode": "replace", "body": "{now}",
+            });
+            for (column, declared) in columns.as_object().into_iter().flatten() {
+                value[column] = declared.clone();
+            }
+            serde_json::from_value(value).expect("shape loads")
+        };
+        let refused = |columns: serde_json::Value| {
+            validate(&[row(columns)])
+                .map_err(|error| error.to_string())
+                .err()
+                .unwrap_or_default()
+        };
 
-        assert!(validate(&[named(None, Some("args"), Some("^[A-Z]+-[0-9]+$"))]).is_ok());
-        assert!(refused(named(None, None, None)).contains("exactly one of"));
-        assert!(refused(named(Some("id"), Some("args"), None)).contains("exactly one of"));
-        assert!(refused(named(None, Some("args"), Some("("))).contains("not a valid regular"));
-
-        let mut delta = named(None, None, Some("^x$"));
-        delta.key = MintKey::Delta;
-        delta.key_base = Some("origin/main".to_owned());
-        assert!(refused(delta.clone()).contains("declares a `key_shape`"));
-        delta.key_shape = None;
-        delta.key_from_input = Some("args".to_owned());
-        assert!(refused(delta).contains("declares a `key_from_input`"));
+        assert!(
+            validate(&[row(serde_json::json!({
+                "key": "named", "key_from_input": "args", "key_shape": "^[A-Z]+-[0-9]+$",
+            }))])
+            .is_ok()
+        );
+        for (columns, refusal) in [
+            (serde_json::json!({"key": "named"}), "exactly one of"),
+            (
+                serde_json::json!({"key": "named", "key_from": "id", "key_from_input": "args"}),
+                "exactly one of",
+            ),
+            (
+                serde_json::json!({"key": "named", "key_from_input": " "}),
+                "an empty `key_from_input`",
+            ),
+            (
+                serde_json::json!({"key": "named", "key_from_input": "args", "key_shape": "("}),
+                "`key_shape` is not a valid regular expression",
+            ),
+            (
+                serde_json::json!({"key": "delta", "key_base": "origin/main", "key_shape": "^x$"}),
+                "declares a `key_shape` and is not keyed `named`",
+            ),
+            (
+                serde_json::json!({"key": "branch", "key_from_input": "args"}),
+                "declares a `key_from_input` and is not keyed `named`",
+            ),
+        ] {
+            let said = refused(columns.clone());
+            assert!(said.contains(refusal), "{columns} was refused as {said:?}");
+        }
     }
 }
