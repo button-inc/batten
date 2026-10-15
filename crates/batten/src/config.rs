@@ -1144,6 +1144,14 @@ pub struct Ready {
     /// direction that tightens.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pressure_test_required_from: Option<String>,
+    /// The instant from which a `feat` row owes its prior-art search
+    /// (CLOUD-2296), read exactly as its two siblings are.
+    ///
+    /// A ratchet rather than a switch for their reason: a row groomed Ready
+    /// before the claim existed is not made unready by its arrival, so the
+    /// queue a fleet is draining stays pullable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prior_art_required_from: Option<String>,
 }
 
 /// The `[trust]` table: what `--config-from` may do when the ref is unreachable.

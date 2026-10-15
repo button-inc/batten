@@ -6445,6 +6445,12 @@ fn board_grammar(overrides: &Overrides) -> Result<ready::Grammar> {
                 .as_ref()
                 .and_then(|ready| ready.pressure_test_required_from.clone()),
         )
+        .with_prior_art_threshold(
+            config
+                .ready
+                .as_ref()
+                .and_then(|ready| ready.prior_art_required_from.clone()),
+        )
         // THE SUBJECT KIND IS FILTERED HERE, where the config is in hand.
         // A `document` review is the tree surface's — `batten check` reads
         // it off the disk — and a `tracker-body` one has no path to read, so
@@ -13505,19 +13511,6 @@ fn run_land_ready(
         }
     }
 
-    // THE RECEIPTS `gh pr ready` OWES, asked of this ready too (CLOUD-2293):
-    // `land_ready_owes` carries why, and which rows it does not ask.
-    if let Some(owed) = land_ready_owes(root, std::time::SystemTime::now())? {
-        output::verdict(
-            err,
-            &format!(
-                "::error:: land: {}",
-                owed.render_finding(refusal::Arm::Full)
-            ),
-        )?;
-        return Ok(ExitCode::Violation);
-    }
-
     spend_the_matrix(root, branch, ledger, out, err)
 }
 
@@ -13589,7 +13582,24 @@ fn spend_the_matrix(
     // superseded head that `Compensation::Abandon` can never cancel, because
     // that reads `git::head_commit`. `Readiness::head` carries the reason.
     let reading = verdict_for(&repo, &head);
-    match land::buys_a_matrix(Some(is_draft), reading.as_ref()) {
+    let spend = land::buys_a_matrix(Some(is_draft), reading.as_ref());
+    // THE RECEIPTS `gh pr ready` OWES, asked of this ready too (CLOUD-2293), and
+    // only when a ready will actually fire: a lap that readies nothing — the
+    // pull request already ready, its run answered or on its way — buys no
+    // matrix and owes no review. `land_ready_owes` carries which rows it asks.
+    if spend != land::Spend::Nothing
+        && let Some(owed) = land_ready_owes(root, std::time::SystemTime::now())?
+    {
+        output::verdict(
+            err,
+            &format!(
+                "::error:: land: {}",
+                owed.render_finding(refusal::Arm::Full)
+            ),
+        )?;
+        return Ok(ExitCode::Violation);
+    }
+    match spend {
         land::Spend::Nothing => {
             writeln!(
                 out,

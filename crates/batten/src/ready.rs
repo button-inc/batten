@@ -295,6 +295,9 @@ pub struct Grammar {
     /// The instant from which a row owes a dispatched pressure test
     /// (CLOUD-472), read exactly as the field above is.
     pressure_test_required_from: Option<String>,
+    /// The instant from which a `feat` row owes its prior-art search
+    /// (CLOUD-2296), read exactly as the two fields above are.
+    prior_art_required_from: Option<String>,
     /// The reviews a refinement block owes, as the consumer declared them.
     ///
     /// Carried here rather than re-read from config because `lint` is a pure
@@ -418,6 +421,15 @@ impl Grammar {
         self
     }
 
+    /// The cutover from which a `feat` row owes its prior-art search
+    /// (CLOUD-2296). Absent on [`Self::from_compiled`]'s path for the reason
+    /// the two thresholds above give.
+    #[must_use]
+    pub fn with_prior_art_threshold(mut self, from: Option<String>) -> Self {
+        self.prior_art_required_from = from;
+        self
+    }
+
     /// The declared reviews whose subject is a refinement body.
     ///
     /// Filtered by the CALLER rather than here: which subject kinds exist is
@@ -465,6 +477,7 @@ impl Grammar {
             defer_verb: find("ready-defer-verb")?,
             prose_dialect_required_from: None,
             pressure_test_required_from: None,
+            prior_art_required_from: None,
             pressure_test_reviews: Vec::new(),
             key: find("ready-issue-key")?,
             closing_verb: find("ready-closing-verb")?,
@@ -1336,16 +1349,26 @@ fn check_claims(
         .map(|declared| declared.trim().to_ascii_lowercase());
     let prose_only = declared
         .as_deref()
-        .is_some_and(|declared| declared == "docs" || declared == "none");
+        .is_some_and(|declared| declared.eq_ignore_ascii_case("docs") || declared == "none");
     // A `feat` OWES ITS PRIOR-ART SEARCH (CLOUD-2296): `feat!` included, read off
-    // the typed field, never the prose (rule 3). Entry shape is
-    // [`check_claimed_prior_art`]'s.
-    let feat = declared
+    // the typed field, never the prose (rule 3), and only from the declared
+    // cutover on — the pressure test's ratchet, so a row groomed Ready before
+    // the claim existed stays Ready. Entry shape is [`check_claimed_prior_art`]'s.
+    let owes_prior_art = declared
         .as_deref()
-        .is_some_and(|declared| declared.trim_end_matches('!') == "feat");
+        .is_some_and(|declared| declared.trim_end_matches('!') == "feat")
+        && grammar
+            .prior_art_required_from
+            .as_deref()
+            .is_some_and(|from| {
+                payload
+                    .created_at
+                    .as_deref()
+                    .is_some_and(|created| created >= from)
+            });
     for key in REQUIRED_CLAIMS
         .into_iter()
-        .chain(feat.then_some("prior_art"))
+        .chain(owes_prior_art.then_some("prior_art"))
     {
         // PRESENT AND NON-EMPTY, because an empty string, array or object is an
         // omission wearing a declaration's shape. `blockers: []` is the one
@@ -1422,11 +1445,18 @@ fn check_claims(
 /// reason for a rejection. Whether the reason is any good is a judgement, and no
 /// gate here makes one.
 fn check_claimed_prior_art(claims: &serde_json::Value, line: usize, report: &mut Report) {
-    let Some(entries) = claims
-        .get("prior_art")
-        .and_then(serde_json::Value::as_array)
-    else {
-        return;
+    let entries = match claims.get("prior_art") {
+        None | Some(serde_json::Value::Null) => return,
+        Some(serde_json::Value::Array(entries)) => entries,
+        // A STRING OR AN OBJECT IS NOT A SEARCH: it passes presence and would
+        // otherwise skip every check below.
+        Some(_) => {
+            report.findings.push(Finding {
+                line,
+                rule: "prior-art-entry-incomplete".to_owned(),
+            });
+            return;
+        }
     };
     for entry in entries {
         let verdict = entry.get("verdict").and_then(serde_json::Value::as_str);

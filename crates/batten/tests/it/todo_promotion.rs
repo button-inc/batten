@@ -451,17 +451,14 @@ fn a_groom_receipt_for_another_row_does_not_admit() {
 #[test]
 fn a_create_straight_into_todo_is_refused() {
     let repo = repo("todo-promotion-create-into-todo");
-    let (code, said) = decided(
-        &repo,
-        r#"{"title":"new","team":"Button Cloud","state":"Todo"}"#,
-    );
+    let (code, said) = decided(&repo, r#"{"title":"new","team":"a-team","state":"Todo"}"#);
     assert_eq!(code, Some(2), "{said}");
     assert!(said.contains("plan file loose"), "{said}");
 
     // The anti-vacuity half: the same create into Backlog is not this row's.
     let (_, said) = decided(
         &repo,
-        r#"{"title":"new","team":"Button Cloud","state":"Backlog"}"#,
+        r#"{"title":"new","team":"a-team","state":"Backlog"}"#,
     );
     assert!(!said.contains("plan file loose"), "{said}");
 }

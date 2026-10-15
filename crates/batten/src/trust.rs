@@ -2378,6 +2378,12 @@ fn cutover_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
                 .as_ref()
                 .and_then(|ready| ready.pressure_test_required_from.clone())
         }),
+        ("ready.prior_art_required_from", |config| {
+            config
+                .ready
+                .as_ref()
+                .and_then(|ready| ready.prior_art_required_from.clone())
+        }),
     ];
 
     let mut found = Vec::new();

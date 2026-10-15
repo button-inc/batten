@@ -1693,6 +1693,22 @@
           ],
           "maxLength": 1536
         },
+        "key_from_input": {
+          "description": "The INPUT path whose value is the subject, for [`MintKey::Named`]\n(CLOUD-2294): the alternative to [`Declared::key_from`], exactly one of\nwhich a `named` row declares.\n\nA dispatch names its subject in its ARGUMENTS — the row a skill was asked\nto groom — and answers with prose, so a result path has nothing to read.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 1536
+        },
+        "key_shape": {
+          "description": "A pattern the subject must match, or the row mints nothing (CLOUD-2294).\n\n[`crate::receipt::safe_subject`] bounds a subject STRUCTURALLY and admits\na space, so free-text arguments (\"groom M2 to ready\") would file under\nthemselves. What a row key looks like is the consumer's fact (rule 1), so\nit is declared here, read exactly as a `receipt` rule's `key_shape` is:\nunanchored, so the author writes `^…$`.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 1536
+        },
         "mode": {
           "description": "Whether the record is replaced or appended.",
           "$ref": "#/$defs/MintMode"
@@ -4123,6 +4139,14 @@
       "properties": {
         "pressure_test_required_from": {
           "description": "The instant from which a row owes a dispatched PRESSURE TEST (CLOUD-472).\n\nA sibling of the field above rather than a reuse of it, and the\nseparation is the point: these two ratchets convert different things and\na consumer must be able to move one without moving the other. Folding\nthem into one instant would mean the day you demand a structured claims\nobject is also the day you demand an agent dispatch, and a repository\nthat wants the first and cannot yet afford the second would have no way\nto say so.\n\nRead exactly as its sibling is — fixed-width ISO-8601 UTC compared\nlexically, absent is could-not-look, and moving it LATER is the only\ndirection that tightens.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 1536
+        },
+        "prior_art_required_from": {
+          "description": "The instant from which a `feat` row owes its prior-art search\n(CLOUD-2296), read exactly as its two siblings are.\n\nA ratchet rather than a switch for their reason: a row groomed Ready\nbefore the claim existed is not made unready by its arrival, so the\nqueue a fleet is draining stays pullable.",
           "type": [
             "string",
             "null"

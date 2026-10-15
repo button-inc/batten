@@ -227,7 +227,8 @@ fn with_tasks(name: &str) -> PathBuf {
         // every threshold case below would then pass for the wrong reason, which
         // is the shape a dead gate and a clean tree share.
         .config(&format!(
-            "version = 1\n\n[ready]\nprose_dialect_required_from = \"2026-06-01T00:00:00.000Z\"\n\n{}",
+            "version = 1\n\n[ready]\nprose_dialect_required_from = \"2026-06-01T00:00:00.000Z\"\n\
+             prior_art_required_from = \"2026-06-01T00:00:00.000Z\"\n\n{}",
             declared_patterns()
         ))
         .file(
@@ -578,6 +579,14 @@ fn a_complete_claims_object_passes_and_names_its_dialect() {
     );
 }
 
+/// A claims object on a row created at `created_at`, for the prior-art cutover.
+fn dated_claims(object: &serde_json::Value, created_at: &str) -> String {
+    dated_payload(
+        Some(created_at),
+        &claims_block(&serde_json::to_string_pretty(object).expect("encodable")),
+    )
+}
+
 /// A `feat` ROW OWES A PRIOR-ART SEARCH (CLOUD-2296): absent, null and empty are
 /// one omission, and each is named. On `main` a `feat` passed without the key.
 #[test]
@@ -594,7 +603,7 @@ fn a_feat_row_without_prior_art_is_not_ready() {
         if let Some(value) = &prior_art {
             fields.insert("prior_art".to_owned(), value.clone());
         }
-        let output = lint(&dir, &claims_payload(&object, &[]));
+        let output = lint(&dir, &dated_claims(&object, AFTER_CUTOVER));
         assert_eq!(code(&output), 2, "{prior_art:?}\n{}", stderr(&output));
         assert!(
             stderr(&output).contains("claim-missing (prior_art)"),
@@ -609,12 +618,22 @@ fn a_feat_row_without_prior_art_is_not_ready() {
         .as_object_mut()
         .expect("the fixture is an object")
         .remove("prior_art");
-    let output = lint(&dir, &claims_payload(&breaking, &[]));
+    let output = lint(&dir, &dated_claims(&breaking, AFTER_CUTOVER));
     assert!(
         stderr(&output).contains("claim-missing (prior_art)"),
         "{}",
         stderr(&output)
     );
+
+    // THE RATCHET: the same `feat` row created before the declared cutover is
+    // judged as it was groomed, so the queue already Ready stays Ready.
+    let mut groomed_before = complete_claims();
+    groomed_before
+        .as_object_mut()
+        .expect("the fixture is an object")
+        .remove("prior_art");
+    let output = lint(&dir, &dated_claims(&groomed_before, BEFORE_CUTOVER));
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
 }
 
 /// A REJECTION CARRIES ITS REASON, and every entry names a tool, where it lives
@@ -641,12 +660,16 @@ fn a_rejection_without_a_reason_is_not_ready() {
     assert_eq!(code(&output), 0, "{}", stderr(&output));
 
     for incomplete in [
-        serde_json::json!({"url": "https://example.invalid/m", "verdict": "adopt"}),
-        serde_json::json!({"tool": "t", "verdict": "adopt"}),
-        serde_json::json!({"tool": "t", "url": "https://example.invalid/m", "verdict": "maybe"}),
+        serde_json::json!([{"url": "https://example.invalid/m", "verdict": "adopt"}]),
+        serde_json::json!([{"tool": "t", "verdict": "adopt"}]),
+        serde_json::json!([{"tool": "t", "url": "https://example.invalid/m", "verdict": "maybe"}]),
+        // Not a list at all: a sentence or an object passes presence, so the
+        // shape check must refuse it rather than skip it.
+        serde_json::json!("searched, nothing fits"),
+        serde_json::json!({"note": 1}),
     ] {
         let mut object = complete_claims();
-        object["prior_art"] = serde_json::json!([incomplete]);
+        object["prior_art"] = incomplete.clone();
         let output = lint(&dir, &claims_payload(&object, &[]));
         assert_eq!(code(&output), 2, "{incomplete}\n{}", stderr(&output));
         assert!(
