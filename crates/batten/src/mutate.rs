@@ -3796,7 +3796,12 @@ pub fn sweep_owned(
 // ---------------------------------------------------------------------------
 
 /// What the census decided about one subject.
+///
+/// `#[non_exhaustive]` for [`Census`]'s reason: CLOUD-2250's `InertMutation`
+/// was a breaking `enum_variant_added`, and marking it now is what stops the
+/// next verdict costing the same.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum CensusVerdict {
     /// A gate in the tree that is neither declared nor exempt.
     Uncovered,
@@ -3806,6 +3811,9 @@ pub enum CensusVerdict {
     DeclaredAndExempt,
     /// A name in the enforced set resolving to no gate at all.
     NamesNoSubject,
+    /// A declared row whose script, applied to its own file, changes nothing:
+    /// it proves nothing, and a sweep would only say so once it reached it.
+    InertMutation,
 }
 
 impl fmt::Display for CensusVerdict {
@@ -3815,6 +3823,7 @@ impl fmt::Display for CensusVerdict {
             CensusVerdict::ExemptUnfiled => "exempt-unfiled",
             CensusVerdict::DeclaredAndExempt => "declared-and-exempt",
             CensusVerdict::NamesNoSubject => "names-no-subject",
+            CensusVerdict::InertMutation => "inert-mutation",
         };
         out.write_str(word)
     }
@@ -4068,11 +4077,58 @@ pub fn census(root: &Path, names: &[String], table: Option<&crate::config::Mutat
             findings.push((name.clone(), CensusVerdict::NamesNoSubject));
         }
     }
+    findings.extend(inert_rows(root, &subjects));
     Census {
         findings,
         subjects: subjects.len(),
         engine_undeclared: engine_undeclared(root, &subjects),
     }
+}
+
+/// Every declared row, in every censused subject, whose script leaves its own
+/// file byte-identical, as `path:line slug` (CLOUD-2250).
+///
+/// REFUSED WHEN THE ROW IS WRITTEN, NOT WHEN A SWEEP REACHES IT. The sweep
+/// reports `inert-mutation` only for the gates it runs, and `mutant:changed`
+/// runs only the ones a branch touched, so a row that rustfmt re-indented or a
+/// refactor removed the line of sat dead on `main` until somebody happened to
+/// sweep its module: three were, and #1132 re-anchored ten more by hand. The
+/// census runs on every change, and [`substitute`] is the sweep's own
+/// application, in process, so this costs a read and a regex per row.
+///
+/// A script outside the one-substitution subset is the sweep's
+/// `unappliable-mutation` and is left to it: this arm names only what applied
+/// and changed nothing.
+//MUTANT inert-row-admitted|s@^                if substitute(\&text, \&row.script).as_ref() == Some(\&text) {$@                if false {@|a_row_whose_script_changes_nothing_is_refused_by_the_census
+fn inert_rows(root: &Path, subjects: &BTreeMap<String, String>) -> Vec<(String, CensusVerdict)> {
+    let mut found = Vec::new();
+    for name in subjects.keys() {
+        for source in sources_for(root, name) {
+            let Ok(text) = std::fs::read_to_string(root.join(&source)) else {
+                continue;
+            };
+            let Some(lines) = declaring_lines(root, name, &source) else {
+                continue;
+            };
+            for row in rows_in(&lines, &source).into_iter().flatten() {
+                if substitute(&text, &row.script).as_ref() == Some(&text) {
+                    found.push((
+                        format!("{source}:{} {}", row_line(&text, &row.slug), row.slug),
+                        CensusVerdict::InertMutation,
+                    ));
+                }
+            }
+        }
+    }
+    found
+}
+
+/// The 1-based line of `slug`'s row in `text`, or `0` where none declares it.
+fn row_line(text: &str, slug: &str) -> usize {
+    let head = format!("{slug}|");
+    text.lines()
+        .position(|line| strip_marker(line, ROW).is_some_and(|body| body.starts_with(&head)))
+        .map_or(0, |index| index + 1)
 }
 
 /// How many engine modules carry no declaration at all.

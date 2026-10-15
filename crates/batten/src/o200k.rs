@@ -113,7 +113,7 @@ fn dfa() -> Option<&'static regex_automata::dfa::sparse::DFA<&'static [u8]>> {
 /// newline, two or more characters long and followed by a non-space, gives up
 /// its last character to the next piece — exactly what the lookahead does.
 //MUTANT-SUITE crates/batten/src/o200k.rs
-//MUTANT lookahead-untrimmed|s@^                        .is_some_and(\x7cnext\x7c !next.is_whitespace())$@                        .is_some_and(\x7c_\x7c false)@|counts_match_tiktoken
+//MUTANT lookahead-untrimmed|s@^                .is_some_and(\x7cnext\x7c !next.is_whitespace())$@                .is_some_and(\x7c_\x7c false)@|counts_match_tiktoken
 fn pieces<'a>(
     dfa: &'a regex_automata::dfa::sparse::DFA<&'static [u8]>,
     text: &'a str,

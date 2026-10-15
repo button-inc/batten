@@ -369,7 +369,7 @@ pub fn toolchain(root: &Path) -> Option<String> {
 ///
 /// The directory cannot be created, or a stale tree or document cannot be
 /// removed.
-//MUTANT scratch-target-wiped|s@^    let stale = \[at.join("tree"), at.join("target").join("doc").join(format!("{package}.json"))\];$@    let stale = [at.join("tree"), at.join("target")];@|scratch_keeps_the_target_and_drops_the_tree_and_json
+//MUTANT scratch-target-wiped|s@^        at.join("tree"),$@        at.join("target"),@|scratch_keeps_the_target_and_drops_the_tree_and_json
 pub fn prepare_scratch(at: &Path, package: &str) -> std::io::Result<()> {
     std::fs::create_dir_all(at)?;
     let stale = [

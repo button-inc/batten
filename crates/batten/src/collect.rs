@@ -449,7 +449,7 @@ pub fn live_since(trees: &[PathBuf]) -> Option<SystemTime> {
 /// The earliest start among `processes` that are builds: a [`BUILD_PROGRAMS`]
 /// program, or an executable under one of `trees` (a test binary it runs).
 //MUTANT-SUITE crates/batten/src/collect.rs
-//MUTANT root-takes-any-process|s@^        .filter(\x7cprocess\x7c is_build(\&process.exe, \&trees))$@        .filter(\x7c_\x7c true)@|the_earliest_build_is_the_root
+//MUTANT root-takes-any-process|s@^        .filter(\x7cprocess\x7c is_build(process, \&trees))$@        .filter(\x7c_\x7c true)@|the_earliest_build_is_the_root
 #[must_use]
 pub fn earliest_build_start(processes: &[Process], trees: &[PathBuf]) -> Option<SystemTime> {
     let trees: Vec<PathBuf> = trees

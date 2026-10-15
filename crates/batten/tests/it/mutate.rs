@@ -2457,6 +2457,34 @@ fn a_preset_is_censused_too_so_the_one_class_a_pattern_row_cannot_reach_is_visib
     assert!(out.contains("some-preset uncovered"), "{out}");
 }
 
+/// Fails by: a row whose script changes nothing in its file read as coverage
+/// until a sweep happens to reach it (CLOUD-2250: three such rows on `main`,
+/// ten more re-anchored by hand on #1132, each after rustfmt or a refactor
+/// moved the line out from under it). The live row beside it stays silent.
+#[test]
+fn a_row_whose_script_changes_nothing_is_refused_by_the_census() {
+    let root = toy("census-inert");
+    write(
+        &root,
+        "policy/some-rule.rego",
+        "package batten.some_rule\n\
+         #MUTANT dead|s@^deny if input.gone$@deny if false@|test_x\n\
+         #MUTANT live|s@^deny if input.bad$@deny if false@|test_x\n\
+         deny if input.bad\n",
+    );
+    track(&root);
+    let (code, out, _) = census(&root, "some-rule");
+    assert_eq!(code, 2, "{out}");
+    assert!(
+        out.contains("policy/some-rule.rego:2 dead inert-mutation"),
+        "{out}"
+    );
+    assert!(
+        !out.contains(" live "),
+        "the applying row is not named: {out}"
+    );
+}
+
 #[test]
 fn a_filed_exemption_is_a_closed_census_not_a_gap() {
     let root = toy("census-exempt");
