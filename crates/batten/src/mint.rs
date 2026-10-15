@@ -690,25 +690,6 @@ pub fn validate(mints: &[Declared]) -> anyhow::Result<()> {
                 mint.name
             )));
         }
-        // A SHAPE THAT NARROWS NOTHING, OR ADMITS NOTHING, IS REFUSED: one that
-        // matches the empty subject (`""`, `.*`, `^`) admits every subject, and
-        // a padded one never matches, so the row mints nothing forever.
-        if let Some(shape) = mint.key_shape.as_deref() {
-            let problem = match regex::Regex::new(shape) {
-                Err(problem) => Some(format!("is not a valid regular expression: {problem}")),
-                Ok(_) if shape.trim() != shape => Some("is padded with whitespace".to_owned()),
-                Ok(pattern) if pattern.is_match("") => {
-                    Some("matches the empty subject, so it narrows nothing".to_owned())
-                }
-                Ok(_) => None,
-            };
-            if let Some(problem) = problem {
-                return Err(crate::error::UsageError::raise(format!(
-                    "`[[mint]]` `{}`: `key_shape` {problem}",
-                    mint.name
-                )));
-            }
-        }
         if mint.key == MintKey::Delta && mint.key_base.is_none() {
             return Err(crate::error::UsageError::raise(format!(
                 "`[[mint]]` `{}` is keyed `delta` and declares no `key_base`, so nothing says \
@@ -746,6 +727,24 @@ pub fn validate(mints: &[Declared]) -> anyhow::Result<()> {
                  projection would be read by nothing",
                 mint.name
             )));
+        }
+        // A SHAPE IS JUDGED ONLY WHERE IT IS READ, after the arm above, so a
+        // stray one is told to go rather than to be fixed. One matching the
+        // empty subject (`""`, `.*`, `^`) is refused: it narrows nothing.
+        if let Some(shape) = mint.key_shape.as_deref() {
+            let problem = match regex::Regex::new(shape) {
+                Err(problem) => Some(format!("is not a valid regular expression: {problem}")),
+                Ok(pattern) if pattern.is_match("") => {
+                    Some("matches the empty subject, so it narrows nothing".to_owned())
+                }
+                Ok(_) => None,
+            };
+            if let Some(problem) = problem {
+                return Err(crate::error::UsageError::raise(format!(
+                    "`[[mint]]` `{}`: `key_shape` {problem}",
+                    mint.name
+                )));
+            }
         }
         // HALF A SELECTOR IS THE DANGEROUS HALF. `selects_at` alone would leave
         // the row minting on every result its tool matched while LOOKING
@@ -1276,8 +1275,8 @@ mod tests {
     /// column (CLOUD-2294).
     ///
     /// Fails by: dropping any one arm. Two sources is a precedence nobody
-    /// declared, an uncompilable or padded shape mints nothing forever, one
-    /// matching the empty subject admits every subject, and either column
+    /// declared, an uncompilable shape mints nothing forever, one matching the
+    /// empty subject narrows nothing, and either column
     /// on a `delta` or `branch` row is read by nothing.
     #[test]
     fn a_named_row_takes_one_subject_source_and_a_shape_that_compiles() {
@@ -1323,12 +1322,12 @@ mod tests {
                 "`key_shape` matches the empty subject",
             ),
             (
-                serde_json::json!({"key": "named", "key_from_input": "args", "key_shape": " "}),
-                "`key_shape` is padded",
+                serde_json::json!({"key": "named", "key_from_input": "args", "key_shape": "^"}),
+                "`key_shape` matches the empty subject",
             ),
             (
-                serde_json::json!({"key": "named", "key_from_input": "args", "key_shape": "^[A-Z]+$ "}),
-                "`key_shape` is padded",
+                serde_json::json!({"key": "delta", "key_base": "origin/main", "key_shape": ".*"}),
+                "declares a `key_shape` and is not keyed `named`",
             ),
             (
                 serde_json::json!({"key": "named", "key_from_input": "args", "key_shape": "("}),
