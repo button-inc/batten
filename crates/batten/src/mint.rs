@@ -1287,7 +1287,7 @@ mod tests {
 
         // A shape loads exactly when it compiles, as a receipt rule's does: a
         // tight one that also matches the empty subject is no exception.
-        for shape in ["^[A-Z]+-[0-9]+$", "^(CLOUD-[0-9]+)?$"] {
+        for shape in ["^[A-Z]+-[0-9]+$", "^([A-Z]+-[0-9]+)?$"] {
             assert!(
                 validate(&[row(serde_json::json!({
                     "key": "named", "key_from_input": "args", "key_shape": shape,
@@ -1317,6 +1317,10 @@ mod tests {
             (
                 serde_json::json!({"key": "named", "key_from_input": "args", "key_shape": "("}),
                 "`key_shape` is not a valid regular expression",
+            ),
+            (
+                serde_json::json!({"key": "delta", "key_base": "origin/main", "key_shape": "^x$"}),
+                "declares a `key_shape` and is not keyed `named`",
             ),
             (
                 serde_json::json!({"key": "branch", "key_shape": "^x$"}),
