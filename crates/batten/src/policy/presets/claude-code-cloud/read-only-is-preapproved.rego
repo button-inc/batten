@@ -2,6 +2,9 @@
 #MUTANT redirect-unread|s@^\tnot some_output_redirect(call)$@\ttrue@|a_reader_redirected_into_a_file_is_not_preapproved
 #MUTANT mcp-verb-unread|s@^\tmcp_read_verb(call.tool)$@\tstartswith(call.tool, "mcp__")@|an_mcp_write_is_not_preapproved
 #MUTANT mcp-call-unread|s@^\tprogram.name == "batten"$@\tprogram.name == "none"@|a_plan_mode_batten_mcp_read_is_allowed_and_a_write_is_not
+#MUTANT guide-not-read|s@"Explore", "Plan", "claude-code-guide"@"Explore", "Plan"@|a_plan_mode_guide_subagent_is_allowed
+#MUTANT printenv-not-read|s@"tree", "printenv", "ps",@"tree", "ps",@|a_plan_mode_printenv_is_allowed
+#MUTANT ps-not-read|s@"tree", "printenv", "ps",@"tree", "printenv",@|a_plan_mode_ps_is_allowed
 # A call that only reads is never put to the operator (CLOUD-1949).
 #
 # The host halts on a permission prompt, and a halted session is the failure the
@@ -53,12 +56,16 @@ mcp_read_verb(tool) if regex.match(`^mcp__[^_].*__((get|list|search|read|query|f
 # list. Each is admissible for the floor's own reason: its bound is stated. NOT
 # here, and deliberately: `sort` (`-o`), `uniq` (an output operand), `sed`
 # (`-i`), `awk` (`system`), `find` (`-delete`, `-exec`), `xargs`, and every
-# interpreter.
+# interpreter. `printenv` prints variables and takes no operand it could write
+# to; `ps` reads `/proc` and has no output-file flag (CLOUD-2367). A wrapped
+# form — `env printenv`, `timeout 5 ps` — reaches here as the wrapped program,
+# because the boundary looks through those wrappers, so it is a read exactly when
+# the program it runs is one. Bare `env` projects no program and stays unproven.
 read_programs(name) if {
 	name in {
 		"cd", "pwd", "true", "false", "test", "[", "which", "type", "date", "jq", "cut",
 		"tr", "nl", "tac", "sha256sum", "md5sum", "du", "df", "uname", "id", "whoami",
-		"hostname", "tree",
+		"hostname", "tree", "printenv", "ps",
 	}
 }
 
@@ -85,10 +92,13 @@ read_only(call) if {
 	mcp_read_verb(call.tool)
 }
 
-# A subagent the host itself declares read-only.
+# A subagent the host itself declares read-only. The bound is the host's own
+# tool list for each: `Explore` and `Plan` carry every tool but the writers, and
+# `claude-code-guide` carries Glob, Grep, Read, WebFetch and WebSearch
+# (CLOUD-2367). A host that gives one of them a writer moves it out of this set.
 read_only(call) if {
 	call.tool in {"Agent", "Task"}
-	call.arguments.subagent_type in {"Explore", "Plan"}
+	call.arguments.subagent_type in {"Explore", "Plan", "claude-code-guide"}
 }
 
 read_only(call) if {
@@ -215,6 +225,34 @@ test_a_batten_mcp_write_is_not if {
 		"segments": [{"words": ["batten", "mcp", "call", "Linear", "save_issue", "{}"]}],
 		"programs": [{"name": "batten", "arguments": ["mcp", "call", "Linear", "save_issue", "{}"], "reads-only": false}],
 	}}
+}
+
+test_the_guide_subagent_is_a_read if {
+	"call read now" in preapprove with input as {"call": {
+		"event": "pre-tool",
+		"tool": "Agent",
+		"arguments": {"subagent_type": "claude-code-guide", "prompt": "x"},
+	}}
+}
+
+test_an_implementer_subagent_is_not_a_read if {
+	count(preapprove) == 0 with input as {"call": {
+		"event": "pre-tool",
+		"tool": "Agent",
+		"arguments": {"subagent_type": "general-purpose", "prompt": "x"},
+	}}
+}
+
+test_printenv_and_ps_are_reads if {
+	every name in ["printenv", "ps"] {
+		"call read now" in preapprove with input as {"call": {
+			"event": "pre-tool",
+			"tool": "Bash",
+			"command": name,
+			"segments": [{"words": [name]}],
+			"programs": [{"name": name, "arguments": [], "reads-only": false}],
+		}}
+	}
 }
 
 test_a_git_writer_is_not if {

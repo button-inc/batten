@@ -613,6 +613,39 @@ fn a_plan_mode_read_notifications_is_allowed() {
     assert_granted_by(&read, "call read now");
 }
 
+/// CLOUD-2367: the host declares this agent's tools as reads only, so plan mode
+/// may spawn it. The implementer beside it stays refused.
+#[test]
+fn a_plan_mode_guide_subagent_is_allowed() {
+    let guide = envelope(
+        "plan",
+        "Agent",
+        &serde_json::json!({ "subagent_type": "claude-code-guide", "prompt": "x", "description": "x" }),
+    );
+    assert_not_plan_refused(&guide);
+    assert_granted_by(&guide, "call read now");
+}
+
+/// CLOUD-2367: `printenv` reads, bare and through the `env` wrapper the
+/// boundary looks through. Bare `env` names no program and stays refused.
+#[test]
+fn a_plan_mode_printenv_is_allowed() {
+    for line in ["printenv MCP_TIMEOUT", "env printenv MCP_TIMEOUT"] {
+        let read = shell("plan", line);
+        assert_not_plan_refused(&read);
+        assert_granted_by(&read, "call read now");
+    }
+    assert_plan_refused(&shell("plan", "env"));
+}
+
+/// CLOUD-2367: the exact `ps` line plan mode refused, measured 2026-10-15.
+#[test]
+fn a_plan_mode_ps_is_allowed() {
+    let read = shell("plan", "ps -eo pid,ppid,pgid,sid,etimes,cmd --forest");
+    assert_not_plan_refused(&read);
+    assert_granted_by(&read, "call read now");
+}
+
 #[test]
 fn a_batten_mcp_read_is_preapproved_outside_plan_mode() {
     assert_granted_by(
