@@ -1354,7 +1354,7 @@ fn end_process(_pid: u32) {}
 /// never preventable) and not `SIGUSR1`/`SIGUSR2`, which mean whatever a
 /// consumer's own tooling has agreed they mean.
 #[cfg(unix)]
-const FORWARDED: &[i32] = &[
+pub(crate) const FORWARDED: &[i32] = &[
     signal_hook::consts::SIGHUP,
     signal_hook::consts::SIGINT,
     signal_hook::consts::SIGQUIT,
@@ -1430,10 +1430,6 @@ fn await_group(slot: &Arc<std::sync::atomic::AtomicI32>) -> Option<rustix::proce
     }
 }
 
-// A SECOND SIGNAL ESCALATES AT ONCE, AND SAYS SO (CLOUD-746 S1, CLOUD-2059). The
-// case reads the recorded reason, so a swallowed second signal shows up as the
-// grace expiring rather than as a teardown that took longer.
-//MUTANT second-signal-ignored|s@^                if signals.pending().next().is_some() {$@                if signals.pending().next().is_some() \&\& false {@|a_second_signal_escalates_instead_of_being_swallowed
 /// What must run before Batten dies of a signal it was sent (CLOUD-1747).
 ///
 /// One slot, because one caller needs it: `land` places a speculative bet that
@@ -1479,6 +1475,26 @@ pub(crate) fn forwarding() -> bool {
     FORWARDING.load(std::sync::atomic::Ordering::SeqCst) > 0
 }
 
+/// Die of `signal` as its default disposition would, after the registered
+/// work. The one re-raise every terminating path shares, so none skips the work.
+///
+/// # Errors
+///
+/// Only when the default disposition cannot be restored; on success it does not
+/// return.
+#[cfg(unix)]
+pub(crate) fn terminate(signal: i32) -> Result<()> {
+    run_on_terminate();
+    // Restores the default disposition and raises on self, so this does not
+    // return.
+    signal_hook::low_level::emulate_default_handler(signal)
+        .context("re-raise the signal Batten was sent")
+}
+
+// A SECOND SIGNAL ESCALATES AT ONCE, AND SAYS SO (CLOUD-746 S1, CLOUD-2059). The
+// case reads the recorded reason, so a swallowed second signal shows up as the
+// grace expiring rather than as a teardown that took longer.
+//MUTANT second-signal-ignored|s@^                if signals.pending().next().is_some() {$@                if signals.pending().next().is_some() \&\& false {@|a_second_signal_escalates_instead_of_being_swallowed
 #[cfg(unix)]
 impl Forwarding {
     /// Install the registry **before** the spawn, if `decision` says Batten owns
@@ -2113,11 +2129,7 @@ pub(crate) fn classify_in_env(
 #[cfg(unix)]
 fn reraise(outcomes: &[Outcome]) -> Result<()> {
     if let Some(signal) = outcomes.iter().find_map(|outcome| outcome.received) {
-        run_on_terminate();
-        // Restores the default disposition and raises on self, so this does not
-        // return.
-        signal_hook::low_level::emulate_default_handler(signal)
-            .context("re-raise the signal Batten was sent")?;
+        terminate(signal)?;
     }
     Ok(())
 }
@@ -2927,12 +2939,7 @@ fn report_bundle(
     #[cfg(unix)]
     if let Some(signal) = outcomes.iter().find_map(|outcome| outcome.received) {
         report.flush()?;
-        run_on_terminate();
-        // Restores the default disposition and raises on self, so this does not
-        // return. A safe API, already vendored — `unsafe_code = "forbid"` is not
-        // the blocker it looks like.
-        signal_hook::low_level::emulate_default_handler(signal)
-            .context("re-raise the signal Batten was sent")?;
+        terminate(signal)?;
     }
 
     if code != 0 {

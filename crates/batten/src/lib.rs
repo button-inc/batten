@@ -21565,14 +21565,13 @@ fn unlanded_pointer() -> Option<refusal::Refusal> {
     // The receipt still lives beside the lease and board-write records in the git
     // dir, out of the tree, so a nudge never dirties the worktree it asks about.
     //
-    // THE POINTER RIDES EVERY APPLICABLE STOP (CLOUD-2078); the marker is still
-    // appended once per claim, because it is also `turn mint ahead`'s
-    // `while_marker` and that row reads it as "this claim was told".
+    // The marker is also `turn mint ahead`'s `while_marker`, which reads it as
+    // "this claim was told".
     let key = identity.fingerprint.to_hex();
-    let seen = git::git_dir(Path::new(".")).ok().map(|dir| {
-        dir.join("batten-receipts")
-            .join(format!("unlanded-nudged.{}", branch.replace('/', "-")))
-    });
+    let git_dir = git::git_dir(Path::new(".")).ok();
+    let seen = git_dir
+        .as_deref()
+        .map(|dir| recorder::record_path(dir, "unlanded-nudged", &branch, None));
     let marked = already_marked(seen.as_deref(), &key);
     if !marked && let Some(path) = seen.as_deref() {
         if let Some(parent) = path.parent() {
@@ -21598,9 +21597,9 @@ fn unlanded_pointer() -> Option<refusal::Refusal> {
     // `UserPromptSubmit` — the operator is back, so the level is worth reporting
     // once more. Its own file, never `unlanded-nudged`: that one is
     // `turn mint ahead`'s "this claim was told" and must not be cleared.
-    let spoken = seen
+    let spoken = git_dir
         .as_deref()
-        .map(|path| path.with_file_name(format!("unlanded-spoken.{}", branch.replace('/', "-"))));
+        .map(|dir| recorder::record_path(dir, UNLANDED_SPOKEN, &branch, None));
     if already_marked(spoken.as_deref(), &key) {
         return None;
     }
@@ -21633,11 +21632,14 @@ fn rearm_unlanded(event: hook::Event) {
         return;
     };
     if let Ok(git_dir) = git::git_dir(Path::new(".")) {
-        let name = format!("unlanded-spoken.{}", branch.replace('/', "-"));
-        let marker = git_dir.join("batten-receipts").join(name);
+        let marker = recorder::record_path(&git_dir, UNLANDED_SPOKEN, &branch, None);
         let _ = std::fs::remove_file(marker);
     }
 }
+
+/// The receipt family recording that the unlanded pointer spoke (CLOUD-2332).
+/// Branch-keyed, so `land::retire_branch` sweeps it with the rest.
+const UNLANDED_SPOKEN: &str = "unlanded-spoken";
 
 /// Whether the claim `key` is already recorded in the marker at `seen`.
 fn already_marked(seen: Option<&Path>, key: &str) -> bool {

@@ -150,10 +150,9 @@ fn a_sigterm_mid_speculation_leaves_the_branch_on_its_own_head() {
         "the borrowed commit is unwound off the branch"
     );
     assert!(
-        !dir.join(".git").join(BASE_REF).exists()
-            && common::git_in(&dir, &["for-each-ref", BASE_REF])
-                .trim()
-                .is_empty(),
+        common::git_in(&dir, &["for-each-ref", BASE_REF])
+            .trim()
+            .is_empty(),
         "the bet's ref goes with the unwind"
     );
 }

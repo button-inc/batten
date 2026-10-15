@@ -496,17 +496,19 @@ pub fn disarm() {
 fn watch_signals() {
     static WATCHING: std::sync::OnceLock<()> = std::sync::OnceLock::new();
     WATCHING.get_or_init(|| {
-        use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
-        let Ok(mut signals) = signal_hook::iterator::Signals::new([SIGHUP, SIGINT, SIGTERM]) else {
+        // The forwarder's own set: a signal `exec` would forward is one this
+        // process can be stopped by mid-bet.
+        let Ok(mut signals) = signal_hook::iterator::Signals::new(crate::exec::FORWARDED) else {
             return;
         };
         // EVERY signal, not the first: a registration outlives its iterator, so a
         // watcher that stopped after one would leave the next SIGTERM ignored.
         std::thread::spawn(move || {
             for signal in signals.forever() {
-                crate::exec::run_on_terminate();
-                if !crate::exec::forwarding() {
-                    let _ = signal_hook::low_level::emulate_default_handler(signal);
+                if crate::exec::forwarding() {
+                    crate::exec::run_on_terminate();
+                } else {
+                    let _ = crate::exec::terminate(signal);
                 }
             }
         });
