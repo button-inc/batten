@@ -2184,7 +2184,8 @@ pub fn record_spawn(root: &Path, server: &str) -> Option<SpawnRecord> {
     Some(SpawnRecord { ledger, line })
 }
 
-/// The sixth field of a ledger record whose launch line could not be exec'd.
+/// The last field of a ledger record whose launch line could not be exec'd,
+/// appended after the launch record's own fields ([`is_exec_failure`]).
 pub const EXEC_FAILED: &str = "exec-failed";
 
 /// Whether a ledger line is a launch's failure record rather than a launch.
@@ -2527,6 +2528,21 @@ fn frame(text: &str) -> String {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// Fails by: the failure marker read from a fixed position. A launch record
+    /// that gains a field moves the marker one place right, and a positional
+    /// reader then misses every failure, or takes the new field for one.
+    #[test]
+    fn a_failure_record_is_named_by_its_last_field_wherever_that_falls() {
+        assert!(is_exec_failure("1\tserena\t2\t0.1\t0\texec-failed"));
+        assert!(is_exec_failure(
+            "1\tserena\t2\t0.1\t0\tnew-field\texec-failed"
+        ));
+        assert!(!is_exec_failure("1\tserena\t2\t0.1\t0"));
+        assert!(!is_exec_failure(
+            "1\tserena\t2\t0.1\t0\texec-failed\tnew-field"
+        ));
+    }
 
     fn row(reduce: Reduce, fields: &[&str]) -> ResultRow {
         ResultRow {
