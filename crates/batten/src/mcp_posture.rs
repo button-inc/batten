@@ -169,10 +169,17 @@ fn unattached(document: &Node, session: &Session, err: &mut dyn Write) -> Result
         };
         match last_outcome(&log) {
             Some(Outcome::Attached) => {}
-            Some(Outcome::Failed(code)) => findings.push(format!(
-                "{server} {code} — {}",
-                spawn_verdict(server, &name, session.spawns.as_deref())
-            )),
+            Some(Outcome::Failed(code)) => findings.push(match exec_failure(&log) {
+                Some(line) => format!(
+                    "{server} {code} — launch-failed (`batten mcp spawn` could not exec the \
+                     launch line; its stderr is at {}:{line})",
+                    dir.join(&name).display()
+                ),
+                None => format!(
+                    "{server} {code} — {}",
+                    spawn_verdict(server, &name, session.spawns.as_deref())
+                ),
+            }),
             None => findings.push(format!(
                 "{server} no-outcome — its newest log records no connection result"
             )),
@@ -218,6 +225,28 @@ fn last_outcome(log: &str) -> Option<Outcome> {
             }
         })
         .next_back()
+}
+
+/// The 1-based line of the record in which `batten mcp spawn` reported that it
+/// could not exec the launch line, or `None`.
+///
+/// THE CHILD'S OWN STDERR OUTRANKS THE LEDGER (CLOUD-2327). The ledger records
+/// the launch before the exec, so a launch line that never started still reads
+/// as "the child ran and did not answer", which is how a cold container's
+/// missing `mise` was reported as an unresponsive serena. Only the spawn verb's
+/// own refusal text counts: a server's routine startup stderr arrives under the
+/// same `Server stderr:` key and says nothing about whether it launched.
+//MUTANT launch-failure-read-as-unresponsive|s@^        stderr.contains(EXEC_FAILED).then_some@        false.then_some@|a_launch_the_spawn_could_not_exec_reads_as_launch_failed
+fn exec_failure(log: &str) -> Option<usize> {
+    const EXEC_FAILED: &str = "could not become";
+    log.lines().enumerate().find_map(|(index, line)| {
+        let record = serde_json::from_str::<serde_json::Value>(line).ok()?;
+        let stderr = record
+            .get("error")?
+            .as_str()?
+            .strip_prefix("Server stderr:")?;
+        stderr.contains(EXEC_FAILED).then_some(index + 1)
+    })
 }
 
 /// The code a failure record carries in its first parentheses, or `unknown`.

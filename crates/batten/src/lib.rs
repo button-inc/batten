@@ -3176,6 +3176,44 @@ fn run_capture(
 /// and a `2` here would tell every harness with a pre-tool hook that policy
 /// refused a call the network dropped. A malformed `params` is exit `1`, because
 /// that is a statement about the invocation.
+/// The launch line with its program replaced by the provisioned binary's
+/// absolute path, when the program is a bare name `PATH` does not hold and a
+/// committed `[[provision]]` row ships it; `None` otherwise, so the line runs
+/// verbatim.
+///
+/// THE CLIENT RUNS `.mcp.json` BEFORE SESSION START PROVISIONS ANYTHING
+/// (CLOUD-2327). Measured: the spawn failed in 204ms with `could not become
+/// 'mise'`, and `mise` was created by its bootstrap row nine seconds later, so
+/// serena never attached on a cold container, and MCP servers are not retried.
+/// Provisioning here is the same checksum-verified, cache-first `apply` that
+/// `provision apply` runs, and it happens BEFORE the one `exec`, so no process
+/// survives to supervise the server (CLOUD-714).
+///
+/// Every failure is `None`, leaving `become_argv`'s own error naming the
+/// program. Nothing is written to either channel, because stdout is the
+/// transport.
+//MUTANT-SUITE crates/batten/tests/it/mcp_spawn.rs
+//MUTANT spawn-unprovisioned|s@^        \.find(|entry| entry.binary == \*program)?;$@        .find(|_| false)?;@|a_launch_program_missing_from_path_is_provisioned_then_becomes_the_launch_line
+fn provisioned_launch(command: &[String], overrides: &Overrides) -> Option<Vec<String>> {
+    let (program, rest) = command.split_first()?;
+    if program.contains(['/', '\\']) || rules::on_path_verbatim(program).is_some() {
+        return None;
+    }
+    let config = resolve::resolve(Path::new("."), overrides).ok()?;
+    let entry = config
+        .provisions
+        .iter()
+        .find(|entry| entry.binary == *program)?;
+    let repo = git::repo_root(Path::new(".")).ok()?;
+    let cache = provision::cache_root(&repo).ok()?;
+    let links_host = std::env::current_exe().map_or(true, |exe| provision::links_host(&exe, &repo));
+    provision::apply(entry, &cache, false, links_host).ok()?;
+    let binary = provision::binary_path(&repo, entry).ok()?;
+    let mut launch = vec![binary.to_string_lossy().into_owned()];
+    launch.extend(rest.iter().cloned());
+    Some(launch)
+}
+
 fn run_mcp(
     command: &cli::McpCommand,
     overrides: &Overrides,
@@ -3193,8 +3231,9 @@ fn run_mcp(
     // JSON-RPC stream and takes the server down looking exactly like the bug.
     if let cli::McpCommand::Spawn { server, command } = command {
         mcp::record_spawn(Path::new("."), server);
+        let launch = provisioned_launch(command, overrides).unwrap_or_else(|| command.clone());
         // Returns only on failure; success replaces this process.
-        return exec::become_argv(command).map(|never| match never {});
+        return exec::become_argv(&launch).map(|never| match never {});
     }
     // CLOUD-843: the connector and attach programs, retired onto the engine.
     if let cli::McpCommand::Grant {

@@ -302,6 +302,44 @@ fn a_timeout_with_a_matching_spawn_record_reads_as_spawned_and_unresponsive() {
     assert!(!text.contains("connection timed out after"), "{text}");
 }
 
+/// Fails by: a launch line `mcp spawn` could not exec read as a server that ran
+/// and did not answer. Measured on CLOUD-2327: the records below are the client
+/// log of a cold container whose `mise` did not exist yet, and posture sent the
+/// session after an unresponsive server that had never started.
+#[test]
+fn a_launch_the_spawn_could_not_exec_reads_as_launch_failed() {
+    const EXEC_FAILED: &str = r#"{"error":"Server stderr: batten: mcp spawn: could not become `mise`: No such file or directory (os error 2)\n","timestamp":"2026-10-15T01:30:54.254Z"}"#;
+    const FAILED_FAST: &str = r#"{"debug":"Connection failed after 204ms (CONNECTION_CLOSED): Connection closed","timestamp":"2026-10-15T01:30:54.258Z"}"#;
+    let s = Session::new("exec-failed");
+    let stamp = "2026-10-15T01-30-54-086Z";
+    s.log("serena", stamp, &[STARTED, EXEC_FAILED, FAILED_FAST]);
+    let ledger = s.spawns(&format!("{}\tserena\t237\t0.08\t0\n", attempt(stamp)));
+    let (code, text) = s.check_with(&["--spawns", &ledger]);
+    assert_eq!(code, Some(2), "{text}");
+    assert!(text.contains("serena CONNECTION_CLOSED"), "{text}");
+    assert!(text.contains("launch-failed"), "{text}");
+    assert!(
+        text.contains(&format!("{stamp}.jsonl:2")),
+        "the record is pointed at: {text}"
+    );
+    assert!(!text.contains("spawned-and-unresponsive"), "{text}");
+    // Pointer-only: where the stderr is, never what it says.
+    assert!(!text.contains("No such file"), "{text}");
+}
+
+/// Routine startup stderr on a launch that then timed out is NOT a failed exec.
+#[test]
+fn routine_stderr_before_a_timeout_is_still_spawned_and_unresponsive() {
+    let s = Session::new("noise-then-timeout");
+    let stamp = "2026-08-19T07-05-16-328Z";
+    s.log("serena", stamp, &[STARTED, NOISE, TIMED_OUT]);
+    let ledger = s.spawns(&format!("{}\tserena\t4543\t2.10\t3\n", attempt(stamp)));
+    let (code, text) = s.check_with(&["--spawns", &ledger]);
+    assert_eq!(code, Some(2), "{text}");
+    assert!(text.contains("spawned-and-unresponsive"), "{text}");
+    assert!(!text.contains("launch-failed"), "{text}");
+}
+
 /// The ledger carries an OLDER serena launch, which is what licenses the verdict.
 #[test]
 fn a_timeout_with_no_spawn_record_for_that_attempt_reads_as_never_spawned() {

@@ -66,7 +66,7 @@ use crate::common;
 
 use std::path::{Path, PathBuf};
 
-use common::{at_root, batten};
+use common::{StateHome as _, at_root, batten};
 
 /// A launcher standing in for the real server command.
 ///
@@ -315,6 +315,54 @@ fn a_launch_line_that_will_not_start_is_a_refusal_and_not_a_silent_success() {
     assert_eq!(output.status.code(), Some(1), "{output:?}");
     let text = String::from_utf8_lossy(&output.stderr).into_owned();
     assert!(text.contains("could not become"), "{text}");
+}
+
+/// Fails by: a bare launch program that a committed `[[provision]]` row ships
+/// but `PATH` does not hold is exec'd as-is and refused (`could not become`).
+/// That is how serena failed to attach on every cold container: the client ran
+/// `.mcp.json` nine seconds before session start provisioned `mise` (CLOUD-2327).
+#[test]
+fn a_launch_program_missing_from_path_is_provisioned_then_becomes_the_launch_line() {
+    // UNIX ONLY, for the reason every exec case here gives.
+    if !cfg!(unix) {
+        return;
+    }
+    let (dir, launcher, ledger) = bench("provisioned-launch");
+    let bytes = std::fs::read(&launcher).unwrap();
+    let artifacts = common::scratch_outside_tree("batten-mcp-spawn", "provisioned-artifacts");
+    let artifact = artifacts.join("demo-server");
+    std::fs::write(&artifact, &bytes).unwrap();
+    let sha = batten::provision::digest(&bytes);
+    common::write(
+        &dir,
+        "batten.toml",
+        &format!(
+            "version = 1\n\n[[provision]]\nname = \"demo-server\"\nversion = \"1.0.0\"\n\
+             url = 'file://{}'\nsha256 = \"{sha}\"\nbinary = \"demo-server\"\n",
+            artifact.display()
+        ),
+    );
+    let home = common::scratch_outside_tree("batten-mcp-spawn", "provisioned-home");
+    let output = batten()
+        .state_home(&home)
+        .args(["mcp", "spawn", "demo", "--", "demo-server", "a", "b"])
+        // `demo-server` is on no directory of this PATH; `env` and `bash`,
+        // which the launcher's shebang needs, are.
+        .env("PATH", "/usr/bin:/bin")
+        .current_dir(&dir)
+        .output()
+        .expect("run batten mcp spawn");
+    let text = String::from_utf8_lossy(&output.stdout).into_owned();
+    assert!(
+        text.contains("args=a b"),
+        "the provisioned program became the launch line: {output:?}"
+    );
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert_eq!(
+        ledger_lines(&ledger).len(),
+        1,
+        "the launch is still recorded once"
+    );
 }
 
 // THE COMMITTED CLIENT CONFIG IS THIS VERB'S CALLER NOW (CLOUD-843).
