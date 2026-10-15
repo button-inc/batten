@@ -15885,7 +15885,7 @@ fn disk_admits(root: &Path, step: &str, err: &mut dyn Write) -> Result<bool> {
 /// `[prune]` key for one would be refused by every release before the one that
 /// reads it, so the engine carries it: `cross-check` measured 54s re-deriving,
 /// and twenty minutes covers a cold run of every triple.
-const SINGLETON_WAIT: std::time::Duration = std::time::Duration::from_secs(20 * 60);
+const SINGLETON_WAIT: std::time::Duration = std::time::Duration::from_mins(20);
 
 /// A batten singleton held by a live process other than this one, by task
 /// name: the background build a below-floor step may wait for. This process's
