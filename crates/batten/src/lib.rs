@@ -11941,6 +11941,7 @@ fn honour_the_notice(
 fn note_the_push(step: land::Step, code: ExitCode, bet: &mut speculation::Bet) {
     if step == land::Step::Push && code == ExitCode::Success && bet.live() {
         bet.pushed = true;
+        speculation::published();
     }
 }
 

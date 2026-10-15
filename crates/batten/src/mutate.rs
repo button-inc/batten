@@ -2584,10 +2584,9 @@ fn await_exit(pid: u32) -> std::io::Result<()> {
 /// Re-raise the signal the sweep was sent, after its suite group is gone.
 #[cfg(unix)]
 fn reraise(signal: i32) -> Result<()> {
-    // Restores the default disposition and raises on self, so this does not
-    // return.
-    signal_hook::low_level::emulate_default_handler(signal)
-        .context("mutate: re-raise the signal the sweep was sent")
+    // The one re-raise, so registered terminate work runs here too. It restores
+    // the default disposition and raises on self, so this does not return.
+    crate::exec::terminate(signal).context("mutate: re-raise the signal the sweep was sent")
 }
 
 /// Read back what the child wrote and drop the capture.

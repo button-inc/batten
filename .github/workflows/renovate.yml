@@ -77,3 +77,8 @@ jobs:
           RENOVATE_ONBOARDING: "false"
           RENOVATE_REQUIRE_CONFIG: required
           RENOVATE_ALLOWED_COMMANDS: '["^node \\.github/renovate/sbom-carry\\.mjs [A-Za-z0-9._/-]+ ?[0-9a-f]{0,40} ?[0-9a-f]{0,40}$"]'
+          # Renovate filters a post-upgrade command's environment, so the carry's
+          # two tree reads would go out unauthenticated and share a runner IP's
+          # 60-an-hour anonymous limit. `customEnvVariables` is the declared way
+          # to hand a child process a variable; the carry reads GITHUB_TOKEN.
+          RENOVATE_CUSTOM_ENV_VARIABLES: ${{ format('{{"GITHUB_TOKEN":"{0}"}}', steps.token.outputs.token) }}

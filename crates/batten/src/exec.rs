@@ -1391,6 +1391,29 @@ struct ForwardingThread {
     /// which the child is a group leader and Batten still holds the default
     /// dispositions.
     pgid: Arc<std::sync::atomic::AtomicI32>,
+    /// This forwarder's place in [`forwarding`]'s count, released when the
+    /// forwarder is, on every path: a `?` between arming and the finish used to
+    /// leave the count raised for the rest of the process.
+    _live: Live,
+}
+
+/// One live forwarder in [`FORWARDING`]'s count, for as long as it exists.
+#[cfg(unix)]
+struct Live;
+
+#[cfg(unix)]
+impl Live {
+    fn count() -> Self {
+        FORWARDING.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Self
+    }
+}
+
+#[cfg(unix)]
+impl Drop for Live {
+    fn drop(&mut self) {
+        FORWARDING.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
 }
 
 /// How long the worker waits for a pgid after taking a signal.
@@ -1598,13 +1621,13 @@ impl Forwarding {
             Some(Escalation::GraceExpired)
         });
 
-        FORWARDING.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Ok(Self {
             active: Some(ForwardingThread {
                 handle,
                 worker,
                 received,
                 pgid,
+                _live: Live::count(),
             }),
         })
     }
@@ -1659,7 +1682,6 @@ impl Forwarding {
         let Some(active) = self.active else {
             return (None, None);
         };
-        FORWARDING.fetch_sub(1, Ordering::SeqCst);
         active.handle.close();
         // A worker that panicked has still recorded what it saw before it could,
         // and a panic on the way out is not worth failing a completed command for.

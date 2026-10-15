@@ -458,8 +458,17 @@ pub fn carries(dir: &Path, candidate: &str, tip: &str) -> bool {
 /// the stranded ref and replays this branch's own commits off it.
 ///
 /// [`disarm`] is the bet settling; until then the unwind is armed.
+///
+/// **THE REFS GO ONLY WITH A RESET THAT HAPPENED.** A reset refused (another git
+/// process holding the index lock) leaves the borrowed range in place, and
+/// [`BASE_REF`] is then the only record of it, which [`recover`] reads.
+///
+/// **A PUBLISHED BET IS LEFT TO THE NEXT LAP** ([`published`]). Its unwind owes
+/// the remote a correction too, which `land`'s own settle makes from the ref; a
+/// local reset that deleted it would leave the remote carrying the range with
+/// nothing on disk pointing at it.
 //MUTANT-SUITE crates/batten/tests/it/land_signal.rs
-//MUTANT signal-leaves-borrowed-range|s@^        let _ = crate::gitwrite::reset_hard(&at, &full, &unwind_to);$@@|a_sigterm_mid_speculation_leaves_the_branch_on_its_own_head
+//MUTANT signal-leaves-borrowed-range|s@^        if crate::gitwrite::reset_hard(&at, &full, &unwind_to).is_err() {$@        if true {@|a_sigterm_mid_speculation_leaves_the_branch_on_its_own_head
 //MUTANT signal-keeps-base-ref|s@^        let _ = crate::gitwrite::delete_ref(&at, BASE_REF);$@@|a_sigterm_mid_speculation_leaves_the_branch_on_its_own_head
 pub fn arm(root: &Path, branch: &str, undo: &str) {
     let (at, full, unwind_to) = (
@@ -467,13 +476,28 @@ pub fn arm(root: &Path, branch: &str, undo: &str) {
         format!("refs/heads/{branch}"),
         undo.to_owned(),
     );
+    PUBLISHED.store(false, std::sync::atomic::Ordering::SeqCst);
     crate::exec::on_terminate(move || {
-        let _ = crate::gitwrite::reset_hard(&at, &full, &unwind_to);
+        if PUBLISHED.load(std::sync::atomic::Ordering::SeqCst) {
+            return;
+        }
+        if crate::gitwrite::reset_hard(&at, &full, &unwind_to).is_err() {
+            return;
+        }
         let _ = crate::gitwrite::delete_ref(&at, BASE_REF);
         let _ = crate::gitwrite::delete_ref(&at, LIVE_REF);
     });
     #[cfg(unix)]
     watch_signals();
+}
+
+/// Whether the armed bet's range has been pushed (see [`arm`]).
+static PUBLISHED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The armed bet's range reached the remote, so a signal leaves it to the next
+/// lap's settle, which corrects the remote as well as the branch.
+pub fn published() {
+    PUBLISHED.store(true, std::sync::atomic::Ordering::SeqCst);
 }
 
 /// The bet settled, so a signal has nothing left to unwind.
@@ -491,27 +515,33 @@ pub fn disarm() {
 /// It re-raises only when no forwarder owns the re-raise, so a child group still
 /// gets its full grace. The slot is taken once, whichever path reaches it first.
 /// Installed once per process; an unarmed signal finds the slot empty and takes
-/// the default action.
+/// the default action. A registration that fails is retried by the next arm
+/// rather than remembered as installed.
 #[cfg(unix)]
 fn watch_signals() {
-    static WATCHING: std::sync::OnceLock<()> = std::sync::OnceLock::new();
-    WATCHING.get_or_init(|| {
-        // The forwarder's own set: a signal `exec` would forward is one this
-        // process can be stopped by mid-bet.
-        let Ok(mut signals) = signal_hook::iterator::Signals::new(crate::exec::FORWARDED) else {
-            return;
-        };
-        // EVERY signal, not the first: a registration outlives its iterator, so a
-        // watcher that stopped after one would leave the next SIGTERM ignored.
-        std::thread::spawn(move || {
-            for signal in signals.forever() {
-                if crate::exec::forwarding() {
-                    crate::exec::run_on_terminate();
-                } else {
-                    let _ = crate::exec::terminate(signal);
-                }
+    static WATCHING: std::sync::Mutex<bool> = std::sync::Mutex::new(false);
+    let Ok(mut installed) = WATCHING.lock() else {
+        return;
+    };
+    if *installed {
+        return;
+    }
+    // The forwarder's own set: a signal `exec` would forward is one this
+    // process can be stopped by mid-bet.
+    let Ok(mut signals) = signal_hook::iterator::Signals::new(crate::exec::FORWARDED) else {
+        return;
+    };
+    *installed = true;
+    // EVERY signal, not the first: a registration outlives its iterator, so a
+    // watcher that stopped after one would leave the next SIGTERM ignored.
+    std::thread::spawn(move || {
+        for signal in signals.forever() {
+            if crate::exec::forwarding() {
+                crate::exec::run_on_terminate();
+            } else {
+                let _ = crate::exec::terminate(signal);
             }
-        });
+        }
     });
 }
 
