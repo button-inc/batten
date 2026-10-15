@@ -16517,7 +16517,7 @@ deny contains "refused by themodule" if {
     }
 
     #[test]
-    fn five_of_six_hosts_declare_the_response_bytes_unreachable_rather_than_guessing() {
+    fn every_host_but_one_declares_the_response_bytes_unreachable_rather_than_guessing() {
         // The honest-value discipline, as a count. An unsurveyed response
         // surface is `Unavailable`, never a guess, and exactly one host has a
         // measurement here: Claude Code's post-tool member, read as DECODED
@@ -16532,7 +16532,8 @@ deny contains "refused by themodule" if {
             })
             .count();
         assert_eq!(
-            unreachable, 5,
+            unreachable,
+            Harness::ALL.len() - 1,
             "exactly one host has a measured capture row; widening another is a \
              measurement, filed per host"
         );
@@ -16746,6 +16747,19 @@ deny contains "refused by themodule" if {
                 "{}: no host vetoes completion from Stop",
                 harness.as_str()
             );
+            // A plugin host's event set is what Batten's generated code delivers
+            // rather than what the host offers, and the OpenCode plugin implements
+            // the pre-tool hook alone (CLOUD-1942). So the claim there is the
+            // narrower one, pinned exactly.
+            if harness.plugin().is_some() {
+                assert_eq!(
+                    harness.capabilities().events,
+                    &[Event::PreTool],
+                    "{}: the generated plugin delivers pre-tool and nothing else",
+                    harness.as_str()
+                );
+                continue;
+            }
             assert!(
                 harness.capabilities().emits(Event::Stop),
                 "{}: every host has a Stop-family event",
@@ -16778,6 +16792,17 @@ deny contains "refused by themodule" if {
                 "{}: TaskCompleted is Claude-only across the surveyed hosts",
                 harness.as_str()
             );
+            // A pre-tool-only plugin has no Stop family to stand in, and saying so
+            // is the honest answer: `None`, never a substitute it cannot deliver.
+            if harness.plugin().is_some() {
+                assert_eq!(
+                    capabilities.degrade(Event::TaskCompleted),
+                    None,
+                    "{}: nothing the generated plugin delivers stands in for completion",
+                    harness.as_str()
+                );
+                continue;
+            }
             assert_eq!(
                 capabilities.degrade(Event::TaskCompleted),
                 Some(Event::Stop),
@@ -16877,10 +16902,22 @@ deny contains "refused by themodule" if {
                 );
                 continue;
             }
+            // The third answer (CLOUD-1942): a host whose adapter is CODE is
+            // installed by writing its plugin, so it registers through
+            // `plugin()` and must not also claim a hook file.
+            if let Some(path) = harness.plugin() {
+                assert!(
+                    wiring.is_none(),
+                    "{} installs through its plugin at {path}, so it must have no \
+                     wiring row",
+                    harness.as_str()
+                );
+                continue;
+            }
             let wiring = wiring.unwrap_or_else(|| {
                 panic!(
-                    "{} has no wiring row and is not in NOT_A_HOST — decide which it is \
-                     rather than leaving it unregisterable",
+                    "{} has no wiring row, no plugin, and is not in NOT_A_HOST — decide \
+                     which it is rather than leaving it unregisterable",
                     harness.as_str()
                 )
             });
@@ -17467,6 +17504,8 @@ deny contains "refused by themodule" if {
         (Harness::CopilotCli, "StrReplaceEditor"),
         (Harness::GeminiCli, "WriteFile"),
         (Harness::CodexCli, "NotebookEdit"),
+        (Harness::Factory, "Create"),
+        (Harness::OpenCode, "write"),
         (Harness::ExitCode, "Write"),
     ];
 

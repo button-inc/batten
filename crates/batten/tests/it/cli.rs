@@ -11008,9 +11008,12 @@ fn generate_hooks_refuses_the_contract_only_harness() {
 
 /// Drives a generated `OpenCode` plugin the way its host does: import the module,
 /// build the hooks with a project directory, and call `tool.execute.before`.
-#[cfg(unix)]
-const OPENCODE_DRIVER: &str = r#"const [plugin, tool, args] = process.argv.slice(2);
-const { Batten } = await import(plugin);
+///
+/// `pathToFileURL` because a bare absolute path is not an import specifier on
+/// Windows, where a drive letter reads as a URL scheme.
+const OPENCODE_DRIVER: &str = r#"import { pathToFileURL } from "node:url";
+const [plugin, tool, args] = process.argv.slice(2);
+const { Batten } = await import(pathToFileURL(plugin).href);
 const hooks = await Batten({ directory: process.cwd() });
 try {
   await hooks["tool.execute.before"]({ tool }, { args: JSON.parse(args) });
@@ -11020,29 +11023,21 @@ try {
 }
 "#;
 
-/// A `batten` that answers like the engine: `2` with the reason for `bash`, `3`
-/// (could not decide) for `task`, and `0` for anything else.
-#[cfg(unix)]
-const OPENCODE_FAKE_ENGINE: &str = r#"#!/bin/sh
-envelope=$(cat)
-case "$envelope" in
-  *'"tool_name":"bash"'*) echo 'commit ship other' >&2; exit 2 ;;
-  *'"tool_name":"task"'*) exit 3 ;;
-esac
-exit 0
-"#;
-
 /// THE PLUGIN IS A GUARD ONLY IF EXIT 2 BECOMES A THROW (CLOUD-1942).
 ///
 /// `OpenCode`'s `tool.execute.before` blocks a tool by throwing and by nothing
 /// else, so a plugin that returned on a refusal would read as installed and
-/// allow every call. Run under the pinned Node against a fake engine on `PATH`:
-/// the refusal is thrown with the engine's reason, an allow passes, and an engine
-/// that could not decide lets the call through, as §7(c) asks of every adapter.
-#[cfg(unix)]
+/// allow every call. Run under the pinned Node against THIS build of the engine,
+/// copied onto `PATH` under the name the plugin spawns, so the case runs on every
+/// platform the suite does: a refusal is thrown with the engine's reason, an
+/// allow passes, and an engine that cannot load its rules is thrown too, because
+/// `adjudicate` fails closed there and the plugin must carry that refusal as well.
+///
+/// No "could not decide" row: `adjudicate` measured exit 0 on every undecodable
+/// or unknown envelope, never 3, so a row for 3 would assert a code this path
+/// does not produce.
 #[test]
 fn a_generated_opencode_plugin_throws_the_engine_s_refusal() {
-    use std::os::unix::fs::PermissionsExt;
     let generated = generated_wiring("opencode");
     assert_eq!(
         generated.status.code(),
@@ -11050,33 +11045,50 @@ fn a_generated_opencode_plugin_throws_the_engine_s_refusal() {
         "opencode's adapter is a plugin, so generate emits it: {}",
         common::stderr(&generated)
     );
-    let dir = common::scratch("opencode-plugin");
-    let plugin = dir.join("batten.mjs");
+    let tools = common::scratch("opencode-plugin");
+    let plugin = tools.join("batten.mjs");
     fs::write(&plugin, common::stdout(&generated)).expect("write the plugin");
-    let bin = dir.join("bin");
-    fs::create_dir_all(&bin).expect("bin dir");
-    let engine = bin.join("batten");
-    fs::write(&engine, OPENCODE_FAKE_ENGINE).expect("write the fake engine");
-    fs::set_permissions(&engine, fs::Permissions::from_mode(0o755)).expect("chmod");
-    let driver = dir.join("drive.mjs");
+    let driver = tools.join("drive.mjs");
     fs::write(&driver, OPENCODE_DRIVER).expect("write the driver");
-    let path = format!(
-        "{}:{}",
-        bin.display(),
-        std::env::var("PATH").unwrap_or_default()
-    );
-    for (tool, args, expected) in [
+    let bin = tools.join("bin");
+    fs::create_dir_all(&bin).expect("bin dir");
+    fs::copy(
+        env!("CARGO_BIN_EXE_batten"),
+        bin.join(format!("batten{}", std::env::consts::EXE_SUFFIX)),
+    )
+    .expect("put this build on PATH as `batten`");
+    let path = std::env::join_paths(std::iter::once(bin.clone()).chain(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    )))
+    .expect("join PATH");
+    let guarded = Fixture::new("opencode-plugin-guarded")
+        .config(PROTECTED_POLICY)
+        .git()
+        .base_commit()
+        .build();
+    let unloadable = Fixture::new("opencode-plugin-unloadable")
+        .config("version = [\n")
+        .git()
+        .base_commit()
+        .build();
+    for (project, tool, args, expected) in [
         (
+            &guarded,
             "bash",
-            r#"{"command":"gh pr merge 1"}"#,
-            "thrown: commit ship other",
+            r#"{"command":"rm guarded/thing"}"#,
+            "path write refused",
         ),
-        ("read", r#"{"filePath":"notes.txt"}"#, "allowed"),
-        ("task", r#"{"prompt":"x"}"#, "allowed"),
+        (&guarded, "read", r#"{"filePath":"notes.txt"}"#, "allowed"),
+        (
+            &unloadable,
+            "bash",
+            r#"{"command":"ls"}"#,
+            "engine-cannot-adjudicate",
+        ),
     ] {
         #[expect(
             clippy::disallowed_types,
-            reason = "the subject is the generated plugin running under the pinned Node, a program the batten door does not spawn; nothing here reaches the engine but the fake on PATH"
+            reason = "stays, and test-only — CLOUD-1942: the subject is the generated plugin running under the pinned Node, a program the batten door does not spawn; the engine it reaches is this build, copied onto PATH"
         )]
         let output = std::process::Command::new("node")
             .arg(&driver)
@@ -11084,13 +11096,19 @@ fn a_generated_opencode_plugin_throws_the_engine_s_refusal() {
             .arg(tool)
             .arg(args)
             .env("PATH", &path)
-            .current_dir(&dir)
+            .current_dir(project)
             .output()
             .expect("run the pinned node");
-        assert_eq!(
-            common::stdout(&output).trim(),
-            expected,
-            "{tool}: stderr: {}",
+        let answer = common::stdout(&output);
+        let answer = answer.trim();
+        let matched = if expected == "allowed" {
+            answer == expected
+        } else {
+            answer.starts_with("thrown: ") && answer.contains(expected)
+        };
+        assert!(
+            matched,
+            "{tool}: expected {expected:?}, got {answer:?}; stderr: {}",
             common::stderr(&output)
         );
     }
