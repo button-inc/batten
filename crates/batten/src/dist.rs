@@ -576,7 +576,9 @@ fn run_cargo_dist(
         writeln!(err, "dist: `dist build` printed no manifest")?;
         return Ok(ExitCode::Internal);
     }
-    let staged = package.target_dir.join(CARGO_DIST_DIR);
+    // The WORKSPACE's `target/`, never cargo's target directory: dist ignores
+    // `CARGO_TARGET_DIR` and stages under `<root>/target` whatever it says.
+    let staged = package.root.join("target").join(CARGO_DIST_DIR);
     std::fs::create_dir_all(&staged)?;
     let manifest = staged.join(cargo_dist_manifest(target));
     crate::durable::replace(&manifest, fragment)?;

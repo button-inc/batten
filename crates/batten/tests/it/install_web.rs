@@ -759,16 +759,10 @@ fn dist_installer(dir: &std::path::Path, target: &str, archive: &[u8]) -> std::p
     stub.insert("workspace".to_owned(), toml::Table::new().into());
     std::fs::write(ws.join("Cargo.toml"), stub.to_string()).unwrap();
     std::fs::write(ws.join("src/main.rs"), "fn main() {}\n").unwrap();
-    std::fs::copy(
-        common::at_root("dist-workspace.toml"),
-        ws.join("dist-workspace.toml"),
-    )
-    .unwrap();
+    let dist_text = std::fs::read_to_string(common::at_root("dist-workspace.toml")).unwrap();
+    std::fs::write(ws.join("dist-workspace.toml"), &dist_text).unwrap();
     // The fragment claims the dist version the committed config pins.
-    let dist_config: toml::Table = std::fs::read_to_string(common::at_root("dist-workspace.toml"))
-        .unwrap()
-        .parse()
-        .unwrap();
+    let dist_config: toml::Table = dist_text.parse().unwrap();
     let dist_version = dist_config["dist"]["cargo-dist-version"].clone();
     let staged = ws.join("target").join(batten::dist::CARGO_DIST_DIR);
     std::fs::create_dir_all(&staged).unwrap();

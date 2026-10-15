@@ -55,9 +55,14 @@ on:
       - "action.yml"
       - ".github/workflows/test.yml"
       - "crates/batten/tests/fixtures/repos/**"
-      # The installer the `action` job's cargo-dist leg proves is generated from these.
+      # The installers and packages the `action` job's cargo-dist leg proves are
+      # generated from these: dist's config and verb, the crate's WiX metadata,
+      # nfpm's config and the Chocolatey package.
       - "dist-workspace.toml"
       - "crates/batten/src/dist.rs"
+      - "crates/batten/Cargo.toml"
+      - "nfpm.yaml"
+      - "packaging/chocolatey/**"
 
 # Supersede, don't accumulate: a landing lap rebases and pushes, and without this
 # the superseded SHA's run is paid out in full for a verdict nobody reads.
