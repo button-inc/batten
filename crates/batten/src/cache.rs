@@ -46,17 +46,94 @@ const CACHEDIR_TAG: &str = "Signature: 8a477f597d28d172789f06886806bc55\n\
      # This file is a cache directory tag created by batten.\n\
      # For information about cache directory tags, see https://bford.info/cachedir/\n";
 
-/// The cache directory under `parent`, tagged for backup tools, or `None` when
-/// it cannot be created.
+/// How many binaries' partitions one cache directory keeps.
+const KEPT_PARTITIONS: usize = 4;
+
+/// The running binary's cache directory under `parent`, or `None` when it
+/// cannot be created.
+///
+/// # One partition per binary, because one slot per row thrashed
+///
+/// Every entry is keyed by the running binary, and each cache keeps one file
+/// per row it answers. Two binaries on one machine — the installed one a hook
+/// runs and a development build, or two checkouts pinned to different releases
+/// — therefore overwrote each other's entries on every call, and neither was
+/// ever served warm (CLOUD-2315, measured: every policy row recompiled while the
+/// installed binary ran beside the one under test). ccache and Go's build cache
+/// grow by content address instead and evict later; this keeps the per-row
+/// bound and partitions it by binary, so each binary has its own slots.
+///
+/// The warm path pays one `stat`. A new partition is the rare path: it tags the
+/// directory for backup tools ([`CACHEDIR_TAG`]) and [`prune`]s, so the
+/// directory holds at most [`KEPT_PARTITIONS`] binaries.
+//MUTANT partitions-never-pruned|s@^    prune(\&root, name);$@@|a_new_partition_keeps_its_neighbours_up_to_the_bound
 #[must_use]
 pub fn root_under(parent: &Path) -> Option<PathBuf> {
     let root = parent.join("cache");
+    let name = partition();
+    let own = root.join(name);
+    if own.is_dir() {
+        return Some(own);
+    }
+    std::fs::create_dir_all(&own).ok()?;
     let tag = root.join("CACHEDIR.TAG");
     if !tag.exists() {
-        std::fs::create_dir_all(&root).ok()?;
         let _ = crate::durable::replace_as(&tag, CACHEDIR_TAG, crate::durable::Persist::Atomic);
     }
-    Some(root)
+    prune(&root, name);
+    Some(own)
+}
+
+/// The running binary's partition name: a short digest of its identity, which
+/// is filesystem-safe whatever the identity spells.
+fn partition() -> &'static str {
+    static NAME: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    NAME.get_or_init(|| {
+        let digest = blake3::hash(running_binary().as_bytes()).to_hex();
+        digest.as_str().get(..16).unwrap_or_default().to_owned()
+    })
+}
+
+/// Whether `name` is spelled as a partition.
+fn is_partition(name: &str) -> bool {
+    name.len() == 16 && name.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+/// Keep `own` and the newest partitions beside it up to [`KEPT_PARTITIONS`],
+/// newest by when each was created; remove the rest, and anything that is not a
+/// partition — the flat layout entries were written in before partitions
+/// existed. Best-effort: another process pruning the same directory, or one
+/// writing into a partition removed here, costs a miss and never a wrong answer.
+fn prune(root: &Path, own: &str) {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return;
+    };
+    let mut partitions = Vec::new();
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name == "CACHEDIR.TAG" || name == own {
+            continue;
+        }
+        let path = entry.path();
+        if !is_partition(&name) {
+            let _ = if path.is_dir() {
+                std::fs::remove_dir_all(&path)
+            } else {
+                std::fs::remove_file(&path)
+            };
+            continue;
+        }
+        let made = entry
+            .metadata()
+            .and_then(|meta| meta.modified())
+            .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+        partitions.push((made, path));
+    }
+    partitions.sort_by(|a, b| b.0.cmp(&a.0));
+    for (_, path) in partitions.into_iter().skip(KEPT_PARTITIONS - 1) {
+        let _ = std::fs::remove_dir_all(path);
+    }
 }
 
 /// The key for an entry: the running binary, a format tag the caller bumps when
@@ -463,8 +540,55 @@ mod tests {
     #[test]
     fn the_cache_root_is_tagged_for_backup_tools() {
         let dir = scratch("tag");
-        let root = root_under(&dir).expect("root");
+        let own = root_under(&dir).expect("root");
+        let root = own
+            .parent()
+            .expect("the partition sits in the tagged directory");
         let tag = std::fs::read_to_string(root.join("CACHEDIR.TAG")).expect("tag");
         assert!(tag.starts_with("Signature: 8a477f597d28d172789f06886806bc55"));
+    }
+
+    /// CLOUD-2315: another binary's partition survives this one's creation, so
+    /// two binaries never evict each other; partitions past the bound and the
+    /// retired flat layout go.
+    ///
+    /// Unix only: ageing a directory opens it as a file, which Windows refuses
+    /// without a backup-semantics flag `std` does not expose.
+    #[cfg(unix)]
+    #[test]
+    fn a_new_partition_keeps_its_neighbours_up_to_the_bound() {
+        let dir = scratch("partitions");
+        let root = dir.join("cache");
+        let others = [
+            "0000000000000001",
+            "0000000000000002",
+            "0000000000000003",
+            "0000000000000004",
+        ];
+        for (age, name) in others.iter().enumerate() {
+            let path = root.join(name);
+            std::fs::create_dir_all(&path).expect("partition");
+            let made = std::time::SystemTime::UNIX_EPOCH
+                + std::time::Duration::from_secs(1_000_000 * (age as u64 + 1));
+            std::fs::File::open(&path)
+                .and_then(|file| file.set_modified(made))
+                .expect("age the partition");
+        }
+        std::fs::create_dir_all(root.join("policy")).expect("flat layout");
+        std::fs::write(root.join("epoch"), "flat").expect("flat layout");
+
+        let own = root_under(&dir).expect("root");
+
+        assert!(own.is_dir());
+        assert!(!root.join("policy").exists(), "the flat layout is retired");
+        assert!(!root.join("epoch").exists(), "the flat layout is retired");
+        assert!(
+            !root.join(others[0]).exists(),
+            "the oldest partition past the bound goes"
+        );
+        for kept in &others[1..] {
+            assert!(root.join(kept).is_dir(), "{kept} is kept");
+        }
+        assert!(root.join("CACHEDIR.TAG").exists());
     }
 }

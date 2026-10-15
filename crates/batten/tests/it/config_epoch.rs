@@ -388,13 +388,21 @@ fn cache_home(name: &str) -> PathBuf {
 /// Canonicalized for the same reason the binary's root is: `git rev-parse
 /// --path-format=absolute` resolves symlinks, and `std::env::temp_dir()` is one
 /// on macOS, so an unresolved path here would name a segment nothing writes.
+///
+/// The cache directory is partitioned by the binary that wrote it (CLOUD-2315),
+/// and the binary under test is not this process, so the partition is found
+/// rather than derived: the one holding an entry, else a path nothing wrote.
 fn cache_file(home: &Path, dir: &Path) -> PathBuf {
     let canonical = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
     let segment = batten::state::derive_repo_name(&canonical).expect("derive the state segment");
-    home.join("batten")
-        .join(segment)
-        .join("cache")
-        .join("epoch")
+    let cache = home.join("batten").join(segment).join("cache");
+    fs::read_dir(&cache)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|entry| entry.path().join("epoch"))
+        .find(|path| path.exists())
+        .unwrap_or_else(|| cache.join("no-partition").join("epoch"))
 }
 
 #[test]
