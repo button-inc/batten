@@ -1414,9 +1414,9 @@ fn check_claims(
 /// an existing tool that did the job. A typed list is what makes the search
 /// writable as a claim and its absence visible.
 ///
-/// **Required on `feat` alone**, a comparison on the typed `commit_type` field
-/// (rule 3): a `fix` repairs what exists, and a `feat` is the row that adds. Where
-/// the key is present on any row, each entry is held to the same shape.
+/// Its PRESENCE on a `feat` is the required-claims loop's to decide, where every
+/// other required key is: a `fix` repairs what exists, and a `feat` is the row
+/// that adds. This holds each entry to its shape, on any row that carries one.
 ///
 /// What is decided is the SHAPE — a tool, where it lives, adopt or reject, and a
 /// reason for a rejection. Whether the reason is any good is a judgement, and no

@@ -27135,16 +27135,13 @@ pub fn land_ready_owes(
     }
     let harness = hook::Harness::ClaudeCode;
     let mut resolved = resolve::resolve(root, &Overrides::default())?;
-    // "AGENT-SOURCED" IS THE DECLARED `[[fact]]` TABLE, read where
-    // `Policy::agent_fact` reads it, with no policy built just to ask.
-    let sourced: Vec<String> = resolved
-        .facts
-        .iter()
-        .map(|fact| fact.name.clone())
-        .collect();
+    // "Agent-sourced" is a name in the `[[fact]]` table, as `Policy::agent_fact` reads it.
+    let facts = &resolved.facts;
     resolved.rules.retain(|rule| {
         rule.kind == rules::RuleKind::Receipt
-            && rule.receipt_names().all(|check| !sourced.contains(check))
+            && rule
+                .receipt_names()
+                .all(|check| !facts.iter().any(|fact| &fact.name == check))
     });
     let policy = without_set_hatches(hook::Policy::from_resolved(&resolved, harness, root, None)?);
     // BARE, so no branch name is ever spliced into a command line to be parsed.
