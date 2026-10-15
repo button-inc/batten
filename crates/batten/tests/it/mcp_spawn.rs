@@ -131,11 +131,19 @@ fn ledger_lines(ledger: &Path) -> Vec<Vec<String>> {
 
 /// The launch records alone. Where a host cannot replace a process every spawn
 /// is refused, so each launch is followed by its own `exec-failed` record, and a
-/// case about launches must not count those.
+/// case about launches must not count those. ON UNIX NOTHING IS SKIPPED: a
+/// working launcher execs, so a failure record there is a broken exec that the
+/// count must still catch.
 fn launch_lines(ledger: &Path) -> Vec<Vec<String>> {
-    ledger_lines(ledger)
-        .into_iter()
-        .filter(|fields| !batten::mcp::is_exec_failure(&fields.join("\t")))
+    if cfg!(unix) {
+        return ledger_lines(ledger);
+    }
+    let Ok(text) = std::fs::read_to_string(ledger) else {
+        return Vec::new();
+    };
+    text.lines()
+        .filter(|line| !batten::mcp::is_exec_failure(line))
+        .map(|line| line.split('\t').map(str::to_owned).collect())
         .collect()
 }
 

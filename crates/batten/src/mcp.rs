@@ -2187,11 +2187,14 @@ pub fn record_spawn(root: &Path, server: &str) -> Option<SpawnRecord> {
 /// The sixth field of a ledger record whose launch line could not be exec'd.
 pub const EXEC_FAILED: &str = "exec-failed";
 
-/// Whether a ledger line is a launch's failure record rather than a launch: the
-/// one place the ledger's layout says which field marks it.
+/// Whether a ledger line is a launch's failure record rather than a launch.
+///
+/// Read from the LAST field, where [`SpawnRecord::exec_failed`] appends the
+/// marker to its launch line, so a field added to the launch record later
+/// cannot move the marker out from under this reader.
 #[must_use]
 pub fn is_exec_failure(line: &str) -> bool {
-    line.split('\t').nth(5) == Some(EXEC_FAILED)
+    line.rsplit('\t').next() == Some(EXEC_FAILED)
 }
 
 /// A launch's ledger record, as [`record_spawn`] composed it.
