@@ -184,6 +184,13 @@ jobs:
           # and never a tag, which a draft may not carry (CLOUD-2033).
           ref: ${{ inputs.sha }}
           persist-credentials: false
+      # THE GNU HOST ON WINDOWS, set before mise installs the pinned toolchain.
+      # regorus's `std` feature pulls `msvc_spectre_libs`, whose build script
+      # gates on the HOST's `target_env` and so looks for `cl.exe` for a gnu
+      # target on an msvc host, and panics. On a gnu host it is a no-op.
+      - name: Use the gnu host toolchain on Windows
+        if: runner.os == 'Windows'
+        run: rustup set default-host x86_64-pc-windows-gnu
       # cache: false — a release build must not restore a shared cache. zizmor
       # flags cache-poisoning as high severity precisely on artifact-publishing
       # workflows: a poisoned cache entry would end up inside a signed binary,
