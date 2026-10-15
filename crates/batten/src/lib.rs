@@ -22044,7 +22044,7 @@ fn capture_response(
                 .map_or(0, |since_epoch| since_epoch.as_secs()),
         )),
         class: None,
-        digest: Some(stored.digest),
+        digest: Some(stored.digest.clone()),
         absent: None,
     };
     if capture::record_call(&root, &row).is_err() {
@@ -22058,8 +22058,11 @@ fn capture_response(
     // An `Err` here is a store that could not be READ or REWRITTEN — the bytes
     // are already published and the row is already written, so it is never a
     // budget refusal. `BUDGET_EXHAUSTED` would send a `doctor` reader to the
-    // wrong remedy, which is the whole point of a reason id.
-    if capture::evict_to_budget(&root, capture_budget().as_ref()).is_err() {
+    // wrong remedy, which is the whole point of a reason id. The response just
+    // stored is kept (CLOUD-2302): this call is about to point at it.
+    if capture::evict_to_budget_keeping(&root, capture_budget().as_ref(), Some(&stored.digest))
+        .is_err()
+    {
         note(capture::STORE_UNWRITABLE);
     }
 }
