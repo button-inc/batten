@@ -372,7 +372,7 @@ fn a_qualified_verb_is_judged_per_segment() {
     // the direction that actually matters — a write must not be excused by a
     // read. Every other guard here judges per segment; the new rows are held to
     // it too.
-    assert_not_refused_as_a_write(&format!("sed -n 1p {GUARDED}; cp {GUARDED} /tmp/x"));
+    assert_allowed(&format!("sed -n 1p {GUARDED}; cp {GUARDED} /tmp/x"));
     assert_denied(&format!("cat /tmp/x; sed -i s/a/b/ {GUARDED}"));
     assert_denied(&format!("git log; git rm {GUARDED}"));
 }
