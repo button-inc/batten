@@ -196,6 +196,60 @@ fn a_result_over_the_bound_is_spilled_not_held() {
     );
 }
 
+/// A SPILLED LEAF NEVER OUTLIVES A RECORDED RESPONSE (CLOUD-2302): the leaf is
+/// stored with no call row, and ranked last it held the store past `max_bytes`,
+/// so the `mcp__*` response the next call stored was evicted in that call and
+/// its pointer named nothing. Either half of the fix alone holds it green, so
+/// each half's own mutant is killed by its unit case in `capture.rs`.
+#[test]
+fn a_spilled_leaf_does_not_outlive_the_mcp_response_stored_after_it() {
+    let dir = common::Fixture::at(common::scratch("result-bound-spill-evicts").join("repo"))
+        .config("version = 1\n\n[capture]\nmax_bytes = 20000\n")
+        .git()
+        .base_commit()
+        .build();
+    let spilled = post_tool(&dir, &read_result(&payload(2000)));
+    assert_eq!(
+        spilled.status.code(),
+        Some(0),
+        "{}",
+        common::stderr(&spilled)
+    );
+    assert!(
+        String::from_utf8_lossy(&spilled.stdout).contains("output point now"),
+        "the premise: the leaf spilled into the store"
+    );
+    let tool = "mcp__linear__get_issue";
+    let payload = serde_json::json!({
+        "hook_event_name": "PostToolUse",
+        "session_id": "bound",
+        "tool_name": tool,
+        "tool_input": { "id": "CLOUD-1" },
+        "tool_response": [{ "type": "text", "text": "{\"id\":\"CLOUD-1\",\"status\":\"Todo\"}" }],
+    });
+    let posted = common::run_with_stdin(
+        &dir,
+        &["adjudicate", "--harness", "claude-code"],
+        &payload.to_string(),
+    );
+    assert_eq!(posted.status.code(), Some(0), "{}", common::stderr(&posted));
+    let calls = common::run(&dir, &["capture", "list", "--calls", "-J"]);
+    let rows: serde_json::Value = serde_json::from_slice(&calls.stdout).expect("JSON rows");
+    let digest = rows
+        .as_array()
+        .and_then(|rows| rows.iter().rev().find(|row| row["tool"] == tool))
+        .and_then(|row| row["digest"].as_str())
+        .unwrap_or_else(|| panic!("a row naming the MCP response: {rows}"))
+        .to_owned();
+    let shown = common::run(&dir, &["capture", "show", &format!("response:{digest}")]);
+    assert_eq!(
+        shown.status.code(),
+        Some(0),
+        "the MCP response was evicted by the call that stored it: {}",
+        common::stderr(&shown)
+    );
+}
+
 /// A RAISED BOUND KEEPS A SPILLED RESULT WHOLE (CLOUD-2224): the read spills at
 /// the default, before the authority is known, so a result within a raised
 /// bound is left to the host as it sent it. `#MUTANT raised-bound-ignored`.
