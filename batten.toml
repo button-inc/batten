@@ -3716,8 +3716,8 @@ when_present = "input-state"
 when_value = "Todo"
 reason = "Create the row in Backlog, groom it, then move it to Todo. A row is groomed before it is promoted, never after."
 
-# CLOUD-312 row 2: `issue-read-guard` retires here. THE COMPLEMENT OF THE ROW
-# ABOVE, not a duplicate of it — same tool, opposite arm. That row says outright
+# CLOUD-312 row 2: `issue-read-guard` retires here. THE COMPLEMENT OF `issue list
+# unread`, not a duplicate of it — same tool, opposite arm. That row says outright
 # that "updating an existing issue is never gated", which was true and is the hole
 # this closes: `when_present` where that one has `when_absent`.
 #
