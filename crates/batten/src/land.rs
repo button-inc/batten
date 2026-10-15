@@ -1103,9 +1103,9 @@ pub fn wait_reading(
                     }
                     Ok(crate::checks_green::Verdict::Red(findings)) => {
                         stop.store(true, std::sync::atomic::Ordering::Relaxed);
-                        let (failed, running) = red_runs(poll.runs(), roster, &findings);
+                        let reading = red_runs(poll.runs(), roster, &findings);
                         if let Ok(mut slot) = red_slot.lock() {
-                            *slot = RedReading { failed, running };
+                            *slot = reading;
                         }
                         drop(green.send(Waited::Red { findings }));
                         return;
@@ -1271,19 +1271,20 @@ pub fn red_runs(
     runs: &[crate::checks_green::Run],
     roster: &crate::checks_green::Roster,
     findings: &[crate::checks_green::Finding],
-) -> (Vec<(u64, String)>, Vec<String>) {
+) -> RedReading {
     let latest = crate::checks_green::latest_per_name(runs, roster);
-    let failed = latest
-        .iter()
-        .filter(|(name, _)| findings.iter().any(|finding| finding.check == **name))
-        .map(|(name, run)| (run.id, (*name).to_owned()))
-        .collect();
-    let running = latest
-        .iter()
-        .filter(|(_, run)| !run.completed())
-        .map(|(name, _)| (*name).to_owned())
-        .collect();
-    (failed, running)
+    RedReading {
+        failed: latest
+            .iter()
+            .filter(|(name, _)| findings.iter().any(|finding| finding.check == **name))
+            .map(|(name, run)| (run.id, (*name).to_owned()))
+            .collect(),
+        running: latest
+            .iter()
+            .filter(|(_, run)| !run.completed())
+            .map(|(name, _)| (*name).to_owned())
+            .collect(),
+    }
 }
 
 /// A branch's red-head key, INJECTIVE where the shared branch-receipt slug is
@@ -1296,15 +1297,16 @@ pub fn red_head_slug(branch: &str) -> String {
     branch.replace('%', "%25").replace('/', "%2F")
 }
 
+/// Where a branch's red-head record lives under a receipt `store`: the ONE
+/// spelling the writer, the reader and the clear share, so they cannot drift.
+fn red_head_file(store: &Path, branch: &str) -> std::path::PathBuf {
+    store.join(format!("{RED_HEAD}.{}", red_head_slug(branch)))
+}
+
 /// Where a branch's red-head record lives, or `None` with no git dir.
 fn red_head_path(root: &Path, branch: &str) -> Option<std::path::PathBuf> {
     let git_dir = crate::git::git_dir(root).ok()?;
-    let slug = red_head_slug(branch);
-    Some(
-        git_dir
-            .join("batten-receipts")
-            .join(format!("{RED_HEAD}.{slug}")),
-    )
+    Some(red_head_file(&crate::minted::store_path(&git_dir), branch))
 }
 
 /// Record that this branch's head stopped red: `head <sha>`, one
@@ -1314,13 +1316,8 @@ fn red_head_path(root: &Path, branch: &str) -> Option<std::path::PathBuf> {
 /// # Errors
 ///
 /// A store directory or file that will not open or write.
-pub fn record_red_head(
-    root: &Path,
-    branch: &str,
-    sha: &str,
-    failed: &[(u64, String)],
-    running: &[String],
-) -> Result<()> {
+pub fn record_red_head(root: &Path, branch: &str, sha: &str, reading: &RedReading) -> Result<()> {
+    let (failed, running) = (&reading.failed, &reading.running);
     let Some(path) = red_head_path(root, branch) else {
         return Ok(());
     };
@@ -1360,9 +1357,8 @@ pub fn red_head_fact(root: &Path) -> crate::facts::Look<serde_json::Value> {
     let Some(branch) = branch else {
         return crate::facts::Look::IsNot;
     };
-    let store = git_dir.join("batten-receipts");
-    let path = store.join(format!("{RED_HEAD}.{}", red_head_slug(&branch)));
-    let text = match std::fs::read_to_string(&path) {
+    let store = crate::minted::store_path(&git_dir);
+    let text = match std::fs::read_to_string(red_head_file(&store, &branch)) {
         Ok(text) => text,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return crate::facts::Look::IsNot;
@@ -1383,8 +1379,7 @@ fn red_head_document(text: &str, read: impl Fn(&str) -> bool) -> serde_json::Val
     let mut failed = Vec::new();
     let mut running = Vec::new();
     for line in text.lines() {
-        let mut fields = line.splitn(2, ' ');
-        let (Some(kind), Some(rest)) = (fields.next(), fields.next()) else {
+        let Some((kind, rest)) = line.split_once(' ') else {
             continue;
         };
         match kind {
@@ -1408,17 +1403,18 @@ fn red_head_document(text: &str, read: impl Fn(&str) -> bool) -> serde_json::Val
 }
 
 /// Remove this branch's red-head record: a green head owes no push a read.
+/// `true` when a record was there to remove, which is what retirement counts.
 ///
 /// # Errors
 ///
 /// A record that exists and will not be removed.
-pub fn clear_red_head(root: &Path, branch: &str) -> Result<()> {
+pub fn clear_red_head(root: &Path, branch: &str) -> Result<bool> {
     let Some(path) = red_head_path(root, branch) else {
-        return Ok(());
+        return Ok(false);
     };
     match std::fs::remove_file(&path) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Ok(()) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
         Err(error) => Err(error)
             .with_context(|| format!("land: remove the red-head record {}", path.display())),
     }
@@ -2830,8 +2826,7 @@ pub fn retire_branch(root: &Path, remote: &str, branch: &str) -> Retired {
     // THE RED-HEAD RECORD IS KEYED ITS OWN WAY (`red_head_slug`, injective where
     // the shared slug is not), so it is cleared through its own spelling rather
     // than matched by the prefix sweep above.
-    let red = red_head_path(root, branch).filter(|path| path.is_file());
-    let receipts = receipts + usize::from(red.is_some() && clear_red_head(root, branch).is_ok());
+    let receipts = receipts + usize::from(clear_red_head(root, branch).unwrap_or(false));
 
     Retired {
         remote: remote_gone,
@@ -4954,9 +4949,12 @@ mod tests {
             check: "macos".to_owned(),
             conclusion: "failure".to_owned(),
         }];
-        let (failed, running) = red_runs(&runs, &roster, &findings);
-        assert_eq!(failed, vec![(7, "macos".to_owned())]);
-        assert_eq!(running, vec!["linux".to_owned(), "windows".to_owned()]);
+        let reading = red_runs(&runs, &roster, &findings);
+        assert_eq!(reading.failed, vec![(7, "macos".to_owned())]);
+        assert_eq!(
+            reading.running,
+            vec!["linux".to_owned(), "windows".to_owned()]
+        );
     }
 
     /// The record round-trips into the fact, with `read` answered per id and an

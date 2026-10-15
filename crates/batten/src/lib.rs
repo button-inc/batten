@@ -14318,10 +14318,8 @@ fn run_land_wait(
     // record goes. A write that fails is said and never changes the verdict:
     // the wait's answer is about the work, the record is about the clone.
     let kept = match &waited {
-        land::Waited::Red { .. } => {
-            land::record_red_head(root, branch, &sha, &red.failed, &red.running)
-        }
-        land::Waited::Green { .. } => land::clear_red_head(root, branch),
+        land::Waited::Red { .. } => land::record_red_head(root, branch, &sha, &red),
+        land::Waited::Green { .. } => land::clear_red_head(root, branch).map(|_| ()),
         _ => Ok(()),
     };
     if let Err(problem) = kept {
@@ -17491,7 +17489,12 @@ fn red_head_for(
     policy: &hook::Policy,
     envelope: &hook::Envelope,
 ) -> facts::Look<serde_json::Value> {
-    if envelope.event == hook::Event::PreTool && policy.reads_pinned(envelope) {
+    // A PUSH OR NOTHING: the fact decides only `git push`, so every other call
+    // opens no repository for it (the common call does no I/O here at all).
+    if envelope.event == hook::Event::PreTool
+        && policy.reads_pinned(envelope)
+        && hook::pushes_git(envelope)
+    {
         land::red_head_fact(hook_authority_root())
     } else {
         facts::Look::CouldNotLook

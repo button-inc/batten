@@ -35,7 +35,8 @@ fn red_repo(name: &str) -> PathBuf {
     std::fs::create_dir_all(&store).expect("the receipt store is creatable");
     std::fs::write(
         store.join(format!(
-            "red-head.{}",
+            "{}.{}",
+            batten::land::RED_HEAD,
             batten::land::red_head_slug("work/red")
         )),
         "head abc123\nfailed 101 windows\nrunning macos\n",
@@ -121,7 +122,8 @@ fn reading_the_failed_check_admits_the_push() {
 
     read_the_log(&dir, 101);
     assert!(
-        dir.join(".git/batten-receipts/check-log-read.101")
+        dir.join(".git/batten-receipts")
+            .join(format!("{}.101", batten::land::CHECK_LOG_READ))
             .is_file(),
         "the read minted its own receipt"
     );

@@ -38,7 +38,7 @@ violation contains {
 	count(unread) > 0
 	subjects := array.concat(
 		[{"artifact": sprintf("%s job %s", [entry.name, entry.id])} | some entry in unread],
-		[{"artifact": sprintf("%s still running", [name])} | some name in running],
+		[{"artifact": sprintf("%s still running", [name])} | some name in input.facts["red-head"].running],
 	)
 }
 
@@ -51,8 +51,6 @@ unread := [entry |
 	some entry in input.facts["red-head"].failed
 	entry.read == false
 ]
-
-running := [name | some name in input.facts["red-head"].running]
 
 # THE SUBCOMMAND, not membership, copied from `linear-history`'s
 # `no-merge-into-branch.rego`: the first argument that is not a global option,

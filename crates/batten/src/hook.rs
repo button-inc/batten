@@ -10242,6 +10242,24 @@ pub(crate) fn singleton_task_started(envelope: &Envelope) -> Option<String> {
 /// leaves the work in the tree; `--hard` discards the working tree *and* the
 /// index with no "you have unstaged changes" refusal, which is what removes the
 /// compensating control people assume git provides.
+/// Whether any program this call reaches is `git push` (CLOUD-2270): the one
+/// call the `red-head` fact can decide anything about, so the lookup is spent
+/// only there. Git's own options before the verb are stepped past exactly as
+/// [`destructive_reset_target`] steps past them.
+#[must_use]
+pub(crate) fn pushes_git(envelope: &Envelope) -> bool {
+    program_reach(&envelope.command).iter().any(|entry| {
+        let arguments: Vec<&str> = entry
+            .get("arguments")
+            .and_then(serde_json::Value::as_array)
+            .map(|list| list.iter().filter_map(serde_json::Value::as_str).collect())
+            .unwrap_or_default();
+        entry.get("name").and_then(serde_json::Value::as_str) == Some("git")
+            && subcommand_index(&arguments, &GIT_VALUE_OPTIONS)
+                .is_some_and(|verb| arguments[verb] == "push")
+    })
+}
+
 pub(crate) fn destructive_reset_target(envelope: &Envelope) -> Option<String> {
     let reach = program_reach(&envelope.command);
     for entry in &reach {
