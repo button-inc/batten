@@ -1516,7 +1516,13 @@ pub fn run_registered(
         };
         let output = runs.join(index.to_string());
         let _ = fs::remove_dir_all(&output);
-        let args = source_args(&patch, source, &output, local, scope);
+        let args = source_args(
+            &patch,
+            source,
+            &output,
+            local,
+            (scope, test_targets(root, source)),
+        );
         let started = std::time::Instant::now();
         let _ = writeln!(
             progress,
@@ -1608,7 +1614,7 @@ fn source_args(
     source: &str,
     output: &Path,
     local: Option<(usize, usize)>,
-    scope: String,
+    (scope, targets): (String, Vec<String>),
 ) -> Vec<String> {
     let mut args = vec![
         String::from("mutants"),
@@ -1623,6 +1629,10 @@ fn source_args(
         String::from("--output"),
         output.to_string_lossy().into_owned(),
     ];
+    // ONLY THE TARGETS THE SCOPE RUNS ARE BUILT ([`test_targets`]): `--cargo-arg`
+    // reaches both the build and the test invocation, so what is compiled per
+    // mutant is what the filterset below can select, and nothing else.
+    args.extend(targets.iter().map(|target| format!("--cargo-arg={target}")));
     // A SHARD SKIPS THE BASELINE, as the book's CI recipe does
     // (mutants.rs/shards.html). One invocation per source meant every shard
     // built and tested 157 unmutated baselines, most for sources with no
@@ -1842,29 +1852,62 @@ impl Outcomes {
 /// judged by the suites it declares: what it generates is what they read.
 #[must_use]
 pub fn test_scope(root: &Path, source: &str) -> Option<String> {
-    let mut terms: Vec<String> = tests_of(root, source).into_iter().collect();
+    let terms: Vec<String> = scope_of(root, source)
+        .into_iter()
+        .map(|(term, _)| term)
+        .collect();
+    (!terms.is_empty()).then(|| terms.join(" | "))
+}
+
+/// The cargo target selectors that build exactly the test binaries
+/// [`test_scope`] names, each once: `--lib`, `--bins`, `--bin=<b>`, `--test=<t>`.
+///
+/// THE BUILD IS THE WHOLE COST OF A MUTANT, and this is what bounds it
+/// (CLOUD-1746). Measured on this tree, a mutant's tests ran in 0s and its
+/// build in 27-41s, because `cargo nextest run` with no selector compiles every
+/// test target of the package — the library twice (as a dependency and under
+/// `cfg(test)`), every integration target and every example — whichever of them
+/// the filterset then runs. A scope of one module's unit tests needs only
+/// `--lib` (20-27s); a declared `tests/<t>` suite adds `--test=<t>`, and cargo
+/// builds the package's binaries for an integration target by itself.
+#[must_use]
+pub fn test_targets(root: &Path, source: &str) -> Vec<String> {
+    let mut targets: Vec<String> = Vec::new();
+    for (_, target) in scope_of(root, source) {
+        if !targets.contains(&target) {
+            targets.push(target);
+        }
+    }
+    targets
+}
+
+/// Each `(filterset term, cargo target selector)` judging `source`: its own
+/// tests, then every Rust suite it declares with `MUTANT-SUITE`, each once.
+fn scope_of(root: &Path, source: &str) -> Vec<(String, String)> {
+    let mut scope: Vec<(String, String)> = tests_of(root, source).into_iter().collect();
     for line in lines_of(root, source).unwrap_or_default() {
         let Some(suite) = strip_marker(&line, SUITE) else {
             continue;
         };
         let suite = suite.trim();
         if has_extension(suite, "rs")
-            && let Some(term) = tests_of(root, suite)
-            && !terms.contains(&term)
+            && let Some(entry) = tests_of(root, suite)
+            && !scope.iter().any(|(term, _)| *term == entry.0)
         {
-            terms.push(term);
+            scope.push(entry);
         }
     }
-    (!terms.is_empty()).then(|| terms.join(" | "))
+    scope
 }
 
-/// The filterset term naming the tests compiled from `path`, inside its package.
+/// The filterset term naming the tests compiled from `path`, inside its
+/// package, and the cargo selector of the target that compiles them.
 ///
 /// Cargo's own layout decides it, never this repository's: `src/lib.rs` is the
 /// library's whole unit-test set and `src/a/b.rs` its `a::b::` module;
 /// `tests/<t>.rs` and `tests/<t>/main.rs` are the target `<t>`, and
 /// `tests/<t>/<m>.rs` its `<m>::` module.
-fn tests_of(root: &Path, path: &str) -> Option<String> {
+fn tests_of(root: &Path, path: &str) -> Option<(String, String)> {
     let (package, dir) = package_of(root, path)?;
     let relative = Path::new(path)
         .strip_prefix(&dir)
@@ -1872,30 +1915,36 @@ fn tests_of(root: &Path, path: &str) -> Option<String> {
         .to_string_lossy()
         .replace('\\', "/");
     let stem = relative.strip_suffix(".rs")?;
-    let term = if let Some(module) = stem.strip_prefix("src/") {
+    let (term, target) = if let Some(module) = stem.strip_prefix("src/") {
         let module = module.strip_suffix("/mod").unwrap_or(module);
         match module {
-            "lib" => String::from("kind(lib)"),
-            "main" => String::from("kind(bin)"),
+            "lib" => (String::from("kind(lib)"), String::from("--lib")),
+            "main" => (String::from("kind(bin)"), String::from("--bins")),
             _ => match module.strip_prefix("bin/") {
-                Some(binary) => format!("binary({binary})"),
-                None => format!("kind(lib) & test(/^{}::/)", module.replace('/', "::")),
+                Some(binary) => (format!("binary({binary})"), format!("--bin={binary}")),
+                None => (
+                    format!("kind(lib) & test(/^{}::/)", module.replace('/', "::")),
+                    String::from("--lib"),
+                ),
             },
         }
     } else {
         let test = stem.strip_prefix("tests/")?;
-        match test.split_once('/') {
-            None => format!("binary({test})"),
-            Some((target, "main")) => format!("binary({target})"),
-            Some((target, module)) => {
-                format!(
-                    "binary({target}) & test(/^{}::/)",
-                    module.replace('/', "::")
-                )
-            }
-        }
+        let (target, module) = match test.split_once('/') {
+            None => (test, None),
+            Some((target, "main")) => (target, None),
+            Some((target, module)) => (target, Some(module)),
+        };
+        let term = match module {
+            None => format!("binary({target})"),
+            Some(module) => format!(
+                "binary({target}) & test(/^{}::/)",
+                module.replace('/', "::")
+            ),
+        };
+        (term, format!("--test={target}"))
     };
-    Some(format!("(package({package}) & {term})"))
+    Some((format!("(package({package}) & {term})"), target))
 }
 
 /// The package whose manifest is nearest above `path`, and that manifest's
@@ -4242,6 +4291,68 @@ mod tests {
             Some("(package(k) & kind(lib))")
         );
         assert_eq!(test_scope(&root, "elsewhere/x.rs"), None);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Fails by: a target the scope runs left unbuilt (its cases then select
+    /// nothing), or every target built again (the cost this exists to cut).
+    #[test]
+    fn a_sources_build_is_exactly_the_targets_its_scope_runs() {
+        let root = std::env::temp_dir().join(format!("batten-targets-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("crates/k/src/a")).expect("dirs");
+        fs::create_dir_all(root.join("crates/k/src/bin")).expect("dirs");
+        fs::create_dir_all(root.join("crates/k/tests/it")).expect("dirs");
+        fs::write(
+            root.join("crates/k/Cargo.toml"),
+            "[package]\nname = \"k\"\n",
+        )
+        .expect("manifest");
+        fs::write(
+            root.join("crates/k/src/a/b.rs"),
+            "//MUTANT-SUITE crates/k/tests/it/flows.rs\n//MUTANT-SUITE crates/k/tests/it/more.rs\n\
+             //MUTANT-SUITE crates/k/tests/solo.rs\n//MUTANT-SUITE crates/k/src/lib.rs\n",
+        )
+        .expect("source");
+        fs::write(root.join("crates/k/src/main.rs"), "").expect("main");
+        fs::write(root.join("crates/k/src/bin/tool.rs"), "").expect("bin");
+        assert_eq!(
+            test_targets(&root, "crates/k/src/a/b.rs"),
+            ["--lib", "--test=it", "--test=solo"]
+        );
+        assert_eq!(test_targets(&root, "crates/k/src/main.rs"), ["--bins"]);
+        assert_eq!(
+            test_targets(&root, "crates/k/src/bin/tool.rs"),
+            ["--bin=tool"]
+        );
+        assert_eq!(
+            test_targets(&root, "crates/k/tests/it/main.rs"),
+            ["--test=it"]
+        );
+        assert!(test_targets(&root, "elsewhere/x.rs").is_empty());
+        let args = source_args(
+            Path::new("change.diff"),
+            "crates/k/src/a/b.rs",
+            Path::new("out"),
+            None,
+            (
+                String::from("scope"),
+                test_targets(&root, "crates/k/src/a/b.rs"),
+            ),
+        );
+        for target in [
+            "--cargo-arg=--lib",
+            "--cargo-arg=--test=it",
+            "--cargo-arg=--test=solo",
+        ] {
+            assert!(args.iter().any(|arg| arg == target), "{target} in {args:?}");
+        }
+        assert_eq!(
+            args.iter()
+                .filter(|arg| arg.starts_with("--cargo-arg="))
+                .count(),
+            3
+        );
         let _ = fs::remove_dir_all(&root);
     }
 
