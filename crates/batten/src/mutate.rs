@@ -325,8 +325,12 @@ pub struct Row {
     pub source: String,
     /// The `MUTANT-SUITE` this row is judged under, as declared: the nearest
     /// one above it in its source, else that source's first; `None` where the
-    /// source declares none (CLOUD-2193). [`Gate::suite_for`] resolves it.
+    /// source declares none (CLOUD-2193). Kept as written so a declaration no
+    /// runner recognizes can be named in the row's `no-suite`.
     pub suite: Option<String>,
+    /// [`Row::suite`] as a runner resolves it, or `None` where it names no
+    /// runner here; [`Gate::suite_for`] hands this back by reference.
+    pub resolved: Option<Suite>,
 }
 
 /// How a gate's suite is run.
@@ -467,10 +471,10 @@ impl Gate {
     /// `None` where neither resolves, including a declaration no runner here
     /// recognizes, which costs that row alone ([`Row::suite`] names it).
     #[must_use]
-    pub fn suite_for(&self, row: &Row) -> Option<Suite> {
+    pub fn suite_for<'a>(&'a self, row: &'a Row) -> Option<&'a Suite> {
         match &row.suite {
-            Some(declared) => Suite::declared(declared),
-            None => self.suite.clone(),
+            Some(_) => row.resolved.as_ref(),
+            None => self.suite.as_ref(),
         }
     }
 
@@ -778,6 +782,7 @@ fn rows_in(lines: &[String], source: &str) -> Vec<std::result::Result<Row, (Stri
             script: (*script).to_owned(),
             want: (*want).to_owned(),
             source: source.to_owned(),
+            resolved: above.as_deref().and_then(Suite::declared),
             suite: above.clone(),
         }));
     }
@@ -932,6 +937,7 @@ pub fn resolve(root: &Path, name: &str) -> Option<Gate> {
             want: format!("\u{0}malformed:{fields}"),
             source: sources[0].clone(),
             suite: None,
+            resolved: None,
         });
     }
     Some(Gate {
@@ -1222,7 +1228,7 @@ impl RunnerKind {
 //MUTANT failed-run-reads-caught|s@^        } else if !ran.passed() \&\& found.is_empty() {$@        } else if false {@|a_failed_run_with_nothing_missed_is_never_every_mutant_caught
 //MUTANT row-judged-under-first-suite|s@^            above = Some(suite);$@            above = first.clone().or(Some(suite));@|a_row_is_judged_under_the_suite_above_it
 //MUTANT later-unrecognized-costs-the-gate|s@^                None if index == 0 => unrunnable@                None if true => unrunnable@|a_later_unrecognized_suite_costs_only_the_rows_under_it
-//MUTANT suite-first-only|s@^            Some(declared) => Suite::declared(declared),$@            Some(_) => self.suite.clone(),@|each_preset_module_row_runs_under_its_own_declared_suite
+//MUTANT suite-first-only|s@^            Some(_) => row.resolved.as_ref(),$@            Some(_) => self.suite.as_ref(),@|each_preset_module_row_runs_under_its_own_declared_suite
 //MUTANT-SUITE crates/batten/tests/it/mutate.rs
 //MUTANT later-suites-unread|s@^                    own.push(resolved);$@                    if own.is_empty() { own.push(resolved); }@|a_change_to_a_sources_second_suite_sweeps_its_gate
 /// Which registered runner owns which sources.
@@ -3491,7 +3497,6 @@ fn judge_row(root: &Path, staged: &mut Staged, gate: &Gate, row: &Row) -> Result
                 .unwrap_or_else(|| String::from(UNDECLARED)),
         });
     };
-    let suite = &suite;
 
     // THE CASE MUST BE GREEN BEFORE IT IS MUTATED. "Red under mutation" is only
     // evidence if the row was green without it: a case that CANNOT pass — an
@@ -4328,6 +4333,7 @@ mod tests {
             want: String::from("w"),
             source: source.to_owned(),
             suite: None,
+            resolved: None,
         }
     }
 
@@ -4793,8 +4799,9 @@ mod tests {
                 panic!("row {slug} is declared");
             };
             gate.suite_for(row)
-                .map(|suite| suite.path().to_owned())
+                .map(Suite::path)
                 .unwrap_or_default()
+                .to_owned()
         };
         assert_eq!(suite_of("one"), "tests/it/a.rs");
         assert_eq!(suite_of("two"), "tests/it/b.rs");
