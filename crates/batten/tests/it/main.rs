@@ -369,6 +369,7 @@ mod remedy_authorship;
 mod remedy_payload_source;
 #[cfg(unix)]
 mod render_cli;
+mod renovate_carry;
 mod repaired_arms;
 mod repetition;
 mod report_only;

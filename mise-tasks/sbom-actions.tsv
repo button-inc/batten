@@ -68,6 +68,24 @@
 # repository ships; CONTRIBUTING.md's Apache-2.0 compatibility column tracks
 # ADOPTED and VENDORED tools, which these are not.
 #
+# TWO ROWS WERE ADDED ON 2026-10-15 with `renovate.yml` (CLOUD-2300), read the
+# same way — raw bytes at the pinned commit, inspected locally.
+#
+#   * `renovatebot/github-action` ships its licence as lowercase `license`, which
+#     the retired carry workflow's fixed probe list could not see. The file opens
+#     "Renovate versions 12.0.0 ... onwards are released under the GNU Affero
+#     General Public License" and carries the AGPLv3 text with no "or later"
+#     grant of the project's own; its `package.json` says `GPL-3.0-or-later`,
+#     which is a project's summary of itself and loses to the file. Its only
+#     project copyright line, `Copyright (c) 2017 Rhys Arkins`, is attached to the
+#     retained MIT notice for versions 11 and earlier, not to this pin, and the
+#     AGPL part names no holder, so the holder is `NONE`. AGPL's obligations
+#     attach to distributing the program or offering a MODIFIED one over a
+#     network; an unmodified CI action that ships in nothing triggers neither,
+#     the same reasoning as the LGPL rows above.
+#   * `actions/create-github-app-token` is MIT with two holder lines, joined here
+#     with `; ` because a row is one line.
+#
 # Columns, tab-separated: `owner/repo@sha`, SPDX license expression, copyright.
 # The sha is the authority for drift; enrichment matches on the owner/repo half,
 # because the document keys components by the `# vX` comment beside the pin rather
@@ -96,3 +114,5 @@ sequoia-pgp/fast-forward@ea7628bedcb0b0b96e94383ada458d812fca4979	LGPL-2.0-or-la
 taiki-e/install-action@91ddec75689c4c78665b598d188dc821c5a43e5c	Apache-2.0 OR MIT	NONE
 actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8	MIT	Copyright GitHub
 jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c	MIT	Copyright (c) 2018 GitHub, Inc. and contributors
+renovatebot/github-action@f0f41e5f2e706165f6814b1d0f0d0e319de7d1d9	AGPL-3.0-only	NONE
+actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510	MIT	Copyright (c) 2023 Gregor Martynus; Copyright (c) 2023 Parker Brown

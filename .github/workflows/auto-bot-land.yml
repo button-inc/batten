@@ -4,15 +4,16 @@ name: auto-bot-land
 # draft nobody has looked at to a fast-forward on `main`.
 #
 # THAT CLAIM IS BOUNDED, AND THE BOUND IS STATED HERE RATHER THAN DISCOVERED ON A
-# RED PR (CLOUD-1207). Two committed gates need a change to the REPOSITORY that no
-# bump can carry: `sbom-check` maps each pinned action's licence by repo AND sha,
-# so a `github-actions` bump orphans every row until a person runs `mise run sbom`
-# and commits the table, and `mise-action-floor` reds a pin it denies. So the lane
-# is unattended for `cargo` and `mise` bumps and attended for some
-# `github-actions` ones. What this workflow owes in that case is not a landing —
-# it cannot produce one — but a stop: the freeze arm below drafts the head, halts
-# the rebases, and says once what failed and what to run. CLOUD-1213 carries
-# whether that class should need a person at all.
+# RED PR (CLOUD-1207). Two committed gates can refuse a `github-actions` bump for a
+# reason only a person can settle: `sbom-check` keys each pinned action's licence
+# to `repo@sha`, and Renovate carries the reviewed row onto its own branch only
+# when the new commit's licence files are byte-identical (CLOUD-2300,
+# `.github/renovate/sbom-carry.mjs`), so a changed licence still reds the bump;
+# and `mise-action-floor` reds a pin it denies. So the lane is unattended for
+# `cargo`, `mise` and most `github-actions` bumps, and attended where a licence
+# moved. What this workflow owes in that case is not a landing — it cannot
+# produce one — but a stop: the freeze arm below drafts the head, halts the
+# rebases, and says once what failed and what to run.
 #
 # This file is `auto-dependabot-land.yml` repointed, not a second lander beside it
 # (CLOUD-660). That workflow is deleted in the same commit, along with
@@ -100,11 +101,12 @@ on:
     # list shifts page boundaries mid-walk, so paginating it is not stable. The
     # `if:` below stays as defence in depth; the two answer different failure modes.
     #
-    # TWO LANES SINCE CLOUD-1213, and the second is the licence-carry one
-    # `sbom-actions-currency` opens. The scope is per-lane rather than a wildcard
-    # for the same reason it exists at all: a broad filter puts every completion
-    # in the repository back on this workflow's run list.
-    branches: ["renovate/**", "sbom-actions/**"]
+    # ONE LANE AGAIN (CLOUD-2300): the licence-carry lane `sbom-actions-currency`
+    # opened on `sbom-actions/**` is retired, its row now written by Renovate on
+    # its own branch. The scope stays per-lane rather than a wildcard for the
+    # reason it exists at all: a broad filter puts every completion in the
+    # repository back on this workflow's run list.
+    branches: ["renovate/**"]
   # THE ONLY TRIGGER THAT CAN START THE LANE, and the reason this workflow has a
   # clock at all. A draft PR completes no workflow, so `workflow_run` never fires
   # for one — the `workflow_run` path above is the free ride that lands a head
@@ -194,8 +196,7 @@ jobs:
       (github.event.workflow_run.event == 'pull_request' &&
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.head_repository.full_name == github.repository &&
-      (startsWith(github.event.workflow_run.head_branch, 'renovate/') ||
-      startsWith(github.event.workflow_run.head_branch, 'sbom-actions/')))
+      startsWith(github.event.workflow_run.head_branch, 'renovate/'))
     runs-on: ubuntu-latest
     timeout-minutes: 3 # budget: p95=52s x3 measured=2026-08-19
     # EVERY WRITER OF `main` SERIALISES IN ONE GROUP (CLOUD-2033 P3), the
@@ -211,21 +212,16 @@ jobs:
       # The author half of the same test, applied in the resolve step below where
       # the PR object is in hand. Named here so both arms read one table.
       #
-      # A TABLE OF PAIRS, NOT TWO INDEPENDENT LISTS (CLOUD-1213). The two lanes
-      # have different authors — Renovate opens its own PRs, and the licence-carry
-      # lane is opened by `sbom-actions-currency` under the default token — so a
-      # single login no longer answers. Pairing them is what keeps the widening
-      # honest: matching any-prefix against any-login would admit
-      # `renovate[bot]` on a `sbom-actions/` branch and the workflow's own token
-      # on a `renovate/` one, neither of which either lane can produce. A PR must
-      # satisfy ONE row whole.
+      # A TABLE OF PAIRS, NOT TWO INDEPENDENT LISTS (CLOUD-1213). A PR must
+      # satisfy ONE row whole: a prefix matched against any login would admit an
+      # author the lane cannot produce. The licence-carry row (`sbom-actions/`,
+      # `github-actions[bot]`) retired with that lane (CLOUD-2300).
       #
       # This does not touch CLOUD-867's origin test. `head_repository.full_name`
       # is still what a fork cannot forge and is still checked separately; the
       # prefix remains a filter, never the trust boundary.
       LANES: >-
-        [{"prefix":"renovate/","login":"renovate[bot]"},
-         {"prefix":"sbom-actions/","login":"github-actions[bot]"}]
+        [{"prefix":"renovate/","login":"renovate[bot]"}]
       # The freeze `renovate.json5` declares as `stopUpdatingLabel` (CLOUD-1207).
       # The two must agree by string or the freeze is a label nothing reads, so
       # this is the one place either is spelled in a workflow.

@@ -269,9 +269,27 @@
       // `prConcurrentLimit: 1` above means ungrouped updates would queue one at
       // a time behind each other rather than merely being noisy.
       //
-      // This rule sets only `groupName`, so the `ci` above survives it.
+      // This rule sets only `groupName` and the carry below, so the `ci` above
+      // survives it.
       matchManagers: ["github-actions"],
       groupName: "actions",
+      // THE LICENCE ROW TRAVELS WITH THE BUMP (CLOUD-2300). `sbom-check` keys
+      // each pinned action's licence to `repo@sha`, so every action bump needs a
+      // row for its new commit. Renovate runs this after rewriting the pin and
+      // commits what it writes onto its own branch: the reviewed row is carried
+      // to the new commit only when every licence file there is byte-identical,
+      // and otherwise nothing is written and the check stays red for a person.
+      // It replaced a daily workflow that opened a second PR per gap and could
+      // never land one (41 of them).
+      //
+      // Runs only where `allowedCommands` admits it: our own Renovate run in
+      // `.github/workflows/renovate.yml`. The pattern there matches this command
+      // exactly, after templating.
+      postUpgradeTasks: {
+        commands: ["node .github/renovate/sbom-carry.mjs {{{depName}}} {{{currentDigest}}} {{{newDigest}}}"],
+        fileFilters: ["mise-tasks/sbom-actions.tsv"],
+        executionMode: "update",
+      },
     },
     {
       // A CEILING AGAINST A STRAY TAG, and the shape is `mise-action-floor`'s
