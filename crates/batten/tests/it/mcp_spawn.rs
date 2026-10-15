@@ -338,6 +338,16 @@ fn a_launch_that_cannot_exec_is_recorded_as_failed() {
         "{lines:?}"
     );
     assert_eq!(lines[0].len(), 5, "the launch record keeps its five fields");
+    assert_eq!(
+        lines[1][0], lines[0][0],
+        "stamped with its own launch's time, so posture's window holds it"
+    );
+    // A later launch counts the failed one once, never its failure record too.
+    let launcher = launcher(&dir);
+    let output = spawn(&dir, "serena", &launcher, &[]);
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let lines = ledger_lines(&ledger);
+    assert_eq!(lines[2][4], "1", "one sibling, not two: {lines:?}");
 }
 
 /// Fails by: a bare launch program that a committed `[[provision]]` row ships

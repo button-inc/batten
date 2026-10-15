@@ -3190,23 +3190,6 @@ fn run_capture(
     }
 }
 
-/// `batten mcp call` (CLOUD-1260).
-///
-/// **Three layers, and each is a different answer.** Dispatch resolves the wiring
-/// a declared source names, makes the call the session was going to make anyway,
-/// and stores the response whole. Reduction turns the stored response into what a
-/// `[[mcp.result]]` row declares. What reaches the caller is a pointer, a delta
-/// and that reduction; the payload reaches the store and stops there.
-///
-/// # Errors
-///
-/// An internal error (→ exit `3`) when no declared source resolves the server, or
-/// when one resolves and will not read, or when the exchange cannot complete.
-/// **All three are could-not-look and none is a policy verdict**, which is why
-/// none of them is exit `2`: §7's table is total and has no per-verb exception,
-/// and a `2` here would tell every harness with a pre-tool hook that policy
-/// refused a call the network dropped. A malformed `params` is exit `1`, because
-/// that is a statement about the invocation.
 /// The launch line with its program replaced by the provisioned binary's
 /// absolute path, when the program is a bare name `PATH` does not hold and a
 /// committed `[[provision]]` row ships it; `None` otherwise, so the line runs
@@ -3225,6 +3208,9 @@ fn run_capture(
 /// transport.
 //MUTANT-SUITE crates/batten/tests/it/mcp_spawn.rs
 //MUTANT spawn-unprovisioned|s@^        \.find(\x7centry\x7c entry.binary == \*program)?;$@        .find(\x7c_\x7c false)?;@|a_launch_program_missing_from_path_is_provisioned_then_becomes_the_launch_line
+// The rows below this one are judged under the suite they were before
+// (CLOUD-2193: a row runs under the declaration above it).
+//MUTANT-SUITE crates/batten/tests/it/engine_gates.rs
 fn provisioned_launch(command: &[String], overrides: &Overrides) -> Option<Vec<String>> {
     let (program, rest) = command.split_first()?;
     if program.contains(['/', '\\']) || rules::on_path_verbatim(program).is_some() {
@@ -3247,6 +3233,23 @@ fn provisioned_launch(command: &[String], overrides: &Overrides) -> Option<Vec<S
     Some(launch)
 }
 
+/// `batten mcp call` (CLOUD-1260).
+///
+/// **Three layers, and each is a different answer.** Dispatch resolves the wiring
+/// a declared source names, makes the call the session was going to make anyway,
+/// and stores the response whole. Reduction turns the stored response into what a
+/// `[[mcp.result]]` row declares. What reaches the caller is a pointer, a delta
+/// and that reduction; the payload reaches the store and stops there.
+///
+/// # Errors
+///
+/// An internal error (→ exit `3`) when no declared source resolves the server, or
+/// when one resolves and will not read, or when the exchange cannot complete.
+/// **All three are could-not-look and none is a policy verdict**, which is why
+/// none of them is exit `2`: §7's table is total and has no per-verb exception,
+/// and a `2` here would tell every harness with a pre-tool hook that policy
+/// refused a call the network dropped. A malformed `params` is exit `1`, because
+/// that is a statement about the invocation.
 fn run_mcp(
     command: &cli::McpCommand,
     overrides: &Overrides,

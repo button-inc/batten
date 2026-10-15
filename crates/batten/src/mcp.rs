@@ -2155,6 +2155,9 @@ fn siblings_within(ledger: &Path, now: u64) -> usize {
         return 0;
     };
     text.lines()
+        // A failure record (CLOUD-2327) is the same launch said twice, never
+        // a sibling of its own.
+        .filter(|line| line.split('\t').nth(5).is_none())
         .filter_map(|line| line.split('\t').next())
         .filter_map(|stamp| stamp.parse::<u64>().ok())
         .filter(|stamp| *stamp <= now && now - *stamp <= SPAWN_WINDOW)
@@ -2192,10 +2195,27 @@ pub const EXEC_FAILED: &str = "exec-failed";
 /// Silent for [`record_spawn`]'s reason: stdout is still the transport.
 //MUTANT exec-failure-unrecorded|s@^    drop(crate::durable::append(\&ledger, \&failed));$@    drop((ledger, failed));@|a_launch_that_cannot_exec_is_recorded_as_failed
 pub fn record_exec_failure(root: &Path, server: &str) {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |since| since.as_secs());
-    let Some((ledger, line)) = spawn_record(root, server, now, std::process::id()) else {
+    let pid = std::process::id();
+    // STAMPED WITH ITS OWN LAUNCH'S TIME: the exec never replaced this process,
+    // so its launch record carries this pid. A provisioning fetch between the
+    // two must not move the failure out of the attempt's window in posture.
+    let launched = spawn_ledger(root)
+        .and_then(|ledger| std::fs::read_to_string(ledger).ok())
+        .and_then(|text| {
+            text.lines().rev().find_map(|line| {
+                let fields: Vec<&str> = line.split('\t').collect();
+                let pid_field = pid.to_string();
+                (fields.get(1) == Some(&server) && fields.get(2) == Some(&pid_field.as_str()))
+                    .then(|| fields.first()?.parse::<u64>().ok())
+                    .flatten()
+            })
+        });
+    let now = launched.unwrap_or_else(|| {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |since| since.as_secs())
+    });
+    let Some((ledger, line)) = spawn_record(root, server, now, pid) else {
         return;
     };
     let failed = format!("{}\t{EXEC_FAILED}\n", line.trim_end_matches('\n'));

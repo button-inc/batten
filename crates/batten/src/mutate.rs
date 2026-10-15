@@ -1688,12 +1688,6 @@ fn source_args(
             .iter()
             .map(|target| format!("--cargo-arg={target}")),
     );
-    // NO DEBUG INFO FOR THE CRATE UNDER MUTATION (CLOUD-1746). Measured on
-    // this tree, one mutant's `--lib --test=it` rebuild is 25.5s at `debug = 1`
-    // and 22.3s at `0`; nothing reads a mutant's debug info. Dependencies are
-    // already `debug = 0` (`profile.dev.package."*"`), so only the workspace's
-    // own crates build once more into the staged target.
-    args.push(String::from("--cargo-arg=--config=profile.test.debug=0"));
     // A SHARD SKIPS THE BASELINE, as the book's CI recipe does
     // (mutants.rs/shards.html). One invocation per source meant every shard
     // built and tested 157 unmutated baselines, most for sources with no
@@ -1930,7 +1924,7 @@ fn terms_of(scope: &[(String, String)]) -> String {
 fn targets_of(scope: &[(String, String)]) -> Vec<String> {
     let mut targets: Vec<String> = Vec::new();
     for (_, target) in scope {
-        if !targets.contains(target) {
+        if !target.is_empty() && !targets.contains(target) {
             targets.push(target.clone());
         }
     }
@@ -1948,8 +1942,8 @@ fn targets_of(scope: &[(String, String)]) -> Vec<String> {
 /// the filterset then runs. A scope of one module's unit tests needs only
 /// `--lib` (20-27s); a declared `tests/<t>` suite adds `--test=<t>`, and cargo
 /// builds the package's binaries for an integration target by itself.
-#[must_use]
-pub fn test_targets(root: &Path, source: &str) -> Vec<String> {
+#[cfg(test)]
+fn test_targets(root: &Path, source: &str) -> Vec<String> {
     targets_of(&scope_of(root, source))
 }
 
@@ -1957,15 +1951,22 @@ pub fn test_targets(root: &Path, source: &str) -> Vec<String> {
 /// tests, then every Rust suite it declares with `MUTANT-SUITE`, each once.
 fn scope_of(root: &Path, source: &str) -> Vec<(String, String)> {
     let mut scope: Vec<(String, String)> = tests_of(root, source).into_iter().collect();
+    let home = package_of(root, source).map(|(package, _)| package);
     for line in lines_of(root, source).unwrap_or_default() {
         let Some(suite) = strip_marker(&line, SUITE) else {
             continue;
         };
         let suite = suite.trim();
         if has_extension(suite, "rs")
-            && let Some(entry) = tests_of(root, suite)
+            && let Some(mut entry) = tests_of(root, suite)
             && !scope.iter().any(|(term, _)| *term == entry.0)
         {
+            // A SUITE IN ANOTHER PACKAGE NAMES NO TARGET HERE: cargo-mutants
+            // builds the mutated package, where `--test=<t>` of a sibling's
+            // target is a build error rather than a narrower build.
+            if package_of(root, suite).map(|(package, _)| package) != home {
+                entry.1.clear();
+            }
             scope.push(entry);
         }
     }
@@ -1993,7 +1994,12 @@ fn tests_of(root: &Path, path: &str) -> Option<(String, String)> {
             "lib" => (String::from("kind(lib)"), String::from("--lib")),
             "main" => (String::from("kind(bin)"), String::from("--bins")),
             _ => match module.strip_prefix("bin/") {
-                Some(binary) => (format!("binary({binary})"), format!("--bin={binary}")),
+                Some(binary) => {
+                    // `src/bin/<name>/main.rs` is the binary `<name>`, as
+                    // `src/bin/<name>.rs` is: cargo's layout, never this repo's.
+                    let binary = binary.strip_suffix("/main").unwrap_or(binary);
+                    (format!("binary({binary})"), format!("--bin={binary}"))
+                }
                 None => (
                     format!("kind(lib) & test(/^{}::/)", module.replace('/', "::")),
                     String::from("--lib"),
@@ -2760,6 +2766,13 @@ fn suite_env(root: &Path) -> Vec<(String, String)> {
             String::from("BATTEN_TEST_SCRATCH_LANE"),
             String::from("mutate"),
         ),
+        // NO DEBUG INFO FOR THE CRATE UNDER MUTATION (CLOUD-1746). Measured:
+        // one mutant's `--lib --test=it` rebuild is 25.5s at `debug = 1` and
+        // 22.3s at `0`, and nothing reads a mutant's debug info. Set here, for
+        // every runner over this one target directory: on cargo-mutants alone
+        // it flipped the profile under the declared sweep's builds, and each
+        // flip rebuilt the workspace crates.
+        (String::from("CARGO_PROFILE_TEST_DEBUG"), String::from("0")),
     ]
 }
 
@@ -4185,7 +4198,7 @@ pub fn census(root: &Path, names: &[String], table: Option<&crate::config::Mutat
 /// outside the one-substitution subset (a sed address block left from before
 /// CLOUD-2255). Neither can ever apply, both are decidable from the text, and
 /// the sweep named each only after an hour of building.
-//MUTANT inert-row-admitted|s@^                    Some(after) if after == text => CensusVerdict::InertMutation,$@                    Some(after) if false => CensusVerdict::InertMutation,@|a_row_whose_script_changes_nothing_is_refused_by_the_census
+//MUTANT inert-row-admitted|s@^                    Some(after) if !changes_code(\&text, \&after) => CensusVerdict::InertMutation,$@                    Some(after) if false => CensusVerdict::InertMutation,@|a_row_whose_script_changes_nothing_is_refused_by_the_census
 //MUTANT malformed-row-admitted|s@, CensusVerdict::MalformedRow));$@, CensusVerdict::InertMutation));@|a_row_that_cannot_apply_is_refused_by_the_census
 //MUTANT unappliable-row-admitted|s@^                    None => CensusVerdict::UnappliableMutation,$@                    None => continue,@|a_row_that_cannot_apply_is_refused_by_the_census
 fn inert_rows(root: &Path, subjects: &BTreeMap<String, String>) -> Vec<(String, CensusVerdict)> {
@@ -4213,7 +4226,7 @@ fn inert_rows(root: &Path, subjects: &BTreeMap<String, String>) -> Vec<(String, 
                 };
                 let verdict = match substitute(&text, &row.script) {
                     None => CensusVerdict::UnappliableMutation,
-                    Some(after) if after == text => CensusVerdict::InertMutation,
+                    Some(after) if !changes_code(&text, &after) => CensusVerdict::InertMutation,
                     Some(_) => continue,
                 };
                 found.push((
@@ -4227,11 +4240,30 @@ fn inert_rows(root: &Path, subjects: &BTreeMap<String, String>) -> Vec<(String, 
 }
 
 /// The 1-based line of `slug`'s row in `text`, or `0` where none declares it.
+/// A malformed row with no `|` at all is its whole body.
 fn row_line(text: &str, slug: &str) -> usize {
     let head = format!("{slug}|");
     text.lines()
-        .position(|line| strip_marker(line, ROW).is_some_and(|body| body.starts_with(&head)))
+        .position(|line| {
+            strip_marker(line, ROW).is_some_and(|body| body.starts_with(&head) || body == slug)
+        })
         .map_or(0, |index| index + 1)
+}
+
+/// Whether `after` changes any line of `text` that is not itself a
+/// declaration: an unanchored pattern written out in its own row matches that
+/// row, and a change only there is still a row that proves nothing.
+fn changes_code(text: &str, after: &str) -> bool {
+    let declaration = |line: &str| {
+        [ROW, SUITE, OWNER, EXEMPT]
+            .iter()
+            .any(|marker| strip_marker(line, marker).is_some())
+    };
+    text.lines().count() != after.lines().count()
+        || text
+            .lines()
+            .zip(after.lines())
+            .any(|(before, now)| before != now && !declaration(before))
 }
 
 /// How many engine modules carry no declaration at all.
@@ -4532,6 +4564,13 @@ mod tests {
             "[package]\nname = \"k\"\n",
         )
         .expect("manifest");
+        // A sibling package: its suite is filtered for, never a `--test` here.
+        fs::create_dir_all(root.join("crates/o/tests")).expect("dirs");
+        fs::write(
+            root.join("crates/o/Cargo.toml"),
+            "[package]\nname = \"o\"\n",
+        )
+        .expect("manifest");
         fs::write(
             root.join("crates/k/src/a/b.rs"),
             [
@@ -4539,6 +4578,7 @@ mod tests {
                 "crates/k/tests/it/more.rs",
                 "crates/k/tests/solo.rs",
                 "crates/k/src/lib.rs",
+                "crates/o/tests/elsewhere.rs",
             ]
             .map(|suite| format!("//{SUITE}{suite}\n"))
             .concat(),
@@ -4546,14 +4586,24 @@ mod tests {
         .expect("source");
         fs::write(root.join("crates/k/src/main.rs"), "").expect("main");
         fs::write(root.join("crates/k/src/bin/tool.rs"), "").expect("bin");
+        fs::create_dir_all(root.join("crates/k/src/bin/dir")).expect("dirs");
+        fs::write(root.join("crates/k/src/bin/dir/main.rs"), "").expect("bin");
         assert_eq!(
             test_targets(&root, "crates/k/src/a/b.rs"),
             ["--lib", "--test=it", "--test=solo"]
+        );
+        assert!(
+            terms_of(&scope_of(&root, "crates/k/src/a/b.rs")).contains("package(o)"),
+            "the sibling's suite is still in the filterset"
         );
         assert_eq!(test_targets(&root, "crates/k/src/main.rs"), ["--bins"]);
         assert_eq!(
             test_targets(&root, "crates/k/src/bin/tool.rs"),
             ["--bin=tool"]
+        );
+        assert_eq!(
+            test_targets(&root, "crates/k/src/bin/dir/main.rs"),
+            ["--bin=dir"]
         );
         assert_eq!(
             test_targets(&root, "crates/k/tests/it/main.rs"),
@@ -4571,7 +4621,6 @@ mod tests {
             "--cargo-arg=--lib",
             "--cargo-arg=--test=it",
             "--cargo-arg=--test=solo",
-            "--cargo-arg=--config=profile.test.debug=0",
         ] {
             assert!(args.iter().any(|arg| arg == target), "{target} in {args:?}");
         }
@@ -4579,7 +4628,13 @@ mod tests {
             args.iter()
                 .filter(|arg| arg.starts_with("--cargo-arg="))
                 .count(),
-            4
+            3
+        );
+        assert!(
+            suite_env(&root)
+                .iter()
+                .any(|(key, value)| key == "CARGO_PROFILE_TEST_DEBUG" && value == "0"),
+            "every runner over the shared target builds without debug info"
         );
         let _ = fs::remove_dir_all(&root);
     }

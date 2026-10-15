@@ -2498,6 +2498,7 @@ fn a_row_whose_script_changes_nothing_is_refused_by_the_census() {
         "package batten.some_rule\n\
          #MUTANT dead|s@^deny if input.gone$@deny if false@|test_x\n\
          #MUTANT live|s@^deny if input.bad$@deny if false@|test_x\n\
+         #MUTANT selfie|s@input.vanished@false@|test_x\n\
          deny if input.bad\n",
     );
     track(&root);
@@ -2505,6 +2506,11 @@ fn a_row_whose_script_changes_nothing_is_refused_by_the_census() {
     assert_eq!(code, 2, "{out}");
     assert!(
         out.contains("policy/some-rule.rego:2 dead inert-mutation"),
+        "{out}"
+    );
+    // Unanchored, its pattern matches only its own row: still inert.
+    assert!(
+        out.contains("policy/some-rule.rego:4 selfie inert-mutation"),
         "{out}"
     );
     assert!(
