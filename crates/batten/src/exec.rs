@@ -1394,7 +1394,7 @@ struct ForwardingThread {
     /// This forwarder's place in [`forwarding`]'s count, released when the
     /// forwarder is, on every path: a `?` between arming and the finish used to
     /// leave the count raised for the rest of the process.
-    _live: Live,
+    live: Live,
 }
 
 /// One live forwarder in [`FORWARDING`]'s count, for as long as it exists.
@@ -1627,7 +1627,7 @@ impl Forwarding {
                 worker,
                 received,
                 pgid,
-                _live: Live::count(),
+                live: Live::count(),
             }),
         })
     }
@@ -1682,6 +1682,10 @@ impl Forwarding {
         let Some(active) = self.active else {
             return (None, None);
         };
+        // OUT OF THE COUNT BEFORE THE HANDLE CLOSES. Once it is closed this
+        // forwarder answers no signal, so a count still raised through the join
+        // below would have the land watcher leave the re-raise to nobody.
+        drop(active.live);
         active.handle.close();
         // A worker that panicked has still recorded what it saw before it could,
         // and a panic on the way out is not worth failing a completed command for.
