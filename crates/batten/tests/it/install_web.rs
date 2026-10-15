@@ -727,11 +727,12 @@ fn dist_installer(dir: &std::path::Path, target: &str, archive: &[u8]) -> std::p
     let version = env!("CARGO_PKG_VERSION");
     let name = batten::dist::cargo_dist_archive("batten", target);
     let ws = dir.join("ws");
+    // Fresh each run: dist refuses a stale `wix/main.wxs` a prior run generated.
+    let _ = std::fs::remove_dir_all(&ws);
     std::fs::create_dir_all(ws.join("src")).unwrap();
-    // The MSI installer refuses a package without its WiX GUIDs and authors, and
-    // regenerates a `wix/main.wxs` it finds missing, so the stub carries the
-    // crate's own `[package.metadata.wix]` table, the metadata the committed
-    // template was generated from, and that template itself.
+    // `dist generate --mode msi` writes `wix/main.wxs` from the package's WiX
+    // GUIDs and authors, so the stub carries the crate's own
+    // `[package.metadata.wix]` table and the metadata the release generates from.
     let manifest: toml::Table = std::fs::read_to_string(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml"),
     )
@@ -766,12 +767,6 @@ fn dist_installer(dir: &std::path::Path, target: &str, archive: &[u8]) -> std::p
     stub.insert("workspace".to_owned(), toml::Table::new().into());
     std::fs::write(ws.join("Cargo.toml"), stub.to_string()).unwrap();
     std::fs::write(ws.join("src/main.rs"), "fn main() {}\n").unwrap();
-    std::fs::create_dir_all(ws.join("wix")).unwrap();
-    std::fs::copy(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("wix/main.wxs"),
-        ws.join("wix/main.wxs"),
-    )
-    .unwrap();
     std::fs::copy(
         workspace().join("dist-workspace.toml"),
         ws.join("dist-workspace.toml"),
@@ -808,27 +803,38 @@ fn dist_installer(dir: &std::path::Path, target: &str, archive: &[u8]) -> std::p
         fragment.to_string(),
     )
     .unwrap();
-    #[expect(
-        clippy::disallowed_types,
-        reason = "stays, and test-only: the subject is cargo-dist's own generator, so the case runs it rather than a restatement of it"
-    )]
-    let generated = Command::new("dist")
-        .args([
+    // The release's own order: the MSI template, then the global step.
+    run_dist(&ws, &["generate", "--mode", "msi"]);
+    run_dist(
+        &ws,
+        &[
             "build",
             "--artifacts=global",
             "--tag",
             &format!("v{version}"),
-        ])
-        .current_dir(&ws)
+        ],
+    );
+    staged.join("batten-installer.sh")
+}
+
+/// Run cargo-dist in `ws` and require it to succeed.
+fn run_dist(ws: &std::path::Path, args: &[&str]) {
+    #[expect(
+        clippy::disallowed_types,
+        reason = "stays, and test-only: the subject is cargo-dist's own generator, so the case runs it rather than a restatement of it"
+    )]
+    let ran = Command::new("dist")
+        .args(args)
+        .current_dir(ws)
         .env_remove("CARGO_TARGET_DIR")
         .output()
         .expect("cargo-dist must be installed: it is a pinned [tools] entry");
     assert!(
-        generated.status.success(),
-        "dist build --artifacts=global: {}",
-        String::from_utf8_lossy(&generated.stderr)
+        ran.status.success(),
+        "dist {}: {}",
+        args.join(" "),
+        String::from_utf8_lossy(&ran.stderr)
     );
-    staged.join("batten-installer.sh")
 }
 
 /// dist's archive layout: the binary under `batten-<target>/`, which the

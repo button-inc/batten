@@ -4569,19 +4569,13 @@ no_fix_reason = "class 2 (a codemod reading `[[pattern]]` by id): read the key f
 # appearing in the core; an arm is DATA ABOUT A LINE THAT NO LONGER EXISTS, and
 # the four markers anchor it at the start of a line, so nothing but a ledger row
 # can reach the exemption.
-#
-# THE APACHE-2.0 NOTICE IS EXEMPT TOO, verbatim and whole-line (CLOUD-2298).
-# cargo-dist builds the MSI from cargo-wix's template at the one path it reads,
-# `crates/batten/wix/main.wxs`, whose header carries the license's standard
-# sentence. A notice is retained as written, never reworded to pass a row, and
-# that exact sentence names no consumer.
 [[rule]]
 id = "source name other"
 no_fix_reason = "class 3 (review disposition): which rewrite is right is a reading of the code, so the refusal routes the reader to the site rather than editing it"
 kind = "forbid"
 glob = "crates/**"
 regex = "(?i)complian"
-exclude = '^(// (carried|subsumed|changed|withdrawn): |  you may not use this file except in compliance with the License\.$)'
+exclude = "^// (carried|subsumed|changed|withdrawn): "
 severity = "deny"
 scope = "tree"
 

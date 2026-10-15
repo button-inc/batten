@@ -303,6 +303,11 @@ jobs:
         env:
           TARGET: ${{ matrix.target }}
         run: mise run batten -- ci step --arg-env TARGET -- rustup target add
+      # dist refuses a missing or stale MSI template, which is its own output
+      # and never committed (`.gitignore`), so it writes it before every build.
+      - name: Generate the MSI template
+        working-directory: dist-src
+        run: mise exec -- dist generate --mode msi
       - name: Build this OS's archive with cargo-dist
         working-directory: dist-src
         env:

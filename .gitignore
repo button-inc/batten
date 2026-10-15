@@ -51,6 +51,10 @@ batten.local.toml
 # Distribution archives built by `mise run dist` — never committed (CLOUD-173).
 /dist/
 
+# cargo-dist's MSI template, written by `dist generate --mode msi` before every
+# dist build (CLOUD-2298). It is dist's output, so the tree never carries it.
+/crates/batten/wix/
+
 # SBOMs derived by `mise run sbom` — cut from the tagged source at release time and
 # attached to the release, never committed (CLOUD-262).
 /sbom/

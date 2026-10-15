@@ -222,6 +222,10 @@ jobs:
         env:
           TARGET: ${{ matrix.target }}
         run: mise run batten -- ci step --arg-env TARGET -- rustup target add
+      # dist refuses a missing or stale MSI template, which is its own output
+      # and never committed (`.gitignore`), so it writes it before every build.
+      - name: Generate the MSI template
+        run: mise exec -- dist generate --mode msi
       - name: Build and archive
         id: dist
         shell: bash
@@ -410,6 +414,10 @@ jobs:
           pattern: dist-manifest-*
           path: target/distrib
           merge-multiple: true
+      # dist refuses a missing or stale MSI template, which is its own output
+      # and never committed (`.gitignore`), so it writes it before every build.
+      - name: Generate the MSI template
+        run: mise exec -- dist generate --mode msi
       - name: Generate the installers from every leg's manifest
         env:
           TAG: ${{ inputs.tag }}
