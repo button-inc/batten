@@ -4363,7 +4363,7 @@ fn parse_remembered(text: &str, source: &str) -> Result<Config> {
 /// decoded the same 583 KB authority twice in one call.
 static LAST: std::sync::Mutex<Option<(String, String, Config)>> = std::sync::Mutex::new(None);
 
-//MUTANT config-parse-unremembered|s@^    (remembered_text == text \&\& \*remembered_source == named).then(|| config.clone())$@    None@|one_authority_is_parsed_once_per_process
+//MUTANT config-parse-unremembered|s@^    (remembered_text == text \&\& \*remembered_source == named).then(\x7c\x7c config.clone())$@    None@|one_authority_is_parsed_once_per_process
 fn remembered(text: &str, source: &str) -> Option<Config> {
     let named = canonical_source(source);
     let last = LAST.lock().ok()?;

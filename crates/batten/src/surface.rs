@@ -8424,7 +8424,7 @@ fn attach(parent: Command, prefix: &str) -> Command {
 }
 
 /// [`attach`], keeping only the child named `only` when one is given.
-//MUTANT narrowed-tree-keeps-everything|s@^            .filter(\|decl\| only.is_none_or(\|name\| leaf_of(decl.path) == name))$@@|a_narrowed_tree_parses_as_the_whole_one
+//MUTANT narrowed-tree-keeps-everything|s@^            .filter(\x7cdecl\x7c only.is_none_or(\x7cname\x7c leaf_of(decl.path) == name))$@@|a_narrowed_tree_parses_as_the_whole_one
 //
 // ONE MOVE PER NODE, NOT ONE PER FLAG. `clap`'s builder takes `Command` by
 // value, so folding `.arg` over a row's flags and `.subcommand` over its

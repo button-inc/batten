@@ -240,7 +240,7 @@ fn cache_path(dir: &Path) -> Option<PathBuf> {
 /// strictly older than the entry's write time may have been rewritten in the
 /// same timestamp tick, with every stamped field unchanged, so the entry cannot
 /// vouch for it.
-//MUTANT epoch-racy-entry-served|s@^    if stamps.iter().any(\|stamp\| stamp.racily_clean(written)) {$@    if false {@|a_tracked_file_changed_after_the_entry_was_written_is_not_served
+//MUTANT epoch-racy-entry-served|s@^    if stamps.iter().any(\x7cstamp\x7c stamp.racily_clean(written)) {$@    if false {@|a_tracked_file_changed_after_the_entry_was_written_is_not_served
 fn read_cache(path: &Path, key: &str, stamps: &[crate::cache::Stamp]) -> Option<String> {
     let body = String::from_utf8(crate::cache::read(path, key)?).ok()?;
     let (written, epoch) = body.split_once(' ')?;

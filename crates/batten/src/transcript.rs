@@ -681,7 +681,7 @@ pub struct Tally {
 /// covered and a digest of the file's first line. A shorter file, a different
 /// first line (an inode reused for a new session), or any unreadable state is a
 /// full re-read from byte zero.
-//MUTANT tally-entry-trusted-after-replace|s@^        .filter(\|saved\| saved.head == head \&\& saved.offset <= len);$@        .filter(\|_\| true);@|the_incremental_reader_answers_as_a_whole_parse
+//MUTANT tally-entry-trusted-after-replace|s@^        .filter(\x7csaved\x7c saved.head == head \&\& saved.offset <= len);$@        .filter(\x7c_\x7c true);@|the_incremental_reader_answers_as_a_whole_parse
 #[must_use]
 pub fn tally_appended(path: &Path, shape: RecordShape) -> Option<Tally> {
     let canonical = std::fs::canonicalize(path).ok()?;
