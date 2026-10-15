@@ -18338,8 +18338,10 @@ fn hook_table(overrides: &Overrides) -> Option<crate::action::HookConfig> {
     if !here.join(config::CONFIG_FILE).exists() {
         return None;
     }
-    match resolve::resolve(here, overrides) {
-        Ok(resolved) => resolved.hook,
+    // Through the call's one resolve (CLOUD-2315): this was a second full
+    // resolve of the authority beside `load_hook_config`'s.
+    match HookLoads::resolve(here, overrides) {
+        Ok(resolved) => resolved.hook.clone(),
         // EVERY LOAD FAULT, for `run_hook`'s reason (CLOUD-1917): that arm has
         // already refused every call the floor does not exempt, so what reaches
         // this read under a fault is a read or the repair write, and a table
@@ -22874,14 +22876,11 @@ fn load_hook_config(overrides: &Overrides, harness: hook::Harness) -> Result<Hoo
     if let Some(loaded) = HookLoads::recall(here, overrides, harness) {
         return Ok(loaded);
     }
-    let resolved = match HookLoads::recall_resolved(here, overrides) {
-        Some(resolved) => resolved,
-        None => resolve::resolve(here, overrides)?,
-    };
+    let resolved = HookLoads::resolve(here, overrides)?;
     let policy =
         hook::Policy::from_resolved(&resolved, harness, here, overrides.config_from.as_deref())?;
     let loaded = (policy, resolved.waivers.clone(), resolved.prune.clone());
-    HookLoads::keep(here, overrides, harness, &resolved, &loaded);
+    HookLoads::keep(here, overrides, harness, &loaded);
     Ok(loaded)
 }
 
@@ -22903,8 +22902,13 @@ fn load_hook_config(overrides: &Overrides, harness: hook::Harness) -> Result<Hoo
 /// Keyed on everything `load_hook_config` reads besides the tree — the authority
 /// root and the overrides — and, for the compiled policy, the harness too,
 /// because `from_resolved` builds a different policy per host.
+///
+/// The resolve is held behind an `Rc` and handed out as one, because a recall
+/// used to deep-clone it — every rule row, every declared verdict — and with
+/// [`hook_table`] reading it too that was most of the heap a warm call
+/// allocated (dhat, CLOUD-2315).
 struct HookLoads {
-    resolved: Vec<((PathBuf, Overrides), resolve::Resolved)>,
+    resolved: Vec<((PathBuf, Overrides), std::rc::Rc<resolve::Resolved>)>,
     loaded: Vec<((PathBuf, Overrides, hook::Harness), HookConfig)>,
 }
 
@@ -22948,32 +22952,40 @@ impl HookLoads {
         })
     }
 
-    fn recall_resolved(here: &Path, overrides: &Overrides) -> Option<resolve::Resolved> {
-        HOOK_LOADS.with(|cell| {
+    /// The resolve of `here` under `overrides`: the one this scope already
+    /// holds, else a fresh one, kept for the rest of the scope.
+    fn resolve(here: &Path, overrides: &Overrides) -> Result<std::rc::Rc<resolve::Resolved>> {
+        let held = HOOK_LOADS.with(|cell| {
             cell.borrow().as_ref().and_then(|loads| {
                 loads
                     .resolved
                     .iter()
                     .find(|((root, held), _)| root == here && held == overrides)
-                    .map(|(_, resolved)| resolved.clone())
+                    .map(|(_, resolved)| std::rc::Rc::clone(resolved))
             })
-        })
-    }
-
-    fn keep(
-        here: &Path,
-        overrides: &Overrides,
-        harness: hook::Harness,
-        resolved: &resolve::Resolved,
-        loaded: &HookConfig,
-    ) {
+        });
+        if let Some(resolved) = held {
+            return Ok(resolved);
+        }
+        let resolved = std::rc::Rc::new(resolve::resolve(here, overrides)?);
         HOOK_LOADS.with(|cell| {
             if let Some(loads) = cell.borrow_mut().as_mut() {
-                let key = (here.to_path_buf(), overrides.clone());
-                if !loads.resolved.iter().any(|(held, _)| *held == key) {
-                    loads.resolved.push((key.clone(), resolved.clone()));
-                }
-                loads.loaded.push(((key.0, key.1, harness), loaded.clone()));
+                loads.resolved.push((
+                    (here.to_path_buf(), overrides.clone()),
+                    std::rc::Rc::clone(&resolved),
+                ));
+            }
+        });
+        Ok(resolved)
+    }
+
+    fn keep(here: &Path, overrides: &Overrides, harness: hook::Harness, loaded: &HookConfig) {
+        HOOK_LOADS.with(|cell| {
+            if let Some(loads) = cell.borrow_mut().as_mut() {
+                loads.loaded.push((
+                    (here.to_path_buf(), overrides.clone(), harness),
+                    loaded.clone(),
+                ));
             }
         });
     }
