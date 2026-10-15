@@ -327,6 +327,13 @@ uv = "0.12.5"                     # fast Rust installer the pipx: backend uses t
 
 [env]
 CARGO_TERM_COLOR = "always"
+# WHERE THIS REPOSITORY KEEPS ITS TASK PROGRAMS, read by `alive` and by `land`'s
+# reap of an abandoned landing's process groups (CLOUD-2366). The engine may not
+# spell a consumer's directory (non-negotiable rule 1), so it reads this; before
+# it was declared here `land` read nothing, and the reap never ran — a killed
+# landing's verify groups, reparented to init, outlived it (CLOUD-1148). ONE
+# SOURCE: `[tasks.alive]` templates it rather than repeating the literal.
+BATTEN_TASK_PROGRAM_ROOT = "mise-tasks"
 # WHICH NEXTEST PROFILE APPLIES, and therefore whether the suite stops at the
 # first failure (review of #928). `.config/nextest.toml` states both halves and
 # why they differ; this decides which one is in force, once, for every leg that
@@ -674,7 +681,7 @@ CI_VERDICT_STEPS = "Run mise run ,Run mise exec -- "
 # which is a property of the world and belongs on a clock (`lock-complete`).
 REGORUS_OPA_COMPLIANCE = "1.2.0"
 REGORUS_OPA_COMPLIANCE_FOR = "0.11"
-MUTANT_GATES = ".config/nextest.toml,action.yml,engine-testing,crates/batten/tests/it/common/mod.rs,agentic-experiment-record,answer-the-operator,claude-code-cloud,engine-disk-watch,engine-prune,engine-cache,engine-epoch,awk-regex,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-inert,ci-suite-lane,ci-tools,claim-before-code,claim-order-is-stated,coderabbit-config,commit-hygiene,dead-capability,denials-outlive-the-turn,digest-major-agreement,egress-fencing,engine-checks-green,engine-config,engine-doctor,engine-exec,engine-handler,engine-hook,engine-land,engine-landed,engine-lease,engine-lib,engine-mcp,engine-perf,engine-semver,engine-identity,engine-install,engine-pinned,engine-pipeline,engine-policy,engine-ready,engine-speculation,engine-surface,engine-verdict,engine-wiring,filed-here,could-not-look-laundered,fixture-forks,forge-verdict-required,glob-containment,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,landing-loop,landing-roster-guarded,leased-push,license-table,linear-history,lock-complete,mcp-timeout-budget,mise,mise-action-floor,mise-pin-agreement,module-map,msrv-pin-agreement,mutation-declared-case,nextest-slow,no-doctests,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential,red-head,release-due,release-provision-parity,release-tag-shape,remedy-authorship,repetition-without-progress,report-only,review-answered,review-dispatched,rules-paths-trigger,run-shape,rust-paths-check,sbom-inventory,shell-hygiene,shell-retirement,shell-write-advisory,skill-frontmatter-complete,spawn-widening,stop-posture,suite-subject-retirable,task-substitution,test-targets,timeout-budget,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration,engine-mutate,engine-task,run-arg-shape,engine-cargo-graph,branch-age,engine-released,evaluator-closure,evaluator-io-probe,agent-spawn,macos-link,ntia,release-tracking,sbom-actions,task-callable,transcript-corpus,engine-rules,release-assets,durable-write,spawn-factory,turn-ask,turn-defer,engine-forge,engine-forge-query,engine-git,engine-census,ci-signal,engine-ci-signal,docs-tree-absent,ripcord-untracked,hk-pin-agreement,engine-record,engine-suites,engine-admission,engine-ci-step,engine-gitwrite,engine-refusal,engine-repair,crates/batten/tests/it/mutant_rows.rs,crates/batten/tests/it/refusal_ceiling.rs,hk-fix-selection.pkl,engine-dist,engine-sbom,supply-chain,engine-reclaim,engine-durable,engine-step,engine-step-table,engine-mcp-grant,engine-mcp-posture,engine-preflight,engine-trust,engine-sweep,sweep-exit-table,tracker-hygiene,engine-tracker-reading,task-duplicate-close-check,engine-release,release-hygiene,engine-hk,hook-profile,engine-attestation,engine-turn,engine-unsubscribe,engine-probe,finding-sink,engine-commit,engine-receipt,engine-board-check,check-verdict,engine-budget,engine-codemod,engine-remedy,engine-config-edit,engine-propose,crates/batten/tests/it/stub_portability.rs,crates/batten/tests/it/truncate_handle.rs,git,engine-engine,engine-attribution,crates/batten/tests/it/pointer_only.rs,engine-hookcost,engine-transcript,engine-contract,forge-read-first,engine-advisory,engine-drain,engine-patch,engine-provision,batten.toml,engine-replay,engine-fetch,engine-pr-watch,engine-symbols,engine-rest,engine-worktree,engine-doc,engine-history,engine-capture,engine-recorder,engine-state,engine-collect,engine-o200k,engine-stream-input,engine-background,engine-redirect,engine-release-verify,engine-release-path,engine-release-state,engine-release-guard,task-verify"
+MUTANT_GATES = ".config/nextest.toml,action.yml,engine-testing,crates/batten/tests/it/common/mod.rs,agentic-experiment-record,answer-the-operator,claude-code-cloud,engine-disk-watch,engine-prune,engine-cache,engine-epoch,awk-regex,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-inert,ci-suite-lane,ci-tools,claim-before-code,claim-order-is-stated,coderabbit-config,commit-hygiene,dead-capability,denials-outlive-the-turn,digest-major-agreement,egress-fencing,engine-checks-green,engine-config,engine-doctor,engine-exec,engine-handler,engine-hook,engine-land,engine-landed,engine-lease,engine-lib,engine-mcp,engine-perf,engine-semver,engine-identity,engine-install,engine-pinned,engine-pipeline,engine-policy,engine-ready,engine-speculation,engine-surface,engine-verdict,engine-wiring,filed-here,could-not-look-laundered,fixture-forks,forge-verdict-required,glob-containment,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,landing-loop,landing-roster-guarded,leased-push,license-table,linear-history,lock-complete,mcp-timeout-budget,mise,mise-action-floor,mise-pin-agreement,module-map,msrv-pin-agreement,mutation-declared-case,nextest-slow,no-doctests,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential,red-head,release-due,release-provision-parity,release-tag-shape,remedy-authorship,repetition-without-progress,report-only,review-answered,review-dispatched,rules-paths-trigger,run-shape,rust-paths-check,sbom-inventory,shell-hygiene,shell-retirement,shell-write-advisory,skill-frontmatter-complete,spawn-widening,stop-posture,suite-subject-retirable,task-substitution,test-targets,timeout-budget,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration,engine-mutate,engine-task,run-arg-shape,engine-cargo-graph,branch-age,engine-released,evaluator-closure,evaluator-io-probe,agent-spawn,macos-link,ntia,release-tracking,sbom-actions,task-callable,transcript-corpus,engine-rules,release-assets,durable-write,spawn-factory,turn-ask,turn-defer,engine-forge,engine-forge-query,engine-git,engine-census,ci-signal,engine-ci-signal,docs-tree-absent,ripcord-untracked,hk-pin-agreement,engine-record,engine-suites,engine-admission,engine-ci-step,engine-gitwrite,engine-refusal,engine-repair,crates/batten/tests/it/mutant_rows.rs,crates/batten/tests/it/refusal_ceiling.rs,hk-fix-selection.pkl,engine-dist,engine-sbom,supply-chain,engine-reclaim,engine-durable,engine-step,engine-step-table,engine-mcp-grant,engine-mcp-posture,engine-preflight,engine-trust,engine-sweep,sweep-exit-table,tracker-hygiene,engine-tracker-reading,task-duplicate-close-check,engine-release,release-hygiene,engine-hk,hook-profile,engine-attestation,engine-turn,engine-unsubscribe,engine-probe,finding-sink,engine-commit,engine-receipt,engine-board-check,check-verdict,engine-budget,engine-codemod,engine-remedy,engine-config-edit,engine-propose,crates/batten/tests/it/stub_portability.rs,crates/batten/tests/it/truncate_handle.rs,git,engine-engine,engine-attribution,crates/batten/tests/it/pointer_only.rs,engine-hookcost,engine-transcript,engine-contract,forge-read-first,engine-advisory,engine-drain,engine-patch,engine-provision,batten.toml,engine-replay,engine-fetch,engine-pr-watch,engine-symbols,engine-rest,engine-worktree,engine-doc,engine-history,engine-capture,engine-recorder,engine-state,engine-collect,engine-o200k,engine-stream-input,engine-background,engine-redirect,engine-release-verify,engine-release-path,engine-release-state,engine-release-guard,task-verify,task-alive"
 # The file inline tasks are declared in, for `mutate`'s `task-` route (CLOUD-1909).
 # The crate may not spell a consumer's filename (non-negotiable rule 1), so the
 # manifest is named here, beside the set it serves. Unset, a `task-` gate resolves
@@ -4425,16 +4432,20 @@ description = "Refuse to start a task that is already running in this clone, nam
 run = "batten singleton"
 
 [tasks.alive]
+#MUTANT-SUITE crates/batten/tests/it/program_root_declared.rs
+#MUTANT alive-root-literal|s@{{env.BATTEN_TASK_PROGRAM_ROOT}}@mise-tasks@|the_program_root_is_declared_once_and_alive_reads_it
 description = "What batten tasks are running right now, and what phase each is in — one call, no log reading"
 # CLOUD-425's reader half, ported off `mise-tasks/alive.sh` under CLOUD-843.
 #
-# `--program-root` is the CONSUMER'S fact and lives here for that reason
-# (non-negotiable rule 1): corroborating that a live pid is still the task that
-# registered it means matching the task's name inside the process's own cmdline,
-# and where this repository keeps its programs is not something `crates/batten`
-# may know. The engine REQUIRES the flag rather than defaulting it, because a
-# wrong root fails silently — an unmatched corroboration reads as alive, so the
-# registry would simply never report a crash.
+# `--program-root` is the CONSUMER'S fact (non-negotiable rule 1): corroborating
+# that a live pid is still the task that registered it means matching the task's
+# name inside the process's own cmdline, and where this repository keeps its
+# programs is not something `crates/batten` may know. Its one source is
+# `[env] BATTEN_TASK_PROGRAM_ROOT`, which `land`'s reap reads too, so the reader
+# and the reaper cannot disagree about a corpse (CLOUD-2366). The engine REQUIRES
+# the flag rather than defaulting it, because a wrong root fails silently — an
+# unmatched corroboration reads as alive, so the registry would simply never
+# report a crash.
 #
 # A one-line shim rather than a multiline body, and the distinction is the
 # `inline-task-bodies-not-growing` ratchet's own: that row exists to count net-new
@@ -4453,7 +4464,7 @@ description = "What batten tasks are running right now, and what phase each is i
 # The exit code moves with the port: could-not-look is 3 here where the retiring
 # program spelled it 2, which the ledger records as a deliberate change rather
 # than translating back in a wrapper nobody reads.
-run = "batten task alive --program-root mise-tasks"
+run = "batten task alive --program-root {{env.BATTEN_TASK_PROGRAM_ROOT}}"
 
 [tasks."ci:quick"]
 description = "The hk gate minus the slow tier — what a diff that cannot move the slow tier pays for (CLOUD-398)"

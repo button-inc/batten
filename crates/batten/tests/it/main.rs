@@ -330,6 +330,7 @@ mod preset_segments;
 mod primitives;
 mod privileged_lane;
 mod process_group;
+mod program_root_declared;
 mod program_run_loose;
 mod prose_only;
 mod prospective_facts;
