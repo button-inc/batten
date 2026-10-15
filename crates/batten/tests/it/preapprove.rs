@@ -589,6 +589,37 @@ fn a_plan_mode_write_is_refused() {
     assert_plan_refused(&shell("plan", "git status && git commit -m x"));
 }
 
+/// CLOUD-2289: `issue read loose` routes a Linear read to `batten mcp call`, so
+/// that route must be reachable in plan mode. A write method stays refused.
+#[test]
+fn a_plan_mode_batten_mcp_read_is_allowed_and_a_write_is_not() {
+    let read = shell(
+        "plan",
+        r#"batten mcp call Linear get_issue '{"id":"CLOUD-1"}'"#,
+    );
+    assert_not_plan_refused(&read);
+    assert_granted_by(&read, "call read now");
+    assert_plan_refused(&shell(
+        "plan",
+        r#"batten mcp call Linear save_issue '{"id":"CLOUD-1"}'"#,
+    ));
+}
+
+#[test]
+fn a_batten_mcp_read_is_preapproved_outside_plan_mode() {
+    assert_granted_by(
+        &shell(
+            "default",
+            r#"batten mcp call Linear list_issues '{"team":"x"}'"#,
+        ),
+        "call read now",
+    );
+    assert_not_granted(&shell(
+        "default",
+        r#"batten mcp call Linear save_comment '{"issueId":"x"}'"#,
+    ));
+}
+
 #[test]
 fn the_plan_file_is_writable_in_plan_mode() {
     let write = envelope(

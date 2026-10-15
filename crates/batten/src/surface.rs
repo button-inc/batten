@@ -4077,6 +4077,13 @@ pub const SURFACE: &[CommandDecl] = &[
     // from this field, which is why an optimistic `read` here would silently
     // widen it.
     //
+    // ONE QUESTION IS NARROWED, AND ONLY IN POLICY (CLOUD-2289): whether a call
+    // changes anything outside batten's own state. For a method whose verb only
+    // reads it does not, so `read-only-is-preapproved.rego`'s `reads` admits
+    // `mcp call <server> <read verb>` by the same `mcp_read_verb` regex that
+    // admits the `mcp__*` tool form. This field, and `batten_effect`, still say
+    // `Unclassified`.
+    //
     // `data_channel` is FALSE, on `exec`'s precedent and for its reason. That
     // contract is that a `-J` document is emitted UNCONDITIONALLY — "including
     // when the answer is empty, because JSON that is sometimes absent is

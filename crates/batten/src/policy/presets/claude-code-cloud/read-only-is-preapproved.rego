@@ -1,6 +1,7 @@
 #MUTANT-SUITE crates/batten/tests/it/preapprove.rs
 #MUTANT redirect-unread|s@^\tnot some_output_redirect(call)$@\ttrue@|a_reader_redirected_into_a_file_is_not_preapproved
 #MUTANT mcp-verb-unread|s@^\tmcp_read_verb(call.tool)$@\tstartswith(call.tool, "mcp__")@|an_mcp_write_is_not_preapproved
+#MUTANT mcp-call-unread|s@^\tprogram.name == "batten"$@\tprogram.name == "none"@|a_plan_mode_batten_mcp_read_is_allowed_and_a_write_is_not
 # A call that only reads is never put to the operator (CLOUD-1949).
 #
 # The host halts on a permission prompt, and a halted session is the failure the
@@ -115,6 +116,18 @@ reads(program) if read_programs(program.name)
 
 reads(program) if program["batten-effect"] == "read"
 
+# `batten mcp call <server> <method>` is the Bash form of `mcp__<server>__<method>`,
+# and reads exactly when the tool form does (CLOUD-2289). The verb's declared
+# effect stays unclassified: it writes batten's capture store and spends a
+# credential (`surface.rs`, CLOUD-1260). Neither changes anything outside
+# batten's own state, and every mediated `mcp__*` read makes the same capture
+# write. One regex decides both forms, so they cannot drift.
+reads(program) if {
+	program.name == "batten"
+	array.slice(program.arguments, 0, 2) == ["mcp", "call"]
+	mcp_read_verb(sprintf("mcp__%s__%s", [program.arguments[2], program.arguments[3]]))
+}
+
 reads(program) if {
 	program.name == "git"
 	git_reads(program.arguments[0])
@@ -178,6 +191,26 @@ test_one_writer_in_the_line_spoils_it if {
 			{"name": "ls", "arguments": [], "reads-only": true},
 			{"name": "rm", "arguments": ["x"], "reads-only": false},
 		],
+	}}
+}
+
+test_a_batten_mcp_read_is_preapproved if {
+	"call read now" in preapprove with input as {"call": {
+		"event": "pre-tool",
+		"tool": "Bash",
+		"command": "batten mcp call Linear get_issue '{}'",
+		"segments": [{"words": ["batten", "mcp", "call", "Linear", "get_issue", "{}"]}],
+		"programs": [{"name": "batten", "arguments": ["mcp", "call", "Linear", "get_issue", "{}"], "reads-only": false}],
+	}}
+}
+
+test_a_batten_mcp_write_is_not if {
+	count(preapprove) == 0 with input as {"call": {
+		"event": "pre-tool",
+		"tool": "Bash",
+		"command": "batten mcp call Linear save_issue '{}'",
+		"segments": [{"words": ["batten", "mcp", "call", "Linear", "save_issue", "{}"]}],
+		"programs": [{"name": "batten", "arguments": ["mcp", "call", "Linear", "save_issue", "{}"], "reads-only": false}],
 	}}
 }
 
