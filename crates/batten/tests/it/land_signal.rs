@@ -28,10 +28,10 @@
 
 use crate::common;
 
-use std::io::BufRead as _;
+use std::io::{BufRead as _, Write as _};
 use std::os::unix::process::ExitStatusExt as _;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 use batten::speculation::{self, BASE_REF, Bet};
 
@@ -74,7 +74,7 @@ fn speculating(name: &str) -> (PathBuf, String, String) {
     reason = "stays, and test-only: the subject is a process dying of a signal, so the child is spawned and signalled as the process it is"
 )]
 fn terminated(dir: &Path, undo: &str, settled: bool) -> Option<i32> {
-    let mut child = Command::new(std::env::current_exe().expect("this test binary"));
+    let mut child = std::process::Command::new(std::env::current_exe().expect("this test binary"));
     child
         .args([
             "land_signal::armed_child",
@@ -102,7 +102,7 @@ fn terminated(dir: &Path, undo: &str, settled: bool) -> Option<i32> {
         armed,
         "the child reports it is armed before it is signalled"
     );
-    let sent = Command::new("kill")
+    let sent = std::process::Command::new("kill")
         .args(["-TERM", &child.id().to_string()])
         .status()
         .expect("run kill");
@@ -125,7 +125,10 @@ fn armed_child() {
     if std::env::var_os(SETTLED).is_some() {
         speculation::disarm();
     }
-    println!("{ARMED}");
+    // The parent's pipe, unbuffered by libtest under `--nocapture`.
+    let mut stdout = std::io::stdout();
+    writeln!(stdout, "{ARMED}").expect("tell the parent");
+    stdout.flush().expect("tell the parent now");
     loop {
         std::thread::park();
     }

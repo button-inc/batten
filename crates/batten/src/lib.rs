@@ -17585,11 +17585,7 @@ fn run_hook(
         output::message(mode, Verbosity::Verbose, err, &note)?;
         return Ok(ExitCode::Success);
     }
-    // THE OPERATOR SPOKE, so the end-of-turn pointer may speak once more
-    // (CLOUD-2332). Only this event re-arms it: a system reminder is not a prompt.
-    if envelope.event == hook::Event::UserPromptSubmit {
-        rearm_unlanded();
-    }
+    rearm_unlanded(envelope.event);
     // The advisory drain rides the BATCH boundary (CLOUD-79), and which event
     // that is on this host is the capability table's answer rather than a literal
     // here (CLOUD-389). `degrade` hands back `PostToolBatch` where the host emits
@@ -17652,17 +17648,7 @@ fn run_hook(
     // become the reason work stops; the retry will simply deny again with the
     // same `Fix::Run`, which is the safe direction and a visible one.
     if envelope.event == hook::Event::PostTool {
-        // THE RECORDERS READ THE RESPONSE THE HOST SENT (CLOUD-2224's
-        // regression): a spilled leaf is put back for them, up to the cap, while
-        // `rewrite_post_tool` still points the model at it.
-        if spilled.is_empty() {
-            record_post_tool(overrides, &envelope, harness, &mut advice);
-        } else {
-            let mut recorded = envelope.clone();
-            recorded.result = stream_input::restore(&envelope.result, &spilled);
-            record_post_tool(overrides, &recorded, harness, &mut advice);
-        }
-        rewrite_post_tool(harness, &envelope, &spilled, out, &mut advice)?;
+        post_tool(harness, &envelope, &spilled, overrides, out, &mut advice)?;
     }
     // THE SAME CORRECTION AGAIN, ONE SELECTOR LATER (CLOUD-924). The paragraph
     // above records CLOUD-312 finding that "command-less" had stopped meaning
@@ -19534,6 +19520,30 @@ fn rewrite_post_tool(
         (None, None) => {}
     }
     Ok(())
+}
+
+/// The `PostTool` half of [`run_hook`]: record what the call said, then rewrite
+/// what the model reads of it.
+///
+/// THE RECORDERS READ THE RESPONSE THE HOST SENT (CLOUD-2224's regression): a
+/// spilled leaf is put back for them, up to the cap, while [`rewrite_post_tool`]
+/// still points the model at it.
+fn post_tool(
+    harness: hook::Harness,
+    envelope: &hook::Envelope,
+    spilled: &[stream_input::Spilled],
+    overrides: &Overrides,
+    out: &mut dyn Write,
+    advice: &mut Vec<advisory::Advice>,
+) -> Result<()> {
+    if spilled.is_empty() {
+        record_post_tool(overrides, envelope, harness, advice);
+    } else {
+        let mut recorded = envelope.clone();
+        recorded.result = stream_input::restore(&envelope.result, spilled);
+        record_post_tool(overrides, &recorded, harness, advice);
+    }
+    rewrite_post_tool(harness, envelope, spilled, out, advice)
 }
 
 /// Store each spilled leaf from its file and put a pointer in its place
@@ -21607,13 +21617,18 @@ fn unlanded_pointer() -> Option<refusal::Refusal> {
     ))
 }
 
-/// Re-arm the unlanded pointer: the operator has spoken (CLOUD-2332).
+/// Re-arm the unlanded pointer when the operator has spoken (CLOUD-2332).
 ///
-/// Fail-silent like every Stop-path write: a marker that will not clear costs one
-/// pointer, never the prompt.
+/// Only `UserPromptSubmit` re-arms it: a system reminder is not a prompt, and
+/// re-arming on one is the loop this exists to end. Fail-silent like every
+/// Stop-path write: a marker that will not clear costs one pointer, never the
+/// prompt.
 //MUTANT-SUITE crates/batten/tests/it/stop_posture.rs
 //MUTANT unlanded-never-rearmed|s@^        let _ = std::fs::remove_file(marker);$@@|an_operator_prompt_rearms_the_unlanded_pointer
-fn rearm_unlanded() {
+fn rearm_unlanded(event: hook::Event) {
+    if event != hook::Event::UserPromptSubmit {
+        return;
+    }
     let Some(branch) = git::current_branch(Path::new(".")).ok().flatten() else {
         return;
     };

@@ -9,8 +9,6 @@
 
 use crate::common::at_root;
 
-use std::process::Command;
-
 /// The template `renovate.json5` hands Renovate, filled as Renovate fills it.
 fn templated(command: &str, dep: &str, old: &str, new: &str) -> String {
     command
@@ -115,7 +113,7 @@ fn the_allowlist_admits_nothing_beside_the_carry() {
 )]
 #[test]
 fn the_carry_script_passes_its_own_suite() {
-    let output = Command::new("node")
+    let output = std::process::Command::new("node")
         .args(["--test", ".github/renovate/sbom-carry.test.mjs"])
         .current_dir(at_root(""))
         .output()
