@@ -1,0 +1,13 @@
+version = 1
+
+# A `native` rule enables one of the engine's compiled gates on the mediated call
+# and grades it. Like the `shape`, `receipt` and `pipeline` fixtures beside it,
+# this pins the routing half: `check` walks past a `mediated_call` row and reports
+# nothing, rather than erroring on a rule it cannot evaluate.
+[[rule]]
+id = "destructive-reset"
+kind = "native"
+gate = "destructive-reset"
+scope = "mediated_call"
+severity = "deny"
+no_fix_reason = "the refusal names its own route"

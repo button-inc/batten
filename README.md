@@ -285,7 +285,7 @@ _diagnostic_, so it never returns `2` — every failure it can report is the
 config-or-usage class, and a harness must never read "this checkout is
 misconfigured" as a policy denial.
 
-## Extending Batten: eleven rule kinds, and which to reach for
+## Extending Batten: twelve rule kinds, and which to reach for
 
 Any predicate you can express as a command plus an exit code is expressible in
 Batten — and most of them need no command at all. The failure mode is picking the
@@ -296,19 +296,20 @@ which can read any file and reach the network; every other kind is decided from
 facts the boundary already resolved. That is why a `command` rule runs only under
 `batten enforce` while the rest are admitted to the read-only `check` surface.
 
-| What you are gating on                                             | Reach for   | Where it is configured                              |
-| ------------------------------------------------------------------ | ----------- | --------------------------------------------------- |
-| A **literal string** banned from matched files                     | `forbid`    | `[[rule]]` with `kind="forbid"`                     |
-| A **file's contents**, judged by a program you supply              | `command`   | `[[rule]]` with `kind="command"`                    |
-| A **command line** an agent is about to run                        | `shape`     | `[[rule]]` with `kind="shape"`                      |
-| A **count that must not grow** — a budget you are paying down      | `ratchet`   | `[[rule]]` with `kind="ratchet"`                    |
-| Whether a **verification receipt** exists and still answers        | `receipt`   | `[[rule]]` with `kind="receipt"`                    |
-| The **shape of a pipeline** — how a call is composed               | `pipeline`  | `[[rule]]` with `kind="pipeline"`                   |
-| A judgement a **model** makes, recorded with its own no-fix reason | `judge`     | `[[rule]]` with `kind="judge"`                      |
-| **Credentials** reaching a file, via a pinned scanner              | `secrets`   | `[[rule]]` with `kind="secrets"`                    |
-| A **document's** own structure                                     | `document`  | `[[rule]]` with `kind="document"`                   |
-| A **relationship between facts** no single row can express         | `policy`    | `[[rule]]` with `kind="policy"`                     |
-| Every **cited id resolving** to a key of a declared register       | `reference` | `[[rule]]` with `kind="reference"` + `[[register]]` |
+| What you are gating on                                                 | Reach for   | Where it is configured                              |
+| ---------------------------------------------------------------------- | ----------- | --------------------------------------------------- |
+| A **literal string** banned from matched files                         | `forbid`    | `[[rule]]` with `kind="forbid"`                     |
+| A **file's contents**, judged by a program you supply                  | `command`   | `[[rule]]` with `kind="command"`                    |
+| A **command line** an agent is about to run                            | `shape`     | `[[rule]]` with `kind="shape"`                      |
+| A **count that must not grow** — a budget you are paying down          | `ratchet`   | `[[rule]]` with `kind="ratchet"`                    |
+| Whether a **verification receipt** exists and still answers            | `receipt`   | `[[rule]]` with `kind="receipt"`                    |
+| The **shape of a pipeline** — how a call is composed                   | `pipeline`  | `[[rule]]` with `kind="pipeline"`                   |
+| A judgement a **model** makes, recorded with its own no-fix reason     | `judge`     | `[[rule]]` with `kind="judge"`                      |
+| **Credentials** reaching a file, via a pinned scanner                  | `secrets`   | `[[rule]]` with `kind="secrets"`                    |
+| A **document's** own structure                                         | `document`  | `[[rule]]` with `kind="document"`                   |
+| A **relationship between facts** no single row can express             | `policy`    | `[[rule]]` with `kind="policy"`                     |
+| Every **cited id resolving** to a key of a declared register           | `reference` | `[[rule]]` with `kind="reference"` + `[[register]]` |
+| Whether one of the engine's **compiled call gates** runs, and how hard | `native`    | `[[rule]]` with `kind="native"` + `gate`            |
 
 Two surfaces are not rule kinds and are configured on their own:
 

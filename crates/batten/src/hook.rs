@@ -4656,6 +4656,59 @@ fn native_advice(policy: &Policy, facts: &Facts<'_>) -> Vec<Refusal> {
     advice
 }
 
+/// The compiled gates that open the mediated chain, each graded by its
+/// `native` row (CLOUD-2291), in the order the chain always ran them. Lifted out
+/// of [`adjudicated_call_gates`], whose line budget their grading spent.
+fn native_denial(policy: &Policy, facts: &Facts<'_>) -> Option<Decision> {
+    // THE DESTRUCTIVE-RESET GATE (CLOUD-462), and its predicate is REACHABILITY
+    // rather than the verb's spelling.
+    //
+    // `git reset --hard` onto a ref whose commits are all on a remote loses
+    // nothing, and refusing that would be the false-positive rate that gets a
+    // guard switched off — the row says exactly that. What can lose work is a
+    // commit that exists in this clone and nowhere else, which the boundary
+    // answered in `Facts::discards` because reachability is a property of the
+    // repository and this function is pure.
+    //
+    // FIRST AMONG THE GATES, because it is the only one whose subject is already
+    // gone by the time any other could speak: every refusal below is about a call
+    // that has not happened, and so is this, but the recovery it names —
+    // `git reflog` — is the one a caller needs before they run the next thing.
+    //
+    // Measured 2026-08-12, which is why the row exists: a `git reset --hard
+    // HEAD~1` meant to undo a probe also discarded `mise-tasks/semver`, a pin and
+    // 39 lines of lockfile whose only copy was that commit. Nothing warned and
+    // nothing refused.
+    if let crate::facts::Look::Is(unreferenced) = facts.discards
+        && !unreferenced.is_empty()
+        && native_blocks(policy, NativeGate::DestructiveReset)
+    {
+        return Some(Decision::Deny(history_drop_refusal(unreferenced)));
+    }
+    // THE SINGLETON GATE (CLOUD-438), the earliest computable moment for
+    // "one `land` per clone".
+    //
+    // The in-task lock is and stays the load-bearing enforcement — a hook can be
+    // unwired, unloaded or bypassed, so this may never be the only thing between
+    // a clone and a second landing loop. What it buys is the ~200 ms and one
+    // process spawn between `mise run land` starting and the lock refusing, plus
+    // a refusal that arrives as a denied tool call rather than buried in a task's
+    // output.
+    //
+    // The same lock, read the same way (`task::singleton_holder`), so there is no
+    // second predicate to drift.
+    if let Some((task, holder)) = facts.singleton
+        && native_blocks(policy, NativeGate::Singleton)
+    {
+        return Some(Decision::Deny(singleton_held_refusal(task, holder)));
+    }
+    // THE HISTORY GATE (CLOUD-2144), in its place in the chain.
+    if native_blocks(policy, NativeGate::History) {
+        return history_gate(facts);
+    }
+    None
+}
+
 /// The history gate (CLOUD-2144): a config row changed by a context that has
 /// not read why it exists. Resolved at the boundary, so this is a lookup; the
 /// fact is could-not-look for every call that is not a write to the authority,
@@ -4685,58 +4738,9 @@ fn adjudicated_call_gates(policy: &Policy, envelope: &Envelope, facts: &Facts<'_
     // reads the hatch any more: the chain decides what the policy says, and
     // [`adjudicated`] decides which of those refusals the hatch may suppress. A
     // gate that could still see it would be a second place the answer is made.
-    let Facts {
-        receipts,
-        keys,
-        discards,
-        ..
-    } = *facts;
-    // THE DESTRUCTIVE-RESET GATE (CLOUD-462), and its predicate is REACHABILITY
-    // rather than the verb's spelling.
-    //
-    // `git reset --hard` onto a ref whose commits are all on a remote loses
-    // nothing, and refusing that would be the false-positive rate that gets a
-    // guard switched off — the row says exactly that. What can lose work is a
-    // commit that exists in this clone and nowhere else, which the boundary
-    // answered in `Facts::discards` because reachability is a property of the
-    // repository and this function is pure.
-    //
-    // FIRST AMONG THE GATES, because it is the only one whose subject is already
-    // gone by the time any other could speak: every refusal below is about a call
-    // that has not happened, and so is this, but the recovery it names —
-    // `git reflog` — is the one a caller needs before they run the next thing.
-    //
-    // Measured 2026-08-12, which is why the row exists: a `git reset --hard
-    // HEAD~1` meant to undo a probe also discarded `mise-tasks/semver`, a pin and
-    // 39 lines of lockfile whose only copy was that commit. Nothing warned and
-    // nothing refused.
-    if let crate::facts::Look::Is(unreferenced) = discards
-        && !unreferenced.is_empty()
-        && native_blocks(policy, NativeGate::DestructiveReset)
-    {
-        return Decision::Deny(history_drop_refusal(unreferenced));
-    }
-    // THE SINGLETON GATE (CLOUD-438), the earliest computable moment for
-    // "one `land` per clone".
-    //
-    // The in-task lock is and stays the load-bearing enforcement — a hook can be
-    // unwired, unloaded or bypassed, so this may never be the only thing between
-    // a clone and a second landing loop. What it buys is the ~200 ms and one
-    // process spawn between `mise run land` starting and the lock refusing, plus
-    // a refusal that arrives as a denied tool call rather than buried in a task's
-    // output.
-    //
-    // The same lock, read the same way (`task::singleton_holder`), so there is no
-    // second predicate to drift.
-    if let Some((task, holder)) = facts.singleton
-        && native_blocks(policy, NativeGate::Singleton)
-    {
-        return Decision::Deny(singleton_held_refusal(task, holder));
-    }
-    // THE HISTORY GATE (CLOUD-2144), in its place in the chain.
-    if native_blocks(policy, NativeGate::History)
-        && let Some(denied) = history_gate(facts)
-    {
+    let Facts { receipts, keys, .. } = *facts;
+    // The three compiled gates, first and in their order (CLOUD-2291).
+    if let Some(denied) = native_denial(policy, facts) {
         return denied;
     }
     // The write gate, before the command gate and not inside it: a write tool
