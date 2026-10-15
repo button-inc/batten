@@ -47,10 +47,11 @@ const CACHEDIR_TAG: &str = "Signature: 8a477f597d28d172789f06886806bc55\n\
      # For information about cache directory tags, see https://bford.info/cachedir/\n";
 
 /// How many binaries' partitions one cache directory keeps, least recently
-/// used evicted first. Eight, not fewer: a binary in use refreshes its use
-/// each minute ([`USE_REFRESH`]), so the installed hook is evicted only by
-/// eight rebuilds between two of its calls — and then costs one cold call
-/// (code review of CLOUD-2315).
+/// used evicted first. Eight, not fewer: on unix a binary in use refreshes its
+/// use time at most a minute behind its last call ([`USE_REFRESH`]), so the
+/// installed hook is evicted only by eight rebuilds since about then — and
+/// then costs one cold call (code review of CLOUD-2315). On Windows nothing
+/// refreshes, so the rank is the partition's last write.
 const KEPT_PARTITIONS: usize = 8;
 
 /// The running binary's cache directory under `parent`, or `None` when it
@@ -142,6 +143,8 @@ fn is_partition(name: &str) -> bool {
 /// flat layout entries were written in before partitions existed. Best-effort:
 /// another process pruning the same directory, or one writing into a partition
 /// removed here, costs a miss and never a wrong answer.
+//MUTANT partition-bound-off-by-one|s@^    for (_, path) in partitions.into_iter().skip(KEPT_PARTITIONS - 1) {$@    for (_, path) in partitions.into_iter().skip(KEPT_PARTITIONS) {@|a_new_partition_keeps_its_neighbours_up_to_the_bound
+//MUTANT partitions-evicted-most-recent-first|s@std::cmp::Reverse(\*made)@*made@|a_partition_in_use_is_refreshed_and_survives_the_prune
 fn prune(root: &Path, own: &str) {
     let Ok(entries) = std::fs::read_dir(root) else {
         return;
@@ -714,8 +717,8 @@ mod tests {
     ///
     /// Compiled everywhere; AGED on unix only. Ageing a directory opens it as a
     /// file, which Windows refuses without a backup-semantics flag `std` does not
-    /// expose, so there the partitions share a creation time and the case holds
-    /// the bound alone — which one goes is then the platform's tie.
+    /// expose, so there the partitions are ranked by creation moments too close
+    /// to pin, and the case holds the bound alone.
     #[test]
     fn a_new_partition_keeps_its_neighbours_up_to_the_bound() {
         let aged = cfg!(unix);
