@@ -1145,6 +1145,11 @@ fn check_preset_scope(rule: &Rule, manifest: &crate::preset::Manifest, name: &st
     )))
 }
 
+/// What a bundle's regex check reads: the declared pattern ids, and — for a
+/// module row, never a preset — the sources, which may be copies `batten preset
+/// eject` wrote (CLOUD-2290).
+type Cited<'a> = (&'a BTreeSet<&'a str>, Option<&'a [(String, String)]>);
+
 /// What a load records as raised: the union every closing check reads, and the
 /// same per row for the collapse predicate (CLOUD-1638).
 type Raised<'a> = (
@@ -1160,7 +1165,7 @@ type Raised<'a> = (
 fn check_loaded(
     rule: &Rule,
     bundle: &Bundle,
-    (declared_patterns, sources): (&BTreeSet<&str>, Option<&[(String, String)]>),
+    (declared_patterns, sources): Cited<'_>,
     registry: &[crate::verdict::DeclaredVerdict],
     source: &str,
     (emitted, per_rule): Raised<'_>,
