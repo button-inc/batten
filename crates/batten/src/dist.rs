@@ -564,11 +564,14 @@ fn stage(
 /// * the leg's earlier outputs are removed, because `target/distrib` is never
 ///   cleaned and a leftover archive, checksum or MSI would pass the post-build
 ///   checks for bytes this build did not write;
-/// * the lockfile is current (`cargo metadata --locked`), because dist's inner
+/// * the lockfile is current (`cargo fetch --locked`), because dist's inner
 ///   `cargo build` takes no `--locked`, and a stale `Cargo.lock` would otherwise
-///   re-resolve into dependencies CI never tested, where the cargo leg refused;
+///   re-resolve into dependencies CI never tested, where the cargo leg refused.
+///   `fetch` rather than `metadata`: it prints nothing on stdout, so a refusal's
+///   reason is not buried under the graph, and what it downloads the build
+///   needs anyway;
 /// * the MSI template is written ([`CARGO_DIST_MSI_TEMPLATE`]).
-fn dist_preflight(root: &Path, outputs: &[&PathBuf], err: &mut dyn Write) -> Result<bool> {
+fn dist_preflight(root: &Path, outputs: &[&Path], err: &mut dyn Write) -> Result<bool> {
     for output in outputs {
         match std::fs::remove_file(output) {
             Ok(()) => {}
@@ -576,11 +579,11 @@ fn dist_preflight(root: &Path, outputs: &[&PathBuf], err: &mut dyn Write) -> Res
             Err(error) => return Err(error.into()),
         }
     }
-    let locked: Vec<String> = ["cargo", "metadata", "--locked", "--format-version", "1"]
-        .into_iter()
-        .map(str::to_owned)
-        .collect();
-    if !ran(root, &locked, err)? {
+    if !ran(
+        root,
+        &["cargo", "fetch", "--locked"].map(str::to_owned),
+        err,
+    )? {
         return Ok(false);
     }
     ran(root, &CARGO_DIST_MSI_TEMPLATE.map(str::to_owned), err)
@@ -605,7 +608,12 @@ fn run_cargo_dist(
     let msi = staged.join(format!("{}-{target}.msi", package.name));
     if !dist_preflight(
         &package.root,
-        &[&dist_archive, &checksum, &manifest, &msi],
+        &[
+            dist_archive.as_path(),
+            checksum.as_path(),
+            manifest.as_path(),
+            msi.as_path(),
+        ],
         err,
     )? {
         return Ok(ExitCode::Internal);
@@ -785,6 +793,27 @@ mod tests {
 
     /// dist's name carries no version and keeps the per-target extension; the
     /// versioned stem the engine fetches is a different name for the same target.
+    /// THE MSI'S WIX TABLE IS PINNED HERE, so editing it touches this file,
+    /// which `test.yml`'s path filter watches, and the three-OS MSI and
+    /// Chocolatey install proof runs. The filter does not watch
+    /// `crates/batten/Cargo.toml` itself: every dependency bump edits it.
+    #[test]
+    fn the_msi_wix_table_is_the_one_the_install_proof_ran_on() {
+        let manifest: toml::Table = include_str!("../Cargo.toml").parse().unwrap();
+        let wix = &manifest["package"]["metadata"]["wix"];
+        assert_eq!(
+            wix["upgrade-guid"].as_str(),
+            Some("4970C541-6183-44FB-BB48-BBCEDC121C9D")
+        );
+        assert_eq!(
+            wix["path-guid"].as_str(),
+            Some("55F605A4-F4D8-4892-8617-C81D1C14F137")
+        );
+        assert_eq!(wix["license"].as_bool(), Some(false));
+        assert_eq!(wix["eula"].as_bool(), Some(false));
+        assert_eq!(wix.as_table().map(toml::Table::len), Some(4));
+    }
+
     #[test]
     fn cargo_dists_archive_name_is_versionless_and_differs_from_the_stem() {
         assert_eq!(
