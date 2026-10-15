@@ -530,7 +530,27 @@ fn stage(
     let absolute = archive.to_string_lossy().into_owned();
     // Both forms put the binary at the archive ROOT, never under
     // `target/<triple>/dist/`, so extracting yields the binary beside the user.
-    let (dir, argv): (&Path, Vec<String>) = if is_windows_target(target) {
+    //
+    // A WINDOWS HOST HAS NO `zip` (measured on windows-latest: "could not start
+    // `zip`"), and every cargo-dist Windows leg builds on one. It does ship
+    // bsdtar as `System32\tar.exe`, which writes the same zip. By its full
+    // path, because a bash step puts Git for Windows' GNU tar first on PATH, and
+    // GNU tar writes no zip. A non-Windows host cross-building the target keeps
+    // Info-ZIP.
+    let (dir, argv): (&Path, Vec<String>) = if is_windows_target(target) && cfg!(windows) {
+        let bsdtar = std::env::var_os("SystemRoot")
+            .map_or_else(|| PathBuf::from(r"C:\Windows"), PathBuf::from)
+            .join("System32")
+            .join("tar.exe");
+        (
+            built_dir.as_path(),
+            [bsdtar.to_string_lossy().into_owned()]
+                .into_iter()
+                .chain(["--format", "zip", "-cf"].map(str::to_owned))
+                .chain([absolute, file])
+                .collect(),
+        )
+    } else if is_windows_target(target) {
         (
             built_dir.as_path(),
             vec!["zip".to_owned(), "-q".to_owned(), absolute, file],
