@@ -50,9 +50,8 @@ const CACHEDIR_TAG: &str = "Signature: 8a477f597d28d172789f06886806bc55\n\
 /// used evicted first. Eight, not fewer: on unix a binary in use refreshes its
 /// use time at most a minute behind its last call ([`USE_REFRESH`]), so the
 /// installed hook is evicted only by eight rebuilds since about then — and
-/// then costs one cold call (code review of CLOUD-2315). On Windows nothing
-/// refreshes, so the rank is the partition directory's own modification time:
-/// its creation, or the last entry written straight into it (CLOUD-2361).
+/// then costs one cold call (code review of CLOUD-2315). Windows is the
+/// exception [`refresh_use`] names (CLOUD-2361).
 const KEPT_PARTITIONS: usize = 8;
 
 /// The running binary's cache directory under `parent`, or `None` when it
@@ -107,7 +106,8 @@ const USE_REFRESH: std::time::Duration = std::time::Duration::from_mins(1);
 /// is renamed straight into it, and most entries live a level down, so a binary
 /// that only reads — the installed hook, warm — read as the oldest and was the
 /// one pruned. Unix only: Windows will not open a directory as a file to set
-/// its time, so there the ranking stays the last write.
+/// its time, so there a partition is never marked used and ranks by whatever
+/// moved its directory's time last (CLOUD-2361).
 //MUTANT partition-use-never-refreshed|s@^    if cfg!(unix) \&\& stale {$@    if false {@|a_partition_in_use_is_refreshed_and_survives_the_prune
 fn refresh_use(own: &Path, meta: &std::fs::Metadata) {
     let stale = meta
