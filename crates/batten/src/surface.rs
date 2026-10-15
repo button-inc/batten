@@ -3171,7 +3171,7 @@ const DIST_STEM: FlagDecl = FlagDecl::switch(
 const DIST_BUILD_TOOL: FlagDecl = FlagDecl::valued(
     "build_tool",
     "build-tool",
-    "How to build for the target: cargo, cross or zigbuild (default: $DIST_BUILD_TOOL, else cargo)",
+    "How to build for the target: cargo, cross, zigbuild or cargo-dist (default: $DIST_BUILD_TOOL, else cargo)",
 );
 
 /// `[tool]` on `mcp grant`: the tool name to resolve.

@@ -700,3 +700,177 @@ fn a_declared_ca_bundle_reaches_the_download_in_curls_precedence() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// cargo-dist's installer (CLOUD-2297).
+// ---------------------------------------------------------------------------
+
+/// The repository root, where `dist-workspace.toml` is.
+fn workspace() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .unwrap()
+}
+
+/// Generate dist's shell installer for `target` with `archive`'s sha256 baked
+/// in, exactly as the release's `installers` job does: one manifest fragment in
+/// the target directory's `distrib/`, then `dist build --artifacts=global`.
+///
+/// The target directory is a scratch one, so nothing lands in the build's own.
+fn dist_installer(dir: &std::path::Path, target: &str, archive: &[u8]) -> std::path::PathBuf {
+    let version = env!("CARGO_PKG_VERSION");
+    let name = batten::dist::cargo_dist_archive("batten", target);
+    let target_dir = dir.join("target");
+    let staged = target_dir.join(batten::dist::CARGO_DIST_DIR);
+    std::fs::create_dir_all(&staged).unwrap();
+    let fragment = serde_json::json!({
+        "dist_version": "0.33.0",
+        "announcement_tag": format!("v{version}"),
+        "releases": [{
+            "app_name": "batten",
+            "app_version": version,
+            "artifacts": [name, format!("{name}.sha256")],
+        }],
+        "artifacts": {
+            name.clone(): {
+                "name": name,
+                "kind": "executable-zip",
+                "target_triples": [target],
+                "assets": [{"id": format!("batten-{target}-exe-batten"), "name": "batten", "path": "batten", "kind": "executable"}],
+                "checksum": format!("{name}.sha256"),
+                "checksums": {"sha256": digest(archive)},
+            },
+            format!("{name}.sha256"): {
+                "name": format!("{name}.sha256"),
+                "kind": "checksum",
+                "target_triples": [target],
+            },
+        },
+    });
+    std::fs::write(
+        staged.join(format!("{target}-dist-manifest.json")),
+        fragment.to_string(),
+    )
+    .unwrap();
+    #[expect(
+        clippy::disallowed_types,
+        reason = "stays, and test-only: the subject is cargo-dist's own generator, so the case runs it rather than a restatement of it"
+    )]
+    let generated = Command::new("dist")
+        .args([
+            "build",
+            "--artifacts=global",
+            "--tag",
+            &format!("v{version}"),
+        ])
+        .current_dir(workspace())
+        .env("CARGO_TARGET_DIR", &target_dir)
+        .output()
+        .expect("cargo-dist must be installed: it is a pinned [tools] entry");
+    assert!(
+        generated.status.success(),
+        "dist build --artifacts=global: {}",
+        String::from_utf8_lossy(&generated.stderr)
+    );
+    staged.join("batten-installer.sh")
+}
+
+/// dist's archive layout: the binary under `batten-<target>/`, which the
+/// installer strips with `--strip-components 1`.
+fn dist_tarball(dir: &std::path::Path, target: &str) -> Vec<u8> {
+    let stage = dir.join("dist-stage");
+    let inner = stage.join(format!("batten-{target}"));
+    std::fs::create_dir_all(&inner).unwrap();
+    let stub = inner.join("batten");
+    std::fs::write(&stub, "#!/bin/sh\necho \"ran $*\"\n").unwrap();
+    std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let archive = dir.join("dist-payload.tar.gz");
+    #[expect(
+        clippy::disallowed_types,
+        reason = "stays, and test-only: the installer untars what it downloads, so the fixture payload has to be a real gzipped tar"
+    )]
+    let status = Command::new("tar")
+        .args([
+            "-czf",
+            archive.to_str().unwrap(),
+            "-C",
+            stage.to_str().unwrap(),
+            &format!("batten-{target}"),
+        ])
+        .status()
+        .expect("run tar");
+    assert!(status.success(), "the fixture archive must build");
+    std::fs::read(&archive).unwrap()
+}
+
+/// Run dist's `installer` against the archive bytes `served`, from a
+/// `file://` release directory, into a fresh unmanaged install directory.
+fn run_dist_installer(
+    dir: &std::path::Path,
+    installer: &std::path::Path,
+    target: &str,
+    served: &[u8],
+) -> (bool, std::path::PathBuf, String) {
+    let www = dir.join("www");
+    std::fs::create_dir_all(&www).unwrap();
+    std::fs::write(
+        www.join(batten::dist::cargo_dist_archive("batten", target)),
+        served,
+    )
+    .unwrap();
+    let into = dir.join("installed");
+    std::fs::create_dir_all(&into).unwrap();
+    #[expect(
+        clippy::disallowed_types,
+        reason = "stays, and test-only: the subject is the generated POSIX installer, which only `sh` runs"
+    )]
+    let ran = Command::new("sh")
+        .arg(installer)
+        .env("BATTEN_DOWNLOAD_URL", format!("file://{}", www.display()))
+        .env("BATTEN_UNMANAGED_INSTALL", &into)
+        .env("BATTEN_NO_MODIFY_PATH", "1")
+        .output()
+        .expect("run sh");
+    let said = format!(
+        "{}{}",
+        String::from_utf8_lossy(&ran.stdout),
+        String::from_utf8_lossy(&ran.stderr)
+    );
+    (ran.status.success(), into.join("batten"), said)
+}
+
+/// The installer cargo-dist generates installs only the bytes the release
+/// published: a tampered archive is refused and nothing is placed, and the
+/// archive whose sha256 the release recorded installs. Both halves, so a
+/// generator that dropped the digest (which installs either) fails here.
+///
+/// Linux only, said inside the case so it compiles everywhere (CLOUD-1148): the
+/// installer verifies through `sha256sum`, and where that is absent it skips
+/// the check (CLOUD-2307), so only a host carrying it can show the refusal.
+#[test]
+fn the_dist_installer_refuses_a_digest_mismatch() {
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let target = batten::engine::running_target();
+    let dir = scratch("install-web-dist");
+    let archive = dist_tarball(&dir, &target);
+    let installer = dist_installer(&dir, &target, &archive);
+
+    let tampered_dir = dir.join("tampered");
+    let mut tampered = archive.clone();
+    tampered.push(0);
+    let (ok, placed, said) = run_dist_installer(&tampered_dir, &installer, &target, &tampered);
+    assert!(!ok, "a tampered archive must be refused: {said}");
+    assert!(said.contains("checksum mismatch"), "{said}");
+    assert!(
+        !placed.exists(),
+        "nothing is installed from a refused archive"
+    );
+
+    let good_dir = dir.join("good");
+    let (ok, placed, said) = run_dist_installer(&good_dir, &installer, &target, &archive);
+    assert!(ok, "the published archive installs: {said}");
+    assert!(placed.is_file(), "the binary is placed: {said}");
+}

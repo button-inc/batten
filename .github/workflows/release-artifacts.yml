@@ -112,10 +112,23 @@ env:
   MISE_LOCKFILE: "true"
 
 jobs:
+  # CARGO-DIST BUILDS EVERY LEG (CLOUD-2297). `dist build --artifacts=local`
+  # compiles through `cargo auditable`, archives under dist's own name
+  # (`batten-<target>.tar.gz`, `.zip` on Windows), writes the `.sha256` beside
+  # it, and prints the manifest fragment the `installers` job reads checksums
+  # from. dist refuses to cross-compile to macOS from Linux (its `tasks.rs`,
+  # "we cowardly refuse"), so each target builds on its own OS: Linux targets
+  # on ubuntu through zigbuild, Darwin on macOS, Windows on Windows.
+  #
+  # THE VERSIONED NAME IS STILL PUBLISHED. Every shipped engine fetches
+  # `batten-<tag>-<target>` and `SHA256SUMS` (`engine::release_asset`,
+  # `engine::fetch_release`), so a release without them reads as unpublished to
+  # `engine update`. The archive is uploaded under both names until no
+  # supported pin's engine reads the versioned one.
   dist:
     name: dist (${{ matrix.target }})
-    runs-on: ubuntu-latest
-    timeout-minutes: 30 # budget: grandfathered measured=2026-08-10
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45 # budget: grandfathered measured=2026-10-15
     permissions:
       contents: write # upload assets to the release
       id-token: write # sign the provenance statement
@@ -125,40 +138,39 @@ jobs:
       # top up beats no release at all.
       fail-fast: false
       matrix:
+        # `build-tool` is how dist links the leg (it chooses, from host and
+        # target); `policy/release-assets.rego` demands a binary SBOM from every
+        # leg whose tool is not `cross`, and no leg uses `cross` any more.
         include:
-          # The host target: no container needed, so no cross.
+          # glibc wherever the host has a new enough one; dist's installer falls
+          # back to musl only where it does not (CLOUD-1861's 8.7x cost).
           - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
             build-tool: cargo
           - target: aarch64-unknown-linux-gnu
-            build-tool: cross
+            runner: ubuntu-latest
+            build-tool: zigbuild
           # musl gives the statically linked binary §12 asks for — it runs on any
-          # Linux regardless of glibc version, which is what makes a single
-          # downloadable binary actually portable.
+          # Linux regardless of glibc version.
           - target: x86_64-unknown-linux-musl
-            build-tool: cross
+            runner: ubuntu-latest
+            build-tool: zigbuild
           - target: aarch64-unknown-linux-musl
-            build-tool: cross
-          # The gnu triple, not msvc: gnu is what a Linux host can link (and what
-          # `cross-check` already type-checks), so Windows costs no 2x-billed
-          # runner. msvc would be the more native choice for Windows users, but
-          # it can only be linked on Windows — revisit if that trade stops paying.
-          #
-          # ZIGBUILD RATHER THAN CROSS, AND THE LINKER IS THE WHOLE REASON
-          # (CLOUD-1574). `cross`'s image carries mingw-w64 import libraries that
-          # predate `ws2_32`'s `GetHostNameW`, which current Rust `std` calls from
-          # `std::sys::net::hostname` — so the link step ends in `undefined
-          # reference to 'GetHostNameW'` and this leg failed on v0.0.145, v0.0.146
-          # and v0.0.147, each of which published every other asset and no Windows
-          # one. zig ships current mingw-w64 import libraries, and it is already
-          # the tool the two Darwin legs below link through, so this is one fewer
-          # cross-compilation mechanism rather than one more.
+            runner: ubuntu-latest
+            build-tool: zigbuild
+          # The gnu triple, kept so a shipped Windows engine finds its own target
+          # in the next release (`engine::running_target`). On a Windows runner
+          # it links against the runner's current mingw-w64, so CLOUD-1574's
+          # `GetHostNameW` import from `cross`'s stale image cannot recur.
           - target: x86_64-pc-windows-gnu
-            build-tool: zigbuild
-          # Darwin via zig. No macOS runner, no Apple SDK.
+            runner: windows-latest
+            build-tool: cargo
           - target: aarch64-apple-darwin
-            build-tool: zigbuild
+            runner: macos-latest
+            build-tool: cargo
           - target: x86_64-apple-darwin
-            build-tool: zigbuild
+            runner: macos-latest
+            build-tool: cargo
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -190,62 +202,28 @@ jobs:
           # mixes build tools and `install_args` is one string:
           #
           #   rust              the compiler, and the rustup that adds the target
-          #   cargo-auditable   every non-`cross` leg builds through it
-          #   zig, cargo-zigbuild   the three `zigbuild` legs' linker chain
-          #   syft              `sbom-binary` on every non-`cross` leg
-          #   gh                the two `gh release upload` steps
-          #
-          # `cross` is deliberately absent: `taiki-e/install-action` provides it
-          # below, and it is not a `[tools]` entry — `ci-tools-check` would refuse
-          # a name here that resolves to none.
+          #   cargo-dist        builds, archives and checksums the leg
+          #   cargo-auditable   every leg builds through it (dist's `cargo-auditable`)
+          #   zig, cargo-zigbuild   dist's linker chain for the non-host Linux legs
+          #   syft              `sbom-binary` on every leg
+          #   gh                the `gh release upload` steps
           #
           # This does NOT unpin anything. Naming tools selects which pinned
-          # versions are installed, so `darwin-link` still links against the same
-          # `zig` this builds with, which is the shared-pin property the comment
-          # below depends on.
-          install_args: rust zig github:rust-cross/cargo-zigbuild github:rust-secure-code/cargo-auditable aqua:anchore/syft aqua:cli/cli
-      - name: Install cross
-        if: matrix.build-tool == 'cross'
-        uses: taiki-e/install-action@91ddec75689c4c78665b598d188dc821c5a43e5c # v2
-        with:
-          tool: cross
-      # NO install step for zig or cargo-zigbuild: mise pins both in [tools], the
-      # mise-action step above passes no `install_args` and so installs every
-      # pinned tool, and `mise run dist` below puts them on PATH. That is also
-      # the versions `darwin-link` links against, so the release and the gate that
-      # proved it use one pin, written down once.
-      #
-      # There WAS an install-action step here — a second provisioning path for a
-      # mise-pinned tool — and it stopped working (CLOUD-259): upstream dropped
-      # zig, falls back to cargo-binstall (no prebuilt), then to a from-source
-      # crate build (zig is not a crate). Both fallbacks are dead ends, so the step
-      # could only fail, and both Darwin legs died before reaching the build. The
-      # source-build fallback is spelled in prose rather than as the literal
-      # command because `no-cargo-install-in-ci` bans that literal in this file —
-      # a gate that fired on its own documentation is a gate people delete.
-      # cargo-zigbuild
-      # was already resolving out of mise's install dir on those runs — the step
-      # re-found what mise had installed and contributed only a way to fail.
-      #
-      # `cross` is NOT in mise.toml, so its step above is a different case.
-      #
-      # cross supplies its target's std inside the container; the other two link
-      # against a rustup-installed one on the host.
+          # versions are installed.
+          install_args: rust aqua:axodotdev/cargo-dist zig github:rust-cross/cargo-zigbuild github:rust-secure-code/cargo-auditable aqua:anchore/syft aqua:cli/cli
       - name: Add the Rust target
-        if: matrix.build-tool != 'cross'
         env:
           TARGET: ${{ matrix.target }}
         run: mise run batten -- ci step --arg-env TARGET -- rustup target add
       - name: Build and archive
         id: dist
         shell: bash
-        # `dist` emits archive=/binary= KEY=VALUE lines, so the per-target
-        # binary suffix is decided in one place and never re-derived here.
-        # `batten dist` reads its builder from DIST_BUILD_TOOL when no
-        # `--build-tool` flag names one (CLOUD-843). Both matrix fields travel
-        # through the environment, so neither is expanded into the script text.
+        # `batten dist --build-tool cargo-dist` runs `dist build` for the leg,
+        # writes its manifest fragment, and archives the binary dist built under
+        # the versioned name too. It emits archive=/binary=/dist_archive=/
+        # checksum=/manifest= KEY=VALUE lines, so no name is re-derived here.
         env:
-          DIST_BUILD_TOOL: ${{ matrix.build-tool }}
+          DIST_BUILD_TOOL: cargo-dist
           DIST_TARGET: ${{ matrix.target }}
         run: mise run batten -- ci step --outputs --arg-env DIST_TARGET -- mise run dist --
       # UPLOAD FIRST, ATTEST SECOND (CLOUD-258). The reverse order shipped, and
@@ -274,22 +252,28 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ inputs.tag }}
           ARCHIVE: ${{ steps.dist.outputs.archive }}
-        run: mise run batten -- ci step --arg-env TAG --arg-env ARCHIVE -- gh release upload --clobber
+          DIST_ARCHIVE: ${{ steps.dist.outputs.dist_archive }}
+          CHECKSUM: ${{ steps.dist.outputs.checksum }}
+        run: mise run batten -- ci step --arg-env TAG --arg-env ARCHIVE --arg-env DIST_ARCHIVE --arg-env CHECKSUM -- gh release upload --clobber
+      # The fragment travels to the `installers` job, which generates the
+      # installers from every leg's checksum. A build artifact, not a release
+      # asset: the installers are what ship.
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dist-manifest-${{ matrix.target }}
+          path: ${{ steps.dist.outputs.manifest }}
+          if-no-files-found: error
       # The binary-level inventory (CLOUD-263), AFTER the upload for CLOUD-258's
       # reason: the archive is already published, so nothing this step does can
       # suppress a binary. It is a step rather than a job — a job costs a billed
       # minute and this costs none — and it runs inside the leg that built the
       # binary because that is the only place the bytes exist.
       #
-      # SKIPPED ON `cross`, and that is a measured narrowing rather than an
-      # oversight: `cargo auditable` composes with `cargo` and with
-      # `cargo-zigbuild` (proven, 85 rust-crate packages recovered from a stripped
-      # `dist` binary against 0 from an unwrapped one), and could not be probed
-      # against `cross` because that wrapper needs a Docker daemon the probe
-      # container had none of. `batten dist` wraps exactly the same two, so a
-      # `cross` leg would produce a document cataloging nothing — which
-      # `sbom-binary` correctly refuses. The five container legs join when someone
-      # runs the same local probe where Docker exists.
+      # SKIPPED ON `cross`, where `cargo auditable` composition is unmeasured
+      # (CLOUD-263). No leg builds through `cross` since cargo-dist builds every
+      # leg with `cargo-auditable = true`, so every leg now inventories; the
+      # condition stays so a `cross` leg re-added later is not demanded an SBOM
+      # it cannot produce.
       - name: Inventory the built binary
         if: matrix.build-tool != 'cross'
         id: sbom
@@ -333,6 +317,53 @@ jobs:
         continue-on-error: true
         with:
           subject-path: ${{ steps.dist.outputs.binary }}
+
+  # THE INSTALLERS, GENERATED BY CARGO-DIST (CLOUD-2297), never hand-rolled.
+  # `dist build --artifacts=global` reads every leg's manifest fragment and
+  # writes `batten-installer.sh`, `batten-installer.ps1` and `sha256.sum`, each
+  # installer carrying every archive's sha256 and refusing a download that does
+  # not match. It needs every leg, so it runs after the matrix.
+  installers:
+    name: installers
+    needs: dist
+    runs-on: ubuntu-latest
+    timeout-minutes: 15 # budget: unmeasured, a manifest merge and two templates
+    permissions:
+      contents: write # upload the installers to the release
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.sha }}
+          persist-credentials: false
+      - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5 (CLOUD-404 retry fix, now a release)
+        with:
+          version: 2026.9.1
+          cache: false
+          install_args: rust aqua:axodotdev/cargo-dist aqua:cli/cli
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: dist-manifest-*
+          path: target/distrib
+          merge-multiple: true
+      - name: Generate the installers from every leg's manifest
+        env:
+          TAG: ${{ inputs.tag }}
+        run: mise run batten -- ci step --arg-env TAG -- dist build --artifacts=global --tag
+      - name: Refuse to upload into anything but a draft of this sha
+        env:
+          BATTEN_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+          SHA: ${{ inputs.sha }}
+        run: mise run batten -- ci step --arg-env SHA --arg-env TAG -- mise run batten -- release guard --sha
+      - name: Upload the installers to the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+          SHELL_INSTALLER: target/distrib/batten-installer.sh
+          POWERSHELL_INSTALLER: target/distrib/batten-installer.ps1
+          DIST_SUMS: target/distrib/sha256.sum
+        run: mise run batten -- ci step --arg-env TAG --arg-env SHELL_INSTALLER --arg-env POWERSHELL_INSTALLER --arg-env DIST_SUMS -- gh release upload --clobber
 
   # The JSON Schemas for the two config surfaces (CLOUD-33), published as release
   # assets.
@@ -448,7 +479,7 @@ jobs:
   # rebuilds every asset and this manifest with them.
   checksums:
     name: checksums
-    needs: [dist, schema]
+    needs: [dist, installers, schema]
     runs-on: ubuntu-latest
     timeout-minutes: 15 # budget: grandfathered measured=2026-08-11
     permissions:
@@ -499,7 +530,7 @@ jobs:
   # here: recovery by re-running either always finds its draft.
   cleanup:
     name: cleanup
-    needs: [dist, schema, checksums]
+    needs: [dist, installers, schema, checksums]
     if: ${{ always() && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 30 # budget: p95=600s x3 measured=2026-10-12

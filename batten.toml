@@ -2625,7 +2625,7 @@ regex = '[.](tar[.]gz|zip)$'
 # variable (`"$SPDX"`) carries a `$` and is never one.
 [[pattern]]
 id = "release-upload-operand"
-regex = '^"?[A-Za-z0-9_./-]+[.](json|sh)"?$'
+regex = '^"?[A-Za-z0-9_./-]+[.](json|sh|ps1|sum)"?$'
 
 # `policy/release-tracking.rego`'s readings of a workflow's lines (CLOUD-618,
 # ported off `release-tracking-check.sh` under CLOUD-1717). YAML's comment rule

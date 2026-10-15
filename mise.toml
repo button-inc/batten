@@ -275,8 +275,13 @@ zig = "0.16" # the linker for the macOS release build and the darwin-link gate: 
 # because Docker was unavailable in the probe container and an unproven build
 # wrapper does not go into the matrix that shipped six empty releases.
 "github:rust-secure-code/cargo-auditable" = "0.7.5"
-zizmor = "1.30.0"                                   # GitHub Actions static analysis; run via `mise run zizmor` (in `verify` and CI)
-uv = "0.12.5"                                       # fast Rust installer the pipx: backend uses to fetch Serena
+# cargo-dist (CLOUD-2297): builds, archives and checksums each release leg, and
+# generates the shell and PowerShell installers from their manifests, so no
+# installer is hand-rolled here. `dist-workspace.toml` is its config;
+# `cargo-dist-version` there must equal this pin.
+"aqua:axodotdev/cargo-dist" = "0.33.0"
+zizmor = "1.30.0"                      # GitHub Actions static analysis; run via `mise run zizmor` (in `verify` and CI)
+uv = "0.12.5"                          # fast Rust installer the pipx: backend uses to fetch Serena
 # Serena's LSP-backed semantic code tools (see .mcp.json). Pinned here — not in
 # .mcp.json — so its version lives with every other tool and lands in mise.lock.
 # The pipx backend installs it with `uv` (present above), keeping the fast resolver.
@@ -405,7 +410,7 @@ RUSTC_WRAPPER = "{% if os() != 'windows' %}{{ exec(command='{ ' ~ config_root ~ 
 # alone — the fan-in. This roster is what `ci-wait` WAITS ON before landing, and
 # waiting only on `final` would strand every landing on a check that fans in from
 # eighteen. Two sets, two purposes; neither derives the other.
-CI_REQUIRED_CHECKS = "ci,batten-check,cross,musl,commit-lint,zizmor,darwin-link (aarch64-apple-darwin),darwin-link (x86_64-apple-darwin),semver,perf,windows,macos,final,action (ubuntu-latest),action (macos-latest),action (windows-latest),action-violation,action-deny,action-usage,action-internal (ubuntu-latest),action-internal (macos-latest),action-final"
+CI_REQUIRED_CHECKS = "ci,batten-check,cross,musl,commit-lint,zizmor,darwin-link (aarch64-apple-darwin),darwin-link (x86_64-apple-darwin),semver,perf,windows,macos,final,action (ubuntu-latest),action (macos-latest),action (windows-latest),action-violation,action-deny,action-usage,action-internal (ubuntu-latest),action-internal (macos-latest),installer (ubuntu-latest),installer (macos-latest),installer (windows-latest),action-final"
 
 # JOBS LEAVING THE ROSTER, and only while they still run (CLOUD-2301). The
 # fast-forward bot judges a head against TRUNK's roster, so a job is retired in
@@ -559,7 +564,7 @@ LEASE_BEAT_NOTE = "batten record census note h"
 # that one success as the whole roster, and `land` posted /fast-forward into a
 # branch protection still listing the other six as expected. The bot was
 # rejected. A stall is recoverable; a false green is not (CLOUD-337).
-CI_ABSENT_OK_CHECKS = "zizmor,cross,musl,darwin-link (aarch64-apple-darwin),darwin-link (x86_64-apple-darwin),semver,windows,macos,action (ubuntu-latest),action (macos-latest),action (windows-latest),action-violation,action-deny,action-usage,action-internal (ubuntu-latest),action-internal (macos-latest),action-final"
+CI_ABSENT_OK_CHECKS = "zizmor,cross,musl,darwin-link (aarch64-apple-darwin),darwin-link (x86_64-apple-darwin),semver,windows,macos,action (ubuntu-latest),action (macos-latest),action (windows-latest),action-violation,action-deny,action-usage,action-internal (ubuntu-latest),action-internal (macos-latest),installer (ubuntu-latest),installer (macos-latest),installer (windows-latest),action-final"
 # The conclusions that CONSTITUTE AN ANSWER about a required check, written once
 # and read by `checks-green` and by `land`'s `graded_runs` — for exactly the
 # reason CI_REQUIRED_CHECKS is written once (CLOUD-327), and against exactly the

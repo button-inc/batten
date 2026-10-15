@@ -120,6 +120,68 @@ fn the_action_installs_its_refs_pin() {
     );
 }
 
+/// THE RELEASED INSTALLER IS CARGO-DIST'S, GENERATED FROM ONE CONFIG
+/// (CLOUD-2297). Each release ships `batten-installer.sh` and
+/// `batten-installer.ps1` from `dist build --artifacts=global`, so the config
+/// must declare both installers over exactly the targets the release matrix
+/// builds (a target dist does not know is one its installer cannot serve, and
+/// one it knows that no leg builds is an installer pointing at nothing), the
+/// release job must run that step and upload both files, and the tool CI runs
+/// must be the version the config names.
+#[test]
+fn install_sh_is_the_released_dist_installer() {
+    let config: toml::Table = std::fs::read_to_string(common::at_root("dist-workspace.toml"))
+        .expect("read dist-workspace.toml")
+        .parse()
+        .expect("dist-workspace.toml is TOML");
+    let dist = config["dist"].as_table().expect("a [dist] table");
+    let listed = |key: &str| -> std::collections::BTreeSet<String> {
+        dist[key]
+            .as_array()
+            .unwrap_or_else(|| panic!("[dist] {key} is a list"))
+            .iter()
+            .map(|value| value.as_str().unwrap().to_owned())
+            .collect()
+    };
+    assert_eq!(
+        listed("installers"),
+        ["powershell", "shell"].map(str::to_owned).into(),
+        "dist generates the POSIX installer and the same installer as ps1"
+    );
+
+    let workflow =
+        std::fs::read_to_string(common::at_root(".github/workflows/release-artifacts.yml"))
+            .expect("read release-artifacts.yml");
+    assert_eq!(
+        listed("targets"),
+        batten::install::matrix_targets(&workflow),
+        "dist's targets are the release matrix's, no more and no fewer"
+    );
+    for needle in [
+        "dist build --artifacts=global",
+        "target/distrib/batten-installer.sh",
+        "target/distrib/batten-installer.ps1",
+        "target/distrib/sha256.sum",
+    ] {
+        assert!(
+            workflow.contains(needle),
+            "release-artifacts.yml must carry `{needle}`"
+        );
+    }
+
+    let mise = std::fs::read_to_string(common::at_root("mise.toml")).expect("read mise.toml");
+    let pinned = format!(
+        "\"aqua:axodotdev/cargo-dist\" = \"{}\"",
+        dist["cargo-dist-version"]
+            .as_str()
+            .expect("a cargo-dist-version")
+    );
+    assert!(
+        mise.contains(&pinned),
+        "mise.toml pins the cargo-dist dist-workspace.toml names: {pinned}"
+    );
+}
+
 #[test]
 fn install_sh_is_the_generated_bootstrap() {
     let path = common::at_root("install.sh");

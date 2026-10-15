@@ -120,6 +120,46 @@ pub enum BuildTool {
     /// cargo-zigbuild: zig as the linker, which also writes the ad-hoc signature
     /// Apple Silicon requires before it will exec an arm64 binary.
     Zigbuild,
+    /// cargo-dist (CLOUD-2297): `dist build --artifacts=local` compiles through
+    /// `cargo auditable`, picks the linker for host and target itself, and
+    /// writes its own archive, its `.sha256`, and the manifest fragment its
+    /// global step generates the installers from.
+    CargoDist,
+}
+
+/// What cargo-dist names a target's archive: `name-TARGET` plus the extension
+/// `dist-workspace.toml` declares, which is this module's [`archive_ext`].
+/// dist's naming carries no version, so `latest/download` URLs resolve; the
+/// versioned [`archive_stem`] stays published beside it for shipped engines.
+#[must_use]
+pub fn cargo_dist_archive(name: &str, target: &str) -> String {
+    format!("{name}-{target}{}", archive_ext(target))
+}
+
+/// The directory, under the target directory, cargo-dist stages into.
+pub const CARGO_DIST_DIR: &str = "distrib";
+
+/// The `dist build` argv for one target, announcing `v<version>`.
+///
+/// `--output-format=json` makes stdout the manifest fragment and nothing else;
+/// the caller writes it where the global step reads fragments from.
+#[must_use]
+pub fn cargo_dist_argv(target: &str, version: &str) -> Vec<String> {
+    [
+        "dist",
+        "build",
+        "--artifacts=local",
+        "--output-format=json",
+        "--tag",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .chain([
+        format!("v{version}"),
+        String::from("--target"),
+        target.to_owned(),
+    ])
+    .collect()
 }
 
 impl BuildTool {
@@ -131,17 +171,18 @@ impl BuildTool {
             "cargo" => Some(Self::Cargo),
             "cross" => Some(Self::Cross),
             "zigbuild" => Some(Self::Zigbuild),
+            "cargo-dist" => Some(Self::CargoDist),
             _ => None,
         }
     }
 
-    /// The build argv for one target and binary.
+    /// The build argv for one target, binary and package version.
     ///
     /// `--locked`, so a release build resolves exactly the versions the lockfile
     /// pins; a release that silently floated a dependency is not the artifact CI
-    /// tested.
+    /// tested. The version is read only by [`Self::CargoDist`], whose tag names it.
     #[must_use]
-    pub fn argv(self, target: &str, bin: &str) -> Vec<String> {
+    pub fn argv(self, target: &str, bin: &str, version: &str) -> Vec<String> {
         let head: &[&str] = match self {
             // `auditable` wraps rustc rather than the subcommand, so it composes
             // with both of these.
@@ -151,6 +192,8 @@ impl BuildTool {
             // container is unmeasured, and an unproven wrapper does not enter a
             // matrix that once shipped six releases with zero binaries.
             Self::Cross => &["cross", "build"],
+            // dist resolves profile, locking and wrapper from its own config.
+            Self::CargoDist => return cargo_dist_argv(target, version),
         };
         head.iter()
             .map(|word| (*word).to_owned())
@@ -340,7 +383,7 @@ pub fn builder_for(
         .ok_or_else(|| named.unwrap_or_default())
 }
 
-/// `batten dist <target> [--stem] [--build-tool cargo|cross|zigbuild]`, the
+/// `batten dist <target> [--stem] [--build-tool cargo|cross|zigbuild|cargo-dist]`, the
 /// builder falling back to [`BUILD_TOOL_ENV`] when the flag is absent.
 ///
 /// # Errors
@@ -365,7 +408,7 @@ pub fn run(
         Ok(tool) => tool,
         Err(named) => {
             return Err(UsageError::raise(format!(
-                "dist: --build-tool (or {BUILD_TOOL_ENV}) must be cargo, cross, or zigbuild, got '{named}'"
+                "dist: --build-tool (or {BUILD_TOOL_ENV}) must be cargo, cross, zigbuild, or cargo-dist, got '{named}'"
             )));
         }
     };
@@ -404,7 +447,33 @@ pub fn run(
         return Ok(ExitCode::Success);
     };
 
-    if !ran(&package.root, &tool.argv(target, &package.bin), err)? {
+    let argv = tool.argv(target, &package.bin, &package.version);
+    let manifest = package
+        .target_dir
+        .join(CARGO_DIST_DIR)
+        .join(format!("{target}-dist-manifest.json"));
+    if tool == BuildTool::CargoDist {
+        // stdout IS the manifest fragment; the build log stays on stderr, where
+        // a failure's reason is the step's only evidence.
+        let Some((code, fragment)) =
+            exec::piped_argv(&package.root, &argv, "", Diagnostics::Pass, &[])
+        else {
+            writeln!(err, "dist: could not start `dist`")?;
+            return Ok(ExitCode::Internal);
+        };
+        if code != 0 {
+            writeln!(err, "dist: `dist` exited {code}")?;
+            return Ok(ExitCode::Internal);
+        }
+        if serde_json::from_str::<Value>(&fragment).is_err() {
+            writeln!(err, "dist: `dist build` printed no manifest")?;
+            return Ok(ExitCode::Internal);
+        }
+        if let Some(parent) = manifest.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(&manifest, fragment)?;
+    } else if !ran(&package.root, &argv, err)? {
         return Ok(ExitCode::Internal);
     }
 
@@ -459,6 +528,31 @@ pub fn run(
 
     writeln!(out, "archive={}", pointer(&archive, &package.root))?;
     writeln!(out, "binary={}", pointer(&built, &package.root))?;
+    if tool == BuildTool::CargoDist {
+        let staged = package.target_dir.join(CARGO_DIST_DIR);
+        let dist_archive = staged.join(cargo_dist_archive(&package.name, target));
+        let checksum = staged.join(format!(
+            "{}.sha256",
+            cargo_dist_archive(&package.name, target)
+        ));
+        for written in [&dist_archive, &checksum] {
+            if !written.is_file() {
+                writeln!(
+                    err,
+                    "dist: expected cargo-dist's {}, found none",
+                    pointer(written, &package.root)
+                )?;
+                return Ok(ExitCode::Internal);
+            }
+        }
+        writeln!(
+            out,
+            "dist_archive={}",
+            pointer(&dist_archive, &package.root)
+        )?;
+        writeln!(out, "checksum={}", pointer(&checksum, &package.root))?;
+        writeln!(out, "manifest={}", pointer(&manifest, &package.root))?;
+    }
     Ok(ExitCode::Success)
 }
 
@@ -551,14 +645,63 @@ mod tests {
                 .collect()
         };
         assert_eq!(
-            BuildTool::Cargo.argv("t", "b"),
+            BuildTool::Cargo.argv("t", "b", "1.2.3"),
             expect(&["cargo", "auditable", "build"])
         );
         assert_eq!(
-            BuildTool::Zigbuild.argv("t", "b"),
+            BuildTool::Zigbuild.argv("t", "b", "1.2.3"),
             expect(&["cargo", "auditable", "zigbuild"])
         );
-        assert_eq!(BuildTool::Cross.argv("t", "b"), expect(&["cross", "build"]));
+        assert_eq!(
+            BuildTool::Cross.argv("t", "b", "1.2.3"),
+            expect(&["cross", "build"])
+        );
+    }
+
+    /// dist announces the package's own version as its tag, and builds only the
+    /// named target: an argv that drops either builds the wrong release.
+    #[test]
+    fn cargo_dist_builds_one_target_under_the_packages_version() {
+        assert_eq!(
+            BuildTool::parse(Some("cargo-dist")),
+            Some(BuildTool::CargoDist)
+        );
+        let argv = BuildTool::CargoDist.argv("x86_64-unknown-linux-gnu", "batten", "1.2.3");
+        assert_eq!(
+            argv,
+            [
+                "dist",
+                "build",
+                "--artifacts=local",
+                "--output-format=json",
+                "--tag",
+                "v1.2.3",
+                "--target",
+                "x86_64-unknown-linux-gnu"
+            ]
+        );
+    }
+
+    /// dist's name carries no version and keeps the per-target extension; the
+    /// versioned stem the engine fetches is a different name for the same target.
+    #[test]
+    fn cargo_dists_archive_name_is_versionless_and_differs_from_the_stem() {
+        assert_eq!(
+            cargo_dist_archive("batten", "x86_64-unknown-linux-gnu"),
+            "batten-x86_64-unknown-linux-gnu.tar.gz"
+        );
+        assert_eq!(
+            cargo_dist_archive("batten", "x86_64-pc-windows-gnu"),
+            "batten-x86_64-pc-windows-gnu.zip"
+        );
+        assert_ne!(
+            cargo_dist_archive("batten", "x86_64-unknown-linux-gnu"),
+            format!(
+                "{}{}",
+                archive_stem("batten", "1.2.3", "x86_64-unknown-linux-gnu"),
+                archive_ext("x86_64-unknown-linux-gnu")
+            )
+        );
     }
 
     #[test]
