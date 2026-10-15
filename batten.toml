@@ -15238,6 +15238,24 @@ kind = "document"
 target = "mise.toml"
 
 [[verdict]]
+id = "job skip loose"
+gloss = "the fan-in branch protection requires can be skipped, and the host counts a skip as success"
+class = """
+The fan-in is the one context branch protection requires, and the host reports a \
+job skipped by its own `if:` as success. So any condition but `always()` is a way \
+to satisfy the ruleset without a verdict: a draft term made every draft push write \
+a passing fan-in, and one such SHA was accepted as a direct push to the trunk with \
+no CI ever run on it (CLOUD-2317); no condition at all skips it whenever a needed \
+job fails. On a draft, `always()` reds it instead, and the ready run supersedes \
+that.
+"""
+
+[[verdict.route]]
+id = "workflow read first"
+kind = "document"
+target = ".github/workflows/ci.yml"
+
+[[verdict]]
 id = "release open early"
 gloss = "the release pull request opens ready, so every refresh of it buys a matrix"
 class = """

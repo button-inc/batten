@@ -326,6 +326,7 @@ jobs:
       - run: mise run test:musl
   final:
     name: final
+    if: ${{ always() }}
     runs-on: ubuntu-latest
     needs: [ci]
     steps:
@@ -867,6 +868,38 @@ fn a_pull_request_job_missing_from_the_roster_is_refused() {
     assert!(
         raised.iter().any(|v| v == "job list missing"),
         "a pull_request job missing from the roster should be refused: {raised:?}"
+    );
+}
+
+/// CLOUD-2317: the host counts a job skipped by its own `if:` as success, and the
+/// fan-in is the one check it requires. Skipped on a draft, `final` let d11b89f
+/// reach `main` with no CI run; with no condition it skips whenever a need fails.
+#[test]
+fn a_fan_in_skipped_on_a_draft_is_refused() {
+    for (name, condition) in [
+        (
+            "fanin-draft",
+            "    if: ${{ always() && github.event.pull_request.draft == false }}\n",
+        ),
+        ("fanin-bare", ""),
+    ] {
+        let root = sound(name);
+        common::write(
+            &root,
+            ".github/workflows/ci.yml",
+            &WORKFLOW.replace("    if: ${{ always() }}\n", condition),
+        );
+        let raised = verdicts_raised(&root);
+        assert!(
+            raised.iter().any(|v| v == "job skip loose"),
+            "{name}: a skippable fan-in should be refused: {raised:?}"
+        );
+    }
+    // ANTI-VACUITY: the sound fixture's `always()` passes this arm.
+    let raised = verdicts_raised(&sound("fanin-always"));
+    assert!(
+        !raised.iter().any(|v| v == "job skip loose"),
+        "a fan-in that always runs is clean: {raised:?}"
     );
 }
 
@@ -1420,6 +1453,7 @@ jobs:
         run: batten ci step --arg-env HEAD_SHA -- batten --config-from origin/main release path --post --seal release-guard.yml --manifest-path trunk-predicate/Cargo.toml
   final:
     name: final
+    if: ${{ always() }}
     runs-on: ubuntu-latest
     needs: [ci, batten-check]
     steps:

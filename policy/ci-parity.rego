@@ -724,6 +724,26 @@ fanin_job_declared if {
 	base_name(object.get(job, "name", key)) == base_name(fanin_check)
 }
 
+# THE FAN-IN CAN NEVER BE SKIPPED (CLOUD-2317). It is the one context branch
+# protection requires, and the host counts a job skipped by its own `if:` as
+# SUCCESS. So its condition is `always()` and nothing else: a draft term made
+# every draft push write a passing `final` (d11b89f reached `main` on one with no
+# CI run), and NO condition at all skips it whenever a needed job fails, which is
+# the same false green by another road. Exact rather than "contains always()",
+# because any conjunct added beside it is a new way to reach a skip.
+fanin_if_always(job) if trim_space(object.get(job, "if", "")) in {"${{ always() }}", "always()"}
+
+violation contains {
+	"rule": "job wire missing",
+	"verdict": "job skip loose",
+	"subjects": [{"path": fanin_workflow}, {"artifact": fanin_check}],
+} if {
+	governed
+	some key, job in workflow[fanin_workflow].jobs
+	base_name(object.get(job, "name", key)) == base_name(fanin_check)
+	not fanin_if_always(job)
+}
+
 # THE DECLARATION IS READ, NOT RESTATED. A literal path in the abandon site would
 # be a second authority for one fact, and the one that drifts is always the copy
 # nobody edits.
@@ -1768,6 +1788,7 @@ sound_workflow := {
 		# enumeration: it cannot start before its dependencies are terminal.
 		"final": {
 			"name": "final",
+			"if": "${{ always() }}",
 			"runs-on": "ubuntu-latest",
 			"needs": ["ci"],
 			"steps": [{"run": "echo done"}],
@@ -2325,6 +2346,36 @@ test_a_fanin_outside_the_roster_is_refused if {
 	found := violation with input as swap("mise.toml", m)
 	some f in found
 	f.verdict == "job require missing"
+}
+
+# CLOUD-2317: the fan-in skipped on a draft, the shape d11b89f reached `main`
+# through, and the fan-in with no condition, which skips when a need fails.
+# REPLACED, never merged: `object.union` merges nested objects, so a removed `if`
+# would come back from the sound fixture underneath it.
+fan_in_as(job) := object.union(
+	object.remove(sound_workflow, ["jobs"]),
+	{"jobs": object.union(object.remove(sound_workflow.jobs, ["final"]), {"final": job})},
+)
+
+test_a_fan_in_skipped_on_a_draft_is_refused if {
+	job := object.union(sound_workflow.jobs.final, {"if": "${{ always() && github.event.pull_request.draft == false }}"})
+	found := violation with input as swap(".github/workflows/ci.yml", fan_in_as(job))
+	some f in found
+	f.verdict == "job skip loose"
+}
+
+test_a_fan_in_with_no_condition_is_refused if {
+	job := object.remove(sound_workflow.jobs.final, ["if"])
+	found := violation with input as swap(".github/workflows/ci.yml", fan_in_as(job))
+	some f in found
+	f.verdict == "job skip loose"
+}
+
+test_a_fan_in_that_always_runs_is_clean if {
+	found := violation with input as sound_input
+	every f in found {
+		f.verdict != "job skip loose"
+	}
 }
 
 test_a_fanin_workflow_declaring_no_such_job_is_refused if {

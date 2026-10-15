@@ -1149,7 +1149,17 @@ jobs:
     # This is also why `always()` is not merely the old value restored: it now
     # carries the reason it cannot change, so the next reader who notices that a
     # stopped run reds `final` does not re-derive the skip and ship it.
-    if: ${{ always() && github.event.pull_request.draft == false }}
+    #
+    # AND A DRAFT IS NO EXCEPTION (CLOUD-2317). This read `always() && draft ==
+    # false` from 09836e9b until 2026-10-15, so every draft push wrote `final` =
+    # skipped, which the host counts as success: d11b89f carried nothing but a
+    # draft run's skipped `final` and `protect-main` accepted it as a direct push
+    # to `main` with no CI ever run on it. On a draft every job in `needs:` is
+    # skipped, so the assertion below reds `final`; the ready run's `final`
+    # concludes later and supersedes it, for `checks green` (newest completed
+    # run per name) and for the host alike. `ci-parity` refuses any other
+    # condition here (`job skip loose`).
+    if: ${{ always() }}
     # `cross`, `darwin-link`, `semver` and `windows` are NOT here any more: they
     # moved to `rust.yml` behind a `paths:` filter (CLOUD-398 slice 2), and a
     # fan-in cannot `needs:` a job in another workflow. They remain required —
