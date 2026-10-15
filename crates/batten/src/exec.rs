@@ -1258,6 +1258,10 @@ struct Reaper {
     grouped: bool,
     /// Whether to act on drop: cleared by [`Reaper::disarm`] on the clean exit.
     armed: bool,
+    /// Whether the child was already waited, set by [`Reaper::reaped`]. A
+    /// reaped pid is free for reuse, so nothing past that point signals or
+    /// waits on it.
+    reaped: std::cell::Cell<bool>,
 }
 
 impl Reaper {
@@ -1267,7 +1271,13 @@ impl Reaper {
             child,
             grouped: decision.groups(),
             armed: true,
+            reaped: std::cell::Cell::new(false),
         }
+    }
+
+    /// The child was waited: its pid is no longer this process's to signal.
+    fn reaped(&self) {
+        self.reaped.set(true);
     }
 
     /// The clean exit: the child was waited and its output collected.
@@ -1282,21 +1292,25 @@ impl Drop for Reaper {
         if !self.armed {
             return;
         }
-        let pid = self.child.to_string();
         if self.grouped {
+            let pid = self.child.to_string();
             let _ = terminate_group(&pid);
             let _ = escalate_group(&pid);
-        } else {
-            end_process(self.child);
         }
-        // A SIGNAL IS DELIVERED, NOT DONE: `kill` returns before the child is
-        // gone, so `exec` could return its error past a child still exiting.
-        // The KILL above bounds this wait.
+        if self.reaped.get() {
+            return;
+        }
+        // The direct child is KILLed whether or not it is still in the group it
+        // led, so the wait below is bounded by that KILL. A SIGNAL IS
+        // DELIVERED, NOT DONE: `kill` returns before the child is gone, so
+        // without the wait `exec` returned its error past a child still exiting.
+        end_process(self.child);
         await_reaped(self.child);
     }
 }
 
-/// Block until the direct child `pid` has exited, and reap it.
+/// Block until the direct child `pid` has exited, and reap it. Only ever
+/// called on a child not yet waited, whose pid nothing else can hold.
 #[cfg(unix)]
 fn await_reaped(pid: u32) {
     let Some(pid) = i32::try_from(pid)
@@ -2716,6 +2730,7 @@ fn run_one(
     let group = GroupRecord::write(repo_root, decision, child.id())?;
 
     let status = child.wait().context("wait for the wrapped command")?;
+    reaper.reaped();
     let (received, escalated) = forwarding.finish_reporting();
     group.clear();
 
