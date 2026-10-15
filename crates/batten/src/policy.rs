@@ -909,9 +909,7 @@ pub fn load(
     // site exists). Validating again here would be a second authority for one
     // question, which is the shape `rules-drift` exists to refuse.
     let pattern_data = crate::pattern::data_document(patterns);
-    // Its text, written once per load and only by a cache read: every bundle's
-    // key and entry carry it, and each used to serialise it again (CLOUD-2315).
-    let pattern_text = std::cell::OnceCell::new();
+    let pattern_text = PatternText::new();
     let declared_patterns: BTreeSet<&str> = patterns.iter().map(|p| p.id.as_str()).collect();
     // The refusal vocabulary (CLOUD-1050): the consumer's rows unioned with what
     // this binary ships. The vendored half is not optional politeness — a
@@ -1153,6 +1151,11 @@ pub fn load(
     Ok(bundles)
 }
 
+/// The pattern table's text and its digest, written once per load by the first
+/// cache read that needs them (CLOUD-2315): every bundle's key and entry carry
+/// the table, and each used to serialise it, then hash all of it, again.
+type PatternText = std::cell::OnceCell<(String, [u8; 32])>;
+
 /// One row's bundle: from the bytecode cache on the hot path, whose loads skip
 /// every check that needs the interpreter's AST, and compiled from source
 /// everywhere else (CLOUD-2236).
@@ -1160,12 +1163,16 @@ fn compile_for(
     root: &Path,
     id: &str,
     sources: &[(String, String)],
-    (pattern_data, pattern_text): (&serde_json::Value, &std::cell::OnceCell<String>),
+    (pattern_data, pattern_text): (&serde_json::Value, &PatternText),
     checks: ModuleChecks,
 ) -> Result<Bundle> {
     if checks == ModuleChecks::SkipOnHotPath {
-        let text = pattern_text.get_or_init(|| pattern_data.to_string());
-        compile_cached(root, id, sources, pattern_data, text)
+        let (text, digest) = pattern_text.get_or_init(|| {
+            let text = pattern_data.to_string();
+            let digest = *blake3::hash(text.as_bytes()).as_bytes();
+            (text, digest)
+        });
+        compile_cached(root, id, sources, pattern_data, (text, digest))
     } else {
         compile(id, sources, pattern_data)
     }
@@ -1936,9 +1943,9 @@ fn compile_cached(
     id: &str,
     sources: &[(String, String)],
     data: &serde_json::Value,
-    text: &str,
+    (text, digest): (&str, &[u8; 32]),
 ) -> Result<Bundle> {
-    let key = cache_key(id, sources, text);
+    let key = cache_key(id, sources, digest);
     let path = cache_path(root, id);
     if let Some(bundle) = path
         .as_deref()
@@ -1974,8 +1981,9 @@ struct CacheHeader {
 /// The cache format; a change to [`CacheHeader`] or to how bytecode is written
 /// bumps it, which makes every older entry a miss. `2` since the entry moved
 /// onto `crate::cache` (CLOUD-2315): the key left the header for the entry's own
-/// key line, and the binary is identified by its build ID.
-const CACHE_FORMAT: &str = "batten-policy-rvm-2";
+/// key line, and the binary is identified by its build ID. `3` keys the pattern
+/// table by its digest rather than its text.
+const CACHE_FORMAT: &str = "batten-policy-rvm-3";
 
 /// The entry for row `id`, under the repository's cache directory: one file per
 /// row, overwritten on a miss, so the cache never grows past the row count.
@@ -2015,16 +2023,18 @@ fn cache_path(root: &Path, id: &str) -> Option<std::path::PathBuf> {
 /// The key an entry must carry to be read: everything the bytecode is a
 /// function of, through `crate::cache::key`, which adds the format and the
 /// running binary's build ID — so a rebuild that changes the code, a regorus bump
-/// included, is a miss, and a relink to identical code is not.
+/// included, is a miss, and a relink to identical code is not. The pattern
+/// table enters by its digest, taken once per load, which names its content
+/// exactly as its text would.
 //MUTANT cache-key-ignores-source|s@        fields.push(source.as_bytes());@        let _ = source;@|an_edited_module_is_not_answered_from_stale_bytecode
-fn cache_key(id: &str, sources: &[(String, String)], data: &str) -> String {
+fn cache_key(id: &str, sources: &[(String, String)], data: &[u8; 32]) -> String {
     let mut fields: Vec<&[u8]> = Vec::with_capacity(2 + 2 * sources.len());
     fields.push(id.as_bytes());
     for (path, source) in sources {
         fields.push(path.as_bytes());
         fields.push(source.as_bytes());
     }
-    fields.push(data.as_bytes());
+    fields.push(data);
     crate::cache::key(CACHE_FORMAT, &fields)
 }
 
