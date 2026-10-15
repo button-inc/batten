@@ -5,6 +5,10 @@ name: release-land
 # a failed `land` job by `display_title`.
 run-name: "release-land ${{ inputs.tag }}"
 
+# workflow-shell: CLOUD-2287 the land job moved here from release-artifacts.yml
+# unchanged but for its publish target, so the step count it adds is the count
+# that file lost, plus the bake job that took its place there.
+
 # Publish a built release and fast-forward `main` to it (CLOUD-2287).
 #
 # MOVED OUT OF `release-artifacts.yml`, and the move is the mechanism. A

@@ -233,8 +233,16 @@ fn forge(name: &str, assets: &[String], manifest: Option<&str>) -> PathBuf {
             "HTTP/2 200\ncontent-type: application/json\n\n{{\"object\":{{\"type\":\"commit\",\"sha\":\"{TAGGED}\"}}}}\n"
         ),
     );
-    let mut routes =
-        String::from("/releases/tags/\trelease\n/releases/latest\trelease\n/git/ref/tags/\ttag\n");
+    let mut routes = String::from(
+        "/releases/tags/\trelease\n/releases/latest\trelease\n/git/ref/tags/\ttag\n/contents/install.lock\tnolock\n",
+    );
+    // No `install.lock` at the release's commit, as for every release before the
+    // bake (CLOUD-2287): the lock check has nothing to judge.
+    write(
+        &forge,
+        "nolock",
+        "HTTP/2 404\ncontent-type: application/json\n\n{}\n",
+    );
     for (index, (_, bytes)) in served.iter().enumerate() {
         let file = format!("asset.{}", 10 + index);
         write(

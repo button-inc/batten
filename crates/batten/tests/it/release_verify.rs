@@ -697,10 +697,13 @@ const BAKED: &str = "4444444444444444444444444444444444444444";
 
 /// The draft's `SHA256SUMS` for v1.0.1: every bootstrap archive, one digest.
 fn draft_sums() -> String {
+    use std::fmt::Write as _;
     batten::install::TARGETS
         .iter()
-        .map(|target| format!("{}  batten-v1.0.1-{target}.tar.gz\n", "a".repeat(64)))
-        .collect()
+        .fold(String::new(), |mut sums, target| {
+            let _ = writeln!(sums, "{}  batten-v1.0.1-{target}.tar.gz", "a".repeat(64));
+            sums
+        })
 }
 
 /// B as the bake writes it: a child of [`COMMIT`] changing only the two files,

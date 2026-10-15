@@ -1449,8 +1449,27 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - run: batten ci step --arg-env TAG -- batten release discard
-  land:
+  bake:
     needs: dist
+    runs-on: ubuntu-latest
+    steps:
+      - run: batten ci step --arg-env SHA --arg-env TAG -- batten release bake --sha
+";
+
+/// The land, in its own workflow since the bake (CLOUD-2287).
+const RELEASE_LAND: &str = r"
+name: release-land
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        required: true
+        type: string
+      sha:
+        required: true
+        type: string
+jobs:
+  land:
     runs-on: ubuntu-latest
     concurrency:
       group: main-writer
@@ -1532,6 +1551,7 @@ fn release_tree(name: &str, edits: &[(&str, &str, &str)]) -> PathBuf {
     let mut files = vec![
         ("ci.yml", RELEASE_CI.to_owned()),
         ("release-artifacts.yml", RELEASE_ARTIFACTS.to_owned()),
+        ("release-land.yml", RELEASE_LAND.to_owned()),
         ("auto-release-land.yml", RELEASE_CUT.to_owned()),
         ("fast-forward.yml", RELEASE_LANDER.to_owned()),
         ("release-guard.yml", RELEASE_GUARD.to_owned()),
@@ -1592,7 +1612,7 @@ fn latest_is_set_only_after_the_fast_forward() {
     assert!(wire_wrong(
         "release-early-latest",
         &[(
-            "release-artifacts.yml",
+            "release-land.yml",
             "      - run: batten ci step --arg-env SHA -- batten release path --post\n",
             "      - run: batten ci step --arg-env SHA -- batten release path --post\n      - run: batten ci step --arg-env TAG -- gh release edit --latest\n",
         )],
@@ -1687,7 +1707,7 @@ fn land_checks_out_main_and_patches_with_the_pat() {
     assert!(wire_wrong(
         "release-land-sha",
         &[(
-            "release-artifacts.yml",
+            "release-land.yml",
             "          ref: main",
             "          ref: ${{ inputs.sha }}",
         )],
@@ -1695,7 +1715,7 @@ fn land_checks_out_main_and_patches_with_the_pat() {
     assert!(wire_wrong(
         "release-land-token",
         &[(
-            "release-artifacts.yml",
+            "release-land.yml",
             "          GH_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}",
             "          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
         )],
@@ -1756,7 +1776,7 @@ fn cleanup_runs_only_on_build_failure() {
         &[(
             "release-artifacts.yml",
             "    needs: [dist]\n",
-            "    needs: [dist, land]\n",
+            "    needs: [dist, bake]\n",
         )],
     ));
 }
@@ -1774,7 +1794,7 @@ fn a_publish_or_draft_without_its_flag_is_refused() {
     assert!(wire_wrong(
         "release-bare-publish",
         &[(
-            "release-artifacts.yml",
+            "release-land.yml",
             "gh release edit --draft=false --prerelease --latest=false",
             "gh release edit --draft=false",
         )],

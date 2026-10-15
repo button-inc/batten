@@ -1105,6 +1105,11 @@ violation contains {
 
 release_artifacts := ".github/workflows/release-artifacts.yml"
 
+# THE LAND IS ITS OWN WORKFLOW (CLOUD-2287): the build ends by baking
+# `install.lock` onto the release head, and that bake must pass CI before the
+# cut dispatches the land, so the land cannot be the build's last job.
+release_land := ".github/workflows/release-land.yml"
+
 release_path_adopted if workflow[release_artifacts]
 
 step_text(step) := body_text(object.get(step, "run", ""))
@@ -1163,7 +1168,7 @@ dispatches_build(path, name) if {
 # the release guard's one-time probe seeding.
 release_path_poster := {
 	".github/workflows/ci.yml": "batten-check",
-	".github/workflows/release-artifacts.yml": "land",
+	".github/workflows/release-land.yml": "land",
 	".github/workflows/release-guard.yml": "settings",
 }
 
@@ -1197,7 +1202,7 @@ violation contains {
 marks_latest(step) if contains(replace(step_text(step), "--latest=false", ""), "--latest")
 
 latest_allowed(path, name, i) if {
-	path == release_artifacts
+	path == release_land
 	name == "land"
 	some j, earlier in job_steps(path, name)
 	contains(step_all(earlier), "git/refs/heads/main")
@@ -1315,7 +1320,7 @@ violation contains {
 # the release itself, the one writer the freeze exists to protect.
 freeze_owed(path, name) if {
 	writes_main(path, name)
-	path != release_artifacts
+	path != release_land
 }
 
 freeze_owed(path, name) if dispatches_build(path, name)
@@ -1418,20 +1423,20 @@ uses_the_pat(step) if {
 violation contains {
 	"rule": "release ship other",
 	"verdict": "release wire wrong",
-	"subjects": [{"path": release_artifacts}, {"artifact": "land checks out something other than main"}],
+	"subjects": [{"path": release_land}, {"artifact": "land checks out something other than main"}],
 } if {
 	release_path_adopted
-	job := workflow[release_artifacts].jobs.land
+	job := workflow[release_land].jobs.land
 	not checks_out_main(job)
 }
 
 violation contains {
 	"rule": "release ship other",
 	"verdict": "release wire wrong",
-	"subjects": [{"path": release_artifacts}, {"artifact": "land moves main without RELEASE_PLZ_TOKEN"}],
+	"subjects": [{"path": release_land}, {"artifact": "land moves main without RELEASE_PLZ_TOKEN"}],
 } if {
 	release_path_adopted
-	some step in job_steps(release_artifacts, "land")
+	some step in job_steps(release_land, "land")
 	contains(step_all(step), "git/refs/heads/main")
 	not uses_the_pat(step)
 }
@@ -1510,18 +1515,19 @@ violation contains {
 	not names_the_head_sha(step)
 }
 
-# `cleanup` DISCARDS ON A BUILD FAILURE ONLY: never after `land`, so recovery by
-# re-running `land` always finds its draft.
+# `cleanup` DISCARDS ON A BUILD FAILURE ONLY: never after the bake, so recovery
+# by re-running the bake, or `release-land.yml`'s `land`, always finds its draft
+# (CLOUD-2287: the bake is the build's last job now).
 violation contains {
 	"rule": "release ship other",
 	"verdict": "release wire wrong",
-	"subjects": [{"path": release_artifacts}, {"artifact": sprintf("%s discards after land", [name])}],
+	"subjects": [{"path": release_artifacts}, {"artifact": sprintf("%s discards after the bake", [name])}],
 } if {
 	release_path_adopted
 	some name, job in workflow[release_artifacts].jobs
-	name != "land"
+	name != "bake"
 	contains(job_text(release_artifacts, name), "release discard")
-	"land" in needs_of(job)
+	"bake" in needs_of(job)
 }
 
 # THE PRE-B2 SEAL: `final` needs a job that runs the predicate with `--seal`, so

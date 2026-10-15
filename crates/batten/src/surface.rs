@@ -7962,6 +7962,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // to the release `main` pins and never backward, then `engine install`'s
     // write. Not `destructive`: the pin only advances, and the install swaps
     // atomically.
+    // unreached: "engine update" CLOUD-2279 an operator's verb: moving a consumer's pin is a change to its config no task or workflow may make unasked, and CLOUD-2279's notice is what will name it
     CommandDecl {
         path: "engine update",
         id: "engine.update",

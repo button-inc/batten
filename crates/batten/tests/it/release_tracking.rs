@@ -74,7 +74,7 @@ use std::path::{Path, PathBuf};
 
 use batten::rules::{self, Rule};
 
-const RELEASE: &str = ".github/workflows/release-artifacts.yml";
+const RELEASE: &str = ".github/workflows/release-land.yml";
 const BACKFILL: &str = ".github/workflows/linear-release-backfill.yml";
 
 /// The `[[pattern]]` rows the module reads, taken from the committed config so

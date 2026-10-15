@@ -72,7 +72,9 @@ rules contains "release wire other"
 
 # Consumer paths in a consumer module, which is where rule 1 puts them.
 profiles := {
-	".github/workflows/release-artifacts.yml": "land",
+	# The land moved out of `release-artifacts.yml` into its own workflow,
+	# dispatched once the baked release head is green (CLOUD-2287).
+	".github/workflows/release-land.yml": "land",
 	".github/workflows/linear-release-backfill.yml": "dispatch",
 }
 
@@ -398,7 +400,7 @@ deny contains finding if {
 # the compiled engine. Paths are literals, never the `profiles` rule in key
 # position, which regorus did not resolve inside a helper (`sbom-actions.rego`).
 
-push_path := ".github/workflows/release-artifacts.yml"
+push_path := ".github/workflows/release-land.yml"
 
 dispatch_path := ".github/workflows/linear-release-backfill.yml"
 
