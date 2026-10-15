@@ -291,7 +291,7 @@ jobs:
         with:
           version: 2026.9.1
           working_directory: dist-src
-          install_args: rust aqua:axodotdev/cargo-dist github:rust-secure-code/cargo-auditable
+          install_args: rust aqua:axodotdev/cargo-dist github:rust-secure-code/cargo-auditable aqua:goreleaser/nfpm
       # Its own family, written by this leg alone, as `semver` keeps one.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
@@ -330,6 +330,39 @@ jobs:
       - name: The installed batten runs
         shell: pwsh
         run: ${{ runner.temp }}/installed/batten --version
+
+      # --- the package channels this OS installs from (CLOUD-2298) ----------
+      #
+      # Each package is built here from the binary cargo-dist just built and
+      # installed by the platform's own package manager. Linux: nfpm's .deb
+      # through dpkg. Windows: dist's MSI through msiexec, into a directory
+      # with no space in its path so the binary runs as a plain argv.
+      - name: Package the .deb with nfpm
+        if: runner.os == 'Linux'
+        working-directory: dist-src
+        env:
+          NFPM_ARCH: amd64
+          BATTEN_VERSION: 0.0.0
+          BATTEN_BINARY: target/${{ matrix.target }}/dist/batten
+        run: mise exec -- nfpm package --config nfpm.yaml --packager deb --target target/distrib/batten.deb
+      - name: Install the .deb with dpkg
+        if: runner.os == 'Linux'
+        working-directory: dist-src
+        run: sudo dpkg -i target/distrib/batten.deb
+      - name: The dpkg-installed batten runs
+        if: runner.os == 'Linux'
+        run: /usr/bin/batten --version
+      - name: Install the MSI with msiexec
+        if: runner.os == 'Windows'
+        working-directory: dist-src
+        # cmd, because a batch script waits for msiexec to finish and a
+        # PowerShell one does not.
+        shell: cmd
+        run: msiexec /i target\distrib\batten-${{ matrix.target }}.msi /qn /norestart APPLICATIONFOLDER=${{ runner.temp }}\msi
+      - name: The MSI-installed batten runs
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ${{ runner.temp }}\msi\bin\batten.exe --version
 
   # --- the exit-code contract (CLOUD-110) ------------------------------------
   #

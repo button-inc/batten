@@ -593,6 +593,12 @@ fn run_cargo_dist(
     )?;
     writeln!(out, "checksum={}", pointer(&checksum, &package.root))?;
     writeln!(out, "manifest={}", pointer(&manifest, &package.root))?;
+    // A Windows leg's MSI (CLOUD-2298), which dist writes only for a Windows
+    // target and only when `dist-workspace.toml` declares the installer.
+    let msi = staged.join(format!("{}-{target}.msi", package.name));
+    if msi.is_file() {
+        writeln!(out, "msi={}", pointer(&msi, &package.root))?;
+    }
     Ok(ExitCode::Success)
 }
 

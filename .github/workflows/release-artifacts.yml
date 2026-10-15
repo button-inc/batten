@@ -144,20 +144,26 @@ jobs:
         include:
           # glibc wherever the host has a new enough one; dist's installer falls
           # back to musl only where it does not (CLOUD-1861's 8.7x cost).
+          # `nfpm-arch` names the Linux package architecture (CLOUD-2298): a glibc
+          # leg packages .deb and .rpm, a musl leg .apk for Alpine's libc.
           - target: x86_64-unknown-linux-gnu
             runner: ubuntu-latest
             build-tool: cargo
+            nfpm-arch: amd64
           - target: aarch64-unknown-linux-gnu
             runner: ubuntu-latest
             build-tool: zigbuild
+            nfpm-arch: arm64
           # musl gives the statically linked binary §12 asks for — it runs on any
           # Linux regardless of glibc version.
           - target: x86_64-unknown-linux-musl
             runner: ubuntu-latest
             build-tool: zigbuild
+            nfpm-arch: amd64
           - target: aarch64-unknown-linux-musl
             runner: ubuntu-latest
             build-tool: zigbuild
+            nfpm-arch: arm64
           # The gnu triple, kept so a shipped Windows engine finds its own target
           # in the next release (`engine::running_target`). On a Windows runner
           # it links against the runner's current mingw-w64, so CLOUD-1574's
@@ -207,10 +213,11 @@ jobs:
           #   zig, cargo-zigbuild   dist's linker chain for the non-host Linux legs
           #   syft              `sbom-binary` on every leg
           #   gh                the `gh release upload` steps
+          #   nfpm              the Linux legs' .deb, .rpm and .apk (CLOUD-2298)
           #
           # This does NOT unpin anything. Naming tools selects which pinned
           # versions are installed.
-          install_args: rust aqua:axodotdev/cargo-dist zig github:rust-cross/cargo-zigbuild github:rust-secure-code/cargo-auditable aqua:anchore/syft aqua:cli/cli
+          install_args: rust aqua:axodotdev/cargo-dist zig github:rust-cross/cargo-zigbuild github:rust-secure-code/cargo-auditable aqua:anchore/syft aqua:cli/cli aqua:goreleaser/nfpm
       - name: Add the Rust target
         env:
           TARGET: ${{ matrix.target }}
@@ -255,6 +262,56 @@ jobs:
           DIST_ARCHIVE: ${{ steps.dist.outputs.dist_archive }}
           CHECKSUM: ${{ steps.dist.outputs.checksum }}
         run: mise run batten -- ci step --arg-env TAG --arg-env ARCHIVE --arg-env DIST_ARCHIVE --arg-env CHECKSUM -- gh release upload --clobber
+      # THE PACKAGE CHANNELS (CLOUD-2298). nfpm wraps the binary dist built for
+      # this leg, so every package carries the release's own bytes; dist wrote
+      # the Windows leg's MSI itself. Each path travels through `env:`, so no
+      # matrix value is expanded into a command line.
+      - name: Package the .deb
+        if: endsWith(matrix.target, 'linux-gnu')
+        env:
+          NFPM_ARCH: ${{ matrix.nfpm-arch }}
+          BATTEN_VERSION: ${{ inputs.tag }}
+          BATTEN_BINARY: ${{ steps.dist.outputs.binary }}
+          PACKAGE: target/distrib/batten-${{ matrix.target }}.deb
+        run: mise run batten -- ci step --arg-env PACKAGE -- mise exec -- nfpm package --config nfpm.yaml --packager deb --target
+      - name: Package the .rpm
+        if: endsWith(matrix.target, 'linux-gnu')
+        env:
+          NFPM_ARCH: ${{ matrix.nfpm-arch }}
+          BATTEN_VERSION: ${{ inputs.tag }}
+          BATTEN_BINARY: ${{ steps.dist.outputs.binary }}
+          PACKAGE: target/distrib/batten-${{ matrix.target }}.rpm
+        run: mise run batten -- ci step --arg-env PACKAGE -- mise exec -- nfpm package --config nfpm.yaml --packager rpm --target
+      - name: Package the .apk
+        if: endsWith(matrix.target, 'linux-musl')
+        env:
+          NFPM_ARCH: ${{ matrix.nfpm-arch }}
+          BATTEN_VERSION: ${{ inputs.tag }}
+          BATTEN_BINARY: ${{ steps.dist.outputs.binary }}
+          PACKAGE: target/distrib/batten-${{ matrix.target }}.apk
+        run: mise run batten -- ci step --arg-env PACKAGE -- mise exec -- nfpm package --config nfpm.yaml --packager apk --target
+      - name: Upload the .deb and .rpm to the release
+        if: endsWith(matrix.target, 'linux-gnu')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+          DEB: target/distrib/batten-${{ matrix.target }}.deb
+          RPM: target/distrib/batten-${{ matrix.target }}.rpm
+        run: mise run batten -- ci step --arg-env TAG --arg-env DEB --arg-env RPM -- gh release upload --clobber
+      - name: Upload the .apk to the release
+        if: endsWith(matrix.target, 'linux-musl')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+          APK: target/distrib/batten-${{ matrix.target }}.apk
+        run: mise run batten -- ci step --arg-env TAG --arg-env APK -- gh release upload --clobber
+      - name: Upload the MSI to the release
+        if: steps.dist.outputs.msi != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+          MSI: ${{ steps.dist.outputs.msi }}
+        run: mise run batten -- ci step --arg-env TAG --arg-env MSI -- gh release upload --clobber
       # The fragment travels to the `installers` job, which generates the
       # installers from every leg's checksum. A build artifact, not a release
       # asset: the installers are what ship.
@@ -363,7 +420,11 @@ jobs:
           SHELL_INSTALLER: target/distrib/batten-installer.sh
           POWERSHELL_INSTALLER: target/distrib/batten-installer.ps1
           DIST_SUMS: target/distrib/sha256.sum
-        run: mise run batten -- ci step --arg-env TAG --arg-env SHELL_INSTALLER --arg-env POWERSHELL_INSTALLER --arg-env DIST_SUMS -- gh release upload --clobber
+          # The Homebrew formula and the npm package (CLOUD-2298), from the
+          # same global step and the same per-leg checksums.
+          HOMEBREW_FORMULA: target/distrib/batten.rb
+          NPM_PACKAGE: target/distrib/batten-npm-package.tar.gz
+        run: mise run batten -- ci step --arg-env TAG --arg-env SHELL_INSTALLER --arg-env POWERSHELL_INSTALLER --arg-env DIST_SUMS --arg-env HOMEBREW_FORMULA --arg-env NPM_PACKAGE -- gh release upload --clobber
 
   # The JSON Schemas for the two config surfaces (CLOUD-33), published as release
   # assets.
