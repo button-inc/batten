@@ -59,7 +59,7 @@
 #MUTANT second-dispatcher|s@^\tpath != ".github/workflows/auto-release-land.yml"$@\tfalse@|only_the_cut_dispatches_release_artifacts
 #MUTANT predicate-from-head|s@^\tnot graded_by_the_trunk(step)$@\tfalse@|ci_grades_with_mains_predicate
 #MUTANT predicate-on-merge-ref|s@^\tnot names_the_head_sha(step)$@\tfalse@|ci_grades_the_pr_head_sha
-#MUTANT cleanup-on-land-failure|s@^\t"land" in needs_of(job)$@\tfalse@|cleanup_runs_only_on_build_failure
+#MUTANT cleanup-on-land-failure|s@^\t"bake" in needs_of(job)$@\tfalse@|cleanup_runs_only_on_build_failure
 #MUTANT final-ignores-unverified-pin|s@^\tnot final_sealed$@\tfalse@|final_fails_on_an_unverified_pin_before_b2
 #MUTANT publish-without-prerelease|s@^\tpublishes_bare(step_text(step))$@\tfalse@|a_publish_or_draft_without_its_flag_is_refused
 #MUTANT bump-push-unprivileged|s@^\tnot pushes_with_the_pat(step)$@\tfalse@|the_cut_pushes_the_bump_with_the_pat
