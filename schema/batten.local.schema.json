@@ -1483,6 +1483,7 @@
             "tracker-hygiene",
             "supply-chain",
             "trunk-based",
+            "linear-history",
             "git"
           ]
         },

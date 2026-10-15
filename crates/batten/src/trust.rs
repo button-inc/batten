@@ -1089,6 +1089,10 @@ pub enum WeakeningKind {
     /// glob reaches is a fact about the tree, not something two parsed configs
     /// can settle. Appended, for the `Ord` reason its neighbours give.
     MutateGateRemoved,
+    /// `ci.required_linear_history` was turned off (CLOUD-2273), so `land linear`
+    /// stops counting the merge commits a branch carries. Appended, for the
+    /// `Ord` reason its neighbours give.
+    CiLinearHistoryDropped,
 }
 
 impl WeakeningKind {
@@ -1133,6 +1137,7 @@ impl WeakeningKind {
         WeakeningKind::HostSettingUnprojected,
         WeakeningKind::CiMergeCheckRemoved,
         WeakeningKind::CiMergeMethodAdded,
+        WeakeningKind::CiLinearHistoryDropped,
         WeakeningKind::AttributionDenyRemoved,
         WeakeningKind::AttributionAllowAdded,
         WeakeningKind::DefectsLedgerRemoved,
@@ -1231,6 +1236,7 @@ impl WeakeningKind {
             WeakeningKind::DeferralUnwatched => "deferral-unwatched",
             WeakeningKind::CiMergeCheckRemoved => "ci-merge-check-removed",
             WeakeningKind::CiMergeMethodAdded => "ci-merge-method-added",
+            WeakeningKind::CiLinearHistoryDropped => "ci-linear-history-dropped",
             WeakeningKind::AttributionDenyRemoved => "attribution-deny-removed",
             WeakeningKind::AttributionAllowAdded => "attribution-allow-added",
             WeakeningKind::DefectsLedgerRemoved => "defects-ledger-removed",
@@ -1606,6 +1612,7 @@ pub const CENSUS: &[FieldCoverage] = &[
         coverage: Coverage::Compared(&[
             WeakeningKind::CiMergeCheckRemoved,
             WeakeningKind::CiMergeMethodAdded,
+            WeakeningKind::CiLinearHistoryDropped,
         ]),
     },
     FieldCoverage {
@@ -3565,6 +3572,21 @@ fn ci_weakenings(base: Option<&crate::ci::Ci>, working: Option<&crate::ci::Ci>) 
                 &keyed("ci.allowed_merge_methods", candidate),
             )),
         }
+    }
+
+    // CLOUD-2273: `land linear` holds merge commits to zero unless this is
+    // claimed `false` (unclaimed is the strict reading), so a claimed `false`
+    // arriving where the base had none is how a branch would stop that count
+    // with no other trace.
+    let relaxed =
+        |ci: Option<&crate::ci::Ci>| ci.and_then(|ci| ci.required_linear_history) == Some(false);
+    if !relaxed(Some(base)) && relaxed(working) {
+        found.push(Weakening::new(
+            WeakeningKind::CiLinearHistoryDropped,
+            "ci.required_linear_history",
+            "true",
+            "false",
+        ));
     }
     found
 }
@@ -5986,6 +6008,30 @@ mod tests {
                 "constrained",
                 "unconstrained",
             )
+        );
+    }
+
+    #[test]
+    fn relaxing_the_linear_history_rule_is_a_weakening() {
+        let base = config("[ci]\nrequired_checks = [\"a\"]\nrequired_linear_history = true\n");
+        let relaxed = config("[ci]\nrequired_checks = [\"a\"]\nrequired_linear_history = false\n");
+        assert_eq!(
+            only(&base, &relaxed),
+            Weakening::new(
+                WeakeningKind::CiLinearHistoryDropped,
+                "ci.required_linear_history",
+                "true",
+                "false",
+            )
+        );
+        assert!(weakenings(&relaxed, &base).is_empty());
+        // Unclaimed is the strict reading, so dropping the key relaxes nothing,
+        // and claiming `false` over an unclaimed base is the weakening.
+        let unclaimed = config("[ci]\nrequired_checks = [\"a\"]\n");
+        assert!(weakenings(&base, &unclaimed).is_empty());
+        assert_eq!(
+            only(&unclaimed, &relaxed).kind,
+            WeakeningKind::CiLinearHistoryDropped
         );
     }
 

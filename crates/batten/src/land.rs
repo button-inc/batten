@@ -177,6 +177,75 @@ pub(crate) fn advance(
     Ok(fetched.head)
 }
 
+/// What `land linear` reads off a branch once the trunk's tip is in hand
+/// (CLOUD-2273).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Linearity {
+    /// HEAD does not descend from the tip: a rebase is owed.
+    Behind,
+    /// The range will not walk, so its merge commits cannot be counted.
+    Unwalkable,
+    /// The range carries merge commits, newest first, that a trunk requiring a
+    /// line refuses at the fast-forward.
+    Woven(Vec<String>),
+    /// Built on the tip, and carrying nothing the trunk refuses.
+    Linear,
+}
+
+/// Judge `tip..head` against the trunk's own contract.
+///
+/// **The merge count is held to zero exactly when the trunk requires a line**
+/// (`ci.required_linear_history`, projected from the host ruleset and kept
+/// honest by `ci-drift`). A constant here would be one of two wrong answers: a
+/// trunk that admits merges would be refused work it accepts, and a projection
+/// that gained the rule would be ignored. Reading the projection keeps the local
+/// gate exactly as strict as the server — never weaker, which is the direction
+/// #1132 paid three refused fast-forwards for.
+///
+/// Separate from the fetch so the judgement is reachable over a local history:
+/// the fetch is HTTPS-only (`fetch::get`), and this is the half that decides.
+#[must_use]
+pub fn linearity(root: &Path, tip: &str, head: &str, requires_line: bool) -> Linearity {
+    if !gitwrite::carries(root, tip, head) {
+        return Linearity::Behind;
+    }
+    if !requires_line {
+        return Linearity::Linear;
+    }
+    match gitwrite::merges_in(root, tip, head) {
+        None => Linearity::Unwalkable,
+        Some(merges) if !merges.is_empty() => Linearity::Woven(merges),
+        Some(_) => Linearity::Linear,
+    }
+}
+
+/// Whether the committed authority at `root` records a trunk that refuses merge
+/// commits — `[ci] required_linear_history`.
+///
+/// Through [`crate::config::authority_site`], as `worktree::declared_trunk`
+/// reads `must_land_on`: `[ci]` is the projection of one host's ruleset, so no
+/// override layer could change the answer.
+///
+/// **ONLY A CLAIMED `false` RELAXES IT.** An absent `batten.toml`, `[ci]` or key
+/// is unclaimed, and unclaimed keeps the merge count at zero — the answer this
+/// verb gave before the projection existed, and the stricter one. Reading
+/// silence as "no rule" would weaken every tree that never wrote the key.
+///
+/// # Errors
+///
+/// A present `batten.toml` that will not load.
+pub fn requires_line(root: &Path) -> Result<bool> {
+    let site = crate::config::authority_site(root, None);
+    if !site.path.is_file() {
+        return Ok(true);
+    }
+    Ok(crate::config::load_site(&site)?
+        .0
+        .ci
+        .and_then(|ci| ci.required_linear_history)
+        .unwrap_or(true))
+}
+
 /// Point the trunk's tracking ref at `branch`'s tip, which an accepted
 /// fast-forward has just made the trunk (CLOUD-2085).
 ///

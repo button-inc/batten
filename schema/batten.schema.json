@@ -1237,6 +1237,13 @@
             "maxLength": 1536
           }
         },
+        "required_linear_history": {
+          "description": "Whether the host refuses a merge commit on the trunk (CLOUD-2273).\n\n`land linear` reads THIS, never a constant: it holds a branch's merge\ncommits to zero exactly when the host will, so the local gate is never\nweaker than the server's and never stricter than the consumer's trunk.\n\n**`None` is UNCLAIMED, the `[host]` table's reading**: drift is silent\nabout it, and `land linear` keeps refusing merge commits — the stricter\nanswer, and the one it gave before the key existed. Only a claimed\n`false` relaxes it to the descent check, and only a claimed value is\ncompared against the host.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "slow_inert": {
           "description": "Paths proven INERT to the hk slow tier, as prefixes (CLOUD-398).\n\n**A deny-list, and the inversion is the design.** `rust-paths-check`\njudges an allow-list because its four jobs decide a pure function of the\nRust tree. The slow tier is not enumerable that way — `cargo-clippy`\ndeclares no glob at all and `batten-check` declares `**` — so any list of\n\"what the slow tier reads\" is wrong the moment somebody adds a step. This\ninverts the default: the tier runs unless EVERY changed path is on a short\nlist proven inert to it, so a wrong entry is the only way to lose a\nverdict, and the list is the whole review surface.\n\nCONSUMER DATA, which is why it is config and not a constant (rule 1): the\npaths a given repository can prove inert are that repository's, and the\nengine knows only the RELATIONSHIP — an entry ending `/` covers a\ndirectory, anything else is an exact path.\n\nEmpty means nothing is inert, so the tier always runs. That is the safe\ndirection and the honest reading of an undeclared list.",
           "type": "array",
@@ -5060,6 +5067,7 @@
             "tracker-hygiene",
             "supply-chain",
             "trunk-based",
+            "linear-history",
             "git"
           ]
         },

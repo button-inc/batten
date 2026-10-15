@@ -109,6 +109,19 @@ pub struct Ci {
     /// omission.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allowed_merge_methods: Option<Vec<String>>,
+    /// Whether the host refuses a merge commit on the trunk (CLOUD-2273).
+    ///
+    /// `land linear` reads THIS, never a constant: it holds a branch's merge
+    /// commits to zero exactly when the host will, so the local gate is never
+    /// weaker than the server's and never stricter than the consumer's trunk.
+    ///
+    /// **`None` is UNCLAIMED, the `[host]` table's reading**: drift is silent
+    /// about it, and `land linear` keeps refusing merge commits — the stricter
+    /// answer, and the one it gave before the key existed. Only a claimed
+    /// `false` relaxes it to the descent check, and only a claimed value is
+    /// compared against the host.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub required_linear_history: Option<bool>,
 }
 
 /// The merge methods the host vocabulary admits.
@@ -161,6 +174,7 @@ impl Ci {
                 .allowed_merge_methods
                 .as_ref()
                 .map(|methods| methods.iter().cloned().collect()),
+            required_linear_history: self.required_linear_history.unwrap_or(false),
         }
     }
 }
@@ -172,6 +186,8 @@ pub struct Contract {
     pub required_checks: BTreeSet<String>,
     /// Allowed merge methods, or `None` for "the host constrains none".
     pub allowed_merge_methods: Option<BTreeSet<String>>,
+    /// Whether any rule refuses a merge commit (`required_linear_history`).
+    pub required_linear_history: bool,
 }
 
 /// Derive the contract from a rules-API response array.
@@ -210,8 +226,12 @@ pub fn derive(payload: &str) -> Result<Contract> {
 
     let mut required_checks = BTreeSet::new();
     let mut allowed_merge_methods: Option<BTreeSet<String>> = None;
+    let mut required_linear_history = false;
     for rule in rules {
         match rule.get("type").and_then(Value::as_str) {
+            // A parameterless rule: its presence IS the constraint, and any one
+            // rule carrying it binds the branch.
+            Some("required_linear_history") => required_linear_history = true,
             Some("required_status_checks") => {
                 let contexts = rule
                     .pointer("/parameters/required_status_checks")
@@ -248,6 +268,7 @@ pub fn derive(payload: &str) -> Result<Contract> {
     Ok(Contract {
         required_checks,
         allowed_merge_methods,
+        required_linear_history,
     })
 }
 
@@ -257,6 +278,8 @@ pub fn derive(payload: &str) -> Result<Contract> {
 pub const REQUIRED_CHECKS_DRIFT: &str = "ci-required-checks-drift";
 /// The merge-method half's smell id.
 pub const MERGE_METHODS_DRIFT: &str = "ci-allowed-merge-methods-drift";
+/// The linear-history half's smell id (CLOUD-2273).
+pub const LINEAR_HISTORY_DRIFT: &str = "ci-required-linear-history-drift";
 
 /// The repository-object keys [`derive_host`] reads.
 ///
@@ -497,6 +520,26 @@ pub fn drift(committed: &Ci, host: &Contract) -> Vec<Drift> {
             tokens: methods,
         });
     }
+
+    // A CLAIMED value only, both directions: a host requiring a line the
+    // projection denies is the dangerous one (`land linear` would admit a merge
+    // the trunk refuses), and a projection claiming a rule the host dropped
+    // refuses work the host admits. Unclaimed is skipped, as `[host]` skips it.
+    if committed
+        .required_linear_history
+        .is_some_and(|claimed| claimed != host.required_linear_history)
+    {
+        let sign = if host.required_linear_history {
+            '+'
+        } else {
+            '-'
+        };
+        found.push(Drift {
+            id: LINEAR_HISTORY_DRIFT,
+            key: "ci.required_linear_history".to_owned(),
+            tokens: vec![format!("{sign}required")],
+        });
+    }
     found
 }
 
@@ -622,7 +665,40 @@ mod tests {
             required_checks: checks.iter().map(|check| (*check).to_owned()).collect(),
             allowed_merge_methods: methods
                 .map(|methods| methods.iter().map(|m| (*m).to_owned()).collect()),
+            required_linear_history: None,
         }
+    }
+
+    #[test]
+    fn a_linear_history_rule_is_derived_and_its_absence_is_not() {
+        assert!(derive(RULES).unwrap().required_linear_history);
+        assert!(!derive(RULES_WITH_METHODS).unwrap().required_linear_history);
+        assert!(!derive("[]").unwrap().required_linear_history);
+    }
+
+    #[test]
+    fn linear_history_drift_is_reported_in_both_directions() {
+        // The host requires a line the projection denies: `land linear` would
+        // admit a merge commit the trunk refuses.
+        let mut denies = ci(&["final"], None);
+        denies.required_linear_history = Some(false);
+        let found = drift(&denies, &derive(RULES).unwrap());
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].id, LINEAR_HISTORY_DRIFT);
+        assert_eq!(found[0].rendered(), "+required");
+
+        // The projection claims a rule the host does not carry.
+        let mut claims = ci(&["final"], None);
+        claims.required_linear_history = Some(true);
+        let claimed = drift(
+            &claims,
+            &derive(r#"[{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"final"}]}}]"#).unwrap(),
+        );
+        assert_eq!(claimed.len(), 1);
+        assert_eq!(claimed[0].rendered(), "-required");
+
+        // Unclaimed is silent, whichever way the host answers.
+        assert!(drift(&ci(&["final"], None), &derive(RULES).unwrap()).is_empty());
     }
 
     #[test]

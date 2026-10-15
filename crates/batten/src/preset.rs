@@ -1906,6 +1906,30 @@ is the same operation with the one check that makes it safe.",
         }],
         patterns: &[],
     },
+    // CLOUD-2273: the call that makes the merge commit a linear trunk refuses at
+    // the fast-forward, refused where it is one command to undo. Its own bundle
+    // rather than a second `trunk-based` module, so each enabling row is named
+    // for the one class it raises.
+    Manifest {
+        name: "linear-history",
+        version: 1,
+        modules: &[PresetModule {
+            scope: RuleScope::MediatedCall,
+            provider: None,
+            pointer: "<preset:linear-history>/no-merge-into-branch.rego",
+            source: include_str!("policy/presets/linear-history/no-merge-into-branch.rego"),
+        }],
+        verdicts: &[VendoredVerdict {
+            id: "commit write loose",
+            gloss: "a merge or a merging pull wove a commit a linear trunk will refuse",
+            class: "A trunk requiring linear history refuses a merge commit at the \
+fast-forward, after CI has run. `git merge <ref>` writes one, and so does `git pull` without \
+`--rebase`; replaying the branch onto the base makes the same change as a line.",
+            routes: &[run("patch run first", "batten land replay <base>")],
+            applicability: crate::verdict::Applicability::Advice,
+        }],
+        patterns: &[],
+    },
     // EVERY GIT CALL BATTEN ALLOWS IS PUT TO NO ONE (CLOUD-2057). One module and
     // no verdicts: it never refuses, it only stops the host re-deciding a call
     // the engine already allowed. Destructive calls are left to the host.

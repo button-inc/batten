@@ -1233,6 +1233,12 @@ pub const VENDORED_DOCS: &[VendoredDoc] = &[
         act: &["`git push --force-with-lease=<ref>:<sha>`"],
         dont: &["use a bare `--force-with-lease`, which compares a stale tracking ref"],
     },
+    VendoredDoc {
+        id: "commit write loose",
+        why: Some("A linear trunk refuses a merge commit at the fast-forward, after CI"),
+        act: &["`batten land replay <base>`", "`git pull --rebase`"],
+        dont: &["merge the base into the branch"],
+    },
     // ── the unclassed emitters' classes ─────────────────────────────────────
     VendoredDoc {
         id: "input parse refused",

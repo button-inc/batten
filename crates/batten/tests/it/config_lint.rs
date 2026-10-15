@@ -1297,6 +1297,27 @@ fn a_projection_matching_the_host_is_silent_and_clean() {
     );
 }
 
+/// CLOUD-2273: `land linear` reads `ci.required_linear_history`, so a projection
+/// that DENIES the host's rule would leave the local gate weaker than the trunk —
+/// the drift in the dangerous direction, named by its key. Unclaimed is silent
+/// (the case above), and `land linear` reads it as the stricter answer.
+#[test]
+fn a_linear_history_rule_the_config_denies_is_drift() {
+    let dir = repo_with_config(
+        "ci-denies-linear",
+        &ci_config("required_linear_history = false\n"),
+    );
+    let output = lint_against(&dir, "rules-required-checks");
+    assert_eq!(output.status.code(), Some(2), "{}", stdout(&output));
+    let text = stdout(&output);
+    assert!(
+        text.contains("ci-required-linear-history-drift")
+            && text.contains("ci.required_linear_history")
+            && text.contains("+required"),
+        "{text:?}"
+    );
+}
+
 #[test]
 fn a_check_the_host_requires_and_the_config_lacks_is_drift() {
     let dir = repo_with_config(

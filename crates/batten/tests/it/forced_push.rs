@@ -175,6 +175,70 @@ fn the_explicit_expected_value_is_allowed() {
     allowed("git fetch origin && git push --force-with-lease=refs/heads/x:deadbeef origin x");
 }
 
+/// The decision under a tree enabling only the `linear-history` preset.
+///
+/// A FIXTURE, not the committed table, and the reason is the release lane: a
+/// consumer row naming a preset the pinned engine does not ship is a config that
+/// engine cannot load (`engine-pin-check`), so this repository enables the preset
+/// only once a release carries it. What this tier proves is unchanged — the
+/// compiled binary resolves the call and the module refuses it.
+fn linear_decision(fixture: &str, command: &str) -> String {
+    let dir = common::scratch_repo(fixture);
+    std::fs::write(
+        dir.join("batten.toml"),
+        "version = 1\n\n[[rule]]\nid = \"commit write loose\"\nkind = \"policy\"\n\
+         scope = \"mediated_call\"\npreset = \"linear-history\"\nseverity = \"deny\"\n",
+    )
+    .expect("write the fixture config");
+    common::stdout(&common::run_with_stdin(
+        &dir,
+        &["adjudicate", "--harness", "claude-code"],
+        &bash_payload(command),
+    ))
+}
+
+/// CLOUD-2273: the call that makes the merge commit the trunk refuses at the
+/// fast-forward. Refused by the `linear-history` preset's merge module, and the
+/// refusal names the replay — the one route that makes the same change as a line.
+#[test]
+fn a_merge_of_the_trunk_into_a_branch_is_refused() {
+    for command in [
+        "git merge origin/main",
+        "git pull origin main",
+        "cd /tmp && git merge origin/main",
+        "git -C /tmp pull",
+    ] {
+        let out = linear_decision("linear-history-refused", command);
+        assert!(
+            out.contains("\"deny\"") && out.contains("commit write loose"),
+            "the merge module must refuse `{command}`\n{out}"
+        );
+        assert!(
+            out.contains("batten land replay"),
+            "the refusal for `{command}` must name the replay\n{out}"
+        );
+    }
+}
+
+/// The anti-vacuity half: the linear spellings of the same two programs pass,
+/// so the module reads the flag rather than refusing the subcommand outright.
+#[test]
+fn a_fast_forward_merge_and_a_rebasing_pull_are_admitted() {
+    for command in [
+        "git merge --ff-only origin/main",
+        "git pull --rebase",
+        "git pull --rebase origin main",
+        "git merge --abort",
+        "git merge-base HEAD origin/main",
+    ] {
+        let out = linear_decision("linear-history-admitted", command);
+        assert!(
+            !out.contains("commit write loose"),
+            "the merge module must admit `{command}`\n{out}"
+        );
+    }
+}
+
 #[test]
 fn the_flag_named_in_prose_is_not_a_push() {
     // ANTI-VACUITY IN THE OTHER DIRECTION. A row keyed on the substring alone

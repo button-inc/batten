@@ -10159,17 +10159,30 @@ fn run_land_linear(
             return Ok(ExitCode::Internal); // the fetch did not complete
         }
     };
-    if !gitwrite::carries(root, &tip, "HEAD") {
-        writeln!(
-            err,
-            "::error:: land linear: HEAD is not rebased on the current {tracking} ({tip})"
-        )?;
-        return Ok(ExitCode::Violation);
-    }
-    // DESCENT IS NOT LINEARITY: the trunk refuses a merge commit, so a branch
+    // DESCENT IS NOT LINEARITY where the trunk refuses a merge commit: a branch
     // carrying one is refused here, before the matrix, not at the fast-forward.
-    match gitwrite::merges_in(root, &tip, "HEAD") {
-        None => {
+    // Whether it does is the trunk's own ruleset, as `[ci]` projects it
+    // (CLOUD-2273) — never a constant this verb assumes.
+    let requires_line = match land::requires_line(root) {
+        Ok(requires_line) => requires_line,
+        Err(error) => {
+            writeln!(
+                err,
+                "::error:: land linear: batten.toml will not load, so whether the trunk \
+                 refuses merge commits is unanswerable: {error:#}"
+            )?;
+            return Ok(ExitCode::Internal);
+        }
+    };
+    match land::linearity(root, &tip, "HEAD", requires_line) {
+        land::Linearity::Behind => {
+            writeln!(
+                err,
+                "::error:: land linear: HEAD is not rebased on the current {tracking} ({tip})"
+            )?;
+            Ok(ExitCode::Violation)
+        }
+        land::Linearity::Unwalkable => {
             writeln!(
                 err,
                 "::error:: land linear: {tracking}..HEAD will not walk, so its merge commits \
@@ -10177,7 +10190,7 @@ fn run_land_linear(
             )?;
             Ok(ExitCode::Internal)
         }
-        Some(merges) if !merges.is_empty() => {
+        land::Linearity::Woven(merges) => {
             writeln!(
                 err,
                 "::error:: land linear: HEAD carries {} merge commit(s) over {tracking}, which \
@@ -10191,7 +10204,7 @@ fn run_land_linear(
             )?;
             Ok(ExitCode::Violation)
         }
-        Some(_) => {
+        land::Linearity::Linear => {
             writeln!(out, "land linear: HEAD is built on {tracking} ({tip})")?;
             Ok(ExitCode::Success)
         }

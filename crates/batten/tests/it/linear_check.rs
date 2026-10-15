@@ -172,6 +172,67 @@ fn a_clone_with_no_landing_remote_is_could_not_look() {
     );
 }
 
+/// CLOUD-2273: the merge count is held to zero exactly when the trunk's ruleset
+/// requires a line. The recorded payload is the one `ci-drift` replays —
+/// `required_linear_history` among its rules — and the same merge-carrying range
+/// is judged under it and under the same rules without it.
+///
+/// AT THE LIBRARY TIER, and the reason is the transport: `land linear`'s fetch is
+/// HTTPS-only, so no local remote reaches the arm after it (this file's header).
+/// `land::linearity` is that arm, called by the verb on the tip it fetched.
+#[test]
+fn a_trunk_requiring_linear_history_refuses_a_merge_commit() {
+    let dir = common::scratch("linear-check-merge");
+    common::init_repo(&dir);
+    let git = |args: &[&str]| common::git_in(&dir, args);
+    git(&["config", "user.email", "t@example.com"]);
+    git(&["config", "user.name", "t"]);
+    git(&["config", "commit.gpgsign", "false"]);
+    git(&["commit", "-q", "--allow-empty", "-m", "one"]);
+    git(&["branch", "-M", "main"]);
+    git(&["checkout", "-q", "-b", "side"]);
+    git(&["commit", "-q", "--allow-empty", "-m", "side"]);
+    git(&["checkout", "-q", "-b", "feature", "main"]);
+    git(&["commit", "-q", "--allow-empty", "-m", "work"]);
+    git(&["merge", "-q", "--no-ff", "--no-edit", "side"]);
+
+    let recorded = std::fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/ci/rules-required-checks.json"),
+    )
+    .expect("the recorded rules payload");
+    let requiring = batten::ci::derive(&recorded).expect("the payload derives");
+    let without: serde_json::Value = serde_json::from_str(&recorded).expect("JSON");
+    let without = serde_json::Value::Array(
+        without
+            .as_array()
+            .expect("a rules array")
+            .iter()
+            .filter(|rule| rule["type"] != "required_linear_history")
+            .cloned()
+            .collect(),
+    );
+    let admitting = batten::ci::derive(&without.to_string()).expect("the payload derives");
+    assert!(requiring.required_linear_history && !admitting.required_linear_history);
+
+    let code = |requires: bool| {
+        match batten::land::linearity(&dir, "main", "HEAD", requires) {
+            batten::land::Linearity::Linear => batten::exit::ExitCode::Success,
+            batten::land::Linearity::Woven(_) | batten::land::Linearity::Behind => {
+                batten::exit::ExitCode::Violation
+            }
+            batten::land::Linearity::Unwalkable => batten::exit::ExitCode::Internal,
+        }
+        .code()
+    };
+    assert_eq!(code(requiring.required_linear_history), 2);
+    assert_eq!(code(admitting.required_linear_history), 0);
+    assert!(matches!(
+        batten::land::linearity(&dir, "main", "HEAD", true),
+        batten::land::Linearity::Woven(merges) if merges.len() == 1
+    ));
+}
+
 /// The receipt half, which stays the task's: minted only after the verb answered
 /// `0`, and a receipt that will not write fails the task. Both are what an argv
 /// sequence does — it stops at the first failing entry, with that entry's code —
