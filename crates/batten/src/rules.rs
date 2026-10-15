@@ -209,6 +209,8 @@ const RECEIPT_PERMITS: &[&str] = &[
     // call, which is the one a punt needs — the turn that punted is over, and no
     // projection of the next call carries it.
     "while_marker",
+    // CLOUD-2271: which target a marker must name before it counts.
+    "while_marker_scope",
     // The harm a punt row names, read directly: whether HEAD is on any remote.
     "while_unpushed",
     "trigger",
@@ -1725,6 +1727,23 @@ pub struct Rule {
     /// the selection alone".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub while_marker: Option<String>,
+    /// The call projections a [`Rule::while_marker`] must name before it counts
+    /// (CLOUD-2271).
+    ///
+    /// **A marker is filed in the clone the hook runs from, under a branch name,
+    /// and a branch name does not say which repository it belongs to.** One
+    /// session opening pull requests in two repositories from the same branch
+    /// name shared one `pr-open` marker, so the second repository's first pull
+    /// request was refused as a duplicate. With a scope, the projections' values
+    /// joined by `/` and wrapped in `/` must appear in the marker's recorded
+    /// body, which for `pr-open` is the pull request's url.
+    ///
+    /// **Unreadable counts.** A projection reading nothing, or a body that will
+    /// not read, leaves the marker counting, the direction
+    /// [`Rule::while_marker`]'s own unreadable arms take. Refused at load on a
+    /// row with no `while_marker`, where it would read nothing.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub while_marker_scope: Vec<crate::hook::Field>,
     /// Fire only while `HEAD` exists in this clone and on no remote-tracking ref
     /// (CLOUD-843).
     ///
@@ -3649,6 +3668,13 @@ pub const COLUMN_CENSUS: &[ColumnCensus] = &[
         ),
     },
     ColumnCensus {
+        field: "while_marker_scope",
+        declares: Declares::NotFactBearing(
+            "projections of the call compared against the marker's own body, read by \
+             the modifier that asked — no receipt is resolved, so nothing is acquired",
+        ),
+    },
+    ColumnCensus {
         field: "while_unpushed",
         declares: Declares::NotFactBearing(
             "whether HEAD is on a remote-tracking ref, walked by the modifier that \
@@ -4633,6 +4659,13 @@ impl Rule {
     /// the two ids and the permitted list, never a path from the receipt store.
     fn validate_marker(&self) -> anyhow::Result<()> {
         let Some(marker) = self.while_marker.as_deref() else {
+            if !self.while_marker_scope.is_empty() {
+                return Err(UsageError::raise(format!(
+                    "rule {}: `while_marker_scope` names the target a marker must carry, and \
+                     this row names no `while_marker` for it to read",
+                    self.id
+                )));
+            }
             return Ok(());
         };
         if crate::land::BRANCH_KEYED_RECEIPTS.contains(&marker) {
@@ -15276,6 +15309,7 @@ mod tests {
             when_present: None,
             when_value: None,
             while_marker: None,
+            while_marker_scope: Vec::new(),
             while_unpushed: false,
             key_from: None,
             key_base: None,

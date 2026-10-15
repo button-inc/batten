@@ -179,6 +179,90 @@ fn an_update_that_does_not_close_leaves_the_marker() {
     assert_eq!(refusal.status.code(), Some(2), "{}", stderr(&refusal));
 }
 
+/// The committed one-PR row, with the target scope CLOUD-2271 adds.
+///
+/// Applied to the staged config rather than committed, for `CLEAR_ROW`'s old
+/// reason: the pinned release refuses a column it does not know, so the row in
+/// `batten.toml` gains it on the pin that carries this engine.
+fn repo_scoped(name: &str) -> PathBuf {
+    let committed = include_str!("../../../../batten.toml");
+    let row = "while_marker = \"pr-open\"\n";
+    assert!(
+        committed.contains(row),
+        "the one-PR row still reads the marker"
+    );
+    let scoped = committed.replacen(
+        row,
+        "while_marker = \"pr-open\"\nwhile_marker_scope = [\"input-owner\", \"input-repo\"]\n",
+        1,
+    );
+    let dir = repo(name);
+    std::fs::write(dir.join("batten.toml"), scoped).expect("stage the scoped config");
+    dir
+}
+
+/// `create_pull_request` aimed at `owner/repo`, from the probe branch.
+fn open_a_pr_in(dir: &Path, owner: &str, repo: &str) -> std::process::Output {
+    run_with_stdin(
+        dir,
+        &["adjudicate", "--harness", "exit-code"],
+        &format!(
+            "{{\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"{TOOL}\",\
+             \"tool_input\":{{\"owner\":\"{owner}\",\"repo\":\"{repo}\",\"title\":\"t\",\
+             \"head\":\"{BRANCH}\",\"base\":\"main\"}}}}"
+        ),
+    )
+}
+
+/// A MARKER FOR ANOTHER REPOSITORY ADMITS THE PR (CLOUD-2271). Measured: the
+/// marker minted for one repository's pull request refused another repository's
+/// first, because both sat on a branch of the same name in one clone.
+///
+/// MUTANT: `marker-scope-ignored` counts every marker whatever it names, and
+/// this pull request is refused again.
+#[test]
+fn a_marker_for_another_repository_admits_the_pr() {
+    let dir = repo_scoped("one-pr-other-repo");
+    plant(&dir);
+    let decided = open_a_pr_in(&dir, "c", "r");
+    assert!(
+        !stderr(&decided).contains("review open twice"),
+        "a marker for o/r does not refuse c/r: {}",
+        stderr(&decided)
+    );
+    // `o/r2` shares a prefix with the marker's `o/r`, and must not match it.
+    let decided = open_a_pr_in(&dir, "o", "r2");
+    assert!(
+        !stderr(&decided).contains("review open twice"),
+        "o/r2 is not o/r: {}",
+        stderr(&decided)
+    );
+}
+
+/// ANTI-VACUITY for the scope: the same repository is still refused.
+#[test]
+fn a_second_pr_in_the_same_repository_is_still_refused() {
+    let dir = repo_scoped("one-pr-same-repo");
+    plant(&dir);
+    let refusal = open_a_pr_in(&dir, "o", "r");
+    assert_eq!(refusal.status.code(), Some(2), "{}", stderr(&refusal));
+    assert!(
+        crate::common::refusing_rule(&stderr(&refusal)).as_deref() == Some("review open twice"),
+        "{}",
+        stderr(&refusal)
+    );
+}
+
+/// A call naming no repository cannot be told apart from the marker's own, so
+/// the marker counts: unreadable fails closed.
+#[test]
+fn a_call_naming_no_repository_is_still_refused() {
+    let dir = repo_scoped("one-pr-no-repo");
+    plant(&dir);
+    let refusal = open_a_pr(&dir);
+    assert_eq!(refusal.status.code(), Some(2), "{}", stderr(&refusal));
+}
+
 /// ANTI-VACUITY: a branch with no open PR is not refused, so the row is not a
 /// blanket ban on opening pull requests.
 #[test]

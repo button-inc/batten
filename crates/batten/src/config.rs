@@ -5062,6 +5062,7 @@ fn default_rules() -> Vec<Rule> {
         when_present: None,
         when_value: None,
         while_marker: None,
+        while_marker_scope: Vec::new(),
         while_unpushed: false,
         key_from: None,
         key_base: None,

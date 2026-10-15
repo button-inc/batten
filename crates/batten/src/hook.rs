@@ -3019,6 +3019,22 @@ pub enum Field {
     ///
     /// APPENDED, never inserted, for the reason stated on [`Field::Prompt`].
     InputDraft,
+    /// The `owner` a structured forge call targets (CLOUD-2271).
+    ///
+    /// Read for [`crate::rules::Rule::while_marker_scope`]: a branch-keyed marker
+    /// lives in the clone the hook runs from, and one session can open pull
+    /// requests in several repositories from the same branch name. Without the
+    /// target, a marker minted for one repository refused the next repository's
+    /// first pull request. An identifier, never prose, through `as_str` like
+    /// [`Field::InputId`].
+    ///
+    /// APPENDED, never inserted, for the reason stated on [`Field::Prompt`].
+    InputOwner,
+    /// The `repo` a structured forge call targets (CLOUD-2271), on
+    /// [`Field::InputOwner`]'s argument.
+    ///
+    /// APPENDED, never inserted, for the reason stated on [`Field::Prompt`].
+    InputRepo,
 }
 
 impl Field {
@@ -3078,6 +3094,16 @@ impl Field {
                 .get("draft")
                 .and_then(Value::as_bool)
                 .map(|flag| flag.to_string()),
+            Field::InputOwner => envelope
+                .input
+                .get("owner")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned),
+            Field::InputRepo => envelope
+                .input
+                .get("repo")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned),
         };
         value.filter(|text| !text.is_empty())
     }
@@ -5498,7 +5524,7 @@ fn modifier_admits(rule: &Rule, envelope: &Envelope) -> bool {
     // direction — a could-not-look silently DROPPING the row — would turn a
     // refusal off on precisely the checkouts least able to notice.
     if let Some(marker) = rule.while_marker.as_deref()
-        && !marker_present(marker)
+        && !marker_present(marker, marker_scope(rule, envelope).as_deref())
     {
         return false;
     }
@@ -5532,7 +5558,13 @@ fn head_unpushed() -> bool {
 /// [`crate::land::retire_branch`] sweeps and `unlanded_pointer` writes. One
 /// spelling, three readers — a second derivation here is the drift
 /// `BRANCH_KEYED_RECEIPTS`' own header records having already been caught once.
-fn marker_present(marker: &str) -> bool {
+///
+/// **A SCOPED MARKER COUNTS ONLY FOR ITS OWN TARGET (CLOUD-2271).** The marker
+/// lives in the clone the hook runs from, so a branch name shared across
+/// repositories shared one marker: `pr-open` minted for one repository's pull
+/// request refused another repository's first. With a `scope`, the marker counts
+/// only when its recorded body names it.
+fn marker_present(marker: &str, scope: Option<&str>) -> bool {
     let root = std::path::Path::new(".");
     let Ok(git_dir) = crate::git::git_dir(root) else {
         return true;
@@ -5540,7 +5572,39 @@ fn marker_present(marker: &str) -> bool {
     let Ok(Some(branch)) = crate::git::current_branch(root) else {
         return true;
     };
-    marker_path(&git_dir, marker, &branch).exists()
+    let path = marker_path(&git_dir, marker, &branch);
+    marker_path(&git_dir, marker, &branch).exists() && marker_names(&path, scope)
+}
+
+/// The `/`-joined target a row's [`Rule::while_marker_scope`] reads from this
+/// call, wrapped in `/` so `o/r` never matches `o/r2`.
+///
+/// `None` when the row declares no scope, AND when any projection reads nothing:
+/// a call that does not say which target it names cannot be told apart from the
+/// marker's own target, so the marker keeps counting. Could-not-look selects,
+/// the direction every arm of [`marker_present`] takes.
+fn marker_scope(rule: &Rule, envelope: &Envelope) -> Option<String> {
+    if rule.while_marker_scope.is_empty() {
+        return None;
+    }
+    let parts: Option<Vec<String>> = rule
+        .while_marker_scope
+        .iter()
+        .map(|field| field.read(envelope))
+        .collect();
+    parts.map(|parts| format!("/{}/", parts.join("/")))
+}
+
+/// Whether the marker at `path` names `scope`, read from its recorded body.
+///
+/// No scope names everything. A body that will not read counts, for
+/// [`marker_scope`]'s reason.
+//MUTANT marker-scope-ignored|s@^        Some(scope) => std::fs::read_to_string(path).map_or(true, |body| body.contains(scope)),$@        Some(_) => true,@|a_marker_for_another_repository_admits_the_pr
+fn marker_names(path: &std::path::Path, scope: Option<&str>) -> bool {
+    match scope {
+        None => true,
+        Some(scope) => std::fs::read_to_string(path).map_or(true, |body| body.contains(scope)),
+    }
 }
 
 /// Where a branch-keyed marker lives.
@@ -11671,6 +11735,7 @@ mod tests {
             when_present: None,
             when_value: None,
             while_marker: None,
+            while_marker_scope: Vec::new(),
             while_unpushed: false,
             key_from: None,
             key_base: None,
