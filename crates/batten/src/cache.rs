@@ -46,8 +46,12 @@ const CACHEDIR_TAG: &str = "Signature: 8a477f597d28d172789f06886806bc55\n\
      # This file is a cache directory tag created by batten.\n\
      # For information about cache directory tags, see https://bford.info/cachedir/\n";
 
-/// How many binaries' partitions one cache directory keeps.
-const KEPT_PARTITIONS: usize = 4;
+/// How many binaries' partitions one cache directory keeps, least recently
+/// used evicted first. Eight, not fewer: a binary in use refreshes its use
+/// each minute ([`USE_REFRESH`]), so the installed hook is evicted only by
+/// eight rebuilds between two of its calls — and then costs one cold call
+/// (code review of CLOUD-2315).
+const KEPT_PARTITIONS: usize = 8;
 
 /// The running binary's cache directory under `parent`, or `None` when it
 /// cannot be created.
@@ -65,7 +69,8 @@ const KEPT_PARTITIONS: usize = 4;
 ///
 /// The warm path pays one `stat`. A new partition is the rare path: it tags the
 /// directory for backup tools ([`CACHEDIR_TAG`]) and [`prune`]s, so the
-/// directory holds at most [`KEPT_PARTITIONS`] binaries.
+/// directory holds at most [`KEPT_PARTITIONS`] binaries, least recently used
+/// evicted first.
 //MUTANT partitions-never-pruned|s@^    prune(\&root, name);$@@|a_new_partition_keeps_its_neighbours_up_to_the_bound
 #[must_use]
 pub fn root_under(parent: &Path) -> Option<PathBuf> {
@@ -89,8 +94,8 @@ pub fn root_under(parent: &Path) -> Option<PathBuf> {
     Some(own)
 }
 
-/// How stale a partition's use time may grow before a hit refreshes it: well
-/// inside [`IN_USE`], so a binary in use reads as in use to every prune (code
+/// How stale a partition's use time may grow before a hit refreshes it: short,
+/// so a binary in use ranks among the most recently used to every prune (code
 /// review of CLOUD-2315 — a day let four rebuilds evict the installed hook). The
 /// cost is one `utimensat` a minute.
 const USE_REFRESH: std::time::Duration = std::time::Duration::from_mins(1);
@@ -131,13 +136,12 @@ fn is_partition(name: &str) -> bool {
     name.len() == 16 && name.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
-/// Keep `own` and the newest partitions beside it up to [`KEPT_PARTITIONS`],
-/// newest by last use ([`refresh_use`]); remove the rest, and anything that is not a
-/// partition — the flat layout entries were written in before partitions
-/// existed. Best-effort: another process pruning the same directory, or one
-/// writing into a partition removed here, costs a miss and never a wrong answer.
-//MUTANT in-use-partition-pruned|s@^        if rank < IN_USE_PARTITIONS - 1 \&\& made.elapsed().is_ok_and(\x7cage\x7c age < IN_USE) {$@        if false {@|a_partition_in_use_is_kept_past_the_bound
-//MUTANT in-use-partitions-unbounded|s@^        if rank < IN_USE_PARTITIONS - 1 \&\& made@        if made@|a_partition_in_use_is_kept_past_the_bound
+/// Keep `own` and the most recently used partitions beside it up to
+/// [`KEPT_PARTITIONS`], ranked by last use ([`refresh_use`]): least recently
+/// used goes first. Remove the rest, and anything that is not a partition — the
+/// flat layout entries were written in before partitions existed. Best-effort:
+/// another process pruning the same directory, or one writing into a partition
+/// removed here, costs a miss and never a wrong answer.
 fn prune(root: &Path, own: &str) {
     let Ok(entries) = std::fs::read_dir(root) else {
         return;
@@ -165,25 +169,10 @@ fn prune(root: &Path, own: &str) {
         partitions.push((made, path));
     }
     partitions.sort_by_key(|(made, _)| std::cmp::Reverse(*made));
-    for (rank, (made, path)) in partitions.into_iter().enumerate().skip(KEPT_PARTITIONS - 1) {
-        if rank < IN_USE_PARTITIONS - 1 && made.elapsed().is_ok_and(|age| age < IN_USE) {
-            continue;
-        }
+    for (_, path) in partitions.into_iter().skip(KEPT_PARTITIONS - 1) {
         let _ = std::fs::remove_dir_all(path);
     }
 }
-
-/// A partition used this recently is in use, and [`prune`] keeps it past
-/// [`KEPT_PARTITIONS`]: a burst of rebuilds — a mutation sweep, a test loop —
-/// must not evict the installed hook between two of its calls (code review of
-/// CLOUD-2315). It exceeds [`USE_REFRESH`] by far, so a binary in use is always
-/// inside it.
-const IN_USE: std::time::Duration = std::time::Duration::from_hours(1);
-
-/// The hard bound, in use or not: a sweep building hundreds of binaries in an
-/// hour keeps this many, newest first. A binary in use refreshes each minute,
-/// and a rebuild takes seconds at least, so the installed hook stays inside it.
-const IN_USE_PARTITIONS: usize = 16;
 
 /// The key for an entry: the running binary, a format tag the caller bumps when
 /// its encoding changes, and every input the value is a function of.
@@ -672,8 +661,9 @@ mod tests {
         let dir = scratch("partition-use");
         let own = root_under(&dir).expect("own partition");
         let root = own.parent().expect("the partition's directory");
-        let others = ["0000000000000002", "0000000000000003", "0000000000000004"];
-        for (step, name) in (2..).zip(others) {
+        // Enough others that with `own` the directory is one past the bound.
+        let others = partition_names(KEPT_PARTITIONS - 1);
+        for (step, name) in (2..).zip(&others) {
             std::fs::create_dir_all(root.join(name)).expect("partition");
             age(&root.join(name), step);
         }
@@ -682,34 +672,14 @@ mod tests {
         prune(root, "ffffffffffffffff");
         assert!(own.is_dir(), "the partition in use survives a later prune");
         assert!(
-            !root.join(others[0]).exists(),
+            !root.join(&others[0]).exists(),
             "the least recently used partition goes instead"
         );
     }
 
-    /// Partitions used within the hour are in use, and a new partition's prune
-    /// keeps them past [`KEPT_PARTITIONS`] — up to the hard bound, which holds
-    /// however many rebuilds an hour sees.
-    #[test]
-    fn a_partition_in_use_is_kept_past_the_bound() {
-        let dir = scratch("partitions-in-use");
-        let root = dir.join("cache");
-        let others: Vec<String> = (1..=IN_USE_PARTITIONS + 4)
-            .map(|n| format!("{n:016x}"))
-            .collect();
-        for name in &others {
-            std::fs::create_dir_all(root.join(name)).expect("partition");
-        }
-        let _ = root_under(&dir).expect("root");
-        let kept = others
-            .iter()
-            .filter(|name| root.join(name).is_dir())
-            .count();
-        assert_eq!(
-            kept,
-            IN_USE_PARTITIONS - 1,
-            "in use is kept past the bound of {KEPT_PARTITIONS}, never past {IN_USE_PARTITIONS}"
-        );
+    /// `count` partition names, none of them this binary's.
+    fn partition_names(count: usize) -> Vec<String> {
+        (1..=count).map(|n| format!("{n:016x}")).collect()
     }
 
     /// A file whose coarse change time reads a moment BEFORE the entry's fine
@@ -744,21 +714,15 @@ mod tests {
     ///
     /// Compiled everywhere; AGED on unix only. Ageing a directory opens it as a
     /// file, which Windows refuses without a backup-semantics flag `std` does not
-    /// expose, so there the partitions are all fresh — in use, and kept past the
-    /// bound ([`a_partition_in_use_is_kept_past_the_bound`]) — and the case holds
-    /// the flat layout's retirement alone.
+    /// expose, so there the partitions share a creation time and the case holds
+    /// the bound alone — which one goes is then the platform's tie.
     #[test]
     fn a_new_partition_keeps_its_neighbours_up_to_the_bound() {
         let aged = cfg!(unix);
         let dir = scratch("partitions");
         let root = dir.join("cache");
-        let others = [
-            "0000000000000001",
-            "0000000000000002",
-            "0000000000000003",
-            "0000000000000004",
-        ];
-        for (step, name) in (1..).zip(others) {
+        let others = partition_names(KEPT_PARTITIONS);
+        for (step, name) in (1..).zip(&others) {
             let path = root.join(name);
             std::fs::create_dir_all(&path).expect("partition");
             if aged {
@@ -773,14 +737,14 @@ mod tests {
         assert!(own.is_dir());
         assert!(!root.join("policy").exists(), "the flat layout is retired");
         assert!(!root.join("epoch").exists(), "the flat layout is retired");
+        let kept = others
+            .iter()
+            .filter(|name| root.join(name).is_dir())
+            .count();
+        assert_eq!(kept, KEPT_PARTITIONS - 1, "own partition plus the bound");
         if aged {
-            let kept = others
-                .iter()
-                .filter(|name| root.join(name).is_dir())
-                .count();
-            assert_eq!(kept, KEPT_PARTITIONS - 1, "own partition plus the bound");
             assert!(
-                !root.join(others[0]).exists(),
+                !root.join(&others[0]).exists(),
                 "the oldest partition past the bound goes"
             );
         }
