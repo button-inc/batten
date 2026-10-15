@@ -51,7 +51,8 @@ const CACHEDIR_TAG: &str = "Signature: 8a477f597d28d172789f06886806bc55\n\
 /// use time at most a minute behind its last call ([`USE_REFRESH`]), so the
 /// installed hook is evicted only by eight rebuilds since about then — and
 /// then costs one cold call (code review of CLOUD-2315). On Windows nothing
-/// refreshes, so the rank is the partition's last write.
+/// refreshes, so the rank is the partition directory's own modification time:
+/// its creation, or the last entry written straight into it (CLOUD-2361).
 const KEPT_PARTITIONS: usize = 8;
 
 /// The running binary's cache directory under `parent`, or `None` when it
@@ -144,7 +145,7 @@ fn is_partition(name: &str) -> bool {
 /// another process pruning the same directory, or one writing into a partition
 /// removed here, costs a miss and never a wrong answer.
 //MUTANT partition-bound-off-by-one|s@^    for (_, path) in partitions.into_iter().skip(KEPT_PARTITIONS - 1) {$@    for (_, path) in partitions.into_iter().skip(KEPT_PARTITIONS) {@|a_new_partition_keeps_its_neighbours_up_to_the_bound
-//MUTANT partitions-evicted-most-recent-first|s@std::cmp::Reverse(\*made)@*made@|a_partition_in_use_is_refreshed_and_survives_the_prune
+//MUTANT partitions-evicted-most-recent-first|s@^    partitions.sort_by_key(\x7c(made, _)\x7c std::cmp::Reverse(\*made));$@    partitions.sort_by_key(\x7c(made, _)\x7c *made);@|a_partition_in_use_is_refreshed_and_survives_the_prune
 fn prune(root: &Path, own: &str) {
     let Ok(entries) = std::fs::read_dir(root) else {
         return;
