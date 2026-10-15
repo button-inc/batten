@@ -221,9 +221,10 @@ pub const VENDORED_DOCS: &[VendoredDoc] = &[
         why: Some("A stop is a completion claim, and the turn's facts say the work is not landed"),
         act: &[
             "finish what the line names; for unlanded work run `mise run land`",
-            "or say in words what blocks it",
+            "or file what blocks it on its tracker row",
         ],
         dont: &[
+            "reply to this notice: it is a hook, not the operator",
             "re-declare the work finished",
             "end the turn again unchanged",
         ],
@@ -1294,10 +1295,13 @@ pub const VENDORED_DOCS: &[VendoredDoc] = &[
         id: "commit ship missing",
         why: Some("Committed work that never lands is invisible to everyone and lost on reclaim"),
         act: &[
-            "land it with `batten land lap`",
-            "or say in the turn what blocks it",
+            "land it with `batten land lap`, backgrounded",
+            "or file what blocks it on its tracker row",
         ],
-        dont: &["end the turn calling unlanded work done"],
+        dont: &[
+            "reply to this notice: it is a hook, not the operator",
+            "end the turn calling unlanded work done",
+        ],
     },
     VendoredDoc {
         id: "issue list unclear",
@@ -1530,6 +1534,13 @@ pub fn violation(doc: &Doc, rendered: &str) -> Option<String> {
             return Some(format!("`doc.{name}` has an empty item"));
         }
     }
+    if doc.act.iter().any(|item| asks_for_words(item)) {
+        return Some(
+            "a `doc.do` item asks for words in the turn; name an action, since a hook's \
+             reader answering it in chat is talking to nobody"
+                .to_owned(),
+        );
+    }
     let sections = doc.why.iter().chain(&doc.act).chain(&doc.dont);
     for text in sections {
         if cites_issue_key(text) {
@@ -1541,6 +1552,26 @@ pub fn violation(doc: &Doc, rendered: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// Whether a `do` item asks its reader to SAY something rather than do it.
+///
+/// A doc rides a hook, and a hook's reader is the agent, not the operator. At a
+/// Stop the remedy is a forced turn, so "or say in the turn what blocks it" had
+/// the agent writing status lines to the hook as if it were the person: a
+/// conversation the operator was never part of, repeated on every stop. The
+/// alternative to an action is another action, such as filing the blocker.
+//MUTANT-SUITE crates/batten/src/doc.rs
+//MUTANT words-remedy-loads|s@^    if doc.act.iter().any(\x7citem\x7c asks_for_words(item)) {$@    if false {@|a_do_item_asking_for_words_does_not_load
+fn asks_for_words(item: &str) -> bool {
+    let item = item.trim().to_lowercase();
+    let item = item.strip_prefix("or ").unwrap_or(&item);
+    ["say ", "tell ", "explain "]
+        .iter()
+        .any(|verb| item.starts_with(verb))
+        || [" in the turn", " in words", " in chat"]
+            .iter()
+            .any(|place| item.contains(place))
 }
 
 /// Whether `text` holds no sentence boundary before its end: a terminator, then
@@ -1596,6 +1627,38 @@ mod tests {
         assert!(violation(&two, "short").is_some());
         let one = doc(Some("One thing, e.g. this."), &["x"], &[]);
         assert_eq!(violation(&one, "short"), None);
+    }
+
+    #[test]
+    fn a_do_item_asking_for_words_does_not_load() {
+        for words in [
+            "or say in the turn what blocks it",
+            "say in words what blocks it",
+            "explain the failure",
+            "report the blocker in chat",
+        ] {
+            let asking = doc(None, &["land it", words], &[]);
+            assert!(violation(&asking, "short").is_some(), "{words}");
+        }
+        let acting = doc(
+            None,
+            &["land it", "or file what blocks it on its tracker row"],
+            &[],
+        );
+        assert_eq!(violation(&acting, "short"), None);
+    }
+
+    #[test]
+    fn every_vendored_doc_names_actions_only() {
+        for vendored in VENDORED_DOCS {
+            let asking: Vec<&str> = vendored
+                .act
+                .iter()
+                .copied()
+                .filter(|item| asks_for_words(item))
+                .collect();
+            assert!(asking.is_empty(), "{}: {asking:?}", vendored.id);
+        }
     }
 
     #[test]
