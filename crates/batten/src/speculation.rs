@@ -459,35 +459,51 @@ pub fn carries(dir: &Path, candidate: &str, tip: &str) -> bool {
 ///
 /// [`disarm`] is the bet settling; until then the unwind is armed.
 ///
-/// **THE REFS GO ONLY WITH A RESET THAT HAPPENED.** A reset refused (another git
-/// process holding the index lock) leaves the borrowed range in place, and
-/// [`BASE_REF`] is then the only record of it, which [`recover`] reads.
+/// **ONLY THE TREE THE BET LEFT IS UNWOUND.** `land` runs in the background
+/// while its operator keeps working in the same checkout, so a branch that has
+/// moved past `bet_head`, or is no longer checked out, holds work the bet never
+/// saw; resetting it would discard that work. Such a tree is left as it stands,
+/// with its refs, for [`recover`].
 ///
-/// **A PUBLISHED BET IS LEFT TO THE NEXT LAP**: the push [`disarm`]s it. Its
-/// unwind owes the remote a correction too, which `land`'s own settle makes from
-/// the ref; a local reset that deleted it would leave the remote carrying the
-/// range with nothing on disk pointing at it.
+/// **THE REFS GO ONLY WITH A RESET THAT HAPPENED.** A reset that fails part way
+/// (the ref moved, the worktree refused, say on another process's index lock) has
+/// its ref put back on `bet_head`, so the branch and [`BASE_REF`] still agree and
+/// [`recover`] can adopt the bet.
 //MUTANT-SUITE crates/batten/tests/it/land_signal.rs
-//MUTANT signal-leaves-borrowed-range|s@^        if crate::gitwrite::reset_hard(&at, &full, &unwind_to).is_ok() {$@        if false {@|a_sigterm_mid_speculation_leaves_the_branch_on_its_own_head
-//MUTANT signal-keeps-base-ref|s@^        let _ = crate::gitwrite::delete_ref(&at, BASE_REF);$@@|a_sigterm_mid_speculation_leaves_the_branch_on_its_own_head
-pub fn arm(root: &Path, branch: &str, undo: &str) {
-    let (at, full, unwind_to) = (
+//MUTANT signal-leaves-borrowed-range|s@^            Ok(_) => {$@            Ok(_) if false => {@|a_sigterm_mid_speculation_leaves_the_branch_on_its_own_head
+//MUTANT signal-keeps-base-ref|s@^                let _ = crate::gitwrite::delete_ref(&at, BASE_REF);$@@|a_sigterm_mid_speculation_leaves_the_branch_on_its_own_head
+//MUTANT signal-keeps-live-ref|s@^                let _ = crate::gitwrite::delete_ref(&at, LIVE_REF);$@@|a_sigterm_mid_speculation_leaves_the_branch_on_its_own_head
+//MUTANT signal-discards-new-work|s@^        if !untouched {$@        if false {@|a_sigterm_after_new_work_leaves_the_branch_alone
+pub fn arm(root: &Path, branch: &str, undo: &str, bet_head: &str) {
+    let (at, name, full, unwind_to, left) = (
         root.to_path_buf(),
+        branch.to_owned(),
         format!("refs/heads/{branch}"),
         undo.to_owned(),
+        bet_head.to_owned(),
     );
     crate::exec::on_terminate(move || {
-        if crate::gitwrite::reset_hard(&at, &full, &unwind_to).is_ok() {
-            let _ = crate::gitwrite::delete_ref(&at, BASE_REF);
-            let _ = crate::gitwrite::delete_ref(&at, LIVE_REF);
+        let checked_out = crate::git::current_branch(&at).ok().flatten().as_deref() == Some(&*name);
+        let tip = crate::git::resolve_ref(&at, &full).ok().flatten();
+        let untouched = checked_out && tip.as_deref() == Some(&*left);
+        if !untouched {
+            return;
+        }
+        match crate::gitwrite::reset_hard(&at, &full, &unwind_to) {
+            Ok(_) => {
+                let _ = crate::gitwrite::delete_ref(&at, BASE_REF);
+                let _ = crate::gitwrite::delete_ref(&at, LIVE_REF);
+            }
+            Err(_) => {
+                let _ = crate::gitwrite::set_ref(&at, &full, &left);
+            }
         }
     });
     #[cfg(unix)]
     watch_signals();
 }
 
-/// Nothing is left for a signal to unwind: the bet settled, or its range was
-/// pushed and only the next lap's settle can correct the remote.
+/// The bet settled, so a signal has nothing left to unwind.
 //MUTANT-SUITE crates/batten/tests/it/land_signal.rs
 //MUTANT disarm-inert|s@^    crate::exec::clear_on_terminate();$@@|a_sigterm_after_the_bet_settled_leaves_the_branch_alone
 pub fn disarm() {

@@ -33,7 +33,7 @@ use std::os::unix::process::ExitStatusExt as _;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
-use batten::speculation::{self, BASE_REF, Bet};
+use batten::speculation::{self, BASE_REF, Bet, LIVE_REF};
 
 /// The repository the child arms over.
 const CHILD: &str = "BATTEN_LAND_SIGNAL_CHILD";
@@ -45,7 +45,8 @@ const SETTLED: &str = "BATTEN_LAND_SIGNAL_SETTLED";
 const ARMED: &str = "BATTEN-UNWIND-ARMED";
 
 /// A branch `work` whose own head is `own`, then carrying one borrowed commit,
-/// with the bet recorded under [`BASE_REF`] — the tree `place_the_bet` leaves.
+/// with the bet recorded under [`BASE_REF`] and the holder's head under
+/// [`LIVE_REF`] — the tree `place_the_bet` leaves.
 fn speculating(name: &str) -> (PathBuf, String, String) {
     let dir = common::Fixture::at(common::scratch(name).join("repo"))
         .config("version = 1\n")
@@ -64,16 +65,17 @@ fn speculating(name: &str) -> (PathBuf, String, String) {
         .trim()
         .to_owned();
     common::git_in(&dir, &["update-ref", BASE_REF, &borrowed]);
+    common::git_in(&dir, &["update-ref", LIVE_REF, &borrowed]);
     (dir, own, borrowed)
 }
 
-/// Run the armed child over `dir`, SIGTERM it once it is armed, and return the
-/// signal it died of.
+/// Run the armed child over `dir`, run `meanwhile` once it is armed, then SIGTERM
+/// it and return the signal it died of.
 #[expect(
     clippy::disallowed_types,
     reason = "stays, and test-only: the subject is a process dying of a signal, so the child is spawned and signalled as the process it is"
 )]
-fn terminated(dir: &Path, undo: &str, settled: bool) -> Option<i32> {
+fn terminated(dir: &Path, undo: &str, settled: bool, meanwhile: impl FnOnce()) -> Option<i32> {
     let mut child = std::process::Command::new(std::env::current_exe().expect("this test binary"));
     child
         .args([
@@ -102,6 +104,7 @@ fn terminated(dir: &Path, undo: &str, settled: bool) -> Option<i32> {
         armed,
         "the child reports it is armed before it is signalled"
     );
+    meanwhile();
     let sent = std::process::Command::new("kill")
         .args(["-TERM", &child.id().to_string()])
         .status()
@@ -120,7 +123,11 @@ fn terminated(dir: &Path, undo: &str, settled: bool) -> Option<i32> {
 fn armed_child() {
     let dir = std::env::var(CHILD).expect("spawned by a case below, which names the repository");
     let undo = std::env::var(UNDO).expect("the head to unwind to");
-    speculation::arm(Path::new(&dir), "work", &undo);
+    let dir = Path::new(&dir);
+    let bet_head = common::git_in(dir, &["rev-parse", "HEAD"])
+        .trim()
+        .to_owned();
+    speculation::arm(dir, "work", &undo, &bet_head);
     if std::env::var_os(SETTLED).is_some() {
         speculation::disarm();
     }
@@ -136,24 +143,54 @@ fn armed_child() {
 /// **A SIGTERM MID-SPECULATION LEAVES THE BRANCH ON ITS OWN HEAD.**
 ///
 /// Both halves of the unwind are asserted: the branch back on its own head, and
-/// the bet's ref gone, so the next `land` does not adopt a bet already undone.
+/// both bet refs gone, so the next `land` does not adopt a bet already undone.
 /// The process still dies of the signal: the unwind is a step on the way out,
 /// never a reason to stay.
 #[test]
 fn a_sigterm_mid_speculation_leaves_the_branch_on_its_own_head() {
     let (dir, own, _) = speculating("land-signal-unwinds");
-    let died = terminated(&dir, &own, false);
+    let died = terminated(&dir, &own, false, || {});
     assert_eq!(died, Some(15), "the child still dies of SIGTERM");
     assert_eq!(
         common::git_in(&dir, &["rev-parse", "refs/heads/work"]).trim(),
         own,
         "the borrowed commit is unwound off the branch"
     );
+    for reference in [BASE_REF, LIVE_REF] {
+        assert!(
+            common::git_in(&dir, &["for-each-ref", reference])
+                .trim()
+                .is_empty(),
+            "{reference} goes with the unwind"
+        );
+    }
+}
+
+/// **AND WORK MADE AFTER THE BET IS NEVER UNWOUND.**
+///
+/// `land` runs in the background while its operator keeps committing in the same
+/// checkout. A branch that moved past the head the bet left holds work the bet
+/// never saw, so the signal leaves it, and its bet ref, for the next lap.
+#[test]
+fn a_sigterm_after_new_work_leaves_the_branch_alone() {
+    let (dir, own, _) = speculating("land-signal-new-work");
+    let died = terminated(&dir, &own, false, || {
+        std::fs::write(dir.join("later.txt"), "made after the bet\n").expect("write");
+        common::git_in(&dir, &["add", "-A"]);
+        common::git_in(&dir, &["commit", "-q", "-m", "later"]);
+    });
+    assert_eq!(died, Some(15), "the child still dies of SIGTERM");
     assert!(
-        common::git_in(&dir, &["for-each-ref", BASE_REF])
+        dir.join("later.txt").exists()
+            && common::git_in(&dir, &["log", "-1", "--format=%s", "refs/heads/work"]).trim()
+                == "later",
+        "the commit made after the bet survives the signal"
+    );
+    assert!(
+        !common::git_in(&dir, &["for-each-ref", BASE_REF])
             .trim()
             .is_empty(),
-        "the bet's ref goes with the unwind"
+        "and the bet stays recorded for the next lap"
     );
 }
 
@@ -165,7 +202,7 @@ fn a_sigterm_mid_speculation_leaves_the_branch_on_its_own_head() {
 #[test]
 fn a_sigterm_after_the_bet_settled_leaves_the_branch_alone() {
     let (dir, own, borrowed) = speculating("land-signal-settled");
-    let died = terminated(&dir, &own, true);
+    let died = terminated(&dir, &own, true, || {});
     assert_eq!(
         died,
         Some(15),

@@ -1566,9 +1566,9 @@ pub fn violation(doc: &Doc, rendered: &str) -> Option<String> {
 fn asks_for_words(item: &str) -> bool {
     let item = item.trim().to_lowercase();
     let item = item.strip_prefix("or ").unwrap_or(&item);
-    ["say ", "tell ", "explain "]
-        .iter()
-        .any(|verb| item.starts_with(verb))
+    // NARROW ON PURPOSE: `violation` loads consumer docs too, and "tell the forge
+    // to retry" is an action. Only the unambiguous forms are refused.
+    item.starts_with("say ")
         || [" in the turn", " in words", " in chat"]
             .iter()
             .any(|place| item.contains(place))
@@ -1634,18 +1634,20 @@ mod tests {
         for words in [
             "or say in the turn what blocks it",
             "say in words what blocks it",
-            "explain the failure",
             "report the blocker in chat",
         ] {
             let asking = doc(None, &["land it", words], &[]);
             assert!(violation(&asking, "short").is_some(), "{words}");
         }
-        let acting = doc(
-            None,
-            &["land it", "or file what blocks it on its tracker row"],
-            &[],
-        );
-        assert_eq!(violation(&acting, "short"), None);
+        // Consumer docs load through the same check, and these are actions.
+        for acting in [
+            "or file what blocks it on its tracker row",
+            "tell the forge to retry the job",
+            "explain-ruleset with `batten policy explain`",
+        ] {
+            let acting = doc(None, &["land it", acting], &[]);
+            assert_eq!(violation(&acting, "short"), None, "{acting:?}");
+        }
     }
 
     #[test]

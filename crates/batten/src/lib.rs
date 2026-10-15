@@ -11941,8 +11941,6 @@ fn honour_the_notice(
 fn note_the_push(step: land::Step, code: ExitCode, bet: &mut speculation::Bet) {
     if step == land::Step::Push && code == ExitCode::Success && bet.live() {
         bet.pushed = true;
-        // The next lap's settle owns it now: it corrects the remote too.
-        speculation::disarm();
     }
 }
 
@@ -12282,8 +12280,11 @@ fn place_the_bet(
             Ok(())
         }
         Ok(_) => {
-            // A SIGNAL MUST NOT STRAND THE BET (CLOUD-1747).
-            speculation::arm(root, branch, &undo);
+            // A SIGNAL MUST NOT STRAND THE BET (CLOUD-1747). Armed over the head
+            // the replay left, so a signal never unwinds work made after it.
+            if let Ok(bet_head) = git::head_commit(root) {
+                speculation::arm(root, branch, &undo, &bet_head);
+            }
             bet.base = Some(candidate.clone());
             bet.undo = Some(undo);
             bet.main_at_bet = main_at_bet;
