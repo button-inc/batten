@@ -728,15 +728,50 @@ fn dist_installer(dir: &std::path::Path, target: &str, archive: &[u8]) -> std::p
     let name = batten::dist::cargo_dist_archive("batten", target);
     let ws = dir.join("ws");
     std::fs::create_dir_all(ws.join("src")).unwrap();
-    std::fs::write(
-        ws.join("Cargo.toml"),
-        format!(
-            "[package]\nname = \"batten\"\nversion = \"{version}\"\nedition = \"2021\"\nrepository = \"{}\"\n\n[workspace]\n",
-            env!("CARGO_PKG_REPOSITORY")
-        ),
+    // The MSI installer refuses a package without its WiX GUIDs and authors, and
+    // regenerates a `wix/main.wxs` it finds missing, so the stub carries the
+    // crate's own `[package.metadata.wix]` table, the metadata the committed
+    // template was generated from, and that template itself.
+    let manifest: toml::Table = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml"),
+    )
+    .unwrap()
+    .parse()
+    .unwrap();
+    let mut metadata = toml::Table::new();
+    metadata.insert(
+        "wix".to_owned(),
+        manifest["package"]["metadata"]["wix"].clone(),
+    );
+    let mut package = toml::Table::new();
+    package.insert("name".to_owned(), "batten".into());
+    package.insert("version".to_owned(), version.into());
+    package.insert("edition".to_owned(), "2021".into());
+    package.insert("repository".to_owned(), env!("CARGO_PKG_REPOSITORY").into());
+    package.insert("homepage".to_owned(), env!("CARGO_PKG_HOMEPAGE").into());
+    package.insert(
+        "description".to_owned(),
+        env!("CARGO_PKG_DESCRIPTION").into(),
+    );
+    package.insert(
+        "authors".to_owned(),
+        env!("CARGO_PKG_AUTHORS")
+            .split(':')
+            .collect::<Vec<_>>()
+            .into(),
+    );
+    package.insert("metadata".to_owned(), metadata.into());
+    let mut stub = toml::Table::new();
+    stub.insert("package".to_owned(), package.into());
+    stub.insert("workspace".to_owned(), toml::Table::new().into());
+    std::fs::write(ws.join("Cargo.toml"), stub.to_string()).unwrap();
+    std::fs::write(ws.join("src/main.rs"), "fn main() {}\n").unwrap();
+    std::fs::create_dir_all(ws.join("wix")).unwrap();
+    std::fs::copy(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("wix/main.wxs"),
+        ws.join("wix/main.wxs"),
     )
     .unwrap();
-    std::fs::write(ws.join("src/main.rs"), "fn main() {}\n").unwrap();
     std::fs::copy(
         workspace().join("dist-workspace.toml"),
         ws.join("dist-workspace.toml"),

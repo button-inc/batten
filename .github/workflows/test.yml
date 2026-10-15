@@ -328,8 +328,9 @@ jobs:
           BATTEN_UNMANAGED_INSTALL: ${{ runner.temp }}/installed
         run: ./target/distrib/batten-installer.ps1
       - name: The installed batten runs
+        working-directory: ${{ runner.temp }}/installed
         shell: pwsh
-        run: ${{ runner.temp }}/installed/batten --version
+        run: ./batten --version
 
       # --- the package channels this OS installs from (CLOUD-2298) ----------
       #
@@ -364,11 +365,14 @@ jobs:
         if: runner.os == 'Windows'
         working-directory: dist-src
         shell: pwsh
-        run: choco install batten --source target/distrib --yes --no-progress --install-arguments=APPLICATIONFOLDER=${{ runner.temp }}/msi
+        env:
+          INSTALL_ARGUMENTS: APPLICATIONFOLDER=${{ runner.temp }}/msi
+        run: mise run batten -- ci step --arg-env INSTALL_ARGUMENTS -- choco install batten --source target/distrib --yes --no-progress --install-arguments
       - name: The Chocolatey-installed batten runs
         if: runner.os == 'Windows'
+        working-directory: ${{ runner.temp }}/msi/bin
         shell: pwsh
-        run: ${{ runner.temp }}/msi/bin/batten.exe --version
+        run: ./batten.exe --version
 
   # --- the exit-code contract (CLOUD-110) ------------------------------------
   #
