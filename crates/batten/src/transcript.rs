@@ -681,6 +681,7 @@ pub struct Tally {
 /// covered and a digest of the file's first line. A shorter file, a different
 /// first line (an inode reused for a new session), or any unreadable state is a
 /// full re-read from byte zero.
+//MUTANT tally-entry-trusted-after-replace|s@^        .filter(\|saved\| saved.head == head \&\& saved.offset <= len);$@        .filter(\|_\| true);@|the_incremental_reader_answers_as_a_whole_parse
 #[must_use]
 pub fn tally_appended(path: &Path, shape: RecordShape) -> Option<Tally> {
     let canonical = std::fs::canonicalize(path).ok()?;
@@ -810,6 +811,7 @@ impl Summary for Tally {
     }
 }
 
+//MUTANT tally-text-not-a-marker|s@^                self.operator_marker = Some(false);$@                {}@|a_split_fold_answers_as_the_whole_parse
 impl Tally {
     fn fold(&mut self, event: &Event) {
         match event {
@@ -2356,7 +2358,6 @@ mod tests {
     /// CLOUD-2315: the incremental reader answers what a whole parse answers as
     /// the file grows, could-not-look on a half-written final line, and starts
     /// over — never trusting its entry — when the file shrank or was replaced.
-    //MUTANT tally-entry-trusted-after-replace|s@^        .filter(\|saved\| saved.head == head \&\& saved.offset <= len);$@        .filter(\|_\| true);@|the_incremental_reader_answers_as_a_whole_parse
     #[test]
     fn the_incremental_reader_answers_as_a_whole_parse() {
         let dir = std::env::temp_dir().join(format!("batten-tally-{}", std::process::id()));
@@ -2402,7 +2403,6 @@ mod tests {
     /// what one parse of the whole session answers, at EVERY split point, over
     /// generated sessions mixing every record shape. The backward scans are the
     /// specification; the fold must never disagree with them.
-    //MUTANT tally-text-not-a-marker|s@^                self.operator_marker = Some(false);$@                {}@|a_split_fold_answers_as_the_whole_parse
     #[test]
     fn a_split_fold_answers_as_the_whole_parse() {
         let mut seed: u64 = 0x2315;

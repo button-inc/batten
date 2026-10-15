@@ -154,6 +154,7 @@ pub fn key(format: &str, inputs: &[&[u8]]) -> String {
 /// The entry is `<key>\n<length> <blake3(body)>\n<body>`: the key decides
 /// whether the entry answers this question at all, and the length and digest
 /// decide whether the bytes are the ones written.
+//MUTANT torn-entry-served|s@^    if check != integrity(body).as_bytes() {$@    if false {@|a_torn_entry_is_a_miss_not_a_wrong_answer
 #[must_use]
 pub fn read(path: &Path, key: &str) -> Option<Vec<u8>> {
     let bytes = std::fs::read(path).ok()?;
@@ -462,7 +463,6 @@ mod tests {
 
     /// THE SELF-VALIDATING ENTRY: a body cut short or overwritten in place —
     /// what an unsynced write can leave after a power failure — is a miss.
-    //MUTANT torn-entry-served|s@^    if check != integrity(body).as_bytes() {$@    if false {@|a_torn_entry_is_a_miss_not_a_wrong_answer
     #[test]
     fn a_torn_entry_is_a_miss_not_a_wrong_answer() {
         let dir = scratch("torn");
