@@ -705,14 +705,6 @@ fn a_declared_ca_bundle_reaches_the_download_in_curls_precedence() {
 // cargo-dist's installer (CLOUD-2297).
 // ---------------------------------------------------------------------------
 
-/// The repository root, where `dist-workspace.toml` is.
-fn workspace() -> std::path::PathBuf {
-    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .canonicalize()
-        .unwrap()
-}
-
 /// Generate dist's shell installer for `target` with `archive`'s sha256 baked
 /// in, exactly as the release's `installers` job does: one manifest fragment in
 /// the workspace's `target/distrib/`, then `dist build --artifacts=global`.
@@ -768,14 +760,20 @@ fn dist_installer(dir: &std::path::Path, target: &str, archive: &[u8]) -> std::p
     std::fs::write(ws.join("Cargo.toml"), stub.to_string()).unwrap();
     std::fs::write(ws.join("src/main.rs"), "fn main() {}\n").unwrap();
     std::fs::copy(
-        workspace().join("dist-workspace.toml"),
+        common::at_root("dist-workspace.toml"),
         ws.join("dist-workspace.toml"),
     )
     .unwrap();
+    // The fragment claims the dist version the committed config pins.
+    let dist_config: toml::Table = std::fs::read_to_string(common::at_root("dist-workspace.toml"))
+        .unwrap()
+        .parse()
+        .unwrap();
+    let dist_version = dist_config["dist"]["cargo-dist-version"].clone();
     let staged = ws.join("target").join(batten::dist::CARGO_DIST_DIR);
     std::fs::create_dir_all(&staged).unwrap();
     let fragment = serde_json::json!({
-        "dist_version": "0.33.0",
+        "dist_version": dist_version.as_str(),
         "announcement_tag": format!("v{version}"),
         "releases": [{
             "app_name": "batten",
@@ -799,12 +797,12 @@ fn dist_installer(dir: &std::path::Path, target: &str, archive: &[u8]) -> std::p
         },
     });
     std::fs::write(
-        staged.join(format!("{target}-dist-manifest.json")),
+        staged.join(batten::dist::cargo_dist_manifest(target)),
         fragment.to_string(),
     )
     .unwrap();
     // The release's own order: the MSI template, then the global step.
-    run_dist(&ws, &["generate", "--mode", "msi"]);
+    run_dist(&ws, &batten::dist::CARGO_DIST_MSI_TEMPLATE[1..]);
     run_dist(
         &ws,
         &[

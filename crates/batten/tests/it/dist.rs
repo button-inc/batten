@@ -517,14 +517,18 @@ fn the_retired_program_is_gone_and_its_task_name_survives() {
 /// here is hand-rolled; each needle is a generator's config or invocation.
 #[test]
 fn every_declared_channel_names_its_generator() {
-    let dist_config =
-        std::fs::read_to_string(at_root("dist-workspace.toml")).expect("dist-workspace.toml");
+    let dist_config: toml::Table = std::fs::read_to_string(at_root("dist-workspace.toml"))
+        .expect("dist-workspace.toml")
+        .parse()
+        .expect("dist-workspace.toml parses");
     let release = std::fs::read_to_string(at_root(".github/workflows/release-artifacts.yml"))
         .expect("release-artifacts.yml");
-    let installers = dist_config
-        .lines()
-        .find(|line| line.starts_with("installers ="))
-        .expect("dist-workspace.toml declares its installers");
+    let installers: Vec<&str> = dist_config["dist"]["installers"]
+        .as_array()
+        .expect("dist-workspace.toml declares its installers")
+        .iter()
+        .filter_map(toml::Value::as_str)
+        .collect();
 
     // cargo-dist: declared in its config, produced by its global or local step.
     for (channel, asset) in [
@@ -535,7 +539,7 @@ fn every_declared_channel_names_its_generator() {
         ("msi", "steps.dist.outputs.msi"),
     ] {
         assert!(
-            installers.contains(&format!("\"{channel}\"")),
+            installers.contains(&channel),
             "cargo-dist must declare the {channel} installer"
         );
         assert!(

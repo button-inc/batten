@@ -142,6 +142,17 @@ pub fn cargo_dist_archive(name: &str, target: &str) -> String {
 /// The directory, under the target directory, cargo-dist stages into.
 pub const CARGO_DIST_DIR: &str = "distrib";
 
+/// The manifest fragment one target's `dist build` leaves in [`CARGO_DIST_DIR`],
+/// the name the global step reads every leg's fragment by.
+#[must_use]
+pub fn cargo_dist_manifest(target: &str) -> String {
+    format!("{target}-dist-manifest.json")
+}
+
+/// `dist generate --mode msi`: writes the MSI template dist refuses to build
+/// without. It is dist's output, never committed, so every build writes it.
+pub const CARGO_DIST_MSI_TEMPLATE: [&str; 4] = ["dist", "generate", "--mode", "msi"];
+
 /// The `dist build` argv for one target, announcing `v<version>`.
 ///
 /// `--output-format=json` makes stdout the manifest fragment and nothing else;
@@ -545,6 +556,10 @@ fn run_cargo_dist(
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
+    let template = CARGO_DIST_MSI_TEMPLATE.map(str::to_owned);
+    if !ran(&package.root, &template, err)? {
+        return Ok(ExitCode::Internal);
+    }
     let argv = cargo_dist_argv(target, &package.version);
     // stdout IS the manifest fragment; the build log stays on stderr, where a
     // failure's reason is the step's only evidence.
@@ -563,14 +578,12 @@ fn run_cargo_dist(
     }
     let staged = package.target_dir.join(CARGO_DIST_DIR);
     std::fs::create_dir_all(&staged)?;
-    let manifest = staged.join(format!("{target}-dist-manifest.json"));
+    let manifest = staged.join(cargo_dist_manifest(target));
     crate::durable::replace(&manifest, fragment)?;
 
-    let dist_archive = staged.join(cargo_dist_archive(&package.name, target));
-    let checksum = staged.join(format!(
-        "{}.sha256",
-        cargo_dist_archive(&package.name, target)
-    ));
+    let dist_name = cargo_dist_archive(&package.name, target);
+    let checksum = staged.join(format!("{dist_name}.sha256"));
+    let dist_archive = staged.join(dist_name);
     for written in [&dist_archive, &checksum] {
         if !written.is_file() {
             writeln!(

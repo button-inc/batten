@@ -229,10 +229,6 @@ jobs:
         env:
           TARGET: ${{ matrix.target }}
         run: mise run batten -- ci step --arg-env TARGET -- rustup target add
-      # dist refuses a missing or stale MSI template, which is its own output
-      # and never committed (`.gitignore`), so it writes it before every build.
-      - name: Generate the MSI template
-        run: mise exec -- dist generate --mode msi
       - name: Build and archive
         id: dist
         shell: bash
@@ -281,7 +277,7 @@ jobs:
         if: endsWith(matrix.target, 'linux-gnu')
         env:
           NFPM_ARCH: ${{ matrix.nfpm-arch }}
-          BATTEN_VERSION: ${{ inputs.tag }}
+          BATTEN_VERSION: ${{ steps.dist.outputs.version }}
           BATTEN_BINARY: ${{ steps.dist.outputs.binary }}
           PACKAGE: target/distrib/batten-${{ matrix.target }}.deb
         run: mise run batten -- ci step --arg-env PACKAGE -- mise exec -- nfpm package --config nfpm.yaml --packager deb --target
@@ -289,7 +285,7 @@ jobs:
         if: endsWith(matrix.target, 'linux-gnu')
         env:
           NFPM_ARCH: ${{ matrix.nfpm-arch }}
-          BATTEN_VERSION: ${{ inputs.tag }}
+          BATTEN_VERSION: ${{ steps.dist.outputs.version }}
           BATTEN_BINARY: ${{ steps.dist.outputs.binary }}
           PACKAGE: target/distrib/batten-${{ matrix.target }}.rpm
         run: mise run batten -- ci step --arg-env PACKAGE -- mise exec -- nfpm package --config nfpm.yaml --packager rpm --target
@@ -297,7 +293,7 @@ jobs:
         if: endsWith(matrix.target, 'linux-musl')
         env:
           NFPM_ARCH: ${{ matrix.nfpm-arch }}
-          BATTEN_VERSION: ${{ inputs.tag }}
+          BATTEN_VERSION: ${{ steps.dist.outputs.version }}
           BATTEN_BINARY: ${{ steps.dist.outputs.binary }}
           PACKAGE: target/distrib/batten-${{ matrix.target }}.apk
         run: mise run batten -- ci step --arg-env PACKAGE -- mise exec -- nfpm package --config nfpm.yaml --packager apk --target
@@ -422,7 +418,8 @@ jobs:
           path: target/distrib
           merge-multiple: true
       # dist refuses a missing or stale MSI template, which is its own output
-      # and never committed (`.gitignore`), so it writes it before every build.
+      # and never committed (`.gitignore`); `batten dist` writes it on each leg,
+      # and this job's fresh checkout needs its own.
       - name: Generate the MSI template
         run: mise exec -- dist generate --mode msi
       - name: Generate the installers from every leg's manifest
