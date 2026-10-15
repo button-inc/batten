@@ -234,6 +234,15 @@ pub(crate) fn at_root(name: &str) -> PathBuf {
         .join(name)
 }
 
+/// The committed `dist-workspace.toml`, parsed: cargo-dist's config, which the
+/// release, its installers and the package channels all read.
+pub(crate) fn dist_config() -> toml::Table {
+    std::fs::read_to_string(at_root("dist-workspace.toml"))
+        .expect("dist-workspace.toml")
+        .parse()
+        .expect("dist-workspace.toml parses")
+}
+
 /// One task's table out of this repository's `mise.toml`, header included.
 ///
 /// **THE ENGINE'S DEFINITION, NOT A COPY OF IT** (CLOUD-1909). Where a task's table

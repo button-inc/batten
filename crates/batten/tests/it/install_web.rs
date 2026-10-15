@@ -709,9 +709,9 @@ fn a_declared_ca_bundle_reaches_the_download_in_curls_precedence() {
 /// in, exactly as the release's `installers` job does: one manifest fragment in
 /// the workspace's `target/distrib/`, then `dist build --artifacts=global`.
 ///
-/// IN A SCRATCH WORKSPACE, because dist ignores `CARGO_TARGET_DIR` (measured:
-/// it read and wrote this checkout's `target/distrib` with the variable set),
-/// so running it here would merge whatever fragments a local build left. The
+/// IN A SCRATCH WORKSPACE, because dist stages under the workspace whatever
+/// `CARGO_TARGET_DIR` says (`batten::dist::cargo_dist_staging`), so running it
+/// here would merge whatever fragments a local build left. The
 /// workspace is a stub `batten` package at this crate's version and repository,
 /// configured by the committed `dist-workspace.toml`, so the generator under
 /// test reads the release's own config.
@@ -759,20 +759,20 @@ fn dist_installer(dir: &std::path::Path, target: &str, archive: &[u8]) -> std::p
     stub.insert("workspace".to_owned(), toml::Table::new().into());
     std::fs::write(ws.join("Cargo.toml"), stub.to_string()).unwrap();
     std::fs::write(ws.join("src/main.rs"), "fn main() {}\n").unwrap();
-    let dist_text = std::fs::read_to_string(common::at_root("dist-workspace.toml")).unwrap();
-    std::fs::write(ws.join("dist-workspace.toml"), &dist_text).unwrap();
+    let dist_config = common::dist_config();
+    std::fs::write(ws.join("dist-workspace.toml"), dist_config.to_string()).unwrap();
     // The fragment claims the dist version the committed config pins.
-    let dist_config: toml::Table = dist_text.parse().unwrap();
     let dist_version = dist_config["dist"]["cargo-dist-version"].clone();
-    let staged = ws.join("target").join(batten::dist::CARGO_DIST_DIR);
+    let staged = batten::dist::cargo_dist_staging(&ws);
     std::fs::create_dir_all(&staged).unwrap();
+    let checksum = batten::dist::cargo_dist_checksum(&name);
     let fragment = serde_json::json!({
         "dist_version": dist_version.as_str(),
         "announcement_tag": format!("v{version}"),
         "releases": [{
             "app_name": "batten",
             "app_version": version,
-            "artifacts": [name, format!("{name}.sha256")],
+            "artifacts": [name, checksum],
         }],
         "artifacts": {
             name.clone(): {
@@ -780,11 +780,11 @@ fn dist_installer(dir: &std::path::Path, target: &str, archive: &[u8]) -> std::p
                 "kind": "executable-zip",
                 "target_triples": [target],
                 "assets": [{"id": format!("batten-{target}-exe-batten"), "name": "batten", "path": "batten", "kind": "executable"}],
-                "checksum": format!("{name}.sha256"),
+                "checksum": checksum,
                 "checksums": {"sha256": digest(archive)},
             },
-            format!("{name}.sha256"): {
-                "name": format!("{name}.sha256"),
+            checksum.clone(): {
+                "name": checksum,
                 "kind": "checksum",
                 "target_triples": [target],
             },
@@ -818,7 +818,6 @@ fn run_dist(ws: &std::path::Path, args: &[&str]) {
     let ran = Command::new("dist")
         .args(args)
         .current_dir(ws)
-        .env_remove("CARGO_TARGET_DIR")
         .output()
         .expect("cargo-dist must be installed: it is a pinned [tools] entry");
     assert!(

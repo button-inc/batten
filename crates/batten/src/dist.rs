@@ -139,8 +139,22 @@ pub fn cargo_dist_archive(name: &str, target: &str) -> String {
     format!("{name}-{target}{}", archive_ext(target))
 }
 
-/// The directory, under the target directory, cargo-dist stages into.
+/// The checksum file cargo-dist writes beside an archive it names.
+#[must_use]
+pub fn cargo_dist_checksum(archive: &str) -> String {
+    format!("{archive}.sha256")
+}
+
+/// The directory cargo-dist stages into, under the workspace's own `target/`.
 pub const CARGO_DIST_DIR: &str = "distrib";
+
+/// Where cargo-dist stages for the workspace at `root`: `<root>/target/distrib`,
+/// never cargo's target directory, because dist ignores `CARGO_TARGET_DIR`
+/// (measured: with it set, dist read and wrote the checkout's own staging).
+#[must_use]
+pub fn cargo_dist_staging(root: &Path) -> PathBuf {
+    root.join("target").join(CARGO_DIST_DIR)
+}
 
 /// The manifest fragment one target's `dist build` leaves in [`CARGO_DIST_DIR`],
 /// the name the global step reads every leg's fragment by.
@@ -576,15 +590,13 @@ fn run_cargo_dist(
         writeln!(err, "dist: `dist build` printed no manifest")?;
         return Ok(ExitCode::Internal);
     }
-    // The WORKSPACE's `target/`, never cargo's target directory: dist ignores
-    // `CARGO_TARGET_DIR` and stages under `<root>/target` whatever it says.
-    let staged = package.root.join("target").join(CARGO_DIST_DIR);
+    let staged = cargo_dist_staging(&package.root);
     std::fs::create_dir_all(&staged)?;
     let manifest = staged.join(cargo_dist_manifest(target));
     crate::durable::replace(&manifest, fragment)?;
 
     let dist_name = cargo_dist_archive(&package.name, target);
-    let checksum = staged.join(format!("{dist_name}.sha256"));
+    let checksum = staged.join(cargo_dist_checksum(&dist_name));
     let dist_archive = staged.join(dist_name);
     for written in [&dist_archive, &checksum] {
         if !written.is_file() {

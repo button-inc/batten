@@ -130,10 +130,7 @@ fn the_action_installs_its_refs_pin() {
 /// must be the version the config names.
 #[test]
 fn install_sh_is_the_released_dist_installer() {
-    let config: toml::Table = std::fs::read_to_string(common::at_root("dist-workspace.toml"))
-        .expect("read dist-workspace.toml")
-        .parse()
-        .expect("dist-workspace.toml is TOML");
+    let config = common::dist_config();
     let dist = config["dist"].as_table().expect("a [dist] table");
     let listed = |key: &str| -> std::collections::BTreeSet<String> {
         dist[key]

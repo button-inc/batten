@@ -314,11 +314,12 @@ jobs:
           TARGET: ${{ matrix.target }}
         run: mise run batten -- ci step --arg-env TARGET -- rustup target add
       - name: Build this OS's archive with cargo-dist
+        id: dist
         working-directory: dist-src
         env:
           DIST_BUILD_TOOL: cargo-dist
           DIST_TARGET: ${{ matrix.target }}
-        run: mise run batten -- ci step --arg-env DIST_TARGET -- mise run batten -- dist
+        run: mise run batten -- ci step --outputs --arg-env DIST_TARGET -- mise run batten -- dist
       - name: Generate the installers from its manifest
         working-directory: dist-src
         run: mise exec -- dist build --artifacts=global
@@ -353,8 +354,8 @@ jobs:
         working-directory: dist-src
         env:
           NFPM_ARCH: amd64
-          BATTEN_VERSION: 0.0.0
-          BATTEN_BINARY: target/${{ matrix.target }}/dist/batten
+          BATTEN_VERSION: ${{ steps.dist.outputs.version }}
+          BATTEN_BINARY: ${{ steps.dist.outputs.binary }}
         run: mise exec -- nfpm package --config nfpm.yaml --packager deb --target target/distrib/batten.deb
       - name: Install the .deb with dpkg
         if: runner.os == 'Linux'

@@ -517,10 +517,7 @@ fn the_retired_program_is_gone_and_its_task_name_survives() {
 /// here is hand-rolled; each needle is a generator's config or invocation.
 #[test]
 fn every_declared_channel_names_its_generator() {
-    let dist_config: toml::Table = std::fs::read_to_string(at_root("dist-workspace.toml"))
-        .expect("dist-workspace.toml")
-        .parse()
-        .expect("dist-workspace.toml parses");
+    let dist_config = crate::common::dist_config();
     let release = std::fs::read_to_string(at_root(".github/workflows/release-artifacts.yml"))
         .expect("release-artifacts.yml");
     let installers: Vec<&str> = dist_config["dist"]["installers"]
