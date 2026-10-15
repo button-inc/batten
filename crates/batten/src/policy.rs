@@ -1722,12 +1722,12 @@ fn answer(bundle: &Bundle, input: &str, rules: &[&str]) -> Option<Answer> {
                 return Some(answer);
             }
             if !Answers::open() {
-                return compiled.answer(input, rules);
+                return compiled.answer(&regorus::Value::from_json_str(input).ok()?, rules);
             }
             // EVERY ANSWERED RULE, ONCE: the next asker of this bundle on this
             // input reads its rule out of the same answer, which is what the
             // interpreter arm above already does by answering the whole package.
-            let answer = compiled.answer(input, &ANSWERED_RULES)?;
+            let answer = compiled.answer(&Answers::parsed(input)?, &ANSWERED_RULES)?;
             Answers::keep(compiled, input, &answer);
             Some(answer)
         }
@@ -1750,7 +1750,13 @@ fn answer(bundle: &Bundle, input: &str, rules: &[&str]) -> Option<Answer> {
 /// on the program's `Arc` — HELD in the key, so its address cannot be freed and
 /// reused within the scope — and on the exact input text. Only bytecode is
 /// memoised; the interpreter path is the rare fallback and is left as it was.
-struct Answers(Vec<(std::sync::Arc<Compiled>, String, Answer)>);
+///
+/// The INPUT is parsed once per call too: every bundle is handed the same
+/// document text, and each used to parse it into a `regorus::Value` of its own.
+struct Answers {
+    answered: Vec<(std::sync::Arc<Compiled>, String, Answer)>,
+    input: Option<(String, regorus::Value)>,
+}
 
 thread_local! {
     static ANSWERS: std::cell::RefCell<Option<Answers>> = const { std::cell::RefCell::new(None) };
@@ -1780,7 +1786,12 @@ impl Drop for AnswerScope {
 /// Open the per-call answer memo for the life of the returned guard.
 #[must_use]
 pub fn answer_scope() -> AnswerScope {
-    ANSWERS.with(|cell| *cell.borrow_mut() = Some(Answers(Vec::new())));
+    ANSWERS.with(|cell| {
+        *cell.borrow_mut() = Some(Answers {
+            answered: Vec::new(),
+            input: None,
+        });
+    });
     AnswerScope
 }
 
@@ -1789,11 +1800,27 @@ impl Answers {
         ANSWERS.with(|cell| cell.borrow().is_some())
     }
 
+    /// `input` parsed, once per distinct text within the scope.
+    fn parsed(input: &str) -> Option<regorus::Value> {
+        ANSWERS.with(|cell| {
+            let mut borrowed = cell.borrow_mut();
+            let answers = borrowed.as_mut()?;
+            if let Some((text, value)) = &answers.input
+                && text == input
+            {
+                return Some(value.clone());
+            }
+            let value = regorus::Value::from_json_str(input).ok()?;
+            answers.input = Some((input.to_owned(), value.clone()));
+            Some(value)
+        })
+    }
+
     fn recall(compiled: &std::sync::Arc<Compiled>, input: &str) -> Option<Answer> {
         ANSWERS.with(|cell| {
             cell.borrow().as_ref().and_then(|answers| {
                 answers
-                    .0
+                    .answered
                     .iter()
                     .find(|(held, text, _)| std::sync::Arc::ptr_eq(held, compiled) && text == input)
                     .map(|(_, _, answer)| answer.clone())
@@ -1804,7 +1831,7 @@ impl Answers {
     fn keep(compiled: &std::sync::Arc<Compiled>, input: &str, answer: &Answer) {
         ANSWERS.with(|cell| {
             if let Some(answers) = cell.borrow_mut().as_mut() {
-                answers.0.push((
+                answers.answered.push((
                     std::sync::Arc::clone(compiled),
                     input.to_owned(),
                     answer.clone(),
@@ -2072,7 +2099,7 @@ impl Compiled {
     }
 
     /// Run the named rules' entry points over `input`.
-    fn answer(&self, input: &str, rules: &[&str]) -> Option<Answer> {
+    fn answer(&self, input: &regorus::Value, rules: &[&str]) -> Option<Answer> {
         BYTECODE_EVALUATIONS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let mut vm = regorus::rvm::vm::RegoVM::new();
         vm.load_program(self.program.clone());
@@ -2082,7 +2109,7 @@ impl Compiled {
         vm.set_strict_builtin_errors(true);
         vm.set_max_instructions(usize::MAX);
         vm.set_data(self.data.clone()).ok()?;
-        vm.set_input(regorus::Value::from_json_str(input).ok()?);
+        vm.set_input(input.clone());
         let mut members = BTreeMap::new();
         for (package, rule) in &self.entries {
             if !rules.contains(&rule.as_str()) {

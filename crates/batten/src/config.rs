@@ -1320,6 +1320,18 @@ pub fn declare_for_process(dir: &Path) {
     let Ok(text) = std::fs::read_to_string(&path) else {
         return;
     };
+    // THE VALIDATED AUTHORITY, WHEN IT IS ALREADY CACHED FOR THESE BYTES
+    // (CLOUD-2315). This prologue runs on every hook call, and the lenient parse
+    // below tokenized the whole 583 KB authority to read one table — measured
+    // 7.85 ms of a call budgeted at 10. Where the parse cache holds a validated
+    // `Config` for exactly this text, its `forge` IS the answer; anywhere else the
+    // lenient read stands as it was.
+    if let Some(config) = cached_parse(&text, &path.to_string_lossy()) {
+        if let Some(forge) = config.forge {
+            crate::rest::declare(forge);
+        }
+        return;
+    }
     let Ok(only) = toml::from_str::<ForgeOnly>(&text) else {
         return;
     };
@@ -4320,15 +4332,9 @@ fn parse_ungated(text: &str, source: &str) -> Result<Config> {
 /// load-time report, [`check_min_version`]'s, stays outside so it is still made
 /// on every load. Only a success is kept: a refusal is re-derived, so its
 /// message is never a stale one.
-//MUTANT config-parse-unremembered|s@^        \&\& remembered_text == text$@        \&\& false@|one_authority_is_parsed_once_per_process
 fn parse_remembered(text: &str, source: &str) -> Result<Config> {
-    static LAST: std::sync::Mutex<Option<(String, String, Config)>> = std::sync::Mutex::new(None);
-    if let Ok(last) = LAST.lock()
-        && let Some((remembered_text, remembered_source, config)) = last.as_ref()
-        && remembered_text == text
-        && remembered_source == source
-    {
-        return Ok(config.clone());
+    if let Some(config) = remembered(text, source) {
+        return Ok(config);
     }
     let persisted = PERSIST_PARSES
         .load(std::sync::atomic::Ordering::Relaxed)
@@ -4347,10 +4353,28 @@ fn parse_remembered(text: &str, source: &str) -> Result<Config> {
             config
         }
     };
-    if let Ok(mut last) = LAST.lock() {
-        *last = Some((text.to_owned(), source.to_owned(), config.clone()));
-    }
+    remember(text, source, &config);
     Ok(config)
+}
+
+/// The last success, keyed by the bytes and the CANONICAL source (CLOUD-2315):
+/// the hook's prologue reads the authority by its absolute path and the resolve
+/// by `./batten.toml`, and keyed on the spelling the two missed each other and
+/// decoded the same 583 KB authority twice in one call.
+static LAST: std::sync::Mutex<Option<(String, String, Config)>> = std::sync::Mutex::new(None);
+
+//MUTANT config-parse-unremembered|s@^    (remembered_text == text \&\& \*remembered_source == named).then(|| config.clone())$@    None@|one_authority_is_parsed_once_per_process
+fn remembered(text: &str, source: &str) -> Option<Config> {
+    let named = canonical_source(source);
+    let last = LAST.lock().ok()?;
+    let (remembered_text, remembered_source, config) = last.as_ref()?;
+    (remembered_text == text && *remembered_source == named).then(|| config.clone())
+}
+
+fn remember(text: &str, source: &str, config: &Config) {
+    if let Ok(mut last) = LAST.lock() {
+        *last = Some((text.to_owned(), canonical_source(source), config.clone()));
+    }
 }
 
 /// Whether [`parse_remembered`] may answer from, and write to, the on-disk
@@ -4395,10 +4419,7 @@ const PARSE_CACHE_FORMAT: &str = "batten-config-msgpack-1";
 /// path, so two repositories each loading `./batten.toml` do not take turns
 /// evicting one entry.
 fn parse_cache_path(source: &str) -> Option<std::path::PathBuf> {
-    let named = std::fs::canonicalize(source).map_or_else(
-        |_| source.to_owned(),
-        |path| path.to_string_lossy().into_owned(),
-    );
+    let named = canonical_source(source);
     let root = crate::cache::root_under(&crate::state::state_root().ok()?)?;
     Some(
         root.join("config")
@@ -4406,10 +4427,36 @@ fn parse_cache_path(source: &str) -> Option<std::path::PathBuf> {
     )
 }
 
+/// The validated `Config` the parse cache holds for exactly `text` from `source`,
+/// when the cache is on for this process; never a parse.
+fn cached_parse(text: &str, source: &str) -> Option<Config> {
+    if !PERSIST_PARSES.load(std::sync::atomic::Ordering::Relaxed) {
+        return None;
+    }
+    if let Some(config) = remembered(text, source) {
+        return Some(config);
+    }
+    let config = read_cached_parse(&parse_cache_path(source)?, &parse_cache_key(text, source))?;
+    // Remembered for the resolve that follows in the same process.
+    remember(text, source, &config);
+    Some(config)
+}
+
+/// The name an authority is cached under: its canonical path, so the same file
+/// reached as `./batten.toml` and as an absolute path is ONE entry (CLOUD-2315 —
+/// one hook call reached it both ways and missed itself).
+fn canonical_source(source: &str) -> String {
+    std::fs::canonicalize(source).map_or_else(
+        |_| source.to_owned(),
+        |path| path.to_string_lossy().into_owned(),
+    )
+}
+
 /// Everything a validated `Config` is a function of.
-//MUTANT parse-cache-key-ignores-text|s@^    crate::cache::key(PARSE_CACHE_FORMAT, \&\[source.as_bytes(), text.as_bytes()\])$@    crate::cache::key(PARSE_CACHE_FORMAT, \&[source.as_bytes()])@|an_edited_authority_is_not_answered_from_the_parse_cache
+//MUTANT parse-cache-key-ignores-text|s@^    crate::cache::key(PARSE_CACHE_FORMAT, \&\[named.as_bytes(), text.as_bytes()\])$@    crate::cache::key(PARSE_CACHE_FORMAT, \&[named.as_bytes()])@|an_edited_authority_is_not_answered_from_the_parse_cache
 fn parse_cache_key(text: &str, source: &str) -> String {
-    crate::cache::key(PARSE_CACHE_FORMAT, &[source.as_bytes(), text.as_bytes()])
+    let named = canonical_source(source);
+    crate::cache::key(PARSE_CACHE_FORMAT, &[named.as_bytes(), text.as_bytes()])
 }
 
 /// The cached `Config` at `path`, when it was written under exactly `key`.

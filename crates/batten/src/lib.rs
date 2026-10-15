@@ -304,6 +304,11 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
     // dispatch table, so no arm can be added that reads the forge and forgets.
     // Best-effort and silent: an unreadable config is the verb's finding to
     // report, with its span, not this line's.
+    // The hook path's parse cache is on from the first read of the authority,
+    // the prologue's included (CLOUD-2315, `config::declare_for_process`).
+    if matches!(command, Some(Command::Hook { .. })) {
+        config::persist_parses();
+    }
     if let Ok(here) = std::env::current_dir() {
         config::declare_for_process(&here);
     }

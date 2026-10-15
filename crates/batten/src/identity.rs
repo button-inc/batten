@@ -856,15 +856,29 @@ const SURFACE_TAG: &str = "surface";
 /// every other tag so a cache key can never collide with an identity.
 const CACHE_TAG: &str = "cache";
 
-/// The key of one cross-process cache entry: the one framing, under its own tag,
-/// over every input the cached value is a function of (CLOUD-2315).
+/// The key of one cross-process cache entry: the one framing — a tag, then each
+/// field length-prefixed (u64 LE) — over every input the cached value is a
+/// function of (CLOUD-2315).
 ///
-/// Through here rather than a cache's own hasher, so `crate::cache` keys and
-/// every other identity in the crate share one construction — the two caches
-/// this replaced each hand-rolled a copy of it.
+/// BLAKE3 RATHER THAN SHA-256, and the framing rather than the digest is what is
+/// shared. A cache key is computed on the per-call path over every input it
+/// covers — measured, 2.0 MB of policy source per hook call — and SHA-256 there
+/// cost ~5 ms against a 10 ms budget where BLAKE3 costs under one. An identity
+/// that is recorded or compared across machines stays [`tagged_fingerprint`]'s;
+/// a cache key is compared only against another this binary computed, so the
+/// digest is this function's choice, while the injective framing is not.
 #[must_use]
 pub fn cache_key(fields: &[&[u8]]) -> Fingerprint {
-    tagged_fingerprint(CACHE_TAG, fields)
+    let mut hasher = blake3::Hasher::new();
+    let mut write = |bytes: &[u8]| {
+        hasher.update(&u64::try_from(bytes.len()).unwrap_or(u64::MAX).to_le_bytes());
+        hasher.update(bytes);
+    };
+    write(CACHE_TAG.as_bytes());
+    for field in fields {
+        write(field);
+    }
+    Fingerprint(*hasher.finalize().as_bytes())
 }
 
 /// The domain tag for a captured output stream, distinct from every
