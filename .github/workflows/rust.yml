@@ -307,7 +307,9 @@ jobs:
           # pkl is `hk_fix_selection.rs`'s: it evaluates the committed fix-hook
           # predicate, and since CLOUD-2059 a leg without it fails those cases
           # rather than letting them return, passing, over nothing.
-          install_args: rust hk aqua:jqlang/jq github:nextest-rs/nextest aqua:open-policy-agent/opa pkl
+          # cargo-dist is `install_web.rs`'s: the Linux-only tamper case runs the
+          # pinned `dist` to generate the installer it refuses (CLOUD-2297).
+          install_args: rust hk aqua:jqlang/jq github:nextest-rs/nextest aqua:open-policy-agent/opa pkl aqua:axodotdev/cargo-dist
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           # A DISTINCT FAMILY, because this target dir holds musl artifacts the
