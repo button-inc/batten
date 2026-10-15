@@ -178,9 +178,7 @@ fn estimated_tokens(line: &str) -> usize {
 /// because those are what the ~300 firings a session are made of.
 const CORPUS: &[&str] = &[
     // The row CLOUD-1286's acceptance named, `tool select other`, was retired
-    // under CLOUD-2362; the fixture cases below still measure its class. A
-    // shape row with an override route stands in, the widest a Bash call emits.
-    "cargo build",
+    // under CLOUD-2362; the fixture cases below still measure its class.
     // The three discard shapes.
     "mise run verify | tail -1",
     "mise run verify >log 2>&1; ls",
