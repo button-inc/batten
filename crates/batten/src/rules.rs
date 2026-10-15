@@ -17089,6 +17089,26 @@ mod tests {
         }
     }
 
+    /// CLOUD-2291: `NativeGate::ALL` is what the weakening diff walks, so a gate
+    /// missing from it is a gate whose lowering is never reported. The match is
+    /// exhaustive and fails to compile on a new variant; the count pins `ALL` to
+    /// it, and each token is the one the config parser reads.
+    #[test]
+    fn native_gate_all_is_every_gate_and_as_str_is_its_token() {
+        for gate in NativeGate::ALL {
+            match gate {
+                NativeGate::DestructiveReset | NativeGate::Singleton | NativeGate::History => {}
+            }
+            let token = serde_json::to_value(gate).expect("a gate serializes");
+            assert_eq!(token, serde_json::json!(gate.as_str()));
+        }
+        assert_eq!(
+            NativeGate::ALL.len(),
+            3,
+            "a new gate must join NativeGate::ALL"
+        );
+    }
+
     #[test]
     fn all_covers_every_kind() {
         // The spawn partition must be total. `ALL` is what the gate below

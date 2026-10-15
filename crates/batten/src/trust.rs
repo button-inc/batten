@@ -5871,8 +5871,8 @@ mod tests {
             &reset("a", "deny"),
             &format!("{}{}", reset("a", "deny"), reset("b", "allow"))
         ));
-        // Removing the only row returns the gate to deny: not lowered.
-        assert!(!lowered(&reset("a", "allow"), ""));
+        // Removing the only row returns the gate to deny: nothing is lowered, and
+        // no `rule[...]` removal is reported for a native row either.
         assert!(weakenings(&config(&reset("a", "allow")), &config("")).is_empty());
         // Removing the deny row of two leaves the allow one deciding: lowered.
         assert!(lowered(
