@@ -319,6 +319,24 @@ jobs:
       # job with the pin bump that names that release (the PR's after-release
       # step), when `ci-parity`'s freeze arm starts demanding them.
 
+      # THE ACTION'S PUSH CREDENTIAL IS OURS TO CACHE (CLOUD-2288). The action
+      # approves `github_token` into a credential store only when the PR head is
+      # ABSENT from the clone (`src/fast-forward.sh:191-208` at the pin below),
+      # its fork path. The shallow checkout never held the head, so that path
+      # always ran; `fetch-depth: 0` fetches it, the block is skipped, and
+      # `git push origin` at :296 went out with no credential: "could not read
+      # Username". This approves the same token the same way, whether or not the
+      # action does; `persist-credentials: false` still holds for every step
+      # before this one.
+      - name: cache the push credential the action caches only for a fork head
+        env:
+          PUSH_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          git config --global credential.helper store
+          printf 'protocol=https\nhost=github.com\nusername=%s\npassword=%s\n' \
+            "$ACTOR" "$PUSH_TOKEN" | git credential approve
+
       # `# v1.0.0`, NOT `# v1`, and the difference is load-bearing rather than
       # pedantic (CLOUD-676). Upstream publishes exactly one tag — `v1.0.0` —
       # with no floating major, unlike `actions/checkout` and
