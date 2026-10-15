@@ -135,7 +135,7 @@ pub fn describe_cached(dir: &Path, base_ref: Option<&str>) -> Result<(String, Ve
     let stamps = stamp_tracked(dir, &tracked);
 
     if let Some(stamps) = stamps.as_ref()
-        && let Some(path) = cache_path(dir)
+        && let Some(path) = state_dir(dir).and_then(|state| cache_path(&state))
         && let Some(epoch) = read_cache(&path, &cache_key(&tracked, stamps), stamps)
     {
         return Ok((epoch, tracked));
@@ -147,9 +147,12 @@ pub fn describe_cached(dir: &Path, base_ref: Option<&str>) -> Result<(String, Ve
     // before the change, and the next run would serve a hash of bytes that are
     // already gone.
     if let Some(stamps) = stamp_tracked(dir, &tracked)
-        && let Some(path) = cache_path(dir)
+        && let Some(state) = state_dir(dir)
+        && let Some(path) = cache_path(&state)
     {
         write_cache(&path, &cache_key(&tracked, &stamps), &epoch);
+        // The retired record sat beside the state rather than under `cache/`.
+        let _ = std::fs::remove_file(state.join(RETIRED_FILE));
     }
     Ok((epoch, tracked))
 }
@@ -215,17 +218,21 @@ fn cache_key(tracked: &[String], stamps: &[crate::cache::Stamp]) -> String {
     crate::cache::key(CACHE_FORMAT, &fields)
 }
 
-/// This repository's cache entry, or `None` when no state directory resolves.
+/// This repository's state directory, or `None` when none resolves.
 ///
 /// Canonicalized first, and that is load-bearing rather than tidy: callers reach
 /// this with `Path::new(".")`, whose final component is `None`, so
 /// [`crate::state::derive_repo_name`] refuses it and every run would silently
 /// take the no-cache path. A cache that is never written is not a safe default —
 /// it is a feature that reports success and does nothing.
-fn cache_path(dir: &Path) -> Option<PathBuf> {
+fn state_dir(dir: &Path) -> Option<PathBuf> {
     let absolute = std::fs::canonicalize(dir).ok()?;
-    let state = crate::state::repo_state_dir(&absolute).ok()?;
-    Some(crate::cache::root_under(&state)?.join(CACHE_FILE))
+    crate::state::repo_state_dir(&absolute).ok()
+}
+
+/// The entry under the repository's state directory `state`.
+fn cache_path(state: &Path) -> Option<PathBuf> {
+    Some(crate::cache::root_under(state)?.join(CACHE_FILE))
 }
 
 /// The cached epoch, or `None` for absent, unreadable, torn, another key — or
@@ -266,11 +273,6 @@ fn write_cache(path: &Path, key: &str, epoch: &str) {
         written.subsec_nanos()
     );
     crate::cache::write(path, key, body.as_bytes());
-    // The retired record sat beside the state rather than under `cache/`; the
-    // entry is `<state>/cache/<partition>/epoch`, three levels below it.
-    if let Some(state) = path.ancestors().nth(3) {
-        let _ = std::fs::remove_file(state.join(RETIRED_FILE));
-    }
 }
 
 /// The config whose `[epoch] tracked` list governs, from the same place its

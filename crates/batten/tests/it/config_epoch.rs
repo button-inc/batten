@@ -378,6 +378,13 @@ fn cache_home(name: &str) -> PathBuf {
     home
 }
 
+/// The state directory of the repo at `dir` under `home`.
+fn state_dir(home: &Path, dir: &Path) -> PathBuf {
+    let canonical = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
+    let segment = batten::state::derive_repo_name(&canonical).expect("derive the state segment");
+    home.join("batten").join(segment)
+}
+
 /// The cache file for the repo at `dir`, wherever it landed under `home`.
 ///
 /// The segment comes from [`batten::state::derive_repo_name`], not from a second
@@ -393,9 +400,7 @@ fn cache_home(name: &str) -> PathBuf {
 /// and the binary under test is not this process, so the partition is found
 /// rather than derived: the one holding an entry, else a path nothing wrote.
 fn cache_file(home: &Path, dir: &Path) -> PathBuf {
-    let canonical = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
-    let segment = batten::state::derive_repo_name(&canonical).expect("derive the state segment");
-    let cache = home.join("batten").join(segment).join("cache");
+    let cache = state_dir(home, dir).join("cache");
     fs::read_dir(&cache)
         .into_iter()
         .flatten()
@@ -441,9 +446,7 @@ fn a_cache_hit_equals_the_cold_recompute() {
 fn a_cache_write_removes_the_retired_record() {
     let dir = repo("retired-record", "version = 1\n", &[("AGENTS.md", "a\n")]);
     let home = cache_home("retired-record");
-    let canonical = dir.canonicalize().unwrap_or_else(|_| dir.clone());
-    let segment = batten::state::derive_repo_name(&canonical).expect("derive the state segment");
-    let state = home.join("batten").join(segment);
+    let state = state_dir(&home, &dir);
     fs::create_dir_all(&state).expect("state dir");
     fs::write(state.join("epoch.json"), "{}").expect("retired record");
 

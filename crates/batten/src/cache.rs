@@ -69,14 +69,10 @@ const KEPT_PARTITIONS: usize = 4;
 //MUTANT partitions-never-pruned|s@^    prune(\&root, name);$@@|a_new_partition_keeps_its_neighbours_up_to_the_bound
 #[must_use]
 pub fn root_under(parent: &Path) -> Option<PathBuf> {
-    // A binary that cannot name itself caches nothing: every such binary would
-    // share the empty identity, and an upgrade would read its predecessor's
-    // entries (code review of CLOUD-2315).
-    if running_binary().is_empty() {
-        return None;
-    }
+    // A binary that cannot name itself has no partition, so it caches nothing
+    // (code review of CLOUD-2315).
+    let name = partition()?;
     let root = parent.join("cache");
-    let name = partition();
     let own = root.join(name);
     if let Ok(meta) = std::fs::metadata(&own)
         && meta.is_dir()
@@ -93,11 +89,10 @@ pub fn root_under(parent: &Path) -> Option<PathBuf> {
     Some(own)
 }
 
-/// How stale a partition's use time may grow before a hit refreshes it: short
-/// against a burst of rebuilds, each a new partition that prunes the oldest, so
-/// a binary in use is never the oldest while it is in use (code review of
-/// CLOUD-2315 — a day let four rebuilds evict the installed hook). The cost is
-/// one `utimensat` a minute.
+/// How stale a partition's use time may grow before a hit refreshes it: well
+/// inside [`IN_USE`], so a binary in use reads as in use to every prune (code
+/// review of CLOUD-2315 — a day let four rebuilds evict the installed hook). The
+/// cost is one `utimensat` a minute.
 const USE_REFRESH: std::time::Duration = std::time::Duration::from_mins(1);
 
 /// Mark `own` used, at most once a minute, so [`prune`] ranks partitions by LAST
@@ -120,13 +115,15 @@ fn refresh_use(own: &Path, meta: &std::fs::Metadata) {
 }
 
 /// The running binary's partition name: a short digest of its identity, which
-/// is filesystem-safe whatever the identity spells.
-fn partition() -> &'static str {
-    static NAME: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+/// is filesystem-safe whatever the identity spells. `None` for a binary that
+/// cannot name itself.
+fn partition() -> Option<&'static str> {
+    static NAME: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
     NAME.get_or_init(|| {
-        let digest = blake3::hash(running_binary().as_bytes()).to_hex();
-        digest.as_str().get(..16).unwrap_or_default().to_owned()
+        let digest = blake3::hash(running_binary()?.as_bytes()).to_hex();
+        digest.as_str().get(..16).map(str::to_owned)
     })
+    .as_deref()
 }
 
 /// Whether `name` is spelled as a partition.
@@ -139,6 +136,7 @@ fn is_partition(name: &str) -> bool {
 /// partition — the flat layout entries were written in before partitions
 /// existed. Best-effort: another process pruning the same directory, or one
 /// writing into a partition removed here, costs a miss and never a wrong answer.
+//MUTANT in-use-partition-pruned|s@^        if made.elapsed().is_ok_and(\x7cage\x7c age < IN_USE) {$@        if false {@|a_partition_in_use_is_kept_past_the_bound
 fn prune(root: &Path, own: &str) {
     let Ok(entries) = std::fs::read_dir(root) else {
         return;
@@ -166,16 +164,27 @@ fn prune(root: &Path, own: &str) {
         partitions.push((made, path));
     }
     partitions.sort_by_key(|(made, _)| std::cmp::Reverse(*made));
-    for (_, path) in partitions.into_iter().skip(KEPT_PARTITIONS - 1) {
+    for (made, path) in partitions.into_iter().skip(KEPT_PARTITIONS - 1) {
+        if made.elapsed().is_ok_and(|age| age < IN_USE) {
+            continue;
+        }
         let _ = std::fs::remove_dir_all(path);
     }
 }
+
+/// A partition used this recently is in use, and [`prune`] keeps it past the
+/// bound: a burst of rebuilds — a mutation sweep, a test loop — must not evict
+/// the installed hook between two of its calls (code review of CLOUD-2315). It
+/// exceeds [`USE_REFRESH`] by far, so a binary in use is always inside it.
+const IN_USE: std::time::Duration = std::time::Duration::from_hours(1);
 
 /// The key for an entry: the running binary, a format tag the caller bumps when
 /// its encoding changes, and every input the value is a function of.
 #[must_use]
 pub fn key(format: &str, inputs: &[&[u8]]) -> String {
-    let binary = running_binary();
+    // Unnamed, the binary has no partition to read or write a keyed entry in
+    // ([`root_under`]), so the empty spelling here never files one.
+    let binary = running_binary().unwrap_or_default();
     let mut fields: Vec<&[u8]> = Vec::with_capacity(inputs.len() + 3);
     fields.push(format.as_bytes());
     fields.push(env!("CARGO_PKG_VERSION").as_bytes());
@@ -236,21 +245,25 @@ fn split_line(bytes: &[u8]) -> Option<(&[u8], &[u8])> {
 }
 
 /// The running binary's identity: its linker build ID where the image carries
-/// one, else its stat tuple. Computed once per process.
+/// one, else its stat tuple. Computed once per process. `None` when neither
+/// can be read: every such binary would share one empty identity, and an
+/// upgrade would read its predecessor's entries (code review of CLOUD-2315).
 #[must_use]
-pub fn running_binary() -> &'static str {
-    static IDENTITY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-    IDENTITY.get_or_init(|| {
-        let image = running_image();
-        if let Some(id) = image
-            .as_deref()
-            .and_then(read_head)
-            .and_then(|head| build_id(&head))
-        {
-            return format!("build-id:{}", hex(&id));
-        }
-        image.as_deref().and_then(stat_identity).unwrap_or_default()
-    })
+pub fn running_binary() -> Option<&'static str> {
+    static IDENTITY: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    IDENTITY
+        .get_or_init(|| {
+            let image = running_image();
+            if let Some(id) = image
+                .as_deref()
+                .and_then(read_head)
+                .and_then(|head| build_id(&head))
+            {
+                return Some(format!("build-id:{}", hex(&id)));
+            }
+            image.as_deref().and_then(stat_identity)
+        })
+        .as_deref()
 }
 
 /// The file the running code was mapped from. On Linux `/proc/self/exe` names
@@ -564,7 +577,7 @@ mod tests {
     /// back to the stat tuple, so the assertion is scoped to ELF and Mach-O.
     #[test]
     fn the_running_binary_is_identified_by_its_code() {
-        let identity = running_binary();
+        let identity = running_binary().expect("the binary names itself");
         if cfg!(any(target_os = "linux", target_os = "macos")) {
             assert!(
                 identity.starts_with("build-id:"),
@@ -667,6 +680,28 @@ mod tests {
         );
     }
 
+    /// Partitions used within the hour are in use, and a new partition's prune
+    /// keeps every one of them past the bound: a burst of rebuilds never evicts
+    /// a binary between two of its calls.
+    #[test]
+    fn a_partition_in_use_is_kept_past_the_bound() {
+        let dir = scratch("partitions-in-use");
+        let root = dir.join("cache");
+        let others = [
+            "0000000000000001",
+            "0000000000000002",
+            "0000000000000003",
+            "0000000000000004",
+        ];
+        for name in others {
+            std::fs::create_dir_all(root.join(name)).expect("partition");
+        }
+        let _ = root_under(&dir).expect("root");
+        for name in others {
+            assert!(root.join(name).is_dir(), "{name} is in use and kept");
+        }
+    }
+
     /// A file whose coarse change time reads a moment BEFORE the entry's fine
     /// write time may still have changed within that tick: it is racy, and only
     /// one changed clearly earlier is believed.
@@ -699,8 +734,9 @@ mod tests {
     ///
     /// Compiled everywhere; AGED on unix only. Ageing a directory opens it as a
     /// file, which Windows refuses without a backup-semantics flag `std` does not
-    /// expose, so there the partitions share a creation time and the case holds
-    /// the bound alone — which one goes is then the platform's tie.
+    /// expose, so there the partitions are all fresh — in use, and kept past the
+    /// bound ([`a_partition_in_use_is_kept_past_the_bound`]) — and the case holds
+    /// the flat layout's retirement alone.
     #[test]
     fn a_new_partition_keeps_its_neighbours_up_to_the_bound() {
         let aged = cfg!(unix);
@@ -727,12 +763,12 @@ mod tests {
         assert!(own.is_dir());
         assert!(!root.join("policy").exists(), "the flat layout is retired");
         assert!(!root.join("epoch").exists(), "the flat layout is retired");
-        let kept = others
-            .iter()
-            .filter(|name| root.join(name).is_dir())
-            .count();
-        assert_eq!(kept, KEPT_PARTITIONS - 1, "own partition plus the bound");
         if aged {
+            let kept = others
+                .iter()
+                .filter(|name| root.join(name).is_dir())
+                .count();
+            assert_eq!(kept, KEPT_PARTITIONS - 1, "own partition plus the bound");
             assert!(
                 !root.join(others[0]).exists(),
                 "the oldest partition past the bound goes"
