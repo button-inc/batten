@@ -12280,6 +12280,8 @@ fn place_the_bet(
             Ok(())
         }
         Ok(_) => {
+            // A SIGNAL MUST NOT STRAND THE BET (CLOUD-1747).
+            speculation::arm(root, branch, &undo);
             bet.base = Some(candidate.clone());
             bet.undo = Some(undo);
             bet.main_at_bet = main_at_bet;
@@ -12342,6 +12344,8 @@ fn drop_the_bet(root: &Path, bet: &mut speculation::Bet) {
     bet.forget();
     let _ = gitwrite::delete_ref(root, speculation::BASE_REF);
     let _ = gitwrite::delete_ref(root, speculation::LIVE_REF);
+    // Nothing left for a signal to unwind (CLOUD-1747).
+    speculation::disarm();
 }
 
 /// The lap's own lease acquisition, so one branch at a time buys a matrix.

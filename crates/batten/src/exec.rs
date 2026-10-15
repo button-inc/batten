@@ -1434,6 +1434,51 @@ fn await_group(slot: &Arc<std::sync::atomic::AtomicI32>) -> Option<rustix::proce
 // case reads the recorded reason, so a swallowed second signal shows up as the
 // grace expiring rather than as a teardown that took longer.
 //MUTANT second-signal-ignored|s@^                if signals.pending().next().is_some() {$@                if signals.pending().next().is_some() \&\& false {@|a_second_signal_escalates_instead_of_being_swallowed
+/// What must run before Batten dies of a signal it was sent (CLOUD-1747).
+///
+/// One slot, because one caller needs it: `land` places a speculative bet that
+/// rewrites the branch onto another session's head, and a signal that ends the
+/// process mid-lap left the branch carrying those commits — measured on #1178,
+/// where `TaskStop` sent SIGTERM and hard-killed inside 3s. Every re-raise path
+/// in this module runs it first, and `land`'s own watcher runs it when no child
+/// is running. Taken, so it runs at most once whichever path gets there first.
+static ON_TERMINATE: std::sync::Mutex<Option<Box<dyn FnOnce() + Send>>> =
+    std::sync::Mutex::new(None);
+
+/// How many forwarders are live: while one is, it owns re-raising a signal after
+/// its group's grace, and `land`'s watcher must not cut that short.
+#[cfg(unix)]
+static FORWARDING: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Register the work a terminating signal must do first, replacing any earlier.
+pub(crate) fn on_terminate(work: impl FnOnce() + Send + 'static) {
+    if let Ok(mut slot) = ON_TERMINATE.lock() {
+        *slot = Some(Box::new(work));
+    }
+}
+
+/// Withdraw it: the state it would repair no longer exists.
+pub(crate) fn clear_on_terminate() {
+    if let Ok(mut slot) = ON_TERMINATE.lock() {
+        *slot = None;
+    }
+}
+
+/// Run it, once, if one is registered.
+#[cfg(unix)]
+pub(crate) fn run_on_terminate() {
+    let work = ON_TERMINATE.lock().ok().and_then(|mut slot| slot.take());
+    if let Some(work) = work {
+        work();
+    }
+}
+
+/// Whether a forwarder is live, so a signal's re-raise is already owned.
+#[cfg(unix)]
+pub(crate) fn forwarding() -> bool {
+    FORWARDING.load(std::sync::atomic::Ordering::SeqCst) > 0
+}
+
 #[cfg(unix)]
 impl Forwarding {
     /// Install the registry **before** the spawn, if `decision` says Batten owns
@@ -1537,6 +1582,7 @@ impl Forwarding {
             Some(Escalation::GraceExpired)
         });
 
+        FORWARDING.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Ok(Self {
             active: Some(ForwardingThread {
                 handle,
@@ -1597,6 +1643,7 @@ impl Forwarding {
         let Some(active) = self.active else {
             return (None, None);
         };
+        FORWARDING.fetch_sub(1, Ordering::SeqCst);
         active.handle.close();
         // A worker that panicked has still recorded what it saw before it could,
         // and a panic on the way out is not worth failing a completed command for.
@@ -2066,6 +2113,7 @@ pub(crate) fn classify_in_env(
 #[cfg(unix)]
 fn reraise(outcomes: &[Outcome]) -> Result<()> {
     if let Some(signal) = outcomes.iter().find_map(|outcome| outcome.received) {
+        run_on_terminate();
         // Restores the default disposition and raises on self, so this does not
         // return.
         signal_hook::low_level::emulate_default_handler(signal)
@@ -2879,6 +2927,7 @@ fn report_bundle(
     #[cfg(unix)]
     if let Some(signal) = outcomes.iter().find_map(|outcome| outcome.received) {
         report.flush()?;
+        run_on_terminate();
         // Restores the default disposition and raises on self, so this does not
         // return. A safe API, already vendored — `unsafe_code = "forbid"` is not
         // the blocker it looks like.

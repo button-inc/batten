@@ -444,6 +444,75 @@ pub fn carries(dir: &Path, candidate: &str, tip: &str) -> bool {
     crate::gitwrite::carries(dir, candidate, tip)
 }
 
+/// Make a terminating signal unwind the bet just placed (CLOUD-1747).
+///
+/// From the replay until the bet settles, `branch` carries another session's
+/// commits. A lap ended by a signal used to leave it that way, because nothing
+/// ran on the way out: measured on #1178, `TaskStop` sent SIGTERM and hard-killed
+/// within 3s, mid-verify, and the next `git push` was the only thing that stopped
+/// those commits going out under that PR. The unwind is local git, so it fits a
+/// short grace; [`BASE_REF`] and [`LIVE_REF`] go with it, so the next `land` does
+/// not adopt a bet that is already undone.
+///
+/// A SIGKILL cannot be caught, and [`recover`] is that half: the next lap adopts
+/// the stranded ref and replays this branch's own commits off it.
+///
+/// [`disarm`] is the bet settling; until then the unwind is armed.
+//MUTANT-SUITE crates/batten/tests/it/land_signal.rs
+//MUTANT signal-leaves-borrowed-range|s@^        let _ = crate::gitwrite::reset_hard(&at, &full, &unwind_to);$@@|a_sigterm_mid_speculation_leaves_the_branch_on_its_own_head
+//MUTANT signal-keeps-base-ref|s@^        let _ = crate::gitwrite::delete_ref(&at, BASE_REF);$@@|a_sigterm_mid_speculation_leaves_the_branch_on_its_own_head
+pub fn arm(root: &Path, branch: &str, undo: &str) {
+    let (at, full, unwind_to) = (
+        root.to_path_buf(),
+        format!("refs/heads/{branch}"),
+        undo.to_owned(),
+    );
+    crate::exec::on_terminate(move || {
+        let _ = crate::gitwrite::reset_hard(&at, &full, &unwind_to);
+        let _ = crate::gitwrite::delete_ref(&at, BASE_REF);
+        let _ = crate::gitwrite::delete_ref(&at, LIVE_REF);
+    });
+    #[cfg(unix)]
+    watch_signals();
+}
+
+/// The bet settled, so a signal has nothing left to unwind.
+//MUTANT-SUITE crates/batten/tests/it/land_signal.rs
+//MUTANT disarm-inert|s@^    crate::exec::clear_on_terminate();$@@|a_sigterm_after_the_bet_settled_leaves_the_branch_alone
+pub fn disarm() {
+    crate::exec::clear_on_terminate();
+}
+
+/// Watch for a terminating signal while a bet is armed.
+///
+/// [`crate::exec`]'s forwarder also runs the unwind on its own re-raise; this
+/// covers every moment it is not running a child (a fetch, a lease read, a wait
+/// on CI), and runs the unwind AT the signal rather than after a child's grace.
+/// It re-raises only when no forwarder owns the re-raise, so a child group still
+/// gets its full grace. The slot is taken once, whichever path reaches it first.
+/// Installed once per process; an unarmed signal finds the slot empty and takes
+/// the default action.
+#[cfg(unix)]
+fn watch_signals() {
+    static WATCHING: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    WATCHING.get_or_init(|| {
+        use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
+        let Ok(mut signals) = signal_hook::iterator::Signals::new([SIGHUP, SIGINT, SIGTERM]) else {
+            return;
+        };
+        // EVERY signal, not the first: a registration outlives its iterator, so a
+        // watcher that stopped after one would leave the next SIGTERM ignored.
+        std::thread::spawn(move || {
+            for signal in signals.forever() {
+                crate::exec::run_on_terminate();
+                if !crate::exec::forwarding() {
+                    let _ = signal_hook::low_level::emulate_default_handler(signal);
+                }
+            }
+        });
+    });
+}
+
 /// Adopt a bet this process did not place.
 ///
 /// Runs BEFORE the ordinary settle, so the settle that follows is the ordinary
