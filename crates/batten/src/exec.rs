@@ -1391,9 +1391,10 @@ struct ForwardingThread {
     /// which the child is a group leader and Batten still holds the default
     /// dispositions.
     pgid: Arc<std::sync::atomic::AtomicI32>,
-    /// This forwarder's place in [`forwarding`]'s count, released when the
-    /// forwarder is, on every path: a `?` between arming and the finish used to
-    /// leave the count raised for the rest of the process.
+    /// This forwarder's place in [`forwarding`]'s count, released on every path:
+    /// with the forwarder on an early `?` (one used to leave the count raised for
+    /// the rest of the process), and in [`Forwarding::finish_reporting`] BEFORE
+    /// the handle closes, since a closed forwarder answers no signal.
     live: Live,
 }
 
