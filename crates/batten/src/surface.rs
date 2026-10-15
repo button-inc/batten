@@ -5365,6 +5365,9 @@ pub const SURFACE: &[CommandDecl] = &[
         effect: Effect::Write,
         flags: &[],
     },
+    // unreached: "preset eject" CLOUD-2290 a consumer runs it once, by hand, to take
+    // a module out of the binary; no task, workflow or hook should ever eject on
+    // its own, so nothing in this tree invokes it.
     CommandDecl {
         path: "preset eject",
         id: "preset.eject",

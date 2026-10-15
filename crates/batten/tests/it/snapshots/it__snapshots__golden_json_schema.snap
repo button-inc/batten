@@ -1,5 +1,6 @@
 ---
 source: crates/batten/tests/it/snapshots.rs
+assertion_line: 139
 expression: stdout_of(&output)
 ---
 {
@@ -3171,6 +3172,34 @@ expression: stdout_of(&output)
               "takes_value": true,
               "positional": false,
               "help": "The commit whose check runs to read — a sha, or a ref this checkout resolves"
+            }
+          ],
+          "subcommands": []
+        }
+      ]
+    },
+    {
+      "path": "preset",
+      "id": "preset",
+      "about": "Take a vendored preset's modules into this repository",
+      "effect": "write",
+      "data_channel": false,
+      "flags": [],
+      "subcommands": [
+        {
+          "path": "preset eject",
+          "id": "preset.eject",
+          "about": "Copy a preset module and its call closure into policy/<preset>/ and load the copies instead",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "target",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The module to eject, as <preset>/<module>, e.g. claude-code-cloud/plan-mode-refuses-writes"
             }
           ],
           "subcommands": []
