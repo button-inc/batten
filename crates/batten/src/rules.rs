@@ -450,6 +450,43 @@ pub enum NativeGate {
     History,
 }
 
+impl NativeGate {
+    /// Every gate, in the order the mediated chain runs them.
+    pub const ALL: &'static [NativeGate] = &[
+        NativeGate::DestructiveReset,
+        NativeGate::Singleton,
+        NativeGate::History,
+    ];
+
+    /// The `gate = "..."` token (§6).
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            NativeGate::DestructiveReset => "destructive-reset",
+            NativeGate::Singleton => "singleton",
+            NativeGate::History => "history",
+        }
+    }
+}
+
+/// The severity `rules` grade `gate` at (CLOUD-2291): the strongest `native` row
+/// naming it, or `deny` where none does.
+///
+/// THE ONE DEFINITION, read by the hook that enforces the grade and by the
+/// weakening diff that judges a change to it, so the two cannot disagree. The
+/// STRONGEST, never the first, so declaration order decides nothing; and `deny`
+/// for no row, so no addition can lower a gate it does not name. A config that
+/// predates the kind keeps every gate refusing.
+#[must_use]
+pub fn native_grade(rules: &[Rule], gate: NativeGate) -> RuleSeverity {
+    rules
+        .iter()
+        .filter(|rule| rule.kind == RuleKind::Native && rule.gate == Some(gate))
+        .map(Rule::severity)
+        .max()
+        .unwrap_or(RuleSeverity::Deny)
+}
+
 /// The columns a [`RuleKind::Reference`] row accepts (CLOUD-2005): its `cites`
 /// table, the citer's `glob` with one of `regex` or `format` + `node`, and the
 /// columns every reporting kind shares. A const of its own so

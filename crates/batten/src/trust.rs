@@ -67,7 +67,7 @@ use anyhow::Result;
 use crate::UsageError;
 use crate::config::{self, Config, Strictness};
 use crate::git;
-use crate::rules::Rule;
+use crate::rules::{Rule, RuleKind};
 use crate::severity::RuleSeverity;
 use crate::waiver;
 
@@ -3730,12 +3730,14 @@ fn added_entries(kind: WeakeningKind, base: &[String], working: &[String]) -> Ve
 /// this comparison deliberately does not answer, because any answer would be a
 /// judgement rather than a predicate.
 fn rule_weakenings(base: &[Rule], working: &[Rule]) -> Vec<Weakening> {
+    // NATIVE ROWS ARE JUDGED BY THE GRADE THEY PRODUCE, NOT ROW BY ROW
+    // (CLOUD-2291): a gate's grade is the strongest row naming it, or `deny`, so
+    // adding, removing, retargeting or reordering a row lowers a gate only when
+    // that grade drops — which `native_weakenings` asks of every gate directly.
     base.iter()
+        .filter(|rule| rule.kind != RuleKind::Native)
         .filter_map(|rule| {
             match working.iter().find(|other| other.id == rule.id) {
-                // A NATIVE ROW'S REMOVAL LOWERS NOTHING (CLOUD-2291): its gate
-                // returns to the implicit `deny`, which no row exceeds.
-                None if rule.kind == crate::rules::RuleKind::Native => None,
                 None => Some(Weakening::new(
                     WeakeningKind::RuleRemoved,
                     format!("rule[{}]", rule.id),
@@ -3753,40 +3755,42 @@ fn rule_weakenings(base: &[Rule], working: &[Rule]) -> Vec<Weakening> {
                 Some(_) => None,
             }
         })
-        .chain(base.iter().flat_map(|rule| {
-            working
-                .iter()
-                .find(|other| other.id == rule.id)
-                .map_or_else(Vec::new, |other| rule_predicate_weakenings(rule, other))
-        }))
+        .chain(
+            base.iter()
+                .filter(|rule| rule.kind != RuleKind::Native)
+                .flat_map(|rule| {
+                    working
+                        .iter()
+                        .find(|other| other.id == rule.id)
+                        .map_or_else(Vec::new, |other| rule_predicate_weakenings(rule, other))
+                }),
+        )
         .chain(native_weakenings(base, working))
         .collect()
 }
 
-/// A `native` row that grades its gate below the implicit `deny` it had before
-/// the row existed (CLOUD-2291).
+/// Every compiled gate whose grade the change lowered (CLOUD-2291), keyed
+/// `native[<gate>]` and reported as `severity-lowered`.
 ///
-/// A compiled gate with no row runs at `deny`, so ADDING a row at `warn` or
-/// `allow` lowers it exactly as editing an existing row's severity would — and
-/// [`rule_weakenings`] keys on the base's rows, so an added one is invisible to
-/// it. Reported as `severity-lowered` from that implicit `deny`.
+/// Compares [`crate::rules::native_grade`] over both configs, the one definition
+/// the hook enforces, so a change lowers a gate here exactly when it lowers it
+/// there.
 fn native_weakenings<'a>(
     base: &'a [Rule],
     working: &'a [Rule],
 ) -> impl Iterator<Item = Weakening> + 'a {
-    working
-        .iter()
-        .filter(|rule| rule.kind == crate::rules::RuleKind::Native)
-        .filter(|rule| !base.iter().any(|old| old.id == rule.id))
-        .filter(|rule| rule.severity() < crate::severity::RuleSeverity::Deny)
-        .map(|rule| {
+    crate::rules::NativeGate::ALL.iter().filter_map(|gate| {
+        let was = crate::rules::native_grade(base, *gate);
+        let now = crate::rules::native_grade(working, *gate);
+        (now < was).then(|| {
             Weakening::new(
                 WeakeningKind::SeverityLowered,
-                format!("rule[{}].severity", rule.id),
-                severity_token(crate::severity::RuleSeverity::Deny),
-                severity_token(rule.severity()),
+                format!("native[{}]", gate.as_str()),
+                severity_token(was),
+                severity_token(now),
             )
         })
+    })
 }
 
 /// Rule columns that are not the rule's predicate, each with why not.
@@ -5846,22 +5850,40 @@ mod tests {
         )
     }
 
-    /// CLOUD-2291: a gate with no row runs at `deny`, so ADDING a row below it is
-    /// the same lowering as editing a row's severity down, and is reported as
-    /// one. An added row AT deny lowers nothing.
+    /// CLOUD-2291 (the name is the Ready block's). A gate's grade is the strongest
+    /// row naming it, or `deny`, and a change is a weakening exactly when that
+    /// grade drops — however the rows got there.
     #[test]
     fn an_added_native_row_below_deny_is_a_lowered_severity() {
-        let base = config("");
-        for severity in ["warn", "allow"] {
-            let working = config(&native("reset", "destructive-reset", severity));
-            let found = only(&base, &working);
-            assert_eq!(found.kind, WeakeningKind::SeverityLowered, "{severity}");
-        }
-        let working = config(&native("reset", "destructive-reset", "deny"));
-        assert!(weakenings(&base, &working).is_empty());
-        // And deleting one returns its gate to `deny`, which lowers nothing.
-        let base = config(&native("reset", "destructive-reset", "allow"));
-        assert!(weakenings(&base, &config("")).is_empty());
+        let lowered = |base: &str, working: &str| {
+            let found = weakenings(&config(base), &config(working));
+            found
+                .iter()
+                .any(|w| w.kind == WeakeningKind::SeverityLowered && w.key.starts_with("native["))
+        };
+        let reset = |id: &str, severity: &str| native(id, "destructive-reset", severity);
+        // Added below the implicit deny: lowered.
+        assert!(lowered("", &reset("a", "warn")));
+        assert!(lowered("", &reset("a", "allow")));
+        // Added at deny, or beside a deny row that still decides: not lowered.
+        assert!(!lowered("", &reset("a", "deny")));
+        assert!(!lowered(
+            &reset("a", "deny"),
+            &format!("{}{}", reset("a", "deny"), reset("b", "allow"))
+        ));
+        // Removing the only row returns the gate to deny: not lowered.
+        assert!(!lowered(&reset("a", "allow"), ""));
+        assert!(weakenings(&config(&reset("a", "allow")), &config("")).is_empty());
+        // Removing the deny row of two leaves the allow one deciding: lowered.
+        assert!(lowered(
+            &format!("{}{}", reset("a", "deny"), reset("b", "allow")),
+            &reset("b", "allow")
+        ));
+        // Retargeting a row to another gate lowers that gate: lowered.
+        assert!(lowered(
+            &reset("a", "allow"),
+            &native("a", "singleton", "allow")
+        ));
     }
 
     #[test]

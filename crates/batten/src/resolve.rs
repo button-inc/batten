@@ -71,7 +71,7 @@ use serde::{Serialize, Serializer};
 
 use crate::config::{self, Strictness};
 use crate::error::UsageError;
-use crate::rules::Rule;
+use crate::rules::{Rule, RuleKind};
 
 /// The git-ignored local override file, read from the same directory as the
 /// committed authority. Optional: absent simply means "no local override".
@@ -1493,7 +1493,7 @@ fn apply_local(
         // A COMPILED GATE IS GRADED BY THE COMMITTED AUTHORITY ONLY (CLOUD-2291).
         // A gate with no row runs at `deny`, so a local row naming one could only
         // lower it — and this file is git-ignored, so nothing would ever see it.
-        if rule.kind == crate::rules::RuleKind::Native {
+        if rule.kind == RuleKind::Native {
             return Err(UsageError::raise(format!(
                 "rule {}: a `native` row grades one of the engine's own gates, which {} \
                  does alone; {LOCAL_CONFIG_FILE} may not carry one",
