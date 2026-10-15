@@ -187,6 +187,7 @@ dependencies = [
  "regex-automata",
  "regex-syntax",
  "regorus",
+ "rmp-serde",
  "rustix",
  "rustls",
  "rustls-graviola",

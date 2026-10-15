@@ -1789,15 +1789,19 @@ fn compile_cached(
     };
     if let Some(path) = path {
         write_cached(&path, &key, &bundle, &compiled);
+        // THE RETIRED LOCATION GOES ON A MISS (CLOUD-2315): format 1 wrote
+        // beside the state rather than under `cache/`, and nothing reads it now.
+        // Here, never on a hit, so the warm path pays nothing for the move.
+        if let Ok(dir) = crate::state::repo_state_dir(&crate::git::canonical(root)) {
+            let _ = std::fs::remove_dir_all(dir.join("policy"));
+        }
     }
     Ok(compiled.into_bundle(bundle))
 }
 
-/// What a cache entry's first line records beside the bytecode.
+/// What an entry's body records beside the bytecode, on its first line.
 #[derive(serde::Serialize, serde::Deserialize)]
 struct CacheHeader {
-    /// [`cache_key`] of the inputs the entry was compiled from.
-    key: String,
     declared: BTreeSet<String>,
     packages: BTreeSet<Vec<String>>,
     entries: BTreeSet<(Vec<String>, String)>,
@@ -1805,10 +1809,12 @@ struct CacheHeader {
 }
 
 /// The cache format; a change to [`CacheHeader`] or to how bytecode is written
-/// bumps it, which makes every older entry a miss.
-const CACHE_FORMAT: &str = "batten-policy-rvm-1";
+/// bumps it, which makes every older entry a miss. `2` since the entry moved
+/// onto `crate::cache` (CLOUD-2315): the key left the header for the entry's own
+/// key line, and the binary is identified by its build ID.
+const CACHE_FORMAT: &str = "batten-policy-rvm-2";
 
-/// The entry for row `id`, in the repository's state directory: one file per
+/// The entry for row `id`, under the repository's cache directory: one file per
 /// row, overwritten on a miss, so the cache never grows past the row count.
 //MUTANT cache-root-relative|s@repo_state_dir(\&crate::git::canonical(root))@repo_state_dir(root)@|a_warm_load_from_the_working_directory_compiles_no_engine
 fn cache_path(root: &Path, id: &str) -> Option<std::path::PathBuf> {
@@ -1816,43 +1822,27 @@ fn cache_path(root: &Path, id: &str) -> Option<std::path::PathBuf> {
     // from the repository's own directory, which `.` does not carry.
     let dir = crate::state::repo_state_dir(&crate::git::canonical(root)).ok()?;
     Some(
-        dir.join("policy")
+        crate::cache::root_under(&dir)?
+            .join("policy")
             .join(format!("{}.rvm", blake3::hash(id.as_bytes()).to_hex())),
     )
 }
 
-/// The digest an entry must carry to be read: everything the bytecode is a
-/// function of. This binary's identity is its size and modification time, so a
-/// rebuild at an unchanged version — a local build, or a regorus bump — is a
-/// miss too.
-//MUTANT cache-key-ignores-source|s@        field(source.as_bytes());@        let _ = source;@|an_edited_module_is_not_answered_from_stale_bytecode
+/// The key an entry must carry to be read: everything the bytecode is a
+/// function of, through `crate::cache::key`, which adds the format and the
+/// running binary's build ID — so a rebuild that changes the code, a regorus bump
+/// included, is a miss, and a relink to identical code is not.
+//MUTANT cache-key-ignores-source|s@        fields.push(source.as_bytes());@        let _ = source;@|an_edited_module_is_not_answered_from_stale_bytecode
 fn cache_key(id: &str, sources: &[(String, String)], data: &serde_json::Value) -> String {
-    let mut hasher = blake3::Hasher::new();
-    let mut field = |bytes: &[u8]| {
-        hasher.update(&(bytes.len() as u64).to_le_bytes());
-        hasher.update(bytes);
-    };
-    field(CACHE_FORMAT.as_bytes());
-    field(env!("CARGO_PKG_VERSION").as_bytes());
-    let binary = std::env::current_exe()
-        .and_then(std::fs::metadata)
-        .map(|meta| {
-            let modified = meta
-                .modified()
-                .ok()
-                .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
-                .map_or(0, |since| since.as_nanos());
-            format!("{}:{modified}", meta.len())
-        })
-        .unwrap_or_default();
-    field(binary.as_bytes());
-    field(id.as_bytes());
+    let data = data.to_string();
+    let mut fields: Vec<&[u8]> = Vec::with_capacity(2 + 2 * sources.len());
+    fields.push(id.as_bytes());
     for (path, source) in sources {
-        field(path.as_bytes());
-        field(source.as_bytes());
+        fields.push(path.as_bytes());
+        fields.push(source.as_bytes());
     }
-    field(data.to_string().as_bytes());
-    hasher.finalize().to_hex().to_string()
+    fields.push(data.as_bytes());
+    crate::cache::key(CACHE_FORMAT, &fields)
 }
 
 /// The cached bundle for `id`, when the entry at `path` was written from
@@ -1864,13 +1854,10 @@ fn read_cached(
     sources: &[(String, String)],
     data: &serde_json::Value,
 ) -> Option<Bundle> {
-    let bytes = std::fs::read(path).ok()?;
+    let bytes = crate::cache::read(path, key)?;
     let split = bytes.iter().position(|byte| *byte == b'\n')?;
     let (head, body) = bytes.split_at(split);
     let header: CacheHeader = serde_json::from_slice(head).ok()?;
-    if header.key != key {
-        return None;
-    }
     // Only a whole program: a partial one is regorus asking to recompile.
     let regorus::rvm::program::DeserializationResult::Complete(program) =
         regorus::rvm::program::Program::deserialize_binary(body.get(1..)?).ok()?
@@ -1902,7 +1889,6 @@ fn read_cached(
 /// miss, which costs it the compile and nothing else.
 fn write_cached(path: &Path, key: &str, bundle: &Bundle, compiled: &Compiled) {
     let header = CacheHeader {
-        key: key.to_owned(),
         declared: bundle.declared.clone(),
         packages: bundle.packages.clone(),
         entries: compiled.entries.clone(),
@@ -1916,11 +1902,7 @@ fn write_cached(path: &Path, key: &str, bundle: &Bundle, compiled: &Compiled) {
     };
     bytes.push(b'\n');
     bytes.extend_from_slice(&program);
-    if let Some(dir) = path.parent()
-        && std::fs::create_dir_all(dir).is_ok()
-    {
-        let _ = crate::durable::replace(path, bytes);
-    }
+    crate::cache::write(path, key, &bytes);
 }
 
 /// The rule names any caller reads off a bundle's answer.

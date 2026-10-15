@@ -4330,11 +4330,99 @@ fn parse_remembered(text: &str, source: &str) -> Result<Config> {
     {
         return Ok(config.clone());
     }
-    let config = parse_ungated(text, source)?;
+    let persisted = PERSIST_PARSES
+        .load(std::sync::atomic::Ordering::Relaxed)
+        .then(|| (parse_cache_path(source), parse_cache_key(text, source)));
+    let cached = persisted.as_ref().and_then(|(path, key)| {
+        path.as_deref()
+            .and_then(|path| read_cached_parse(path, key))
+    });
+    let config = match cached {
+        Some(config) => config,
+        None => {
+            let config = parse_ungated(text, source)?;
+            if let Some((Some(path), key)) = &persisted {
+                write_cached_parse(path, key, &config);
+            }
+            config
+        }
+    };
     if let Ok(mut last) = LAST.lock() {
         *last = Some((text.to_owned(), source.to_owned(), config.clone()));
     }
     Ok(config)
+}
+
+/// Whether [`parse_remembered`] may answer from, and write to, the on-disk
+/// parse cache (CLOUD-2315). Off unless a caller turns it on, so a library caller
+/// and every unit test parse exactly as before and write nothing.
+static PERSIST_PARSES: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// THE HOOK PATH PARSES THE AUTHORITY ONCE PER EDIT, NOT ONCE PER CALL
+/// (CLOUD-2315).
+///
+/// [`parse_remembered`] made one adjudication parse once; every adjudication is
+/// still its own process, and each paid the whole parse again — measured on one
+/// container, 8.5 ms to deserialize and 7.4 ms to validate this repository's
+/// 583 KB authority, against a 10 ms per-call target. The result is the pure
+/// function of `(text, source)` the doc above already relies on, so a validated
+/// `Config` stored under a key over both, and over this binary's identity, is
+/// the same answer at the cost of one decode.
+///
+/// **A STALE ENTRY CANNOT ANSWER.** The key carries the bytes and the source,
+/// and `crate::cache::key` adds the format and the running binary's build ID, so
+/// an edit, a code change or a different file is a miss that re-parses — the
+/// `.rvm` cache's contract, through the same module. A refusal is never stored,
+/// so a broken authority is re-judged every time. And
+/// `one_config_survives_the_parse_cache_unchanged` holds the encoding to a
+/// lossless round trip over this repository's own authority, so a field the
+/// encoding drops fails a test before it can be served.
+///
+/// MessagePack, measured: a hit costs 1.9 ms (read, key, integrity, decode)
+/// against the 16 ms parse, and the hook path went 81.0 -> 62.8 ms mean on one
+/// container. It is the slowest of the binary formats in the shared benchmark;
+/// the faster ones either cannot decode `Config`'s `untagged` types (postcard,
+/// bitcode's serde mode) or need a derive on every config type (rkyv).
+pub fn persist_parses() {
+    PERSIST_PARSES.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Bump on any change to how an entry is written; every older entry then misses.
+const PARSE_CACHE_FORMAT: &str = "batten-config-msgpack-1";
+
+/// One entry per authority FILE, overwritten on a miss, so the cache never grows
+/// past the number of authorities this machine loads. Named by the canonical
+/// path, so two repositories each loading `./batten.toml` do not take turns
+/// evicting one entry.
+fn parse_cache_path(source: &str) -> Option<std::path::PathBuf> {
+    let named = std::fs::canonicalize(source).map_or_else(
+        |_| source.to_owned(),
+        |path| path.to_string_lossy().into_owned(),
+    );
+    let root = crate::cache::root_under(&crate::state::state_root().ok()?)?;
+    Some(
+        root.join("config")
+            .join(format!("{}.cfg", blake3::hash(named.as_bytes()).to_hex())),
+    )
+}
+
+/// Everything a validated `Config` is a function of.
+//MUTANT parse-cache-key-ignores-text|s@^    crate::cache::key(PARSE_CACHE_FORMAT, \&\[source.as_bytes(), text.as_bytes()\])$@    crate::cache::key(PARSE_CACHE_FORMAT, \&[source.as_bytes()])@|an_edited_authority_is_not_answered_from_the_parse_cache
+fn parse_cache_key(text: &str, source: &str) -> String {
+    crate::cache::key(PARSE_CACHE_FORMAT, &[source.as_bytes(), text.as_bytes()])
+}
+
+/// The cached `Config` at `path`, when it was written under exactly `key`.
+fn read_cached_parse(path: &Path, key: &str) -> Option<Config> {
+    rmp_serde::from_slice(&crate::cache::read(path, key)?).ok()
+}
+
+/// Store `config` under `key`. Best-effort: a cache that cannot be written is a
+/// parse next time, never a failure of this one.
+fn write_cached_parse(path: &Path, key: &str, config: &Config) {
+    if let Ok(body) = rmp_serde::to_vec_named(config) {
+        crate::cache::write(path, key, &body);
+    }
 }
 
 fn parse_ungated_with(text: &str, source: &str, grammar: Grammar) -> Result<Config> {
@@ -6213,6 +6301,62 @@ mod tests {
         assert!(
             parse("version = 1\nnot toml at all [", "bad.toml").is_err(),
             "a refusal is still a refusal"
+        );
+    }
+
+    /// CLOUD-2315: the parse cache may only serve a `Config` the encoding carries
+    /// whole. Held over THIS repository's authority — every table and every
+    /// `untagged`/`flatten` type it actually declares — because a field the
+    /// encoding drops would otherwise be a gate silently missing from every hook
+    /// call answered from the cache.
+    #[test]
+    fn one_config_survives_the_parse_cache_unchanged() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../batten.toml");
+        let text = fs::read_to_string(&path).unwrap();
+        let parsed = parse_ungated(&text, "batten.toml").unwrap();
+        let dir = std::env::temp_dir().join(format!(
+            "batten-parse-cache-roundtrip-{}",
+            std::process::id()
+        ));
+        let entry = dir.join("entry.cfg");
+        let key = parse_cache_key(&text, "batten.toml");
+        write_cached_parse(&entry, &key, &parsed);
+        let served = read_cached_parse(&entry, &key).expect("a written entry is served");
+        // THE ONE NAMED EXCEPTION: `[prune]`'s three keys retired by CLOUD-2198
+        // are `skip_serializing` — read so an old config still loads, and read by
+        // nothing after that — so the cache carries `None` where the parse kept
+        // the ignored value. Cleared here BY NAME, so any other field the
+        // encoding drops still fails this case.
+        let mut expected = parsed.clone();
+        if let Some(prune) = expected.prune.as_mut() {
+            prune.warm = None;
+            prune.cold = None;
+            prune.regrowable = None;
+        }
+        assert_eq!(
+            served, expected,
+            "the cache answers what the parse answered"
+        );
+        assert!(
+            read_cached_parse(&entry, &parse_cache_key(&text, "other.toml")).is_none(),
+            "an entry written under another key is never served"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// CLOUD-2315: an edit to the authority is a miss, so a stale validated
+    /// config can never answer for new bytes.
+    #[test]
+    fn an_edited_authority_is_not_answered_from_the_parse_cache() {
+        assert_ne!(
+            parse_cache_key("version = 1\n", "batten.toml"),
+            parse_cache_key("version = 1\n# edited\n", "batten.toml"),
+            "other bytes, another key"
+        );
+        assert_ne!(
+            parse_cache_key("version = 1\n", "batten.toml"),
+            parse_cache_key("version = 1\n", "other.toml"),
+            "another source, another key"
         );
     }
 

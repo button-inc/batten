@@ -693,6 +693,14 @@ regex = "1"
 # same lock — it is the same code reached at the layer that answers the question
 # actually being asked.
 regex-syntax = "0.8"
+# The validated-config cache's encoding (CLOUD-2315). A hook call parsed and
+# validated the whole authority every time — 8.5 ms to deserialize and 7.4 ms to
+# validate 583 KB, measured, against a 10 ms per-call target — for a result that
+# is a pure function of the bytes. MessagePack because it is SELF-DESCRIBING:
+# `Config` nests `untagged` and `flatten` types, which a non-self-describing
+# format such as `postcard` cannot decode. Not a new supply-chain surface: the
+# lock already resolves it at this version through `regorus`.
+rmp-serde = "1"
 semver = "1"
 tar = "0.4"
 serde = { version = "1", features = ["derive"] }

@@ -28,6 +28,7 @@ pub mod bot;
 pub mod brief;
 pub mod budget;
 pub mod bypass;
+pub mod cache;
 pub mod capture;
 /// Declared reductions over responses the agent already captured.
 pub mod captured;
@@ -17566,6 +17567,9 @@ fn run_hook(
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
     let _loads = HookLoads::scope();
+    // The per-call path is the one that pays a full parse per process; every
+    // other verb parses as before (CLOUD-2315, `config::persist_parses`).
+    config::persist_parses();
     let Some((raw, mut envelope, spilled, _spool)) = read_envelope(harness, mode, err)? else {
         return Ok(ExitCode::Success);
     };

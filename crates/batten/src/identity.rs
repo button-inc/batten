@@ -852,6 +852,21 @@ fn write_field(hasher: &mut Sha256, bytes: &[u8]) {
 /// [`FindingKind`] tag so a surface hash can never collide with a finding's.
 const SURFACE_TAG: &str = "surface";
 
+/// The domain tag for a cross-process cache key (CLOUD-2315), distinct from
+/// every other tag so a cache key can never collide with an identity.
+const CACHE_TAG: &str = "cache";
+
+/// The key of one cross-process cache entry: the one framing, under its own tag,
+/// over every input the cached value is a function of (CLOUD-2315).
+///
+/// Through here rather than a cache's own hasher, so `crate::cache` keys and
+/// every other identity in the crate share one construction — the two caches
+/// this replaced each hand-rolled a copy of it.
+#[must_use]
+pub fn cache_key(fields: &[&[u8]]) -> Fingerprint {
+    tagged_fingerprint(CACHE_TAG, fields)
+}
+
 /// The domain tag for a captured output stream, distinct from every
 /// [`FindingKind`] tag and from [`SURFACE_TAG`] for the same reason: three
 /// domains under one tag could collide across kinds of thing.

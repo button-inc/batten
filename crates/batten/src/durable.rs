@@ -206,19 +206,35 @@ pub fn append_with_mode_as(
 /// Returns the I/O error when the temp file cannot be created, written, synced
 /// or renamed into place. The temp file is removed on every failure path.
 pub fn replace(path: impl AsRef<Path>, contents: impl AsRef<[u8]>) -> std::io::Result<()> {
+    replace_as(path, contents, Persist::Synced)
+}
+
+/// [`replace`] at a chosen [`Persist`] tier: a reader still sees the old file or
+/// the new one, never a torn one; `Atomic` only skips the wait for the disk.
+///
+/// # Errors
+///
+/// As [`replace`].
+pub fn replace_as(
+    path: impl AsRef<Path>,
+    contents: impl AsRef<[u8]>,
+    persist: Persist,
+) -> std::io::Result<()> {
     let target = resolve(path.as_ref());
     let directory = match target.parent() {
         Some(parent) if !parent.as_os_str().is_empty() => parent.to_path_buf(),
         _ => PathBuf::from("."),
     };
     let temp = temp_beside(&target);
-    let written = write_temp(&temp, &target, contents.as_ref())
+    let written = write_temp_as(&temp, &target, contents.as_ref(), persist)
         .and_then(|()| std::fs::rename(&temp, &target));
     if let Err(err) = written {
         let _ = std::fs::remove_file(&temp);
         return Err(err);
     }
-    sync_directory(&directory);
+    if persist == Persist::Synced {
+        sync_directory(&directory);
+    }
     Ok(())
 }
 

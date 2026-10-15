@@ -123,6 +123,7 @@ regex.workspace = true
 regex-syntax.workspace = true
 schemars.workspace = true
 semver.workspace = true
+rmp-serde.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
