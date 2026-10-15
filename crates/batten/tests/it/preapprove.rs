@@ -152,6 +152,36 @@ fn a_backgrounded_call_without_a_timeout_is_rewritten_to_the_maximum() {
     assert_eq!(updated["description"], "Run the mutant task");
 }
 
+/// CLOUD-2365: a host whose environment raises `BASH_MAX_TIMEOUT_MS` honours a
+/// longer background call, so the pin is that maximum rather than two hours.
+#[test]
+fn a_raised_host_maximum_is_the_pinned_timeout() {
+    let payload = background(&serde_json::json!({
+        "command": "mise run mutant",
+        "run_in_background": true,
+    }));
+    let mut hook = common::batten();
+    hook.env("BASH_MAX_TIMEOUT_MS", "604800000");
+    let outcome = common::stdin_run(
+        &mut hook,
+        &root(),
+        &["adjudicate", "--harness", "claude-code"],
+        &payload,
+    );
+    let updated = stdout(&outcome)
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .find_map(|document| {
+            document
+                .get("hookSpecificOutput")?
+                .get("updatedInput")
+                .cloned()
+        })
+        .expect("the grant carries the rewrite");
+    assert_eq!(updated["timeout"], 604_800_000, "{updated}");
+}
+
 #[test]
 fn an_explicit_timeout_is_left_alone() {
     let payload = background(&serde_json::json!({

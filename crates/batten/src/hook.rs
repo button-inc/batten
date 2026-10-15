@@ -7695,6 +7695,14 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
             // none (CLOUD-2157). A number cannot carry a secret, and it is what
             // tells a call that took the host's default from one that chose.
             "timeout": envelope.input.get("timeout").and_then(Value::as_u64),
+            // THE HOST'S BACKGROUND MAXIMUM, in milliseconds (CLOUD-2365): what a
+            // backgrounded call may ask for before the host stops it. Read from
+            // this process's environment, which the host's hook spawn inherits,
+            // so a raised `BASH_MAX_TIMEOUT_MS` reaches the module that pins it.
+            "background-max": background_max(
+                std::env::var("BASH_MAX_TIMEOUT_MS").ok().as_deref(),
+                std::env::var("BASH_DEFAULT_TIMEOUT_MS").ok().as_deref(),
+            ),
             // THE SEGMENTATION THE ENGINE ALREADY COMPUTES (CLOUD-857).
             //
             // `command` above is the line EXACTLY as written, and for two years
@@ -7863,6 +7871,35 @@ pub fn history_read_ids(command: &str) -> Option<Vec<String>> {
         .map(|word| (*word).to_owned())
         .collect();
     (!ids.is_empty()).then_some(ids)
+}
+
+/// The longest background `timeout` the host honours, in milliseconds
+/// (CLOUD-2365), from its two variables' raw values.
+///
+/// THE HOST'S OWN ARITHMETIC, mirrored rather than approximated, because a pin
+/// that says more than the host allows is cut short and one that says less
+/// stops a landing early. Measured in Claude Code 2.1.301
+/// (`grep -aoE 'function hPe\(.{0,260}' /opt/claude-code/bin/claude`): the
+/// default is `BASH_DEFAULT_TIMEOUT_MS` or 120000, the maximum is
+/// `BASH_MAX_TIMEOUT_MS` raised to at least that default (or 600000 raised the
+/// same way when unset), and the background ceiling is that maximum raised to at
+/// least two hours and capped at `2^31 - 1`, the largest timer the host's
+/// runtime can arm. A value that does not parse as a positive integer is
+/// unset, as it is to the host.
+///
+/// PURE, so it is tested without a process environment — a test cannot set one
+/// under `unsafe_code = "forbid"`.
+//MUTANT-SUITE crates/batten/src/hook.rs
+//MUTANT background-max-unclamped|s@\.min(2_147_483_647)@@|background_max_mirrors_the_host
+//MUTANT-SUITE crates/batten/tests/it/pipeline_shapes.rs
+pub(crate) fn background_max(max: Option<&str>, default: Option<&str>) -> u64 {
+    let positive = |raw: Option<&str>| {
+        raw.and_then(|text| text.trim().parse::<u64>().ok())
+            .filter(|value| *value > 0)
+    };
+    let default = positive(default).unwrap_or(120_000);
+    let maximum = positive(max).map_or(600_000.max(default), |value| value.max(default));
+    maximum.max(7_200_000).min(2_147_483_647)
 }
 
 fn program_reach(command: &str) -> Vec<serde_json::Value> {
@@ -10997,6 +11034,21 @@ pub const INERT_TOOLS: [&str; 5] = [
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
+
+    /// CLOUD-2365: the host's background ceiling, mirrored case by case from
+    /// Claude Code 2.1.301's `hPe`/`Gpe`.
+    #[test]
+    fn background_max_mirrors_the_host() {
+        use super::background_max;
+        assert_eq!(background_max(Some("604800000"), None), 604_800_000);
+        assert_eq!(background_max(None, None), 7_200_000);
+        assert_eq!(background_max(Some("3000000000"), None), 2_147_483_647);
+        assert_eq!(background_max(Some("60000"), None), 7_200_000);
+        assert_eq!(background_max(Some("x"), None), 7_200_000);
+        assert_eq!(background_max(Some("0"), None), 7_200_000);
+        assert_eq!(background_max(None, Some("9000000")), 9_000_000);
+        assert_eq!(background_max(Some("8000000"), Some("9000000")), 9_000_000);
+    }
 
     /// The parse, unwrapped — every command in this module is one this build
     /// must be able to READ, so a `CouldNotLook` here is a defect rather than an

@@ -1,6 +1,7 @@
 #MUTANT-SUITE crates/batten/tests/it/preapprove.rs
 #MUTANT background-unchecked|s@^\tinput.call\["run-in-background"\] == true$@\ttrue@|a_foreground_call_is_not_rewritten
 #MUTANT timeout-overwritten|s@^\tobject.get(input.call, "timeout", null) == null$@\ttrue@|an_explicit_timeout_is_left_alone
+#MUTANT background-max-ignored|s@object.get(call, "background-max", 7200000)@7200000@|a_raised_host_maximum_is_the_pinned_timeout
 # A backgrounded call that names no timeout runs with the host's maximum
 # (CLOUD-2157).
 #
@@ -23,10 +24,17 @@ import rego.v1
 
 rules contains "timer pin missing"
 
-# Claude Code's ceiling for a backgrounded call, in milliseconds.
-maximum := 7200000
+# THE HOST'S CEILING, AS THE HOST COMPUTES IT (CLOUD-2365). Not a constant: a
+# raised `BASH_MAX_TIMEOUT_MS` lifts it, and a pin of the old two hours stopped a
+# landing the host would have let run for a week. The engine mirrors the host's
+# arithmetic and hands the answer over as `background-max`; the two-hour floor
+# below is only for an input that carries no such key. A FUNCTION, never a rule:
+# a module-level value over `input` can answer a live call with what a `test_`
+# computed (`read-only-is-preapproved.rego` measured it), and a function has no
+# value to keep between two inputs.
+maximum(call) := object.get(call, "background-max", 7200000)
 
-rewrite contains {"rule": "timer pin missing", "key": "timeout", "value": maximum} if {
+rewrite contains {"rule": "timer pin missing", "key": "timeout", "value": maximum(input.call)} if {
 	input.call.event == "pre-tool"
 	input.call.tool == "Bash"
 	input.call["run-in-background"] == true
@@ -41,6 +49,14 @@ call(background, timeout) := {"call": {
 
 test_a_backgrounded_call_without_a_timeout_takes_the_maximum if {
 	{"rule": "timer pin missing", "key": "timeout", "value": 7200000} in rewrite with input as call(true, null)
+}
+
+test_the_host_maximum_is_pinned_when_present if {
+	{"rule": "timer pin missing", "key": "timeout", "value": 604800000} in rewrite with input as {"call": {
+		"event": "pre-tool", "tool": "Bash", "permission-mode": "auto",
+		"command": "mise run mutant",
+		"run-in-background": true, "timeout": null, "background-max": 604800000,
+	}}
 }
 
 test_an_explicit_timeout_is_kept if {

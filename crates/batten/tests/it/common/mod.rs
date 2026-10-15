@@ -531,6 +531,13 @@ pub(crate) fn batten() -> Batten {
     pin_mise(&mut command);
     command.envs(batten::testing::state_pins(scratch_state_root()));
     pin_home(&mut command);
+    // NOR THE HOST'S BACKGROUND LIMITS (CLOUD-2365). The engine reads them to
+    // compute the ceiling it pins, so a developer whose environment raises one
+    // would see every pinned value move. LAST, after the pins above, which carry
+    // the developer's environment forward; a case that wants one sets it after.
+    for name in ["BASH_MAX_TIMEOUT_MS", "BASH_DEFAULT_TIMEOUT_MS"] {
+        command.env_remove(name);
+    }
     Batten(command)
 }
 

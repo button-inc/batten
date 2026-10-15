@@ -3894,6 +3894,10 @@ pub fn call_input_schema() -> Result<String> {
                     // a false one, and a predicate about backgrounding must not
                     // fire on a call whose host never spoke.
                     "run-in-background": {"type": ["boolean", "null"]},
+                    // The host's background ceiling in milliseconds, from its own
+                    // environment (CLOUD-2365) — always present on a mediated
+                    // call, because the host's arithmetic always yields one.
+                    "background-max": {"type": "integer"},
                     // THE SEGMENTED COMMAND (CLOUD-857). Constrained rather than
                     // left open like its neighbours, because a module reads a
                     // FIELD of each entry and `additionalProperties: false` is

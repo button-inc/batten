@@ -8,6 +8,9 @@
       "description": "The envelope the harness handed the boundary -- what is being attempted, never a fact resolved about it.",
       "properties": {
         "arguments": {},
+        "background-max": {
+          "type": "integer"
+        },
         "command": {},
         "event": {
           "type": "string"

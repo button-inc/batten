@@ -363,7 +363,8 @@ A **mediated-call** module (`scope = "mediated_call"`, run by `batten hook`)
 reads `input.call.command`, `input.call.segments`, `input.call.programs`,
 `input.call.event`, `input.call.operation`, `input.call.tool`,
 `input.call.arguments`, `input.call.writes`,
-`input.call["run-in-background"]`, `input.call["final-message"]`,
+`input.call["run-in-background"]`, `input.call["background-max"]` (the host's
+background ceiling in milliseconds — CLOUD-2365), `input.call["final-message"]`,
 `input.call.transcript`, `input.call["stop-repeat"]` and
 `input.call["permission-mode"]` (the host's mode, `null` when it sent none —
 CLOUD-1949), plus the `facts` object.
