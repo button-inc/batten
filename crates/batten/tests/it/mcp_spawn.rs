@@ -129,6 +129,16 @@ fn ledger_lines(ledger: &Path) -> Vec<Vec<String>> {
         .collect()
 }
 
+/// The launch records alone. Where a host cannot replace a process every spawn
+/// is refused, so each launch is followed by its own `exec-failed` record, and a
+/// case about launches must not count those.
+fn launch_lines(ledger: &Path) -> Vec<Vec<String>> {
+    ledger_lines(ledger)
+        .into_iter()
+        .filter(|fields| fields.get(5).map(String::as_str) != Some(batten::mcp::EXEC_FAILED))
+        .collect()
+}
+
 #[test]
 fn a_launch_appends_one_record_naming_the_server_and_becomes_the_launch_line() {
     // UNIX ONLY: `mcp spawn` REPLACES this process (`exec`), and a host that
@@ -199,7 +209,7 @@ fn a_launch_inside_the_window_counts_the_earlier_one_as_a_sibling() {
     let (dir, launcher, ledger) = bench("sibling-inside");
     spawn(&dir, "serena", &launcher, &["x"]);
     spawn(&dir, "other", &launcher, &["x"]);
-    let lines = ledger_lines(&ledger);
+    let lines = launch_lines(&ledger);
     assert_eq!(lines.len(), 2, "{lines:?}");
     // Counted BEFORE the append, so a launch never counts itself.
     assert_eq!(lines[0][4], "0", "{lines:?}");
@@ -218,7 +228,7 @@ fn a_launch_outside_the_window_counts_no_sibling() {
         "1000000000\tancient\t1\t0.0\t0\n",
     );
     spawn(&dir, "serena", &launcher, &["x"]);
-    let lines = ledger_lines(&ledger);
+    let lines = launch_lines(&ledger);
     assert_eq!(lines.len(), 2, "{lines:?}");
     assert_eq!(lines[1][4], "0", "{lines:?}");
 }
@@ -292,7 +302,7 @@ fn a_second_server_is_an_argument_rather_than_a_second_script() {
     let (dir, launcher, ledger) = bench("second-server");
     spawn(&dir, "serena", &launcher, &["x"]);
     spawn(&dir, "context7", &launcher, &["x"]);
-    let lines = ledger_lines(&ledger);
+    let lines = launch_lines(&ledger);
     assert_eq!(lines[0][1], "serena", "{lines:?}");
     assert_eq!(lines[1][1], "context7", "{lines:?}");
 }
