@@ -715,14 +715,34 @@ fn workspace() -> std::path::PathBuf {
 
 /// Generate dist's shell installer for `target` with `archive`'s sha256 baked
 /// in, exactly as the release's `installers` job does: one manifest fragment in
-/// the target directory's `distrib/`, then `dist build --artifacts=global`.
+/// the workspace's `target/distrib/`, then `dist build --artifacts=global`.
 ///
-/// The target directory is a scratch one, so nothing lands in the build's own.
+/// IN A SCRATCH WORKSPACE, because dist ignores `CARGO_TARGET_DIR` (measured:
+/// it read and wrote this checkout's `target/distrib` with the variable set),
+/// so running it here would merge whatever fragments a local build left. The
+/// workspace is a stub `batten` package at this crate's version and repository,
+/// configured by the committed `dist-workspace.toml`, so the generator under
+/// test reads the release's own config.
 fn dist_installer(dir: &std::path::Path, target: &str, archive: &[u8]) -> std::path::PathBuf {
     let version = env!("CARGO_PKG_VERSION");
     let name = batten::dist::cargo_dist_archive("batten", target);
-    let target_dir = dir.join("target");
-    let staged = target_dir.join(batten::dist::CARGO_DIST_DIR);
+    let ws = dir.join("ws");
+    std::fs::create_dir_all(ws.join("src")).unwrap();
+    std::fs::write(
+        ws.join("Cargo.toml"),
+        format!(
+            "[package]\nname = \"batten\"\nversion = \"{version}\"\nedition = \"2021\"\nrepository = \"{}\"\n\n[workspace]\n",
+            env!("CARGO_PKG_REPOSITORY")
+        ),
+    )
+    .unwrap();
+    std::fs::write(ws.join("src/main.rs"), "fn main() {}\n").unwrap();
+    std::fs::copy(
+        workspace().join("dist-workspace.toml"),
+        ws.join("dist-workspace.toml"),
+    )
+    .unwrap();
+    let staged = ws.join("target").join(batten::dist::CARGO_DIST_DIR);
     std::fs::create_dir_all(&staged).unwrap();
     let fragment = serde_json::json!({
         "dist_version": "0.33.0",
@@ -764,8 +784,8 @@ fn dist_installer(dir: &std::path::Path, target: &str, archive: &[u8]) -> std::p
             "--tag",
             &format!("v{version}"),
         ])
-        .current_dir(workspace())
-        .env("CARGO_TARGET_DIR", &target_dir)
+        .current_dir(&ws)
+        .env_remove("CARGO_TARGET_DIR")
         .output()
         .expect("cargo-dist must be installed: it is a pinned [tools] entry");
     assert!(

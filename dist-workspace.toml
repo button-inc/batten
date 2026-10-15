@@ -23,3 +23,6 @@ cargo-auditable = true
 install-path = "CARGO_HOME"
 hosting = "github"
 install-updater = false
+# The release publishes the tagged source through GitHub already; dist's own
+# tarball would be a second, unpublished copy.
+source-tarball = false
