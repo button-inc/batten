@@ -286,15 +286,16 @@ test_a_split_across_majors_is_refused if {
 # A TRANSITIVE crate on another major is not our agreement to keep: the workspace
 # has no say in what a dependency vendors, and a gate asserting otherwise is red
 # forever and switched off within a day.
+# The transitive crate is one this module judges (`hmac`), undeclared, on the
+# other major. It was `sha1-checked`, which `crypto_crates` never names, so
+# dropping `crate in declared` changed nothing this case could see and the
+# full sweep reported `transitive-crate-enrolled` SURVIVED.
 test_a_transitive_crate_on_another_major_is_not_ours if {
 	count(violation) == 0 with input as tree(
-		workspace({"hmac", "sha2"}),
+		workspace({"sha2"}),
 		array.concat(
-			array.concat(
-				array.concat(pkg("digest", "0.10.7", []), pkg("digest", "0.11.3", [])),
-				array.concat(pkg("hmac", "0.12.1", ["digest 0.10.7"]), pkg("sha2", "0.10.8", ["digest 0.10.7"])),
-			),
-			pkg("sha1-checked", "0.11.0", ["digest 0.11.3"]),
+			array.concat(pkg("digest", "0.10.7", []), pkg("digest", "0.11.3", [])),
+			array.concat(pkg("sha2", "0.10.8", ["digest 0.10.7"]), pkg("hmac", "0.13.0", ["digest 0.11.3"])),
 		),
 	)
 }
@@ -336,5 +337,5 @@ test_a_bare_entry_beside_several_majors_is_could_not_look if {
 }
 
 #MUTANT-SUITE crates/batten/tests/it/digest_major_agreement.rs
-#MUTANT reads-no-resolution|s@^\tcount({resolved(c) | some c in judged}) > 1$@\tfalse@|the_half_bump_is_refused
+#MUTANT reads-no-resolution|s@^\tcount({resolved(c) \x7c some c in judged}) > 1$@\tfalse@|the_half_bump_is_refused
 #MUTANT transitive-crate-enrolled|s@^\tcrate in declared$@\ttrue@|a_transitive_crate_on_another_major_is_not_ours

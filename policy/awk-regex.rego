@@ -179,4 +179,4 @@ test_a_line_that_never_reaches_awk_is_not_judged if {
 
 #MUTANT-SUITE crates/batten/tests/it/awk_regex.rs
 #MUTANT awk-regex-position-unread|s@in_regex_position(line, name)$@true@|a_value_compared_with_equals_is_fine_over_the_binary
-#MUTANT awk-regex-prefix-unread|s@leading(part) == name@startswith(part, name)@|a_name_that_prefixes_another_is_not_confused_for_it
+#MUTANT awk-regex-prefix-unread|s@leading(part) == name@startswith(trim_space(part), name)@|a_name_that_prefixes_another_is_not_confused_for_it

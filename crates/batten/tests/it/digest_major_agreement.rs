@@ -186,16 +186,20 @@ fn a_transitive_crate_on_another_major_is_not_ours() {
     // The workspace has no say in what a transitive dependency vendors, and a
     // gate asserting otherwise is red on the commit that introduced it and every
     // commit after — which is a gate switched off within a day.
+    //
+    // THE TRANSITIVE CRATE IS ONE THE MODULE JUDGES (`hmac`), undeclared here,
+    // on the other major. It was `sha1-checked`, which the module's crate set
+    // never names, so dropping `crate in declared` changed nothing this case
+    // could see: the full sweep reported `transitive-crate-enrolled` SURVIVED.
     let dir = digest_repo(
         "digest-transitive",
-        &workspace(&["hmac", "sha2"]),
+        &workspace(&["sha2"]),
         &format!(
-            "{}{}{}{}{}",
+            "{}{}{}{}",
             pkg("digest", "0.10.7", &[]),
             pkg("digest", "0.11.3", &[]),
-            pkg("hmac", "0.12.1", &["digest 0.10.7"]),
             pkg("sha2", "0.10.8", &["digest 0.10.7"]),
-            pkg("sha1-checked", "0.11.0", &["digest 0.11.3"])
+            pkg("hmac", "0.13.0", &["digest 0.11.3"])
         ),
     );
     let output = check(&dir);

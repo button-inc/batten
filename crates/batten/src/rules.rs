@@ -7685,8 +7685,8 @@ fn recorder_blocked(git_dir: &std::path::Path, branch: &str) -> BTreeMap<String,
 // ambient sweep this table exists to refuse — it passes the present case and
 // only a case asserting that an UNDECLARED family stays unprojected can see it.
 //MUTANT-SUITE crates/batten/tests/it/record_families.rs
-//MUTANT declared-family-unprojected|s@        .chain(families.iter().map(|family| family.record.as_str()))@@|a_declared_family_reaches_the_module_that_reads_it
-//MUTANT undeclared-family-projected|s@        .chain(families.iter().map(|family| family.record.as_str()))@        .chain(std::iter::once("measured"))@|an_undeclared_family_is_not_projected_whatever_the_store_holds
+//MUTANT declared-family-unprojected|s@        .chain(families.iter().map(\x7cfamily\x7c family.record.as_str()))@@|a_declared_family_reaches_the_module_that_reads_it
+//MUTANT undeclared-family-projected|s@        .chain(families.iter().map(\x7cfamily\x7c family.record.as_str()))@        .chain(std::iter::once("measured"))@|an_undeclared_family_is_not_projected_whatever_the_store_holds
 fn recorder_records(
     git_dir: &std::path::Path,
     branch: &str,
@@ -10458,7 +10458,7 @@ fn first_pointer(subjects: &[crate::verdict::Subject]) -> (Option<String>, Optio
 }
 
 /// Every subject but the one [`first_pointer`] chose, rendered (CLOUD-2213).
-//MUTANT carried-subjects-dropped|s@^        .filter(|(index, _)| Some(\*index) != skip)$@        .filter(|(index, _)| Some(*index) != skip \&\& false)@|a_policy_findings_other_subjects_ride_its_line
+//MUTANT carried-subjects-dropped|s@^        .filter(\x7c(index, _)\x7c Some(\*index) != skip)$@        .filter(\x7c(index, _)\x7c Some(*index) != skip \&\& false)@|a_policy_findings_other_subjects_ride_its_line
 fn carried_subjects(subjects: &[crate::verdict::Subject]) -> Vec<String> {
     let skip = pointer_index(subjects);
     subjects

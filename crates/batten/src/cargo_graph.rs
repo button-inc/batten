@@ -41,7 +41,7 @@
 // row guards: an optional dependency nobody enabled reads as linked, and the
 // gate refuses a link that succeeds.
 //MUTANT-SUITE crates/batten/src/cargo_graph.rs
-//MUTANT graph-scans-unactivated|s@^                if key.is_some_and(|key| enabled.contains(key)) {$@                if true {@|the_same_optional_dependency_once_activated_is_reached
+//MUTANT graph-scans-unactivated|s@^                if key.is_some_and(\x7ckey\x7c enabled.contains(key)) {$@                if true {@|the_same_optional_dependency_once_activated_is_reached
 //MUTANT graph-weak-dep-activates|s@^                && !head.ends_with(.?.)$@@|a_weak_reference_is_not_an_activation
 //MUTANT graph-keeps-dev-edges|s@^            if dev_only(dep) && !is_member {$@            if false {@|a_dev_dependency_of_a_dependency_is_not_in_the_built_closure
 

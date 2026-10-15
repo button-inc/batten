@@ -1308,7 +1308,7 @@ pub fn parse(text: &str, source: &str) -> Result<Config> {
 /// The outer shape here is lenient so no row is built; [`crate::rest::Forge`]
 /// stays strict, so a `[forge]` key this build predates declares nothing rather
 /// than half a table.
-//MUTANT forge-declared-by-full-parse|s@    let Ok(only) = toml::from_str::<ForgeOnly>(&text) else {@    let Ok(only) = parse_ungated(&text, "x").map(\x7cconfig\x7c ForgeOnly { forge: config.forge }) else {@|declaring_the_forge_parses_no_config
+//MUTANT forge-declared-by-full-parse|s@^    let Ok(only) = toml::from_str::<ForgeOnly>(\&text) else {$@    let Ok(only) = parse_ungated(\&text, "x").map(\x7cconfig\x7c ForgeOnly { forge: config.forge }) else {@|declaring_the_forge_parses_no_config
 pub fn declare_for_process(dir: &Path) {
     /// The one table this read needs. No `deny_unknown_fields`: every other
     /// key in the authority is some other reader's.

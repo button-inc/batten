@@ -466,7 +466,7 @@ fn takes(route: &str, name: &str, command: &str) -> bool {
 }
 
 /// The bucket a refusal of `call` falls in, given the call after it.
-//MUTANT offered-routes-unread|s@^    if offered.iter().any(|route| takes(route, name, \&command)) {$@    if false {@|a_route_the_refusal_printed_is_followed
+//MUTANT offered-routes-unread|s@^    if offered.iter().any(\x7croute\x7c takes(route, name, \&command)) {$@    if false {@|a_route_the_refusal_printed_is_followed
 fn follow(
     findings: &[(String, crate::refusal::Arm)],
     offered: &[String],

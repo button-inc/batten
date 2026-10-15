@@ -270,10 +270,10 @@ fn task_names(lines: &[String]) -> Vec<String> {
 /// reach another task's rows (CLOUD-1909).
 //MUTANT-SUITE crates/batten/tests/it/mutate.rs
 //MUTANT task-block-unscoped|s@        Some(task) if task_manifest().as_deref() == Some(source) => task_block(&lines, task),@        Some(_) if task_manifest().as_deref() == Some(source) => Some(lines),@|a_task_gate_sweeps_only_its_own_block
-//MUTANT registered-rows-swept-by-hand|s@^                if !gate.rows.is_empty() \&\& !gate.rows.iter().any(|row| registry.declares(row)) {$@                if false {@|a_change_to_a_rust_gate_is_judged_by_its_registered_runner
-//MUTANT registered-row-judged-twice|s@^        for row in gate.rows.iter().filter(|row| registry.declares(row)) {$@        for row in \&gate.rows {@|a_registered_runners_rows_are_never_swept_by_the_declared_runner
+//MUTANT registered-rows-swept-by-hand|s@^                if !gate.rows.is_empty() \&\& !gate.rows.iter().any(\x7crow\x7c registry.declares(row)) {$@                if false {@|a_change_to_a_rust_gate_is_judged_by_its_registered_runner
+//MUTANT registered-row-judged-twice|s@^        for row in gate.rows.iter().filter(\x7crow\x7c registry.declares(row)) {$@        for row in \&gate.rows {@|a_registered_runners_rows_are_never_swept_by_the_declared_runner
 //MUTANT shard-slices-unsorted|s@^    sorted.sort();$@@|shards_partition_the_sorted_gates_and_refuse_a_malformed_value
-//MUTANT shard-takes-every-gate|s@^        .filter(|(index, _)| index % n == k)$@        .filter(|_| true)@|shards_partition_the_sorted_gates_and_refuse_a_malformed_value
+//MUTANT shard-takes-every-gate|s@^        .filter(\x7c(index, _)\x7c index % n == k)$@        .filter(\x7c_\x7c true)@|shards_partition_the_sorted_gates_and_refuse_a_malformed_value
 //MUTANT every-gate-touched|s@^        \.filter(\x7cname\x7c {$@        .filter(\x7cname\x7c { true \x7c\x7c@|a_change_touching_no_gate_sweeps_nothing
 fn declaring_lines(root: &Path, name: &str, source: &str) -> Option<Vec<String>> {
     let lines = lines_of(root, source)?;
@@ -1214,7 +1214,7 @@ impl RunnerKind {
 }
 
 //MUTANT-SUITE crates/batten/src/mutate.rs
-//MUTANT registry-owns-nothing|s@^            .filter(|(_, glob)| crate::rules::glob_match(glob, path))$@            .filter(|_| false)@|a_registered_glob_owns_its_sources_and_the_declared_runner_the_rest
+//MUTANT registry-owns-nothing|s@^            .filter(\x7c(_, glob)\x7c crate::rules::glob_match(glob, path))$@            .filter(\x7c_\x7c false)@|a_registered_glob_owns_its_sources_and_the_declared_runner_the_rest
 //MUTANT overlap-picks-one|s@^        let mut owners = owners.into_iter();$@        let mut owners = owners.into_iter().take(1);@|a_source_two_runners_claim_has_no_owner
 //MUTANT declared-runner-takes-globs|s@^            if kind == RunnerKind::Declared {$@            if false {@|a_registry_naming_no_runner_or_giving_the_declared_one_globs_is_refused
 //MUTANT declared-suites-unscoped|s@^        if has_extension(suite, "rs")$@        if false@|a_sources_scope_is_its_own_tests_and_every_suite_it_declares
@@ -3860,6 +3860,12 @@ pub enum CensusVerdict {
     /// A declared row whose script, applied to its own file, changes nothing:
     /// it proves nothing, and a sweep would only say so once it reached it.
     InertMutation,
+    /// A declared row that is not three `|`-separated fields, so no script and
+    /// case can be read from it at all.
+    MalformedRow,
+    /// A declared row whose script is outside the one-substitution subset the
+    /// runner applies ([`substitute`]), so it can never be applied.
+    UnappliableMutation,
 }
 
 impl fmt::Display for CensusVerdict {
@@ -3870,6 +3876,8 @@ impl fmt::Display for CensusVerdict {
             CensusVerdict::DeclaredAndExempt => "declared-and-exempt",
             CensusVerdict::NamesNoSubject => "names-no-subject",
             CensusVerdict::InertMutation => "inert-mutation",
+            CensusVerdict::MalformedRow => "malformed-row",
+            CensusVerdict::UnappliableMutation => "unappliable-mutation",
         };
         out.write_str(word)
     }
@@ -4142,10 +4150,14 @@ pub fn census(root: &Path, names: &[String], table: Option<&crate::config::Mutat
 /// census runs on every change, and [`substitute`] is the sweep's own
 /// application, in process, so this costs a read and a regex per row.
 ///
-/// A script outside the one-substitution subset is the sweep's
-/// `unappliable-mutation` and is left to it: this arm names only what applied
-/// and changed nothing.
-//MUTANT inert-row-admitted|s@^                if substitute(\&text, \&row.script).as_ref() == Some(\&text) {$@                if false {@|a_row_whose_script_changes_nothing_is_refused_by_the_census
+/// THE OTHER TWO DEAD SHAPES TOO, which the full declared sweep measured in its
+/// first 155 rows: a row split into four fields by a literal `|`, and a script
+/// outside the one-substitution subset (a sed address block left from before
+/// CLOUD-2255). Neither can ever apply, both are decidable from the text, and
+/// the sweep named each only after an hour of building.
+//MUTANT inert-row-admitted|s@^                    Some(after) if after == text => CensusVerdict::InertMutation,$@                    Some(after) if false => CensusVerdict::InertMutation,@|a_row_whose_script_changes_nothing_is_refused_by_the_census
+//MUTANT malformed-row-admitted|s@, CensusVerdict::MalformedRow));$@, CensusVerdict::InertMutation));@|a_row_that_cannot_apply_is_refused_by_the_census
+//MUTANT unappliable-row-admitted|s@^                    None => CensusVerdict::UnappliableMutation,$@                    None => continue,@|a_row_that_cannot_apply_is_refused_by_the_census
 fn inert_rows(root: &Path, subjects: &BTreeMap<String, String>) -> Vec<(String, CensusVerdict)> {
     let mut found = Vec::new();
     for name in subjects.keys() {
@@ -4156,13 +4168,24 @@ fn inert_rows(root: &Path, subjects: &BTreeMap<String, String>) -> Vec<(String, 
             let Some(lines) = declaring_lines(root, name, &source) else {
                 continue;
             };
-            for row in rows_in(&lines, &source).into_iter().flatten() {
-                if substitute(&text, &row.script).as_ref() == Some(&text) {
-                    found.push((
-                        format!("{source}:{} {}", row_line(&text, &row.slug), row.slug),
-                        CensusVerdict::InertMutation,
-                    ));
-                }
+            for row in rows_in(&lines, &source) {
+                let row = match row {
+                    Ok(row) => row,
+                    Err((head, _)) => {
+                        let at = row_line(&text, &head);
+                        found.push((format!("{source}:{at} {head}"), CensusVerdict::MalformedRow));
+                        continue;
+                    }
+                };
+                let verdict = match substitute(&text, &row.script) {
+                    None => CensusVerdict::UnappliableMutation,
+                    Some(after) if after == text => CensusVerdict::InertMutation,
+                    Some(_) => continue,
+                };
+                found.push((
+                    format!("{source}:{} {}", row_line(&text, &row.slug), row.slug),
+                    verdict,
+                ));
             }
         }
     }

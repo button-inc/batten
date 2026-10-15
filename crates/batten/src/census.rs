@@ -216,7 +216,7 @@ const QUOTES: [&str; 2] = ["\"\"\"", "'''"];
 //MUTANT-SUITE crates/batten/src/census.rs
 //MUTANT comments-counted|s@    !text.is_empty() && !text.starts_with('#')@    !text.is_empty()@|a_body_counts_its_code_lines_and_skips_comments_and_blanks
 //MUTANT metacharacters-unread|s@    if value.contains(METACHARACTERS) {@    if false {@|a_plain_argv_is_not_shell_and_a_pipeline_is
-//MUTANT env-prefix-unread|s@ || first.contains('=')@ || false@|a_plain_argv_is_not_shell_and_a_pipeline_is
+//MUTANT env-prefix-unread|s@ \x7c\x7c first.contains('=')@ \x7c\x7c false@|a_plain_argv_is_not_shell_and_a_pipeline_is
 //MUTANT block-never-ends|s@        indent(line) + 2$@        indent(line) + 200@|a_block_ends_at_the_first_line_at_or_left_of_its_key
 //MUTANT workflow-one-liner-unread|s@        } else if !rest.is_empty() && shell_syntax(rest) {@        } else if false {@|a_block_ends_at_the_first_line_at_or_left_of_its_key
 #[must_use]

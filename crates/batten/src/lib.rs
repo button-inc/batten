@@ -3193,7 +3193,7 @@ fn run_capture(
 /// program. Nothing is written to either channel, because stdout is the
 /// transport.
 //MUTANT-SUITE crates/batten/tests/it/mcp_spawn.rs
-//MUTANT spawn-unprovisioned|s@^        \.find(|entry| entry.binary == \*program)?;$@        .find(|_| false)?;@|a_launch_program_missing_from_path_is_provisioned_then_becomes_the_launch_line
+//MUTANT spawn-unprovisioned|s@^        \.find(\x7centry\x7c entry.binary == \*program)?;$@        .find(\x7c_\x7c false)?;@|a_launch_program_missing_from_path_is_provisioned_then_becomes_the_launch_line
 fn provisioned_launch(command: &[String], overrides: &Overrides) -> Option<Vec<String>> {
     let (program, rest) = command.split_first()?;
     if program.contains(['/', '\\']) || rules::on_path_verbatim(program).is_some() {
@@ -8048,7 +8048,7 @@ struct StateFilter<'a> {
     path: Option<&'a str>,
 }
 
-//MUTANT state-filter-unread|s@^        self.rule.is_none_or(|rule| record.rule == rule)$@        true@|a_rule_past_its_location_cap_points_at_exactly_its_set
+//MUTANT state-filter-unread|s@^        self.rule.is_none_or(\x7crule\x7c record.rule == rule)$@        true@|a_rule_past_its_location_cap_points_at_exactly_its_set
 impl StateFilter<'_> {
     /// Whether `record` is in the selection: its rule, and an instance in the
     /// file. A record outside it is dropped whole, never trimmed.
@@ -8982,7 +8982,7 @@ fn run_override_spend(
 }
 
 //MUTANT-SUITE crates/batten/tests/it/admission.rs
-//MUTANT fingerprint-unaddressed|s@path == subject || fingerprint == subject@path == subject@|twin_findings_on_one_path_are_each_admitted_by_fingerprint
+//MUTANT fingerprint-unaddressed|s@path == subject \x7c\x7c fingerprint == subject@path == subject@|twin_findings_on_one_path_are_each_admitted_by_fingerprint
 //MUTANT fingerprint-binds|s@Ok((admission::Anchor::Finding(fingerprint), path))@Ok((admission::Anchor::Finding(fingerprint), subject.to_owned()))@|twin_findings_on_one_path_are_each_admitted_by_fingerprint
 /// The [`admission::Anchor`] a `(rule, subject)` pair is answered about
 /// (CLOUD-1125).
@@ -17505,7 +17505,7 @@ fn destructive_call_facts(
     (discards, singleton)
 }
 
-//MUTANT advice-beside-the-grant|s@^    if !matches!(decision, hook::Decision::Preapproved(_)) || advice.is_empty() {$@    if true {@|a_preapproval_carries_the_calls_advice_in_one_document
+//MUTANT advice-beside-the-grant|s@^    if !matches!(decision, hook::Decision::Preapproved(_)) \x7c\x7c advice.is_empty() {$@    if true {@|a_preapproval_carries_the_calls_advice_in_one_document
 fn run_hook(
     harness: hook::Harness,
     // Resolved by the dispatch (CLOUD-1170) — see `Recency::now`.
@@ -19372,8 +19372,8 @@ fn expire_wiring_record(envelope: &hook::Envelope) {
 /// and no single `additionalContext` carries the whole cycle's prose. **`resume`
 /// and `fork` keep**: the host replays the transcript, so what it delivered is
 /// still in the window. Other contexts in the clone are never touched.
-//MUTANT compact-keeps-window|s@^        Some("resume" | "fork") => {}$@        Some("resume" | "fork" | "compact") => {}@|a_compaction_forgets_and_the_next_firing_is_full
-//MUTANT resume-forgets-window|s@^        Some("resume" | "fork") => {}$@        Some("fork") => {}@|a_resume_keeps_the_window
+//MUTANT compact-keeps-window|s@^        Some("resume" \x7c "fork") => {}$@        Some("resume" \x7c "fork" \x7c "compact") => {}@|a_compaction_forgets_and_the_next_firing_is_full
+//MUTANT resume-forgets-window|s@^        Some("resume" \x7c "fork") => {}$@        Some("fork") => {}@|a_resume_keeps_the_window
 //MUTANT drain-result-kept|s@^    forget_drain_result(envelope);$@    let _ = forget_drain_result;@|a_session_start_relists_the_drain_payload
 fn expire_sightings(envelope: &hook::Envelope) {
     if envelope.event != hook::Event::SessionStart {
@@ -19396,7 +19396,7 @@ fn expire_sightings(envelope: &hook::Envelope) {
 /// compaction the context no longer holds what it read and owes the read again
 /// before changing the row. `resume` and `fork` carry the window over and keep
 /// the reads.
-//MUTANT compact-keeps-history|s@^    let carried = matches!(envelope.start_source.as_deref(), Some("resume" | "fork"));$@    let carried = matches!(envelope.start_source.as_deref(), Some("resume" | "fork" | "compact"));@|a_compaction_drops_the_history_receipt
+//MUTANT compact-keeps-history|s@^    let carried = matches!(envelope.start_source.as_deref(), Some("resume" \x7c "fork"));$@    let carried = matches!(envelope.start_source.as_deref(), Some("resume" \x7c "fork" \x7c "compact"));@|a_compaction_drops_the_history_receipt
 fn expire_history_reads(envelope: &hook::Envelope) {
     let carried = matches!(envelope.start_source.as_deref(), Some("resume" | "fork"));
     if envelope.event != hook::Event::SessionStart || carried {
@@ -21567,7 +21567,7 @@ fn already_marked(seen: Option<&Path>, key: &str) -> bool {
 /// full text once per context per window now, and a pointer withheld is a
 /// pointer the reader needed, so both stores and their writes are gone.
 //MUTANT-SUITE crates/batten/tests/it/stop_posture.rs
-//MUTANT filed-row-selected-by-id|s@^        .filter(|declared| publishers.contains(declared.id.as_str()))$@        .filter(|declared| declared.id == "filed-here")@|a_filed_row_naming_the_diff_is_pointed_at_under_its_real_row_id
+//MUTANT filed-row-selected-by-id|s@^        .filter(\x7cdeclared\x7c publishers.contains(declared.id.as_str()))$@        .filter(\x7cdeclared\x7c declared.id == "filed-here")@|a_filed_row_naming_the_diff_is_pointed_at_under_its_real_row_id
 //MUTANT filed-scan-asserts-the-registry|s@^            checks: policy::ModuleChecks::RunOverSelection, // one row, never the authority$@            checks: policy::ModuleChecks::Run,@|a_filed_row_naming_the_diff_is_pointed_at_under_its_real_row_id
 //MUTANT-SUITE crates/batten/tests/it/adjudicate_absent.rs
 fn filed_here_rows(overrides: &Overrides, root: &Path) -> Option<(Vec<String>, Vec<String>)> {
@@ -22022,7 +22022,7 @@ pub fn mint_receipts_for_test(
 /// for the harness envelope. Every failure is silent, as the mint boundary has
 /// always been: the gate that reads the receipt simply denies again.
 //MUTANT dispatch-not-spent|s@^                clear_minted(&claimed)$@                std::fs::rename(\&claimed, \&original)@|a_dispatched_review_answers_only_once_it_completes
-//MUTANT dependent-before-writer|s@^    ordered.sort_by_key(|mint| mint.after.is_some());$@    ordered.sort_by_key(|_| 0);@|a_dependent_declared_first_still_waits_for_its_writer
+//MUTANT dependent-before-writer|s@^    ordered.sort_by_key(\x7cmint\x7c mint.after.is_some());$@    ordered.sort_by_key(\x7c_\x7c 0);@|a_dependent_declared_first_still_waits_for_its_writer
 //MUTANT prerequisite-read-live|s@^                if written_now.contains(&prerequisite) {$@                if false {@|one_call_cannot_satisfy_its_own_prerequisite
 //MUTANT completion-ignores-dispatch|s@^                if std::fs::rename(&original, &claimed).is_err() {$@                if std::fs::rename(\&original, \&claimed).is_err() \&\& false {@|a_completion_without_a_dispatch_of_this_change_mints_nothing
 fn mint_receipts(
@@ -24569,8 +24569,8 @@ fn apply_baseline(
 /// row) admits nothing — there is no token an admission could bind. An
 /// unresolvable HEAD or epoch admits nothing. An unreadable store admits
 /// nothing. A store this cannot read must not be able to suppress.
-//MUTANT block-arm-removed|/^        if admitted.is_none() {$/{N;s@^\(        if \)admitted.is_none()\( {\n            let message = head_message\)@\1false\2@}|a_spent_block_in_the_head_commit_admits_with_no_store
-//MUTANT merge-parent-arm-removed|/^        if admitted.is_none() {$/{N;s@^\(        if \)admitted.is_none()\( {\n            let message = merged_head_message\)@\1false\2@}|a_spent_block_on_a_merge_refs_second_parent_admits
+//MUTANT block-arm-removed|s@^                git::commit_record(root, "HEAD")$@                git::commit_record(root, "refs/batten/none")@|a_spent_block_in_the_head_commit_admits_with_no_store
+//MUTANT merge-parent-arm-removed|s@^                git::commit_record(root, "HEAD^2")$@                git::commit_record(root, "refs/batten/none")@|a_spent_block_on_a_merge_refs_second_parent_admits
 fn apply_admissions(
     findings: Vec<rules::Finding>,
     scan: &rules::Scan,

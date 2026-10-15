@@ -2754,7 +2754,7 @@ explain` and its routes have never been walked by anybody. Delete the row, or gi
 ///
 /// None today; the `Result` stays so every caller keeps one fault channel.
 //MUTANT-SUITE crates/batten/tests/it/vendored_skew.rs
-//MUTANT skew-bricks-the-boundary|s@        registry.retain(|row| row.id != entry.id);@        if registry.iter().any(|row| row.id == entry.id) { return Err(UsageError::raise(entry.id)); }@|a_branch_declaring_a_class_the_binary_ships_still_adjudicates
+//MUTANT skew-bricks-the-boundary|s@        registry.retain(\x7crow\x7c row.id != entry.id);@        if registry.iter().any(\x7crow\x7c row.id == entry.id) { return Err(UsageError::raise(entry.id)); }@|a_branch_declaring_a_class_the_binary_ships_still_adjudicates
 pub fn registry_for(
     verdicts: &[crate::verdict::DeclaredVerdict],
 ) -> Result<Vec<crate::verdict::DeclaredVerdict>> {
@@ -2778,7 +2778,7 @@ pub fn registry_for(
 ///
 /// A [`UsageError`] (exit `1`) naming every colliding token.
 //MUTANT-SUITE crates/batten/tests/it/vendored_skew.rs
-//MUTANT skew-lands-unrefused|s@    if let Some(first) = collisions.first() {@    if let Some(first) = collisions.first().filter(|_| false) {@|a_class_the_binary_ships_is_still_refused_by_check
+//MUTANT skew-lands-unrefused|s@    if let Some(first) = collisions.first() {@    if let Some(first) = collisions.first().filter(\x7c_\x7c false) {@|a_class_the_binary_ships_is_still_refused_by_check
 fn check_no_vendored_collision(verdicts: &[crate::verdict::DeclaredVerdict]) -> Result<()> {
     let vendored: BTreeSet<String> = crate::verdict::vendored()
         .into_iter()

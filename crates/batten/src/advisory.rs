@@ -250,7 +250,7 @@ fn merged(entries: Vec<Advice>) -> Vec<Advice> {
 //MUTANT first-sighting-repeated|s@^            !held$@            true@|a_drained_rules_remedy_is_said_once_per_window
 //MUTANT unceilinged-reordered|s@^    let ranked = ceiling.is_some();$@    let ranked = true;@|an_undeclared_ceiling_leaves_the_channel_exactly_as_it_was
 //MUTANT advisory-ceiling-unread|s@^    let whole = within(\&probes);$@    let whole = true;@|what_does_not_fit_is_counted_and_returned_rather_than_dropped
-//MUTANT cut-entry-marked|s@^            overflow.push(match entry.finding {$@            overflow.push(match entry.finding.map(|refusal| { let _ = sighter.mark(\&refusal); refusal }) {@|a_cut_finding_is_never_marked_seen
+//MUTANT cut-entry-marked|s@^            overflow.push(match entry.finding {$@            overflow.push(match entry.finding.map(\x7crefusal\x7c { let _ = sighter.mark(\&refusal); refusal }) {@|a_cut_finding_is_never_marked_seen
 #[must_use]
 pub fn admit(
     entries: Vec<Advice>,

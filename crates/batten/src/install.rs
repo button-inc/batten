@@ -585,7 +585,7 @@ pub const SYSTEM_BIN_DIRS: &[&str] = &["/usr/local/bin", "/opt/homebrew/bin"];
 /// writable — a root Setup shell carries `/usr/local/bin` and not `~/.local/bin`;
 /// otherwise the per-user directory, reported as off `PATH`.
 //MUTANT-SUITE crates/batten/src/install.rs
-//MUTANT self-install-ignores-path|s@^        if on_path.iter().any(|entry| entry == dir) && writable(dir) {$@        if false {@|a_writable_system_directory_on_path_is_chosen
+//MUTANT self-install-ignores-path|s@^        if on_path.iter().any(\x7centry\x7c entry == dir) && writable(dir) {$@        if false {@|a_writable_system_directory_on_path_is_chosen
 #[must_use]
 pub fn destination(
     named: Option<std::path::PathBuf>,

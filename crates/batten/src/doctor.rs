@@ -2818,7 +2818,7 @@ pub fn diagnose_session(dir: &Path) -> SessionReport {
 }
 
 //MUTANT unprovisioned-verify-green|s@^        .filter(\x7ctool\x7c !installed.contains(tool))$@        .filter(\x7ctool\x7c installed.contains(tool))@|a_declared_tool_the_probe_does_not_report_is_unprovisioned
-//MUTANT toolchain-probe-blind|/^    let Some(installed) = installed_tools(probe) else {$/{n;s@^        return Toolchain::Unreadable;$@        return Toolchain::Provisioned;@}|a_probe_that_answered_nothing_is_unprovisioned_rather_than_a_pass
+//MUTANT toolchain-probe-blind|s@^    let Some(installed) = installed_tools(probe) else {$@    let Some(installed) = installed_tools(probe).or_else(\x7c\x7c Some(declared.clone())) else {@|a_probe_that_answered_nothing_is_unprovisioned_rather_than_a_pass
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]

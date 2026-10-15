@@ -2513,6 +2513,34 @@ fn a_row_whose_script_changes_nothing_is_refused_by_the_census() {
     );
 }
 
+/// Fails by: a row that can never apply read as coverage until a sweep spends a
+/// build reaching it. Both shapes were measured by the full declared sweep: a
+/// literal `|` splitting a row into four fields, and a sed address block the
+/// in-process runner does not apply (CLOUD-2255).
+#[test]
+fn a_row_that_cannot_apply_is_refused_by_the_census() {
+    let root = toy("census-unapplied");
+    write(
+        &root,
+        "policy/some-rule.rego",
+        "package batten.some_rule\n\
+         #MUTANT split|s@a | b@c@|test_x\n\
+         #MUTANT addressed|/^deny/{n;s@x@y@}|test_x\n\
+         deny if input.bad\n",
+    );
+    track(&root);
+    let (code, out, _) = census(&root, "some-rule");
+    assert_eq!(code, 2, "{out}");
+    assert!(
+        out.contains("policy/some-rule.rego:2 split malformed-row"),
+        "{out}"
+    );
+    assert!(
+        out.contains("policy/some-rule.rego:3 addressed unappliable-mutation"),
+        "{out}"
+    );
+}
+
 #[test]
 fn a_filed_exemption_is_a_closed_census_not_a_gap() {
     let root = toy("census-exempt");

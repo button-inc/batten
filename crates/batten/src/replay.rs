@@ -563,7 +563,7 @@ const COMPILE_FAILED: &str = "could not compile";
 /// that named the test nowhere and did not fail to compile is could-not-look,
 /// never a finding: a refusal the replay never measured would read as one it did.
 //MUTANT-SUITE crates/batten/tests/it/test_replay.rs
-//MUTANT expectation-unchecked|s@^    let failed = statuses.iter().any(|status| \*status != "PASS");$@    let failed = false;@|a_narrowed_expectation_is_refused_by_name
+//MUTANT expectation-unchecked|s@^    let failed = statuses.iter().any(\x7cstatus\x7c \*status != "PASS");$@    let failed = false;@|a_narrowed_expectation_is_refused_by_name
 fn passes(outcome: Option<&(i32, String)>, test: &str) -> Result<bool> {
     let Some((code, output)) = outcome else {
         bail!("test replay: could not replay {test}: {}", said(outcome));

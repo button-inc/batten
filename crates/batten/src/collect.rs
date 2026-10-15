@@ -757,7 +757,7 @@ fn newest_write(path: &Path) -> SystemTime {
 /// right after `cargo test` built removed the test binary nextest was about to
 /// run, and 2,087 cases failed to exec it.
 //MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
-//MUTANT rebuild-ranked-stale|s@^            let meta = entry.metadata().ok()?;$@            let meta = entry.metadata().ok().filter(\|_\| false)?;@|a_unit_just_rebuilt_is_not_least_recently_used
+//MUTANT rebuild-ranked-stale|s@^            let meta = entry.metadata().ok()?;$@            let meta = entry.metadata().ok().filter(\x7c_\x7c false)?;@|a_unit_just_rebuilt_is_not_least_recently_used
 fn last_use(fingerprint: &Path) -> SystemTime {
     std::fs::read_dir(fingerprint)
         .into_iter()

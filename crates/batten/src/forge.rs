@@ -614,7 +614,7 @@ pub fn window_over(
 // judged by `total_count` and reported truncated. The third drops the prefix the
 // truncated arm now carries, which a count-only assertion cannot see.
 //MUTANT-SUITE crates/batten/tests/it/forge_window.rs
-//MUTANT stop-never-ends-the-walk|s@^        stopped = stop.is_some_and(|stop| batch.iter().any(stop));$@        stopped = false;@|a_row_past_the_window_ends_the_walk_and_the_window_is_whole
+//MUTANT stop-never-ends-the-walk|s@^        stopped = stop.is_some_and(\x7cstop\x7c batch.iter().any(stop));$@        stopped = false;@|a_row_past_the_window_ends_the_walk_and_the_window_is_whole
 //MUTANT stopped-walk-judged-by-count|s@^    let reached_the_end = stopped$@    let reached_the_end = false@|a_row_past_the_window_ends_the_walk_and_the_window_is_whole
 //MUTANT truncation-drops-the-prefix|s@^            rows,$@            rows: Vec::new(),@|a_collection_larger_than_the_window_is_truncated
 #[must_use]

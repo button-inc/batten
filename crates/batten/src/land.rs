@@ -911,7 +911,7 @@ pub enum Waited {
 /// An UNREAD wait keeps its runs too (CLOUD-1215): nobody read them, so nothing
 /// says they are waste.
 //MUTANT-SUITE crates/batten/tests/it/land_lap.rs
-//MUTANT unread-wait-abandons-its-runs|s@    !matches!(seen, Some(TapVerdict::Red \| TapVerdict::Unread))@    !matches!(seen, Some(TapVerdict::Red))@|an_unread_wait_neither_re_drafts_nor_cancels
+//MUTANT unread-wait-abandons-its-runs|s@    !matches!(seen, Some(TapVerdict::Red \x7c TapVerdict::Unread))@    !matches!(seen, Some(TapVerdict::Red))@|an_unread_wait_neither_re_drafts_nor_cancels
 #[must_use]
 pub const fn abandons_the_runs(seen: Option<TapVerdict>) -> bool {
     !matches!(seen, Some(TapVerdict::Red | TapVerdict::Unread))

@@ -111,7 +111,7 @@ pub struct Redirect {
 /// The table with every `read` dropped whose `read_server` `resolves` says no
 /// source can reach (CLOUD-2229): a refusal must name a route that can be taken.
 //MUTANT-SUITE crates/batten/src/redirect.rs
-//MUTANT unreachable-route-still-refused|s@^        if row.read_server.as_deref().is_some_and(\|server\| !resolves(server)) {$@        if false {@|a_memory_read_is_admitted_where_no_source_resolves_its_server
+//MUTANT unreachable-route-still-refused|s@^                .is_some_and(\x7cserver\x7c !resolves(server))$@                .is_some_and(\x7c_\x7c false)@|a_memory_read_is_admitted_where_no_source_resolves_its_server
 #[must_use]
 pub fn offered(table: &[Redirect], resolves: impl Fn(&str) -> bool) -> Vec<Redirect> {
     table
