@@ -13992,7 +13992,7 @@ fn run_land_entry_gates(
         )?;
         writeln!(
             err,
-            "::error:: nothing has been spent — read each failed job's log (`batten mcp call github get_job_logs`, or `get_check_run` for a check with no job), then run the landing again"
+            "::error:: nothing has been spent — `batten policy explain 'job read unread'` names each read that pays it; then run the landing again"
         )?;
         return Ok(Some(ExitCode::Violation));
     }

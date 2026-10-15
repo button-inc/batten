@@ -2030,7 +2030,7 @@ fast-forward, after CI has run. `git merge <ref>` writes one, and so does `git p
     // record is the `red-head` fact `land` writes; its own bundle, so the row
     // enabling it names the one class it raises.
     Manifest {
-        name: "red-head",
+        name: crate::land::RED_HEAD,
         version: 1,
         modules: &[PresetModule {
             scope: RuleScope::MediatedCall,

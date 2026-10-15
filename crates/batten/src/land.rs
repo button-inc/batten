@@ -1259,6 +1259,10 @@ pub fn record_wait(root: &Path, branch: &str, answers: &[Answered]) -> Result<()
 /// Branch-keyed, `red-head.<slug>`, and REPLACED rather than appended: it
 /// answers "what does this branch's head owe a push", which is current state,
 /// never history. `red-head` reads it as a mediated fact.
+///
+/// Also the PRESET's name, by construction rather than coincidence: the
+/// manifest spells itself with this constant, so the landing's "is the preset
+/// enabled" lookup and the record cannot be renamed apart.
 pub const RED_HEAD: &str = "red-head";
 
 /// A red reading's two pointer lists: each failed required check's newest run
@@ -1352,32 +1356,118 @@ fn run_was_read(store: &Path, id: &str) -> bool {
         .any(|family| store.join(format!("{family}.{id}")).is_file())
 }
 
-/// The current branch's red-head record as the `red-head` fact projects it:
-/// `{"head", "failed": [{"id", "name", "read"}], "running"}`.
-///
-/// `IsNot` with no record (or a detached `HEAD`, which has nothing to key one
-/// on); `CouldNotLook` outside a repository or on a record that will not read.
-/// `read` is a stat of [`CHECK_LOG_READ`]`.<id>`, never the log itself.
-#[must_use]
-pub fn red_head_fact(root: &Path) -> crate::facts::Look<serde_json::Value> {
-    let Ok(git_dir) = crate::git::git_dir(root) else {
+/// A branch's red-head record as read, each failed run's `read` already asked
+/// of [`run_was_read`]. The ONE parse the hook's fact and the landing's entry
+/// both read, so neither re-derives the other's shape.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+struct RedHead {
+    head: String,
+    failed: Vec<FailedRun>,
+    running: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+struct FailedRun {
+    id: String,
+    name: String,
+    read: bool,
+}
+
+impl RedHead {
+    /// Parse a record's text, asking `read` of each failed run's id.
+    ///
+    /// An id that is not all digits was not written by [`record_red_head`] and
+    /// is never joined onto a path: it is parsed unread.
+    fn parse(text: &str, read: impl Fn(&str) -> bool) -> Self {
+        let mut record = Self {
+            head: String::new(),
+            failed: Vec::new(),
+            running: Vec::new(),
+        };
+        for line in text.lines() {
+            let Some((kind, rest)) = line.split_once(' ') else {
+                continue;
+            };
+            match kind {
+                "head" => rest.clone_into(&mut record.head),
+                "failed" => {
+                    let Some((id, name)) = rest.split_once(' ') else {
+                        continue;
+                    };
+                    let digits = !id.is_empty() && id.bytes().all(|byte| byte.is_ascii_digit());
+                    record.failed.push(FailedRun {
+                        id: id.to_owned(),
+                        name: name.to_owned(),
+                        read: digits && read(id),
+                    });
+                }
+                "running" => record.running.push(rest.to_owned()),
+                _ => {}
+            }
+        }
+        record
+    }
+
+    /// The refusal subjects, `<name> job <id>` per unread failure and then
+    /// `<name> still running`, or `None` when every failure was read: a running
+    /// check alone owes nothing, as the preset says.
+    fn owed(&self) -> Option<Vec<String>> {
+        let unread: Vec<String> = self
+            .failed
+            .iter()
+            .filter(|run| !run.read)
+            .map(|run| format!("{} job {}", run.name, run.id))
+            .collect();
+        if unread.is_empty() {
+            return None;
+        }
+        let running = self
+            .running
+            .iter()
+            .map(|name| format!("{name} still running"));
+        Some(unread.into_iter().chain(running).collect())
+    }
+}
+
+/// `branch`'s red-head record. `IsNot` with none; `CouldNotLook` outside a
+/// repository or on a record that will not read.
+fn read_red_head(root: &Path, branch: &str) -> crate::facts::Look<RedHead> {
+    let Some(path) = red_head_path(root, branch) else {
         return crate::facts::Look::CouldNotLook;
     };
-    let Ok(branch) = crate::git::current_branch(root) else {
-        return crate::facts::Look::CouldNotLook;
-    };
-    let Some(branch) = branch else {
-        return crate::facts::Look::IsNot;
-    };
-    let store = crate::minted::store_path(&git_dir);
-    let text = match std::fs::read_to_string(red_head_file(&store, &branch)) {
+    let text = match std::fs::read_to_string(&path) {
         Ok(text) => text,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return crate::facts::Look::IsNot;
         }
         Err(_) => return crate::facts::Look::CouldNotLook,
     };
-    crate::facts::Look::Is(red_head_document(&text, |id| run_was_read(&store, id)))
+    let store = path.parent().unwrap_or(Path::new("."));
+    crate::facts::Look::Is(RedHead::parse(&text, |id| run_was_read(store, id)))
+}
+
+/// The current branch's red-head record as the `red-head` fact projects it:
+/// `{"head", "failed": [{"id", "name", "read"}], "running"}`.
+///
+/// `IsNot` with no record (or a detached `HEAD`, which has nothing to key one
+/// on); `CouldNotLook` outside a repository or on a record that will not read.
+/// `read` is [`run_was_read`]'s stat of a receipt, never the log itself.
+#[must_use]
+pub fn red_head_fact(root: &Path) -> crate::facts::Look<serde_json::Value> {
+    let Ok(branch) = crate::git::current_branch(root) else {
+        return crate::facts::Look::CouldNotLook;
+    };
+    let Some(branch) = branch else {
+        return crate::facts::Look::IsNot;
+    };
+    match read_red_head(root, &branch) {
+        crate::facts::Look::Is(record) => match serde_json::to_value(record) {
+            Ok(document) => crate::facts::Look::Is(document),
+            Err(_) => crate::facts::Look::CouldNotLook,
+        },
+        crate::facts::Look::IsNot => crate::facts::Look::IsNot,
+        crate::facts::Look::CouldNotLook => crate::facts::Look::CouldNotLook,
+    }
 }
 
 /// What `branch`'s red head still owes before `land` may push over it, as
@@ -1390,10 +1480,16 @@ pub fn red_head_fact(root: &Path) -> crate::facts::Look<serde_json::Value> {
 /// So the landing asks the same record before its first lap.
 ///
 /// **ONLY WHERE A ROW ENABLES THE PRESET.** Without one, nothing declares the
-/// `check-log-read` mint that pays the debt, and refusing here would leave a
-/// consumer that never opted in no route past its own red stop.
+/// `[[mint]]` rows whose receipts [`run_was_read`] stats, and refusing here
+/// would leave a consumer that never opted in no route past its own red stop.
+/// The record is read first: most landings start green and have none, so the
+/// config is loaded only when a record could owe something.
 #[must_use]
 pub fn red_head_owed(root: &Path, branch: &str) -> Option<Vec<String>> {
+    let crate::facts::Look::Is(record) = read_red_head(root, branch) else {
+        return None;
+    };
+    let owed = record.owed()?;
     let site = crate::config::authority_site(root, None);
     let enabled = site.path.is_file()
         && crate::config::load_site(&site).is_ok_and(|(config, _)| {
@@ -1402,67 +1498,7 @@ pub fn red_head_owed(root: &Path, branch: &str) -> Option<Vec<String>> {
                 .iter()
                 .any(|rule| rule.preset.as_deref() == Some(RED_HEAD))
         });
-    if !enabled {
-        return None;
-    }
-    let path = red_head_path(root, branch)?;
-    let text = std::fs::read_to_string(&path).ok()?;
-    let store = path.parent()?;
-    let document = red_head_document(&text, |id| run_was_read(store, id));
-    let unread: Vec<String> = document["failed"]
-        .as_array()?
-        .iter()
-        .filter(|entry| entry["read"] == false)
-        .map(|entry| {
-            format!(
-                "{} job {}",
-                entry["name"].as_str().unwrap_or("-"),
-                entry["id"].as_str().unwrap_or("-")
-            )
-        })
-        .collect();
-    if unread.is_empty() {
-        return None;
-    }
-    let running = document["running"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(serde_json::Value::as_str)
-        .map(|name| format!("{name} still running"));
-    Some(unread.into_iter().chain(running).collect())
-}
-
-/// Project a red-head record's text, asking `read` of each failed run's id.
-///
-/// An id that is not all digits was not written by [`record_red_head`] and
-/// is never joined onto a path: it is projected unread.
-fn red_head_document(text: &str, read: impl Fn(&str) -> bool) -> serde_json::Value {
-    let mut head = String::new();
-    let mut failed = Vec::new();
-    let mut running = Vec::new();
-    for line in text.lines() {
-        let Some((kind, rest)) = line.split_once(' ') else {
-            continue;
-        };
-        match kind {
-            "head" => rest.clone_into(&mut head),
-            "failed" => {
-                let Some((id, name)) = rest.split_once(' ') else {
-                    continue;
-                };
-                let digits = !id.is_empty() && id.bytes().all(|byte| byte.is_ascii_digit());
-                failed.push(serde_json::json!({
-                    "id": id,
-                    "name": name,
-                    "read": digits && read(id),
-                }));
-            }
-            "running" => running.push(serde_json::Value::from(rest)),
-            _ => {}
-        }
-    }
-    serde_json::json!({"head": head, "failed": failed, "running": running})
+    enabled.then_some(owed)
 }
 
 /// Remove this branch's red-head record: a green head owes no push a read.
@@ -5027,13 +5063,13 @@ mod tests {
         let text = "head abc\nfailed 101 test (ubuntu)\nfailed 102 windows\n\
                     failed ../x macos\nrunning linux\n";
         let asked = std::cell::RefCell::new(Vec::new());
-        let document = red_head_document(text, |id| {
+        let record = RedHead::parse(text, |id| {
             asked.borrow_mut().push(id.to_owned());
             id == "101"
         });
         assert_eq!(
-            document,
-            serde_json::json!({
+            serde_json::to_value(&record).ok(),
+            Some(serde_json::json!({
                 "head": "abc",
                 "failed": [
                     {"id": "101", "name": "test (ubuntu)", "read": true},
@@ -5041,9 +5077,17 @@ mod tests {
                     {"id": "../x", "name": "macos", "read": false},
                 ],
                 "running": ["linux"],
-            })
+            }))
         );
         assert_eq!(*asked.borrow(), vec!["101".to_owned(), "102".to_owned()]);
+        assert_eq!(
+            record.owed(),
+            Some(vec![
+                "windows job 102".to_owned(),
+                "macos job ../x".to_owned(),
+                "linux still running".to_owned(),
+            ])
+        );
     }
 
     /// And the mapping reaches the decision: a lap that ran out of asks over a

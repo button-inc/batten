@@ -10,8 +10,8 @@
 #
 # THE RECORD IS THE ENGINE'S. `land` writes `red-head.<branch>` when a wait stops
 # red and removes it when one answers green; `input.facts["red-head"]` projects
-# it with `read` per failed run, a stat of the `check-log-read.<id>` receipt a
-# log read mints. `null` means no red head, and nothing here refuses on it.
+# it with `read` per failed run, a stat of either receipt below that a read
+# mints. `null` means no red head, and nothing here refuses on it.
 #
 # ENABLING IT TAKES TWO `[[mint]]` ROWS BESIDE ITS `[[rule]]`, because a preset
 # ships no mint and `read` is only ever true where one wrote the receipt:
