@@ -1248,9 +1248,10 @@ impl GroupRecord {
 /// `land lap` and its `mutate sweep` kept building on a full disk until a manual
 /// `pkill`. The only reaper ran on `land`'s abandon path.
 ///
-/// Its owned group when Batten leads one, which reaches the grandchildren; the
-/// direct child alone otherwise, because that group is the caller's. TERM, then
-/// KILL to whatever is still there, as [`cancel_owned_group`] does.
+/// Its owned group when Batten leads one, which reaches the grandchildren: TERM,
+/// then KILL to whatever is still there, as [`cancel_owned_group`] does. Never
+/// the caller's group. Then, unless it was already waited, the direct child:
+/// KILLed, whichever group it is in now, and reaped before `exec` returns.
 struct Reaper {
     /// The child's pid, which is also its group's id when Batten owns one.
     child: u32,
