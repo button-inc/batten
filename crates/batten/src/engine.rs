@@ -302,11 +302,40 @@ pub fn checkout_build(root: &Path) -> Option<PathBuf> {
     build.is_file().then_some(build)
 }
 
+/// Whether `stamp` records the digest of the tree at `root` (CLOUD-2299): this
+/// binary was built from exactly the tree it is judging.
+///
+/// THE STAMP CARRIES THE PER-CLONE FACT, NEVER THE PIN. `build:release` once
+/// wrote a source pin after every local build, so the committed `batten.toml`
+/// was dirty after any `install:local` and reverted by hand before each commit.
+/// The engine pin is the committed authority's alone (CLOUD-2061), so the fact
+/// "this clone runs its own tree's build" lives beside the binary instead. A
+/// stamp for any other digest is a stale build and decides nothing: the caller
+/// falls back to the pin, so a stale local build never outranks it.
+//MUTANT-SUITE crates/batten/tests/it/engine_gates.rs
+//MUTANT stamp-trusted-for-any-digest|s@^    digest(root).is_ok_and(\x7ccurrent\x7c current == stamp)$@    digest(root).is_ok()@|a_stamp_for_another_digest_falls_back_to_the_pin
+#[must_use]
+pub fn stamped_from(root: &Path, stamp: Option<&str>) -> bool {
+    let Some(stamp) = stamp else {
+        return false;
+    };
+    digest(root).is_ok_and(|current| current == stamp)
+}
+
+/// The tree holding the config at `source`, or `None` for a label no file
+/// answers to.
+fn tree_of(source: &str) -> Option<PathBuf> {
+    std::fs::canonicalize(source)
+        .ok()?
+        .parent()
+        .map(Path::to_path_buf)
+}
+
 /// Refuse a config whose pin this engine does not satisfy.
 ///
 /// `stamp` yields this binary's recorded source digest, or `None` when it has
-/// none. It is asked only for a source pin, so a config pinning a release — or
-/// nothing — never touches the disk for it.
+/// none. A release pin asks for it only when this engine is another release,
+/// so a satisfied pin — or none — never touches the disk for it.
 ///
 /// # Errors
 ///
@@ -322,7 +351,13 @@ pub fn check(text: &str, source: &str, stamp: impl FnOnce() -> Option<String>) -
     match (pin.release.as_deref(), pin.source.as_deref()) {
         (Some(tag), None) => {
             let running = release();
-            if tag != running {
+            // A BUILD STAMPED WITH THIS TREE'S DIGEST ANSWERS FOR THIS TREE
+            // (CLOUD-2299), whatever release the committed pin names: the clone
+            // runs the engine it built, and says so by its stamp rather than by
+            // rewriting the committed pin.
+            if tag != running
+                && !tree_of(source).is_some_and(|root| stamped_from(&root, stamp().as_deref()))
+            {
                 // A RELEASE PIN IS REPAIRED BY THE RELEASE, NEVER BY A BUILD.
                 // CLOUD-2220 named `cargo build` here for a stale in-tree binary,
                 // and that build reports the tag's version without being the
@@ -399,16 +434,22 @@ pub fn stamp_of(binary: &Path) -> Option<String> {
 /// update than refuse (CLOUD-2062). `None` covers both "no pin" and "satisfied";
 /// a malformed pin is left to [`check`] to name.
 #[must_use]
-pub fn stale(text: &str, stamp: impl FnOnce() -> Option<String>) -> Option<Pin> {
-    stale_as(text, stamp, runs_local())
+pub fn stale(text: &str, root: &Path, stamp: impl FnOnce() -> Option<String>) -> Option<Pin> {
+    stale_as(text, root, stamp, runs_local())
 }
 
 /// [`stale`], with `BATTEN_ENGINE=local`'s answer passed in rather than read,
 /// so the decision is a function of its arguments.
-fn stale_as(text: &str, stamp: impl FnOnce() -> Option<String>, local: bool) -> Option<Pin> {
+fn stale_as(
+    text: &str,
+    root: &Path,
+    stamp: impl FnOnce() -> Option<String>,
+    local: bool,
+) -> Option<Pin> {
     let pin = declared(text)?;
     let satisfied = match (pin.release.as_deref(), pin.source.as_deref()) {
-        (Some(tag), None) => tag == release(),
+        // [`check`]'s answer: this tree's own stamped build is not stale.
+        (Some(tag), None) => tag == release() || stamped_from(root, stamp().as_deref()),
         // `BATTEN_ENGINE=local` satisfies a source pin here exactly as it does
         // in [`check`]: one answer to "is this the engine", or a test run of
         // the branch would try to BUILD the pin it was told to run without.
@@ -1005,8 +1046,11 @@ mod tests {
     #[test]
     fn a_satisfied_or_absent_pin_is_not_stale() {
         let tag = release();
-        let stale =
-            |text: &str, stamp: Option<&str>| stale_as(text, || stamp.map(str::to_owned), false);
+        // No tree, so no stamp can name it: the release arm is the pin's alone.
+        let none = Path::new("/nonexistent");
+        let stale = |text: &str, stamp: Option<&str>| {
+            stale_as(text, none, || stamp.map(str::to_owned), false)
+        };
         assert!(stale("version = 1\n", None).is_none());
         assert!(stale(&format!("engine = {{ release = \"{tag}\" }}\n"), None).is_none());
         assert!(stale("engine = { release = \"v0.0.1\" }\n", None).is_some());
@@ -1018,7 +1062,8 @@ mod tests {
     /// release pin.
     #[test]
     fn the_local_engine_answers_a_source_pin_only() {
-        assert!(stale_as("engine = { source = \"ab\" }\n", || None, true).is_none());
-        assert!(stale_as("engine = { release = \"v0.0.1\" }\n", || None, true).is_some());
+        let none = Path::new("/nonexistent");
+        assert!(stale_as("engine = { source = \"ab\" }\n", none, || None, true).is_none());
+        assert!(stale_as("engine = { release = \"v0.0.1\" }\n", none, || None, true).is_some());
     }
 }

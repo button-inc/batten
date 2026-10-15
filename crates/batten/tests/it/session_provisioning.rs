@@ -993,13 +993,13 @@ fn the_reclaim_itself_stays_dependency_free_and_the_surfaces_are_not_empty() {
     );
 }
 
-/// A LOCAL RELEASE BUILD IS THE ENGINE IN USE (CLOUD-2232): built, stamped with
-/// this tree's digest, and pinned by it, in that order, by the binary just
-/// built. A build that skipped either left an unstamped binary first on
-/// `_.path` while `batten.toml` named the release, so the branch was judged by
-/// an engine it had not built.
+/// A LOCAL RELEASE BUILD IS THE ENGINE IN USE (CLOUD-2232), and THE STAMP IS
+/// WHAT SAYS SO (CLOUD-2299): built, then stamped with this tree's digest by the
+/// binary just built, which `engine::check` accepts under the committed release
+/// pin. It writes no pin: pinning the source rewrote the committed `batten.toml`
+/// after every `install:local`, and every commit had to revert it by hand.
 #[test]
-fn a_local_release_build_is_stamped_and_pinned_by_itself() {
+fn a_local_release_build_leaves_batten_toml_clean() {
     let build = task_surface("build:release").expect("the release build is a declared task");
     let at = |needle: &str| {
         build
@@ -1008,11 +1008,14 @@ fn a_local_release_build_is_stamped_and_pinned_by_itself() {
     };
     let compiled = at("cargo build --quiet --release -p batten");
     let stamped = at("target/release/batten engine stamp");
-    let pinned = at("target/release/batten engine pin source");
-    assert!(
-        compiled < stamped && stamped < pinned,
-        "built, then stamped, then pinned: {build}"
-    );
+    assert!(compiled < stamped, "built, then stamped: {build}");
+    for name in COMPILE_ENTRY_POINTS {
+        let body = task_surface(name).unwrap_or_else(|| panic!("{name} is a declared task"));
+        assert!(
+            !body.contains("engine pin"),
+            "{name} writes no pin into the committed config: {body}"
+        );
+    }
 }
 
 /// THE INSTALL STAMPS THE INSTALLED COPY (CLOUD-2232). `engine stamp` stamps the

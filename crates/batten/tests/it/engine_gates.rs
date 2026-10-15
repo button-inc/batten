@@ -83,6 +83,79 @@ fn make_executable(path: &Path) {
     std::fs::set_permissions(path, mode).expect("chmod the stub");
 }
 
+/// A private copy of the binary, installed OUTSIDE the checkout so neither the
+/// in-tree arm nor the suite's `BATTEN_ENGINE=local` answers for it: only its
+/// stamp can.
+fn installed_binary(dir: &Path) -> PathBuf {
+    let mut name = dir.file_name().unwrap().to_os_string();
+    name.push(".bin");
+    let copy = dir.with_file_name(name).join("batten");
+    std::fs::create_dir_all(copy.parent().unwrap()).unwrap();
+    std::fs::copy(env!("CARGO_BIN_EXE_batten"), &copy).unwrap();
+    copy
+}
+
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays, and test-only: the stamp cases run a private COPY of the compiled binary so its stamp is its own, which `common::batten` cannot target because it names the shared binary"
+)]
+fn run_installed(binary: &Path, dir: &Path, args: &[&str]) -> Output {
+    std::process::Command::new(binary)
+        .args(args)
+        .current_dir(dir)
+        // The pre-parse check is the subject; without this the startup follow
+        // (CLOUD-2062) would fetch the pinned release before it is reached.
+        .env("BATTEN_ENGINE_UPDATED", "1")
+        .env_remove(batten::engine::LOCAL_ENV)
+        .output()
+        .expect("run the installed copy")
+}
+
+/// THE STAMP CARRIES THE PER-CLONE FACT (CLOUD-2299). A local build stamped with
+/// this tree's digest runs under the committed release pin naming another
+/// release, so `build:release` need not rewrite the pin to be the engine in use.
+#[test]
+fn a_binary_stamped_with_this_trees_digest_satisfies_a_release_pin() {
+    let dir = repo(
+        "engine-gate-stamped-current",
+        "version = 1\nengine = { release = \"v0.0.1\" }\n",
+    );
+    let binary = installed_binary(&dir);
+    let stamped = run_installed(&binary, &dir, &["engine", "stamp"]);
+    assert!(stamped.status.success(), "{}", text(&stamped));
+    let output = run_installed(&binary, &dir, &["config", "show"]);
+    assert!(
+        output.status.success(),
+        "this tree's own stamped build loads under a release pin: {}",
+        text(&output)
+    );
+}
+
+/// A STALE LOCAL BUILD NEVER OUTRANKS THE PIN: a stamp naming any other tree
+/// decides nothing, and the release pin refuses as it did before.
+#[test]
+fn a_stamp_for_another_digest_falls_back_to_the_pin() {
+    let dir = repo(
+        "engine-gate-stamped-other",
+        "version = 1\nengine = { release = \"v0.0.1\" }\n",
+    );
+    let binary = installed_binary(&dir);
+    let stamped = run_installed(&binary, &dir, &["engine", "stamp"]);
+    assert!(stamped.status.success(), "{}", text(&stamped));
+    // The tree moves on after the build: the stamp now names a tree that is gone.
+    common::write(&dir, "crates/x/src/lib.rs", "fn b() {}\n");
+    let output = run_installed(&binary, &dir, &["config", "show"]);
+    let said = text(&output);
+    assert!(
+        !output.status.success(),
+        "a stale stamp must not load: {said}"
+    );
+    assert!(
+        said.contains("v0.0.1") && said.contains("`batten engine update`"),
+        "the refusal is the pin's own: {said}"
+    );
+}
+
 const LANE: &str = "\
 jobs:
   land:

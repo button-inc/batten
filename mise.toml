@@ -2671,19 +2671,20 @@ description = "Build the release binary the hook registrations execute"
 # the working tree, disqualifying on the hottest path in the binary. The gates
 # keep `cargo run` for exactly the reason stated at `batten-check` below.
 #
-# BUILT, STAMPED AND PINNED IN ONE TASK: building to test IS building to use.
-# The build alone left an unstamped binary first on `_.path` while
-# `batten.toml` kept naming the release, so a branch's hook and gates judged it
-# with an engine it had not built — measured on #1132, v0.0.214's floor model
-# refusing a lap while the branch carried the collector that retires it. The
-# stamp records this tree's digest beside the binary; the pin names it, so the
-# config, the binary on PATH and the tree agree. `engine-pin-check` refuses a
-# source pin at landing (CLOUD-2063): a branch flips back to a release pin
-# before it lands, and `main` never carries one.
+# BUILT AND STAMPED IN ONE TASK: building to test IS building to use. The
+# build alone left an unstamped binary first on `_.path` while `batten.toml`
+# kept naming the release, so a branch's hook and gates judged it with an
+# engine it had not built — measured on #1132, v0.0.214's floor model refusing
+# a lap while the branch carried the collector that retires it. The stamp
+# records this tree's digest beside the binary, and `engine::check` accepts a
+# binary stamped with the CURRENT tree's digest under the committed release pin
+# (CLOUD-2299). NO PIN IS WRITTEN: `engine pin source` here rewrote the committed
+# `batten.toml` after every `install:local`, and each commit reverted it by hand.
+# The pin is the committed authority's alone (CLOUD-2061); the per-clone fact is
+# the stamp's.
 run = [
   "cargo build --quiet --release -p batten",
   "target/release/batten engine stamp",
-  "target/release/batten engine pin source",
 ]
 
 [tasks.acquisition-bench]

@@ -663,7 +663,7 @@ fn follow_pin(may_build: bool) -> Result<Option<ExitCode>> {
     let Ok(text) = std::fs::read_to_string(root.join(config::CONFIG_FILE)) else {
         return Ok(None);
     };
-    let Some(pin) = engine::stale(&text, engine::running_stamp) else {
+    let Some(pin) = engine::stale(&text, &root, engine::running_stamp) else {
         return Ok(None);
     };
     // READ BEFORE THE SWAP. After the rename Linux reports the running image as
@@ -745,7 +745,7 @@ fn engine_update(root: &Path, out: &mut dyn Write) -> Result<ExitCode> {
     let binary = std::env::current_exe()?;
     let want = match (pin.release.as_deref(), pin.source.as_deref()) {
         (Some(tag), None) => {
-            if engine::stale(&text, engine::running_stamp).is_none() {
+            if engine::stale(&text, root, engine::running_stamp).is_none() {
                 return Ok(ExitCode::Success);
             }
             let bytes = engine::fetch_release(env!("CARGO_PKG_REPOSITORY"), tag)?;
