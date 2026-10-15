@@ -3733,6 +3733,9 @@ fn rule_weakenings(base: &[Rule], working: &[Rule]) -> Vec<Weakening> {
     base.iter()
         .filter_map(|rule| {
             match working.iter().find(|other| other.id == rule.id) {
+                // A NATIVE ROW'S REMOVAL LOWERS NOTHING (CLOUD-2291): its gate
+                // returns to the implicit `deny`, which no row exceeds.
+                None if rule.kind == crate::rules::RuleKind::Native => None,
                 None => Some(Weakening::new(
                     WeakeningKind::RuleRemoved,
                     format!("rule[{}]", rule.id),
@@ -5856,6 +5859,9 @@ mod tests {
         }
         let working = config(&native("reset", "destructive-reset", "deny"));
         assert!(weakenings(&base, &working).is_empty());
+        // And deleting one returns its gate to `deny`, which lowers nothing.
+        let base = config(&native("reset", "destructive-reset", "allow"));
+        assert!(weakenings(&base, &config("")).is_empty());
     }
 
     #[test]

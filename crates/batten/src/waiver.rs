@@ -563,7 +563,7 @@ pub const fn reaches(kind: RuleKind) -> bool {
         | RuleKind::Policy
         // A reference row denies too, so a waiver over it suppresses a real finding.
         | RuleKind::Reference
-        // So does a native gate; the waiver names its verdict, as it always did.
+        // So does a native gate (CLOUD-2291).
         | RuleKind::Native => true,
         RuleKind::Judge => false,
     }

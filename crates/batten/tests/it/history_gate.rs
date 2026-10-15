@@ -118,7 +118,10 @@ fn denied(line: &str) -> bool {
     line.contains("\"permissionDecision\":\"deny\"")
 }
 
-/// CLOUD-2291: absent (another gate's row present), `deny` and `warn`.
+/// CLOUD-2291 (the name is the Ready block's). The gate runs at its own row's
+/// severity and at `deny` with no row of its own: another gate's row leaves it
+/// refusing, `allow` switches it off, `deny` refuses, `warn` allows and still
+/// names the class.
 #[test]
 fn the_history_gate_runs_only_when_a_row_enables_it_at_its_severity() {
     let row = common::native_row;

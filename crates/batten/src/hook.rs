@@ -4611,12 +4611,19 @@ fn event_decides(event: Event) -> Option<Decision> {
 /// disable the reset gate, which a security review caught. Lowering is a row's
 /// own severity, which `config lint` reports as a weakening, and only the
 /// committed authority may carry one (`resolve::apply_local`).
+///
+/// THE STRONGEST ROW NAMING THE GATE, never the first: with two rows for one
+/// gate, declaration order would decide the grade, and moving an `allow` row
+/// above a `deny` one would lower the gate with no row added, removed or
+/// changed for `config lint` to see.
 fn native_grade(policy: &Policy, gate: NativeGate) -> RuleSeverity {
     policy
         .shapes
         .iter()
-        .find(|rule| rule.kind == RuleKind::Native && rule.gate == Some(gate))
-        .map_or(RuleSeverity::Deny, Rule::severity)
+        .filter(|rule| rule.kind == RuleKind::Native && rule.gate == Some(gate))
+        .map(Rule::severity)
+        .max()
+        .unwrap_or(RuleSeverity::Deny)
 }
 
 /// The first compiled gate that fired at a blocking grade, disposed as its

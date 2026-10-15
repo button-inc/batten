@@ -48,10 +48,10 @@ fn fixture_with(name: &str, rows: &str) -> PathBuf {
     common::adjudicable_with(name, rows)
 }
 
-/// CLOUD-2291: the gate runs only where a row enables it, at that row's
-/// severity. Absent — another gate's row present, so the config has opted into
-/// rows — the second start is allowed; `deny` refuses it as before; `warn` allows
-/// it and still names the class.
+/// CLOUD-2291 (the name is the Ready block's). The gate runs at its own row's
+/// severity and at `deny` with no row of its own: another gate's row leaves it
+/// refusing, `allow` switches it off, `deny` refuses, `warn` allows and still
+/// names the class, and a second row cannot lower the first.
 #[test]
 fn the_singleton_gate_runs_only_when_a_row_enables_it_at_its_severity() {
     let native_row = common::native_row;
@@ -62,6 +62,24 @@ fn the_singleton_gate_runs_only_when_a_row_enables_it_at_its_severity() {
     hold(&other, "land", Some("1"));
     let (code, cause) = adjudicate(&other, "mise run land");
     assert_eq!(code, Some(2), "no row of its own still refuses\n{cause}");
+    assert!(cause.contains(CLASS), "under its own class\n{cause}");
+
+    // Two rows for one gate: the strongest decides, whatever their order.
+    let both = fixture_with(
+        "singleton-native-both",
+        &format!(
+            "{}{}",
+            native_row("singleton", "allow"),
+            native_row("singleton", "deny").replace("gate guard other", "gate guard ahead")
+        ),
+    );
+    hold(&both, "land", Some("1"));
+    let (code, cause) = adjudicate(&both, "mise run land");
+    assert_eq!(
+        code,
+        Some(2),
+        "an allow row cannot outrank a deny row\n{cause}"
+    );
 
     let off = fixture_with("singleton-native-off", &native_row("singleton", "allow"));
     hold(&off, "land", Some("1"));
