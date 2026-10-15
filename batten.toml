@@ -3702,6 +3702,20 @@ max_age = 300
 requires_field = { at = 6, is = "ready" }
 reason = "The last read says the Ready block fails. Run `batten ready lint --issue <key>`, fix what it names with `save_issue`, then re-read with `batten mcp call Linear get_issue`. Open questions mean Backlog, not Todo."
 
+# A CREATE STRAIGHT INTO TODO (CLOUD-2294). The row above keys on `input-id`,
+# which a create lacks, so a new row could skip every promotion gate by being
+# born in Todo. This refuses the route and names the door.
+[[rule]]
+id = "plan file loose"
+kind = "shape"
+scope = "mediated_call"
+severity = "deny"
+tool = "save_issue"
+when_absent = "input-id"
+when_present = "input-state"
+when_value = "Todo"
+reason = "Create the row in Backlog, groom it, then move it to Todo. A row is groomed before it is promoted, never after."
+
 # CLOUD-312 row 2: `issue-read-guard` retires here. THE COMPLEMENT OF THE ROW
 # ABOVE, not a duplicate of it — same tool, opposite arm. That row says outright
 # that "updating an existing issue is never gated", which was true and is the hole

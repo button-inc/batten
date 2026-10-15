@@ -51,7 +51,12 @@ use common::{Fixture, run, run_with_stdin, stderr, stdout};
 /// compile time, so a row edited in `batten.toml` is exercised by the next run
 /// rather than by whoever remembers to update a duplicate.
 fn repo(name: &str) -> PathBuf {
-    let staged = Fixture::new(name).config(include_str!("../../../../batten.toml"));
+    repo_with(name, include_str!("../../../../batten.toml"))
+}
+
+/// [`repo`] over `config` rather than the committed authority alone.
+fn repo_with(name: &str, config: &str) -> PathBuf {
+    let staged = Fixture::new(name).config(config);
     // Copied by ENUMERATION rather than by name, and staged before the commit so
     // they are tracked like the config is: naming a consumer's policy filenames
     // in `crates/**` is non-negotiable rule 1's violation, and `no-consumer-repo-
@@ -348,4 +353,131 @@ fn a_uuid_id_fails_open_rather_than_denying() {
         Some(0),
         "an id this engine cannot key a receipt under is not having looked, and not looking allows"
     );
+}
+
+// ---------------------------------------------------------------------------
+// A ROW IS GROOMED BEFORE IT IS PROMOTED (CLOUD-2294).
+// ---------------------------------------------------------------------------
+
+/// The `groom` mint and its promotion row, as they will be committed once a
+/// release carries `key_from_input` and `key_shape`: the pinned engine refuses a
+/// config column it predates, so the committed authority cannot hold them yet.
+/// Appended to the committed rows, so every other promotion gate still applies.
+const GROOM_ROWS: &str = r#"
+[[mint]]
+name = "groom"
+tool = "Skill"
+selects_at = "skill"
+selects = "groom"
+key = "named"
+key_from_input = "args"
+key_shape = "[A-Z][A-Z0-9]*-[0-9]+"
+requires = []
+mode = "replace"
+body = "{now}"
+
+[[rule]]
+id = "plan grade missing"
+kind = "receipt"
+scope = "mediated_call"
+severity = "deny"
+tool = "save_issue"
+when_present = "input-state"
+when_value = "Todo"
+checks = ["groom"]
+key = "named"
+key_from = "input-id"
+key_shape = "^[A-Z][A-Z0-9]*-[0-9]+$"
+reason = "Run the `groom` skill with the row's key as its argument, then retry the move."
+"#;
+
+fn groomed_repo(name: &str) -> PathBuf {
+    repo_with(
+        name,
+        &format!("{}{GROOM_ROWS}", include_str!("../../../../batten.toml")),
+    )
+}
+
+/// The `groom` skill dispatched over `args`, answered as the live host answers.
+fn groom(repo: &Path, args: &str) {
+    let envelope = serde_json::json!({
+        "hook_event_name": "PostToolUse",
+        "tool_name": "Skill",
+        "tool_input": {"skill": "groom", "args": args},
+        "tool_response": "Launching skill: groom",
+    });
+    let _ = run_with_stdin(
+        repo,
+        &["adjudicate", "--harness", "exit-code"],
+        &envelope.to_string(),
+    );
+}
+
+/// The promotion's verdict and what it printed, so a case can say WHICH row
+/// refused rather than only that one did.
+fn decided(repo: &Path, input: &str) -> (Option<i32>, String) {
+    let output = run_with_stdin(
+        repo,
+        &["adjudicate", "--harness", "exit-code"],
+        &pre_tool("mcp__Linear__save_issue", input),
+    );
+    (
+        output.status.code(),
+        format!("{}{}", stdout(&output), stderr(&output)),
+    )
+}
+
+/// A READY READ IS NOT A GROOM, and the groom is what admits the move.
+///
+/// On `main` the ready read alone admitted it: `plan grade unread` is the only
+/// promotion row, and it asks what the last read found.
+#[test]
+fn a_todo_move_without_a_groom_receipt_is_refused() {
+    let repo = groomed_repo("todo-promotion-ungroomed");
+    read_the_row(&repo, READY_BODY);
+
+    let (code, said) = decided(&repo, PROMOTION);
+    assert_eq!(code, Some(2), "{said}");
+    assert!(said.contains("plan grade missing"), "{said}");
+
+    groom(&repo, "CLOUD-1");
+    let (code, said) = decided(&repo, PROMOTION);
+    assert_eq!(code, Some(0), "a groomed, ready row is promoted: {said}");
+}
+
+/// A GROOM OF ANOTHER ROW DOES NOT ANSWER: the receipt is keyed by the row the
+/// skill was asked about.
+#[test]
+fn a_groom_receipt_for_another_row_does_not_admit() {
+    let repo = groomed_repo("todo-promotion-groomed-elsewhere");
+    read_the_row(&repo, READY_BODY);
+    groom(&repo, "CLOUD-2");
+    assert!(
+        receipt(&repo, "groom.CLOUD-2").is_some(),
+        "the other row's groom minted, so the refusal below is about the key"
+    );
+
+    let (code, said) = decided(&repo, PROMOTION);
+    assert_eq!(code, Some(2), "{said}");
+    assert!(said.contains("plan grade missing"), "{said}");
+}
+
+/// A CREATE STRAIGHT INTO TODO IS REFUSED, over the committed rows alone. On
+/// `main` every promotion row keyed on `input-id`, which a create lacks.
+#[test]
+fn a_create_straight_into_todo_is_refused() {
+    let repo = repo("todo-promotion-create-into-todo");
+    let (code, said) = decided(
+        &repo,
+        r#"{"title":"new","team":"Button Cloud","state":"Todo"}"#,
+    );
+    assert_eq!(code, Some(2), "{said}");
+    assert!(said.contains("plan file loose"), "{said}");
+
+    // The anti-vacuity half: the same create into Backlog is not this row's.
+    let (_, said) = decided(
+        &repo,
+        r#"{"title":"new","team":"Button Cloud","state":"Backlog"}"#,
+    );
+    assert!(!said.contains("plan file loose"), "{said}");
 }

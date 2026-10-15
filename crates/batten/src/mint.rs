@@ -133,6 +133,23 @@ pub struct Declared {
     /// The path whose value is the subject, for [`MintKey::Named`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key_from: Option<String>,
+    /// The INPUT path whose value is the subject, for [`MintKey::Named`]
+    /// (CLOUD-2294): the alternative to [`Declared::key_from`], exactly one of
+    /// which a `named` row declares.
+    ///
+    /// A dispatch names its subject in its ARGUMENTS — the row a skill was asked
+    /// to groom — and answers with prose, so a result path has nothing to read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key_from_input: Option<String>,
+    /// A pattern the subject must match in full, or the row mints nothing
+    /// (CLOUD-2294).
+    ///
+    /// [`crate::receipt::safe_subject`] bounds a subject STRUCTURALLY and admits
+    /// a space, so free-text arguments ("groom M2 to ready") would file under
+    /// themselves. What a row key looks like is the consumer's fact (rule 1), so
+    /// it is declared here, the twin of a `receipt` rule's `key_shape`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key_shape: Option<String>,
     /// The base ref the change is measured against, for [`MintKey::Delta`].
     ///
     /// Declared rather than defaulted: which ref a branch is *a change against*
@@ -478,10 +495,25 @@ pub fn satisfied(declared: &Declared, result: &serde_json::Value) -> bool {
 /// **Refused, never rewritten**, which is [`crate::receipt::safe_subject`]'s rule
 /// and its reason: rewriting a bad subject would file two different subjects
 /// under one receipt and let a fresh read of A authorise a stale write to B.
+///
+/// From the INPUT when the row declares [`Declared::key_from_input`], and only
+/// when it matches [`Declared::key_shape`], if declared (CLOUD-2294).
 #[must_use]
-pub fn subject(declared: &Declared, result: &serde_json::Value) -> Option<String> {
-    let from = declared.key_from.as_deref()?;
-    let subject = scalar(result, from)?;
+pub fn subject(
+    declared: &Declared,
+    input: &serde_json::Value,
+    result: &serde_json::Value,
+) -> Option<String> {
+    let subject = match declared.key_from_input.as_deref() {
+        Some(from) => scalar(input, from)?,
+        None => scalar(result, declared.key_from.as_deref()?)?,
+    };
+    if let Some(shape) = declared.key_shape.as_deref() {
+        let whole = regex::Regex::new(&format!("^(?:{shape})$")).ok()?;
+        if !whole.is_match(&subject) {
+            return None;
+        }
+    }
     crate::receipt::safe_subject(&subject).then_some(subject)
 }
 
@@ -648,10 +680,35 @@ pub fn validate(mints: &[Declared]) -> anyhow::Result<()> {
                 mint.name
             )));
         }
-        if mint.key == MintKey::Named && mint.key_from.is_none() {
+        if mint.key == MintKey::Named && mint.key_from.is_none() && mint.key_from_input.is_none() {
             return Err(crate::error::UsageError::raise(format!(
                 "`[[mint]]` `{}` is keyed `named` and declares no `key_from`, so nothing says \
                  which projection supplies the subject and no receipt could be filed",
+                mint.name
+            )));
+        }
+        // ONE SOURCE OF A SUBJECT (CLOUD-2294): with both, which one names the
+        // record would be a precedence nobody declared.
+        if mint.key_from.is_some() && mint.key_from_input.is_some() {
+            return Err(crate::error::UsageError::raise(format!(
+                "`[[mint]]` `{}` declares both `key_from` and `key_from_input`; a subject has \
+                 one source",
+                mint.name
+            )));
+        }
+        if mint.key != MintKey::Named && (mint.key_from_input.is_some() || mint.key_shape.is_some())
+        {
+            return Err(crate::error::UsageError::raise(format!(
+                "`[[mint]]` `{}` declares `key_from_input` or `key_shape` and is not keyed \
+                 `named`, so it would be read by nothing",
+                mint.name
+            )));
+        }
+        if let Some(shape) = mint.key_shape.as_deref()
+            && regex::Regex::new(&format!("^(?:{shape})$")).is_err()
+        {
+            return Err(crate::error::UsageError::raise(format!(
+                "`[[mint]]` `{}` declares a `key_shape` that is not a pattern",
                 mint.name
             )));
         }
@@ -730,7 +787,7 @@ pub fn validate(mints: &[Declared]) -> anyhow::Result<()> {
         // A `named` row whose subject projection the body never has to render is
         // still required to name one the ENGINE can read, so the same parser
         // decides both and a typo cannot reach the filename.
-        if let Some(from) = mint.key_from.as_deref()
+        if let Some(from) = mint.key_from.as_deref().or(mint.key_from_input.as_deref())
             && from.trim().is_empty()
         {
             return Err(crate::error::UsageError::raise(format!(
@@ -1173,6 +1230,8 @@ mod tests {
             tool: "get_issue".to_owned(),
             key: MintKey::Named,
             key_from: Some("id".to_owned()),
+            key_from_input: None,
+            key_shape: None,
             key_base: None,
             selects_at: None,
             selects: None,

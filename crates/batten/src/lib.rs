@@ -21833,7 +21833,7 @@ fn mint_receipts(
         // pay a git invocation for a question it never asks.
         let suffix = match mint.key {
             crate::mint::MintKey::Named => {
-                let Some(subject) = crate::mint::subject(mint, result) else {
+                let Some(subject) = crate::mint::subject(mint, input, result) else {
                     continue;
                 };
                 subject

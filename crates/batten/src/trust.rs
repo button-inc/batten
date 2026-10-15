@@ -6792,6 +6792,8 @@ mod tests {
             tool: "get_issue".to_owned(),
             key: crate::mint::MintKey::Named,
             key_from: Some("id".to_owned()),
+            key_from_input: None,
+            key_shape: None,
             key_base: None,
             selects_at: None,
             selects: None,

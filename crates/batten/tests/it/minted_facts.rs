@@ -232,3 +232,59 @@ fn no_receipt_store_at_all_is_could_not_look() {
         stderr(&outcome)
     );
 }
+
+/// A SKILL'S ARGUMENTS ARE NAMED BY THE ROW'S SHAPE, OR MINT NOTHING (CLOUD-2294).
+///
+/// `key_from_input` takes the subject from the dispatch's arguments, which are
+/// free text. `safe_subject` admits a space, so without `key_shape` a prose
+/// argument would file a receipt under itself. The row-key argument after it is
+/// the anti-vacuity half: the same row DOES mint from a key.
+#[test]
+fn a_skill_arg_that_is_not_a_row_key_mints_nothing() {
+    let dir = common::Fixture::new("minted-facts-skill-args")
+        .config(
+            r#"version = 1
+
+[[mint]]
+name = "groomed"
+tool = "Skill"
+selects_at = "skill"
+selects = "groom"
+key = "named"
+key_from_input = "args"
+key_shape = "[A-Z][A-Z0-9]*-[0-9]+"
+requires = []
+mode = "replace"
+body = "{now}"
+"#,
+        )
+        .git()
+        .base_commit()
+        .build();
+    let dispatch = |args: &str| {
+        common::post_tool(
+            &dir,
+            "Skill",
+            &serde_json::json!({"skill": "groom", "args": args}),
+            &serde_json::json!("Launching skill: groom"),
+        );
+    };
+    let store = dir.join(".git/batten-receipts");
+    let minted = || -> Vec<String> {
+        std::fs::read_dir(&store)
+            .map(|entries| {
+                entries
+                    .filter_map(Result::ok)
+                    .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                    .filter(|name| name.starts_with("groomed."))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+
+    dispatch("groom M2 to ready");
+    assert!(minted().is_empty(), "prose minted: {:?}", minted());
+
+    dispatch(SUBJECT);
+    assert_eq!(minted(), vec![format!("groomed.{SUBJECT}")]);
+}
