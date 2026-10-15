@@ -20,23 +20,27 @@
 // seven fixed names, and `renovatebot/github-action` ships lowercase `license`:
 // every probe missed at both commits, and "both absent" read as "identical" — a
 // carry with nothing read. Here the commit's own tree is listed, every top-level
-// `LICENSE*`, `LICENCE*`, `COPYING*` or `NOTICE*` is compared by blob id, and an
-// empty set is "unreviewed", never "identical".
+// `LICENSE*`, `LICENCE*`, `COPYING*`, `COPYRIGHT*`, `NOTICE*` or `UNLICENSE*`
+// file is compared by blob id, a top-level `LICENSES/` directory (the REUSE
+// layout) by tree id, which covers every file under it, and an empty set is
+// "unreviewed", never "identical".
 
 import { readFileSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
 const TABLE = "mise-tasks/sbom-actions.tsv";
 const PIN = /^[0-9a-f]{40}$/;
-const LICENCE = /^(licen[cs]e|copying|notice)([.-].*)?$/i;
+const LICENCE = /^(licen[cs]e|copying|copyright|notice|unlicense)([.-].*)?$/i;
+const LICENCE_DIR = /^licen[cs]es$/i;
 
 function say(line) {
   process.stdout.write(`sbom-carry: ${line}\n`);
 }
 
-// The licence files at one commit, as `path -> blob id`, or null when the tree
-// could not be read. Blob ids are git's content hashes, so equal ids ARE equal
-// bytes, and nothing is downloaded to compare them.
+// The licence entries at one commit, as `path -> object id`, or null when the
+// tree could not be read. Object ids are git's content hashes, so equal ids ARE
+// equal bytes (for a directory, equal bytes in every file under it), and
+// nothing is downloaded to compare them.
 async function licenceFiles(api, repo, sha) {
   const headers = { accept: "application/vnd.github+json" };
   const token = process.env.GITHUB_COM_TOKEN ?? process.env.GITHUB_TOKEN;
@@ -52,7 +56,9 @@ async function licenceFiles(api, repo, sha) {
   if (!Array.isArray(tree.tree) || tree.truncated) return null;
   const files = new Map();
   for (const entry of tree.tree) {
-    if (entry.type === "blob" && LICENCE.test(entry.path)) files.set(entry.path, entry.sha);
+    const licence =
+      (entry.type === "blob" && LICENCE.test(entry.path)) || (entry.type === "tree" && LICENCE_DIR.test(entry.path));
+    if (licence) files.set(entry.path, entry.sha);
   }
   return files;
 }

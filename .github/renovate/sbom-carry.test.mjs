@@ -84,6 +84,23 @@ test("a lowercase licence file is found, and a change to it is caught", async ()
   assert.equal(answer, "changed");
 });
 
+// A licence change outside a top-level LICENSE: a REUSE `LICENSES/` directory, a
+// COPYRIGHT file. Each must block the carry even with LICENSE itself unchanged.
+test("a changed LICENSES directory or COPYRIGHT file writes nothing", async () => {
+  const licence = blob("LICENSE", "1".repeat(40));
+  const dir = (sha) => ({ path: "LICENSES", type: "tree", sha });
+  for (const [before, after] of [
+    [[licence, dir("5".repeat(40))], [licence, dir("6".repeat(40))]],
+    [[licence, blob("COPYRIGHT", "7".repeat(40))], [licence, blob("COPYRIGHT", "8".repeat(40))]],
+  ]) {
+    const path = table([ROW]);
+    const answer = await withForge({ [`acme/act@${OLD}`]: before, [`acme/act@${NEW}`]: after }, (api) =>
+      carry("acme/act", OLD, NEW, { table: path, api }),
+    );
+    assert.equal(answer, "changed");
+  }
+});
+
 test("no licence file at either commit is never identical", async () => {
   const path = table([ROW]);
   const readme = [blob("README.md", "2".repeat(40))];
