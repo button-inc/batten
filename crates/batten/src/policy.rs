@@ -915,7 +915,17 @@ pub fn load(
     // preset reaches a consumer who wrote no `[[verdict]]` row at all, so
     // holding it to their table would make an enabled preset unloadable with no
     // fix available.
-    let registry = registry_for(verdicts)?;
+    //
+    // BUILT ONLY WHERE A CHECK READS IT (CLOUD-2315): the registry and the
+    // collidable tokens feed `check_verdicts_are_declared`, `check_finding_ids`
+    // and `check_collapse`, none of which runs on the hot path (CLOUD-885) — so
+    // building them there was 0.65 ms of every hook call spent on nothing.
+    let hot = checks == ModuleChecks::SkipOnHotPath;
+    let registry = if hot {
+        None
+    } else {
+        Some(registry_for(verdicts)?)
+    };
     let mut emitted: BTreeSet<String> = BTreeSet::new();
     // What each policy row raises, kept PER ROW as well as unioned into
     // `emitted` (CLOUD-1638). The union answers "is every declared class
@@ -923,7 +933,11 @@ pub fn load(
     // classes THIS row raises — and a set that has already been merged cannot
     // answer it.
     let mut per_rule: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    let tokens = collidable_tokens(verdicts);
+    let tokens = if hot {
+        BTreeSet::new()
+    } else {
+        collidable_tokens(verdicts)
+    };
     let mut bundles = Vec::new();
     // Keyed on the scope's WORD rather than the enum, so this set does not oblige
     // `RuleScope` to carry `Ord` for one local lookup — the derive would be a
@@ -1057,7 +1071,12 @@ pub fn load(
             if checks != ModuleChecks::SkipOnHotPath {
                 check_tree_paths_are_emittable(rule, &bundle, source_key)?;
                 check_no_inline_regex(rule, &bundle, &declared_patterns, source_key)?;
-                check_verdicts_are_declared(rule, &bundle, &registry, source_key)?;
+                check_verdicts_are_declared(
+                    rule,
+                    &bundle,
+                    registry.as_deref().unwrap_or_default(),
+                    source_key,
+                )?;
                 record_raised(rule, &bundle, &mut emitted, &mut per_rule);
             }
             claim_ids(&mut ids, &declared, source_key)?;
@@ -1097,7 +1116,12 @@ pub fn load(
                 where_it_came_from,
                 &sources,
             )?;
-            check_verdicts_are_declared(rule, &bundle, &registry, where_it_came_from)?;
+            check_verdicts_are_declared(
+                rule,
+                &bundle,
+                registry.as_deref().unwrap_or_default(),
+                where_it_came_from,
+            )?;
             record_raised(rule, &bundle, &mut emitted, &mut per_rule);
         }
 
@@ -1897,11 +1921,12 @@ fn compile_cached(
     sources: &[(String, String)],
     data: &serde_json::Value,
 ) -> Result<Bundle> {
-    let key = cache_key(id, sources, data);
+    let text = data.to_string();
+    let key = cache_key(id, sources, &text);
     let path = cache_path(root, id);
     if let Some(bundle) = path
         .as_deref()
-        .and_then(|path| read_cached(path, &key, id, sources, data))
+        .and_then(|path| read_cached(path, &key, id, sources, &text))
     {
         return Ok(bundle);
     }
@@ -1955,8 +1980,7 @@ fn cache_path(root: &Path, id: &str) -> Option<std::path::PathBuf> {
 /// running binary's build ID — so a rebuild that changes the code, a regorus bump
 /// included, is a miss, and a relink to identical code is not.
 //MUTANT cache-key-ignores-source|s@        fields.push(source.as_bytes());@        let _ = source;@|an_edited_module_is_not_answered_from_stale_bytecode
-fn cache_key(id: &str, sources: &[(String, String)], data: &serde_json::Value) -> String {
-    let data = data.to_string();
+fn cache_key(id: &str, sources: &[(String, String)], data: &str) -> String {
     let mut fields: Vec<&[u8]> = Vec::with_capacity(2 + 2 * sources.len());
     fields.push(id.as_bytes());
     for (path, source) in sources {
@@ -1967,6 +1991,28 @@ fn cache_key(id: &str, sources: &[(String, String)], data: &serde_json::Value) -
     crate::cache::key(CACHE_FORMAT, &fields)
 }
 
+/// The data document as a `regorus::Value`, parsed once per distinct text
+/// (CLOUD-2315): every bundle of one load shares the pattern table, and each
+/// cache hit used to re-parse it. Keyed by the text itself, so a different
+/// document can never be answered from this one.
+fn data_value(text: &str) -> Option<regorus::Value> {
+    thread_local! {
+        static LAST: std::cell::RefCell<Option<(String, regorus::Value)>> =
+            const { std::cell::RefCell::new(None) };
+    }
+    LAST.with(|cell| {
+        let mut last = cell.borrow_mut();
+        if let Some((held, value)) = last.as_ref()
+            && held == text
+        {
+            return Some(value.clone());
+        }
+        let value = regorus::Value::from_json_str(text).ok()?;
+        *last = Some((text.to_owned(), value.clone()));
+        Some(value)
+    })
+}
+
 /// The cached bundle for `id`, when the entry at `path` was written from
 /// exactly these inputs.
 fn read_cached(
@@ -1974,7 +2020,7 @@ fn read_cached(
     key: &str,
     id: &str,
     sources: &[(String, String)],
-    data: &serde_json::Value,
+    data: &str,
 ) -> Option<Bundle> {
     let bytes = crate::cache::read(path, key)?;
     let split = bytes.iter().position(|byte| *byte == b'\n')?;
@@ -1988,7 +2034,7 @@ fn read_cached(
     };
     let compiled = Compiled {
         program: std::sync::Arc::new(program),
-        data: regorus::Value::from_json_str(&data.to_string()).ok()?,
+        data: data_value(data)?,
         entries: header.entries,
         facts: header.facts,
     };

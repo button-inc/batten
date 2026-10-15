@@ -3728,15 +3728,28 @@ impl Policy {
             // A READ ROUTE NO SOURCE CAN REACH IS NOT OFFERED (CLOUD-2229). Only
             // a server no declared source answers clears it: a source that
             // resolves and will not read is could-not-look, and keeps the refusal.
-            redirects: crate::redirect::offered(&resolved.redirects, |server| {
-                resolved.mcp.as_ref().is_some_and(|mcp| {
-                    !matches!(
-                        crate::mcp::wiring(mcp, root, server),
-                        Err(crate::mcp::Unresolved::NotFound { .. }
-                            | crate::mcp::Unresolved::Undeclared)
-                    )
+            //
+            // ONCE PER SERVER, NOT ONCE PER ROW (CLOUD-2315): `wiring` reads and
+            // parses a source's wiring file, and several rows naming one server
+            // re-read the same file within one load.
+            redirects: {
+                let answered =
+                    std::cell::RefCell::new(std::collections::BTreeMap::<String, bool>::new());
+                crate::redirect::offered(&resolved.redirects, |server| {
+                    if let Some(known) = answered.borrow().get(server) {
+                        return *known;
+                    }
+                    let resolves = resolved.mcp.as_ref().is_some_and(|mcp| {
+                        !matches!(
+                            crate::mcp::wiring(mcp, root, server),
+                            Err(crate::mcp::Unresolved::NotFound { .. }
+                                | crate::mcp::Unresolved::Undeclared)
+                        )
+                    });
+                    answered.borrow_mut().insert(server.to_owned(), resolves);
+                    resolves
                 })
-            }),
+            },
             facts: resolved.facts.clone(),
             mints: resolved.mints.clone(),
             recorders: resolved.recorders.clone(),
