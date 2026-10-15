@@ -650,10 +650,11 @@ fn a_rejection_without_a_reason_is_not_ready() {
         stderr(&output)
     );
 
-    // An adoption needs no reason: the tool IS the answer.
+    // An adoption needs no reason: the tool IS the answer. The verdict is read
+    // trimmed and case-insensitive, as `commit_type` is.
     let mut adopted = complete_claims();
     adopted["prior_art"] = serde_json::json!([
-        {"tool": "cargo-mutants", "url": "https://example.invalid/m", "verdict": "adopt"}
+        {"tool": "cargo-mutants", "url": "https://example.invalid/m", "verdict": " Adopt"}
     ]);
     let output = lint(&dir, &claims_payload(&adopted, &[]));
     assert_eq!(code(&output), 0, "{}", stderr(&output));

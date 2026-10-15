@@ -1287,7 +1287,7 @@ fn check_replay(
 /// CLOUD-1092 both lived in — a declaration disagreeing with the table it is
 /// checked against — is not expressible here at all. That is the difference
 /// between checking a claim and removing the chance to make a wrong one.
-//MUTANT empty-tests-admitted-beyond-docs|s@declared.eq_ignore_ascii_case("docs")@!declared.is_empty()@|a_refactor_row_still_owes_its_tests
+//MUTANT empty-tests-admitted-beyond-docs|s@declared == "docs"@!declared.is_empty()@|a_refactor_row_still_owes_its_tests
 fn check_claims(
     grammar: &Grammar,
     payload: &Payload,
@@ -1327,11 +1327,9 @@ fn check_claims(
         .get("commit_type")
         .and_then(serde_json::Value::as_str)
         .map(|declared| declared.trim().to_ascii_lowercase());
-    // `eq_ignore_ascii_case` is redundant over the lowercased value and kept: it
-    // is the text `empty-tests-admitted-beyond-docs` rewrites.
     let prose_only = declared
         .as_deref()
-        .is_some_and(|declared| declared.eq_ignore_ascii_case("docs") || declared == "none");
+        .is_some_and(|declared| declared == "docs" || declared == "none");
     // A `feat` OWES ITS PRIOR-ART SEARCH (CLOUD-2296): `feat!` included, read off
     // the typed field, never the prose (rule 3), and only from the declared
     // cutover on — the pressure test's ratchet, so a row groomed Ready before
@@ -1433,16 +1431,20 @@ fn check_claimed_prior_art(claims: &serde_json::Value, line: usize, report: &mut
         }
     };
     for entry in entries {
-        let verdict = entry.get("verdict").and_then(serde_json::Value::as_str);
+        // Read the way `commit_type` is: trimmed, case-insensitive.
+        let verdict = entry
+            .get("verdict")
+            .and_then(serde_json::Value::as_str)
+            .map(|verdict| verdict.trim().to_ascii_lowercase());
         if !filled(entry, "tool")
             || !filled(entry, "url")
-            || !matches!(verdict, Some("adopt" | "reject"))
+            || !matches!(verdict.as_deref(), Some("adopt" | "reject"))
         {
             report.findings.push(Finding {
                 line,
                 rule: "prior-art-entry-incomplete".to_owned(),
             });
-        } else if verdict == Some("reject") && !filled(entry, "reason") {
+        } else if verdict.as_deref() == Some("reject") && !filled(entry, "reason") {
             report.findings.push(Finding {
                 line,
                 rule: "prior-art-rejection-unreasoned".to_owned(),

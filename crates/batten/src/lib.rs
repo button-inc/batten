@@ -27193,7 +27193,9 @@ pub fn land_ready_owes(
         ..hook::Facts::none(&stop, &waived)
     };
     match hook::adjudicate(&policy, &envelope, &facts) {
-        hook::Decision::Deny(refused) => Ok(Some(refused)),
+        // AN ASK IS A DENY HERE: a lap runs unattended, so nobody is there to be
+        // asked, and readying on it would answer on that person's behalf.
+        hook::Decision::Deny(refused) | hook::Decision::Ask(refused) => Ok(Some(refused)),
         _ => Ok(None),
     }
 }
