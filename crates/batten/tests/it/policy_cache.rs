@@ -149,6 +149,37 @@ fn a_warm_load_from_the_working_directory_compiles_no_engine() {
     assert!(warm.is_bytecode());
 }
 
+/// CLOUD-2315: inside one hook call's scope a bundle is evaluated ONCE per
+/// input, however many of its rules are read — and the answers are the ones an
+/// unscoped evaluation gives. Outside the scope nothing is memoised.
+#[test]
+fn one_call_evaluates_each_bundle_once() {
+    let root = root_with("once", ANSWERS_EVERY_RULE);
+    let _cold = load(&root, policy::ModuleChecks::SkipOnHotPath);
+    let bundle = load(&root, policy::ModuleChecks::SkipOnHotPath);
+    assert!(bundle.is_bytecode());
+    let unscoped: Vec<Decided> = CALLS.iter().map(|input| decided(&bundle, input)).collect();
+    let scope = policy::answer_scope();
+    for (input, expected) in CALLS.iter().zip(&unscoped) {
+        let before = policy::bytecode_evaluations();
+        assert_eq!(&decided(&bundle, input), expected, "{input}");
+        assert_eq!(&decided(&bundle, input), expected, "{input}, asked again");
+        assert_eq!(
+            policy::bytecode_evaluations() - before,
+            1,
+            "deny, preapprove and rewrite, asked twice, are one evaluation: {input}"
+        );
+    }
+    drop(scope);
+    let before = policy::bytecode_evaluations();
+    let _ = decided(&bundle, CALLS[1]);
+    assert_eq!(
+        policy::bytecode_evaluations() - before,
+        3,
+        "with the scope closed, every ask evaluates"
+    );
+}
+
 #[test]
 fn an_edited_module_is_not_answered_from_stale_bytecode() {
     let root = root_with("edited", ANSWERS_EVERY_RULE);

@@ -17567,6 +17567,7 @@ fn run_hook(
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
     let _loads = HookLoads::scope();
+    let _answers = policy::answer_scope();
     // The per-call path is the one that pays a full parse per process; every
     // other verb parses as before (CLOUD-2315, `config::persist_parses`).
     config::persist_parses();

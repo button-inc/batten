@@ -1659,6 +1659,7 @@ fn package_members<'a>(
 /// The interpreter answers the whole `data.batten` document; bytecode answers
 /// each entry point, addressed by package and rule. [`package_members`] reads
 /// both, so every collector above decides from either without knowing which.
+#[derive(Clone)]
 enum Answer {
     /// The `data.batten` documents of an interpreted query.
     Documents(Vec<regorus::Value>),
@@ -1707,6 +1708,7 @@ impl Evaluator {
 /// call that asks one question.
 ///
 /// `None` is could-not-look: the input will not parse or the bundle faults.
+//MUTANT answer-memo-never-recalled|s@^            if let Some(answer) = Answers::recall(compiled, input) {$@            if let Some(answer) = None::<Answer> {@|one_call_evaluates_each_bundle_once
 fn answer(bundle: &Bundle, input: &str, rules: &[&str]) -> Option<Answer> {
     match &bundle.evaluator {
         Evaluator::Interpreted(engine) => {
@@ -1715,7 +1717,99 @@ fn answer(bundle: &Bundle, input: &str, rules: &[&str]) -> Option<Answer> {
             let results = engine.eval_query(PACKAGE_QUERY.to_owned(), false).ok()?;
             Some(Answer::of(&results))
         }
-        Evaluator::Compiled(compiled) => compiled.answer(input, rules),
+        Evaluator::Compiled(compiled) => {
+            if let Some(answer) = Answers::recall(compiled, input) {
+                return Some(answer);
+            }
+            if !Answers::open() {
+                return compiled.answer(input, rules);
+            }
+            // EVERY ANSWERED RULE, ONCE: the next asker of this bundle on this
+            // input reads its rule out of the same answer, which is what the
+            // interpreter arm above already does by answering the whole package.
+            let answer = compiled.answer(input, &ANSWERED_RULES)?;
+            Answers::keep(compiled, input, &answer);
+            Some(answer)
+        }
+    }
+}
+
+/// ONE EVALUATION PER BUNDLE PER CALL (CLOUD-2315).
+///
+/// A mediated call asked each bundle the same question with the same input up
+/// to four times — `deny` from the adjudication, `deny` again for the advisory
+/// half, `rewrite` for the grant, `preapprove` — and each ask built a VM, cloned
+/// the data document and re-parsed the input. Measured on this repository: 64
+/// evaluations over 19 bundles, 16.7 ms, on an allowed call against a 10 ms
+/// budget. An answer is a pure function of the program and the input, so the
+/// first ask evaluates every rule any caller reads ([`ANSWERED_RULES`]) and the
+/// rest read it back.
+///
+/// **SCOPED, never process-wide**, for `HookLoads`' reason: the memo exists only
+/// while an [`AnswerScope`] is alive, and `run_hook` holds the only one. Keyed
+/// on the program's `Arc` — HELD in the key, so its address cannot be freed and
+/// reused within the scope — and on the exact input text. Only bytecode is
+/// memoised; the interpreter path is the rare fallback and is left as it was.
+struct Answers(Vec<(std::sync::Arc<Compiled>, String, Answer)>);
+
+thread_local! {
+    static ANSWERS: std::cell::RefCell<Option<Answers>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Every bytecode evaluation this process has run — a counter, never a clock,
+/// for `engines_constructed`'s reason.
+static BYTECODE_EVALUATIONS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+/// How many bytecode evaluations this process has run (CLOUD-2315).
+#[must_use]
+pub fn bytecode_evaluations() -> usize {
+    BYTECODE_EVALUATIONS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// The guard [`answer_scope`] returns: the memo dies with it.
+pub struct AnswerScope;
+
+impl Drop for AnswerScope {
+    fn drop(&mut self) {
+        ANSWERS.with(|cell| *cell.borrow_mut() = None);
+    }
+}
+
+/// Open the per-call answer memo for the life of the returned guard.
+#[must_use]
+pub fn answer_scope() -> AnswerScope {
+    ANSWERS.with(|cell| *cell.borrow_mut() = Some(Answers(Vec::new())));
+    AnswerScope
+}
+
+impl Answers {
+    fn open() -> bool {
+        ANSWERS.with(|cell| cell.borrow().is_some())
+    }
+
+    fn recall(compiled: &std::sync::Arc<Compiled>, input: &str) -> Option<Answer> {
+        ANSWERS.with(|cell| {
+            cell.borrow().as_ref().and_then(|answers| {
+                answers
+                    .0
+                    .iter()
+                    .find(|(held, text, _)| std::sync::Arc::ptr_eq(held, compiled) && text == input)
+                    .map(|(_, _, answer)| answer.clone())
+            })
+        })
+    }
+
+    fn keep(compiled: &std::sync::Arc<Compiled>, input: &str, answer: &Answer) {
+        ANSWERS.with(|cell| {
+            if let Some(answers) = cell.borrow_mut().as_mut() {
+                answers.0.push((
+                    std::sync::Arc::clone(compiled),
+                    input.to_owned(),
+                    answer.clone(),
+                ));
+            }
+        });
     }
 }
 
@@ -1978,6 +2072,7 @@ impl Compiled {
 
     /// Run the named rules' entry points over `input`.
     fn answer(&self, input: &str, rules: &[&str]) -> Option<Answer> {
+        BYTECODE_EVALUATIONS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let mut vm = regorus::rvm::vm::RegoVM::new();
         vm.load_program(self.program.clone());
         // The interpreter's semantics, not the VM's defaults: a builtin error
