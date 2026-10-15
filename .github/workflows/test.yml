@@ -378,7 +378,9 @@ jobs:
         working-directory: dist-src
         shell: pwsh
         env:
-          INSTALL_ARGUMENTS: APPLICATIONFOLDER=${{ runner.temp }}/msi
+          # Backslash, not `/`: msiexec takes a Directory property verbatim,
+          # and `D:\a\_temp/msi` failed the install with 1603.
+          INSTALL_ARGUMENTS: APPLICATIONFOLDER=${{ runner.temp }}\msi
         run: mise run batten -- ci step --arg-env INSTALL_ARGUMENTS -- choco install batten --source target/distrib --yes --no-progress --install-arguments
       - name: The Chocolatey-installed batten runs
         if: runner.os == 'Windows'
