@@ -454,8 +454,8 @@ fn the_landings_own_stop_note_is_still_declared() {
 
 /// **THE LAP'S READY ASKS THE RECEIPTS `gh pr ready` ASKS** (CLOUD-2293).
 ///
-/// Through `land_ready_owes`, the one call `run_land_ready` makes before it
-/// spends the matrix: a whole lap needs a serving remote this tier does not stand
+/// Through `land_ready_owes`, the call `spend_the_matrix` makes before any ready
+/// it fires: a whole lap needs a serving remote this tier does not stand
 /// up (`land.rs`' `a_lap_over_a_clone_with_no_remote_…` says why). On `main` the
 /// lap's ready asked no receipt at all.
 ///
@@ -485,6 +485,13 @@ tool = "pull_request_read"
 when = { method = "get_reviews" }
 counts = "."
 
+[[fact]]
+name = "review-threads-clear"
+returns = "json-array"
+tool = "pull_request_read"
+when = { method = "get_review_comments" }
+counts = "."
+
 [[rule]]
 id = "review list unread"
 kind = "receipt"
@@ -495,13 +502,15 @@ checks = ["review-happened"]
 key = "head"
 reason = "read the reviews"
 
+# A ROW MIXING A FACT WITH A MINTED RECEIPT: the fact is the hand route's, and
+# the receipt is still the lap's to ask.
 [[rule]]
 id = "review ask missing"
 kind = "receipt"
 scope = "mediated_call"
 severity = "deny"
 pattern = "gh pr ready"
-checks = ["code-review"]
+checks = ["review-threads-clear", "code-review"]
 key = "delta"
 key_base = "refs/remotes/origin/main"
 reason = "dispatch the code-review skill"

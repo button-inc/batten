@@ -94,6 +94,12 @@ fn grammar() -> batten::ready::Grammar {
                 .as_ref()
                 .and_then(|ready| ready.pressure_test_required_from.clone()),
         )
+        .with_prior_art_threshold(
+            config
+                .ready
+                .as_ref()
+                .and_then(|ready| ready.prior_art_required_from.clone()),
+        )
 }
 
 /// The corpus: one payload per verdict-bearing shape the grammar decides.

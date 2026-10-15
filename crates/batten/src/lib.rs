@@ -27145,14 +27145,29 @@ pub fn land_ready_owes(
     }
     let harness = hook::Harness::ClaudeCode;
     let mut resolved = resolve::resolve(root, &Overrides::default())?;
-    // "Agent-sourced" is a name in the `[[fact]]` table, as `Policy::agent_fact` reads it.
-    let facts = &resolved.facts;
-    resolved.rules.retain(|rule| {
-        rule.kind == rules::RuleKind::Receipt
-            && rule
-                .receipt_names()
-                .all(|check| !facts.iter().any(|fact| &fact.name == check))
-    });
+    // "Agent-sourced" is a name in the `[[fact]]` table, as `Policy::agent_fact`
+    // reads it. PER CHECK, NOT PER ROW: a row's ordinary receipts are still asked
+    // when it also names a fact. A conjunction just loses the fact names; an
+    // alternation naming one could be answered by it, which the lap cannot judge,
+    // so that alternation is left to the hand route. A row left asking nothing
+    // goes.
+    let sourced = |check: &String| resolved.facts.iter().any(|fact| &fact.name == check);
+    let mut kept = Vec::new();
+    for mut rule in std::mem::take(&mut resolved.rules) {
+        if rule.kind != rules::RuleKind::Receipt {
+            continue;
+        }
+        if let Some(checks) = rule.checks.as_mut() {
+            checks.retain(|check| !sourced(check));
+        }
+        if rule.checks_any.iter().flatten().any(sourced) {
+            rule.checks_any = None;
+        }
+        if rule.receipt_names().next().is_some() {
+            kept.push(rule);
+        }
+    }
+    resolved.rules = kept;
     let policy = without_set_hatches(hook::Policy::from_resolved(&resolved, harness, root, None)?);
     // BARE, so no branch name is ever spliced into a command line to be parsed.
     let raw = serde_json::json!({
