@@ -1665,7 +1665,7 @@ fn source_args(
     source: &str,
     output: &Path,
     local: Option<(usize, usize)>,
-    scope: &[(String, String)],
+    scope: &[(String, Option<String>)],
 ) -> Vec<String> {
     let mut args = vec![
         String::from("mutants"),
@@ -1912,7 +1912,7 @@ pub fn test_scope(root: &Path, source: &str) -> Option<String> {
 }
 
 /// A [`scope_of`]'s filterset: its terms, alternated.
-fn terms_of(scope: &[(String, String)]) -> String {
+fn terms_of(scope: &[(String, Option<String>)]) -> String {
     scope
         .iter()
         .map(|(term, _)| term.as_str())
@@ -1920,19 +1920,9 @@ fn terms_of(scope: &[(String, String)]) -> String {
         .join(" | ")
 }
 
-/// A [`scope_of`]'s target selectors, each once, in order.
-fn targets_of(scope: &[(String, String)]) -> Vec<String> {
-    let mut targets: Vec<String> = Vec::new();
-    for (_, target) in scope {
-        if !target.is_empty() && !targets.contains(target) {
-            targets.push(target.clone());
-        }
-    }
-    targets
-}
-
-/// The cargo target selectors that build exactly the test binaries
-/// [`test_scope`] names, each once: `--lib`, `--bins`, `--bin=<b>`, `--test=<t>`.
+/// The cargo target selectors that build exactly the test binaries a
+/// [`scope_of`] names, each once, in order: `--lib`, `--bins`, `--bin=<b>`,
+/// `--test=<t>`.
 ///
 /// THE BUILD IS THE WHOLE COST OF A MUTANT, and this is what bounds it
 /// (CLOUD-1746). Measured on this tree, a mutant's tests ran in 0s and its
@@ -1942,15 +1932,24 @@ fn targets_of(scope: &[(String, String)]) -> Vec<String> {
 /// the filterset then runs. A scope of one module's unit tests needs only
 /// `--lib` (20-27s); a declared `tests/<t>` suite adds `--test=<t>`, and cargo
 /// builds the package's binaries for an integration target by itself.
-#[cfg(test)]
-fn test_targets(root: &Path, source: &str) -> Vec<String> {
-    targets_of(&scope_of(root, source))
+fn targets_of(scope: &[(String, Option<String>)]) -> Vec<String> {
+    let mut targets: Vec<String> = Vec::new();
+    for target in scope.iter().filter_map(|(_, target)| target.as_ref()) {
+        if !targets.contains(target) {
+            targets.push(target.clone());
+        }
+    }
+    targets
 }
 
 /// Each `(filterset term, cargo target selector)` judging `source`: its own
-/// tests, then every Rust suite it declares with `MUTANT-SUITE`, each once.
-fn scope_of(root: &Path, source: &str) -> Vec<(String, String)> {
-    let mut scope: Vec<(String, String)> = tests_of(root, source).into_iter().collect();
+/// tests, then every Rust suite it declares with `MUTANT-SUITE`, each once. A
+/// suite in another package carries no selector.
+fn scope_of(root: &Path, source: &str) -> Vec<(String, Option<String>)> {
+    let mut scope: Vec<(String, Option<String>)> = tests_of(root, source)
+        .map(|(term, target)| (term, Some(target)))
+        .into_iter()
+        .collect();
     let home = package_of(root, source).map(|(package, _)| package);
     for line in lines_of(root, source).unwrap_or_default() {
         let Some(suite) = strip_marker(&line, SUITE) else {
@@ -1958,16 +1957,14 @@ fn scope_of(root: &Path, source: &str) -> Vec<(String, String)> {
         };
         let suite = suite.trim();
         if has_extension(suite, "rs")
-            && let Some(mut entry) = tests_of(root, suite)
-            && !scope.iter().any(|(term, _)| *term == entry.0)
+            && let Some((term, target)) = tests_of(root, suite)
+            && !scope.iter().any(|(known, _)| *known == term)
         {
             // A SUITE IN ANOTHER PACKAGE NAMES NO TARGET HERE: cargo-mutants
             // builds the mutated package, where `--test=<t>` of a sibling's
             // target is a build error rather than a narrower build.
-            if package_of(root, suite).map(|(package, _)| package) != home {
-                entry.1.clear();
-            }
-            scope.push(entry);
+            let home_package = package_of(root, suite).map(|(package, _)| package) == home;
+            scope.push((term, home_package.then_some(target)));
         }
     }
     scope
@@ -4198,7 +4195,7 @@ pub fn census(root: &Path, names: &[String], table: Option<&crate::config::Mutat
 /// outside the one-substitution subset (a sed address block left from before
 /// CLOUD-2255). Neither can ever apply, both are decidable from the text, and
 /// the sweep named each only after an hour of building.
-//MUTANT inert-row-admitted|s@^                    Some(after) if !changes_code(\&text, \&after) => CensusVerdict::InertMutation,$@                    Some(after) if false => CensusVerdict::InertMutation,@|a_row_whose_script_changes_nothing_is_refused_by_the_census
+//MUTANT inert-row-admitted|s@^                    Some(after) if code_lines_changed(\&text, \&after) == 0 => {$@                    Some(after) if false => {@|a_row_whose_script_changes_nothing_is_refused_by_the_census
 //MUTANT malformed-row-admitted|s@, CensusVerdict::MalformedRow));$@, CensusVerdict::InertMutation));@|a_row_that_cannot_apply_is_refused_by_the_census
 //MUTANT unappliable-row-admitted|s@^                    None => CensusVerdict::UnappliableMutation,$@                    None => continue,@|a_row_that_cannot_apply_is_refused_by_the_census
 fn inert_rows(root: &Path, subjects: &BTreeMap<String, String>) -> Vec<(String, CensusVerdict)> {
@@ -4226,7 +4223,9 @@ fn inert_rows(root: &Path, subjects: &BTreeMap<String, String>) -> Vec<(String, 
                 };
                 let verdict = match substitute(&text, &row.script) {
                     None => CensusVerdict::UnappliableMutation,
-                    Some(after) if !changes_code(&text, &after) => CensusVerdict::InertMutation,
+                    Some(after) if code_lines_changed(&text, &after) == 0 => {
+                        CensusVerdict::InertMutation
+                    }
                     Some(_) => continue,
                 };
                 found.push((
@@ -4248,22 +4247,6 @@ fn row_line(text: &str, slug: &str) -> usize {
             strip_marker(line, ROW).is_some_and(|body| body.starts_with(&head) || body == slug)
         })
         .map_or(0, |index| index + 1)
-}
-
-/// Whether `after` changes any line of `text` that is not itself a
-/// declaration: an unanchored pattern written out in its own row matches that
-/// row, and a change only there is still a row that proves nothing.
-fn changes_code(text: &str, after: &str) -> bool {
-    let declaration = |line: &str| {
-        [ROW, SUITE, OWNER, EXEMPT]
-            .iter()
-            .any(|marker| strip_marker(line, marker).is_some())
-    };
-    text.lines().count() != after.lines().count()
-        || text
-            .lines()
-            .zip(after.lines())
-            .any(|(before, now)| before != now && !declaration(before))
 }
 
 /// How many engine modules carry no declaration at all.
@@ -4588,6 +4571,7 @@ mod tests {
         fs::write(root.join("crates/k/src/bin/tool.rs"), "").expect("bin");
         fs::create_dir_all(root.join("crates/k/src/bin/dir")).expect("dirs");
         fs::write(root.join("crates/k/src/bin/dir/main.rs"), "").expect("bin");
+        let test_targets = |root: &Path, source: &str| targets_of(&scope_of(root, source));
         assert_eq!(
             test_targets(&root, "crates/k/src/a/b.rs"),
             ["--lib", "--test=it", "--test=solo"]

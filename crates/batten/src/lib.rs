@@ -3266,12 +3266,14 @@ fn run_mcp(
     // because stdout is the MCP transport, and one stray byte on it corrupts the
     // JSON-RPC stream and takes the server down looking exactly like the bug.
     if let cli::McpCommand::Spawn { server, command } = command {
-        mcp::record_spawn(Path::new("."), server);
+        let record = mcp::record_spawn(Path::new("."), server);
         let launch = provisioned_launch(command, overrides).unwrap_or_else(|| command.clone());
         // Returns only on failure; success replaces this process. A failure is
         // recorded before it returns, for `mcp posture` (CLOUD-2327).
         let failed = exec::become_argv(&launch).map(|never| match never {});
-        mcp::record_exec_failure(Path::new("."), server);
+        if let Some(record) = record {
+            record.exec_failed();
+        }
         return failed;
     }
     // CLOUD-843: the connector and attach programs, retired onto the engine.

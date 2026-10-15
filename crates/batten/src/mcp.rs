@@ -2157,7 +2157,7 @@ fn siblings_within(ledger: &Path, now: u64) -> usize {
     text.lines()
         // A failure record (CLOUD-2327) is the same launch said twice, never
         // a sibling of its own.
-        .filter(|line| line.split('\t').nth(5).is_none())
+        .filter(|line| line.split('\t').nth(5) != Some(EXEC_FAILED))
         .filter_map(|line| line.split('\t').next())
         .filter_map(|stamp| stamp.parse::<u64>().ok())
         .filter(|stamp| *stamp <= now && now - *stamp <= SPAWN_WINDOW)
@@ -2169,57 +2169,46 @@ fn siblings_within(ledger: &Path, now: u64) -> usize {
 /// **Nothing reaches stdout, ever, and here that is not hygiene.** STDOUT IS THE
 /// MCP TRANSPORT: one stray byte corrupts the JSON-RPC stream and takes the
 /// server down in a way that looks exactly like the bug this records. So the
-/// record is a file and the return is `()` — there is no channel for a caller to
-/// act on the difference, and no verdict a failed append should produce.
-pub fn record_spawn(root: &Path, server: &str) {
+/// record is a file, and a failed append produces no verdict. What comes back is
+/// the record as composed, for [`SpawnRecord::exec_failed`] — never whether it
+/// reached the disk.
+#[must_use]
+pub fn record_spawn(root: &Path, server: &str) -> Option<SpawnRecord> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |since| since.as_secs());
-    let Some((ledger, line)) = spawn_record(root, server, now, std::process::id()) else {
-        return;
-    };
+    let (ledger, line) = spawn_record(root, server, now, std::process::id())?;
     // One write per record and a sync (`durable::append`), so concurrent spawns
     // cannot interleave inside a line and a reported record is on disk.
     drop(crate::durable::append(&ledger, &line));
+    Some(SpawnRecord { ledger, line })
 }
 
 /// The sixth field of a ledger record whose launch line could not be exec'd.
 pub const EXEC_FAILED: &str = "exec-failed";
 
-/// Append that the launch line could not be exec'd (CLOUD-2327): the launch
-/// record's five fields again, then [`EXEC_FAILED`].
-///
-/// THERE IS AN AFTER WHEN THE EXEC FAILS. `exec` returns only on failure, and
-/// then this process still exists, so it can say so in the file posture reads
-/// rather than leave posture to infer it from the client's copy of its stderr.
-/// Silent for [`record_spawn`]'s reason: stdout is still the transport.
-//MUTANT exec-failure-unrecorded|s@^    drop(crate::durable::append(\&ledger, \&failed));$@    drop((ledger, failed));@|a_launch_that_cannot_exec_is_recorded_as_failed
-pub fn record_exec_failure(root: &Path, server: &str) {
-    let pid = std::process::id();
-    // STAMPED WITH ITS OWN LAUNCH'S TIME: the exec never replaced this process,
-    // so its launch record carries this pid. A provisioning fetch between the
-    // two must not move the failure out of the attempt's window in posture.
-    let launched = spawn_ledger(root)
-        .and_then(|ledger| std::fs::read_to_string(ledger).ok())
-        .and_then(|text| {
-            text.lines().rev().find_map(|line| {
-                let fields: Vec<&str> = line.split('\t').collect();
-                let pid_field = pid.to_string();
-                (fields.get(1) == Some(&server) && fields.get(2) == Some(&pid_field.as_str()))
-                    .then(|| fields.first()?.parse::<u64>().ok())
-                    .flatten()
-            })
-        });
-    let now = launched.unwrap_or_else(|| {
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |since| since.as_secs())
-    });
-    let Some((ledger, line)) = spawn_record(root, server, now, pid) else {
-        return;
-    };
-    let failed = format!("{}\t{EXEC_FAILED}\n", line.trim_end_matches('\n'));
-    drop(crate::durable::append(&ledger, &failed));
+/// A launch's ledger record, as [`record_spawn`] composed it.
+#[derive(Debug)]
+pub struct SpawnRecord {
+    ledger: std::path::PathBuf,
+    line: String,
+}
+
+impl SpawnRecord {
+    /// Append that the launch line could not be exec'd (CLOUD-2327): this
+    /// launch's record again, then [`EXEC_FAILED`].
+    ///
+    /// THERE IS AN AFTER WHEN THE EXEC FAILS. `exec` returns only on failure,
+    /// and then this process still exists, so it can say so in the file posture
+    /// reads rather than leave posture to infer it from the client's copy of its
+    /// stderr. The launch's own fields carry its stamp, so a provisioning fetch
+    /// between the two cannot move the failure out of the attempt's window.
+    /// Silent for [`record_spawn`]'s reason: stdout is still the transport.
+    //MUTANT exec-failure-unrecorded|s@^        drop(crate::durable::append(\&self.ledger, \&failed));$@        drop((self.ledger, failed));@|a_launch_that_cannot_exec_is_recorded_as_failed
+    pub fn exec_failed(self) {
+        let failed = format!("{}\t{EXEC_FAILED}\n", self.line.trim_end_matches('\n'));
+        drop(crate::durable::append(&self.ledger, &failed));
+    }
 }
 
 /// Dispatch one declared method over a mediated MCP connection and return its
