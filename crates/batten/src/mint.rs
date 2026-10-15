@@ -1259,4 +1259,41 @@ mod tests {
             "and a body it CAN read records the verdict it reached"
         );
     }
+
+    #[test]
+    fn a_named_row_takes_one_subject_source_and_a_shape_that_compiles() {
+        // CLOUD-2294's three load-time refusals, each beside the row it admits.
+        let named =
+            |key_from: Option<&str>, key_from_input: Option<&str>, key_shape: Option<&str>| {
+                Declared {
+                    name: "groom".to_owned(),
+                    tool: "Skill".to_owned(),
+                    key: MintKey::Named,
+                    key_from: key_from.map(str::to_owned),
+                    key_from_input: key_from_input.map(str::to_owned),
+                    key_shape: key_shape.map(str::to_owned),
+                    key_base: None,
+                    selects_at: None,
+                    selects: None,
+                    requires: Vec::new(),
+                    after: None,
+                    mode: MintMode::Replace,
+                    body: "{now}".to_owned(),
+                }
+            };
+        let refused = |row: Declared| validate(&[row]).unwrap_err().to_string();
+
+        assert!(validate(&[named(None, Some("args"), Some("^[A-Z]+-[0-9]+$"))]).is_ok());
+        assert!(refused(named(None, None, None)).contains("exactly one of"));
+        assert!(refused(named(Some("id"), Some("args"), None)).contains("exactly one of"));
+        assert!(refused(named(None, Some("args"), Some("("))).contains("not a valid regular"));
+
+        let mut delta = named(None, None, Some("^x$"));
+        delta.key = MintKey::Delta;
+        delta.key_base = Some("origin/main".to_owned());
+        assert!(refused(delta.clone()).contains("declares a `key_shape`"));
+        delta.key_shape = None;
+        delta.key_from_input = Some("args".to_owned());
+        assert!(refused(delta).contains("declares a `key_from_input`"));
+    }
 }
