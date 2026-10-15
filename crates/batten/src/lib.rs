@@ -656,6 +656,10 @@ const ENGINE_UPDATED: &str = "BATTEN_ENGINE_UPDATED";
 //MUTANT-SUITE crates/batten/tests/it/engine_update.rs
 //MUTANT checkout-build-replaced|s@^    if exe.starts_with(\&root) {$@    if false {@|a_build_inside_the_checkout_is_never_replaced
 //MUTANT follow-pin-source-unfollowed|s@^            Some(build) => build,$@            Some(_) => return Ok(None),@|a_verb_is_followed_to_the_checkouts_build
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `follow_pin` reads the committed config, one human-edited document"
+)]
 fn follow_pin(may_build: bool) -> Result<Option<ExitCode>> {
     let Ok(root) = git::worktree_root(Path::new(".")) else {
         return Ok(None);
@@ -735,6 +739,10 @@ fn follow_pin(may_build: bool) -> Result<Option<ExitCode>> {
 /// stamped. Either is swapped in by rename, so a crash leaves the old binary.
 //MUTANT-SUITE crates/batten/tests/it/engine_update.rs
 //MUTANT update-judges-only-itself|s@^    if engine::runs_local() {$@    if engine::runs_local() \x7c\x7c engine::running_stamp().as_deref() == Some(want) {@|a_current_engine_replaces_a_stale_installed_copy
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `engine_update` reads the committed config and one release binary"
+)]
 fn engine_update(root: &Path, out: &mut dyn Write) -> Result<ExitCode> {
     let Ok(text) = std::fs::read_to_string(root.join(config::CONFIG_FILE)) else {
         return Ok(ExitCode::Success);
@@ -828,6 +836,10 @@ fn engine_update(root: &Path, out: &mut dyn Write) -> Result<ExitCode> {
 ///
 /// Off `PATH` is a refusal, as it always was: every hook registration names
 /// `batten` bare, so a binary the shell cannot resolve is not installed.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `engine_install` reads one release binary, whose size the release build bounds"
+)]
 fn engine_install(out: &mut dyn Write) -> Result<ExitCode> {
     let var = |name: &str| std::env::var(name).ok().filter(|value| !value.is_empty());
     let on_path: Vec<std::path::PathBuf> = std::env::var_os("PATH")
@@ -964,6 +976,10 @@ fn run_engine(command: cli::EngineCommand, out: &mut dyn Write) -> Result<ExitCo
 /// anything else — no pin, a release pin — is left alone. `version` pins this
 /// engine's own release, which is how the release pull request moves the pin
 /// with the version it bumps.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `engine_pin` reads the committed config, one human-edited document"
+)]
 fn engine_pin(
     root: &Path,
     digest: &str,
@@ -1026,6 +1042,10 @@ fn engine_pin(
 //MUTANT-SUITE crates/batten/tests/it/engine_gates.rs
 //MUTANT source-pin-admitted|s@^    if pin.source.is_some() {$@    if false {@|a_source_pin_is_refused_on_the_landing_path
 //MUTANT dropped-row-unchecked|s@^    if !runs(\&\["config", "lint"\])? {$@    if !runs(\&["config", "show"])? {@|a_config_the_pinned_release_drops_a_row_of_is_drift
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `engine_gate` reads the committed config and one workflow file"
+)]
 fn engine_gate(root: &Path, lanes: &[String], out: &mut dyn Write) -> Result<ExitCode> {
     let config_path = root.join(config::CONFIG_FILE);
     let text = std::fs::read_to_string(&config_path)?;
@@ -1264,6 +1284,10 @@ impl Drop for Scratch {
 /// # Errors
 ///
 /// Propagates a write failure on either channel.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `bench_drift` reads one committed bench document"
+)]
 fn bench_drift(
     committed: &Path,
     rendered: &str,
@@ -1499,6 +1523,10 @@ fn release_survey(
 /// workflow declaring no matrix, or a `pkg-fmt` with no suffix rule. Each is
 /// `Internal` rather than a refusal, because a gate that could not look must not
 /// report a contract it never checked.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `run_release` reads a tracked file, so the tracked tree's largest file is the bound, and the document is parsed whole"
+)]
 fn run_release(
     overrides: &Overrides,
     out: &mut dyn Write,
@@ -1896,6 +1924,10 @@ fn run_init(
 /// rather than because the config did, so reporting drift would send a reader
 /// hunting a change nobody made. Could-not-look is the honest answer, and
 /// regenerating at the new pin is the remedy the message names.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `run_hk` reads the generated hk contract artifact, one document"
+)]
 fn run_hk(
     command: HkCommand,
     mode: Mode,
@@ -2217,8 +2249,17 @@ fn declared_ledger(overrides: &Overrides) -> Result<(defects::Defects, PathBuf)>
 
 /// Read and parse the declared ledger. An absent file is an empty ledger — the
 /// ordinary state before the first record.
+///
+/// Streamed (CLOUD-1525), and ONLY absence is empty: the whole-file read this
+/// replaced defaulted every failure, so a ledger that was there and not text
+/// listed no defects, which is the false green this verb exists to refuse.
 fn read_ledger(path: &Path) -> Result<Vec<defects::Record>> {
-    defects::parse(&std::fs::read_to_string(path).unwrap_or_default())
+    use anyhow::Context as _;
+    match std::fs::File::open(path) {
+        Ok(file) => defects::parse_reader(std::io::BufReader::new(file)),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(err) => Err(err).with_context(|| format!("read the defects ledger {}", path.display())),
+    }
 }
 
 /// List recorded defects, as pointers (CLOUD-52).
@@ -4101,6 +4142,10 @@ fn board_root() -> PathBuf {
 /// Unreadable is [`UsageError`], never an empty set. A caller who named a file
 /// this cannot open has not supplied empty evidence, they have supplied evidence
 /// nobody read.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `evidence_file` reads one evidence document the caller names"
+)]
 fn evidence_file(path: &str, what: &str) -> Result<Vec<(String, Option<String>)>> {
     let raw = std::fs::read_to_string(path).map_err(|_| {
         UsageError::raise(format!(
@@ -5230,6 +5275,10 @@ fn detach_pattern(id: &str) -> Result<regex::Regex> {
 ///
 /// A [`UsageError`] for a `[[pattern]]` id that resolves to no compiling row;
 /// an internal error when the announcement cannot be written.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `run_detach` reads one record file this crate writes whole"
+)]
 fn run_detach(request: &Detach<'_>, out: &mut dyn Write) -> Result<ExitCode> {
     detach_pattern(request.pattern)?;
     if let Ok(said) = std::fs::read_to_string(request.marker) {
@@ -5575,6 +5624,10 @@ fn bot_lane(overrides: &Overrides) -> Result<bot::BotLane> {
 /// somebody the lane does not know, or whose diff touches no manifest it owns,
 /// gets no row. The alternative is a tracker row asserting a bump nobody
 /// proposed.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `derive_row` reads one lane body template"
+)]
 fn derive_row(lane: &bot::BotLane, number: &str) -> Result<(bot::Pull, String, String)> {
     let pull = bot::forge::pull(&lane.repo, number)?;
     // Each refusal is `issue file refused` with what it names as subjects
@@ -7044,6 +7097,10 @@ fn carry_document(branch: &str, carried: usize, refusal: Option<&str>) -> Result
 ///
 /// [`UsageError`] when there is no branch to key a receipt to, or when the merge
 /// base or the table cannot be read — could-not-look, never a silent pass.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `run_claim_carry` reads the carry table, one row per carried claim"
+)]
 fn run_claim_carry(
     repo: &Path,
     mode: Mode,
@@ -8468,6 +8525,10 @@ fn run_policy(
 /// Read off the module SOURCE for [`policy::finding_ids`]' reasons — the
 /// compiled set is not a clean list of finding ids, and this verb must answer
 /// without standing up an engine.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `owning_row` reads one policy module"
+)]
 fn owning_row<'a>(config: &'a resolve::Resolved, id: &str) -> Option<&'a rules::Rule> {
     config.rules.iter().find(|rule| {
         rule.module.as_deref().is_some_and(|module| {
@@ -8493,6 +8554,10 @@ fn owning_row<'a>(config: &'a resolve::Resolved, id: &str) -> Option<&'a rules::
 /// configured one cannot be read: this verb's whole subject is that file, so
 /// could-not-look must be an error rather than a vacuous pass over nothing —
 /// exactly the shape `budget`'s dead-glob refusal takes one verb up.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `run_policy_hooks` reads one policy module"
+)]
 fn run_policy_hooks(json: bool, overrides: &Overrides, out: &mut dyn Write) -> Result<ExitCode> {
     let config = resolve::resolve(Path::new("."), overrides)?;
     let path = transcript::configured_path(config.transcript.as_ref()).ok_or_else(|| {
@@ -16173,6 +16238,10 @@ fn semver_commits(root: &Path, baseline: &str) -> Vec<semver::Commit> {
 /// than a short-circuit: a consumer that protects nothing has nothing to
 /// articulate, and the distinction only matters if somebody later reads a clean
 /// run as evidence the clause fired.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `commit_admissions` reads one commit message the host passed"
+)]
 fn commit_admissions(
     range: Option<&str>,
     message: Option<&str>,
@@ -17085,6 +17154,10 @@ fn call_facts(envelope: &hook::Envelope) -> CallFacts {
 /// Resolved only for a write to the authority itself, so nearly every call
 /// opens nothing. Could-not-look on anything unreadable — no context, no HEAD,
 /// an edit span not found — and it ALLOWS, for `discards`' reason.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `unread_history` reads the committed config, one human-edited document"
+)]
 fn unread_history(envelope: &hook::Envelope) -> facts::Look<Vec<String>> {
     if envelope.operation != hook::Operation::Write
         || envelope.writes.as_deref() != Some(config::CONFIG_FILE)
@@ -17721,6 +17794,10 @@ fn is_adjudicable(envelope: &hook::Envelope) -> bool {
 //MUTANT spill-floor-restored|s@^    let bound = capture::DEFAULT_RESULT_MAX_TOKENS;$@    let bound = 1_000_000;@|a_result_over_the_bound_is_spilled_not_held
 //MUTANT-SUITE crates/batten/tests/it/handler_dispatch.rs
 //MUTANT handler-bytes-reserialized|s@^    let raw = if streamed.spilled.is_empty() {$@    let raw = if false {@|a_handler_reads_the_payload_the_host_sent
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `read_envelope` reads the spooled hook envelope, which carries the transcript's path and never its body"
+)]
 fn read_envelope(
     harness: hook::Harness,
     mode: Mode,
@@ -18075,6 +18152,10 @@ fn hook_config_or_floor(
 /// this IS that build, or this call was already handed once.
 //MUTANT-SUITE crates/batten/tests/it/engine_update.rs
 //MUTANT hook-handoff-skipped|s@^    let Some(build) = engine::checkout_build(root) else {$@    let Some(build) = None::<PathBuf> else {@|a_hook_outside_the_checkout_hands_off_to_the_authoritys_build
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `hand_to_checkout_build` reads the committed config, one human-edited document"
+)]
 fn hand_to_checkout_build(raw: &str, out: &mut dyn Write) -> Result<Option<ExitCode>> {
     if std::env::var_os(ENGINE_UPDATED).is_some() {
         return Ok(None);
@@ -19980,6 +20061,10 @@ fn session_facts(
 /// from typed fields — a tool result's own `is_error`, a hook run's exit code —
 /// so no span of session text is read even internally, which is where rule 4 is
 /// decided for this family.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "not bounded: `extracted_facts` reads the host appends to the transcript every turn, and CLOUD-1345 streams it"
+)]
 fn extracted_facts(
     policy: &hook::Policy,
     envelope: &hook::Envelope,
@@ -21178,10 +21263,48 @@ fn unlanded_pointer() -> Option<refusal::Refusal> {
 }
 
 /// Whether the claim `key` is already recorded in the marker at `seen`.
+///
+/// Streamed (CLOUD-1525): the marker gains a line per nudged claim, per branch,
+/// and this runs on every Stop. It stops at the first match, and a line that is
+/// not text ends the scan unmatched, which re-nudges — the direction the
+/// whole-file read failed in too.
 fn already_marked(seen: Option<&Path>, key: &str) -> bool {
-    seen.is_some_and(|path| {
-        std::fs::read_to_string(path).is_ok_and(|text| text.lines().any(|line| line == key))
-    })
+    use std::io::BufRead as _;
+    seen.and_then(|path| std::fs::File::open(path).ok())
+        .is_some_and(|file| {
+            std::io::BufReader::new(file)
+                .lines()
+                .map_while(Result::ok)
+                .any(|line| line == key)
+        })
+}
+
+/// Every distinct id the board record's `issue` lines name, first-seen order.
+///
+/// Streamed (CLOUD-1525): the record gains a line per board write on the branch
+/// and this runs on every Stop, so it holds the ids and never the file. A record
+/// that cannot be read, or holds a line that is not text, names nothing — the
+/// answer the whole-file read gave both.
+fn filed_ids(record: &Path) -> Vec<String> {
+    use std::io::BufRead as _;
+    let Ok(file) = std::fs::File::open(record) else {
+        return Vec::new();
+    };
+    let mut seen = std::collections::BTreeSet::new();
+    let mut filed = Vec::new();
+    for line in std::io::BufReader::new(file).lines() {
+        let Ok(line) = line else {
+            return Vec::new();
+        };
+        let mut columns = line.split(' ');
+        if columns.next() == Some("issue")
+            && let Some(id) = columns.next()
+            && seen.insert(id.to_owned())
+        {
+            filed.push(id.to_owned());
+        }
+    }
+    filed
 }
 
 /// What the `filed-here` row says about this branch: the flagged paths, then
@@ -21296,19 +21419,7 @@ fn filed_here_rows(overrides: &Overrides, root: &Path) -> Option<(Vec<String>, V
     // reused branch name are not this checklist's business.
     let claim = claim::claimed_token(&git_dir.join("batten-receipts"), &branch);
     let record = recorder::record_path(&git_dir, BOARD_RECORD, &branch, claim.as_deref());
-    let mut seen = std::collections::BTreeSet::new();
-    let filed: Vec<String> = std::fs::read_to_string(record)
-        .map(|text| {
-            text.lines()
-                .filter_map(|line| {
-                    let mut columns = line.split(' ');
-                    (columns.next()? == "issue").then(|| columns.next())?
-                })
-                .filter(|id| seen.insert((*id).to_owned()))
-                .map(str::to_owned)
-                .collect()
-        })
-        .unwrap_or_default();
+    let filed = filed_ids(&record);
     // A CLOSED ROW NEEDS NO RE-EVALUATION: a row the tracker last said was
     // canceled, a duplicate or completed is off the checklist. The store's
     // newest read answers it, so the Stop path never calls the tracker; a row
@@ -21603,6 +21714,10 @@ fn defer_backgrounded(
 ///
 /// Every failure is silent and returns `None`, matching the mint boundary's own
 /// documented posture: the gate that reads the receipt simply denies again.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `recover_spilled` reads one spilled leaf, bounded by the spill bound"
+)]
 fn recover_spilled(result: &serde_json::Value) -> Option<serde_json::Value> {
     let text = result.as_str()?;
     let path = facts::spilled_path(text)?;
@@ -22232,6 +22347,10 @@ fn collect_before_admitting(
 /// Read separately from the policy load below, and deliberately tolerant: a
 /// capture must not fail because config did not parse, so an unreadable
 /// authority means the engine defaults rather than an error.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `capture_budget` reads the committed config, one human-edited document"
+)]
 fn capture_budget() -> Option<capture::CaptureConfig> {
     let text = std::fs::read_to_string(hook_authority_root().join(config::CONFIG_FILE)).ok()?;
     let parsed: config::Config = toml::from_str(&text).ok()?;
@@ -23057,6 +23176,10 @@ enum Surface {
 ///
 /// [`UsageError`] (→ exit `1`) for a judge row with no resolvable command, a
 /// program absent from `PATH`, or a payload the boundary refuses.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `run_judges` reads a tracked file, so the tracked tree's largest file is the bound, and the document is parsed whole"
+)]
 fn run_judges(
     err: &mut dyn Write,
     mode: Mode,
@@ -25697,6 +25820,10 @@ fn pointer_value(entry: &resolve::Attributed) -> String {
 /// when the input is not UTF-8. A brief is prose; bytes that are not text are a
 /// caller mistake, and answering "no missing sections" over them would be a pass
 /// nobody measured.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `run_lint_brief` reads one brief the caller names"
+)]
 fn run_lint_brief(path: Option<&str>, json: bool, out: &mut dyn Write) -> Result<ExitCode> {
     let text = match path {
         None | Some("-") => {
@@ -26320,6 +26447,10 @@ fn run_ci_slow_needed_at(
 ///
 /// Propagates a write failure on either channel. Nothing about the tree is an
 /// error; the widest answer is always available.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `run_ci_suites` reads one suite report"
+)]
 fn run_ci_suites(
     base: &str,
     overrides: &Overrides,
@@ -27306,6 +27437,10 @@ mod tests {
     /// (`tests/it/lease_health.rs` states why none is added). What this pins is
     /// the arm the loop calls on `Applied`: the receipt AND the declared beat.
     #[test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: `an_applied_renewal_writes_its_receipt_and_the_declared_beat` reads a fixture this case wrote"
+    )]
     fn an_applied_renewal_writes_its_receipt_and_the_declared_beat() {
         // `touch` is the declared note command this case stubs with, and no such
         // program ships on Windows; the case compiles there and says so (`cfg!`,

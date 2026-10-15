@@ -543,9 +543,9 @@ pub fn attribution_for(repo_root: &Path, commit: &str) -> Result<Vec<Attribution
     // distinction this row exists to keep.
     let mut counted: std::collections::BTreeMap<(String, String, String, bool), (Caller, usize)> =
         std::collections::BTreeMap::new();
-    for record in load_all(repo_root)? {
+    for_each(repo_root, |record| {
         if record.anchor.commit != commit {
-            continue;
+            return;
         }
         let key = (
             record.caller.model_id.as_str().to_owned(),
@@ -555,7 +555,7 @@ pub fn attribution_for(repo_root: &Path, commit: &str) -> Result<Vec<Attribution
         );
         let entry = counted.entry(key).or_insert((record.caller, 0));
         entry.1 += 1;
-    }
+    })?;
     Ok(counted
         .into_iter()
         .map(|((_, _, _, dirty), (caller, records))| Attribution {
@@ -569,19 +569,43 @@ pub fn attribution_for(repo_root: &Path, commit: &str) -> Result<Vec<Attribution
 
 /// Every record in the log, shards read in sorted path order.
 ///
+/// # Errors
+///
+/// As [`for_each`].
+pub fn load_all(repo_root: &Path) -> Result<Vec<DecisionRecord>> {
+    let mut all = Vec::new();
+    for_each(repo_root, |record| all.push(record))?;
+    Ok(all)
+}
+
+/// The record separator a shard is split on.
+const NEWLINE: u8 = b'\n';
+
+/// Visit every record in the log, shards in sorted path order, each streamed a
+/// line at a time.
+///
+/// **STREAMED, BECAUSE THE LOG IS APPENDED FOREVER** (CLOUD-1525). A shard grows
+/// by a line per decision, per worktree, and nothing truncates it, so a reader
+/// that held a whole shard would hold an amount nothing bounds. One line is held
+/// at a time, and a caller that folds rather than collects holds no more.
+///
 /// A line that does not parse is dropped rather than failing the read — the torn
 /// trailing line of a shard whose writer died mid-append. [`crate::journal`]
 /// takes the same position for the same reason: refusing to read every other
-/// shard over one partial write makes a crash contagious.
+/// shard over one partial write makes a crash contagious. Split on bytes rather
+/// than decoded first, so a line that is not UTF-8 drops only itself too.
 ///
 /// # Errors
 ///
 /// Returns an error when the state root cannot be resolved or a shard cannot be
 /// read. An absent log is an empty one, which is the ordinary first-read case.
-pub fn load_all(repo_root: &Path) -> Result<Vec<DecisionRecord>> {
+//MUTANT-SUITE crates/batten/tests/it/decision_record.rs
+//MUTANT decision-fold-collects|s@std::io::BufReader::new(shard).split(NEWLINE)@std::io::Cursor::new(std::io::read_to_string(shard)?).split(NEWLINE)@|a_line_that_is_not_utf8_drops_only_itself
+pub fn for_each(repo_root: &Path, mut visit: impl FnMut(DecisionRecord)) -> Result<()> {
+    use std::io::BufRead as _;
     let dir = decisions_dir(repo_root)?;
     let Ok(entries) = std::fs::read_dir(&dir) else {
-        return Ok(Vec::new());
+        return Ok(());
     };
     let mut paths: Vec<PathBuf> = entries
         .flatten()
@@ -592,16 +616,20 @@ pub fn load_all(repo_root: &Path) -> Result<Vec<DecisionRecord>> {
     // `read_dir` order (§6).
     paths.sort();
 
-    let mut all = Vec::new();
     for path in paths {
-        let text = std::fs::read_to_string(&path)
+        let shard = std::fs::File::open(&path)
             .with_context(|| format!("read the decision shard {}", path.display()))?;
-        all.extend(
-            text.lines()
-                .filter_map(|line| serde_json::from_str::<DecisionRecord>(line).ok()),
-        );
+        for line in std::io::BufReader::new(shard).split(NEWLINE) {
+            let line =
+                line.with_context(|| format!("read the decision shard {}", path.display()))?;
+            // `from_slice` admits trailing whitespace, so a `\r\n` line parses as
+            // it did under `lines()`.
+            if let Ok(record) = serde_json::from_slice::<DecisionRecord>(&line) {
+                visit(record);
+            }
+        }
     }
-    Ok(all)
+    Ok(())
 }
 
 /// Whether `previous` survives unchanged as a prefix of `current`.

@@ -1326,18 +1326,24 @@ fn working_tree_changes(dir: &Path, want: Changes) -> Result<BTreeSet<String>> {
             changed.insert(path.to_owned());
             continue;
         };
-        let content = if metadata.is_symlink() {
-            std::fs::read_link(&absolute)
-                .map(|target| target.to_string_lossy().into_owned().into_bytes())
+        let hashed = if metadata.is_symlink() {
+            let Ok(target) = std::fs::read_link(&absolute) else {
+                changed.insert(path.to_owned());
+                continue;
+            };
+            gix::objs::compute_hash(
+                repo.object_hash(),
+                gix::object::Kind::Blob,
+                target.to_string_lossy().as_bytes(),
+            )
+            .map_err(|_| refusal())?
         } else {
-            std::fs::read(&absolute)
+            let Some(hashed) = file_blob_id(repo.object_hash(), &absolute, metadata.len()) else {
+                changed.insert(path.to_owned());
+                continue;
+            };
+            hashed
         };
-        let Ok(content) = content else {
-            changed.insert(path.to_owned());
-            continue;
-        };
-        let hashed = gix::objs::compute_hash(repo.object_hash(), gix::object::Kind::Blob, &content)
-            .map_err(|_| refusal())?;
         if hashed != entry.id {
             changed.insert(path.to_owned());
         }
@@ -2164,6 +2170,10 @@ fn collect_tree(
 /// # Errors
 ///
 /// Raises a [`UsageError`] (exit `1`) when the message cannot be parsed.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `message_trailers` reads one commit message the host passed"
+)]
 pub fn message_trailers(dir: &Path, message: &Path) -> Result<Vec<String>> {
     let _ = dir;
     let body = std::fs::read(message).map_err(|_| {
@@ -3279,6 +3289,10 @@ pub fn materialize_rev(dir: &Path, rev: &str, dest: &Path) -> Result<()> {
 /// # Errors
 ///
 /// Raises only when the repository cannot be opened at all.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `base_delta` reads a tracked file, so the tracked tree's largest file is the bound, and the document is parsed whole"
+)]
 pub fn base_delta(
     dir: &Path,
     base: &str,
@@ -5685,6 +5699,26 @@ pub fn index_facts(dir: &Path, declared: &[String]) -> Result<BTreeMap<String, I
     Ok(facts)
 }
 
+/// The blob id of the regular file at `absolute`, hashed as it streams.
+///
+/// CLOUD-1525: a tracked file has no size bound, and comparing it to the index
+/// used to read it whole first. Git's blob header carries the length, so the
+/// stat's `len` goes in up front and the bytes are hashed a buffer at a time. A
+/// file that changed length between the stat and the read fails the hash, and
+/// every caller reads a failure as a change, which it is.
+fn file_blob_id(hash: gix::hash::Kind, absolute: &Path, len: u64) -> Option<gix::ObjectId> {
+    let mut file = std::fs::File::open(absolute).ok()?;
+    gix::objs::compute_stream_hash(
+        hash,
+        gix::object::Kind::Blob,
+        &mut file,
+        len,
+        &mut gix::progress::Discard,
+        &std::sync::atomic::AtomicBool::new(false),
+    )
+    .ok()
+}
+
 /// Whether the working tree's copy of an index entry differs from it — one
 /// path's `git diff --name-only`.
 fn entry_diverges(
@@ -5716,25 +5750,29 @@ fn entry_diverges(
         return true;
     };
     let want_link = entry.mode == Mode::SYMLINK;
-    let content = if metadata.is_symlink() {
+    let hashed = if metadata.is_symlink() {
         if !want_link {
             return true;
         }
-        std::fs::read_link(&absolute)
-            .map(|target| target.to_string_lossy().into_owned().into_bytes())
+        let Ok(target) = std::fs::read_link(&absolute) else {
+            return true;
+        };
+        gix::objs::compute_hash(
+            hash,
+            gix::object::Kind::Blob,
+            target.to_string_lossy().as_bytes(),
+        )
+        .ok()
     } else if metadata.is_file() {
         if want_link {
             return true;
         }
-        std::fs::read(&absolute)
+        file_blob_id(hash, &absolute, metadata.len())
     } else {
         // A directory where the index records a file is a type change.
         return true;
     };
-    let Ok(content) = content else {
-        return true;
-    };
-    let Ok(hashed) = gix::objs::compute_hash(hash, gix::object::Kind::Blob, &content) else {
+    let Some(hashed) = hashed else {
         return true;
     };
     if hashed != entry.id {
@@ -6189,6 +6227,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: `no_second_repo_root_resolver_exists` reads a fixture this case wrote"
+    )]
     fn no_second_repo_root_resolver_exists() {
         // The single-implementation assertion (CLOUD-34), in the spirit of
         // state.rs's no-baked-literal grep test: the crate contains exactly
@@ -6263,6 +6305,10 @@ mod tests {
     }
 
     /// Read every `src/*.rs`, optionally skipping this module.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: `crate_sources` reads one crate source file the case names"
+    )]
     fn crate_sources(skip_self: bool) -> Vec<(PathBuf, String)> {
         let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         let mut sources = Vec::new();
@@ -6533,6 +6579,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: `every_declared_git_module_exists_and_reaches_gix` reads a fixture this case wrote"
+    )]
     fn every_declared_git_module_exists_and_reaches_gix() {
         // ANTI-VACUITY, both directions. A name in the list that no file carries
         // would silently exempt nothing while reading as coverage; a name whose
@@ -6629,6 +6679,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: `every_stays_shelled_out_claim_names_its_price` reads a fixture this case wrote"
+    )]
     fn every_stays_shelled_out_claim_names_its_price() {
         // CLOUD-320's THIRD ACCEPTANCE CLAUSE, made runnable: "where a verdict is
         // 'stays' for a reason that is a cost rather than a constraint, it says

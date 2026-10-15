@@ -240,6 +240,35 @@ fn records_round_trip_through_the_out_of_tree_store() {
 }
 
 #[test]
+fn a_line_that_is_not_utf8_drops_only_itself() {
+    // THE STREAMING CASE (CLOUD-1525). A shard is read a line at a time, so a
+    // corrupt line costs that line and nothing else — the torn-append posture
+    // `for_each` already takes, applied to bytes that are not text at all. A
+    // reader that pulled the whole shard into a `String` first fails the shard
+    // over its worst line, so both records around it are lost and this reds.
+    let fixture = Fixture::new("decision-store-corrupt-line");
+    clear_state(fixture.path());
+    let shard = shard_path(fixture.path(), fixture.path()).unwrap();
+
+    let before = record_at(&"a".repeat(64), declared());
+    let after = record_at(&"b".repeat(64), Caller::undeclared());
+    append(fixture.path(), fixture.path(), &before).unwrap();
+    {
+        use std::io::Write as _;
+        let mut file = fs::OpenOptions::new().append(true).open(&shard).unwrap();
+        file.write_all(b"\xff\xfe not a record\n").unwrap();
+    }
+    append(fixture.path(), fixture.path(), &after).unwrap();
+
+    assert_eq!(load_all(fixture.path()).unwrap(), vec![before, after]);
+    clear_state(fixture.path());
+}
+
+#[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `appending_holds_the_prefix_and_rewriting_an_existing_line_is_rejected` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn appending_holds_the_prefix_and_rewriting_an_existing_line_is_rejected() {
     // The append-only predicate, and it is a BYTE PREFIX rather than a growing
     // id set (CLOUD-52): a prefix also freezes past rows' bytes, so the quiet

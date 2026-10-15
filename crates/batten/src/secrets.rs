@@ -307,6 +307,10 @@ pub fn custody(repo_root: &Path, today: Date) -> Result<Custody> {
 ///
 /// Errors are pointer-only: a malformed file is named by path and by which line
 /// failed, never by its contents, because its contents are key material.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `read` reads one record file this crate writes whole"
+)]
 fn read(path: &Path) -> Result<Option<Custody>> {
     let text = match fs::read_to_string(path) {
         Ok(text) => text,
@@ -696,18 +700,26 @@ pub fn events(repo_root: &Path) -> Result<Vec<Event>> {
 /// # Errors
 ///
 /// As [`events`].
+///
+/// Streamed a line at a time (CLOUD-1525): the ledger gains an event per rotation
+/// and per loss and nothing truncates it. Split on bytes, so a line that is not
+/// text is skipped like any other unparseable line rather than failing the whole
+/// history — the outage [`events`] names, which a whole-file read reopened.
 pub fn events_at(path: &Path) -> Result<Vec<Event>> {
-    let text = match fs::read_to_string(path) {
-        Ok(text) => text,
+    use std::io::BufRead as _;
+    let context = || format!("read the custody ledger {}", path.display());
+    let file = match fs::File::open(path) {
+        Ok(file) => file,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(err) => {
-            return Err(err).with_context(|| format!("read the custody ledger {}", path.display()));
-        }
+        Err(err) => return Err(err).with_context(context),
     };
-    Ok(text
-        .lines()
-        .filter_map(|line| serde_json::from_str::<Event>(line).ok())
-        .collect())
+    let mut events = Vec::new();
+    for line in std::io::BufReader::new(file).split(b'\n') {
+        if let Ok(event) = serde_json::from_slice::<Event>(&line.with_context(context)?) {
+            events.push(event);
+        }
+    }
+    Ok(events)
 }
 
 /// Every rotation pair the ledger holds, oldest first, as fingerprints.
@@ -983,6 +995,10 @@ fn lost_from(events: &[Event], held_witnesses: &[String]) -> Vec<String> {
 /// of a file rewrite. Copying the lines the file already holds needs no accessor
 /// and no new capability: the bytes move from disk to disk through one `String`
 /// that is never rendered.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `generation_lines` reads one record file this crate writes whole"
+)]
 fn generation_lines(path: &Path) -> Result<(String, String)> {
     let text = fs::read_to_string(path)
         .with_context(|| format!("read the secret-identity key {}", path.display()))?;
@@ -1373,6 +1389,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: `a_malformed_key_is_refused_rather_than_re_minted` reads a fixture this case wrote"
+    )]
     fn a_malformed_key_is_refused_rather_than_re_minted() {
         let path = scratch("malformed");
         load_or_mint_at(&path, date()).unwrap();
@@ -1396,6 +1416,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: `losing_the_create_race_reads_the_winners_key` reads a fixture this case wrote"
+    )]
     fn losing_the_create_race_reads_the_winners_key() {
         // `mint` directly, not `load_or_mint_at`, because the race is exactly the
         // window between that function's `read` and its `create_new`: a test
@@ -1423,6 +1447,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: `the_key_bytes_reach_no_rendering` reads a fixture this case wrote"
+    )]
     fn the_key_bytes_reach_no_rendering() {
         let path = scratch("redaction");
         let key = load_or_mint_at(&path, date()).unwrap();
@@ -1827,10 +1855,41 @@ severity = "deny"
         assert_ne!(witnesses[0], witnesses[1]);
     }
 
+    // CLOUD-1525: the ledger streams, so a line that is not text costs that line
+    // and the history around it survives. The whole-file read failed the entire
+    // ledger over it, which is the custody outage `events` says a torn line must
+    // never become.
+    #[test]
+    fn a_line_that_is_not_text_costs_only_itself() {
+        use std::io::Write as _;
+        let path = scratch("ledger-not-text");
+        load_or_mint_at(&path, date()).unwrap();
+        let ledger = ledger_beside(&path);
+        fs::OpenOptions::new()
+            .append(true)
+            .open(&ledger)
+            .unwrap()
+            .write_all(b"\xff\xfe torn\n")
+            .unwrap();
+        rotate_at(&path, tomorrow()).unwrap();
+        let events = events_at(&ledger).unwrap();
+        assert!(
+            matches!(
+                events.as_slice(),
+                [Event::Minted { .. }, Event::Rotated { .. }]
+            ),
+            "{events:?}"
+        );
+    }
+
     // Pointer-only, structurally: the ledger holds ids, fingerprints and counts.
     // A key byte reaching it would put the key in the same directory as a digest
     // it protects, in a file that is not the key file.
     #[test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: `no_ledger_event_can_carry_a_key_byte` reads a fixture this case wrote"
+    )]
     fn no_ledger_event_can_carry_a_key_byte() {
         let path = scratch("ledger-pointer-only");
         let key = load_or_mint_at(&path, date()).unwrap();

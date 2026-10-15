@@ -1141,25 +1141,23 @@ pub fn append_all(
     // matched its own create and appended a second line for one write. The shell
     // this replaces could not have the bug, because it was one program deciding
     // once; splitting it into rows is what introduced the ordering.
-    let mut snapshots: BTreeMap<String, String> = BTreeMap::new();
+    //
+    // THE SNAPSHOT IS A LENGTH, NOT THE BYTES (CLOUD-1525). The record grows by a
+    // line per selected call, per branch, and this runs on every mediated call, so
+    // holding it whole cost an amount nothing bounds. Every append lands past the
+    // length taken here, so the prefix it names is exactly the snapshot.
+    let mut snapshots: BTreeMap<String, u64> = BTreeMap::new();
     for recorder in recorders {
         if !selects(&recorder.tool, tool) {
             continue;
         }
         let RecordKey::Branch = recorder.key;
         let path = record_path(git_dir, &recorder.record, branch, claim.as_deref());
-        if !snapshots.contains_key(&recorder.record) {
-            snapshots.insert(
-                recorder.record.clone(),
-                std::fs::read_to_string(&path).unwrap_or_default(),
-            );
-        }
+        let snapshot = *snapshots
+            .entry(recorder.record.clone())
+            .or_insert_with(|| std::fs::metadata(&path).map_or(0, |meta| meta.len()));
         if let Some(recorded) = &recorder.requires_recorded
-            && !already_recorded(
-                snapshots.get(&recorder.record).map_or("", String::as_str),
-                recorded,
-                context,
-            )
+            && !already_recorded(&path, snapshot, recorded, context)
         {
             continue;
         }
@@ -1237,17 +1235,26 @@ pub fn record_path(
     git_dir.join("batten-receipts").join(name)
 }
 
-/// Whether the snapshot already carries a line matching EVERY named column.
+/// Whether the first `snapshot` bytes of `path` already carry a line matching
+/// EVERY named column, streamed a line at a time.
 ///
 /// A record that could not be read is the empty snapshot, so nothing matches and
-/// nothing is written. That is the fail-closed direction for a WRITE, and it is
+/// nothing is written — and a line that is not text makes the whole record
+/// unreadable, as the whole-file read this replaces did, so the scan runs to the
+/// end of the snapshot even after a match. That is the fail-closed direction for a WRITE, and it is
 /// deliberately the opposite of how the gate reading this record fails: writing
 /// less can only make a later gate quieter, while writing on an unestablished
 /// precondition would record a judgement nothing supports.
 ///
 /// Every column must match, never any: the columns together are the anchor, and
 /// matching on one of them is what let a comment line stand in for a filing.
-fn already_recorded(snapshot: &str, recorded: &Recorded, context: &Context<'_>) -> bool {
+fn already_recorded(
+    path: &Path,
+    snapshot: u64,
+    recorded: &Recorded,
+    context: &Context<'_>,
+) -> bool {
+    use std::io::{BufRead as _, Read as _};
     let wanted: Option<Vec<(usize, String)>> = recorded
         .matches
         .iter()
@@ -1261,12 +1268,20 @@ fn already_recorded(snapshot: &str, recorded: &Recorded, context: &Context<'_>) 
     let Some(wanted) = wanted else {
         return false;
     };
-    snapshot.lines().any(|line| {
+    let Ok(file) = std::fs::File::open(path) else {
+        return false;
+    };
+    let mut found = false;
+    for line in std::io::BufReader::new(file.take(snapshot)).lines() {
+        let Ok(line) = line else {
+            return false;
+        };
         let columns: Vec<&str> = line.split_whitespace().collect();
-        wanted
+        found |= wanted
             .iter()
-            .all(|(at, text)| columns.get(*at).is_some_and(|column| column == text))
-    })
+            .all(|(at, text)| columns.get(*at).is_some_and(|column| column == text));
+    }
+    found
 }
 
 /// Append one line, creating the store if it does not exist.
@@ -1282,6 +1297,58 @@ fn append(path: &Path, line: &str) -> Option<()> {
 )]
 mod outcome_tests {
     use super::*;
+
+    /// CLOUD-1525: the streamed `already_recorded` reads exactly the snapshot.
+    ///
+    /// Three arms, each one the whole-file read answered and the stream must
+    /// answer the same: a line inside the snapshot matches, a line appended after
+    /// it does not (the call's own earlier row must not satisfy a later one), and
+    /// a record holding bytes that are not text matches nothing.
+    #[test]
+    fn already_recorded_reads_the_snapshot_prefix_and_fails_closed() {
+        let dir =
+            std::env::temp_dir().join(format!("batten-recorder-snapshot-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("a scratch directory");
+        let path = dir.join("record");
+        let patterns = BTreeMap::new();
+        let programs = BTreeMap::new();
+        let input = serde_json::json!({});
+        let context = Context {
+            input: &input,
+            result: &input,
+            branch: Some("work"),
+            root: Path::new("."),
+            patterns: &patterns,
+            programs: &programs,
+            grammar: None,
+            now: 0,
+        };
+        let wanted = |kind: &str| Recorded {
+            matches: BTreeMap::from([(0, Value::Literal(kind.to_owned()))]),
+        };
+
+        std::fs::write(&path, "create CLOUD-1\n").expect("seed the record");
+        let snapshot = std::fs::metadata(&path).expect("stat").len();
+        std::fs::write(&path, "create CLOUD-1\ngroom CLOUD-1\n").expect("append");
+        assert!(already_recorded(
+            &path,
+            snapshot,
+            &wanted("create"),
+            &context
+        ));
+        assert!(
+            !already_recorded(&path, snapshot, &wanted("groom"), &context),
+            "a line past the snapshot is this call's own write"
+        );
+
+        std::fs::write(&path, b"create CLOUD-1\n\xff\xfe\n").expect("corrupt the record");
+        let whole = std::fs::metadata(&path).expect("stat").len();
+        assert!(
+            !already_recorded(&path, whole, &wanted("create"), &context),
+            "a record that is not text is unread, never partly read"
+        );
+        drop(std::fs::remove_dir_all(&dir));
+    }
 
     fn declared(requires: &[&str], matching: &[(&str, &str)]) -> Declared {
         Declared {
