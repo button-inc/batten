@@ -385,7 +385,7 @@ fn a_dispatched_review_answers_only_once_it_completes() {
     dispatch(&dir, RECEIPT);
     denied(&ready(&dir));
     assert_ne!(
-        status(&dir, RECEIPT).status.code(),
+        status(&dir).status.code(),
         Some(0),
         "dispatched, not completed"
     );
@@ -397,7 +397,7 @@ fn a_dispatched_review_answers_only_once_it_completes() {
     assert!(dispatched.exists(), "the dispatch minted its record");
     complete(&dir);
     allowed(&ready(&dir));
-    let answered = status(&dir, RECEIPT);
+    let answered = status(&dir);
     assert_eq!(answered.status.code(), Some(0), "{}", stdout(&answered));
 
     // The dispatch is spent by the completion it admitted, so it cannot answer
@@ -435,7 +435,7 @@ fn one_call_cannot_satisfy_its_own_prerequisite() {
 
     dispatch(&dir, RECEIPT);
     assert_ne!(
-        status(&dir, RECEIPT).status.code(),
+        status(&dir).status.code(),
         Some(0),
         "one dispatch minted its own completion"
     );
@@ -443,7 +443,7 @@ fn one_call_cannot_satisfy_its_own_prerequisite() {
     // call rewrites it, so it is still this call's own.
     dispatch(&dir, RECEIPT);
     assert_ne!(
-        status(&dir, RECEIPT).status.code(),
+        status(&dir).status.code(),
         Some(0),
         "a second dispatch spent the record it had just rewritten"
     );
@@ -478,7 +478,7 @@ fn a_dependent_declared_first_still_waits_for_its_writer() {
     dispatch(&dir, RECEIPT);
     dispatch(&dir, RECEIPT);
     assert_ne!(
-        status(&dir, RECEIPT).status.code(),
+        status(&dir).status.code(),
         Some(0),
         "a dependent declared first spent the dispatch an earlier call left"
     );
@@ -516,7 +516,12 @@ fn an_unresolvable_base_is_refused_rather_than_read_missing() {
 
 /// The question `land` asks before it readies (CLOUD-2260): the same receipt,
 /// read through the verb rather than the hook.
-fn status(dir: &Path, check: &str) -> Output {
+fn status(dir: &Path) -> Output {
+    status_of(dir, RECEIPT)
+}
+
+/// [`status`] for any one of the checks readying owes (CLOUD-2293).
+fn status_of(dir: &Path, check: &str) -> Output {
     run_with_stdin(
         dir,
         &[
@@ -648,7 +653,7 @@ fn a_committed_simplification_re_owes_all_three() {
     change(&dir, "fn a() {}\n// simplified\n");
     for check in OWED {
         assert_ne!(
-            status(&dir, check).status.code(),
+            status_of(&dir, check).status.code(),
             Some(0),
             "`{check}` still answers over the simplified change"
         );
