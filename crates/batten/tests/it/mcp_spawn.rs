@@ -348,7 +348,10 @@ fn a_launch_program_missing_from_path_is_provisioned_then_becomes_the_launch_lin
         .args(["mcp", "spawn", "demo", "--", "demo-server", "a", "b"])
         // `demo-server` is on no directory of this PATH; `env` and `bash`,
         // which the launcher's shebang needs, are.
-        .env("PATH", "/usr/bin:/bin")
+        .env(
+            "PATH",
+            std::env::join_paths(["/usr/bin", "/bin"]).expect("a joinable PATH"),
+        )
         .current_dir(&dir)
         .output()
         .expect("run batten mcp spawn");
