@@ -1680,7 +1680,7 @@ fn source_args(
         String::from("--output"),
         output.to_string_lossy().into_owned(),
     ];
-    // ONLY THE TARGETS THE SCOPE RUNS ARE BUILT ([`test_targets`]): `--cargo-arg`
+    // ONLY THE TARGETS THE SCOPE RUNS ARE BUILT ([`targets_of`]): `--cargo-arg`
     // reaches both the build and the test invocation, so what is compiled per
     // mutant is what the filterset below can select, and nothing else.
     args.extend(
@@ -1947,8 +1947,8 @@ fn targets_of(scope: &[(String, Option<String>)]) -> Vec<String> {
 /// suite in another package carries no selector.
 fn scope_of(root: &Path, source: &str) -> Vec<(String, Option<String>)> {
     let mut scope: Vec<(String, Option<String>)> = tests_of(root, source)
-        .map(|(term, target)| (term, Some(target)))
         .into_iter()
+        .map(|(term, target)| (term, Some(target)))
         .collect();
     let home = package_of(root, source).map(|(package, _)| package);
     for line in lines_of(root, source).unwrap_or_default() {
