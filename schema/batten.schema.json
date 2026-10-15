@@ -4745,6 +4745,14 @@
             "maxLength": 1536
           }
         },
+        "except": {
+          "description": "Modules of the enabled preset this row does NOT compile, by name — the\nfile stem, as `plan-mode-refuses-writes` (CLOUD-2290).\n\nThe half of ejecting a module that the binary owns: a local copy declares\nthe ids the vendored module did, and `claim_ids` refuses one id from two\nbundles, so the vendored module has to step aside for the copy to load.\n`batten preset eject` writes this key; it is ordinary config, so a\nconsumer may write it by hand too.\n\nA name the preset does not ship is refused at load (exit `1`), never\nignored: an `except` that excepts nothing would leave the vendored module\nrunning beside the copy that was meant to replace it.",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 1536
+          }
+        },
         "exclude": {
           "description": "A regex that **un**-matches: a matched line carrying it is not a finding.\n\n[`RuleKind::Forbid`] only, and regex-only with no literal twin — an\nexclusion is inherently shape-based, and the measured one (a whole-line\ncomment, `^[[:space:]]*#`) cannot be written as a literal at all.\n\nComment-awareness lives here, in the consumer's config, rather than as a\n`skip_comments` flag in the engine: per-language comment syntax inside\n`crates/batten` would break non-negotiable rule 1, and it would also be\nwrong — `no-conflict-markers` must still fire inside a comment. What a\ncomment looks like is a property of a repository, not of Batten.",
           "type": [
