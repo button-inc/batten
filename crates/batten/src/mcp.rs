@@ -2194,6 +2194,7 @@ pub struct SpawnRecord {
     line: String,
 }
 
+//MUTANT exec-failure-unrecorded|s@^        drop(crate::durable::append(\&self.ledger, \&failed));$@        drop((self.ledger, failed));@|a_launch_that_cannot_exec_is_recorded_as_failed
 impl SpawnRecord {
     /// Append that the launch line could not be exec'd (CLOUD-2327): this
     /// launch's record again, then [`EXEC_FAILED`].
@@ -2204,7 +2205,6 @@ impl SpawnRecord {
     /// stderr. The launch's own fields carry its stamp, so a provisioning fetch
     /// between the two cannot move the failure out of the attempt's window.
     /// Silent for [`record_spawn`]'s reason: stdout is still the transport.
-    //MUTANT exec-failure-unrecorded|s@^        drop(crate::durable::append(\&self.ledger, \&failed));$@        drop((self.ledger, failed));@|a_launch_that_cannot_exec_is_recorded_as_failed
     pub fn exec_failed(self) {
         let failed = format!("{}\t{EXEC_FAILED}\n", self.line.trim_end_matches('\n'));
         drop(crate::durable::append(&self.ledger, &failed));
