@@ -893,6 +893,27 @@ fn run_dist_installer(
     (ran.status.success(), into.join("batten"), said)
 }
 
+/// The triple dist's installer downloads on this host, which is not the one
+/// this test binary was built for: the installer picks by the HOST's libc, so a
+/// musl-built suite on a glibc runner (the `musl` CI leg) fetches the `-gnu`
+/// archive. musl hosts carry a `/lib/ld-musl-*` loader; everything else is gnu.
+fn installer_target() -> String {
+    let built = batten::engine::running_target();
+    let musl_host = std::fs::read_dir("/lib").is_ok_and(|entries| {
+        entries
+            .flatten()
+            .any(|entry| entry.file_name().to_string_lossy().starts_with("ld-musl-"))
+    });
+    let libc = if musl_host {
+        "-linux-musl"
+    } else {
+        "-linux-gnu"
+    };
+    built
+        .replace("-linux-musl", libc)
+        .replace("-linux-gnu", libc)
+}
+
 /// The installer cargo-dist generates installs only the bytes the release
 /// published: a tampered archive is refused and nothing is placed, and the
 /// archive whose sha256 the release recorded installs. Both halves, so a
@@ -906,7 +927,7 @@ fn the_dist_installer_refuses_a_digest_mismatch() {
     if !cfg!(target_os = "linux") {
         return;
     }
-    let target = batten::engine::running_target();
+    let target = installer_target();
     let dir = scratch("install-web-dist");
     let archive = dist_tarball(&dir, &target);
     let installer = dist_installer(&dir, &target, &archive);
