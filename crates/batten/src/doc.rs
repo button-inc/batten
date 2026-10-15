@@ -1254,7 +1254,10 @@ pub const VENDORED_DOCS: &[VendoredDoc] = &[
     VendoredDoc {
         id: "job read unread",
         why: Some("A push replacing a red head erases the failed checks nobody read"),
-        act: &["read each named failed job's log: `batten mcp call github get_job_logs`"],
+        act: &[
+            "read each named failed job's log: `batten mcp call github get_job_logs`",
+            "a check with no job: `batten mcp call github get_check_run`",
+        ],
         dont: &[
             "push over a failure you have not read",
             "read one failure and assume the rest match",

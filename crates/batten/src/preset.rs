@@ -2045,10 +2045,18 @@ fast-forward, after CI has run. `git merge <ref>` writes one, and so does `git p
 replacing that head starts a new run that buries them. Reading one failure and pushing \
 erases the others, and a check still running at the stop reports on a head nobody will \
 look at again. Read each named failed job's log first; reading is what admits the push.",
-            routes: &[run(
-                "job read first",
-                "batten mcp call github get_job_logs '{\"owner\":\"<owner>\",\"repo\":\"<repo>\",\"job_id\":<id>,\"return_content\":true}'",
-            )],
+            routes: &[
+                run(
+                    "job read first",
+                    "batten mcp call github get_job_logs '{\"owner\":\"<owner>\",\"repo\":\"<repo>\",\"job_id\":<id>,\"return_content\":true}'",
+                ),
+                // A FAILED CHECK NO ACTIONS JOB RUNS has a check run and no log,
+                // so its read is the run itself (review of #1180).
+                run(
+                    "job read other",
+                    "batten mcp call github get_check_run '{\"owner\":\"<owner>\",\"repo\":\"<repo>\",\"check_run_id\":<id>}'",
+                ),
+            ],
             applicability: crate::verdict::Applicability::Advice,
         }],
         patterns: &[],

@@ -10226,22 +10226,6 @@ pub(crate) fn singleton_task_started(envelope: &Envelope) -> Option<String> {
     None
 }
 
-/// The target of a `git reset --hard` in this call, if it makes one (CLOUD-462).
-///
-/// **Read off `programs`, which is the argv the boundary already resolved** — so
-/// `(git reset --hard HEAD~1)`, `time git reset …` and a reset in the second half
-/// of a list are all seen, for the same reason CLOUD-1382 moved every other
-/// program anchor there. A second parser here would be the second authority this
-/// module refuses to grow.
-///
-/// The target defaults to `HEAD` when none is written, which is git's own
-/// default and the case that discards only the working tree. That still resolves
-/// to an empty range, so the gate is silent on it without needing an arm.
-///
-/// `--hard` specifically, and the row's own scope is why. A mixed or soft reset
-/// leaves the work in the tree; `--hard` discards the working tree *and* the
-/// index with no "you have unstaged changes" refusal, which is what removes the
-/// compensating control people assume git provides.
 /// Whether any program this call reaches is `git push` (CLOUD-2270): the one
 /// call the `red-head` fact can decide anything about, so the lookup is spent
 /// only there. Git's own options before the verb are stepped past exactly as
@@ -10260,6 +10244,22 @@ pub(crate) fn pushes_git(envelope: &Envelope) -> bool {
     })
 }
 
+/// The target of a `git reset --hard` in this call, if it makes one (CLOUD-462).
+///
+/// **Read off `programs`, which is the argv the boundary already resolved** — so
+/// `(git reset --hard HEAD~1)`, `time git reset …` and a reset in the second half
+/// of a list are all seen, for the same reason CLOUD-1382 moved every other
+/// program anchor there. A second parser here would be the second authority this
+/// module refuses to grow.
+///
+/// The target defaults to `HEAD` when none is written, which is git's own
+/// default and the case that discards only the working tree. That still resolves
+/// to an empty range, so the gate is silent on it without needing an arm.
+///
+/// `--hard` specifically, and the row's own scope is why. A mixed or soft reset
+/// leaves the work in the tree; `--hard` discards the working tree *and* the
+/// index with no "you have unstaged changes" refusal, which is what removes the
+/// compensating control people assume git provides.
 pub(crate) fn destructive_reset_target(envelope: &Envelope) -> Option<String> {
     let reach = program_reach(&envelope.command);
     for entry in &reach {

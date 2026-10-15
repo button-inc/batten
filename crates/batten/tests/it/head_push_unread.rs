@@ -21,7 +21,10 @@ const CONFIG: &str = "version = 1\n\n\
 scope = \"mediated_call\"\npreset = \"red-head\"\nseverity = \"deny\"\n\n\
 [[mint]]\nname = \"check-log-read\"\ntool = \"get_job_logs\"\nkey = \"named\"\n\
 key_from = \"job_id\"\nrequires = [\"job_id\", \"logs_content\"]\nmode = \"replace\"\n\
-body = \"{job_id} {now}\"\n";
+body = \"{job_id} {now}\"\n\n\
+[[mint]]\nname = \"check-run-read\"\ntool = \"get_check_run\"\nkey = \"named\"\n\
+key_from = \"id\"\nrequires = [\"id\", \"conclusion\"]\nmode = \"replace\"\n\
+body = \"{id} {now}\"\n";
 
 /// A repository on a branch whose head stopped red: `windows` failed as run
 /// `101`, and `macos` was still running when the stop was taken.
@@ -133,4 +136,51 @@ fn reading_the_failed_check_admits_the_push() {
         !out.contains("job read unread"),
         "reading the failed check's log admits the push, though macos still runs\n{out}"
     );
+}
+
+/// A FAILED CHECK NO ACTIONS JOB RUNS has no log to read, so its check run is
+/// the read (review of #1180): without this route a third-party failure would
+/// refuse every push for good.
+#[test]
+fn reading_a_failed_check_run_admits_the_push() {
+    let dir = red_repo("head-push-unread-check-run");
+    let payload = "{\"hook_event_name\":\"PostToolUse\",\
+         \"tool_name\":\"mcp__github__get_check_run\",\
+         \"tool_input\":{\"check_run_id\":101},\
+         \"tool_response\":{\"id\":101,\"conclusion\":\"failure\"}}";
+    let _ = common::run_with_stdin(&dir, &["adjudicate", "--harness", "exit-code"], payload);
+    let out = decision(&dir, "git push origin HEAD");
+    assert!(
+        !out.contains("job read unread"),
+        "a read check run pays the debt as a job log does\n{out}"
+    );
+}
+
+/// `land` IS THE PRESCRIBED PUSH, and the hook sees `mise run land`, never the
+/// lap's own push (review of #1180). The landing's entry asks the same record,
+/// and only where a row enables the preset.
+#[test]
+fn the_landing_owes_the_same_read_as_a_hand_push() {
+    let dir = red_repo("head-push-unread-landing");
+    let owed = batten::land::red_head_owed(&dir, "work/red").expect("unread debt is owed");
+    assert!(
+        owed.iter().any(|subject| subject.contains("windows"))
+            && owed
+                .iter()
+                .any(|subject| subject.contains("macos still running")),
+        "{owed:?}"
+    );
+
+    read_the_log(&dir, 101);
+    assert_eq!(
+        batten::land::red_head_owed(&dir, "work/red"),
+        None,
+        "a read failure owes the landing nothing"
+    );
+
+    // WITHOUT THE PRESET nothing is owed, whatever the record says: a consumer
+    // that never opted in has no mint to pay with.
+    let bare = red_repo("head-push-unread-landing-bare");
+    std::fs::write(bare.join("batten.toml"), "version = 1\n").expect("write a bare config");
+    assert_eq!(batten::land::red_head_owed(&bare, "work/red"), None);
 }

@@ -13981,6 +13981,21 @@ fn run_land_entry_gates(
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<Option<ExitCode>> {
+    // THE ENGINE'S OWN ENTRY GATE (CLOUD-2270): a red head whose failed checks
+    // were never read is not pushed over by the landing either, which is the
+    // push the mediated `red-head` gate cannot see.
+    if let Some(owed) = land::red_head_owed(root, branch) {
+        writeln!(
+            err,
+            "::error:: land: job read unread — {branch}'s last red head owes a read before a push replaces it: {}",
+            owed.join(", ")
+        )?;
+        writeln!(
+            err,
+            "::error:: nothing has been spent — read each failed job's log (`batten mcp call github get_job_logs`, or `get_check_run` for a check with no job), then run the landing again"
+        )?;
+        return Ok(Some(ExitCode::Violation));
+    }
     let declared = std::env::var("LAND_ENTRY_GATES").unwrap_or_default();
     let gates = land::body_gates(&declared);
     if gates.is_empty() {

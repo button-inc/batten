@@ -13,6 +13,19 @@
 # it with `read` per failed run, a stat of the `check-log-read.<id>` receipt a
 # log read mints. `null` means no red head, and nothing here refuses on it.
 #
+# ENABLING IT TAKES TWO `[[mint]]` ROWS BESIDE ITS `[[rule]]`, because a preset
+# ships no mint and `read` is only ever true where one wrote the receipt:
+#
+#   [[mint]]  name = "check-log-read"  tool = "get_job_logs"   key = "named"
+#             key_from = "job_id"  requires = ["job_id", "logs_content"]
+#   [[mint]]  name = "check-run-read"  tool = "get_check_run"  key = "named"
+#             key_from = "id"      requires = ["id", "conclusion"]
+#
+# The second is the read for a failed check no Actions job runs (a third-party
+# app's): it has a check run and no job log, and without it that failure could
+# never be paid. Either receipt pays a run; two rows may not share one name.
+# Each needs `mode = "replace"` and a `body` such as `"{now}"`.
+#
 # A RUNNING CHECK ALONE NEVER REFUSES: it has no log to read yet, and a refusal
 # with no remedy would hold the branch hostage to a runner. It is NAMED when a
 # failure refuses, because the push abandons its verdict too.

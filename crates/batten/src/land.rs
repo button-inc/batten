@@ -1340,6 +1340,18 @@ pub fn record_red_head(root: &Path, branch: &str, sha: &str, reading: &RedReadin
 /// run's log was read (CLOUD-2270): `check-log-read.<id>` under the store.
 pub const CHECK_LOG_READ: &str = "check-log-read";
 
+/// The receipt family a read of a failed CHECK RUN mints, for a check no
+/// Actions job runs and so with no log (review of #1180): `check-run-read.<id>`.
+/// Its own name because two `[[mint]]` rows may not write one receipt.
+pub const CHECK_RUN_READ: &str = "check-run-read";
+
+/// Whether the failed run `id` was read: either receipt pays it.
+fn run_was_read(store: &Path, id: &str) -> bool {
+    [CHECK_LOG_READ, CHECK_RUN_READ]
+        .iter()
+        .any(|family| store.join(format!("{family}.{id}")).is_file())
+}
+
 /// The current branch's red-head record as the `red-head` fact projects it:
 /// `{"head", "failed": [{"id", "name", "read"}], "running"}`.
 ///
@@ -1365,9 +1377,60 @@ pub fn red_head_fact(root: &Path) -> crate::facts::Look<serde_json::Value> {
         }
         Err(_) => return crate::facts::Look::CouldNotLook,
     };
-    crate::facts::Look::Is(red_head_document(&text, |id| {
-        store.join(format!("{CHECK_LOG_READ}.{id}")).is_file()
-    }))
+    crate::facts::Look::Is(red_head_document(&text, |id| run_was_read(&store, id)))
+}
+
+/// What `branch`'s red head still owes before `land` may push over it, as
+/// refusal subjects (`<name> job <id>`, `<name> still running`), or `None` when
+/// nothing is owed (CLOUD-2270, review of #1180).
+///
+/// **`land` IS THE PRESCRIBED PUSH, so the mediated gate alone misses it**: the
+/// hook sees one `mise run land` call and no `git push`, and the lap's own push
+/// would bury the very failure the `red-head` preset refuses a hand push over.
+/// So the landing asks the same record before its first lap.
+///
+/// **ONLY WHERE A ROW ENABLES THE PRESET.** Without one, nothing declares the
+/// `check-log-read` mint that pays the debt, and refusing here would leave a
+/// consumer that never opted in no route past its own red stop.
+#[must_use]
+pub fn red_head_owed(root: &Path, branch: &str) -> Option<Vec<String>> {
+    let site = crate::config::authority_site(root, None);
+    let enabled = site.path.is_file()
+        && crate::config::load_site(&site).is_ok_and(|(config, _)| {
+            config
+                .rules
+                .iter()
+                .any(|rule| rule.preset.as_deref() == Some(RED_HEAD))
+        });
+    if !enabled {
+        return None;
+    }
+    let path = red_head_path(root, branch)?;
+    let text = std::fs::read_to_string(&path).ok()?;
+    let store = path.parent()?;
+    let document = red_head_document(&text, |id| run_was_read(store, id));
+    let unread: Vec<String> = document["failed"]
+        .as_array()?
+        .iter()
+        .filter(|entry| entry["read"] == false)
+        .map(|entry| {
+            format!(
+                "{} job {}",
+                entry["name"].as_str().unwrap_or("-"),
+                entry["id"].as_str().unwrap_or("-")
+            )
+        })
+        .collect();
+    if unread.is_empty() {
+        return None;
+    }
+    let running = document["running"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .map(|name| format!("{name} still running"));
+    Some(unread.into_iter().chain(running).collect())
 }
 
 /// Project a red-head record's text, asking `read` of each failed run's id.
