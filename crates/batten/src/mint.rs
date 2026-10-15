@@ -781,10 +781,12 @@ pub fn validate(mints: &[Declared]) -> anyhow::Result<()> {
         }
         // A `named` row whose subject projection the body never has to render is
         // still required to name one the ENGINE can read, so the same parser
-        // decides both and a typo cannot reach the filename.
+        // decides both and a typo cannot reach the filename. A blank `key_shape`
+        // compiles and matches every subject: a guard that guards nothing.
         for (column, from) in [
             ("key_from", mint.key_from.as_deref()),
             ("key_from_input", mint.key_from_input.as_deref()),
+            ("key_shape", mint.key_shape.as_deref()),
         ] {
             if from.is_some_and(|path| path.trim().is_empty()) {
                 return Err(crate::error::UsageError::raise(format!(
@@ -1265,7 +1267,8 @@ mod tests {
     /// column (CLOUD-2294).
     ///
     /// Fails by: dropping any one arm. Two sources is a precedence nobody
-    /// declared, an uncompilable shape mints nothing forever, and either column
+    /// declared, an uncompilable shape mints nothing forever, a blank one admits
+    /// every subject, and either column
     /// on a `delta` or `branch` row is read by nothing.
     #[test]
     fn a_named_row_takes_one_subject_source_and_a_shape_that_compiles() {
@@ -1273,16 +1276,13 @@ mod tests {
             let mut value = serde_json::json!({
                 "name": "groom", "tool": "Skill", "mode": "replace", "body": "{now}",
             });
-            for (column, declared) in columns.as_object().into_iter().flatten() {
+            for (column, declared) in columns.as_object().expect("columns are an object") {
                 value[column] = declared.clone();
             }
             serde_json::from_value(value).expect("shape loads")
         };
         let refused = |columns: serde_json::Value| {
-            validate(&[row(columns)])
-                .map_err(|error| error.to_string())
-                .err()
-                .unwrap_or_default()
+            validate(&[row(columns)]).map_or_else(|error| error.to_string(), |()| "<loaded>".into())
         };
 
         assert!(
@@ -1298,8 +1298,16 @@ mod tests {
                 "exactly one of",
             ),
             (
+                serde_json::json!({"key": "named", "key_from": " "}),
+                "an empty `key_from`",
+            ),
+            (
                 serde_json::json!({"key": "named", "key_from_input": " "}),
                 "an empty `key_from_input`",
+            ),
+            (
+                serde_json::json!({"key": "named", "key_from_input": "args", "key_shape": " "}),
+                "an empty `key_shape`",
             ),
             (
                 serde_json::json!({"key": "named", "key_from_input": "args", "key_shape": "("}),
