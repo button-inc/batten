@@ -1289,8 +1289,33 @@ impl Drop for Reaper {
         } else {
             end_process(self.child);
         }
+        // A SIGNAL IS DELIVERED, NOT DONE: `kill` returns before the child is
+        // gone, so `exec` could return its error past a child still exiting.
+        // The KILL above bounds this wait.
+        await_reaped(self.child);
     }
 }
+
+/// Block until the direct child `pid` has exited, and reap it.
+#[cfg(unix)]
+fn await_reaped(pid: u32) {
+    let Some(pid) = i32::try_from(pid)
+        .ok()
+        .and_then(rustix::process::Pid::from_raw)
+    else {
+        return;
+    };
+    // A forwarded signal can interrupt the wait; any other error (already
+    // reaped, not our child) leaves nothing to wait for.
+    while let Err(rustix::io::Errno::INTR) = rustix::process::waitid(
+        rustix::process::WaitId::Pid(pid),
+        rustix::process::WaitIdOptions::EXITED,
+    ) {}
+}
+
+/// No processes to reap off unix.
+#[cfg(not(unix))]
+fn await_reaped(_pid: u32) {}
 
 /// `SIGKILL` one process: the direct child of a group Batten does not own.
 #[cfg(unix)]
