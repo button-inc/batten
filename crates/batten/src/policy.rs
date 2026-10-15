@@ -1807,9 +1807,10 @@ fn answer(bundle: &Bundle, input: &str, rules: &[&str]) -> Option<Answer> {
             if let Some(answer) = Answers::recall(compiled, input, |held| select(held, rules)) {
                 return answer;
             }
-            let evaluated = compiled.evaluate_all(&Answers::parsed(input)?)?;
+            let (at, parsed) = Answers::parsed(input)?;
+            let evaluated = compiled.evaluate_all(&parsed)?;
             let answer = select(&evaluated, rules);
-            Answers::keep(compiled, evaluated);
+            Answers::keep(compiled, at, evaluated);
             answer
         }
     }
@@ -1852,11 +1853,15 @@ fn select(evaluated: &Evaluated, rules: &[&str]) -> Option<Answer> {
 ///
 /// The INPUT is parsed once per call too: every bundle is handed the same
 /// document text, and each used to parse it into a `regorus::Value` of its own.
+/// Each distinct text is held once, and an entry names it by index.
 struct Answers {
-    /// Every bundle evaluated over `input`, and what it answered.
-    answered: Vec<(std::sync::Arc<Compiled>, Evaluated)>,
-    /// The input every entry of `answered` was evaluated over, held once.
-    input: Option<(String, regorus::Value)>,
+    /// Every bundle evaluated, the index of the input it was evaluated over,
+    /// and what it answered.
+    answered: Vec<(std::sync::Arc<Compiled>, usize, Evaluated)>,
+    /// Every distinct input the call asked over, each held once with its parse:
+    /// a call can ask over more than one document, and alternating between
+    /// them must not cost the answers already had (code review of CLOUD-2315).
+    inputs: Vec<(String, regorus::Value)>,
 }
 
 /// One program over one input, every rule evaluated: the rules that faulted, and
@@ -1897,7 +1902,7 @@ pub fn answer_scope() -> AnswerScope {
     ANSWERS.with(|cell| {
         *cell.borrow_mut() = Some(Answers {
             answered: Vec::new(),
-            input: None,
+            inputs: Vec::new(),
         });
     });
     AnswerScope
@@ -1908,21 +1913,23 @@ impl Answers {
         ANSWERS.with(|cell| cell.borrow().is_some())
     }
 
-    /// `input` parsed, once per distinct text within the scope. Another text
-    /// forgets every answer, which were all over the text it replaces.
-    fn parsed(input: &str) -> Option<regorus::Value> {
+    /// Which of the held inputs `input` is.
+    fn input_at(&self, input: &str) -> Option<usize> {
+        self.inputs.iter().position(|(text, _)| text == input)
+    }
+
+    /// `input`'s place among the held inputs and its parse, parsed once per
+    /// distinct text within the scope.
+    fn parsed(input: &str) -> Option<(usize, regorus::Value)> {
         ANSWERS.with(|cell| {
             let mut borrowed = cell.borrow_mut();
             let answers = borrowed.as_mut()?;
-            if let Some((text, value)) = &answers.input
-                && text == input
-            {
-                return Some(value.clone());
+            if let Some(at) = answers.input_at(input) {
+                return Some((at, answers.inputs[at].1.clone()));
             }
             let value = regorus::Value::from_json_str(input).ok()?;
-            answers.input = Some((input.to_owned(), value.clone()));
-            answers.answered.clear();
-            Some(value)
+            answers.inputs.push((input.to_owned(), value.clone()));
+            Some((answers.inputs.len() - 1, value))
         })
     }
 
@@ -1936,24 +1943,22 @@ impl Answers {
         ANSWERS.with(|cell| {
             let borrowed = cell.borrow();
             let answers = borrowed.as_ref()?;
-            if answers.input.as_ref().is_none_or(|(text, _)| text != input) {
-                return None;
-            }
-            let (_, evaluated) = answers
+            let at = answers.input_at(input)?;
+            let (_, _, evaluated) = answers
                 .answered
                 .iter()
-                .find(|(held, _)| std::sync::Arc::ptr_eq(held, compiled))?;
+                .find(|(held, over, _)| *over == at && std::sync::Arc::ptr_eq(held, compiled))?;
             Some(read(evaluated))
         })
     }
 
-    /// Hold `compiled`'s evaluation over the input [`Answers::parsed`] last read.
-    fn keep(compiled: &std::sync::Arc<Compiled>, evaluated: Evaluated) {
+    /// Hold `compiled`'s evaluation over the input held at `at`.
+    fn keep(compiled: &std::sync::Arc<Compiled>, at: usize, evaluated: Evaluated) {
         ANSWERS.with(|cell| {
             if let Some(answers) = cell.borrow_mut().as_mut() {
                 answers
                     .answered
-                    .push((std::sync::Arc::clone(compiled), evaluated));
+                    .push((std::sync::Arc::clone(compiled), at, evaluated));
             }
         });
     }

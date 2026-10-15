@@ -176,6 +176,19 @@ fn one_call_evaluates_each_rule_once() {
             "deny, preapprove and rewrite asked again evaluate nothing: {input}"
         );
     }
+    let before = policy::bytecode_evaluations();
+    for (input, expected) in CALLS.iter().zip(&unscoped) {
+        assert_eq!(
+            &decided(&bundle, input),
+            expected,
+            "{input}, after the others"
+        );
+    }
+    assert_eq!(
+        policy::bytecode_evaluations() - before,
+        0,
+        "an input asked again after another is still answered from the memo"
+    );
     drop(scope);
     let before = policy::bytecode_evaluations();
     let _ = decided(&bundle, CALLS[1]);

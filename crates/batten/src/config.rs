@@ -6785,18 +6785,17 @@ mod tests {
     /// dropped rows and the "enforces nothing" report would go silent.
     #[test]
     fn an_authority_with_a_dropped_row_is_never_stored_in_the_parse_cache() {
-        // The switch is process-wide: off again when the case ends, panicking
-        // or not, so a runner sharing this process parses as before.
-        struct SwitchedOff;
-        impl Drop for SwitchedOff {
+        // The switch is process-wide: put back as it was when the case ends,
+        // panicking or not, so a runner sharing this process parses as before.
+        struct Restored(bool);
+        impl Drop for Restored {
             fn drop(&mut self) {
-                PERSIST_PARSES.store(false, std::sync::atomic::Ordering::Relaxed);
+                PERSIST_PARSES.store(self.0, std::sync::atomic::Ordering::Relaxed);
             }
         }
         let dir = crate::scratch::scratch("config-dropped-row-uncached");
         crate::testing::contain_state(&dir.join("state"));
-        let _off = SwitchedOff;
-        persist_parses();
+        let _restored = Restored(PERSIST_PARSES.swap(true, std::sync::atomic::Ordering::Relaxed));
         let text = format!(
             "{}from_a_newer_schema = true\n",
             rule_config("severity = \"deny\"\n", "scope = \"tree\"\n")

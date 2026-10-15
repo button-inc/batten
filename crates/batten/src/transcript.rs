@@ -694,26 +694,33 @@ pub struct Tally {
 /// covered and a digest of the file's first line. A shorter file, a different
 /// first line (an inode reused for a new session), or any unreadable state is a
 /// full re-read from byte zero.
-//MUTANT tally-entry-trusted-after-replace|s@^        .filter(\x7csaved\x7c saved.head == head \&\& saved.offset <= len);$@        .filter(\x7c_\x7c true);@|the_incremental_reader_answers_as_a_whole_parse
 #[must_use]
 pub fn tally_appended(path: &Path, shape: RecordShape) -> Option<Tally> {
+    let cache = crate::state::state_root()
+        .ok()
+        .and_then(|state| crate::cache::root_under(&state));
+    tally_under(path, shape, cache.as_deref())
+}
+
+/// [`tally_appended`] with its entry under the cache partition `cache`. No
+/// partition is a whole read, never could-not-look: a cache that cannot be
+/// kept must not cost a readable transcript its answer.
+//MUTANT tally-entry-trusted-after-replace|s@^        .filter(\x7csaved\x7c saved.head == head \&\& saved.offset <= len);$@        .filter(\x7c_\x7c true);@|the_incremental_reader_answers_as_a_whole_parse
+fn tally_under(path: &Path, shape: RecordShape, cache: Option<&Path>) -> Option<Tally> {
     use std::io::{Read as _, Seek as _};
     let canonical = std::fs::canonicalize(path).ok()?;
     let label = canonical.to_string_lossy().into_owned();
     let meta = std::fs::metadata(&canonical).ok()?;
-    // No cache directory is a whole read, never could-not-look: a cache that
-    // cannot be kept must not cost a readable transcript its answer.
-    let entry = crate::state::state_root()
-        .ok()
-        .and_then(|state| crate::cache::root_under(&state))
-        .map(|root| {
-            root.join("transcript")
-                .join(blake3::hash(label.as_bytes()).to_hex().as_str())
-        });
-    let key = crate::cache::key(
-        TALLY_FORMAT,
-        &[label.as_bytes(), file_identity(&meta).as_bytes()],
-    );
+    let entry = cache.map(|root| {
+        let at = root
+            .join("transcript")
+            .join(blake3::hash(label.as_bytes()).to_hex().as_str());
+        let key = crate::cache::key(
+            TALLY_FORMAT,
+            &[label.as_bytes(), file_identity(&meta).as_bytes()],
+        );
+        (at, key)
+    });
     let mut file = std::fs::File::open(&canonical).ok()?;
     let len = usize::try_from(meta.len()).ok()?;
     // THE HEAD LINE AND THE TAIL, NEVER THE WHOLE FILE: reading 8.7 MB to skip
@@ -729,8 +736,8 @@ pub fn tally_appended(path: &Path, shape: RecordShape) -> Option<Tally> {
     .to_hex()
     .to_string();
     let saved = entry
-        .as_deref()
-        .and_then(|entry| crate::cache::read(entry, &key))
+        .as_ref()
+        .and_then(|(at, key)| crate::cache::read(at, key))
         .and_then(|body| serde_json::from_slice::<Tallied>(&body).ok())
         .filter(|saved| saved.head == head && saved.offset <= len);
     let (mut tally, offset) =
@@ -753,10 +760,10 @@ pub fn tally_appended(path: &Path, shape: RecordShape) -> Option<Tally> {
         tally,
     };
     if whole > 0
-        && let Some(entry) = &entry
+        && let Some((at, key)) = &entry
         && let Ok(body) = serde_json::to_vec(&advanced)
     {
-        crate::cache::write(entry, &key, &body);
+        crate::cache::write(at, key, &body);
     }
     if !partial.iter().all(u8::is_ascii_whitespace) {
         parse(std::str::from_utf8(partial).ok()?, &label, shape)
@@ -2419,20 +2426,17 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// A state root no cache directory can be made under is a whole read, never
-    /// could-not-look (code review of CLOUD-2315).
+    /// No cache partition is a whole read, never could-not-look (code review of
+    /// CLOUD-2315).
     #[test]
     fn a_transcript_is_tallied_where_no_cache_can_be_kept() {
         let dir = crate::scratch::scratch("transcript-no-cache");
         std::fs::create_dir_all(&dir).expect("scratch");
-        let blocked = dir.join("state");
-        std::fs::write(&blocked, "a file, so nothing is made under it").expect("block");
-        crate::testing::contain_state(&blocked);
         let path = dir.join("session.jsonl");
         let text = format!("{}\n{}\n", POOL[0], POOL[1]);
         std::fs::write(&path, &text).expect("transcript");
         assert_eq!(
-            tally_appended(&path, RecordShape::Jsonl).map(|tally| tally.counts()),
+            tally_under(&path, RecordShape::Jsonl, None).map(|tally| tally.counts()),
             Some(
                 parse(&text, "t", RecordShape::Jsonl)
                     .expect("parses")

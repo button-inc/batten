@@ -136,7 +136,8 @@ fn is_partition(name: &str) -> bool {
 /// partition — the flat layout entries were written in before partitions
 /// existed. Best-effort: another process pruning the same directory, or one
 /// writing into a partition removed here, costs a miss and never a wrong answer.
-//MUTANT in-use-partition-pruned|s@^        if made.elapsed().is_ok_and(\x7cage\x7c age < IN_USE) {$@        if false {@|a_partition_in_use_is_kept_past_the_bound
+//MUTANT in-use-partition-pruned|s@^        if rank < IN_USE_PARTITIONS - 1 \&\& made.elapsed().is_ok_and(\x7cage\x7c age < IN_USE) {$@        if false {@|a_partition_in_use_is_kept_past_the_bound
+//MUTANT in-use-partitions-unbounded|s@^        if rank < IN_USE_PARTITIONS - 1 \&\& made@        if made@|a_partition_in_use_is_kept_past_the_bound
 fn prune(root: &Path, own: &str) {
     let Ok(entries) = std::fs::read_dir(root) else {
         return;
@@ -164,26 +165,32 @@ fn prune(root: &Path, own: &str) {
         partitions.push((made, path));
     }
     partitions.sort_by_key(|(made, _)| std::cmp::Reverse(*made));
-    for (made, path) in partitions.into_iter().skip(KEPT_PARTITIONS - 1) {
-        if made.elapsed().is_ok_and(|age| age < IN_USE) {
+    for (rank, (made, path)) in partitions.into_iter().enumerate().skip(KEPT_PARTITIONS - 1) {
+        if rank < IN_USE_PARTITIONS - 1 && made.elapsed().is_ok_and(|age| age < IN_USE) {
             continue;
         }
         let _ = std::fs::remove_dir_all(path);
     }
 }
 
-/// A partition used this recently is in use, and [`prune`] keeps it past the
-/// bound: a burst of rebuilds — a mutation sweep, a test loop — must not evict
-/// the installed hook between two of its calls (code review of CLOUD-2315). It
-/// exceeds [`USE_REFRESH`] by far, so a binary in use is always inside it.
+/// A partition used this recently is in use, and [`prune`] keeps it past
+/// [`KEPT_PARTITIONS`]: a burst of rebuilds — a mutation sweep, a test loop —
+/// must not evict the installed hook between two of its calls (code review of
+/// CLOUD-2315). It exceeds [`USE_REFRESH`] by far, so a binary in use is always
+/// inside it.
 const IN_USE: std::time::Duration = std::time::Duration::from_hours(1);
+
+/// The hard bound, in use or not: a sweep building hundreds of binaries in an
+/// hour keeps this many, newest first. A binary in use refreshes each minute,
+/// and a rebuild takes seconds at least, so the installed hook stays inside it.
+const IN_USE_PARTITIONS: usize = 16;
 
 /// The key for an entry: the running binary, a format tag the caller bumps when
 /// its encoding changes, and every input the value is a function of.
 #[must_use]
 pub fn key(format: &str, inputs: &[&[u8]]) -> String {
-    // Unnamed, the binary has no partition to read or write a keyed entry in
-    // ([`root_under`]), so the empty spelling here never files one.
+    // Unnamed, the binary has no partition ([`root_under`]), so no entry it
+    // could read or write is ever filed under the empty spelling here.
     let binary = running_binary().unwrap_or_default();
     let mut fields: Vec<&[u8]> = Vec::with_capacity(inputs.len() + 3);
     fields.push(format.as_bytes());
@@ -681,25 +688,28 @@ mod tests {
     }
 
     /// Partitions used within the hour are in use, and a new partition's prune
-    /// keeps every one of them past the bound: a burst of rebuilds never evicts
-    /// a binary between two of its calls.
+    /// keeps them past [`KEPT_PARTITIONS`] — up to the hard bound, which holds
+    /// however many rebuilds an hour sees.
     #[test]
     fn a_partition_in_use_is_kept_past_the_bound() {
         let dir = scratch("partitions-in-use");
         let root = dir.join("cache");
-        let others = [
-            "0000000000000001",
-            "0000000000000002",
-            "0000000000000003",
-            "0000000000000004",
-        ];
-        for name in others {
+        let others: Vec<String> = (1..=IN_USE_PARTITIONS + 4)
+            .map(|n| format!("{n:016x}"))
+            .collect();
+        for name in &others {
             std::fs::create_dir_all(root.join(name)).expect("partition");
         }
         let _ = root_under(&dir).expect("root");
-        for name in others {
-            assert!(root.join(name).is_dir(), "{name} is in use and kept");
-        }
+        let kept = others
+            .iter()
+            .filter(|name| root.join(name).is_dir())
+            .count();
+        assert_eq!(
+            kept,
+            IN_USE_PARTITIONS - 1,
+            "in use is kept past the bound of {KEPT_PARTITIONS}, never past {IN_USE_PARTITIONS}"
+        );
     }
 
     /// A file whose coarse change time reads a moment BEFORE the entry's fine

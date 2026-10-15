@@ -133,10 +133,13 @@ pub fn describe_cached(dir: &Path, base_ref: Option<&str>) -> Result<(String, Ve
     // this module exists to prevent (see the module docs), reintroduced by a
     // shortcut rather than by a skip.
     let stamps = stamp_tracked(dir, &tracked);
+    // Resolved once for the read and the write.
+    let state = state_dir(dir);
+    let path = state.as_deref().and_then(cache_path);
 
     if let Some(stamps) = stamps.as_ref()
-        && let Some(path) = state_dir(dir).and_then(|state| cache_path(&state))
-        && let Some(epoch) = read_cache(&path, &cache_key(&tracked, stamps), stamps)
+        && let Some(path) = path.as_deref()
+        && let Some(epoch) = read_cache(path, &cache_key(&tracked, stamps), stamps)
     {
         return Ok((epoch, tracked));
     }
@@ -147,10 +150,10 @@ pub fn describe_cached(dir: &Path, base_ref: Option<&str>) -> Result<(String, Ve
     // before the change, and the next run would serve a hash of bytes that are
     // already gone.
     if let Some(stamps) = stamp_tracked(dir, &tracked)
-        && let Some(state) = state_dir(dir)
-        && let Some(path) = cache_path(&state)
+        && let Some(state) = state.as_deref()
+        && let Some(path) = path.as_deref()
     {
-        write_cache(&path, &cache_key(&tracked, &stamps), &epoch);
+        write_cache(path, &cache_key(&tracked, &stamps), &epoch);
         // The retired record sat beside the state rather than under `cache/`.
         let _ = std::fs::remove_file(state.join(RETIRED_FILE));
     }
