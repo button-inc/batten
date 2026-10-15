@@ -4310,8 +4310,14 @@ mod tests {
         .expect("manifest");
         fs::write(
             root.join("crates/k/src/a/b.rs"),
-            "//MUTANT-SUITE crates/k/tests/it/flows.rs\n//MUTANT-SUITE crates/k/tests/it/more.rs\n\
-             //MUTANT-SUITE crates/k/tests/solo.rs\n//MUTANT-SUITE crates/k/src/lib.rs\n",
+            [
+                "crates/k/tests/it/flows.rs",
+                "crates/k/tests/it/more.rs",
+                "crates/k/tests/solo.rs",
+                "crates/k/src/lib.rs",
+            ]
+            .map(|suite| format!("//{SUITE}{suite}\n"))
+            .concat(),
         )
         .expect("source");
         fs::write(root.join("crates/k/src/main.rs"), "").expect("main");
