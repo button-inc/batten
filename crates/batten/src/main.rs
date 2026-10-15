@@ -13,6 +13,11 @@ use std::process::ExitCode;
 use anyhow::Result;
 use batten::output::{self, Mode};
 
+/// mimalloc, not the platform allocator (CLOUD-2315): see the workspace
+/// manifest's `mimalloc` row for the measurement.
+#[global_allocator]
+static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 fn main() -> ExitCode {
     // BEFORE THE OUTPUT MODE, LET ALONE THE PARSER (CLOUD-1455). When the kernel
     // runs a provisioned tool's launcher it re-enters this binary, and everything

@@ -701,6 +701,12 @@ regex-syntax = "0.8"
 # format such as `postcard` cannot decode. Not a new supply-chain surface: the
 # lock already resolves it at this version through `regorus`.
 rmp-serde = "1"
+# The global allocator (CLOUD-2315). glibc's malloc was 35% of the instructions
+# a warm `batten adjudicate` ran — a short-lived process that allocates a
+# parsed config, bytecode and JSON trees and frees them all at exit. mimalloc
+# is what `uv` and `ruff` ship for the same profile; its C source builds through
+# `cc`, which the lock already carries.
+mimalloc = { version = "0.1", default-features = false }
 semver = "1"
 tar = "0.4"
 serde = { version = "1", features = ["derive"] }
