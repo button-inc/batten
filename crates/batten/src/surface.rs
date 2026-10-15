@@ -7993,7 +7993,6 @@ pub const SURFACE: &[CommandDecl] = &[
     // engine is swapped atomically over each copy whose bytes or stamp differ,
     // and a satisfied or absent pin writes nothing. It reads only the `engine`
     // line, never the config, so it runs outside any repository too.
-    // unreached: "engine install" CLOUD-2203 the generated install.sh runs it; the committed script is swapped once a release carries this verb
     CommandDecl {
         path: "engine install",
         id: "engine.install",
