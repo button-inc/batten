@@ -8666,7 +8666,7 @@ trace\:"Add everything"))' \
 ;;
 (dist)
 _arguments "${_arguments_options[@]}" : \
-'--build-tool=[How to build for the target\: cargo, cross or zigbuild (default\: \$DIST_BUILD_TOOL, else cargo)]:build_tool:_default' \
+'--build-tool=[How to build for the target\: cargo, cross, zigbuild or cargo-dist (default\: \$DIST_BUILD_TOOL, else cargo)]:build_tool:_default' \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \

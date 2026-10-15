@@ -5216,7 +5216,7 @@ complete -c batten -n "__fish_batten_using_subcommand sbom" -l no-color -d 'Neve
 complete -c batten -n "__fish_batten_using_subcommand sbom" -l no-input -d 'Never prompt; treat the run as unattended'
 complete -c batten -n "__fish_batten_using_subcommand sbom" -s y -l yes -d 'Confirm a destructive operation that would otherwise refuse'
 complete -c batten -n "__fish_batten_using_subcommand sbom" -s h -l help -d 'Print help (see more with \'--help\')'
-complete -c batten -n "__fish_batten_using_subcommand dist" -l build-tool -d 'How to build for the target: cargo, cross or zigbuild (default: $DIST_BUILD_TOOL, else cargo)' -r
+complete -c batten -n "__fish_batten_using_subcommand dist" -l build-tool -d 'How to build for the target: cargo, cross, zigbuild or cargo-dist (default: $DIST_BUILD_TOOL, else cargo)' -r
 complete -c batten -n "__fish_batten_using_subcommand dist" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"

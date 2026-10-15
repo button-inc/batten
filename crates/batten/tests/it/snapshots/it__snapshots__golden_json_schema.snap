@@ -1308,7 +1308,7 @@ expression: stdout_of(&output)
           "long": "build-tool",
           "takes_value": true,
           "positional": false,
-          "help": "How to build for the target: cargo, cross or zigbuild (default: $DIST_BUILD_TOOL, else cargo)"
+          "help": "How to build for the target: cargo, cross, zigbuild or cargo-dist (default: $DIST_BUILD_TOOL, else cargo)"
         },
         {
           "name": "stem",
