@@ -705,8 +705,11 @@ rmp-serde = "1"
 # a warm `batten adjudicate` ran — a short-lived process that allocates a
 # parsed config, bytecode and JSON trees and frees them all at exit. mimalloc
 # is what `uv` and `ruff` ship for the same profile; its C source builds through
-# `cc`, which the lock already carries.
-mimalloc = { version = "0.1", default-features = false }
+# `cc`, which the lock already carries. `no_thp` because the default commits
+# and populates whole arenas on Linux: measured, it cut page faults 3,080 -> 380
+# and RAISED system time 13.6 -> 17-21 ms with a 52 MB peak RSS, where `no_thp`
+# keeps glibc's system time and the user-time win (20-22 -> 13-14 ms).
+mimalloc = { version = "0.1", default-features = false, features = ["no_thp"] }
 semver = "1"
 tar = "0.4"
 serde = { version = "1", features = ["derive"] }

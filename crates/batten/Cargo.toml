@@ -124,7 +124,6 @@ regex-syntax.workspace = true
 schemars.workspace = true
 semver.workspace = true
 rmp-serde.workspace = true
-mimalloc.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
@@ -176,6 +175,12 @@ signal-hook.workspace = true
 # is `std`, and its Windows analogue is not.
 [target.'cfg(windows)'.dependencies]
 winapi-util.workspace = true
+
+# The global allocator (CLOUD-2315), Linux only: its C source needs a platform
+# SDK to link on macOS, which `macos_link.rs` holds the macOS graph clear of, and
+# the hook's per-call budget is measured on Linux.
+[target.'cfg(target_os = "linux")'.dependencies]
+mimalloc.workspace = true
 
 # The running programs' executables on macOS (CLOUD-2197); Linux reads `/proc`.
 [target.'cfg(target_os = "macos")'.dependencies]
