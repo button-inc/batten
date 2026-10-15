@@ -113,13 +113,12 @@ fn terminated(dir: &Path, undo: &str, settled: bool) -> Option<i32> {
 /// The child half: arm the unwind, say so, and wait to be signalled.
 ///
 /// Ignored, because it is not a case: a run that is not spawned by one of the
-/// cases below has no repository to arm over, and returns.
+/// cases below has no repository to arm over, and fails rather than passing
+/// over nothing.
 #[test]
 #[ignore = "the child the cases below spawn; it arms over the repository they name"]
 fn armed_child() {
-    let Ok(dir) = std::env::var(CHILD) else {
-        return;
-    };
+    let dir = std::env::var(CHILD).expect("spawned by a case below, which names the repository");
     let undo = std::env::var(UNDO).expect("the head to unwind to");
     speculation::arm(Path::new(&dir), "work", &undo);
     if std::env::var_os(SETTLED).is_some() {
