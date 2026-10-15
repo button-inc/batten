@@ -2240,7 +2240,7 @@ pub fn eject(root: &Path, config: &Path, rules: &[Rule], target: &str) -> anyhow
 
     std::fs::create_dir_all(root.join(&folder))?;
     for (member, path) in closure.iter().zip(&written) {
-        crate::durable::replace(&root.join(path), ejected_source(manifest, member))?;
+        crate::durable::replace(root.join(path), ejected_source(manifest, member))?;
     }
 
     let mut except: Vec<String> = row.except.clone();

@@ -1,0 +1,16 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-preset-eject 1  batten 
+.SH NAME
+batten\-preset\-eject \- Copy a preset module and its call closure into policy/<preset>/ and load the copies instead
+.SH SYNOPSIS
+\fBbatten preset eject\fR [\fB\-h\fR|\fB\-\-help\fR] <\fItarget\fR> 
+.SH DESCRIPTION
+Copy a preset module and its call closure into policy/<preset>/ and load the copies instead
+.SH OPTIONS
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fItarget\fR>
+The module to eject, as <preset>/<module>, e.g. claude\-code\-cloud/plan\-mode\-refuses\-writes

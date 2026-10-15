@@ -10095,7 +10095,11 @@ fn ejected_behind(
             let mut paths: Vec<String> = entries
                 .filter_map(Result::ok)
                 .filter_map(|entry| entry.file_name().into_string().ok())
-                .filter(|file| file.ends_with(".rego"))
+                .filter(|file| {
+                    Path::new(file)
+                        .extension()
+                        .is_some_and(|extension| extension.eq_ignore_ascii_case("rego"))
+                })
                 .map(|file| format!("{}/{file}", bundle.trim_end_matches('/')))
                 .collect();
             paths.sort();

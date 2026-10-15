@@ -1,0 +1,20 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-preset 1  batten 
+.SH NAME
+batten\-preset \- Take a vendored preset\*(Aqs modules into this repository
+.SH SYNOPSIS
+\fBbatten preset\fR [\fB\-h\fR|\fB\-\-help\fR] <\fIsubcommands\fR>
+.SH DESCRIPTION
+Take a vendored preset\*(Aqs modules into this repository
+.SH OPTIONS
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.SH SUBCOMMANDS
+.TP
+batten\-preset\-eject(1)
+Copy a preset module and its call closure into policy/<preset>/ and load the copies instead
+.TP
+batten\-preset\-help(1)
+Print this message or the help of the given subcommand(s)

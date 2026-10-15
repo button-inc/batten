@@ -117,6 +117,17 @@ pub const VENDORED_DOCS: &[VendoredDoc] = &[
         dont: &["wrap the program in another one to hide it"],
     },
     VendoredDoc {
+        id: "module pin stale",
+        why: Some(
+            "A copy taken out of a preset stops receiving the preset's fixes, and nothing else says one shipped",
+        ),
+        act: &[
+            "read what the preset changed since the version the copy's header records",
+            "take what applies by hand, then raise the recorded version",
+        ],
+        dont: &["raise the version without reading what changed"],
+    },
+    VendoredDoc {
         id: "rule read missing",
         why: Some(
             "A rule changed by a reader who never saw why it exists loses the reason it was written",

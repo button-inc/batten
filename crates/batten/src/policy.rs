@@ -1056,13 +1056,7 @@ pub fn load(
             // refuse, arriving through the one source that bypasses it.
             if checks != ModuleChecks::SkipOnHotPath {
                 check_tree_paths_are_emittable(rule, &bundle, source_key)?;
-                check_no_inline_regex(
-                    rule,
-                    &bundle,
-                    &declared_patterns,
-                    source_key,
-                    &BTreeMap::new(),
-                )?;
+                check_no_inline_regex(rule, &bundle, &declared_patterns, source_key)?;
                 check_verdicts_are_declared(rule, &bundle, &registry, source_key)?;
                 record_raised(rule, &bundle, &mut emitted, &mut per_rule);
             }
@@ -1096,12 +1090,12 @@ pub fn load(
 
         if checks != ModuleChecks::SkipOnHotPath {
             check_tree_paths_are_emittable(rule, &bundle, where_it_came_from)?;
-            check_no_inline_regex(
+            check_copy_regex(
                 rule,
                 &bundle,
                 &declared_patterns,
                 where_it_came_from,
-                &ejected_originals(&sources),
+                &sources,
             )?;
             check_verdicts_are_declared(rule, &bundle, &registry, where_it_came_from)?;
             record_raised(rule, &bundle, &mut emitted, &mut per_rule);
@@ -2978,6 +2972,28 @@ fn emitted_verdicts(bundle: &Bundle) -> BTreeSet<String> {
 /// exception to it: a pattern is a declaration the config author wrote — the
 /// class `config show` exists to echo — not content read out of a subject file.
 fn check_no_inline_regex(
+    rule: &Rule,
+    bundle: &Bundle,
+    declared: &BTreeSet<&str>,
+    source: &str,
+) -> Result<()> {
+    check_patterns(rule, bundle, declared, source, &BTreeMap::new())
+}
+
+/// [`check_no_inline_regex`] for an in-repo row whose `sources` may include
+/// copies `batten preset eject` wrote (CLOUD-2290). A wrapper rather than a
+/// fifth argument at the call site, which `load` has no line to spare for.
+fn check_copy_regex(
+    rule: &Rule,
+    bundle: &Bundle,
+    declared: &BTreeSet<&str>,
+    source: &str,
+    sources: &[(String, String)],
+) -> Result<()> {
+    check_patterns(rule, bundle, declared, source, &ejected_originals(sources))
+}
+
+fn check_patterns(
     rule: &Rule,
     bundle: &Bundle,
     declared: &BTreeSet<&str>,

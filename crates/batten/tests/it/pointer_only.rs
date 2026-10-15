@@ -1910,6 +1910,14 @@ const CENSUS: &[Verb] = &[
     // `explain` answers about the class and this answers about the row, and the
     // two are different questions wherever a class has more than one raiser —
     // which is 66 of this config's 128 rows.
+    // CLOUD-2290. Driven with a preset the binary does not ship, so the census
+    // reads its refusal and the corpus is never written into.
+    Verb {
+        path: "preset eject",
+        args: &["no-such-preset/no-such-module"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
     Verb {
         path: "policy rule",
         // A row the corpus declares, so the verb reaches its echo arm rather than
