@@ -463,12 +463,12 @@ pub fn carries(dir: &Path, candidate: &str, tip: &str) -> bool {
 /// process holding the index lock) leaves the borrowed range in place, and
 /// [`BASE_REF`] is then the only record of it, which [`recover`] reads.
 ///
-/// **A PUBLISHED BET IS LEFT TO THE NEXT LAP** ([`published`]). Its unwind owes
-/// the remote a correction too, which `land`'s own settle makes from the ref; a
-/// local reset that deleted it would leave the remote carrying the range with
-/// nothing on disk pointing at it.
+/// **A PUBLISHED BET IS LEFT TO THE NEXT LAP**: the push [`disarm`]s it. Its
+/// unwind owes the remote a correction too, which `land`'s own settle makes from
+/// the ref; a local reset that deleted it would leave the remote carrying the
+/// range with nothing on disk pointing at it.
 //MUTANT-SUITE crates/batten/tests/it/land_signal.rs
-//MUTANT signal-leaves-borrowed-range|s@^        if crate::gitwrite::reset_hard(&at, &full, &unwind_to).is_err() {$@        if true {@|a_sigterm_mid_speculation_leaves_the_branch_on_its_own_head
+//MUTANT signal-leaves-borrowed-range|s@^        if crate::gitwrite::reset_hard(&at, &full, &unwind_to).is_ok() {$@        if false {@|a_sigterm_mid_speculation_leaves_the_branch_on_its_own_head
 //MUTANT signal-keeps-base-ref|s@^        let _ = crate::gitwrite::delete_ref(&at, BASE_REF);$@@|a_sigterm_mid_speculation_leaves_the_branch_on_its_own_head
 pub fn arm(root: &Path, branch: &str, undo: &str) {
     let (at, full, unwind_to) = (
@@ -476,31 +476,18 @@ pub fn arm(root: &Path, branch: &str, undo: &str) {
         format!("refs/heads/{branch}"),
         undo.to_owned(),
     );
-    PUBLISHED.store(false, std::sync::atomic::Ordering::SeqCst);
     crate::exec::on_terminate(move || {
-        if PUBLISHED.load(std::sync::atomic::Ordering::SeqCst) {
-            return;
+        if crate::gitwrite::reset_hard(&at, &full, &unwind_to).is_ok() {
+            let _ = crate::gitwrite::delete_ref(&at, BASE_REF);
+            let _ = crate::gitwrite::delete_ref(&at, LIVE_REF);
         }
-        if crate::gitwrite::reset_hard(&at, &full, &unwind_to).is_err() {
-            return;
-        }
-        let _ = crate::gitwrite::delete_ref(&at, BASE_REF);
-        let _ = crate::gitwrite::delete_ref(&at, LIVE_REF);
     });
     #[cfg(unix)]
     watch_signals();
 }
 
-/// Whether the armed bet's range has been pushed (see [`arm`]).
-static PUBLISHED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-
-/// The armed bet's range reached the remote, so a signal leaves it to the next
-/// lap's settle, which corrects the remote as well as the branch.
-pub fn published() {
-    PUBLISHED.store(true, std::sync::atomic::Ordering::SeqCst);
-}
-
-/// The bet settled, so a signal has nothing left to unwind.
+/// Nothing is left for a signal to unwind: the bet settled, or its range was
+/// pushed and only the next lap's settle can correct the remote.
 //MUTANT-SUITE crates/batten/tests/it/land_signal.rs
 //MUTANT disarm-inert|s@^    crate::exec::clear_on_terminate();$@@|a_sigterm_after_the_bet_settled_leaves_the_branch_alone
 pub fn disarm() {
