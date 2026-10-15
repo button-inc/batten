@@ -22060,7 +22060,9 @@ fn capture_response(
     // budget refusal. `BUDGET_EXHAUSTED` would send a `doctor` reader to the
     // wrong remedy, which is the whole point of a reason id. The response just
     // stored is kept (CLOUD-2302): this call is about to point at it.
-    if capture::evict_to_budget(&root, capture_budget().as_ref(), Some(&stored.digest)).is_err() {
+    if capture::evict_to_budget_keeping(&root, capture_budget().as_ref(), Some(&stored.digest))
+        .is_err()
+    {
         note(capture::STORE_UNWRITABLE);
     }
 }
@@ -22088,7 +22090,7 @@ fn record_absent_response(
     // one does: a host that sends no response appends a row per post-tool call
     // and mints no blob, so nothing else would ever bring the log inside its
     // record bound — and `next_order` scans that log on every later call.
-    if capture::evict_to_budget(&root, capture_budget().as_ref(), None).is_err() {
+    if capture::evict_to_budget(&root, capture_budget().as_ref()).is_err() {
         push_capture_notice(advice, capture::STORE_UNWRITABLE);
     }
 }

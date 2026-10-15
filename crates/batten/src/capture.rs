@@ -2186,18 +2186,25 @@ pub const DEFAULT_RESPONSE_MAX_RECORDS: u64 = 1024;
 /// advisory overflow names no call row, so it falls after the ordered ones; a
 /// RESPONSE no row names goes first (CLOUD-2302).
 ///
-/// `keep` is the digest the calling call just stored, which this call never
-/// evicts: a pointer printed for it must name something.
-///
 /// # Errors
 ///
 /// Returns an error when the store cannot be read or a record cannot be removed.
-pub fn evict_to_budget(
+pub fn evict_to_budget(repo_root: &Path, config: Option<&CaptureConfig>) -> Result<usize> {
+    evict_to_budget_keeping(repo_root, config, None)
+}
+
+/// [`evict_to_budget`], never evicting `keep`: the digest the calling call
+/// just stored, which a pointer printed for it must still name (CLOUD-2302).
+///
+/// # Errors
+///
+/// As [`evict_to_budget`].
+pub fn evict_to_budget_keeping(
     repo_root: &Path,
     config: Option<&CaptureConfig>,
     keep: Option<&str>,
 ) -> Result<usize> {
-    evict_to_budget_in(&captures_dir(repo_root)?, config, keep)
+    evict_to_budget_in_keeping(&captures_dir(repo_root)?, config, keep)
 }
 
 /// [`evict_to_budget`] over a store directory named outright — [`store_in`]'s
@@ -2206,10 +2213,19 @@ pub fn evict_to_budget(
 /// # Errors
 ///
 /// As [`evict_to_budget`].
+pub fn evict_to_budget_in(dir: &Path, config: Option<&CaptureConfig>) -> Result<usize> {
+    evict_to_budget_in_keeping(dir, config, None)
+}
+
+/// [`evict_to_budget_keeping`] over a store directory named outright.
+///
+/// # Errors
+///
+/// As [`evict_to_budget`].
 //MUTANT reread-ranked-by-first-row|s@^            latest.insert(found.digest.as_str(), (at, is_builtin_result(row)));$@            latest.entry(found.digest.as_str()).or_insert((at, is_builtin_result(row)));@|a_response_read_again_is_as_new_as_its_latest_call
 //MUTANT unnamed-response-last|s@^        \.filter(|record| unnamed(record) \&\& response(record))$@        .filter(|_| false)@|an_unnamed_response_is_evicted_before_a_recorded_one_and_an_advisory_is_not
 //MUTANT kept-digest-evicted|s@^        if keep == Some(record.digest.as_str()) {$@        if false {@|the_digest_a_call_just_stored_survives_its_own_eviction
-pub fn evict_to_budget_in(
+pub fn evict_to_budget_in_keeping(
     dir: &Path,
     config: Option<&CaptureConfig>,
     keep: Option<&str>,
@@ -3068,7 +3084,7 @@ mod tests {
             max_bytes: Some(1),
             max_records: Some(1),
         };
-        assert_eq!(evict_to_budget_in(&root, Some(&tight), None).unwrap(), 0);
+        assert_eq!(evict_to_budget_in(&root, Some(&tight)).unwrap(), 0);
         assert_eq!(
             list_in(&root).unwrap().len(),
             4,
@@ -3094,7 +3110,7 @@ mod tests {
             max_bytes: None,
             max_records: Some(2),
         };
-        assert_eq!(evict_to_budget_in(&root, Some(&two), None).unwrap(), 1);
+        assert_eq!(evict_to_budget_in(&root, Some(&two)).unwrap(), 1);
         let left: Vec<String> = list_in(&root)
             .unwrap()
             .into_iter()
@@ -3122,7 +3138,7 @@ mod tests {
             max_bytes: None,
             max_records: Some(1),
         };
-        assert_eq!(evict_to_budget_in(&root, Some(&one), None).unwrap(), 1);
+        assert_eq!(evict_to_budget_in(&root, Some(&one)).unwrap(), 1);
         let left: Vec<String> = list_in(&root)
             .unwrap()
             .into_iter()
@@ -3148,7 +3164,7 @@ mod tests {
         let root = scratch_store("evict-default");
         store_in(&root, Stream::Response, b"small").unwrap();
         // Well inside the default, so nothing goes...
-        assert_eq!(evict_to_budget_in(&root, None, None).unwrap(), 0);
+        assert_eq!(evict_to_budget_in(&root, None).unwrap(), 0);
         // ...and the default is a real bound rather than "no bound": the same
         // store under a table of one record evicts, which an unbounded reading
         // could never do.
@@ -3158,7 +3174,7 @@ mod tests {
             max_bytes: None,
             max_records: Some(0),
         };
-        assert_eq!(evict_to_budget_in(&root, Some(&one), None).unwrap(), 1);
+        assert_eq!(evict_to_budget_in(&root, Some(&one)).unwrap(), 1);
     }
 
     #[test]
@@ -3183,7 +3199,7 @@ mod tests {
             max_bytes: None,
             max_records: Some(1),
         };
-        assert_eq!(evict_to_budget_in(&root, Some(&one), None).unwrap(), 1);
+        assert_eq!(evict_to_budget_in(&root, Some(&one)).unwrap(), 1);
         let left: Vec<String> = list_in(&root)
             .unwrap()
             .into_iter()
@@ -3219,7 +3235,7 @@ mod tests {
         // Well past `max_records * 4` rows, all naming the one deduplicated blob.
         for _ in 0..12 {
             record_call_in(&root, &row("s", Some(&stored.digest), None)).unwrap();
-            evict_to_budget_in(&root, Some(&one), None).unwrap();
+            evict_to_budget_in(&root, Some(&one)).unwrap();
         }
         let rows = calls_in(&root).unwrap();
         assert!(
@@ -3262,20 +3278,14 @@ mod tests {
             max_bytes: None,
             max_records: Some(records),
         };
-        assert_eq!(
-            evict_to_budget_in(&root, Some(&budget(2)), None).unwrap(),
-            1
-        );
+        assert_eq!(evict_to_budget_in(&root, Some(&budget(2))).unwrap(), 1);
         assert_eq!(
             responses_left(&root),
             vec![recorded.digest.clone()],
             "the unnamed response outlived the recorded one"
         );
         // One more out: the recorded response goes, the advisory stays last.
-        assert_eq!(
-            evict_to_budget_in(&root, Some(&budget(1)), None).unwrap(),
-            1
-        );
+        assert_eq!(evict_to_budget_in(&root, Some(&budget(1))).unwrap(), 1);
         let left: Vec<String> = list_in(&root)
             .unwrap()
             .into_iter()
@@ -3302,7 +3312,7 @@ mod tests {
             max_records: None,
         };
         assert_eq!(
-            evict_to_budget_in(&root, Some(&none), Some(&kept.digest)).unwrap(),
+            evict_to_budget_in_keeping(&root, Some(&none), Some(&kept.digest)).unwrap(),
             1
         );
         assert_eq!(
