@@ -517,7 +517,9 @@ reason = "dispatch the code-review skill"
     // nextest runs each case in its own process, so the move is this case's:
     // the receipt store is read from the working directory, as on a lap.
     std::env::set_current_dir(&dir).expect("enter the fixture");
-    let now = std::time::SystemTime::now();
+    // No row here declares a `max_age`, so the instant decides nothing; a fixed
+    // one keeps the clock out of the assertion.
+    let now = std::time::UNIX_EPOCH;
 
     let owed = batten::land_ready_owes(&dir, now)
         .expect("the authority resolves")
