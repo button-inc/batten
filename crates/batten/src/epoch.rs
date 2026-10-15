@@ -323,7 +323,7 @@ mod tests {
             changed,
         };
         let tracked = vec!["batten.toml".to_owned()];
-        let before = crate::cache::now() - std::time::Duration::from_secs(60);
+        let before = crate::cache::now().saturating_sub(std::time::Duration::from_secs(60));
         let key = cache_key(&tracked, &[stamp(before)]);
         write_cache(&path, &key, "the-epoch");
         assert_eq!(

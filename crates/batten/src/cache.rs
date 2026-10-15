@@ -14,7 +14,7 @@
 //!
 //! * **A key is every input the value is a function of, by CONTENT** — never a
 //!   timestamp of an input. git's racy-index problem, PEP 552's hash-based
-//!   `.pyc`, Cargo's checksum freshness and ESLint's `content` strategy all moved
+//!   `.pyc`, Cargo's checksum freshness and `ESLint`'s `content` strategy all moved
 //!   off mtimes for the same reason: an mtime can stand still across an edit and
 //!   move across no edit. Keys go through [`crate::identity::cache_key`], the
 //!   crate's one framing.
@@ -130,7 +130,7 @@ fn prune(root: &Path, own: &str) {
             .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
         partitions.push((made, path));
     }
-    partitions.sort_by(|a, b| b.0.cmp(&a.0));
+    partitions.sort_by_key(|(made, _)| std::cmp::Reverse(*made));
     for (_, path) in partitions.into_iter().skip(KEPT_PARTITIONS - 1) {
         let _ = std::fs::remove_dir_all(path);
     }
@@ -321,8 +321,8 @@ fn align4(len: usize) -> usize {
 fn macho_uuid(head: &[u8]) -> Option<Vec<u8>> {
     const LC_UUID: u64 = 0x1b;
     let little = match head.get(..4)? {
-        [0xcf, 0xfa, 0xed, 0xfe] | [0xce, 0xfa, 0xed, 0xfe] => true,
-        [0xfe, 0xed, 0xfa, 0xcf] | [0xfe, 0xed, 0xfa, 0xce] => false,
+        [0xcf | 0xce, 0xfa, 0xed, 0xfe] => true,
+        [0xfe, 0xed, 0xfa, 0xcf | 0xce] => false,
         _ => return None,
     };
     let wide = matches!(head.first()?, 0xcf) || matches!(head.get(3)?, 0xcf);

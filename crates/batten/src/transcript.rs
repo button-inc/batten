@@ -649,6 +649,11 @@ pub struct Repeats {
 /// split point of generated sessions, so the backward scans stay the
 /// specification and this is only a faster way to compute them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, serde::Deserialize)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each `saw_*` is one independent presence the whole parse reports; \
+              they are not states of one machine an enum could name"
+)]
 pub struct Tally {
     turns: usize,
     tool_calls: usize,
@@ -684,6 +689,7 @@ pub struct Tally {
 //MUTANT tally-entry-trusted-after-replace|s@^        .filter(\x7csaved\x7c saved.head == head \&\& saved.offset <= len);$@        .filter(\x7c_\x7c true);@|the_incremental_reader_answers_as_a_whole_parse
 #[must_use]
 pub fn tally_appended(path: &Path, shape: RecordShape) -> Option<Tally> {
+    use std::io::{Read as _, Seek as _};
     let canonical = std::fs::canonicalize(path).ok()?;
     let label = canonical.to_string_lossy().into_owned();
     let meta = std::fs::metadata(&canonical).ok()?;
@@ -694,7 +700,6 @@ pub fn tally_appended(path: &Path, shape: RecordShape) -> Option<Tally> {
         TALLY_FORMAT,
         &[label.as_bytes(), file_identity(&meta).as_bytes()],
     );
-    use std::io::{Read as _, Seek as _};
     let mut file = std::fs::File::open(&canonical).ok()?;
     let len = usize::try_from(meta.len()).ok()?;
     // THE HEAD LINE AND THE TAIL, NEVER THE WHOLE FILE: reading 8.7 MB to skip

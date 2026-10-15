@@ -3739,15 +3739,15 @@ impl Policy {
                     if let Some(known) = answered.borrow().get(server) {
                         return *known;
                     }
-                    let resolves = resolved.mcp.as_ref().is_some_and(|mcp| {
+                    let reachable = resolved.mcp.as_ref().is_some_and(|mcp| {
                         !matches!(
                             crate::mcp::wiring(mcp, root, server),
                             Err(crate::mcp::Unresolved::NotFound { .. }
                                 | crate::mcp::Unresolved::Undeclared)
                         )
                     });
-                    answered.borrow_mut().insert(server.to_owned(), resolves);
-                    resolves
+                    answered.borrow_mut().insert(server.to_owned(), reachable);
+                    reachable
                 })
             },
             facts: resolved.facts.clone(),

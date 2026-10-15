@@ -17561,6 +17561,15 @@ fn destructive_call_facts(
     (discards, singleton)
 }
 
+/// The per-call memos one `run_hook` holds for its life (CLOUD-2315): one config
+/// load and one evaluation per bundle per input, and the on-disk parse cache —
+/// the per-call path is the one that pays a full parse per process, and every
+/// other verb parses as before (`config::persist_parses`).
+fn hook_call_memos() -> (HookLoadScope, policy::AnswerScope) {
+    config::persist_parses();
+    (HookLoads::scope(), policy::answer_scope())
+}
+
 //MUTANT advice-beside-the-grant|s@^    if !matches!(decision, hook::Decision::Preapproved(_)) \x7c\x7c advice.is_empty() {$@    if true {@|a_preapproval_carries_the_calls_advice_in_one_document
 fn run_hook(
     harness: hook::Harness,
@@ -17571,11 +17580,7 @@ fn run_hook(
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
-    let _loads = HookLoads::scope();
-    let _answers = policy::answer_scope();
-    // The per-call path is the one that pays a full parse per process; every
-    // other verb parses as before (CLOUD-2315, `config::persist_parses`).
-    config::persist_parses();
+    let _memos = hook_call_memos();
     let Some((raw, mut envelope, spilled, _spool)) = read_envelope(harness, mode, err)? else {
         return Ok(ExitCode::Success);
     };

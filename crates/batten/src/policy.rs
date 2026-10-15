@@ -910,23 +910,14 @@ pub fn load(
     // question, which is the shape `rules-drift` exists to refuse.
     let pattern_data = crate::pattern::data_document(patterns);
     let pattern_text = PatternText::new();
+    let data = (&pattern_data, &pattern_text);
     let declared_patterns: BTreeSet<&str> = patterns.iter().map(|p| p.id.as_str()).collect();
     // The refusal vocabulary (CLOUD-1050): the consumer's rows unioned with what
     // this binary ships. The vendored half is not optional politeness — a
     // preset reaches a consumer who wrote no `[[verdict]]` row at all, so
     // holding it to their table would make an enabled preset unloadable with no
-    // fix available.
-    //
-    // BUILT ONLY WHERE A CHECK READS IT (CLOUD-2315): the registry and the
-    // collidable tokens feed `check_verdicts_are_declared`, `check_finding_ids`
-    // and `check_collapse`, none of which runs on the hot path (CLOUD-885) — so
-    // building them there was 0.65 ms of every hook call spent on nothing.
-    let hot = checks == ModuleChecks::SkipOnHotPath;
-    let registry = if hot {
-        None
-    } else {
-        Some(registry_for(verdicts)?)
-    };
+    // fix available. Built only where a check reads it (`check_tables`).
+    let (registry, tokens) = check_tables(verdicts, checks)?;
     let mut emitted: BTreeSet<String> = BTreeSet::new();
     // What each policy row raises, kept PER ROW as well as unioned into
     // `emitted` (CLOUD-1638). The union answers "is every declared class
@@ -934,11 +925,6 @@ pub fn load(
     // classes THIS row raises — and a set that has already been merged cannot
     // answer it.
     let mut per_rule: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    let tokens = if hot {
-        BTreeSet::new()
-    } else {
-        collidable_tokens(verdicts)
-    };
     let mut bundles = Vec::new();
     // Keyed on the scope's WORD rather than the enum, so this set does not oblige
     // `RuleScope` to carry `Ord` for one local lookup — the derive would be a
@@ -1042,32 +1028,12 @@ pub fn load(
             // compiles only the modules at its own — which is what keeps a tree
             // module from being compiled onto the call surface, where it would
             // read keys the engine never builds there.
-            if !manifest.decides(rule.scope) {
-                let decided: Vec<&str> = manifest
-                    .scopes()
-                    .into_iter()
-                    .map(crate::rules::RuleScope::as_str)
-                    .collect();
-                return Err(UsageError::raise(format!(
-                    "rule `{}` enables the preset `{name}` at scope `{}`, but its modules \
-                     decide {} — at the wrong scope they read keys the engine never builds, \
-                     so the rule would evaluate and refuse nothing",
-                    rule.id,
-                    rule.scope.as_str(),
-                    decided.join(" and ")
-                )));
-            }
+            check_preset_scope(rule, manifest, name)?;
             // The provider comparison (CLOUD-1625), in its own function for
             // `clippy::too_many_lines`: a nameable step lifted out whole, which is
             // the remedy `lib.rs` takes for the same lint rather than raising a cap.
             let sources: Vec<(String, String)> = preset_sources(rule, manifest, name)?;
-            let bundle = compile_for(
-                root,
-                &rule.id,
-                &sources,
-                (&pattern_data, &pattern_text),
-                checks,
-            )?;
+            let bundle = compile_for(root, &rule.id, &sources, data, checks)?;
             let declared = bundle.declared.clone();
             check_predicate_severity(rule, &declared, source_key)?;
             // A PRESET IS A MODULE TOO, and this branch's `continue` skipped the
@@ -1075,16 +1041,16 @@ pub fn load(
             // preset, so a preset reading an unemittable `input.tree` key would
             // have loaded as a dead gate — the exact failure the check exists to
             // refuse, arriving through the one source that bypasses it.
-            if checks != ModuleChecks::SkipOnHotPath {
-                check_tree_paths_are_emittable(rule, &bundle, source_key)?;
-                check_no_inline_regex(rule, &bundle, &declared_patterns, source_key)?;
-                check_verdicts_are_declared(
+            if let Some(registry) = registry.as_deref() {
+                let raised = (&mut emitted, &mut per_rule);
+                check_loaded(
                     rule,
                     &bundle,
-                    registry.as_deref().unwrap_or_default(),
+                    (&declared_patterns, None),
+                    registry,
                     source_key,
+                    raised,
                 )?;
-                record_raised(rule, &bundle, &mut emitted, &mut per_rule);
             }
             claim_ids(&mut ids, &declared, source_key)?;
             bundles.push(bundle.with_severity(rule));
@@ -1106,13 +1072,7 @@ pub fn load(
         // one engine from N sources, which is the whole of CLOUD-837. The hot
         // path reads it from the bytecode cache when nothing it is a function
         // of has changed (CLOUD-2236).
-        let bundle = compile_for(
-            root,
-            &rule.id,
-            &sources,
-            (&pattern_data, &pattern_text),
-            checks,
-        )?;
+        let bundle = compile_for(root, &rule.id, &sources, data, checks)?;
         let declared = bundle.declared.clone();
 
         // The pointer a bundle-level fault is reported against.
@@ -1120,22 +1080,16 @@ pub fn load(
 
         check_predicate_severity(rule, &declared, where_it_came_from)?;
 
-        if checks != ModuleChecks::SkipOnHotPath {
-            check_tree_paths_are_emittable(rule, &bundle, where_it_came_from)?;
-            check_copy_regex(
+        if let Some(registry) = registry.as_deref() {
+            let raised = (&mut emitted, &mut per_rule);
+            check_loaded(
                 rule,
                 &bundle,
-                &declared_patterns,
+                (&declared_patterns, Some(sources.as_slice())),
+                registry,
                 where_it_came_from,
-                &sources,
+                raised,
             )?;
-            check_verdicts_are_declared(
-                rule,
-                &bundle,
-                registry.as_deref().unwrap_or_default(),
-                where_it_came_from,
-            )?;
-            record_raised(rule, &bundle, &mut emitted, &mut per_rule);
         }
 
         claim_ids(&mut ids, &declared, where_it_came_from)?;
@@ -1149,6 +1103,74 @@ pub fn load(
         check_collapse(rules, &per_rule, &tokens)?;
     }
     Ok(bundles)
+}
+
+/// The verdict registry and the collidable tokens, built exactly off the hot path
+/// (CLOUD-2315): they feed `check_loaded`, `check_finding_ids` and
+/// `check_collapse`, none of which runs there (CLOUD-885), and building them on
+/// every hook call was 0.65 ms spent on nothing. `Some` registry is therefore
+/// also what gates [`check_loaded`].
+fn check_tables(
+    verdicts: &[crate::verdict::DeclaredVerdict],
+    checks: ModuleChecks,
+) -> Result<(
+    Option<Vec<crate::verdict::DeclaredVerdict>>,
+    BTreeSet<String>,
+)> {
+    if checks == ModuleChecks::SkipOnHotPath {
+        return Ok((None, BTreeSet::new()));
+    }
+    Ok((Some(registry_for(verdicts)?), collidable_tokens(verdicts)))
+}
+
+/// Refuse a preset enabled at a scope none of its modules decide (CLOUD-1181,
+/// CLOUD-1672) — see the call site in [`load`] for why this precedes
+/// compilation. Lifted out whole for `clippy::too_many_lines`.
+fn check_preset_scope(rule: &Rule, manifest: &crate::preset::Manifest, name: &str) -> Result<()> {
+    if manifest.decides(rule.scope) {
+        return Ok(());
+    }
+    let decided: Vec<&str> = manifest
+        .scopes()
+        .into_iter()
+        .map(crate::rules::RuleScope::as_str)
+        .collect();
+    Err(UsageError::raise(format!(
+        "rule `{}` enables the preset `{name}` at scope `{}`, but its modules \
+         decide {} — at the wrong scope they read keys the engine never builds, \
+         so the rule would evaluate and refuse nothing",
+        rule.id,
+        rule.scope.as_str(),
+        decided.join(" and ")
+    )))
+}
+
+/// The checks one loaded bundle owes off the hot path (CLOUD-885): the tree keys
+/// it reads are emittable, it cites no inline regex, every class it raises is
+/// declared, and what it raises is recorded for the load's own closing checks.
+/// Lifted out of [`load`] whole, where both the preset and the module arm ran it,
+/// for `clippy::too_many_lines`.
+fn check_loaded(
+    rule: &Rule,
+    bundle: &Bundle,
+    (declared_patterns, sources): (&BTreeSet<&str>, Option<&[(String, String)]>),
+    registry: &[crate::verdict::DeclaredVerdict],
+    source: &str,
+    (emitted, per_rule): (
+        &mut BTreeSet<String>,
+        &mut BTreeMap<String, BTreeSet<String>>,
+    ),
+) -> Result<()> {
+    check_tree_paths_are_emittable(rule, bundle, source)?;
+    // A module row's sources may be copies `batten preset eject` wrote
+    // (CLOUD-2290); a preset arm passes none and takes the plain check.
+    match sources {
+        Some(sources) => check_copy_regex(rule, bundle, declared_patterns, source, sources)?,
+        None => check_no_inline_regex(rule, bundle, declared_patterns, source)?,
+    }
+    check_verdicts_are_declared(rule, bundle, registry, source)?;
+    record_raised(rule, bundle, emitted, per_rule);
+    Ok(())
 }
 
 /// The pattern table's text and its digest, written once per load by the first

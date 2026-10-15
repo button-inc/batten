@@ -1326,10 +1326,7 @@ pub fn declare_for_process(dir: &Path) {
     // 7.85 ms of a call budgeted at 10. Where the parse cache holds a validated
     // `Config` for exactly this text, its `forge` IS the answer; anywhere else the
     // lenient read stands as it was.
-    if let Some(config) = cached_parse(&text, &path.to_string_lossy()) {
-        if let Some(forge) = config.forge {
-            crate::rest::declare(forge);
-        }
+    if declared_from_cache(&text, &path.to_string_lossy()) {
         return;
     }
     let Ok(only) = toml::from_str::<ForgeOnly>(&text) else {
@@ -4343,17 +4340,16 @@ fn parse_remembered(text: &str, source: &str) -> Result<Config> {
         path.as_deref()
             .and_then(|path| read_cached_parse(path, key))
     });
-    let config = match cached {
-        Some(config) => config,
-        None => {
-            let config = parse_ungated(text, source)?;
-            if let Some((Some(path), key)) = &persisted {
-                write_cached_parse(path, key, &config);
-            }
-            config
+    let config = if let Some(config) = cached {
+        config
+    } else {
+        let config = parse_ungated(text, source)?;
+        if let Some((Some(path), key)) = &persisted {
+            write_cached_parse(path, key, &config);
         }
+        config
     };
-    remember(text, source, &config);
+    remember(text, source, config.clone());
     Ok(config)
 }
 
@@ -4361,19 +4357,37 @@ fn parse_remembered(text: &str, source: &str) -> Result<Config> {
 /// the hook's prologue reads the authority by its absolute path and the resolve
 /// by `./batten.toml`, and keyed on the spelling the two missed each other and
 /// decoded the same 583 KB authority twice in one call.
-static LAST: std::sync::Mutex<Option<(String, String, Config)>> = std::sync::Mutex::new(None);
+///
+/// The text is held as the SAME `Arc` [`read_text`] handed out where it can be
+/// (CLOUD-2315), so a hook call no longer copies the 956 KB authority into the
+/// memo, and a later read of the same file matches by address before bytes.
+type LastParse = Option<(std::sync::Arc<str>, String, Config)>;
+static LAST: std::sync::Mutex<LastParse> = std::sync::Mutex::new(None);
 
-//MUTANT config-parse-unremembered|s@^    (remembered_text == text \&\& \*remembered_source == named).then(\x7c\x7c config.clone())$@    None@|one_authority_is_parsed_once_per_process
-fn remembered(text: &str, source: &str) -> Option<Config> {
+/// Whether the memo holds exactly `text` from `source`, and if so, `with` over it.
+//MUTANT config-parse-unremembered|s@^    same.then(\x7c\x7c with(config))$@    None@|one_authority_is_parsed_once_per_process
+fn with_remembered<T>(text: &str, source: &str, with: impl FnOnce(&Config) -> T) -> Option<T> {
     let named = canonical_source(source);
     let last = LAST.lock().ok()?;
     let (remembered_text, remembered_source, config) = last.as_ref()?;
-    (remembered_text == text && *remembered_source == named).then(|| config.clone())
+    // The memo holds its `Arc` alive, so an equal address and length IS that
+    // allocation; anything else is compared by bytes.
+    let same_bytes = (std::ptr::eq(remembered_text.as_ptr(), text.as_ptr())
+        && remembered_text.len() == text.len())
+        || **remembered_text == *text;
+    let same = same_bytes && *remembered_source == named;
+    same.then(|| with(config))
 }
 
-fn remember(text: &str, source: &str, config: &Config) {
+fn remembered(text: &str, source: &str) -> Option<Config> {
+    with_remembered(text, source, Config::clone)
+}
+
+/// Keep `config`, moved in, as the parse of `text` from `source`.
+fn remember(text: &str, source: &str, config: Config) {
+    let held = shared_text(text).unwrap_or_else(|| std::sync::Arc::from(text));
     if let Ok(mut last) = LAST.lock() {
-        *last = Some((text.to_owned(), canonical_source(source), config.clone()));
+        *last = Some((held, canonical_source(source), config));
     }
 }
 
@@ -4402,9 +4416,9 @@ static PERSIST_PARSES: std::sync::atomic::AtomicBool = std::sync::atomic::Atomic
 /// lossless round trip over this repository's own authority, so a field the
 /// encoding drops fails a test before it can be served.
 ///
-/// MessagePack, measured: a hit costs 1.9 ms (read, key, integrity, decode)
-/// against the 16 ms parse, and the hook path went 81.0 -> 62.8 ms mean on one
-/// container. It is the slowest of the binary formats in the shared benchmark;
+/// `MessagePack`, measured: a hit is one read, a key, an integrity check and a
+/// decode — the decode 4.3M instructions under callgrind — against the 16 ms
+/// parse, and the hook path went 81.0 -> 62.8 ms mean on one container. It is the slowest of the binary formats in the shared benchmark;
 /// the faster ones either cannot decode `Config`'s `untagged` types (postcard,
 /// bitcode's serde mode) or need a derive on every config type (rkyv).
 pub fn persist_parses() {
@@ -4427,20 +4441,41 @@ fn parse_cache_path(source: &str) -> Option<std::path::PathBuf> {
     )
 }
 
-/// The validated `Config` the parse cache holds for exactly `text` from `source`,
-/// when the cache is on for this process; never a parse.
-fn cached_parse(text: &str, source: &str) -> Option<Config> {
+/// Declare the `[forge]` table of the validated `Config` the parse cache holds
+/// for exactly `text` from `source`, and say whether it held one; never a parse,
+/// and off unless the cache is on for this process. The decoded `Config` is
+/// moved into the memo for the resolve that follows rather than cloned out to a
+/// caller that reads one table.
+fn declared_from_cache(text: &str, source: &str) -> bool {
     if !PERSIST_PARSES.load(std::sync::atomic::Ordering::Relaxed) {
-        return None;
+        return false;
     }
-    if let Some(config) = remembered(text, source) {
-        return Some(config);
+    let forge = with_remembered(text, source, |config| config.forge.clone()).or_else(|| {
+        let config = read_cached_parse(&parse_cache_path(source)?, &parse_cache_key(text, source))?;
+        let forge = config.forge.clone();
+        remember(text, source, config);
+        Some(forge)
+    });
+    let Some(forge) = forge else {
+        return false;
+    };
+    if let Some(forge) = forge {
+        crate::rest::declare(forge);
     }
-    let config = read_cached_parse(&parse_cache_path(source)?, &parse_cache_key(text, source))?;
-    // Remembered for the resolve that follows in the same process.
-    remember(text, source, &config);
-    Some(config)
+    true
 }
+
+/// The `Arc` [`read_text`] last handed out, when `text` IS it — same address,
+/// same length — so a memo can hold it instead of a copy.
+fn shared_text(text: &str) -> Option<std::sync::Arc<str>> {
+    let last = LAST_TEXT.lock().ok()?;
+    let (_, _, held) = last.as_ref()?;
+    (std::ptr::eq(held.as_ptr(), text.as_ptr()) && held.len() == text.len())
+        .then(|| std::sync::Arc::clone(held))
+}
+
+type HeldText = Option<(String, std::time::Duration, std::sync::Arc<str>)>;
+static LAST_TEXT: std::sync::Mutex<HeldText> = std::sync::Mutex::new(None);
 
 /// The authority's text, read once per process while the file is unchanged
 /// (CLOUD-2315).
@@ -4458,8 +4493,6 @@ fn cached_parse(text: &str, source: &str) -> Option<Config> {
 /// As [`fs::read_to_string`], whose error a missing or unreadable file still
 /// returns.
 pub fn read_text(path: &Path) -> io::Result<std::sync::Arc<str>> {
-    type Held = Option<(String, std::time::Duration, std::sync::Arc<str>)>;
-    static LAST_TEXT: std::sync::Mutex<Held> = std::sync::Mutex::new(None);
     let Some(stamp) = crate::cache::stamp(path) else {
         return fs::read_to_string(path).map(std::sync::Arc::from);
     };
