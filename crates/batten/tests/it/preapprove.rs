@@ -715,17 +715,69 @@ fn outside_plan_mode_a_write_is_not_the_presets_to_refuse() {
     assert_not_plan_refused(&unmoded);
 }
 
+/// The preset that grants a read, beside a substitution row that refuses `grep`
+/// over a repository path.
+///
+/// A fixture rather than this repository's config, because this repository
+/// retired its own substitution row (CLOUD-2362) and the case is about the
+/// engine's ordering, not that row.
+const REFUSING_CONFIG: &str = r#"version = 1
+
+[[rule]]
+id = "plan write refused"
+kind = "policy"
+scope = "mediated_call"
+preset = "claude-code-cloud"
+severity = "deny"
+
+[[rule]]
+id = "fixture grep refused"
+kind = "pipeline"
+scope = "mediated_call"
+severity = "deny"
+substitutes = ["grep"]
+reason = "a fixture substitution row"
+"#;
+
 /// DENY FIRST. `grep` is on the engine's read-only floor, so the preset would
-/// grant it — and this repository's `tool run loose` refuses it through Bash.
-/// The refusal must stand.
+/// grant it — and the fixture's substitution row refuses it through Bash. The
+/// refusal must stand.
 #[test]
 fn a_refused_call_is_never_preapproved() {
-    let (decision, reason) = verdict(&shell("default", "grep foo README.md")).unwrap_or_default();
+    let dir = common::scratch("preapprove-refused");
+    let home = common::scratch("preapprove-refused-home");
+    common::write(&dir, "batten.toml", REFUSING_CONFIG);
+    common::init_repo(&dir);
+    let mut invocation = common::batten();
+    invocation
+        .current_dir(&dir)
+        .state_home(&home)
+        .args(["adjudicate", "--harness", "claude-code"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let mut child = invocation.spawn().expect("spawn batten adjudicate");
+    {
+        use std::io::Write as _;
+        child
+            .stdin
+            .take()
+            .expect("the child's stdin")
+            .write_all(shell("default", "grep foo docs/README.md").as_bytes())
+            .expect("write the envelope");
+    }
+    let outcome = child.wait_with_output().expect("run batten adjudicate");
+    let inner = stdout(&outcome)
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("the host reads JSON"))
+        .find_map(|document| document.get("hookSpecificOutput").cloned())
+        .unwrap_or_default();
     assert_eq!(
-        decision, "deny",
-        "the refusal must outrank the grant: {reason}"
+        inner["permissionDecision"], "deny",
+        "the refusal must outrank the grant: {inner}"
     );
-    assert!(reason.contains("tool run loose"), "{reason}");
+    assert!(inner.to_string().contains("tool run loose"), "{inner}");
 }
 
 /// A warn-severity module of the fixture's own, so the advice this case needs

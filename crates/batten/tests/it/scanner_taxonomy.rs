@@ -10,7 +10,7 @@
 //!
 //! WHAT THIS FILE ASSERTS, AND WHAT IT CANNOT. It asserts **presence**: the
 //! rules file still names an instrument for each of the three question classes,
-//! still names the gate over the substitution axis, still keeps row one free of
+//! names no retired gate as if it still refused, still keeps row one free of
 //! a bare product name, still points at CLOUD-310 for the disposition rather
 //! than restating it, still states the no-extension-and-exits-`0` defect beside
 //! the recommendation, and is still routed to from `AGENTS.md`'s index. That
@@ -22,14 +22,13 @@
 //! is feedforward, the rule says so on its own row, and a §7 claiming otherwise
 //! here would be the same defect CLOUD-844 is about.
 //!
-//! **The substitution axis is a different matter, and saying otherwise was a
-//! defect of its own** (CLOUD-998). This file used to state flatly that it was
-//! "not a gate over tool choice"; `tool select other` is exactly that, over
-//! the command line, and its refusal redirects to the rules file. So the claim
-//! here is narrowed to the axis it holds for, and one assertion now pins the
-//! gate's name into the prose. This is otherwise the same shape as
-//! `spawn_census.rs`'s assertion that `clippy.toml` names the spawn type: the
-//! prose carries the position, and the test keeps the prose from evaporating.
+//! **The substitution axis was gated for a while, and is not now** (CLOUD-2362).
+//! A row refused a shell text utility over a tracked path and redirected to the
+//! rules file, and while it stood this file pinned its name into the prose
+//! (CLOUD-998). It was retired for want of any evidence that it improved an
+//! outcome, so the assertion is inverted: a rules file still naming the gate
+//! tells a reader a refusal is coming that never will, which is CLOUD-998's
+//! defect the other way round.
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -56,7 +55,7 @@ const INDEX: &str = "AGENTS.md";
 ///
 /// ROW ONE NAMES A CAPABILITY, NOT A PRODUCT, and that is the correction
 /// CLOUD-998 landed. It used to pin the literal `` `grep` `` — the utility
-/// `tool select other` refuses over a tracked path — so the gate's own
+/// the substitution gate then refused over a tracked path — so the gate's own
 /// redirect sent a reader back to the refused call, and this assertion held the
 /// wrong answer in place. Naming a first-class tool instead would have been the
 /// same defect one layer over: which instruments a session carries varies, so
@@ -101,17 +100,16 @@ const INSTRUMENTS: &[(&str, &[&str])] = &[
 /// rather than copy.
 const DISPOSITION: &str = "CLOUD-310";
 
-/// The gate that decides the substitution axis, whose refusal redirects here.
+/// The retired gate over the substitution axis (CLOUD-2362).
 ///
-/// The rules file must name it. For its whole life the file asserted that no
-/// gate existed over instrument choice, which was true when written and false
-/// once this row landed — and a reader who believes no gate exists has no reason
-/// to expect the refusal (CLOUD-998).
-const SUBSTITUTION_GATE: &str = "tool select other";
+/// The rules file must NOT name it. While it stood the file had to, so a reader
+/// expected its refusal (CLOUD-998); now that it is gone, naming it would set up
+/// that same expectation for a refusal that never comes.
+const RETIRED_SUBSTITUTION_GATE: &str = "tool select other";
 
 /// The bare product names row one must not answer with.
 ///
-/// Both directions: the shell utility the gate refuses, and the first-class
+/// Both directions: the shell utilities, and the first-class
 /// tools that are absent in some sessions. Row one names the capability, so
 /// neither belongs in that cell.
 const BARE_PRODUCTS: &[&str] = &["`grep`", "`rg`", "`Grep`", "`Read`", "`Glob`"];
@@ -177,13 +175,12 @@ fn the_rules_state_the_no_extension_defect_beside_the_recommendation() {
 }
 
 #[test]
-fn the_rules_name_the_gate_over_the_substitution_axis() {
+fn the_rules_name_no_retired_gate_over_the_substitution_axis() {
     let text = rules_text();
     assert!(
-        text.contains(SUBSTITUTION_GATE),
-        "{RULES} must name `{SUBSTITUTION_GATE}` — its refusal redirects a reader here to choose \
-         between the question classes, and a file that does not mention the gate tells that \
-         reader no refusal is coming"
+        !text.contains(RETIRED_SUBSTITUTION_GATE),
+        "{RULES} names `{RETIRED_SUBSTITUTION_GATE}`, which CLOUD-2362 retired — a reader told a \
+         refusal is coming will expect one that never fires"
     );
 }
 

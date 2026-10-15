@@ -6226,7 +6226,12 @@ fn substitution_decision(
         // where a trailing `)` would otherwise stop
         // `(grep needle crates/batten/src/lib.rs)` from matching the path the row
         // selected on.
-        let Some(target) = tokens[program_index + 1..]
+        let candidates = if program == "find" {
+            find_start_points(operands)
+        } else {
+            operands
+        };
+        let Some(target) = candidates
             .iter()
             .take_while(|token| !token.contains('>') && !token.contains('<'))
             .map(|token| program_token(token))
@@ -6299,6 +6304,38 @@ fn followed_cd(
         return Some(target.to_path_buf());
     }
     current.map(|here| here.join(target))
+}
+
+/// The operands of a `find` that name where it searches, and nothing after them
+/// (CLOUD-2362).
+///
+/// `find`'s grammar puts its start points BEFORE its expression, and every token
+/// of the expression is a test, an action or the value one of those takes. So
+/// `-name '*.jsonl'` is a pattern, never a path. Read as one, `find / -name
+/// '*.jsonl'` searched from outside the repository and was refused on its
+/// pattern, which has an extension and so looked like a repository file.
+///
+/// The leading global options (`-H`, `-L`, `-P`, `-O<n>`, and `-D` with its
+/// value) come before the start points and are skipped. The first token after
+/// them that begins with `-`, `(` or `!` opens the expression and ends the
+/// list.
+//MUTANT find-expression-read-as-target|s@^    &operands\[start\.\.end\]$@    \&operands[start..]@|a_find_expression_operand_is_never_a_target
+fn find_start_points<'a>(operands: &'a [&'a str]) -> &'a [&'a str] {
+    let mut start = 0;
+    while let Some(token) = operands.get(start) {
+        match *token {
+            "-H" | "-L" | "-P" => start += 1,
+            "-D" => start += 2,
+            option if option.starts_with("-O") => start += 1,
+            _ => break,
+        }
+    }
+    let start = start.min(operands.len());
+    let end = operands[start..]
+        .iter()
+        .position(|token| token.starts_with(['-', '(', '!']))
+        .map_or(operands.len(), |offset| start + offset);
+    &operands[start..end]
 }
 
 /// Does this `substitutes` entry select this invocation?
