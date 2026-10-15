@@ -219,39 +219,22 @@ mutation = "never write it by hand — it records a human's answers, so put the 
 # "whatever is registered". The glob is wider than the derived set by exactly the
 # UNREGISTERED modules, and that is the safe direction: an unregistered module is
 # not protected, so this row is unreachable for one and costs nothing.
-# THE MEMORIES TREE, and the one row in this table that declares a `read`
-# (CLOUD-1258).
+# THE MEMORIES TREE: a mutation route only.
 #
-# The read half is the point. `no-tool-substitution` is `kind = "pipeline"` and
-# decides over shell argv, so a structured-tool call is invisible to it, and
-# `protected` crossed with `[[verb]]` enumerates MUTATIONS — CLOUD-442's port
-# says "reads stay allowed" in as many words. So a generic file read of a memory
-# was gated by nothing, measured 2026-08-31 with the Serena server healthy and
-# `read_memory` loadable.
+# It declared a `read = "read_memory"` too (CLOUD-1258), whose one stated reason
+# was that a path read couples the caller to the tree layout and CLOUD-868 would
+# move that tree into a private repository. CLOUD-868 was canceled (the memories
+# stay public), so CLOUD-2362 retired the read route: a path read returns the same
+# bytes, and the route cost a Serena round-trip and its first-use permission
+# faults (`mem:serena-setup`). The engine still offers the `read` key.
 #
-# It is not a style preference: a path read couples the caller to the tree
-# layout, and CLOUD-868 proposes moving that tree into a private repository.
-# `read_memory` survives the move; a hardcoded path does not. Every flat-path
-# read is an unmigrated call site, and this makes them unwritable now rather
-# than discoverable after the move breaks them.
-#
-# THE KEY IS OPTIONAL AND ITS ABSENCE IS THE "NOT OFFERED" ARM. A consumer whose
-# session does not carry Serena declares no `read` and is refused nothing — the
-# boundary cannot see whether an MCP server is healthy, so the question is
-# answered where it IS decidable, by the author who knows. That is CLOUD-998's
-# defect ruled out by construction rather than by care.
-#
-# The mutation half names the family rather than one tool because this row now
+# The mutation half names the family rather than one tool because this row
 # outranks the per-verb redirects for this class (CLOUD-280's tiering); the
-# per-verb answers stay reachable through `batten policy explain`.
+# per-verb answers stay reachable through `batten policy explain`. It stays
+# because `rename_memory` is the only route that rewrites `mem:` referrers.
 [[redirect]]
 glob = ".serena/memories/**"
 mutation = "use Serena's memory tools — `write_memory` to create, `edit_memory` to change in place, `rename_memory` to move (it is the only route that rewrites `mem:` referrers)"
-read = "read_memory"
-# `read_server = "serena"` (CLOUD-2229) is HELD until the release that carries
-# it: `main` pins v0.0.214, which does not know the key, and a config naming a
-# key its pinned release cannot read is refused at landing (CLOUD-2063). It
-# returns with the pin that can read it.
 
 [[redirect]]
 glob = "policy/**"
@@ -4032,54 +4015,12 @@ delta_sources = ["**"]
 # inherit the gate for it in the same preset.
 reason = "Name a shell program `.sh` or `.bash`; make a sibling it builds at run time a file the tree carries; and write no more shell than the base, since the `[census.shell]` homes may only lose shell lines."
 
-# The substitution family of the same kind (CLOUD-864). Measured over one
-# session's transcript: 34 of 38 Bash calls had a first-class tool that does the
-# job, and `Read`/`Grep`/`Glob` were used ZERO times — 15 `head -N`, 13 `grep`,
-# 12 `ls`, 5 `cat`, 5 `sed -n`, 2 `find -name`.
-#
-# THE ROW IS ON THIS KIND BECAUSE OF WHAT DISTINGUISHES THE TWO CASES, and there
-# is no other kind that can hold it. `grep pat crates/` answers a question `Grep`
-# answers better; `git ls-files | grep crates/batten` is a filter over another
-# command's output that no tool replaces. Same program, same operand, opposite
-# verdicts — only the POSITION separates them. A `shape` row cannot see it:
-# `matching_shape_rows` iterates every segment with no index in scope, so it
-# would refuse the filter too. This kind is already defined over what surrounds a
-# command, which is exactly the fact in question.
-#
-# The list is the consumer's, like `filters` above. Another repository's `awk` may
-# have no better answer available; here every one of these has one.
-#
-# WHAT IT DELIBERATELY DOES NOT CATCH, so nobody reads silence as coverage: a
-# path reached through a shell variable (`grep "$p" "$d"` names no path the
-# parser can see, and guessing would refuse work over an unnameable target); the
-# native `Grep`/`Read` tools, which arrive as structured input rather than a
-# command line; and anything outside the repository, which keeps the
-# `>/tmp/x.log` form the row above MANDATES allowed.
-[[rule]]
-id = "tool select other"
-kind = "pipeline"
-scope = "mediated_call"
-severity = "deny"
-#
-# `sed:-n` is QUALIFIED and the rest are not, on a distinction the corpus makes
-# and a bare name cannot. `sed -n '1,40p' f` prints a range — `Read(offset,
-# limit)`, and the single most-measured shape here. `sed 's/a/b/' f` transforms
-# the stream, which no first-class tool does, so refusing it would tell the
-# caller "a tool answers this directly" when none does. The other eight read a
-# file or list paths in every mode they have, so they need no qualifier.
-#
-# `wc` stays unqualified deliberately: `wc -l f` has no range-read equivalent,
-# but a count over a pattern answers the question that reaches for it, and the
-# reason text names that capability.
-substitutes = ["cat", "head", "tail", "sed:-n", "grep", "rg", "find", "ls", "wc"]
-#
-# THE REASON NAMES CAPABILITIES, NEVER PRODUCTS (CLOUD-998). It used to name
-# `Read(offset, limit)`, `Grep`, `Glob` and Serena's symbol tools as literals.
-# That is wrong wherever a session does not carry them — the structured surface
-# is not guaranteed present, and a remedy naming an absent tool is unactionable
-# in exactly the session that most needs one. The four questions below are what
-# is invariant; which instrument answers them is whatever the session has.
-reason = "Use the structured surface this session offers: a range of one file, a pattern across the tree, paths by glob, or what a name resolves to; `rules/scanning.md` picks between them. After a pipe these utilities are allowed."
+# The substitution family of the same kind once stood here: `tool select other`
+# (CLOUD-864) refused a shell text utility over a tracked path. CLOUD-2362
+# retired it. Its evidence counted how often it would fire, never an outcome it
+# improved, and about a third of its measured denials misparsed their subject
+# (CLOUD-1690). The engine still offers the family (`substitutes`) to any
+# consumer that declares one.
 
 [[rule]]
 id = "verdict guard missing"
@@ -5645,6 +5586,10 @@ max_tokens = 110000
 #   78  pointer  path read routed     (longest committed memory name)
 #   49  pointer  the Bash corpus      (`tool run loose`)
 #
+# CLOUD-2362 retired both of the last two rows from this config. The number
+# stands on the first, and `refusal_ceiling.rs` stages the retired substitution
+# row into its fixtures, so its class is still measured against this key.
+#
 # Declared here rather than as a constant in `crates/batten` for the reason
 # non-negotiable rule 1 gives: a consumer whose harness renders wider cannot move
 # a number compiled into the engine.
@@ -5658,6 +5603,8 @@ max_tokens = 96
 # compaction cycle. Measured 2026-10-03 the same way as the key above:
 #
 #  159  full  tool run loose / tool select other (the row's reason is the bulk)
+#
+# That row is a fixture row since CLOUD-2362, staged by `refusal_ceiling.rs`.
 #
 # 176 is that rounded up to a multiple of 16. `refusal::validate` still refuses a
 # value at or below `max_tokens`. NOT AN `[epoch]` FLOOR BUMP, for the reason the
