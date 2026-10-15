@@ -102,6 +102,20 @@ pub fn repo_state_dir(repo_root: &Path) -> Result<PathBuf> {
     Ok(state_root()?.join(name))
 }
 
+/// [`repo_state_dir`] under a data directory named outright rather than the one
+/// this process resolves — for a caller that hands the data directory to a CHILD
+/// through the environment and must name a path inside the child's store
+/// (CLOUD-2315: `perf`'s posttool arm empties one subtree of it per run).
+///
+/// # Errors
+///
+/// As [`derive_repo_name`].
+pub fn repo_state_dir_under(data_dir: &Path, repo_root: &Path) -> Result<PathBuf> {
+    Ok(data_dir
+        .join(APP_NAMESPACE)
+        .join(derive_repo_name(repo_root)?))
+}
+
 /// Derive the state-directory segment for the repository at `repo_root`:
 /// `<final path component>-<checkout digest>`, both resolved at runtime.
 ///

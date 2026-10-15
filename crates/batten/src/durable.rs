@@ -38,6 +38,30 @@
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
+/// Whether a write waits for the disk before returning (CLOUD-2315).
+///
+/// **BOTH TIERS ARE CRASH-ONLY AGAINST A PROCESS.** A temp file published by
+/// `rename` or `link` is complete before it has a name, so a killed writer
+/// leaves the old state or the new one whatever this says. `Synced` adds the one
+/// thing `Atomic` lacks: the record survives the MACHINE going down, because
+/// `fsync` put it on the disk rather than in a page cache.
+///
+/// **`Atomic` IS FOR A RECORD WHOSE LOSS ON POWER FAILURE COSTS NOTHING**, and
+/// only on the per-call hook path, where `fsync` is a latency lottery: measured
+/// 2026-10-15 on one container, the same capture's sync took 0.09 ms on one call
+/// and 211 ms on the next, depending on what else the disk was flushing. A
+/// sighting marker that is lost re-explains a class once; a hook's copy of a
+/// tool response is lost only with the session whose transcript holds it.
+/// Neither is reported to anyone as written, so persist-before-emit has nothing
+/// to protect there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Persist {
+    /// `fsync` the file (and a published name's directory) before returning.
+    Synced,
+    /// Publish atomically and return without waiting for the disk.
+    Atomic,
+}
+
 /// Append whole lines to `path` as ONE write, then sync.
 ///
 /// `text` is one or more lines; a missing trailing newline is supplied, so a
@@ -132,6 +156,22 @@ pub fn append_whole_lines(path: &Path, text: &str) -> std::io::Result<()> {
 ///
 /// Returns the I/O error when the file cannot be opened, written, or synced.
 pub fn append_with_mode(path: &Path, text: &str, mode: u32) -> std::io::Result<()> {
+    append_with_mode_as(path, text, mode, Persist::Synced)
+}
+
+/// [`append_with_mode`] at a chosen [`Persist`] tier. The record is still ONE
+/// `write(2)` on an `O_APPEND` handle, so concurrent appenders never interleave;
+/// `Atomic` only skips the wait for the disk.
+///
+/// # Errors
+///
+/// Returns the I/O error when the file cannot be opened, written, or synced.
+pub fn append_with_mode_as(
+    path: &Path,
+    text: &str,
+    mode: u32,
+    persist: Persist,
+) -> std::io::Result<()> {
     let mut buffer = String::with_capacity(text.len() + 1);
     buffer.push_str(text);
     if !buffer.ends_with('\n') {
@@ -148,7 +188,10 @@ pub fn append_with_mode(path: &Path, text: &str, mode: u32) -> std::io::Result<(
     let _ = mode;
     let mut file = options.open(path)?;
     file.write_all(buffer.as_bytes())?;
-    file.sync_all()
+    match persist {
+        Persist::Synced => file.sync_all(),
+        Persist::Atomic => Ok(()),
+    }
 }
 
 /// Replace `path`'s contents atomically: temp, sync, rename, sync the directory.
@@ -195,17 +238,35 @@ pub fn replace(path: impl AsRef<Path>, contents: impl AsRef<[u8]>) -> std::io::R
 /// removed on every path.
 //MUTANT exclusive-create-overwrites|s@^        Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),$@        Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => Ok(true),@|exactly_one_of_many_concurrent_creators_wins
 pub fn create_exclusive(path: &Path, contents: impl AsRef<[u8]>) -> std::io::Result<bool> {
+    create_exclusive_as(path, contents, Persist::Synced)
+}
+
+/// [`create_exclusive`] at a chosen [`Persist`] tier: exactly one concurrent
+/// caller still wins, and the winner's file is still complete before it has a
+/// name; `Atomic` only skips the wait for the disk.
+///
+/// # Errors
+///
+/// Any I/O error other than the target already existing; the temp file is
+/// removed on every path.
+pub fn create_exclusive_as(
+    path: &Path,
+    contents: impl AsRef<[u8]>,
+    persist: Persist,
+) -> std::io::Result<bool> {
     let directory = match path.parent() {
         Some(parent) if !parent.as_os_str().is_empty() => parent.to_path_buf(),
         _ => PathBuf::from("."),
     };
     let temp = temp_beside(path);
-    let linked =
-        write_temp(&temp, path, contents.as_ref()).and_then(|()| std::fs::hard_link(&temp, path));
+    let linked = write_temp_as(&temp, path, contents.as_ref(), persist)
+        .and_then(|()| std::fs::hard_link(&temp, path));
     let _ = std::fs::remove_file(&temp);
     match linked {
         Ok(()) => {
-            sync_directory(&directory);
+            if persist == Persist::Synced {
+                sync_directory(&directory);
+            }
             Ok(true)
         }
         Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
@@ -250,6 +311,15 @@ fn temp_name(target: &Path, pid: u32, nanos: u128, sequence: u64) -> PathBuf {
 }
 
 fn write_temp(temp: &Path, target: &Path, contents: &[u8]) -> std::io::Result<()> {
+    write_temp_as(temp, target, contents, Persist::Synced)
+}
+
+fn write_temp_as(
+    temp: &Path,
+    target: &Path,
+    contents: &[u8],
+    persist: Persist,
+) -> std::io::Result<()> {
     let mut file = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -258,7 +328,10 @@ fn write_temp(temp: &Path, target: &Path, contents: &[u8]) -> std::io::Result<()
         file.set_permissions(existing.permissions())?;
     }
     file.write_all(contents)?;
-    file.sync_all()
+    match persist {
+        Persist::Synced => file.sync_all(),
+        Persist::Atomic => Ok(()),
+    }
 }
 
 /// Sync the directory entry a rename created, so the rename survives a crash.
@@ -349,6 +422,50 @@ mod tests {
             std::fs::read_dir(&dir).expect("list").count(),
             1,
             "no temp file survives"
+        );
+    }
+
+    /// THE UNSYNCED TIER KEEPS EVERY PROPERTY BUT THE WAIT (CLOUD-2315): one
+    /// winner among racing creators, the winner's bytes whole, no temp left, and
+    /// an append that lands as one line. Only the disk sync is dropped.
+    #[test]
+    fn the_atomic_tier_keeps_exclusivity_and_whole_records() {
+        let dir = scratch("atomic-tier");
+        let path = dir.join("mark");
+        let winners: usize = std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..16)
+                .map(|n| {
+                    let path = &path;
+                    scope.spawn(move || {
+                        create_exclusive_as(path, format!("writer {n}"), Persist::Atomic)
+                            .expect("create")
+                    })
+                })
+                .collect();
+            handles
+                .into_iter()
+                .map(|handle| usize::from(handle.join().expect("join")))
+                .sum()
+        });
+        assert_eq!(winners, 1, "one creator, however many raced");
+        assert!(
+            std::fs::read_to_string(&path)
+                .expect("read")
+                .starts_with("writer "),
+            "the winner's contents, whole"
+        );
+        assert_eq!(
+            std::fs::read_dir(&dir).expect("list").count(),
+            1,
+            "no temp file survives"
+        );
+        let log = dir.join("log");
+        append_with_mode_as(&log, "one", 0o600, Persist::Atomic).expect("append");
+        append_with_mode_as(&log, "two\n", 0o600, Persist::Atomic).expect("append");
+        assert_eq!(
+            std::fs::read_to_string(&log).expect("read"),
+            "one\ntwo\n",
+            "each append is one terminated line"
         );
     }
 

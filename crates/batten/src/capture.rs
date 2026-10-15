@@ -874,6 +874,22 @@ pub fn store(repo_root: &Path, stream: Stream, bytes: &[u8]) -> Result<Capture> 
     store_in(&captures_dir(repo_root)?, stream, bytes)
 }
 
+/// [`store`] at a chosen [`crate::durable::Persist`] tier (CLOUD-2315): the
+/// record is published by `rename` either way, so a reader still sees "absent"
+/// or "complete"; `Atomic` only skips the wait for the disk.
+///
+/// # Errors
+///
+/// As [`store`].
+pub fn store_as(
+    repo_root: &Path,
+    stream: Stream,
+    bytes: &[u8],
+    persist: crate::durable::Persist,
+) -> Result<Capture> {
+    store_in_as(&captures_dir(repo_root)?, stream, bytes, persist)
+}
+
 /// [`store`] into a store directory named outright — [`Spool::open_in`]'s seam,
 /// for its reason: resolving the state root reads the OS data directory, which a
 /// unit test must not write into.
@@ -882,6 +898,20 @@ pub fn store(repo_root: &Path, stream: Stream, bytes: &[u8]) -> Result<Capture> 
 ///
 /// As [`store`].
 pub fn store_in(dir: &Path, stream: Stream, bytes: &[u8]) -> Result<Capture> {
+    store_in_as(dir, stream, bytes, crate::durable::Persist::Synced)
+}
+
+/// [`store_in`] at a chosen [`crate::durable::Persist`] tier.
+///
+/// # Errors
+///
+/// As [`store`].
+pub fn store_in_as(
+    dir: &Path,
+    stream: Stream,
+    bytes: &[u8],
+    persist: crate::durable::Persist,
+) -> Result<Capture> {
     let digest = identity::capture_fingerprint(stream.as_str(), bytes).to_hex();
     let dir = dir.to_path_buf();
     create_store_dir(&dir)?;
@@ -926,8 +956,10 @@ pub fn store_in(dir: &Path, stream: Stream, bytes: &[u8]) -> Result<Capture> {
     let (mut file, staging) = open_staging(&dir, &format!("{}-{digest}", stream.as_str()))?;
     file.write_all(bytes)
         .with_context(|| format!("write the capture {}", staging.display()))?;
-    file.sync_all()
-        .with_context(|| format!("sync the capture {}", staging.display()))?;
+    if persist == crate::durable::Persist::Synced {
+        file.sync_all()
+            .with_context(|| format!("sync the capture {}", staging.display()))?;
+    }
     drop(file);
     std::fs::rename(&staging, &path)
         .with_context(|| format!("publish the capture {}", path.display()))?;
@@ -2395,12 +2427,30 @@ pub fn record_call(repo_root: &Path, row: &CallRow) -> Result<()> {
     record_call_in(&captures_dir(repo_root)?, row)
 }
 
+/// [`record_call`] at a chosen [`crate::durable::Persist`] tier (CLOUD-2315):
+/// still one `write(2)` under the lock, so rows never interleave.
+///
+/// # Errors
+///
+/// As [`record_call`].
+pub fn record_call_as(
+    repo_root: &Path,
+    row: &CallRow,
+    persist: crate::durable::Persist,
+) -> Result<()> {
+    record_call_in_as(&captures_dir(repo_root)?, row, persist)
+}
+
 /// [`record_call`] into a store directory named outright — [`store_in`]'s seam.
 ///
 /// # Errors
 ///
 /// As [`record_call`].
 pub fn record_call_in(dir: &Path, row: &CallRow) -> Result<()> {
+    record_call_in_as(dir, row, crate::durable::Persist::Synced)
+}
+
+fn record_call_in_as(dir: &Path, row: &CallRow, persist: crate::durable::Persist) -> Result<()> {
     let dir = dir.to_path_buf();
     create_store_dir(&dir)?;
     let path = dir.join("calls");
@@ -2414,7 +2464,7 @@ pub fn record_call_in(dir: &Path, row: &CallRow) -> Result<()> {
     let mut minted = row.clone();
     minted.order = order;
     let line = serde_json::to_string(&minted).context("render a call row")?;
-    let appended = crate::durable::append_with_mode(&path, &line, STORE_FILE_MODE);
+    let appended = crate::durable::append_with_mode_as(&path, &line, STORE_FILE_MODE, persist);
     drop(lock);
     appended.with_context(|| format!("append to the call log {}", path.display()))?;
     Ok(())

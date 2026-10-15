@@ -17565,6 +17565,7 @@ fn run_hook(
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
+    let _loads = HookLoads::scope();
     let Some((raw, mut envelope, spilled, _spool)) = read_envelope(harness, mode, err)? else {
         return Ok(ExitCode::Success);
     };
@@ -21929,7 +21930,14 @@ fn write_records_for(
         return;
     };
     let recorders = policy.declared_recorders();
-    if recorders.is_empty() {
+    // NO ROW NAMES THIS TOOL, NOTHING IS BUILT (CLOUD-2315), on `record_mints`'
+    // reasoning: `append_all` and `defer_backgrounded` both select on this same
+    // tool selector, so a call no row names compiled every `[[pattern]]` and
+    // resolved the branch for nothing.
+    if !recorders
+        .iter()
+        .any(|row| rules::selects_tool_name(&row.tool, raw_tool))
+    {
         return;
     }
     // A BACKGROUNDED RESULT NAMES ITS TASK, NOT ITS OUTPUT (CLOUD-2214). Its
@@ -22406,7 +22414,15 @@ fn record_mints(overrides: &Overrides, envelope: &hook::Envelope) {
         return;
     };
     let declared = policy.declared_mints();
-    if declared.is_empty() {
+    // NO ROW NAMES THIS TOOL, NOTHING IS BUILT (CLOUD-2315). `mint_receipts`
+    // skips every row whose tool does not select this call, so the grammar
+    // below — every `[[pattern]]` compiled afresh, ~13 ms measured here — was
+    // paid on every PostToolUse call to be read by nothing. Same selector, asked
+    // first; a call some row names is untouched.
+    if !declared
+        .iter()
+        .any(|mint| rules::selects_tool_name(&mint.tool, &envelope.raw_tool))
+    {
         return;
     }
     // THE ANCHOR, NEVER THE CWD, and this is a measured defect rather than a
@@ -22485,7 +22501,16 @@ fn capture_response(
             return;
         }
     };
-    let Ok(stored) = capture::store(&root, capture::Stream::Response, &decoded.bytes) else {
+    // UNSYNCED, AND ONLY HERE (CLOUD-2315): this runs on every PostToolUse call,
+    // where a capture's `fsync` measured 0.09 ms on one call and 211 ms on the
+    // next. The host's transcript holds the same response, so a power failure
+    // loses a copy rather than the only record; `rename` still publishes it whole.
+    let Ok(stored) = capture::store_as(
+        &root,
+        capture::Stream::Response,
+        &decoded.bytes,
+        durable::Persist::Atomic,
+    ) else {
         note(capture::STORE_UNWRITABLE);
         record_absence(&root, envelope, harness, capture::STORE_UNWRITABLE, advice);
         return;
@@ -22516,7 +22541,7 @@ fn capture_response(
         digest: Some(stored.digest),
         absent: None,
     };
-    if capture::record_call(&root, &row).is_err() {
+    if capture::record_call_as(&root, &row, durable::Persist::Atomic).is_err() {
         // THE ONE UNRECORDABLE FAILURE (CLOUD-917 clause 4): the provenance write
         // itself. The advisory is the only channel left, which is why it is not
         // conditional on the row.
@@ -22588,7 +22613,7 @@ fn record_absence(
         digest: None,
         absent: Some(reason.to_owned()),
     };
-    if capture::record_call(root, &row).is_err() {
+    if capture::record_call_as(root, &row, durable::Persist::Atomic).is_err() {
         push_capture_notice(advice, capture::STORE_UNWRITABLE);
     }
 }
@@ -22838,10 +22863,112 @@ fn load_hook_config(overrides: &Overrides, harness: hook::Harness) -> Result<Hoo
     // clock; a waiver is only half a fact until a date is applied to it, so
     // folding the table into `Policy` would put an undecided value in the one
     // structure whose whole point is that everything in it is decided.
-    let resolved = resolve::resolve(here, overrides)?;
+    if let Some(loaded) = HookLoads::recall(here, overrides, harness) {
+        return Ok(loaded);
+    }
+    let resolved = match HookLoads::recall_resolved(here, overrides) {
+        Some(resolved) => resolved,
+        None => resolve::resolve(here, overrides)?,
+    };
     let policy =
         hook::Policy::from_resolved(&resolved, harness, here, overrides.config_from.as_deref())?;
-    Ok((policy, resolved.waivers, resolved.prune))
+    let loaded = (policy, resolved.waivers.clone(), resolved.prune.clone());
+    HookLoads::keep(here, overrides, harness, &resolved, &loaded);
+    Ok(loaded)
+}
+
+/// ONE CONFIG LOAD PER HOOK CALL, NOT ONE PER READER (CLOUD-2315).
+///
+/// A `PostToolUse` call reached `load_hook_config` from `record_agent_fact`,
+/// `record_mints` and `write_records`, then again from the adjudicator — each a
+/// full resolve of this repository's authority. Measured 2026-10-15 on one
+/// container: 21.8, 20.9 and 21.3 ms for the three recorders, 64 of the 73 ms
+/// `record_post_tool` took. The recorders' own comment had already named the
+/// fix: "a shared load across the three recorders is the right shape".
+///
+/// **SCOPED TO ONE `run_hook`, never the process.** The memo exists only while a
+/// [`HookLoads::scope`] guard is alive, and `run_hook` holds the only one, so a
+/// library caller or a unit test that rewrites a fixture's authority between two
+/// loads always reads the file again. Within one hook call the authority cannot
+/// change underneath it: nothing on that path writes `batten.toml` or a module.
+///
+/// Keyed on everything `load_hook_config` reads besides the tree — the authority
+/// root and the overrides — and, for the compiled policy, the harness too,
+/// because `from_resolved` builds a different policy per host.
+struct HookLoads {
+    resolved: Vec<((PathBuf, Overrides), resolve::Resolved)>,
+    loaded: Vec<((PathBuf, Overrides, hook::Harness), HookConfig)>,
+}
+
+thread_local! {
+    static HOOK_LOADS: std::cell::RefCell<Option<HookLoads>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// The guard [`HookLoads::scope`] returns: the memo dies with it.
+struct HookLoadScope;
+
+impl Drop for HookLoadScope {
+    fn drop(&mut self) {
+        HOOK_LOADS.with(|cell| *cell.borrow_mut() = None);
+    }
+}
+
+impl HookLoads {
+    /// Open the memo for the life of the returned guard.
+    fn scope() -> HookLoadScope {
+        HOOK_LOADS.with(|cell| {
+            *cell.borrow_mut() = Some(Self {
+                resolved: Vec::new(),
+                loaded: Vec::new(),
+            });
+        });
+        HookLoadScope
+    }
+
+    fn recall(here: &Path, overrides: &Overrides, harness: hook::Harness) -> Option<HookConfig> {
+        HOOK_LOADS.with(|cell| {
+            cell.borrow().as_ref().and_then(|loads| {
+                loads
+                    .loaded
+                    .iter()
+                    .find(|((root, held, host), _)| {
+                        root == here && held == overrides && *host == harness
+                    })
+                    .map(|(_, loaded)| loaded.clone())
+            })
+        })
+    }
+
+    fn recall_resolved(here: &Path, overrides: &Overrides) -> Option<resolve::Resolved> {
+        HOOK_LOADS.with(|cell| {
+            cell.borrow().as_ref().and_then(|loads| {
+                loads
+                    .resolved
+                    .iter()
+                    .find(|((root, held), _)| root == here && held == overrides)
+                    .map(|(_, resolved)| resolved.clone())
+            })
+        })
+    }
+
+    fn keep(
+        here: &Path,
+        overrides: &Overrides,
+        harness: hook::Harness,
+        resolved: &resolve::Resolved,
+        loaded: &HookConfig,
+    ) {
+        HOOK_LOADS.with(|cell| {
+            if let Some(loads) = cell.borrow_mut().as_mut() {
+                let key = (here.to_path_buf(), overrides.clone());
+                if !loads.resolved.iter().any(|(held, _)| *held == key) {
+                    loads.resolved.push((key.clone(), resolved.clone()));
+                }
+                loads.loaded.push(((key.0, key.1, harness), loaded.clone()));
+            }
+        });
+    }
 }
 
 /// Resolve the `exec` output predicates for this run (CLOUD-117).

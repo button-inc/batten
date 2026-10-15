@@ -438,7 +438,12 @@ pub fn first_sighting(root: &Path, context: &str, key: &str, full: &str) -> bool
     let _ = std::fs::create_dir_all(&dir);
     // An error other than "already there" answers TRUE: an unwritable store
     // means the next firing explains itself again, which is the safe direction.
-    crate::durable::create_exclusive(&path, full).unwrap_or(true)
+    //
+    // UNSYNCED (CLOUD-2315): this runs on every refused call, and a marker lost
+    // to a power failure costs one repeated explanation — the same answer as an
+    // unwritable store. Measured, its `fsync` was 40 ms of one deny.
+    crate::durable::create_exclusive_as(&path, full, crate::durable::Persist::Atomic)
+        .unwrap_or(true)
 }
 
 /// The one sentence a finding cannot carry itself, delivered once per epoch

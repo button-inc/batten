@@ -1712,8 +1712,22 @@ fn bench(
             .iter()
             .map(|(label, _)| format!("{state}-{label}"))
             .collect();
+        // THE CAPTURE STORE, NOT THE WHOLE ROOT (CLOUD-2315). Emptying the root
+        // also emptied the compiled-policy cache beside the store, so every run
+        // recompiled and synced all of this repository's modules — measured at
+        // 182 ms of a ~250 ms reading, a cost an agent pays once per checkout and
+        // the arm was publishing as the cost of every PostToolUse call. The store
+        // is the only state the two arms could leak into each other through, so
+        // it is the only thing emptied; warmup compiles the cache once per arm.
+        let stores = roots
+            .iter()
+            .map(|root| {
+                crate::state::repo_state_dir_under(Path::new(root), dir)
+                    .map(|state_dir| state_dir.join("captures").to_string_lossy().into_owned())
+            })
+            .collect::<Result<Vec<String>>>()?;
         args.push(String::from("--prepare"));
-        args.push(format!("rm -rf {}", roots.join(" ")));
+        args.push(format!("rm -rf {}", stores.join(" ")));
         arms.iter()
             .zip(&roots)
             .map(|((label, cmd), root)| (*label, state_prefixed(root, cmd)))
