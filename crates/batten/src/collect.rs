@@ -519,23 +519,26 @@ struct Unit {
     fingerprint: PathBuf,
     artifacts: Vec<PathBuf>,
     last_use: SystemTime,
+    /// A scratch entry or the staged copy, taken whole: a live run reads it
+    /// with no build lock held.
+    whole: bool,
 }
 
 /// Every unit under `tree`, at any depth: every `.fingerprint` directory, nested
 /// target triples and build trees included.
 //MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
-//MUTANT scratch-unit-ranked|s@^        .filter(\x7cfingerprints\x7c !fingerprints.starts_with(\&scratch))$@        .filter(\x7c_\x7c true)@|a_build_inside_fresh_scratch_is_never_collected
-fn units_in(tree: &Path) -> Vec<Unit> {
+//MUTANT scratch-unit-ranked|s@^        .filter(\x7cfingerprints\x7c !wholes.iter().any(\x7cwhole\x7c fingerprints.starts_with(whole)))$@        .filter(\x7c_\x7c true)@|a_build_inside_fresh_scratch_is_never_collected
+fn units_in(tree: &Path, fingerprints: Vec<PathBuf>, wholes: &[PathBuf]) -> Vec<Unit> {
     let mut units = Vec::new();
-    // SCRATCH IS ONE UNIT EACH, RANKED BY [`scratch_in`]: a test suite builds
+    // SCRATCH IS ONE UNIT EACH, RANKED BY [`whole_units`]: a test suite builds
     // whole trees under `tmp/`, and ranking their units one by one reached past
     // the working set that keeps a running suite's fixture whole. Measured on
     // #1132, the session's hook collected a running case's aged fixture unit
-    // and the case failed three runs in five.
-    let scratch = tree.join("tmp");
-    for fingerprints in crate::prune::directories_named(tree, ".fingerprint")
+    // and the case failed three runs in five. The staged copy is one unit for
+    // the same reason.
+    for fingerprints in fingerprints
         .into_iter()
-        .filter(|fingerprints| !fingerprints.starts_with(&scratch))
+        .filter(|fingerprints| !wholes.iter().any(|whole| fingerprints.starts_with(whole)))
     {
         let Some(profile) = fingerprints.parent().map(Path::to_path_buf) else {
             continue;
@@ -561,6 +564,7 @@ fn units_in(tree: &Path) -> Vec<Unit> {
                 last_use: last_use(&fingerprint),
                 profile: profile.clone(),
                 fingerprint,
+                whole: false,
             });
         }
     }
@@ -592,6 +596,7 @@ fn caches_in(tree: &Path, profile: &Path) -> Vec<Unit> {
             last_use: newest_write(&entry.path()),
             fingerprint: entry.path(),
             artifacts: Vec::new(),
+            whole: false,
         })
         .collect()
 }
@@ -602,32 +607,128 @@ fn caches_in(tree: &Path, profile: &Path) -> Vec<Unit> {
 //MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
 //MUTANT run-root-ignores-executables|s@artifact.is_file() \&\& artifact.extension().is_none_or(\x7cext\x7c ext == "exe")@false@|a_test_binary_a_live_run_built_is_never_collected
 fn read_by_a_run(unit: &Unit) -> bool {
-    unit.profile == unit.tree.join("tmp")
+    unit.whole
         || unit.artifacts.iter().any(|artifact| {
             artifact.is_file() && artifact.extension().is_none_or(|ext| ext == "exe")
         })
 }
 
-/// The test scratch a tree holds, one unit per entry under `tmp/`: cargo's
-/// `CARGO_TARGET_TMPDIR`, which integration suites fill with fixtures and
-/// nothing removes until the next run's setup — measured at 4.1GB on #1132.
-/// No build lock covers it; the working set keeps a running suite's fixtures.
-fn scratch_in(tree: &Path) -> Vec<Unit> {
-    let scratch = tree.join("tmp");
-    let Ok(entries) = std::fs::read_dir(&scratch) else {
-        return Vec::new();
-    };
-    entries
-        .filter_map(Result::ok)
-        .filter(|entry| entry.file_type().is_ok_and(|kind| !kind.is_symlink()))
-        .map(|entry| Unit {
-            tree: tree.to_path_buf(),
-            profile: scratch.clone(),
-            last_use: newest_write(&entry.path()),
-            fingerprint: entry.path(),
-            artifacts: Vec::new(),
+/// The name cargo's `CARGO_TARGET_TMPDIR` takes inside a build tree.
+const SCRATCH: &str = "tmp";
+
+/// The staged repository copy `batten mutate` keeps under the build root
+/// (`lib.rs`'s `root.join("target").join("mutate")`): the engine's own path,
+/// never a consumer's.
+const STAGED: &str = "mutate";
+
+/// The directories a pass takes whole rather than unit by unit (CLOUD-2286):
+/// the `tmp/` of `tree` and of every build tree nested in it, outermost only,
+/// and the staged copy.
+///
+/// MEASURED ON #1132, NEITHER WAS RANKED: `target/mutate` held 511 MB idle
+/// since the day before and `target/replay/tmp` 555 MB, and neither carries a
+/// `.fingerprint` of its own, so no pass could reach them while it removed the
+/// dependencies of the profiles the next lap built. A build tree is a
+/// fingerprint directory's grandparent — `replay` for `replay/debug` — and its
+/// `tmp/` is the scratch cargo gave that build's suites.
+//MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
+//MUTANT nested-scratch-unseen|s@^                .filter_map(\x7cfound\x7c Some(found.parent()?.parent()?.join(SCRATCH))),$@                .filter_map(\x7c_\x7c None::<PathBuf>),@|a_nested_build_trees_stale_scratch_is_collected
+//MUTANT staged-copy-unranked|s@^    if staged.is_dir() {$@    if false \&\& staged.is_dir() {@|an_idle_staged_copy_goes_before_a_built_profiles_units
+fn wholes_in(tree: &Path, fingerprints: &[PathBuf]) -> Vec<PathBuf> {
+    let mut scratch: Vec<PathBuf> = std::iter::once(tree.join(SCRATCH))
+        .chain(
+            fingerprints
+                .iter()
+                .filter_map(|found| Some(found.parent()?.parent()?.join(SCRATCH))),
+        )
+        .filter(|dir| dir.is_dir())
+        .collect();
+    scratch.sort();
+    scratch.dedup();
+    let mut wholes: Vec<PathBuf> = scratch
+        .iter()
+        .filter(|dir| {
+            !scratch
+                .iter()
+                .any(|outer| outer != *dir && dir.starts_with(outer))
         })
-        .collect()
+        .cloned()
+        .collect();
+    let staged = tree.join(STAGED);
+    if staged.is_dir() {
+        wholes.push(staged);
+    }
+    wholes
+}
+
+/// One unit per entry of each scratch directory, and the staged copy as one:
+/// cargo's `CARGO_TARGET_TMPDIR`, which integration suites fill with fixtures
+/// and nothing removes until the next run's setup — measured at 4.1GB on
+/// #1132. No build lock covers either; the working set keeps a running suite's
+/// fixtures, and a running sweep's staged copy, whole.
+///
+/// THE STAGED COPY IS DATED BY ITS NEWEST WRITE AT ANY DEPTH, because a sweep
+/// writes it deep: each row corrupts and restores one source, and a shallow
+/// read would date a running sweep's copy by the day it was first staged.
+fn whole_units(tree: &Path, wholes: &[PathBuf]) -> Vec<Unit> {
+    let mut units = Vec::new();
+    for whole in wholes {
+        if whole.file_name().is_some_and(|name| name == STAGED) {
+            units.push(Unit {
+                tree: tree.to_path_buf(),
+                profile: whole.clone(),
+                last_use: newest_write_within(whole),
+                fingerprint: whole.clone(),
+                artifacts: Vec::new(),
+                whole: true,
+            });
+            continue;
+        }
+        let Ok(entries) = std::fs::read_dir(whole) else {
+            continue;
+        };
+        units.extend(
+            entries
+                .filter_map(Result::ok)
+                .filter(|entry| entry.file_type().is_ok_and(|kind| !kind.is_symlink()))
+                .map(|entry| Unit {
+                    tree: tree.to_path_buf(),
+                    // EACH ENTRY IS ITS OWN PROFILE: one fresh fixture does not
+                    // shield every stale one beside it.
+                    profile: entry.path(),
+                    last_use: newest_write(&entry.path()),
+                    fingerprint: entry.path(),
+                    artifacts: Vec::new(),
+                    whole: true,
+                }),
+        );
+    }
+    units
+}
+
+/// The newest mtime anywhere under `path`, never following a link.
+fn newest_write_within(path: &Path) -> SystemTime {
+    let mut newest = std::fs::symlink_metadata(path)
+        .and_then(|meta| meta.modified())
+        .unwrap_or(SystemTime::UNIX_EPOCH);
+    let mut stack = vec![path.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.filter_map(Result::ok) {
+            let Ok(meta) = entry.metadata() else {
+                continue;
+            };
+            if let Ok(written) = meta.modified() {
+                newest = newest.max(written);
+            }
+            if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                stack.push(entry.path());
+            }
+        }
+    }
+    newest
 }
 
 /// The newest mtime of `path` and its immediate children: when a cache or a
@@ -942,14 +1043,17 @@ pub fn collect(request: &Request<'_>) -> Pass {
         removed += units;
         freed += bytes;
     }
-    let scratch: Vec<Unit> = locks
-        .iter()
-        .flat_map(|(tree, _)| scratch_in(tree))
-        .collect();
-    let live = ranked(
-        locks.iter().flat_map(|(tree, _)| units_in(tree)).collect(),
-        scratch,
-    );
+    // ONE WALK PER TREE: the fingerprint directories both name the nested
+    // build trees whose scratch is taken whole and are the units themselves.
+    let mut units = Vec::new();
+    let mut scratch = Vec::new();
+    for (tree, _) in &locks {
+        let fingerprints = crate::prune::directories_named(tree, ".fingerprint");
+        let wholes = wholes_in(tree, &fingerprints);
+        scratch.extend(whole_units(tree, &wholes));
+        units.extend(units_in(tree, fingerprints, &wholes));
+    }
+    let live = ranked(units, scratch);
     // WHY A PASS REMOVED WHAT IT DID, counted (CLOUD-2197's trace): measured on
     // #1132, a pass over hundreds of units older than the working set removed
     // none, and nothing said which guard stopped it.
@@ -1130,6 +1234,38 @@ pub fn collect_toward_max(
         wall_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
         held: pass.held,
     })
+}
+
+/// Block until each build lock among `held` has been free once, or `bound`
+/// passes (CLOUD-2286). `true` when every one was: the build that held it
+/// finished, so a second pass may reach what the first passed over.
+///
+/// THE WAIT IS THE LOCK ITSELF, NEVER A TIMER (CLOUD-1177): a thread takes
+/// each `.cargo-lock` blocking, exactly as cargo would, and lets go at once;
+/// the caller waits on that thread up to `bound`. A thread still blocked at the
+/// bound is left to finish on its own, and it holds the lock for no longer
+/// than taking it takes. A collector lock among `held` is another pass, not a
+/// build, and is not waited on.
+#[must_use]
+pub fn await_builds(held: &[PathBuf], bound: std::time::Duration) -> bool {
+    let builds: Vec<PathBuf> = held
+        .iter()
+        .filter(|lock| lock.file_name().is_some_and(|name| name == ".cargo-lock"))
+        .cloned()
+        .collect();
+    if builds.is_empty() {
+        return false;
+    }
+    let (done, finished) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for lock in &builds {
+            if let Ok(file) = std::fs::File::open(lock) {
+                let _ = file.lock();
+            }
+        }
+        let _ = done.send(());
+    });
+    finished.recv_timeout(bound).is_ok()
 }
 
 #[cfg(test)]

@@ -15827,6 +15827,7 @@ fn disk_admits(root: &Path, step: &str, err: &mut dyn Write) -> Result<bool> {
     }
     let kept = collect::engine_kept();
     let mut after = now;
+    let mut held = Vec::new();
     if let Some(done) =
         collect::collect_toward_max(root, &prune, &kept, now, &mut free, None, false)
     {
@@ -15834,6 +15835,39 @@ fn disk_admits(root: &Path, step: &str, err: &mut dyn Write) -> Result<bool> {
             writeln!(err, "{step}: {line}")?;
         }
         after = done.free_after_mb;
+        held = done.held.locks;
+    }
+    // A BUILD OF BATTEN'S OWN IS WAITED FOR, NOT REFUSED AGAINST (CLOUD-2286).
+    // Measured on #1132's last lap: the hook-spawned `cross-turn` singleton held
+    // a profile's build lock at 3,979 MB free against 4,096, and `land replay`
+    // refused with nothing it might remove — the lap's own background type-check
+    // starving the lap. While a live singleton other than this process holds its
+    // lock and the pass was passed over by a build lock, the step blocks on that
+    // lock and collects again; past `SINGLETON_WAIT`, or with no such singleton,
+    // it refuses as before.
+    let waiting_since = std::time::Instant::now();
+    while after < min {
+        let Some(task) = foreign_singleton(root) else {
+            break;
+        };
+        let left = SINGLETON_WAIT.saturating_sub(waiting_since.elapsed());
+        if left.is_zero() || !collect::await_builds(&held, left) {
+            break;
+        }
+        writeln!(err, "{step}: disk-waited {task}")?;
+        let Ok(now) = free() else {
+            break;
+        };
+        let Some(done) =
+            collect::collect_toward_max(root, &prune, &kept, now, &mut free, None, false)
+        else {
+            break;
+        };
+        for line in done.lines() {
+            writeln!(err, "{step}: {line}")?;
+        }
+        after = done.free_after_mb;
+        held = done.held.locks;
     }
     if after >= min {
         return Ok(true);
@@ -15844,6 +15878,28 @@ fn disk_admits(root: &Path, step: &str, err: &mut dyn Write) -> Result<bool> {
         root.join(&prune.root).display()
     )?;
     Ok(false)
+}
+
+/// How long a below-floor step waits on a batten singleton's build before it
+/// refuses (CLOUD-2286). A singleton declares no bound of its own, and a
+/// `[prune]` key for one would be refused by every release before the one that
+/// reads it, so the engine carries it: `cross-check` measured 54s re-deriving,
+/// and twenty minutes covers a cold run of every triple.
+const SINGLETON_WAIT: std::time::Duration = std::time::Duration::from_secs(20 * 60);
+
+/// A batten singleton held by a live process other than this one, by task
+/// name: the background build a below-floor step may wait for. This process's
+/// own lock (`land`'s, taken under its pid) is never one.
+//MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
+//MUTANT singleton-unwaited|s@^        .find(\x7ctask\x7c task::singleton_holder(\&git_dir, task).is_some_and(\x7cholder\x7c holder != own))$@        .find(\x7c_\x7c false)@|a_lap_below_the_floor_waits_for_its_own_background_build
+fn foreign_singleton(root: &Path) -> Option<String> {
+    let git_dir = crate::git::git_dir(root).ok()?;
+    let own = std::process::id().to_string();
+    std::fs::read_dir(git_dir.join(task::SINGLETON_DIR))
+        .ok()?
+        .filter_map(Result::ok)
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .find(|task| task::singleton_holder(&git_dir, task).is_some_and(|holder| holder != own))
 }
 
 /// The declared runner over the narrowed (and possibly sharded) gates.

@@ -212,6 +212,70 @@ fn a_build_inside_fresh_scratch_is_never_collected() {
     );
 }
 
+/// A NESTED BUILD TREE'S SCRATCH IS RANKED LIKE THE CHECKOUT'S (CLOUD-2286):
+/// measured on #1132, `target/replay/tmp` held 555 MB of fixtures that no pass
+/// could see, because only `target/tmp` was scratch. `#MUTANT
+/// nested-scratch-unseen` leaves the stale fixture.
+#[test]
+fn a_nested_build_trees_stale_scratch_is_collected() {
+    let root = common::scratch("collect-nested-build-scratch");
+    let tree = root.join("target");
+    unit(
+        &tree.join("replay/debug"),
+        "replayed",
+        "1212121212121212",
+        30,
+        16,
+    );
+    aged_dir(&tree.join("replay/tmp/old-fixture"), 7200);
+    aged_dir(&tree.join("replay/tmp/live-fixture"), 1);
+    let trees = [tree.clone()];
+    let _ = batten::collect::collect(&request_under_a_live_build(&trees, u64::MAX));
+    assert!(
+        !tree.join("replay/tmp/old-fixture").exists(),
+        "the replay build's stale fixture went"
+    );
+    assert!(
+        tree.join("replay/tmp/live-fixture").exists(),
+        "a running suite's fixture stays"
+    );
+}
+
+/// THE STAGED COPY IS ONE UNIT, RANKED BY ITS NEWEST WRITE (CLOUD-2286):
+/// measured on #1132, `target/mutate` held 511 MB idle since the day before
+/// while a lap removed the dependencies of the profiles the next lap built.
+/// An idle copy goes before a built profile's older-looking unit; a copy a
+/// running sweep just wrote stays whole. `#MUTANT staged-copy-unranked` takes
+/// the dependency instead.
+#[test]
+fn an_idle_staged_copy_goes_before_a_built_profiles_units() {
+    let root = common::scratch("collect-staged-copy");
+    let tree = root.join("target");
+    unit(&tree.join("debug"), "dep", "1313131313131313", 7200, 4096);
+    unit(&tree.join("debug"), "fresh", "1414141414141414", 30, 4096);
+    let staged = tree.join("mutate");
+    aged_dir(&staged.join("crates/src"), 3600);
+    aged_dir(&staged.join("crates"), 3600);
+    aged_dir(&staged, 3600);
+    let trees = [tree.clone()];
+    let _ = batten::collect::collect(&request(&trees, &[], 1));
+    assert!(!staged.exists(), "the idle staged copy went first, whole");
+    assert!(
+        present(&tree.join("debug"), "dep", "1313131313131313"),
+        "the built profile's older-looking dependency stayed"
+    );
+
+    // A running sweep's copy: written deep since the live build started.
+    aged_dir(&staged.join("crates/src"), 1);
+    aged_dir(&staged.join("crates"), 3600);
+    aged_dir(&staged, 3600);
+    let _ = batten::collect::collect(&request_under_a_live_build(&trees, u64::MAX));
+    assert!(
+        staged.join("crates/src/payload").exists(),
+        "a copy a live sweep wrote stays whole"
+    );
+}
+
 #[test]
 fn the_least_recently_used_live_unit_goes_first() {
     let root = common::scratch("collect-lru");
@@ -1064,6 +1128,80 @@ fn a_lap_whose_volume_cannot_be_freed_stops_before_the_gate() {
     // Anti-vacuity: with room, the gate runs.
     let roomy = verify("500");
     assert!(marker.exists(), "{}", common::stderr(&roomy));
+}
+
+/// A LAP BELOW THE FLOOR WAITS FOR BATTEN'S OWN BACKGROUND BUILD (CLOUD-2286).
+/// Measured on #1132's last lap: the `cross-turn` singleton's type-check held a
+/// profile's build lock at 3,979 MB free against 4,096 and `land replay`
+/// refused. Here the case holds `target/debug/.cargo-lock` and a live process
+/// (this one) holds a singleton: the step blocks on the build lock, the case
+/// lets go once the first pass has reported, and the second pass admits. With
+/// no singleton the same volume refuses as before. `#MUTANT singleton-unwaited`
+/// refuses both.
+#[test]
+fn a_lap_below_the_floor_waits_for_its_own_background_build() {
+    use std::io::BufRead as _;
+    let dir = hooked("land-waits-for-singleton", true);
+    let marker = dir.join(".git/refs/tags/gate-ran");
+    let build_lock = dir.join("target/debug/.cargo-lock");
+    let lock = std::fs::File::create(&build_lock).unwrap();
+    lock.lock().unwrap();
+    let verify = || {
+        let mut command = common::batten();
+        command
+            .current_dir(&dir)
+            .args(["land", "verify"])
+            .env("LAND_VERIFY", "git tag gate-ran")
+            // The first pass reads 5 twice; the pass after the wait reads 500.
+            .env("TARGET_PRUNE_FREE_MB", "5,5,5,500")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        command
+    };
+
+    let alone = verify().output().expect("the binary runs");
+    let said = common::stderr(&alone);
+    assert_eq!(alone.status.code(), Some(2), "{said}");
+    assert!(!said.contains("disk-waited"), "{said}");
+    assert!(!marker.exists(), "no singleton, so the gate never started");
+
+    let singleton = dir.join(".git/batten-singleton/cross-turn");
+    std::fs::create_dir_all(&singleton).unwrap();
+    std::fs::write(singleton.join("pid"), std::process::id().to_string()).unwrap();
+    let mut child = verify().spawn().expect("the binary runs");
+    let mut stderr = std::io::BufReader::new(child.stderr.take().unwrap());
+    let mut seen = String::new();
+    let mut line = String::new();
+    while stderr.read_line(&mut line).unwrap() > 0 {
+        seen.push_str(&line);
+        let first_pass = line.contains("land verify: disk-collected ");
+        line.clear();
+        if first_pass {
+            break;
+        }
+    }
+    assert!(
+        seen.contains("land verify: disk-collected "),
+        "the first pass reported before the wait: {seen}"
+    );
+    drop(lock);
+    let mut rest = String::new();
+    std::io::Read::read_to_string(&mut stderr, &mut rest).unwrap();
+    seen.push_str(&rest);
+    let _ = child.wait().unwrap();
+    assert!(
+        !seen.contains("min_free_mb 100"),
+        "admitted, not refused: {seen}"
+    );
+    assert!(
+        seen.contains("land verify: disk-waited cross-turn"),
+        "{seen}"
+    );
+    assert!(
+        marker.exists(),
+        "the gate ran once the build let go: {seen}"
+    );
 }
 
 #[test]
