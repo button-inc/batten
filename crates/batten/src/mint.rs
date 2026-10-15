@@ -141,13 +141,13 @@ pub struct Declared {
     /// to groom — and answers with prose, so a result path has nothing to read.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key_from_input: Option<String>,
-    /// A pattern the subject must match in full, or the row mints nothing
-    /// (CLOUD-2294).
+    /// A pattern the subject must match, or the row mints nothing (CLOUD-2294).
     ///
     /// [`crate::receipt::safe_subject`] bounds a subject STRUCTURALLY and admits
     /// a space, so free-text arguments ("groom M2 to ready") would file under
     /// themselves. What a row key looks like is the consumer's fact (rule 1), so
-    /// it is declared here, the twin of a `receipt` rule's `key_shape`.
+    /// it is declared here, read exactly as a `receipt` rule's `key_shape` is:
+    /// unanchored, so the author writes `^…$`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key_shape: Option<String>,
     /// The base ref the change is measured against, for [`MintKey::Delta`].
@@ -508,11 +508,12 @@ pub fn subject(
         Some(from) => scalar(input, from)?,
         None => scalar(result, declared.key_from.as_deref()?)?,
     };
-    if let Some(shape) = declared.key_shape.as_deref() {
-        let whole = regex::Regex::new(&format!("^(?:{shape})$")).ok()?;
-        if !whole.is_match(&subject) {
-            return None;
-        }
+    // THE RULE COLUMN'S READING, unanchored: the author writes `^…$`, so one
+    // pattern means the same thing on a mint row and on the rule that reads it.
+    if let Some(shape) = declared.key_shape.as_deref()
+        && !regex::Regex::new(shape).ok()?.is_match(&subject)
+    {
+        return None;
     }
     crate::receipt::safe_subject(&subject).then_some(subject)
 }
@@ -680,35 +681,20 @@ pub fn validate(mints: &[Declared]) -> anyhow::Result<()> {
                 mint.name
             )));
         }
-        if mint.key == MintKey::Named && mint.key_from.is_none() && mint.key_from_input.is_none() {
+        // A `named` row takes its subject from EXACTLY ONE source (CLOUD-2294):
+        // none files nothing, and two would be a precedence nobody declared.
+        if mint.key == MintKey::Named && mint.key_from.is_some() == mint.key_from_input.is_some() {
             return Err(crate::error::UsageError::raise(format!(
-                "`[[mint]]` `{}` is keyed `named` and declares no `key_from`, so nothing says \
-                 which projection supplies the subject and no receipt could be filed",
-                mint.name
-            )));
-        }
-        // ONE SOURCE OF A SUBJECT (CLOUD-2294): with both, which one names the
-        // record would be a precedence nobody declared.
-        if mint.key_from.is_some() && mint.key_from_input.is_some() {
-            return Err(crate::error::UsageError::raise(format!(
-                "`[[mint]]` `{}` declares both `key_from` and `key_from_input`; a subject has \
-                 one source",
-                mint.name
-            )));
-        }
-        if mint.key != MintKey::Named && (mint.key_from_input.is_some() || mint.key_shape.is_some())
-        {
-            return Err(crate::error::UsageError::raise(format!(
-                "`[[mint]]` `{}` declares `key_from_input` or `key_shape` and is not keyed \
-                 `named`, so it would be read by nothing",
+                "`[[mint]]` `{}` is keyed `named` and must declare exactly one of `key_from` \
+                 (a result path) and `key_from_input` (an input path)",
                 mint.name
             )));
         }
         if let Some(shape) = mint.key_shape.as_deref()
-            && regex::Regex::new(&format!("^(?:{shape})$")).is_err()
+            && let Err(problem) = regex::Regex::new(shape)
         {
             return Err(crate::error::UsageError::raise(format!(
-                "`[[mint]]` `{}` declares a `key_shape` that is not a pattern",
+                "`[[mint]]` `{}`: `key_shape` is not a valid regular expression: {problem}",
                 mint.name
             )));
         }
@@ -734,9 +720,18 @@ pub fn validate(mints: &[Declared]) -> anyhow::Result<()> {
         // row keyed `delta` or `branch` is read by nothing exactly as a `key_base`
         // on a `named` one is — the same inert declaration, and refusing one while
         // ignoring the other is the half-coverage this function exists to refuse.
-        if mint.key != MintKey::Named && mint.key_from.is_some() {
+        // The same holds for `key_from_input` and `key_shape` (CLOUD-2294).
+        if mint.key != MintKey::Named
+            && let Some(column) = [
+                ("key_from", mint.key_from.is_some()),
+                ("key_from_input", mint.key_from_input.is_some()),
+                ("key_shape", mint.key_shape.is_some()),
+            ]
+            .into_iter()
+            .find_map(|(column, declared)| declared.then_some(column))
+        {
             return Err(crate::error::UsageError::raise(format!(
-                "`[[mint]]` `{}` declares a `key_from` and is not keyed `named`, so the \
+                "`[[mint]]` `{}` declares a `{column}` and is not keyed `named`, so the \
                  projection would be read by nothing",
                 mint.name
             )));
@@ -787,13 +782,16 @@ pub fn validate(mints: &[Declared]) -> anyhow::Result<()> {
         // A `named` row whose subject projection the body never has to render is
         // still required to name one the ENGINE can read, so the same parser
         // decides both and a typo cannot reach the filename.
-        if let Some(from) = mint.key_from.as_deref().or(mint.key_from_input.as_deref())
-            && from.trim().is_empty()
-        {
-            return Err(crate::error::UsageError::raise(format!(
-                "`[[mint]]` `{}` declares an empty `key_from`",
-                mint.name
-            )));
+        for (column, from) in [
+            ("key_from", mint.key_from.as_deref()),
+            ("key_from_input", mint.key_from_input.as_deref()),
+        ] {
+            if from.is_some_and(|path| path.trim().is_empty()) {
+                return Err(crate::error::UsageError::raise(format!(
+                    "`[[mint]]` `{}` declares an empty `{column}`",
+                    mint.name
+                )));
+            }
         }
         // ONE WRITER AND AT MOST ONE CLEAR PER NAME (CLOUD-2083). A `clear` row
         // shares its writer's name because it is the same record's other end, so

@@ -1330,18 +1330,29 @@ fn check_claims(
     // omission, and so is `docs!`, which claims a breaking change. Read the way
     // `check_claimed_type` reads the field: trimmed, case-insensitive. The row
     // still has to name its `gate`.
-    let prose_only = claims
+    let declared = claims
         .get("commit_type")
         .and_then(serde_json::Value::as_str)
-        .map(|declared| declared.trim().to_ascii_lowercase())
-        .is_some_and(|declared| declared.eq_ignore_ascii_case("docs") || declared == "none");
-    for key in REQUIRED_CLAIMS {
+        .map(|declared| declared.trim().to_ascii_lowercase());
+    let prose_only = declared
+        .as_deref()
+        .is_some_and(|declared| declared == "docs" || declared == "none");
+    // A `feat` OWES ITS PRIOR-ART SEARCH (CLOUD-2296): `feat!` included, read off
+    // the typed field, never the prose (rule 3). Entry shape is
+    // [`check_claimed_prior_art`]'s.
+    let feat = declared
+        .as_deref()
+        .is_some_and(|declared| declared.trim_end_matches('!') == "feat");
+    for key in REQUIRED_CLAIMS
+        .into_iter()
+        .chain(feat.then_some("prior_art"))
+    {
         // PRESENT AND NON-EMPTY, because an empty string, array or object is an
         // omission wearing a declaration's shape. `blockers: []` is the one
         // deliberate exception and is handled below — a row with no blockers
         // must be able to SAY so, which is the absence this row exists to make
         // writable. `tests: []` joins it for a `docs` row alone, above.
-        let filled = match claims.get(key) {
+        let present = match claims.get(key) {
             None | Some(serde_json::Value::Null) => false,
             Some(serde_json::Value::String(text)) => !text.trim().is_empty(),
             Some(serde_json::Value::Array(items)) => {
@@ -1350,7 +1361,7 @@ fn check_claims(
             Some(serde_json::Value::Object(fields)) => !fields.is_empty(),
             Some(_) => true,
         };
-        if !filled {
+        if !present {
             report.findings.push(Finding {
                 line: block_line,
                 rule: format!("claim-missing ({key})"),
@@ -1411,31 +1422,11 @@ fn check_claims(
 /// reason for a rejection. Whether the reason is any good is a judgement, and no
 /// gate here makes one.
 fn check_claimed_prior_art(claims: &serde_json::Value, line: usize, report: &mut Report) {
-    let feat = claims
-        .get("commit_type")
-        .and_then(serde_json::Value::as_str)
-        .is_some_and(|declared| {
-            declared
-                .trim()
-                .trim_end_matches('!')
-                .eq_ignore_ascii_case("feat")
-        });
-    let entries = match claims.get("prior_art") {
-        Some(serde_json::Value::Array(entries)) if !entries.is_empty() => entries,
-        None | Some(serde_json::Value::Null) if !feat => return,
-        _ => {
-            report.findings.push(Finding {
-                line,
-                rule: "claim-missing (prior_art)".to_owned(),
-            });
-            return;
-        }
-    };
-    let filled = |entry: &serde_json::Value, field: &str| {
-        entry
-            .get(field)
-            .and_then(serde_json::Value::as_str)
-            .is_some_and(|text| !text.trim().is_empty())
+    let Some(entries) = claims
+        .get("prior_art")
+        .and_then(serde_json::Value::as_array)
+    else {
+        return;
     };
     for entry in entries {
         let verdict = entry.get("verdict").and_then(serde_json::Value::as_str);
@@ -1454,6 +1445,15 @@ fn check_claimed_prior_art(claims: &serde_json::Value, line: usize, report: &mut
             });
         }
     }
+}
+
+/// Whether `entry[key]` is a string with something in it — the one reading of
+/// "filled" every claims list holds an entry's fields to.
+fn filled(entry: &serde_json::Value, key: &str) -> bool {
+    entry
+        .get(key)
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|text| !text.trim().is_empty())
 }
 
 /// `gate` — a task NAMED, and exits inside the one contract.
@@ -1483,11 +1483,7 @@ fn check_claimed_gate(claims: &serde_json::Value, line: usize, report: &mut Repo
     let Some(gate) = claims.get("gate") else {
         return;
     };
-    let named = gate
-        .get("task")
-        .and_then(serde_json::Value::as_str)
-        .is_some_and(|task| !task.trim().is_empty());
-    if !named {
+    if !filled(gate, "task") {
         report.findings.push(Finding {
             line,
             rule: "gate-task-unnamed".to_owned(),
@@ -1616,11 +1612,7 @@ fn check_claimed_tests(claims: &serde_json::Value, line: usize, report: &mut Rep
     };
     for entry in tests {
         for key in ["file", "mutation"] {
-            let filled = entry
-                .get(key)
-                .and_then(serde_json::Value::as_str)
-                .is_some_and(|text| !text.trim().is_empty());
-            if !filled {
+            if !filled(entry, key) {
                 report.findings.push(Finding {
                     line,
                     rule: format!("test-claim-incomplete ({key})"),

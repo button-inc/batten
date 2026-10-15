@@ -27135,13 +27135,16 @@ pub fn land_ready_owes(
     }
     let harness = hook::Harness::ClaudeCode;
     let mut resolved = resolve::resolve(root, &Overrides::default())?;
-    // ONE PREDICATE FOR "AGENT-SOURCED", the declared `[[fact]]` table's.
-    let full = hook::Policy::from_resolved(&resolved, harness, root, None)?;
+    // "AGENT-SOURCED" IS THE DECLARED `[[fact]]` TABLE, read where
+    // `Policy::agent_fact` reads it, with no policy built just to ask.
+    let sourced: Vec<String> = resolved
+        .facts
+        .iter()
+        .map(|fact| fact.name.clone())
+        .collect();
     resolved.rules.retain(|rule| {
         rule.kind == rules::RuleKind::Receipt
-            && rule
-                .receipt_names()
-                .all(|check| full.agent_fact(check).is_none())
+            && rule.receipt_names().all(|check| !sourced.contains(check))
     });
     let policy = without_set_hatches(hook::Policy::from_resolved(&resolved, harness, root, None)?);
     // BARE, so no branch name is ever spliced into a command line to be parsed.
@@ -27159,33 +27162,13 @@ pub fn land_ready_owes(
         now,
     };
     let receipts = receipt_facts(&policy, &envelope, &[], None, &receipted, &recency, true);
-    let waived = if resolved.waivers.is_empty() {
-        waiver::Live::new()
-    } else {
-        waiver::live(&resolved.waivers, waiver::today()?)
-    };
-    let keys = facts::Look::IsNot;
+    let waived = waiver::live(&resolved.waivers, waiver::today()?);
     let stop = stop::StopFacts::default();
-    let sourced = None;
-    let prospective = facts::Look::CouldNotLook;
-    let pinned = pinned_for(&policy, &envelope);
-    let (tasks, extracted) = session_facts(&policy, &envelope);
-    let call = call_facts(&envelope);
+    // RECEIPTS AND WAIVERS ARE ALL A RECEIPT ROW READS, so every other fact is
+    // the could-not-look a caller that asked nothing else passes.
     let facts = hook::Facts {
-        singleton: &call.singleton,
-        discards: &call.discards,
-        unread_history: &call.unread_history,
         receipts: &receipts,
-        keys: &keys,
-        stop: &stop,
-        waived: &waived,
-        sourced: &sourced,
-        prospective: &prospective,
-        manifest: None,
-        pinned: &pinned,
-        tasks: &tasks,
-        extracted: &extracted,
-        dispatch: &call.dispatch,
+        ..hook::Facts::none(&stop, &waived)
     };
     match hook::adjudicate(&policy, &envelope, &facts) {
         hook::Decision::Deny(refused) => Ok(Some(refused)),

@@ -252,7 +252,7 @@ selects_at = "skill"
 selects = "groom"
 key = "named"
 key_from_input = "args"
-key_shape = "[A-Z][A-Z0-9]*-[0-9]+"
+key_shape = "^[A-Z][A-Z0-9]*-[0-9]+$"
 requires = []
 mode = "replace"
 body = "{now}"
@@ -261,30 +261,14 @@ body = "{now}"
         .git()
         .base_commit()
         .build();
-    let dispatch = |args: &str| {
-        common::post_tool(
-            &dir,
-            "Skill",
-            &serde_json::json!({"skill": "groom", "args": args}),
-            &serde_json::json!("Launching skill: groom"),
-        );
-    };
     let store = dir.join(".git/batten-receipts");
-    let minted = || -> Vec<String> {
-        std::fs::read_dir(&store)
-            .map(|entries| {
-                entries
-                    .filter_map(Result::ok)
-                    .map(|entry| entry.file_name().to_string_lossy().into_owned())
-                    .filter(|name| name.starts_with("groomed."))
-                    .collect()
-            })
-            .unwrap_or_default()
-    };
 
-    dispatch("groom M2 to ready");
-    assert!(minted().is_empty(), "prose minted: {:?}", minted());
+    common::dispatch_skill_with(&dir, "groom", Some("groom M2 to ready"));
+    assert!(
+        !store.join("groomed.groom M2 to ready").exists(),
+        "prose minted a receipt under itself"
+    );
 
-    dispatch(SUBJECT);
-    assert_eq!(minted(), vec![format!("groomed.{SUBJECT}")]);
+    common::dispatch_skill_with(&dir, "groom", Some(SUBJECT));
+    assert!(store.join(format!("groomed.{SUBJECT}")).exists());
 }

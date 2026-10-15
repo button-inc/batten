@@ -1537,10 +1537,19 @@ pub(crate) fn post_tool(
 
 /// A skill dispatch, answered as the live host answers it: prose, not JSON.
 pub(crate) fn dispatch_skill(dir: &Path, skill: &str) {
+    dispatch_skill_with(dir, skill, None);
+}
+
+/// [`dispatch_skill`], with the `args` the skill was invoked with.
+pub(crate) fn dispatch_skill_with(dir: &Path, skill: &str, args: Option<&str>) {
+    let mut input = serde_json::json!({"skill": skill});
+    if let Some(args) = args {
+        input["args"] = serde_json::json!(args);
+    }
     post_tool(
         dir,
         "Skill",
-        &serde_json::json!({"skill": skill}),
+        &input,
         &serde_json::json!(format!("Launching skill: {skill}")),
     );
 }

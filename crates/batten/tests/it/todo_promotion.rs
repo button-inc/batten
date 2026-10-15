@@ -134,13 +134,7 @@ fn read_the_row(repo: &Path, description: &str) {
 }
 
 fn verdict(repo: &Path, input: &str) -> Option<i32> {
-    run_with_stdin(
-        repo,
-        &["adjudicate", "--harness", "exit-code"],
-        &pre_tool("mcp__Linear__save_issue", input),
-    )
-    .status
-    .code()
+    decided(repo, input).0
 }
 
 /// What the receipt store holds for `name`, or `None` when nothing minted.
@@ -371,7 +365,7 @@ selects_at = "skill"
 selects = "groom"
 key = "named"
 key_from_input = "args"
-key_shape = "[A-Z][A-Z0-9]*-[0-9]+"
+key_shape = "^[A-Z][A-Z0-9]*-[0-9]+$"
 requires = []
 mode = "replace"
 body = "{now}"
@@ -400,17 +394,7 @@ fn groomed_repo(name: &str) -> PathBuf {
 
 /// The `groom` skill dispatched over `args`, answered as the live host answers.
 fn groom(repo: &Path, args: &str) {
-    let envelope = serde_json::json!({
-        "hook_event_name": "PostToolUse",
-        "tool_name": "Skill",
-        "tool_input": {"skill": "groom", "args": args},
-        "tool_response": "Launching skill: groom",
-    });
-    let _ = run_with_stdin(
-        repo,
-        &["adjudicate", "--harness", "exit-code"],
-        &envelope.to_string(),
-    );
+    common::dispatch_skill_with(repo, "groom", Some(args));
 }
 
 /// The promotion's verdict and what it printed, so a case can say WHICH row
