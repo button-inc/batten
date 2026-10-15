@@ -1392,7 +1392,68 @@ fn check_claims(
     check_claimed_type(&claims, root, block_line, report)?;
     check_claimed_blockers(grammar, payload, &claims, block_line, report);
     check_claimed_tests(&claims, block_line, report);
+    check_claimed_prior_art(&claims, block_line, report);
     Ok(true)
+}
+
+/// `prior_art` — the search a `feat` row owes before it builds (CLOUD-2296).
+///
+/// AGENTS.md's "adopt prior art; don't expand the core" was prose with no gate:
+/// four engine mechanisms were built in one session before any search, each with
+/// an existing tool that did the job. A typed list is what makes the search
+/// writable as a claim and its absence visible.
+///
+/// **Required on `feat` alone**, a comparison on the typed `commit_type` field
+/// (rule 3): a `fix` repairs what exists, and a `feat` is the row that adds. Where
+/// the key is present on any row, each entry is held to the same shape.
+///
+/// What is decided is the SHAPE — a tool, where it lives, adopt or reject, and a
+/// reason for a rejection. Whether the reason is any good is a judgement, and no
+/// gate here makes one.
+fn check_claimed_prior_art(claims: &serde_json::Value, line: usize, report: &mut Report) {
+    let feat = claims
+        .get("commit_type")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|declared| {
+            declared
+                .trim()
+                .trim_end_matches('!')
+                .eq_ignore_ascii_case("feat")
+        });
+    let entries = match claims.get("prior_art") {
+        Some(serde_json::Value::Array(entries)) if !entries.is_empty() => entries,
+        None | Some(serde_json::Value::Null) if !feat => return,
+        _ => {
+            report.findings.push(Finding {
+                line,
+                rule: "claim-missing (prior_art)".to_owned(),
+            });
+            return;
+        }
+    };
+    let filled = |entry: &serde_json::Value, field: &str| {
+        entry
+            .get(field)
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|text| !text.trim().is_empty())
+    };
+    for entry in entries {
+        let verdict = entry.get("verdict").and_then(serde_json::Value::as_str);
+        if !filled(entry, "tool")
+            || !filled(entry, "url")
+            || !matches!(verdict, Some("adopt" | "reject"))
+        {
+            report.findings.push(Finding {
+                line,
+                rule: "prior-art-entry-incomplete".to_owned(),
+            });
+        } else if verdict == Some("reject") && !filled(entry, "reason") {
+            report.findings.push(Finding {
+                line,
+                rule: "prior-art-rejection-unreasoned".to_owned(),
+            });
+        }
+    }
 }
 
 /// `gate` — a task NAMED, and exits inside the one contract.

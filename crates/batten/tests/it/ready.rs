@@ -269,6 +269,13 @@ fn complete_claims() -> serde_json::Value {
             "file": "crates/batten/tests/it/ready.rs",
             "mutation": "required-key-unread",
         }],
+        // A `feat` owes its prior-art search (CLOUD-2296).
+        "prior_art": [{
+            "tool": "an existing linter",
+            "url": "https://example.invalid/linter",
+            "verdict": "reject",
+            "reason": "it cannot read a claims object",
+        }],
     })
 }
 
@@ -569,6 +576,99 @@ fn a_complete_claims_object_passes_and_names_its_dialect() {
         "{}",
         stdout(&output)
     );
+}
+
+/// A `feat` ROW OWES A PRIOR-ART SEARCH (CLOUD-2296): absent, null and empty are
+/// one omission, and each is named. On `main` a `feat` passed without the key.
+#[test]
+fn a_feat_row_without_prior_art_is_not_ready() {
+    let dir = with_tasks("ready-claims-feat-no-prior-art");
+    for prior_art in [
+        None,
+        Some(serde_json::Value::Null),
+        Some(serde_json::json!([])),
+    ] {
+        let mut object = complete_claims();
+        let fields = object.as_object_mut().expect("the fixture is an object");
+        fields.remove("prior_art");
+        if let Some(value) = &prior_art {
+            fields.insert("prior_art".to_owned(), value.clone());
+        }
+        let output = lint(&dir, &claims_payload(&object, &[]));
+        assert_eq!(code(&output), 2, "{prior_art:?}\n{}", stderr(&output));
+        assert!(
+            stderr(&output).contains("claim-missing (prior_art)"),
+            "{prior_art:?}\n{}",
+            stderr(&output)
+        );
+    }
+    // And `feat!` is a `feat`.
+    let mut breaking = complete_claims();
+    breaking["commit_type"] = serde_json::json!("feat!");
+    breaking
+        .as_object_mut()
+        .expect("the fixture is an object")
+        .remove("prior_art");
+    let output = lint(&dir, &claims_payload(&breaking, &[]));
+    assert!(
+        stderr(&output).contains("claim-missing (prior_art)"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+/// A REJECTION CARRIES ITS REASON, and every entry names a tool, where it lives
+/// and a verdict from the closed pair.
+#[test]
+fn a_rejection_without_a_reason_is_not_ready() {
+    let dir = with_tasks("ready-claims-prior-art-unreasoned");
+    let mut object = complete_claims();
+    object["prior_art"][0]["reason"] = serde_json::json!("  ");
+    let output = lint(&dir, &claims_payload(&object, &[]));
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("prior-art-rejection-unreasoned"),
+        "{}",
+        stderr(&output)
+    );
+
+    // An adoption needs no reason: the tool IS the answer.
+    let mut adopted = complete_claims();
+    adopted["prior_art"] = serde_json::json!([
+        {"tool": "cargo-mutants", "url": "https://example.invalid/m", "verdict": "adopt"}
+    ]);
+    let output = lint(&dir, &claims_payload(&adopted, &[]));
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+
+    for incomplete in [
+        serde_json::json!({"url": "https://example.invalid/m", "verdict": "adopt"}),
+        serde_json::json!({"tool": "t", "verdict": "adopt"}),
+        serde_json::json!({"tool": "t", "url": "https://example.invalid/m", "verdict": "maybe"}),
+    ] {
+        let mut object = complete_claims();
+        object["prior_art"] = serde_json::json!([incomplete]);
+        let output = lint(&dir, &claims_payload(&object, &[]));
+        assert_eq!(code(&output), 2, "{incomplete}\n{}", stderr(&output));
+        assert!(
+            stderr(&output).contains("prior-art-entry-incomplete"),
+            "{incomplete}\n{}",
+            stderr(&output)
+        );
+    }
+}
+
+/// THE KEY STAYS OPTIONAL OFF `feat`: a `fix` repairs what exists.
+#[test]
+fn a_fix_row_needs_no_prior_art() {
+    let dir = with_tasks("ready-claims-fix-no-prior-art");
+    let mut object = complete_claims();
+    object["commit_type"] = serde_json::json!("fix");
+    object
+        .as_object_mut()
+        .expect("the fixture is an object")
+        .remove("prior_art");
+    let output = lint(&dir, &claims_payload(&object, &[]));
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
 }
 
 #[test]
