@@ -314,9 +314,7 @@ mod tests {
     /// after it may differ with every stamped field equal, so it is a miss.
     #[test]
     fn a_tracked_file_changed_after_the_entry_was_written_is_not_served() {
-        let dir = std::env::temp_dir().join(format!("batten-epoch-racy-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).unwrap();
+        let dir = crate::scratch::scratch("epoch-racy");
         let path = dir.join("epoch");
         let stamp = |changed: std::time::Duration| crate::cache::Stamp {
             fields: "stat:fixed".to_owned(),

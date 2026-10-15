@@ -836,16 +836,29 @@ fn fingerprint_of(kind: FindingKind, fields: &[&str]) -> Fingerprint {
 /// can drift.
 fn tagged_fingerprint(tag: &str, fields: &[&[u8]]) -> Fingerprint {
     let mut hasher = Sha256::new();
-    write_field(&mut hasher, tag.as_bytes());
-    for field in fields {
-        write_field(&mut hasher, field);
-    }
+    frame(tag, fields, |bytes| hasher.update(bytes));
     Fingerprint(hasher.finalize().into())
 }
 
+/// One field of the framing into a SHA-256, for a caller that streams its last
+/// field rather than holding it whole.
 fn write_field(hasher: &mut Sha256, bytes: &[u8]) {
-    hasher.update(u64::try_from(bytes.len()).unwrap_or(u64::MAX).to_le_bytes());
-    hasher.update(bytes);
+    frame_field(bytes, |part| hasher.update(part));
+}
+
+/// One length-prefixed field, the unit [`frame`] repeats.
+fn frame_field(bytes: &[u8], mut update: impl FnMut(&[u8])) {
+    update(&u64::try_from(bytes.len()).unwrap_or(u64::MAX).to_le_bytes());
+    update(bytes);
+}
+
+/// The framing itself, over whichever digest a caller feeds: `tag`, then each
+/// field, every one preceded by its length as a u64 LE.
+fn frame(tag: &str, fields: &[&[u8]], mut update: impl FnMut(&[u8])) {
+    frame_field(tag.as_bytes(), &mut update);
+    for field in fields {
+        frame_field(field, &mut update);
+    }
 }
 
 /// The domain tag for a config-surface identity, distinct from every
@@ -870,14 +883,9 @@ const CACHE_TAG: &str = "cache";
 #[must_use]
 pub fn cache_key(fields: &[&[u8]]) -> Fingerprint {
     let mut hasher = blake3::Hasher::new();
-    let mut write = |bytes: &[u8]| {
-        hasher.update(&u64::try_from(bytes.len()).unwrap_or(u64::MAX).to_le_bytes());
+    frame(CACHE_TAG, fields, |bytes| {
         hasher.update(bytes);
-    };
-    write(CACHE_TAG.as_bytes());
-    for field in fields {
-        write(field);
-    }
+    });
     Fingerprint(*hasher.finalize().as_bytes())
 }
 

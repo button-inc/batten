@@ -4361,7 +4361,7 @@ fn parse_remembered(text: &str, source: &str) -> Result<Config> {
 /// The text is held as the SAME `Arc` [`read_text`] handed out where it can be
 /// (CLOUD-2315), so a hook call no longer copies the 956 KB authority into the
 /// memo, and a later read of the same file matches by address before bytes.
-type LastParse = Option<(std::sync::Arc<str>, String, Config)>;
+type LastParse = Option<(std::sync::Arc<String>, String, Config)>;
 static LAST: std::sync::Mutex<LastParse> = std::sync::Mutex::new(None);
 
 /// Whether the memo holds exactly `text` from `source`, and if so, `with` over it.
@@ -4372,9 +4372,7 @@ fn with_remembered<T>(text: &str, source: &str, with: impl FnOnce(&Config) -> T)
     let (remembered_text, remembered_source, config) = last.as_ref()?;
     // The memo holds its `Arc` alive, so an equal address and length IS that
     // allocation; anything else is compared by bytes.
-    let same_bytes = (std::ptr::eq(remembered_text.as_ptr(), text.as_ptr())
-        && remembered_text.len() == text.len())
-        || **remembered_text == *text;
+    let same_bytes = same_allocation(remembered_text, text) || **remembered_text == *text;
     let same = same_bytes && *remembered_source == named;
     same.then(|| with(config))
 }
@@ -4385,7 +4383,7 @@ fn remembered(text: &str, source: &str) -> Option<Config> {
 
 /// Keep `config`, moved in, as the parse of `text` from `source`.
 fn remember(text: &str, source: &str, config: Config) {
-    let held = shared_text(text).unwrap_or_else(|| std::sync::Arc::from(text));
+    let held = shared_text(text).unwrap_or_else(|| std::sync::Arc::new(text.to_owned()));
     if let Ok(mut last) = LAST.lock() {
         *last = Some((held, canonical_source(source), config));
     }
@@ -4467,14 +4465,20 @@ fn declared_from_cache(text: &str, source: &str) -> bool {
 
 /// The `Arc` [`read_text`] last handed out, when `text` IS it — same address,
 /// same length — so a memo can hold it instead of a copy.
-fn shared_text(text: &str) -> Option<std::sync::Arc<str>> {
+fn shared_text(text: &str) -> Option<std::sync::Arc<String>> {
     let last = LAST_TEXT.lock().ok()?;
     let (_, _, held) = last.as_ref()?;
-    (std::ptr::eq(held.as_ptr(), text.as_ptr()) && held.len() == text.len())
-        .then(|| std::sync::Arc::clone(held))
+    same_allocation(held, text).then(|| std::sync::Arc::clone(held))
 }
 
-type HeldText = Option<(String, std::time::Duration, std::sync::Arc<str>)>;
+/// Whether `text` IS `held` — the same address and length. Sound only where
+/// the caller keeps `held` alive, so its address cannot be reused by another
+/// string; both callers hold it in a memo.
+fn same_allocation(held: &str, text: &str) -> bool {
+    std::ptr::eq(held.as_ptr(), text.as_ptr()) && held.len() == text.len()
+}
+
+type HeldText = Option<(String, std::time::Duration, std::sync::Arc<String>)>;
 static LAST_TEXT: std::sync::Mutex<HeldText> = std::sync::Mutex::new(None);
 
 /// The authority's text, read once per process while the file is unchanged
@@ -4492,7 +4496,9 @@ static LAST_TEXT: std::sync::Mutex<HeldText> = std::sync::Mutex::new(None);
 ///
 /// As [`fs::read_to_string`], whose error a missing or unreadable file still
 /// returns.
-pub fn read_text(path: &Path) -> io::Result<std::sync::Arc<str>> {
+/// An `Arc<String>` rather than an `Arc<str>`: the second would copy the whole
+/// text out of the `String` the read produced, the first moves it.
+pub fn read_text(path: &Path) -> io::Result<std::sync::Arc<String>> {
     let Some(stamp) = crate::cache::stamp(path) else {
         return fs::read_to_string(path).map(std::sync::Arc::from);
     };
@@ -4503,7 +4509,7 @@ pub fn read_text(path: &Path) -> io::Result<std::sync::Arc<str>> {
         return Ok(std::sync::Arc::clone(text));
     }
     let at = crate::cache::now();
-    let text: std::sync::Arc<str> = fs::read_to_string(path)?.into();
+    let text = std::sync::Arc::new(fs::read_to_string(path)?);
     if let Ok(mut last) = LAST_TEXT.lock() {
         *last = Some((stamp.fields, at, std::sync::Arc::clone(&text)));
     }
@@ -4520,11 +4526,37 @@ fn unchanged_since(held: &str, at: std::time::Duration, now: &crate::cache::Stam
 /// The name an authority is cached under: its canonical path, so the same file
 /// reached as `./batten.toml` and as an absolute path is ONE entry (CLOUD-2315 —
 /// one hook call reached it both ways and missed itself).
+///
+/// The last answer is kept: one hook call asks about the same spelling four
+/// times (the memo, the entry path, the key, the memo again), and each was a
+/// `realpath` walk. Only the spelling is remembered, never a file's contents,
+/// so a symlink retargeted mid-process is the one thing it can miss.
 fn canonical_source(source: &str) -> String {
-    std::fs::canonicalize(source).map_or_else(
+    // A relative spelling is a function of the working directory too, so the
+    // directory is part of what was asked.
+    type Asked = (String, Option<std::path::PathBuf>);
+    static LAST: std::sync::Mutex<Option<(Asked, String)>> = std::sync::Mutex::new(None);
+    let asked: Asked = (
+        source.to_owned(),
+        Path::new(source)
+            .is_relative()
+            .then(|| std::env::current_dir().ok())
+            .flatten(),
+    );
+    if let Ok(last) = LAST.lock()
+        && let Some((held, answered)) = last.as_ref()
+        && *held == asked
+    {
+        return answered.clone();
+    }
+    let answered = std::fs::canonicalize(source).map_or_else(
         |_| source.to_owned(),
         |path| path.to_string_lossy().into_owned(),
-    )
+    );
+    if let Ok(mut last) = LAST.lock() {
+        *last = Some((asked, answered.clone()));
+    }
+    answered
 }
 
 /// Everything a validated `Config` is a function of.
@@ -6436,10 +6468,7 @@ mod tests {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../batten.toml");
         let text = fs::read_to_string(&path).unwrap();
         let parsed = parse_ungated(&text, "batten.toml").unwrap();
-        let dir = std::env::temp_dir().join(format!(
-            "batten-parse-cache-roundtrip-{}",
-            std::process::id()
-        ));
+        let dir = crate::scratch::scratch("config-parse-cache-roundtrip");
         let entry = dir.join("entry.cfg");
         let key = parse_cache_key(&text, "batten.toml");
         write_cached_parse(&entry, &key, &parsed);
@@ -6471,16 +6500,17 @@ mod tests {
     /// even an edit of the same length.
     #[test]
     fn an_authority_edited_between_two_reads_is_read_again() {
-        let dir = std::env::temp_dir().join(format!("batten-read-text-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("scratch");
+        let dir = crate::scratch::scratch("config-read-text");
         let path = dir.join(CONFIG_FILE);
         std::fs::write(&path, "version = 1\n").expect("write");
         let first = super::read_text(&path).expect("read");
         let again = super::read_text(&dir.join(".").join(CONFIG_FILE)).expect("read again");
         assert_eq!(first, again, "either spelling reads the same file");
         std::fs::write(&path, "version = 2\n").expect("edit");
-        assert_eq!(&*super::read_text(&path).expect("read"), "version = 2\n");
+        assert_eq!(
+            super::read_text(&path).expect("read").as_str(),
+            "version = 2\n"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

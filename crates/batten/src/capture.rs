@@ -956,10 +956,9 @@ pub fn store_in_as(
     let (mut file, staging) = open_staging(&dir, &format!("{}-{digest}", stream.as_str()))?;
     file.write_all(bytes)
         .with_context(|| format!("write the capture {}", staging.display()))?;
-    if persist == crate::durable::Persist::Synced {
-        file.sync_all()
-            .with_context(|| format!("sync the capture {}", staging.display()))?;
-    }
+    persist
+        .sync(&file)
+        .with_context(|| format!("sync the capture {}", staging.display()))?;
     drop(file);
     std::fs::rename(&staging, &path)
         .with_context(|| format!("publish the capture {}", path.display()))?;

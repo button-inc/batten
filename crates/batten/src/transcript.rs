@@ -2373,9 +2373,7 @@ mod tests {
     /// over — never trusting its entry — when the file shrank or was replaced.
     #[test]
     fn the_incremental_reader_answers_as_a_whole_parse() {
-        let dir = std::env::temp_dir().join(format!("batten-tally-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("scratch");
+        let dir = crate::scratch::scratch("transcript-tally");
         crate::testing::contain_state(&dir.join("state"));
         let path = dir.join("session.jsonl");
         let whole = |text: &str| parse(text, "t", RecordShape::Jsonl).expect("parses");

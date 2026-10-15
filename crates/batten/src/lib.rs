@@ -17562,11 +17562,10 @@ fn destructive_call_facts(
 }
 
 /// The per-call memos one `run_hook` holds for its life (CLOUD-2315): one config
-/// load and one evaluation per bundle per input, and the on-disk parse cache —
-/// the per-call path is the one that pays a full parse per process, and every
-/// other verb parses as before (`config::persist_parses`).
+/// load, and one evaluation per bundle per input. The on-disk parse cache is
+/// switched on earlier, in [`run`], because the `[forge]` prologue reads it
+/// before this function is reached.
 fn hook_call_memos() -> (HookLoadScope, policy::AnswerScope) {
-    config::persist_parses();
     (HookLoads::scope(), policy::answer_scope())
 }
 

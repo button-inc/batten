@@ -642,9 +642,7 @@ mod tests {
         reason = "a fixture that cannot be written is a broken test"
     )]
     fn an_absent_member_never_collides_with_a_present_one() {
-        let dir = std::env::temp_dir().join(format!("batten-pinned-key-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("scratch");
+        let dir = crate::scratch::scratch("pinned-key");
         std::fs::write(dir.join("a.cfg"), "A").expect("a");
         let configs = vec![dir.join("a.cfg"), dir.join("b.cfg")];
         let absent = key(&configs);

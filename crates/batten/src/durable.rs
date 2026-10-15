@@ -62,6 +62,29 @@ pub enum Persist {
     Atomic,
 }
 
+impl Persist {
+    /// `fsync` `file` at the `Synced` tier; nothing at `Atomic`. The one
+    /// spelling of the tier for a file, so a third tier changes one place.
+    ///
+    /// # Errors
+    ///
+    /// The I/O error a sync returns.
+    pub fn sync(self, file: &std::fs::File) -> std::io::Result<()> {
+        match self {
+            Persist::Synced => file.sync_all(),
+            Persist::Atomic => Ok(()),
+        }
+    }
+
+    /// `fsync` `directory` at the `Synced` tier, best-effort, as
+    /// [`sync_directory`]; nothing at `Atomic`.
+    fn sync_dir(self, directory: &Path) {
+        if self == Persist::Synced {
+            sync_directory(directory);
+        }
+    }
+}
+
 /// Append whole lines to `path` as ONE write, then sync.
 ///
 /// `text` is one or more lines; a missing trailing newline is supplied, so a
@@ -188,10 +211,7 @@ pub fn append_with_mode_as(
     let _ = mode;
     let mut file = options.open(path)?;
     file.write_all(buffer.as_bytes())?;
-    match persist {
-        Persist::Synced => file.sync_all(),
-        Persist::Atomic => Ok(()),
-    }
+    persist.sync(&file)
 }
 
 /// Replace `path`'s contents atomically: temp, sync, rename, sync the directory.
@@ -232,9 +252,7 @@ pub fn replace_as(
         let _ = std::fs::remove_file(&temp);
         return Err(err);
     }
-    if persist == Persist::Synced {
-        sync_directory(&directory);
-    }
+    persist.sync_dir(&directory);
     Ok(())
 }
 
@@ -280,9 +298,7 @@ pub fn create_exclusive_as(
     let _ = std::fs::remove_file(&temp);
     match linked {
         Ok(()) => {
-            if persist == Persist::Synced {
-                sync_directory(&directory);
-            }
+            persist.sync_dir(&directory);
             Ok(true)
         }
         Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
@@ -340,10 +356,7 @@ fn write_temp_as(
         file.set_permissions(existing.permissions())?;
     }
     file.write_all(contents)?;
-    match persist {
-        Persist::Synced => file.sync_all(),
-        Persist::Atomic => Ok(()),
-    }
+    persist.sync(&file)
 }
 
 /// Sync the directory entry a rename created, so the rename survives a crash.

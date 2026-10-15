@@ -8418,12 +8418,8 @@ pub fn is_noun(decl: &CommandDecl) -> bool {
     has_children(decl.path) && !decl.data_channel && decl.flags.is_empty()
 }
 
-/// Attach every direct child of `prefix` to `parent`, recursively.
-fn attach(parent: Command, prefix: &str) -> Command {
-    attach_only(parent, prefix, None)
-}
-
-/// [`attach`], keeping only the child named `only` when one is given.
+/// Attach every direct child of `prefix` to `parent`, recursively, keeping
+/// only the child named `only` when one is given.
 //MUTANT narrowed-tree-keeps-everything|s@^            .filter(\x7cdecl\x7c only.is_none_or(\x7cname\x7c leaf_of(decl.path) == name))$@@|a_narrowed_tree_parses_as_the_whole_one
 //
 // ONE MOVE PER NODE, NOT ONE PER FLAG. `clap`'s builder takes `Command` by
@@ -8441,7 +8437,7 @@ fn attach_only(parent: Command, prefix: &str, only: Option<&str>) -> Command {
                 let sub = Command::new(leaf_of(decl.path))
                     .about(decl.about)
                     .args(decl.flags.iter().map(arg_of));
-                let sub = attach(sub, decl.path);
+                let sub = attach_only(sub, decl.path, None);
                 // A noun performs no default action: it lists its sub-verbs (§2).
                 // A row that nests AND declares an answer keeps acting bare.
                 if is_noun(decl) {
@@ -8460,7 +8456,7 @@ fn attach_only(parent: Command, prefix: &str, only: Option<&str>) -> Command {
 /// of them can disagree with the declaration.
 #[must_use]
 pub fn command() -> Command {
-    command_narrowed(None)
+    command_for(None)
 }
 
 /// The tree [`command`] builds, with only the top-level verb `verb` attached
@@ -8477,15 +8473,11 @@ pub fn command() -> Command {
 /// two to one parse for every declared top-level verb.
 #[must_use]
 pub fn command_for(verb: Option<&str>) -> Command {
-    let declared = verb.filter(|name| {
+    let only = verb.filter(|name| {
         SURFACE
             .iter()
             .any(|decl| parent_of(decl.path).is_empty() && decl.path == *name)
     });
-    command_narrowed(declared)
-}
-
-fn command_narrowed(only: Option<&str>) -> Command {
     // arg_required_else_help: a bare invocation lists the subcommands and never
     // performs a default action (§2). clap renders the listing on its error path
     // (stderr, exit 1), so stdout stays the answer channel.

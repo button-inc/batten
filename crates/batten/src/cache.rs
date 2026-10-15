@@ -157,7 +157,7 @@ pub fn key(format: &str, inputs: &[&[u8]]) -> String {
 //MUTANT torn-entry-served|s@^    if check != integrity(body).as_bytes() {$@    if false {@|a_torn_entry_is_a_miss_not_a_wrong_answer
 #[must_use]
 pub fn read(path: &Path, key: &str) -> Option<Vec<u8>> {
-    let bytes = std::fs::read(path).ok()?;
+    let mut bytes = std::fs::read(path).ok()?;
     let (head, rest) = split_line(&bytes)?;
     if head != key.as_bytes() {
         return None;
@@ -166,7 +166,11 @@ pub fn read(path: &Path, key: &str) -> Option<Vec<u8>> {
     if check != integrity(body).as_bytes() {
         return None;
     }
-    Some(body.to_vec())
+    // The body is the read buffer's tail: hand it back in place rather than
+    // copying a whole entry on every hit.
+    let at = bytes.len() - body.len();
+    bytes.drain(..at);
+    Some(bytes)
 }
 
 /// Store `body` at `path` under `key`, atomically and unsynced.
@@ -445,10 +449,7 @@ mod tests {
     use super::*;
 
     fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("batten-cache-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("scratch");
-        dir
+        crate::scratch::scratch(&format!("cache-{name}"))
     }
 
     /// An entry answers only its own key, and only with the bytes written.

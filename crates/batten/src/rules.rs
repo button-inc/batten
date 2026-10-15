@@ -13884,7 +13884,8 @@ impl Sets {
 /// 14% of the instructions a warm call ran.
 #[derive(Debug, Clone)]
 pub struct Selector {
-    pattern: String,
+    /// Carries the pattern as written too (`Glob::glob`), so there is no
+    /// second copy of it here.
     glob: globset::Glob,
     matcher: std::sync::OnceLock<globset::GlobMatcher>,
 }
@@ -13906,7 +13907,6 @@ impl Selector {
             .build()
             .map_err(|err| UsageError::raise(format!("glob `{pattern}` is not valid: {err}")))?;
         Ok(Selector {
-            pattern: pattern.to_owned(),
             glob,
             matcher: std::sync::OnceLock::new(),
         })
@@ -13923,7 +13923,7 @@ impl Selector {
     /// The pattern this was compiled from, as the consumer wrote it.
     #[must_use]
     pub fn pattern(&self) -> &str {
-        &self.pattern
+        self.glob.glob()
     }
 }
 
@@ -13935,7 +13935,7 @@ impl Selector {
 /// config that built it.
 impl PartialEq for Selector {
     fn eq(&self, other: &Self) -> bool {
-        self.pattern == other.pattern
+        self.pattern() == other.pattern()
     }
 }
 
