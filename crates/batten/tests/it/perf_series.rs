@@ -267,6 +267,10 @@ fn the_series_is_not_written_to_the_default_notes_ref() {
 
 /// The retired programs are gone and the task names their workflow uses survive.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_retired_programs_are_gone_and_their_task_names_survive` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_retired_programs_are_gone_and_their_task_names_survive() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()

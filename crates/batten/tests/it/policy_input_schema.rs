@@ -34,6 +34,10 @@ use batten::facts::{Fact, Surface};
 const NOT_A_FACT: &str = "missing";
 
 /// The committed bytes for one surface.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `committed` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn committed(name: &str) -> String {
     let path = format!("{}/../../schema/{name}", env!("CARGO_MANIFEST_DIR"));
     std::fs::read_to_string(&path).unwrap_or_else(|why| panic!("cannot read {path}: {why}"))

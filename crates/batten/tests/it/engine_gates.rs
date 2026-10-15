@@ -181,6 +181,10 @@ fn no_pin_is_nothing_to_judge() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_fixer_rewrites_a_stale_source_pin_to_the_digest` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_fixer_rewrites_a_stale_source_pin_to_the_digest() {
     let stale = format!(
         "version = 1\nengine = {{ source = \"{}\" }}\n",
@@ -206,6 +210,10 @@ fn the_fixer_rewrites_a_stale_source_pin_to_the_digest() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_fixer_leaves_a_release_pin_alone` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_fixer_leaves_a_release_pin_alone() {
     let pinned = "version = 1\nengine = { release = \"v0.0.1\" }\n";
     let dir = repo("engine-pin-release-kept", pinned);

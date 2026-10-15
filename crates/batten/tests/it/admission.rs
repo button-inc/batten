@@ -298,6 +298,10 @@ fn genuinely_different_answers_are_a_different_address_and_are_issuable() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `a_record_edited_after_issuance_no_longer_recomputes_and_is_refused` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn a_record_edited_after_issuance_no_longer_recomputes_and_is_refused() {
     // THE SELF-VERIFICATION CLAUSE, and the reason the corpus is evidence rather
     // than a log. Under a random bearer token this edit is undetectable: the
@@ -1566,6 +1570,10 @@ fn twin_findings_on_one_path_are_each_admitted_by_fingerprint() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `a_mint_for_a_rule_that_produced_no_finding_still_falls_back_to_the_call` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn a_mint_for_a_rule_that_produced_no_finding_still_falls_back_to_the_call() {
     // THE FAIL-OPEN HALF, and the conjunct the case above does not reach
     // (CLOUD-418). The refusal is keyed on the rule having FIRED, never on the
@@ -1683,6 +1691,10 @@ fn a_mediated_anchor_and_a_finding_anchor_are_not_interchangeable() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `a_mint_for_a_mediated_rule_anchors_the_call_not_a_tree_finding` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn a_mint_for_a_mediated_rule_anchors_the_call_not_a_tree_finding() {
     // THE ROUTING THE MINT DOES NOT ASK ABOUT, pinned here because it holds by a
     // property stated in another file. `admission_anchor` prefers a `Finding`
@@ -1857,6 +1869,10 @@ fn admits_fixture_with_predicate(name: &str) -> PathBuf {
 /// The fixture is the reason the suite was green, which is why this case brings
 /// its own module rather than reusing that one.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `a_mint_for_a_policy_predicate_anchors_the_finding_not_the_call` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn a_mint_for_a_policy_predicate_anchors_the_finding_not_the_call() {
     use batten::admission::{Anchor, Record};
 

@@ -109,6 +109,10 @@ fn signal(pid: u32, name: &str) {
 }
 
 /// Block until `path` exists and is non-empty, then read it trimmed.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `await_file` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn await_file(path: &Path) -> String {
     let deadline = Instant::now() + PATIENCE;
     while Instant::now() < deadline {
@@ -359,6 +363,10 @@ fn a_second_signal_escalates_instead_of_being_swallowed() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `a_signal_in_the_spawn_window_leaves_no_orphan` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn a_signal_in_the_spawn_window_leaves_no_orphan() {
     // CLOUD-746 S3. The forwarder used to be installed AFTER the spawn, with two
     // `Drain::spawn` and two `Spool::open` calls in between — real file IO, not a
@@ -545,6 +553,10 @@ fn the_capture_is_sealed_before_the_re_raise() {
 /// different repositories, so their handles differ by construction and only the
 /// BYTES are comparable — which is what the acceptance clause is about.
 fn newest_capture(home: &Path) -> Vec<u8> {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: `walk` reads a test input: a fixture the case wrote or a file this repository tracks"
+    )]
     fn walk(dir: &Path, found: &mut Vec<Vec<u8>>) {
         let Ok(entries) = fs::read_dir(dir) else {
             return;
@@ -759,6 +771,10 @@ fn a_clean_run_leaves_no_group_record_and_a_killed_one_does() {
 }
 
 /// The contents of every `exec/group.*` note under a scratch state home.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `group_records` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn group_records(home: &Path) -> Vec<String> {
     let mut found = Vec::new();
     let mut stack = vec![home.join("data")];

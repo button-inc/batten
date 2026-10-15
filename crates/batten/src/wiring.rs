@@ -213,6 +213,10 @@ fn record_path(git_dir: &Path) -> PathBuf {
 ///
 /// Returns an error only when `dir` is not a git repository, since then there is
 /// no store to have looked in.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `read_at_load` reads one harness settings document"
+)]
 pub fn read_at_load(dir: &Path) -> Result<Option<AtLoad>> {
     let path = record_path(&git::git_dir(dir)?);
     let Ok(raw) = std::fs::read_to_string(path) else {
@@ -299,6 +303,10 @@ impl Reclaimed {
 /// could not be READ is not an error — it is a could-not-look, counted out of
 /// `surfaces_read` and left alone, because a file this verb cannot parse is one
 /// it must not rewrite.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `reclaim` reads one harness settings document"
+)]
 pub fn reclaim(dir: &Path, home: &Path, dry_run: bool) -> Result<Reclaimed> {
     // WHOSE `$HOME` IS THIS (CLOUD-1383). The census below is right about WHAT is
     // a sibling on either kind of machine; what it cannot know is whether removing
@@ -528,6 +536,10 @@ pub struct Registered {
 ///
 /// When the surface parsed and cannot be written back. A surface that will not
 /// parse is left alone, as [`reclaim`] leaves one.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `register` reads one harness settings document"
+)]
 pub fn register(root: &Path, repo: &Path, check: bool) -> Result<Registered> {
     let mut out = Registered {
         authoritative: crate::environment::disposable(),
@@ -834,6 +846,10 @@ fn shim(marker: &str) -> String {
 /// written back. A script that cannot be READ is a could-not-look and is left
 /// alone, reported [`DisarmState::Foreign`] — the same direction [`reclaim`]
 /// takes on a surface it cannot parse.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `disarm` reads one harness settings document"
+)]
 pub fn disarm(home: &Path, declared: &[Disarm], dry_run: bool) -> Result<Disarmed> {
     // The posture gate is [`reclaim`]'s, and sharing it is the point: a machine
     // whose home directory is somebody's own must not have its scripts rewritten

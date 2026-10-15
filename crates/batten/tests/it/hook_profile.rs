@@ -58,6 +58,10 @@ const WIRED_HOOK: &str = "#!/usr/bin/env bash\nhk run pre-commit --profile '!slo
 
 /// This repository's own `amends` line, so the scratch config resolves from the
 /// package cache this checkout already warmed rather than from the network.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `amends` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn amends() -> String {
     std::fs::read_to_string(at_root("hk.pkl"))
         .expect("read hk.pkl")
@@ -139,6 +143,10 @@ target = ".claude/hooks/git-hook.sh"
 
 /// A committed repository carrying the module, the rows, a hook and an
 /// `hk.pkl` with `steps` added — or none at all when `steps` is `None`.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `fixture` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn fixture(name: &str, hook: &str, steps: Option<&str>) -> PathBuf {
     let dir = scratch(&format!("hook-profile-{name}"));
     write(&dir, "batten.toml", &config());

@@ -188,6 +188,10 @@ fn format_path(store_dir: &Path) -> PathBuf {
 /// # Errors
 ///
 /// Returns an error when the journal directory cannot be created or written.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `open` reads the journal's one format record"
+)]
 pub fn open(store_dir: &Path) -> Result<Access> {
     let path = format_path(store_dir);
     let format = match std::fs::read_to_string(&path) {
@@ -514,6 +518,10 @@ pub enum Fold {
 /// an answer rather than a fault, and a caller that pattern-matches only
 /// [`Fold::Records`] gets a compile error rather than a silent empty list.
 #[must_use]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "not bounded: `fold_lines` reads the journal shards grow by a line per drain and per scan, and CLOUD-1522 streams them"
+)]
 pub fn fold_lines(store_dir: &Path) -> Fold {
     let dir = shards_dir(store_dir);
     let Ok(entries) = std::fs::read_dir(&dir) else {
@@ -584,6 +592,10 @@ pub enum Merge {
 }
 
 /// Read every shard's entries, in a deterministic order.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "not bounded: `read_shards` reads the journal shards grow by a line per drain and per scan, and CLOUD-1522 streams them"
+)]
 fn read_shards(store_dir: &Path) -> Result<Vec<Entry>> {
     let dir = shards_dir(store_dir);
     let Ok(entries) = std::fs::read_dir(&dir) else {
@@ -804,6 +816,10 @@ impl Drain {
 /// Infallible by construction: an absent log is an empty one (the ordinary
 /// first-drain case), and an unparseable line is skipped the same way a torn
 /// shard line is. There is no failure a caller could act on differently.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "not bounded: `read_merged` reads the merged journal grows by a line per entry, and CLOUD-1522 streams it"
+)]
 fn read_merged(store_dir: &Path) -> Vec<Entry> {
     let Ok(text) = std::fs::read_to_string(merged_path(store_dir)) else {
         return Vec::new();
@@ -1110,6 +1126,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: `a_merge_rewrites_only_the_records_its_fold_changed` reads a fixture this case wrote"
+    )]
     fn a_merge_rewrites_only_the_records_its_fold_changed() {
         // THE COST HALF of idempotence. Every merge replays every shard, so a
         // merge that wrote the record once per entry paid the log's whole history

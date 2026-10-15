@@ -32,6 +32,10 @@ fn repo(name: &str) -> PathBuf {
 /// reddens here. The whole file is not copied: it registers policy modules a
 /// scratch repository does not hold, and the hook refuses to adjudicate without
 /// them.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `authority` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn authority() -> String {
     let committed =
         std::fs::read_to_string(common::at_root("batten.toml")).expect("read the authority");
@@ -76,6 +80,10 @@ fn authority() -> String {
     kept
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `recorded` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn recorded(root: &Path) -> Option<String> {
     let git_dir = common::git_in(root, &["rev-parse", "--absolute-git-dir"]);
     let path = batten::recorder::record_path(Path::new(git_dir.trim()), "pr-closes", "work", None);

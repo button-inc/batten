@@ -1206,6 +1206,10 @@ pub fn run_cut(
 /// # Errors
 ///
 /// Only a failed write to `out` or `err`.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `run_pin` reads the committed config, one human-edited document"
+)]
 pub fn run_pin(
     at: Option<&str>,
     out: &mut dyn std::io::Write,

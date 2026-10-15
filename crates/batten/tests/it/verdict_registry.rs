@@ -548,6 +548,10 @@ fn a_command_route_naming_a_defined_task_is_clean_over_the_engine() {
 /// import can alias a variant path, which is what makes the scan sound here where
 /// `spawn_census`'s `Command::new` scan was not.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `every_native_class_is_raised_by_production_code` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn every_native_class_is_raised_by_production_code() {
     let verdict_rs = common::at_root("crates/batten/src/verdict.rs");
     let declared = declared_native_variants(&verdict_rs);
@@ -599,6 +603,10 @@ fn every_native_class_is_raised_by_production_code() {
 /// Re-typing the list here would be a second authority on it, and the two would
 /// drift in exactly the direction that makes the assertion above pass
 /// vacuously — a name missing from this copy is a class the gate stops checking.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `declared_native_variants` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn declared_native_variants(verdict_rs: &std::path::Path) -> Vec<String> {
     let src = std::fs::read_to_string(verdict_rs).expect("verdict.rs is committed");
     let at = src

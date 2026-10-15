@@ -52,6 +52,10 @@ const LATEST: &str = "release-due-latest";
 /// READ FROM `batten.toml`, never restated: the windows are the rows' own
 /// `since.seconds`, and a fixture carrying its own copy would test a window
 /// nobody ships.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `committed_queries` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn committed_queries() -> String {
     let text = std::fs::read_to_string(at_root("batten.toml")).expect("the authority");
     let parsed: toml::Value = toml::from_str(&text).expect("batten.toml parses");
@@ -76,6 +80,10 @@ fn committed_queries() -> String {
 
 /// A committed consumer repository: the real module, the committed windows, and
 /// the two families declared.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `repo` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn repo(name: &str) -> PathBuf {
     let dir = scratch(&format!("release-due-{name}"));
     let module = std::fs::read_to_string(at_root("policy/release-due.rego")).expect("the module");

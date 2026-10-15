@@ -123,6 +123,10 @@ fn the_swept_row_reads_the_documents_it_declares() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_fixture_declares_exactly_the_documents_it_was_asked_for` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_fixture_declares_exactly_the_documents_it_was_asked_for() {
     // The confound the experiment is built to avoid, asserted rather than trusted:
     // ONE rule, ONE bundle, ONE module, and only the `documents` array grows. A
@@ -145,6 +149,10 @@ fn the_fixture_declares_exactly_the_documents_it_was_asked_for() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_floor_arm_carries_neither_a_rule_nor_the_verdict_it_would_raise` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_floor_arm_carries_neither_a_rule_nor_the_verdict_it_would_raise() {
     // Both halves in one case, because they are one requirement: `[[verdict]]` runs
     // in BOTH directions, so a floor arm declaring the class with no rule to raise

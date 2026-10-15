@@ -95,6 +95,10 @@ const DENIALS: &[&str] = &[
 /// The features `Cargo.toml` actually enables, read through the engine's own
 /// TOML reader rather than a second parser — the same route `spawn_census.rs`
 /// takes to the `tokio` list.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `enabled_features` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn enabled_features() -> Vec<String> {
     let text = fs::read_to_string(at_root("Cargo.toml")).expect("the workspace manifest is here");
     let manifest = match Format::Toml.read(&text) {
@@ -114,6 +118,10 @@ fn enabled_features() -> Vec<String> {
 }
 
 /// Every tracked rules file, as `(path, contents)`.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `rules_files` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn rules_files() -> Vec<(String, String)> {
     let dir = at_root(RULES_DIR);
     let mut found: Vec<(String, String)> = fs::read_dir(&dir)

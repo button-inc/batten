@@ -67,6 +67,10 @@ fn record(root: &Path, body: &str) -> std::process::Output {
 }
 
 /// Read the record back through the engine's own path derivation.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `recorded` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn recorded(root: &Path) -> Option<String> {
     let git_dir = common::git_in(root, &["rev-parse", "--absolute-git-dir"]);
     let path = batten::recorder::record_path(Path::new(git_dir.trim()), "pr-closes", "work", None);

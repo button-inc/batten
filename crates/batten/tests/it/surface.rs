@@ -99,6 +99,10 @@ fn completions_are_byte_stable_across_runs() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_committed_completions_are_the_ones_the_binary_emits` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_committed_completions_are_the_ones_the_binary_emits() {
     // DoR §4's byte-for-byte drift assertion, over the compiled binary rather
     // than through the shell gate — so a stale committed script fails the Rust
@@ -452,6 +456,10 @@ fn a_page_is_emitted_for_every_command_and_none_is_empty() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_committed_pages_are_the_ones_the_binary_emits` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_committed_pages_are_the_ones_the_binary_emits() {
     // DoR §4 over the compiled binary, so a stale page fails the Rust suite too
     // and cannot land while only `hk` is skipped.

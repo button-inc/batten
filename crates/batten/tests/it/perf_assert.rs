@@ -387,6 +387,10 @@ fn an_unreadable_readme_is_reported() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_committed_readme_publishes_the_budgets_this_module_enforces` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_committed_readme_publishes_the_budgets_this_module_enforces() {
     // THE REAL PER-COMMIT GATE, and the case `tests/perf-assert.bats` ran on every
     // commit. It is the one assertion here whose subject is this repository rather

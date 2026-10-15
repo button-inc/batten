@@ -42,6 +42,10 @@ use std::fs;
 use common::at_root;
 
 /// The module the drain clause is about.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `exec_source` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn exec_source() -> String {
     fs::read_to_string(at_root("crates/batten/src/exec.rs")).expect("exec.rs is committed")
 }
@@ -80,6 +84,10 @@ fn the_runtime_never_reaches_the_module_that_owns_a_process_group() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_network_callers_are_the_declared_ones_and_nothing_else` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_network_callers_are_the_declared_ones_and_nothing_else() {
     // The claim the row asks nobody to over-read: the network call sites in the
     // crate are ENUMERATED. Everything else is local files, the deliberately

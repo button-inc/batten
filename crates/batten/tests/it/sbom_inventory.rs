@@ -188,6 +188,10 @@ target = "mise-tasks/sbom-actions.tsv"
 
 /// A repository carrying the committed module, the row that reads it, a lockfile,
 /// a workflow and the licence table.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `fixture` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn fixture(name: &str, table: &str) -> PathBuf {
     let dir = scratch(&format!("sbom-inventory-{name}-{}", std::process::id()));
     write(&dir, "batten.toml", &config());

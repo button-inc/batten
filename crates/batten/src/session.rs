@@ -255,6 +255,10 @@ impl SessionRecord {
 /// future-schema record is not partially trusted. Absent routes to "this session
 /// is its own root, with no cursor", which re-syncs — the safe direction, since a
 /// half-read cursor would skip findings.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `read_record` reads one record file this crate writes whole"
+)]
 fn read_record(path: &Path) -> Option<SessionRecord> {
     let text = std::fs::read_to_string(path).ok()?;
     let record: SessionRecord = serde_json::from_str(&text).ok()?;

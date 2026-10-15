@@ -92,6 +92,10 @@ impl Env {
     ///
     /// Returns after `provision apply` has installed it, so a case that wants a
     /// COLD cache simply does not call this.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: `install_scanner` reads a test input: a fixture the case wrote or a file this repository tracks"
+    )]
     fn install_scanner(&self, script: &str) {
         let path = self.artifacts.join("ripsecrets");
         fs::write(&path, script).unwrap();
@@ -136,6 +140,10 @@ impl Env {
     /// For the isolation cases below, which need a SECOND gate in the same run —
     /// the whole claim is about what happens to the other gates when one of them
     /// cannot complete, and a single-rule fixture cannot show it.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: `add_rule` reads a test input: a fixture the case wrote or a file this repository tracks"
+    )]
     fn add_rule(&self, toml: &str) {
         let path = self.repo.join("batten.toml");
         let existing = fs::read_to_string(&path).unwrap();
@@ -151,6 +159,10 @@ impl Env {
     }
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `collect` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn collect(dir: &Path, out: &mut Vec<u8>) {
     let Ok(entries) = fs::read_dir(dir) else {
         return;

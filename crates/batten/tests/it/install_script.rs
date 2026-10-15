@@ -68,6 +68,10 @@ use crate::common;
     clippy::disallowed_types,
     reason = "stays, and test-only: the action's own shell lines are what is under test, and `sh` is the program that runs them"
 )]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_action_installs_its_refs_pin` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_action_installs_its_refs_pin() {
     if cfg!(not(unix)) {
         return;
@@ -121,6 +125,10 @@ fn the_action_installs_its_refs_pin() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `install_sh_is_the_generated_bootstrap` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn install_sh_is_the_generated_bootstrap() {
     let path = common::at_root("install.sh");
     let generated = batten::install::render_bootstrap("batten", env!("CARGO_PKG_REPOSITORY"));

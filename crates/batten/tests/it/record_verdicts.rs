@@ -110,6 +110,10 @@ fn fetch(dir: &Path, forge: &Path, fanin: Option<&str>) -> Output {
 }
 
 /// The forge record for HEAD, or `None` where nothing was written.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `recorded` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn recorded(dir: &Path) -> Option<String> {
     let sha = git_in(dir, &["rev-parse", "HEAD"]);
     std::fs::read_to_string(batten::forge::record_path(&dir.join(".git"), sha.trim())).ok()
@@ -200,6 +204,10 @@ fn the_latest_run_per_name_wins_by_completion_then_start() {
 /// the first run creates the directory and answers `0`, and any second run over
 /// the same tree answers non-zero. So whether the verb asked again is readable
 /// off the record alone.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `validating` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn validating(name: &str, run: &str) -> PathBuf {
     let dir = scratch(&format!("record-verdicts-{name}"));
     init_repo(&dir);
@@ -221,6 +229,10 @@ fn validating(name: &str, run: &str) -> PathBuf {
 }
 
 /// `record validate config-validator`, and the one record it keeps.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `validated` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn validated(dir: &Path) -> (Output, Option<String>) {
     let mut command = common::batten();
     command
@@ -257,6 +269,10 @@ fn a_clean_answer_over_the_same_bytes_and_argv_is_not_asked_again() {
 /// consumer who changes the validator's flags has asked a different question
 /// of the same bytes, and a clean answer to the old one is not its answer.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `a_moved_argv_is_asked_again_over_the_same_bytes` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn a_moved_argv_is_asked_again_over_the_same_bytes() {
     let dir = validating("receipt-argv", r#"["mkdir", "asked"]"#);
     let (first, _) = validated(&dir);

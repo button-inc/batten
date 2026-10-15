@@ -633,6 +633,10 @@ pub(crate) fn escalate_group(pgid: &str) -> bool {
 /// Returns whether anything was still there to signal, which is a pointer-only
 /// answer (non-negotiable rule 4): a boolean, never what was running.
 #[must_use]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `cancel_owned_group` reads one record file this crate writes whole"
+)]
 pub(crate) fn cancel_owned_group(repo_root: &Path) -> bool {
     let Ok(dir) = crate::state::repo_state_dir(repo_root) else {
         return false;

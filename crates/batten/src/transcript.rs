@@ -868,6 +868,10 @@ impl Stream {
 /// [`parse`] is unchanged and still refuses a stream containing a line that does
 /// not decode: nothing here hands anyone a partial transcript.
 #[must_use]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "not bounded: `resolve` reads the host appends to the transcript every turn, and CLOUD-1524 streams it"
+)]
 pub fn resolve(root: &Path, configured: Option<&str>, harness: Option<Harness>) -> Capability {
     let Some(relative) = configured else {
         return Capability::Unconfigured;
@@ -1380,6 +1384,10 @@ fn authored_content(content: &Value) -> bool {
 /// repository can be pointed at, and no path, session id or byte of one leaves
 /// this function.
 #[must_use]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "not bounded: `census` reads the host appends to the transcript every turn, and CLOUD-1524 streams it"
+)]
 pub fn census(root: &std::path::Path, exclude: Option<&str>) -> usize {
     let mut seen = std::collections::BTreeSet::new();
     let mut pending = vec![root.to_path_buf()];

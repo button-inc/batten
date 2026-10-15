@@ -43,6 +43,10 @@ const INSTRUCTIONS: &str = "AGENTS.md";
 /// The path-scoped file that carries the detail behind the record.
 const DETAIL: &str = "rules/commits.md";
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `read` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn read(path: &str) -> String {
     fs::read_to_string(at_root(path)).unwrap_or_else(|error| panic!("read {path}: {error}"))
 }

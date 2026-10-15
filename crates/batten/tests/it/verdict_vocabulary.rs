@@ -216,6 +216,10 @@ fn every_candidate_word_is_one_token_under_the_declared_pin() {
 /// the table would be measured and unused. Both directions are asserted because
 /// only one of them is the obvious one.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_measured_list_and_the_declared_table_are_the_same_set` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_measured_list_and_the_declared_table_are_the_same_set() {
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let text =
@@ -271,6 +275,10 @@ fn the_measured_list_and_the_declared_table_are_the_same_set() {
 /// property the grammar's canonical form rests on, and it is what would have to
 /// be false for the space form to be the wrong choice.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_space_form_is_the_cheapest_spelling_of_a_name` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_space_form_is_the_cheapest_spelling_of_a_name() {
     let bpe = tiktoken_rs::o200k_base().expect("the pinned encoding is vendored with the crate");
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");

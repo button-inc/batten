@@ -663,6 +663,10 @@ pub fn read_range(dir: &Path, base: &str, head: &str) -> Result<Vec<Subject>> {
 /// # Errors
 ///
 /// Returns an error when the message file cannot be read — exit `1`, not a pass.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `read_message` reads one commit message the host passed"
+)]
 pub fn read_message(message: &Path) -> Result<Subject> {
     let body = std::fs::read_to_string(message).map_err(|error| {
         UsageError::raise(format!(

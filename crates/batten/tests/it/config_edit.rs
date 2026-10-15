@@ -226,6 +226,10 @@ fn an_empty_path_is_refused() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `apply_file_writes_only_a_change_and_nothing_on_a_refusal` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn apply_file_writes_only_a_change_and_nothing_on_a_refusal() {
     let dir = common::scratch("config-edit-apply-file");
     let file = dir.join("Cargo.toml");

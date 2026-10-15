@@ -17,6 +17,10 @@ use batten::uses::{Origin, RootExports, UseEdge, resolve, root_exports, use_edge
 
 /// The crate root, read from the tree rather than from a fixture — the
 /// measurement is a claim ABOUT this tree and a fixture could not make it.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `root_table` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn root_table() -> RootExports {
     let source = std::fs::read_to_string("src/lib.rs").expect("the crate root is readable");
     match root_exports(&source) {
@@ -26,6 +30,10 @@ fn root_table() -> RootExports {
 }
 
 /// Every module's resolved edges, keyed by file name.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `resolved_tree` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn resolved_tree() -> BTreeMap<String, Vec<UseEdge>> {
     let root = root_table();
     let mut out = BTreeMap::new();

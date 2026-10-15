@@ -158,6 +158,10 @@ fn the_skip_says_why_rather_than_only_that() {
 /// it refuses the fixture's absent `Cargo.toml` at once, which is still the verb
 /// failing without building anything.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `a_measurement_builds_the_repository_it_was_asked_about` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn a_measurement_builds_the_repository_it_was_asked_about() {
     let repo = repo("perf-measure-confined");
     let bin = repo.join("stub-bin");
@@ -385,6 +389,10 @@ fn the_keyed_base_directory_survives_the_per_run_wipe() {
 /// the shell case compared two integers, so a path renamed on one side and added
 /// on the other would have balanced out.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `every_path_perf_assert_budgets_is_paired` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn every_path_perf_assert_budgets_is_paired() {
     // THE TABLE MOVED WITH THE GATE (CLOUD-1321). `mise-tasks/perf-assert.sh` is
     // retired onto `policy/perf-assert.rego`, so the budgets are a Rego object
@@ -461,6 +469,10 @@ fn every_path_perf_assert_budgets_is_paired() {
 /// `lease_namespace_premise.rs`'s reason — a case that benchmarked a real binary
 /// would take minutes and would itself be the noisy measurement it is about.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_default_sample_is_at_least_what_the_null_was_remeasured_at` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_default_sample_is_at_least_what_the_null_was_remeasured_at() {
     /// The re-measured sample, below which the null is known to exceed the
     /// threshold on this class of container.

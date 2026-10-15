@@ -503,6 +503,10 @@ fn the_pkl_predicate_refuses_a_check_only_step_in_the_fix_hook() {
 /// inside the `["pre-commit"]` block and not merely somewhere in the file, or a
 /// `stash` on another hook would answer for this one.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `this_repositorys_hk_pkl_declares_stash_on_the_pre_commit_hook` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn this_repositorys_hk_pkl_declares_stash_on_the_pre_commit_hook() {
     let source = fs::read_to_string(common::at_root("hk.pkl")).expect("read the committed gate");
     let mut inside = false;
@@ -644,6 +648,10 @@ fn a_commit_contains_only_what_was_staged_with_another_change_dirty() {
 
 #[cfg(unix)]
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_unstaged_change_survives_the_fixer_byte_for_byte` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_unstaged_change_survives_the_fixer_byte_for_byte() {
     // THE DISCRIMINATING CASE. A fix that ate the second changeset would be worse
     // than the sweep it replaced, so "survives" means both halves: still unstaged,
@@ -664,6 +672,10 @@ fn the_unstaged_change_survives_the_fixer_byte_for_byte() {
 
 #[cfg(unix)]
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `shown_able_to_fail_without_the_setting_the_fixer_clobbers_the_unstaged_change` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn shown_able_to_fail_without_the_setting_the_fixer_clobbers_the_unstaged_change() {
     // THE NEGATIVE CONTROL, and the reason the case above is not vacuous. Identical
     // fixture, one line removed. If hk ever stops honouring `stash`, this case goes

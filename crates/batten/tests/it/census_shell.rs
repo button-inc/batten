@@ -487,6 +487,10 @@ fn the_census_is_byte_stable() {
 /// the enabling row hands it over at all. `shell_banned.rs` pins the exempt set
 /// itself, and that every declared home is a line source.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `this_repositorys_ban_reads_the_census_declaration` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn this_repositorys_ban_reads_the_census_declaration() {
     let authority: toml::Value =
         toml::from_str(&std::fs::read_to_string(common::at_root("batten.toml")).unwrap()).unwrap();

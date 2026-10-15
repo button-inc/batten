@@ -81,6 +81,26 @@ answers which class of whole-tree question is `rules/scanning.md`. The
 same applies to reading a deny message that
 points at somebody else's remedy (CLOUD-437).
 
+## The read census: a whole-file read declares its bound
+
+**A reader over a file whose length is not bounded by construction streams it.**
+`clippy.toml` bans `std::fs::read_to_string` and `std::fs::read` (CLOUD-1525), so
+the fn holding a whole-file read carries
+`#[expect(clippy::disallowed_methods, reason = "bounded: …")]` naming, beside the
+fn's own name in backticks, what bounds the file: one record the crate writes
+whole, a /proc record, the committed config.
+"Bounded by a config budget" names the budget. A tracked file is bounded only by
+the tracked tree's largest file, and the reason says so. "Small in practice" is not
+a bound. A store appended forever (a journal, a log, the transcript) is never
+annotated as bounded: it streams, and until it does its reason reads
+`not bounded:` and names the row that converts it. `#[expect]` rather than
+`#[allow]` keeps the inventory self-cleaning, as the spawn census's does. The count
+of these annotations is not what `waiver add refused` ratchets: that row counts
+the delay and runtime calls it was written for.
+
+A bounded file read an unbounded number of times is the census's blind spot, and
+its mechanism is a counter in the code path, never this lint.
+
 ## Concurrency posture — one authority, a verdict per row
 
 CLOUD-747. This stance was re-derived independently in five places, each with its

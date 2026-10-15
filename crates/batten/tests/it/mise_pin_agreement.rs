@@ -338,6 +338,10 @@ fn a_launcher_fronted_bare_exec_is_still_refused() {
 // dropped the scope or the pin is red here rather than in a session that could
 // not start its server.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_committed_launch_is_fronted_scoped_and_pinned` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_committed_launch_is_fronted_scoped_and_pinned() {
     let manifest =
         fs::read_to_string(common::at_root(".mcp.json")).expect("the committed manifest");

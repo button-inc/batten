@@ -304,6 +304,10 @@ pub fn path(root: &Path) -> Result<Option<PathBuf>> {
 ///
 /// Raises when the file exists and cannot be read or parsed, or carries a schema
 /// outside this build's range.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `load` reads one baseline document the record verb writes whole"
+)]
 pub fn load(root: &Path) -> Result<Option<Baseline>> {
     if !any_baseline_exists() {
         return Ok(None);

@@ -288,6 +288,10 @@ fn a_resolver_lane_is_denied_where_both_classes_are_declared() {
 /// Exit `1`, not `2`: a config that will not load is a statement about the
 /// invocation, never a verdict about the repository.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `dropping_the_resolve_class_refuses_the_load_rather_than_reporting_one_class` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn dropping_the_resolve_class_refuses_the_load_rather_than_reporting_one_class() {
     let root = fixture(
         "resolve-class-undeclared",

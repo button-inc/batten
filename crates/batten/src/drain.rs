@@ -1115,6 +1115,10 @@ fn wake_path(store_dir: &Path, session: &str) -> PathBuf {
 /// being wrong is one extra drain, where refusing would make a garbled bookkeeping
 /// file the reason findings stop being surfaced.
 #[must_use]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `load_wake` reads one record file this crate writes whole"
+)]
 pub fn load_wake(store_dir: &Path, session: &str) -> WakeState {
     let Ok(text) = std::fs::read_to_string(wake_path(store_dir, session)) else {
         return WakeState::default();
@@ -2417,6 +2421,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: `wake_state_round_trips_and_a_foreign_schema_reads_as_fresh` reads a fixture this case wrote"
+    )]
     fn wake_state_round_trips_and_a_foreign_schema_reads_as_fresh() {
         // A corrupt or future bookkeeping file must not be able to stop findings
         // being surfaced: unreadable resolves to a state that drains.

@@ -105,6 +105,10 @@ const RULE: &str = "rule watch other";
 /// are CONSUMER config — the engine refuses at load a module raising a token no
 /// row declares, and a fixture missing one fails with a config error that looks
 /// nothing like the predicate being wrong.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `fixture` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn fixture(name: &str, files: &[(&str, &str)]) -> std::path::PathBuf {
     let dir = scratch(name);
     let module = std::fs::read_to_string(
@@ -831,6 +835,10 @@ fn the_subscripted_spelling_counts_as_naming_a_key() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_two_anchors_this_gate_keys_on_are_still_one_line_in_the_committed_files` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_two_anchors_this_gate_keys_on_are_still_one_line_in_the_committed_files() {
     // THE ANTI-DEAD-GATE ASSERTION, and it exists because both new predicates are
     // LINE-ORIENTED over prose a formatter owns. `prettier` reflows Markdown, so a

@@ -296,6 +296,10 @@ fn owner_repo(slug: &str) -> Option<(String, String)> {
 ///
 /// Only an output channel that cannot be written. Every failure to establish an
 /// input or to reach the endpoint is a `give_up` at exit `0`.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `drop_subscription` reads one record file this crate writes whole"
+)]
 pub fn drop_subscription(
     git_dir: &Path,
     host: &Host,
@@ -466,6 +470,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: `a_receipt_is_this_sessions_for_this_pr` reads a fixture this case wrote"
+    )]
     fn a_receipt_is_this_sessions_for_this_pr() {
         let dir = std::env::temp_dir().join(format!("batten-unsubscribe-{}", std::process::id()));
         let host = Host {

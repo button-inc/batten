@@ -204,6 +204,10 @@ fn the_assertion_scan_would_find_an_ungated_claim() {
 /// is the third thing, which is what this closes: a reader told the check was
 /// run, by a comment that is the only record it ever was.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `every_conformance_claim_names_its_gate` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn every_conformance_claim_names_its_gate() {
     let phrases = claim_phrases();
     let marker = marker();

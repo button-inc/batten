@@ -30,6 +30,10 @@ fn census(source: &str) -> SkipCensus {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `no_case_returns_before_it_asserts` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn no_case_returns_before_it_asserts() {
     let root = common::at_root("crates/batten");
     let sources = common::rust_sources();

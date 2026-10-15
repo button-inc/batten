@@ -120,6 +120,10 @@ fn field_of(text: &str, row: &MintedQuery, now: u64) -> Option<String> {
 /// this mint is present with an EMPTY map — the engine looked and there was
 /// nothing, which is a different answer.
 #[must_use]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `fields` reads one record file this crate writes whole"
+)]
 pub fn fields(
     git_dir: &Path,
     declared: &[MintedQuery],

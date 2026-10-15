@@ -78,6 +78,10 @@ const SHIPPED_TABLES: &[&str] = &[
 ];
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `bound_two_no_ambient_crate_reaches_the_shipped_closure` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn bound_two_no_ambient_crate_reaches_the_shipped_closure() {
     // CLOUD-647's constraint, computed rather than promised — and computed with
     // the document fact CLOUD-772 landed, so this gate is also the first
@@ -115,6 +119,10 @@ fn bound_two_no_ambient_crate_reaches_the_shipped_closure() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_dev_only_exception_is_real_and_not_an_empty_allowance` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_dev_only_exception_is_real_and_not_an_empty_allowance() {
     // The bound above passes trivially if nothing it names is in the tree at all,
     // and an allowance nobody exercises is one nobody notices going stale. This
@@ -194,6 +202,10 @@ fn the_monotonicity_case_discriminates_on_severity() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `bound_four_the_policy_authority_is_a_protected_path` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn bound_four_the_policy_authority_is_a_protected_path() {
     // §8's out-of-band property: an agent must not be able to edit the rules that
     // judge it. The module registry the bound ultimately names does not exist
@@ -299,6 +311,10 @@ fn calls_the_clock(line: &str) -> bool {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_evaluation_path_reads_no_wall_clock` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_evaluation_path_reads_no_wall_clock() {
     // Pointer-only per non-negotiable rule 4: a path and a line, never the source.
     let mut problems: Vec<String> = Vec::new();
@@ -323,6 +339,10 @@ fn the_evaluation_path_reads_no_wall_clock() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_clock_sweep_reaches_the_files_it_claims_to` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_clock_sweep_reaches_the_files_it_claims_to() {
     // ANTI-VACUITY. The assertion above passes perfectly over a path that does not
     // exist and over a predicate that never matches: an empty sweep and a clean one
@@ -348,6 +368,10 @@ fn the_clock_sweep_reaches_the_files_it_claims_to() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_boundary_still_reads_a_clock_somewhere` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_boundary_still_reads_a_clock_somewhere() {
     // THE OTHER DIRECTION, and it makes the gate a statement about the SPLIT rather
     // than about abstinence. A crate with no clock read anywhere would not be this

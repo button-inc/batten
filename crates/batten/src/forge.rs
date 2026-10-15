@@ -108,6 +108,10 @@ pub fn record_path(git_dir: &Path, sha: &str) -> PathBuf {
 /// torn record is not evidence about the others, and a whole family refused for
 /// one bad line would take a gate offline for a producer's transient failure.
 #[must_use]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `verdicts` reads one record file this crate writes whole"
+)]
 pub fn verdicts(git_dir: &Path, declared: &[String]) -> BTreeMap<String, BTreeMap<String, String>> {
     let mut found = BTreeMap::new();
     for sha in declared {
@@ -516,6 +520,10 @@ fn validator_path(git_dir: &Path, url: &str) -> PathBuf {
 /// and reading that as an empty page would end the walk one page early and
 /// report the prefix as whole. `land-divergence`'s own `conditional_get`
 /// returned failure here for the same reason.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `conditional_get` reads one cached response and its etag, bounded by the forge's own page size"
+)]
 fn conditional_get(git_dir: &Path, path: &str, fetch: Transport<'_>) -> Option<(u16, String)> {
     let stored = validator_path(git_dir, path);
     let etag = std::fs::read_to_string(stored.join("etag")).ok();

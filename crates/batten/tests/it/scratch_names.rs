@@ -314,6 +314,10 @@ fn rust_sources(dir: &Path, out: &mut Vec<PathBuf>) {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `no_two_cases_can_reach_one_scratch_directory` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn no_two_cases_can_reach_one_scratch_directory() {
     let root = common::at_root("crates/batten/tests");
     let mut sources = Vec::new();

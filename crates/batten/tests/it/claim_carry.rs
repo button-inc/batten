@@ -65,6 +65,10 @@ fn carry(dir: &Path) -> (Option<i32>, String, String) {
 }
 
 /// Whether the receipt the verb writes is on disk under the branch's name.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `receipt` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn receipt(dir: &Path) -> Option<String> {
     let path = dir
         .join(".git")

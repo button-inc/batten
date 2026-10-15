@@ -89,6 +89,10 @@ fn is_input(path: &str) -> bool {
 /// task refused under a source pin.
 //MUTANT-SUITE crates/batten/tests/it/engine_pin.rs
 //MUTANT empty-digest-stamped|s@^    if inputs == 0 {$@    if false {@|a_stamp_over_no_inputs_is_refused
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `digest` reads a tracked file whole to hash it, so the tracked tree's largest file is the bound"
+)]
 pub fn digest(root: &Path) -> Result<String> {
     use sha2::Digest as _;
     let mut hasher = sha2::Sha256::new();
@@ -387,6 +391,10 @@ pub fn running_stamp() -> Option<String> {
 
 /// `binary`'s stamp, or `None` when it carries none.
 #[must_use]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `stamp_of` reads one record file this crate writes whole"
+)]
 pub fn stamp_of(binary: &Path) -> Option<String> {
     let text = std::fs::read_to_string(stamp_path(binary)).ok()?;
     let digest = text.trim();

@@ -125,6 +125,10 @@ const SHIPPED: &[u8] = b"#!/bin/sh\necho the fixture release\n";
 /// Serve, over loopback TLS, a ref `main` whose `batten.toml` pins [`WANTED`], and
 /// [`WANTED`]'s release for this build's target. Returns the host and the
 /// environment `engine install` needs to reach and trust it.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `ref_release_host` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn ref_release_host(home: &Path) -> (common::TlsWww, Vec<(String, String)>) {
     #[expect(
         clippy::disallowed_types,
@@ -195,6 +199,10 @@ fn ref_release_host(home: &Path) -> (common::TlsWww, Vec<(String, String)>) {
 /// `BATTEN_VERSION_FROM_REF` installs the release the ref's `batten.toml` pins,
 /// fetched and verified, rather than the binary that is running.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_version_comes_from_the_refs_manifest` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_version_comes_from_the_refs_manifest() {
     // Linux only, said here so the case compiles everywhere (CLOUD-1148): the
     // TLS fixture's key material comes from `openssl`.
@@ -234,6 +242,10 @@ fn the_version_comes_from_the_refs_manifest() {
 /// A named `BATTEN_VERSION` always wins: the bootstrap fetched and verified that
 /// release, so the ref is never read and the running binary is what lands.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `an_explicitly_named_version_is_never_replaced_by_the_ref` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn an_explicitly_named_version_is_never_replaced_by_the_ref() {
     // Linux only, said here so the case compiles everywhere (CLOUD-1148): the
     // TLS fixture's key material comes from `openssl`.

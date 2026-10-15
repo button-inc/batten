@@ -20,6 +20,10 @@ use std::io::{BufReader, Read, Write};
 
 const CHUNK: usize = 16 * 1024;
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `peak_rss_kib` reads a kernel-sized /proc record"
+)]
 fn peak_rss_kib() -> u64 {
     std::fs::read_to_string("/proc/self/status")
         .ok()

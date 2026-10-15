@@ -89,6 +89,10 @@ fn git(dir: &Path, args: &[&str]) {
 }
 
 /// The record this branch accumulated, or the empty string when none was written.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `record` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn record(dir: &Path) -> String {
     fs::read_to_string(dir.join(".git/batten-receipts/landing-lease.work")).unwrap_or_default()
 }

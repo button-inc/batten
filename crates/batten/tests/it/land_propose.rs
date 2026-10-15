@@ -17,6 +17,10 @@ use batten::propose::Shape;
 
 type Files<'a> = &'a [(&'a str, &'a str)];
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `init` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn init(name: &str) -> (PathBuf, gix::Repository) {
     let dir = common::scratch(name);
     let repo = gix::init(&dir).expect("init");
@@ -89,6 +93,10 @@ fn head_of(dir: &Path) -> String {
 /// order and appends the branch's item, and the replay still stops and moves
 /// nothing — a proposal is read, never applied.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `a_list_both_sides_grew_is_proposed_in_trunk_order_and_nothing_moves` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn a_list_both_sides_grew_is_proposed_in_trunk_order_and_nothing_moves() {
     let (dir, tip) = raced(
         "propose-list-race",

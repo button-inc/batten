@@ -56,6 +56,10 @@ const RULE: &str = "memory point missing";
 /// `crates/batten/tests/shell_retirement.rs`' precedent: a fixture that re-typed
 /// the predicate would be a second implementation, and it would pass over a
 /// module the engine can no longer load.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `fixture` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn fixture(name: &str, files: &[(&str, &str)]) -> std::path::PathBuf {
     let dir = scratch(name);
     let module = std::fs::read_to_string(

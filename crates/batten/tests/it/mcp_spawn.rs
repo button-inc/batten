@@ -120,6 +120,10 @@ fn spawn(dir: &Path, server: &str, launcher: &Path, args: &[&str]) -> std::proce
         .expect("run batten mcp spawn")
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `ledger_lines` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn ledger_lines(ledger: &Path) -> Vec<Vec<String>> {
     let Ok(text) = std::fs::read_to_string(ledger) else {
         return Vec::new();
@@ -326,6 +330,10 @@ fn a_launch_line_that_will_not_start_is_a_refusal_and_not_a_silent_success() {
 // to the release that shipped the verb; that release is the one on `PATH` now, so
 // the repoint landed and this case pins it.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_committed_config_launches_serena_through_the_verb` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_committed_config_launches_serena_through_the_verb() {
     let config: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(at_root(".mcp.json")).unwrap()).unwrap();
@@ -382,6 +390,10 @@ fn a_launch_line_carrying_its_own_double_dash_runs_verbatim() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_pinned_launch_args_are_still_in_the_committed_config` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_pinned_launch_args_are_still_in_the_committed_config() {
     // `mise-pin-agreement` reads the pin out of `.mcp.json`, so the args have to
     // stay there. Asserted here rather than only in the pin gate's own cases

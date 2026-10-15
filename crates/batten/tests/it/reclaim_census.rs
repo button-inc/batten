@@ -356,6 +356,10 @@ fn a_loop_that_stops_on_purpose_leaves_the_matching_x() {
 /// in-flight landing into an intentional one. No verb can write a torn line, so
 /// this one is appended by hand to the shard the notes went to.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `a_torn_stop_does_not_answer_for_its_boot` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn a_torn_stop_does_not_answer_for_its_boot() {
     let c = Clone::new("torn")
         .with_boots(&[PRIOR_BOOT])
@@ -409,6 +413,10 @@ fn the_declared_notes_are_argv_for_the_census_verb() {
 
 /// The two retired tasks are gone, and the session-start row names the verb.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_census_tasks_are_retired_onto_the_verb` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_census_tasks_are_retired_onto_the_verb() {
     let manifest = std::fs::read_to_string(common::at_root("mise.toml")).expect("mise.toml");
     let manifest: toml::Value = toml::from_str(&manifest).expect("mise.toml parses");

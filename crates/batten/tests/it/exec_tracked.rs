@@ -33,6 +33,10 @@ fn exec(dir: &Path, args: &[&str]) -> Output {
 }
 
 /// The processes whose command line carries `marker`, read from `/proc`.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `carrying` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn carrying(marker: &str) -> Vec<String> {
     std::fs::read_dir("/proc")
         .expect("read /proc")

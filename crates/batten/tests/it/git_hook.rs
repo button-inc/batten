@@ -124,6 +124,10 @@ impl Fixture {
     }
 
     /// Every call the stub recorded, one per line; empty when it was never run.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: `calls` reads a test input: a fixture the case wrote or a file this repository tracks"
+    )]
     fn calls(&self) -> String {
         fs::read_to_string(&self.calls).unwrap_or_default()
     }

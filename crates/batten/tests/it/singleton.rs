@@ -57,6 +57,10 @@ fn lock(repo: &Path, task: &str) -> PathBuf {
 /// this is a genuine "no such process" rather than a race against whatever
 /// happens to be running. A literal high number would eventually collide, and
 /// the collision would turn a crashed case green.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `unassignable_pid` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn unassignable_pid() -> String {
     std::fs::read_to_string("/proc/sys/kernel/pid_max")
         .ok()
@@ -65,6 +69,10 @@ fn unassignable_pid() -> String {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `an_unheld_task_is_acquired_and_the_pid_file_names_the_caller` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn an_unheld_task_is_acquired_and_the_pid_file_names_the_caller() {
     // The pid written is the CALLER's, never this process's: the verb acts on
     // the caller's behalf and holds nothing itself, because it exits at once.
@@ -77,6 +85,10 @@ fn an_unheld_task_is_acquired_and_the_pid_file_names_the_caller() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `a_second_acquire_is_refused_while_the_first_is_alive_and_names_the_live_pid` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn a_second_acquire_is_refused_while_the_first_is_alive_and_names_the_live_pid() {
     // THE ACCEPTANCE CASE, and the one CLOUD-428 was measured on. This process
     // is the live holder — a process this file knows everything about, so the
@@ -138,6 +150,10 @@ fn a_missing_registry_entry_still_refuses_because_the_lock_is_the_authority() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `a_lock_whose_holder_is_dead_is_reclaimed_rather_than_waited_out` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn a_lock_whose_holder_is_dead_is_reclaimed_rather_than_waited_out() {
     let repo = lock_repo("singleton-reclaim");
     let corpse = unassignable_pid();
@@ -174,6 +190,10 @@ fn a_lock_whose_holder_is_dead_is_reclaimed_rather_than_waited_out() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `a_lock_naming_no_pid_is_reclaimed_after_the_recheck` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn a_lock_naming_no_pid_is_reclaimed_after_the_recheck() {
     // CLOUD-1895. A lock with no pid file, or an empty one, is what a process
     // killed between `take`'s create and its write leaves behind. It used to read
@@ -222,6 +242,10 @@ fn a_readable_live_holder_is_still_refused_beside_the_unstamped_reclaim() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `a_live_holder_is_never_reclaimed_however_long_the_recheck_is` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn a_live_holder_is_never_reclaimed_however_long_the_recheck_is() {
     // The reachable half of TWO SIGHTINGS at this tier. The unreachable half —
     // the lock changing hands BETWEEN the two sightings — is

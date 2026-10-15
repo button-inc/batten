@@ -117,6 +117,10 @@ pub(crate) fn declared_board() -> String {
     TABLE.clone()
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `scan_declared_board` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn scan_declared_board() -> String {
     let text = std::fs::read_to_string(at_root("batten.toml")).expect("the committed config");
     let mut rows = String::new();
@@ -144,6 +148,10 @@ fn scan_declared_board() -> String {
     rows
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `scan_declared_patterns` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn scan_declared_patterns() -> String {
     let text = std::fs::read_to_string(at_root("batten.toml")).expect("the committed config");
     let mut rows = String::new();
@@ -246,6 +254,10 @@ pub(crate) fn at_root(name: &str) -> PathBuf {
 ///
 /// Read through [`at_root`], so under `mutate sweep` it is the STAGED manifest and
 /// a mutation of the body is what the suite sees.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `task_block` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 pub(crate) fn task_block(name: &str) -> Option<String> {
     let manifest =
         std::fs::read_to_string(at_root("mise.toml")).expect("the task manifest is readable");
@@ -289,6 +301,10 @@ pub(crate) fn task_value(block: &str, key: &str) -> String {
 /// An absent task or an absent `run` is the empty list, which every caller
 /// asserts against rather than reading as a pass.
 #[must_use]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `task_commands` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 pub(crate) fn task_commands(name: &str) -> Vec<String> {
     let manifest = fs::read_to_string(at_root("mise.toml")).expect("the manifest");
     let parsed: toml::Value = toml::from_str(&manifest).expect("mise.toml parses as TOML");
@@ -327,6 +343,10 @@ pub(crate) fn task_commands(name: &str) -> Vec<String> {
 /// A single string and a list are both spellings mise accepts, so both read the
 /// same here; an absent key is the empty list.
 #[must_use]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `task_depends` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 pub(crate) fn task_depends(name: &str) -> Vec<String> {
     let manifest = fs::read_to_string(at_root("mise.toml")).expect("the manifest");
     let parsed: toml::Value = toml::from_str(&manifest).expect("mise.toml parses as TOML");
@@ -425,6 +445,10 @@ fn bypass_env_vars() -> Vec<String> {
 /// A two-field serde view rather than a `toml::Value` tree: everything but the
 /// `[[rule]]` rows' one column is skipped by the deserializer instead of built.
 //MUTANT bypass-read-drops-rows|s@^        .filter_map(\x7crule\x7c rule.bypass_env)$@        .filter_map(\x7crule\x7c rule.bypass_env.filter(\x7c_\x7c false))@|the_cheap_bypass_read_names_what_the_full_load_names
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `bypass_env_vars_in` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 pub(crate) fn bypass_env_vars_in(path: &Path) -> Vec<String> {
     #[derive(serde::Deserialize)]
     struct Rows {
@@ -990,6 +1014,10 @@ pub(crate) fn pinned_mise_data_dir() -> Option<&'static Path> {
 /// One reader for every task-body tier, so a suite asserts the committed task
 /// rather than a copy of it.
 #[must_use]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `task_body` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 pub(crate) fn task_body(name: &str) -> String {
     let manifest = fs::read_to_string(at_root("mise.toml")).expect("the manifest");
     let parsed: toml::Value = toml::from_str(&manifest).expect("mise.toml parses as TOML");
@@ -1016,6 +1044,10 @@ pub(crate) fn task_body(name: &str) -> String {
 
 /// `[env].<name>` from the committed `mise.toml` — the one declaration a task
 /// body and its tier both read, so a tier never restates a shared name.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `task_env` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 pub(crate) fn task_env(name: &str) -> String {
     let manifest = fs::read_to_string(at_root("mise.toml")).expect("the manifest");
     let parsed: toml::Value = toml::from_str(&manifest).expect("mise.toml parses as TOML");
@@ -1172,6 +1204,10 @@ pub(crate) fn produce(dir: &Path, task: &str, stdin: &str) -> Output {
 /// four cases to assert `rm .serena/memories/core.md` refuses against a set that
 /// does not name it.
 #[must_use]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `committed_protected_declared` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 pub(crate) fn committed_protected_declared() -> bool {
     let authority = std::fs::read_to_string(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../batten.toml"),
@@ -1238,6 +1274,10 @@ pub(crate) fn committed_protected_path() -> &'static str {
 /// this repository's own rows, independent of whether the owner has the
 /// committed gate switched on.
 #[must_use]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `committed_fixture_with_protected` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 pub(crate) fn committed_fixture_with_protected(name: &str) -> PathBuf {
     let committed = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let authority =
@@ -2175,6 +2215,10 @@ pub(crate) fn init_repo(dir: &Path) {
 /// and `clone`, none of which a [`Fixture`] runs — and [`git_command`]'s
 /// `gc.auto=0` closes the auto path — so a fixture that ever packs its refs
 /// should fail here by name rather than pin nothing and pass.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `pin_origin_main` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 pub(crate) fn pin_origin_main(dir: &Path) {
     let git = dir.join(".git");
     assert!(
@@ -2260,6 +2304,10 @@ impl Fixture {
     /// For a table a fixture wants IN ADDITION to its own, where re-typing the
     /// whole config to add one section would put two spellings of it in the
     /// suite — [`declared_patterns`] is the case this exists for.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: `config_append` reads a test input: a fixture the case wrote or a file this repository tracks"
+    )]
     pub(crate) fn config_append(self, contents: &str) -> Self {
         let path = self.dir.join("batten.toml");
         let existing = std::fs::read_to_string(&path).unwrap_or_default();
@@ -2346,6 +2394,10 @@ impl Fixture {
     /// valid TOML at the head of any document); one that names its own keeps it,
     /// and [`Fixture::undeclared_trunk`] opts a case out.
     #[must_use]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: `base_commit` reads a test input: a fixture the case wrote or a file this repository tracks"
+    )]
     pub(crate) fn base_commit(self) -> Self {
         let config = self.dir.join("batten.toml");
         if !self.undeclared_trunk
@@ -2469,6 +2521,10 @@ pub(crate) fn committed_patterns() -> Vec<batten::pattern::NamedPattern> {
     PATTERNS.clone()
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `parse_committed_patterns` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn parse_committed_patterns() -> Vec<batten::pattern::NamedPattern> {
     let text = std::fs::read_to_string(at_root("batten.toml")).expect("batten.toml is committed");
     // `Table` rather than `Value`: this crate's `toml` parses a bare `Value` as a
@@ -2525,6 +2581,10 @@ fn parse_committed_patterns() -> Vec<batten::pattern::NamedPattern> {
 /// before.
 // MUTANT vocabulary-reads-ignored-tree|s@batten::rules::tree_files(root).expect("the vocabulary root is walkable")@std::fs::read_dir(root).into_iter().flatten().flatten().flat_map(\x7cdir\x7c std::fs::read_dir(dir.path()).into_iter().flatten().flatten().map(move \x7cfile\x7c format!("{}/{}", dir.file_name().to_string_lossy(), file.file_name().to_string_lossy()))).collect::<Vec<_>>()@|the_declared_vocabulary_never_reads_an_ignored_directory
 #[must_use]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `verdicts_in` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 pub(crate) fn verdicts_in(root: &Path) -> Vec<batten::verdict::DeclaredVerdict> {
     let mut found: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     // An absent root declares nothing, as the `read_dir` walk it replaces did; an

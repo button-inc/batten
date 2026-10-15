@@ -117,6 +117,10 @@ fn pin_source(dir: &Path, digest: &str) {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `an_unpinned_repo_updates_nothing` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn an_unpinned_repo_updates_nothing() {
     let dir = repo("engine-update-unpinned");
     stub_cargo(&dir);
@@ -129,6 +133,10 @@ fn an_unpinned_repo_updates_nothing() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `a_source_pin_update_installs_where_the_hook_resolves` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn a_source_pin_update_installs_where_the_hook_resolves() {
     // CLOUD-2226. Under `mise exec` the running binary is the build output, so
     // installing over it alone left the `batten` the hook resolves on `PATH`
@@ -162,6 +170,10 @@ fn a_source_pin_update_installs_where_the_hook_resolves() {
 /// runs behind, so the refusal's one repair changed nothing. Measured on #1132.
 /// A current running engine installs ITSELF over the stale copy, with no build.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `a_current_engine_replaces_a_stale_installed_copy` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn a_current_engine_replaces_a_stale_installed_copy() {
     let dir = repo("engine-update-current-runner");
     stub_cargo(&dir);
@@ -211,6 +223,10 @@ fn engine_stamp(binary: &Path) -> PathBuf {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `a_source_pin_builds_installs_and_stamps` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn a_source_pin_builds_installs_and_stamps() {
     let dir = repo("engine-update-source");
     stub_cargo(&dir);
@@ -240,6 +256,10 @@ fn a_source_pin_builds_installs_and_stamps() {
 /// instead (CLOUD-2063). Measured before the guard: `verify`'s own `cargo run`
 /// overwrote `target/debug/batten` with the pinned release.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `a_build_inside_the_checkout_is_never_replaced` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn a_build_inside_the_checkout_is_never_replaced() {
     let dir = repo("engine-update-checkout-build");
     stub_cargo(&dir);
@@ -455,6 +475,10 @@ fn seed_release(dir: &Path, tag: &str) {
 /// cache. It is exec'd from the cache, and the installed binary is left alone:
 /// a lockfile's runner execs the pinned version, it does not reinstall itself.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `a_release_pin_is_followed_from_the_cache_on_the_hook_path` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn a_release_pin_is_followed_from_the_cache_on_the_hook_path() {
     let dir = repo("engine-update-follow-release");
     stub_cargo(&dir);

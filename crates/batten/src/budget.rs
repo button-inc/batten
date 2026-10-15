@@ -492,6 +492,10 @@ fn find_line_anchored(haystack: &str, needle: &str) -> Option<usize> {
 /// unknown or the document does not parse. That refusal is the whole point: an
 /// always-loaded surface the gate cannot read must never be reported as an empty
 /// one, which is the same false green a dead glob produced (CLOUD-298).
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `embedded_value` reads a tracked file, so the tracked tree's largest file is the bound, and the document is parsed whole"
+)]
 fn embedded_value(root: &Path, name: &str, decl: &EmbeddedDecl) -> Result<Option<String>> {
     let full = root.join(&decl.path);
     let text = match fs::read_to_string(&full) {
@@ -602,6 +606,10 @@ pub fn count_lines(loaded: &str) -> usize {
 /// when any single entry matches no file — per entry, never per set, so a dead
 /// glob cannot hide behind the entries that still count. An I/O failure while
 /// walking or reading propagates as an internal error (→ exit `3`).
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `measure` reads a tracked file, so the tracked tree's largest file is the bound, and the document is parsed whole"
+)]
 pub fn measure(root: &Path, name: &str, budget: &BudgetSet) -> Result<Report> {
     if budget.files.is_empty() && budget.embedded.is_empty() {
         return Err(UsageError::raise(format!(

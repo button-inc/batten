@@ -208,6 +208,10 @@ fn bench_copy(name: &str) -> std::path::PathBuf {
 /// the tree. So the benchmark is copied into a repository of its own, the binary
 /// linked beside it, and only the copy is perturbed.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `an_unmethodical_table_is_refused` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn an_unmethodical_table_is_refused() {
     let copy = bench_copy("bench-tokens-unmethodical");
 
@@ -238,6 +242,10 @@ fn an_unmethodical_table_is_refused() {
 
 /// The retired programs are gone and no caller resolves them by path.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_retired_programs_are_not_tracked` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_retired_programs_are_not_tracked() {
     let root = repo();
     for path in [
@@ -263,6 +271,10 @@ fn the_retired_programs_are_not_tracked() {
 /// are deserialised into types, so a malformed method is a parse error naming
 /// the file rather than an empty shell variable that prices everything at zero.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_benchmark_reads_its_inputs_without_a_shell_toolchain` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_benchmark_reads_its_inputs_without_a_shell_toolchain() {
     let root = repo();
     let tasks = std::fs::read_to_string(root.join("mise.toml")).expect("mise.toml");

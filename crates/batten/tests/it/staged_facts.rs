@@ -519,6 +519,10 @@ checksum = "sha256:abc"
 "#;
 
 /// Materialize a repository carrying the committed `lock cover partial` module.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `lock_fixture` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn lock_fixture(name: &str, lock: &str) -> PathBuf {
     let module = std::fs::read_to_string(
         Path::new(env!("CARGO_MANIFEST_DIR"))

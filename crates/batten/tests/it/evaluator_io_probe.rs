@@ -58,6 +58,10 @@ use crate::common;
 use common::{git_in, init_repo, run, run_with_stdin, scratch, write};
 
 /// A repository registering the real module against the declared family.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `repo` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn repo(name: &str) -> std::path::PathBuf {
     let dir = scratch(&format!("evaluator-io-probe-{name}"));
     let module = std::fs::read_to_string("../../policy/evaluator-io-probe.rego")
@@ -286,6 +290,10 @@ fn the_verb_derives_a_real_failure_into_the_pass() {
 /// verdict carries no log byte; this asserts the RECORD does not either, which
 /// is the claim that matters — the record is a file on disk a module reads.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `no_byte_of_the_probe_log_reaches_the_record` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn no_byte_of_the_probe_log_reaches_the_record() {
     let dir = repo("derive-noisy");
     let written = derive(&dir, 101, "SECRET_MODULE_BODY\nerror: build failed\n");
@@ -470,6 +478,10 @@ fn the_probe_verb_refuses_a_supplied_status_and_a_command_that_will_not_start() 
 
 /// The task is the verb: one argv running the real probe build.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_task_is_the_probe_verb` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_task_is_the_probe_verb() {
     let text = std::fs::read_to_string(common::at_root("mise.toml")).expect("the manifest");
     let parsed: toml::Value = toml::from_str(&text).expect("mise.toml parses");

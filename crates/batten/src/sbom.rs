@@ -511,6 +511,10 @@ fn first_quoted(text: &str, prefix: &str) -> Option<String> {
 }
 
 /// The manifest's version: the first `version = "…"` line.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `manifest_version` reads the workspace `Cargo.toml`, one manifest"
+)]
 fn manifest_version(root: &Path) -> Result<String> {
     let text = std::fs::read_to_string(root.join("Cargo.toml")).unwrap_or_default();
     match first_quoted(&text, "version = \"") {
@@ -535,6 +539,10 @@ fn manifest_version_for_binary(root: &Path, binary: &str) -> Result<String> {
 }
 
 /// `Organization: <first author>` of the manifest, or NOASSERTION.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `workspace_supplier` reads the workspace `Cargo.toml`, one manifest"
+)]
 fn workspace_supplier(root: &Path) -> String {
     let text = std::fs::read_to_string(root.join("Cargo.toml")).unwrap_or_default();
     match first_quoted(&text, "authors = [") {
@@ -572,6 +580,10 @@ fn holder_lines(text: &str) -> Vec<String> {
 }
 
 /// A file's text, or nothing for one a line scan would call binary.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `scannable` reads one build artifact, whose size the build bounds"
+)]
 fn scannable(path: &Path) -> Option<String> {
     let bytes = std::fs::read(path).ok()?;
     if bytes.contains(&0) {
@@ -1115,6 +1127,10 @@ fn spawn(program: &str, args: &[&str], root: &Path, capture: bool) -> Option<(bo
 }
 
 /// Read and parse one JSON document.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `read_json` reads one generated SBOM document"
+)]
 fn read_json(path: &Path) -> Option<Value> {
     serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()
 }
@@ -1218,6 +1234,10 @@ fn derive_tree(declared: &Declared, root: &Path, spdx: &Path, cdx: &Path) -> Res
 }
 
 /// [`derive_tree`]'s work, with the cleanup left to the caller.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `derive_tree_inner` reads a tracked file, so the tracked tree's largest file is the bound, and the document is parsed whole"
+)]
 fn derive_tree_inner(declared: &Declared, root: &Path, spdx: &Path, cdx: &Path) -> Result<Value> {
     // Bound before the scan, so a manifest this cannot read fails before syft
     // spends a minute cataloguing a tree whose subject it could not name.

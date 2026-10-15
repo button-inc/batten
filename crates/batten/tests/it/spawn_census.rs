@@ -57,6 +57,10 @@ fn census_attributes(source: &str) -> Vec<(usize, String)> {
 
 /// The workspace manifest as a parsed document, through the fact the engine
 /// already owns (CLOUD-772) rather than a second TOML reader.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `manifest` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn manifest() -> Node {
     let text = fs::read_to_string(at_root("Cargo.toml")).expect("the workspace manifest is here");
     match Format::Toml.read(&text) {
@@ -116,6 +120,10 @@ fn the_stale_annotation_arm_is_denied_too() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `clippy_toml_names_the_spawn_type_and_says_why` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn clippy_toml_names_the_spawn_type_and_says_why() {
     // The other half: the manifest carries the severity, this file carries the
     // subject. Split because they are different questions and clippy reads them
@@ -137,6 +145,10 @@ fn clippy_toml_names_the_spawn_type_and_says_why() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_signal_ban_is_declared_and_coupled_to_the_bound_that_holds_today` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_signal_ban_is_declared_and_coupled_to_the_bound_that_holds_today() {
     // CLOUD-747. Signals are `signal-hook`'s, one registry: mise's supervisor
     // reaches for the same crate, so both ends of the pgroup protocol are
@@ -251,6 +263,10 @@ fn the_signal_ban_is_declared_and_coupled_to_the_bound_that_holds_today() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `every_annotation_is_an_expect_carrying_a_verdict` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn every_annotation_is_an_expect_carrying_a_verdict() {
     // The property that replaces the table. Each site's verdict is on the site,
     // so there is nothing to keep in sync — and `#[expect]` rather than
@@ -292,6 +308,10 @@ fn every_annotation_is_an_expect_carrying_a_verdict() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_census_is_not_empty` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_census_is_not_empty() {
     // The anti-vacuity arm. Every assertion above is about the SHAPE of an
     // annotation, and each of them passes trivially over a crate that carries
@@ -315,6 +335,10 @@ fn the_census_is_not_empty() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `claps_command_needs_no_annotation` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn claps_command_needs_no_annotation() {
     // THE DISCRIMINATOR, and it is load-bearing (§7(c)). `surface.rs` imports
     // clap's `Command` BARE, so the token names two different types in this

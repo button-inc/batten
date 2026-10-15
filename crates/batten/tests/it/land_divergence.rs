@@ -443,6 +443,10 @@ fn measure(dir: &std::path::Path, forge: &std::path::Path) -> std::process::Outp
 }
 
 /// What the fixture forge was asked, one request per line.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `asked` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn asked(forge: &std::path::Path) -> String {
     std::fs::read_to_string(forge.join("args")).unwrap_or_default()
 }

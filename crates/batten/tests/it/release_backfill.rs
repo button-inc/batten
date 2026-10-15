@@ -160,6 +160,10 @@ fn said(output: &Output) -> String {
     )
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `requests` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn requests(forge: &Path) -> Vec<String> {
     std::fs::read_to_string(forge.join("args"))
         .unwrap_or_default()
@@ -202,6 +206,10 @@ fn the_repository_tags_are_swept_oldest_first_by_version() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `named_tags_win_over_the_repository_tags` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn named_tags_win_over_the_repository_tags() {
     let (dir, forge) = sweep(
         "named",

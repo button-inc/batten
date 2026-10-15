@@ -55,6 +55,10 @@ impl Bench {
         self.home.join(".launcher").join(name)
     }
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: `body` reads a test input: a fixture the case wrote or a file this repository tracks"
+    )]
     fn body(&self, name: &str) -> String {
         std::fs::read_to_string(self.script(name)).expect("the script is readable")
     }

@@ -32,6 +32,10 @@ use std::process::Output;
 
 use common::{Fixture, git_in, run, stdout};
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `report_repo` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn report_repo(name: &str, manifest: &str, workflow: Option<&str>) -> PathBuf {
     let mut fixture = Fixture::new(name)
         .config(

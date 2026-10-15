@@ -354,6 +354,10 @@ impl Secret {
 /// when the file it names will not read. **Every message names the VARIABLE and
 /// the source id and nothing else** — never the path it expanded to, which is a
 /// machine's home directory, and never a byte of the value.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `credential` reads one credential file"
+)]
 fn credential(source: &Source) -> Result<Option<(String, Secret)>> {
     let Some(row) = &source.credential else {
         return Ok(None);
@@ -1232,6 +1236,10 @@ fn entry_in(
 /// Split out of [`entry_in`] (CLOUD-843) so `mcp grant` can walk a map's KEYS as
 /// well as look one up, through the same path resolution, escape checks and
 /// could-not-look arms, rather than a second copy of the walk.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `server_map` reads one harness settings document"
+)]
 pub(crate) fn server_map(
     source: &Source,
     repo_root: &Path,
@@ -1532,6 +1540,10 @@ pub fn bound_in(
 //MUTANT allow-check-ignores-policy|s@^            (!posture.is_empty() && posture != ALWAYS_ALLOW).then_some@            (!posture.is_empty()).then_some@|an_allow_rule_whose_tool_the_connector_allows_passes
 //MUTANT bare-rule-unread|s@^        if is_bare_server_rule(rule, server) {$@        if false {@|a_bare_server_rule_counts_once_when_any_tool_asks
 //MUTANT bare-rule-over-allowed-counted|s@^            if !asking.is_empty() {$@            if true {@|a_bare_server_rule_counts_once_when_any_tool_asks
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `unenforceable_in` reads one harness settings document"
+)]
 fn unenforceable_in(
     settings: &[std::path::PathBuf],
     server: &str,
@@ -1611,6 +1623,10 @@ fn unenforceable_in(
 /// which names exist; refusing every per-tool grant against it would report a real
 /// grant as absent. Where no name could be read, the grammar is all there is and
 /// the check falls back to it.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `granted_in` reads one harness settings document"
+)]
 fn granted_in(settings: &[std::path::PathBuf], server: &str, declared: &[String]) -> Option<bool> {
     let prefix = format!("mcp__{server}");
     let mut looked = false;
@@ -2116,6 +2132,10 @@ pub fn spawn_ledger(root: &Path) -> Option<std::path::PathBuf> {
 /// renders `?` rather than a number when it cannot be read: a zero there would
 /// read as *the machine was idle*, which is precisely the claim the hypothesis
 /// above turns on.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `spawn_record` reads a kernel-sized /proc record"
+)]
 fn spawn_record(
     root: &Path,
     server: &str,
@@ -2150,6 +2170,10 @@ fn spawn_record(
 /// A timestamp in the FUTURE is skipped rather than counted. Clocks move
 /// backwards on resume, and a negative age counted as a sibling would inflate
 /// exactly the field the hypothesis reads.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `siblings_within` reads the sibling ledger, which the window `siblings_within` names prunes"
+)]
 fn siblings_within(ledger: &Path, now: u64) -> usize {
     let Ok(text) = std::fs::read_to_string(ledger) else {
         return 0;

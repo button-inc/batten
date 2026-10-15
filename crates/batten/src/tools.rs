@@ -112,6 +112,10 @@ pub fn record_path(git_dir: &Path, key: &str) -> PathBuf {
 /// "the tool found nothing", and a gate that confused them would pass on
 /// ignorance. Same for a key with no record.
 #[must_use]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `verdicts` reads a tracked input and one record file"
+)]
 pub fn verdicts(
     git_dir: &Path,
     root: &Path,

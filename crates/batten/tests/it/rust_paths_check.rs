@@ -52,6 +52,10 @@ fn paths_repo(name: &str, entries: &[&str]) -> PathBuf {
     workflow_repo(name, &workflow)
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `workflow_repo` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn workflow_repo(name: &str, workflow: &str) -> PathBuf {
     let dir = Fixture::new(name)
         .config(

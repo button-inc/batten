@@ -822,6 +822,10 @@ struct Request<'a> {
 /// answers from `<file>`, and a request body is kept beside it as
 /// `<file>.request` so a case asserts what the forge was ASKED to store. No
 /// `routes` file, or no line matching, falls through to the call-order protocol.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `from_fixture` reads one recorded fixture response"
+)]
 fn from_fixture(
     dir: &std::path::Path,
     request: &Request<'_>,

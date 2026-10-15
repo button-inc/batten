@@ -43,6 +43,10 @@ const CANARIES: &[&str] = &[
 ];
 
 /// A fixture transcript, read from the checked-in pack.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `transcript` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn transcript(name: &str) -> String {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/transcripts")

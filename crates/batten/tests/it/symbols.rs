@@ -216,6 +216,10 @@ fn the_resolved_set_excludes_what_only_name_resolution_can_exclude() {
 
 /// The byte tier, run here rather than quoted, so the comparison above is a
 /// MEASUREMENT and not a remembered number.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `byte_scan` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn byte_scan(root: &Path) -> std::collections::BTreeSet<&'static str> {
     let dir = root.join("src");
     let needle = ["Command", "::new"].concat();

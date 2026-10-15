@@ -106,6 +106,10 @@ fn a_record_under_another_key_does_not_answer() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `a_half_written_append_is_not_a_record` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn a_half_written_append_is_not_a_record() {
     // THE DISCRIMINATING CASE (CLOUD-1032). A process killed mid-`write` leaves a
     // line with no terminator. `str::lines` yields it identically to a whole one,

@@ -355,6 +355,10 @@ const RETIRED_MERGED: [&str; 2] = [
 ///
 /// One of each per case: these run in parallel and `git init` races on a shared
 /// directory.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `fixture` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn fixture(name: &str, committed: &str, merged: Option<&str>) -> (PathBuf, PathBuf) {
     let repo = scratch(&format!("harness-wiring-{name}"));
     write(&repo, "batten.toml", &config());
@@ -502,6 +506,10 @@ fn a_stop_sibling_is_refused_too_so_the_scope_is_every_event() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `a_tree_with_no_wiring_surface_is_clean` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn a_tree_with_no_wiring_surface_is_clean() {
     // COULD-NOT-LOOK IS NOT A FINDING, and this case exists because the opposite
     // shipped once. Measured 2026-09-01, before CLOUD-1383 deleted the exemption

@@ -173,6 +173,10 @@ target = "forge-verdict-required.rego"
 ///
 /// THE WHOLE RECORD rather than one conclusion, because the anti-vacuity case
 /// needs a second line — a leaf skipping beside a fan-in that genuinely failed.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `real_fixture` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn real_fixture(name: &str, record: &str) -> PathBuf {
     let dir = scratch(&format!("forge-real-{name}"));
     write(&dir, "batten.toml", &real_config(DECLARED_SHA));

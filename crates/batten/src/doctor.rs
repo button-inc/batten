@@ -638,6 +638,10 @@ pub fn rustup_target(rustlib: &Path, target: &str, installed: bool) -> RustupTar
 /// rather than a substring: `rust-std-x86_64-unknown-linux-gnu` contains
 /// `rust-std-x86_64-unknown-linux-gn`, so a substring test would report residue
 /// for a target that merely prefixes an installed one.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `residue` reads a toolchain's one-line-per-component manifest"
+)]
 fn residue(rustlib: &Path, target: &str) -> bool {
     if rustlib.join(target).is_dir() {
         return true;
@@ -724,6 +728,10 @@ fn rustlib_dir() -> Option<PathBuf> {
 /// from [`RustupTarget::Stale`]. `rustup target remove` is asked first and its
 /// failure ignored on purpose: it is the tidy path, and the whole premise here is
 /// that rustup's bookkeeping disagrees with the disk.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `purge` reads a toolchain's one-line-per-component manifest"
+)]
 fn purge(rustlib: &Path, target: &str) {
     drop(rustup(&["target", "remove", target]));
     drop(std::fs::remove_dir_all(rustlib.join(target)));
@@ -1083,6 +1091,10 @@ pub fn unprovisioned(declared: &[String], installed: &[String]) -> Vec<String> {
 /// a constant here: non-negotiable rule 1, with `document_facts.rs`'s
 /// `no_artifact_name_reaches_the_core` as the gate that enforces it.
 #[must_use]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `diagnose_toolchain` reads a toolchain's one-line-per-component manifest"
+)]
 pub fn diagnose_toolchain(manifest: &Path, probe: &str) -> Toolchain {
     let Ok(text) = std::fs::read_to_string(manifest) else {
         return Toolchain::Unreadable;
@@ -1114,6 +1126,10 @@ pub fn diagnose_toolchain(manifest: &Path, probe: &str) -> Toolchain {
 /// Reads both files and hashes them; spawns nothing. Length is compared first
 /// only as a short-circuit — two files of different lengths cannot be identical.
 #[must_use]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `diagnose_mediator` reads two release binaries to compare them, whose size the release build bounds"
+)]
 pub fn diagnose_mediator(dir: &Path) -> Mediator {
     // The tree builds a mediator iff it carries the crate that produces one.
     // Asking the manifest rather than looking for the artifact keeps "a consumer
@@ -2021,6 +2037,10 @@ const FILE_UNREADABLE: &str = "hook-wiring-file-unreadable";
     clippy::too_many_lines,
     reason = "one harness's diagnosis reads as one sequence: locate the file, judge               batten's entries per derived event, then the rest of the surface. Splitting               it would thread `findings`, `registrations` and `siblings` through helpers               that exist only to satisfy a line count, and each of the three phases is               already commented as its own step."
 )]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `diagnose_harness` reads one harness settings document"
+)]
 fn diagnose_harness(dir: &Path, harness: hook::Harness, exclusive: bool) -> Option<HarnessWiring> {
     let wiring = harness.wiring()?;
     let path = match wiring.file {
@@ -2348,6 +2368,10 @@ fn diagnose_merged(
 /// cannot be handed, and a counter whose off-by-one nobody can reach from a test
 /// is a counter nobody is holding. `a_surface_is_counted_read_only_once_its_shape_is_a_wiring_file`
 /// drives this seam.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `merged_under` reads one harness settings document"
+)]
 fn merged_under(
     home: &Path,
     dir: &Path,
@@ -2713,6 +2737,10 @@ fn store_is_merely_unwritten(link: &Path) -> bool {
 /// CLOUD-1376 records, where the store held `pending` and the answer given was
 /// "safe".
 #[must_use]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `diagnose_session` reads one session record"
+)]
 pub fn diagnose_session(dir: &Path) -> SessionReport {
     // RESOLVED ONCE, AND BEFORE THE TASK STORE, because it is the answer to a
     // different question and must survive the store's could-not-look. A session

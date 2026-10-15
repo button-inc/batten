@@ -337,6 +337,10 @@ impl Pin {
     ///
     /// Returns a [`crate::UsageError`] (→ exit `1`) when the file exists and
     /// cannot be read or parsed.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: `read` reads one record file this crate writes whole"
+    )]
     fn read(dir: &Path, reference: &str) -> Result<Option<Self>> {
         let Some(path) = Self::path(dir) else {
             return Ok(None);

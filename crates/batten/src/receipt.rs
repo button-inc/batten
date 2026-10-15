@@ -588,6 +588,10 @@ impl SourcedStore {
     /// absent here, and lands on that same arm — which is the whole of
     /// CLOUD-859's fix, since the existing three-valued contract already carries
     /// it and no new verdict was needed.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: `record` reads one record file this crate writes whole"
+    )]
     pub(crate) fn record(&self, check: &str) -> Option<crate::facts::Sourced> {
         crate::facts::Sourced::parse(&std::fs::read_to_string(self.path(check)?).ok()?)
     }
@@ -1096,6 +1100,10 @@ fn branch_receipt_name(check: &str, branch: &str) -> String {
 /// legitimately contains separators and is rewritten, where a subject that
 /// contains one is refused by `safe_subject` before it reaches here. Rewriting
 /// would let two subjects collide onto one receipt.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `named_validity` reads one record file this crate writes whole"
+)]
 fn named_validity(git_dir: &str, check: &str, subject: &str) -> Validity {
     let path = Path::new(git_dir)
         .join("batten-receipts")
@@ -1187,6 +1195,10 @@ fn moved_forward(base: &str, head: &str) -> Option<usize> {
 
 /// [`branch_validity`] with the range reader injected, so the direction below is
 /// testable without a repository per case.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `branch_validity_with` reads one record file this crate writes whole"
+)]
 fn branch_validity_with(
     git_dir: &str,
     check: &str,
@@ -1389,6 +1401,10 @@ pub fn head_receipt_valid(check: &str) -> bool {
     ) == Validity::Valid
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `load_statement` reads one record file this crate writes whole"
+)]
 fn load_statement(path: &Path) -> Option<Statement> {
     let bytes = std::fs::read(path).ok()?;
     let statement: Statement = serde_json::from_slice(&bytes).ok()?;
@@ -2256,6 +2272,10 @@ pub fn run_verified(out: &mut dyn Write) -> Result<ExitCode> {
 /// of its lines carries the verdict is a different question with a different
 /// answer; a `mode = "replace"` receipt has exactly one line, which is the family
 /// this column is for.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `field_refutes` reads one record file this crate writes whole"
+)]
 fn field_refutes(path: &Path, bound: &crate::rules::FieldBound) -> bool {
     let Ok(text) = std::fs::read_to_string(path) else {
         return false;
@@ -2984,6 +3004,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: `the_base_line_matches_what_the_minter_writes` reads a fixture this case wrote"
+    )]
     fn the_base_line_matches_what_the_minter_writes() {
         // The other half of the crate↔writer contract
         // `the_branch_receipt_filename_matches_the_minting_task` pins: this reader

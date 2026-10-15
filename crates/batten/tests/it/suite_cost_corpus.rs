@@ -145,6 +145,10 @@ fn an_absent_report_is_could_not_look_rather_than_an_empty_corpus() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_producer_writes_the_corpus_at_the_path_it_declares` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_producer_writes_the_corpus_at_the_path_it_declares() {
     // The one half of the retired contract that is still the producer's own: it
     // writes where it says it writes, so a reader who opens that path reads what

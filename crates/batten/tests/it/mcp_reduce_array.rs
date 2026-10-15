@@ -219,6 +219,10 @@ fn the_other_two_arms_are_untouched_by_the_new_variant() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `this_repositorys_own_list_issues_row_loads_and_declares_each` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn this_repositorys_own_list_issues_row_loads_and_declares_each() {
     // The committed row, read from the tree rather than from a fixture: the
     // engine change and the consumer row are two halves of one deliverable, and a

@@ -209,6 +209,10 @@ fn forked_hook(dir: &Path, home: &Path, payload: &str, parent: &str) -> Output {
 /// tell a written record from a remembered one. Searching for the record that has
 /// a watermark rather than computing the lineage key keeps the assertion about the
 /// fact — some record holds it — instead of restating the hashing this crate does.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `watermark` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn watermark(home: &Path) -> Option<(u64, String)> {
     let sessions = std::fs::read_dir(home.join("data").join("batten"))
         .ok()?

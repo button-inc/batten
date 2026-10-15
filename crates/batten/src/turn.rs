@@ -280,6 +280,10 @@ pub fn read(body: &str, vocabulary: &Vocabulary<'_>) -> Reading {
 /// reads as no open row: could-not-look lands on the side of closed, or it buys
 /// silence (CLOUD-775).
 #[must_use]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `column` reads one record file this crate writes whole"
+)]
 pub fn column(git_dir: Option<&Path>, receipt: &str, field: usize, key: &str) -> String {
     let unsafe_key = key.is_empty()
         || key == "."

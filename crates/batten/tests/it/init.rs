@@ -61,6 +61,10 @@ fn init_needs_no_repository() {
 /// runtime. This is what keeps `crates/batten/src/starter.toml` the single
 /// authority the plan traded `batten.example.toml` away for.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `init_emits_the_committed_starter_verbatim` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn init_emits_the_committed_starter_verbatim() {
     let dir = scratch_outside_tree("init", "verbatim");
 
@@ -81,6 +85,10 @@ fn init_emits_the_committed_starter_verbatim() {
 /// not about the invocation. The reason therefore rides stderr **unprefixed** —
 /// a `batten: ` prefix belongs to `1` and `3`.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `a_second_init_refuses_and_leaves_the_file_untouched` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn a_second_init_refuses_and_leaves_the_file_untouched() {
     let dir = scratch_outside_tree("init", "twice");
     assert!(

@@ -117,6 +117,10 @@ fn another_contexts_receipt_does_not_admit() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `a_new_commit_to_the_rule_invalidates_the_history_receipt` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn a_new_commit_to_the_rule_invalidates_the_history_receipt() {
     let repo = fixture("history-new-commit");
     read_history(&repo, "s1");
@@ -168,6 +172,10 @@ fn a_compaction_drops_the_history_receipt() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `one_commit_over_two_rows_prints_its_message_once` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn one_commit_over_two_rows_prints_its_message_once() {
     let repo = fixture("history-shared-commit");
     let other_line = "id = \"path write unsafe\"";
@@ -208,6 +216,10 @@ fn one_commit_over_two_rows_prints_its_message_once() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `a_message_the_cap_cut_is_not_pointed_at` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn a_message_the_cap_cut_is_not_pointed_at() {
     let repo = fixture("history-cap-cut");
     let other = "path write unsafe";
@@ -282,6 +294,10 @@ fn a_message_the_cap_cut_is_not_pointed_at() {
 ///
 /// The suite `history-cap-counts-row` is killed in.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `a_row_longer_than_the_cap_still_lists_its_changes` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn a_row_longer_than_the_cap_still_lists_its_changes() {
     let repo = fixture("history-long-row");
     let path = repo.join("batten.toml");

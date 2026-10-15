@@ -250,6 +250,10 @@ fn code(output: &Output) -> i32 {
 }
 
 /// The claim receipt this branch's pull would mint.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `claim_receipt` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn claim_receipt(dir: &Path) -> Option<String> {
     std::fs::read_to_string(receipts(dir).join("claim.feature-claim")).ok()
 }

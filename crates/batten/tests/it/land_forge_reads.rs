@@ -40,6 +40,10 @@ fn fixture(name: &str) -> std::path::PathBuf {
 }
 
 /// Everything the fixture recorded about the requests that went out.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `requests` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn requests(dir: &std::path::Path) -> String {
     std::fs::read_to_string(dir.join("args")).unwrap_or_default()
 }

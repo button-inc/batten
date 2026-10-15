@@ -45,6 +45,10 @@ const RULE: &str = "registry read missing";
 /// file would be a second predicate that agrees with the first only while somebody
 /// keeps them in step, and the defect this suite exists to catch is exactly a
 /// predicate that agrees with its own fixture and with nothing else.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `module` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn module() -> String {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")

@@ -161,6 +161,10 @@ pub type Manifest = BTreeMap<String, String>;
 /// # Errors
 ///
 /// Propagates an I/O failure from the tree walk or a file read.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `surface` reads a tracked file whole to hash it, so the tracked tree's largest file is the bound; `surface_fingerprint` normalizes line endings over the whole document"
+)]
 pub fn surface(root: &Path, tracked: &[String]) -> Result<Look<Manifest>> {
     if tracked.is_empty() {
         return Ok(Look::CouldNotLook);
@@ -248,6 +252,10 @@ fn snapshot_path(git_dir: &Path, session: Option<&str>) -> PathBuf {
 /// session, which is **seeded silently**: a session that started after a change
 /// has already read the new files and must not be nudged about them.
 #[must_use]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `previous` reads one contract snapshot this crate writes whole"
+)]
 pub fn previous(git_dir: &Path, session: Option<&str>) -> Look<Manifest> {
     let Ok(text) = std::fs::read_to_string(snapshot_path(git_dir, session)) else {
         return Look::CouldNotLook;

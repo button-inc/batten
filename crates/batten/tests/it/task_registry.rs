@@ -83,6 +83,10 @@ fn task(dir: &Path, args: &[&str]) -> Output {
 /// One field of one record, read the way the retiring shell's own helper did —
 /// the FIRST matching line, so a record carrying a stray line that happens to
 /// start with a field name still answers with the field.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `field` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn field(repo: &Path, pid: &str, name: &str) -> String {
     let body = std::fs::read_to_string(entries(repo).join(pid)).unwrap_or_default();
     body.lines()
@@ -144,6 +148,10 @@ fn this_process() -> (String, String) {
 /// this is a genuine "no such process" rather than a race against whatever
 /// happens to be running. A literal high number would eventually collide, and
 /// the collision would turn a crashed case green.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `unassignable_pid` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn unassignable_pid() -> String {
     std::fs::read_to_string("/proc/sys/kernel/pid_max")
         .ok()
@@ -513,6 +521,10 @@ fn the_report_is_a_pointer_and_never_a_line_of_any_log() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_reader_sends_no_signal` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_reader_sends_no_signal() {
     // CLOUD-425's safety property, held structurally rather than by review.
     // `SIGUSR1`'s default disposition is Term, so a reader that signalled would

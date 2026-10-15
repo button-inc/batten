@@ -63,6 +63,10 @@ const ENGINE_TASK: &str = "[tasks.gate]\nrun = [\n  \"{{vars.batten}} record der
 
 /// A repository registering the real module, one `[[board.sweep]]` row, and the
 /// manifest the row's task lives in.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `repo` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn repo(name: &str, row: &str, manifest: &str) -> std::path::PathBuf {
     let dir = scratch(&format!("sweep-exit-table-{name}"));
     let module = std::fs::read_to_string("../../policy/sweep-exit-table.rego")

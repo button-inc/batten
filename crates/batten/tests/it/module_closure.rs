@@ -199,6 +199,10 @@ const DEEPEST_CLOSURE: usize = 29;
 /// Keys are module names as `policy/module-layering.rego`'s `declared_modules`
 /// spells them — a file's stem, a directory's own name, and `lib`/`main` for the
 /// two entry points, which are files in the judged set like any other.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `module_graph` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn module_graph() -> BTreeMap<String, BTreeSet<String>> {
     let src = at_root("crates/batten/src");
     let root_source = fs::read_to_string(src.join("lib.rs")).unwrap();

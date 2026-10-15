@@ -270,6 +270,10 @@ pub enum Signal {
 /// A push for a pid that never registered is a NO-OP rather than a fabricated
 /// entry: the registry records what registered, and inventing a record here
 /// would let a half-wired task look fully wired.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `push` reads one record file this crate writes whole"
+)]
 pub fn push(git_dir: &Path, pid: &str, signal: Signal, value: &str, now: u64) {
     let Ok(body) = std::fs::read_to_string(entry_path(git_dir, pid)) else {
         return;
@@ -294,6 +298,10 @@ pub fn push(git_dir: &Path, pid: &str, signal: Signal, value: &str, now: u64) {
 
 /// One field of one record, or `None` where nothing registered under that pid.
 #[must_use]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `read_field` reads one record file this crate writes whole"
+)]
 pub fn read_field(git_dir: &Path, pid: &str, name: &str) -> Option<String> {
     std::fs::read_to_string(entry_path(git_dir, pid))
         .ok()
@@ -347,6 +355,10 @@ pub struct Alive<'a> {
 /// duplicate-landing incident the registry exists to prevent. So an unevaluable
 /// corroboration reads as ALIVE — which also keeps the reader honest off Linux,
 /// where `/proc/<pid>/cmdline` does not exist at all.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `task_alive` reads a kernel-sized /proc record"
+)]
 fn task_alive(program_root: &str, pid: &str, task: &str) -> bool {
     if !pid_exists(pid) {
         return false;
@@ -515,6 +527,10 @@ fn elapsed(stamp: &str, now: u64) -> Option<u64> {
 /// caused by the first. A future corroboration bug then costs a wrong word,
 /// never the evidence.
 #[must_use]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `alive` reads one record file this crate writes whole"
+)]
 pub fn alive(git_dir: &Path, options: Alive<'_>) -> Reading {
     let dir = state_dir(git_dir);
     // Genuine ABSENCE is a real answer — "nothing is running" — and only genuine
@@ -603,6 +619,10 @@ pub fn alive(git_dir: &Path, options: Alive<'_>) -> Reading {
 /// ALIVE there, so this under-reports rather than over-reports, which is the
 /// direction that cannot kill a working lap.
 #[must_use]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `abandoned` reads one record file this crate writes whole"
+)]
 pub fn abandoned(git_dir: &Path, program_root: &str) -> Vec<Entry> {
     let dir = state_dir(git_dir);
     let Ok(listing) = std::fs::read_dir(&dir) else {
@@ -958,6 +978,10 @@ fn take(lock: &Path, pid: &str) -> bool {
 }
 
 /// Who the lock says holds it, or `None` where it says nothing readable.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `holder_of` reads one record file this crate writes whole"
+)]
 fn holder_of(lock: &Path) -> Option<String> {
     let raw = std::fs::read_to_string(lock.join("pid")).ok()?;
     let holder = raw.trim().to_owned();

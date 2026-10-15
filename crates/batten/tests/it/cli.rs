@@ -3611,6 +3611,10 @@ fn committed_policy_modules(dir: &Path) {
 }
 
 /// The committed authority, read once per case that needs its bytes.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `committed_config` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn committed_config() -> String {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../batten.toml");
     fs::read_to_string(&path).expect("read the committed batten.toml")
@@ -4075,6 +4079,10 @@ fn hook_denies_a_blocked_shape_in_the_harness_channel() {
 }
 
 /// A checked-in host fixture, by file stem.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `host_fixture` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn host_fixture(stem: &str) -> String {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/hooks")
@@ -6266,6 +6274,10 @@ fn receipt_status(dir: &std::path::Path, home: &std::path::Path, check: &str) ->
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `receipt_lifecycle_amend_rebase_and_moved_main_invalidate` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn receipt_lifecycle_amend_rebase_and_moved_main_invalidate() {
     let (repo, home) = receipt_fixture("receipt-triple");
     let base = git_in(&repo, &["rev-parse", "origin/main"]);
@@ -6354,6 +6366,10 @@ fn receipt_lifecycle_amend_rebase_and_moved_main_invalidate() {
 /// list to an external verifier, that surface is where the tool's pin, and
 /// therefore the standard's edition, lives.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `receipt_records_the_config_epoch_at_its_subject_commit` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn receipt_records_the_config_epoch_at_its_subject_commit() {
     let root = scratch("receipt-epoch");
     let _ = fs::remove_dir_all(&root);
@@ -6424,6 +6440,10 @@ fn receipt_records_the_config_epoch_at_its_subject_commit() {
 /// that matters is not "the record has fields" but "the record has NO free
 /// text" (non-negotiable rule 4).
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_agent_context_statement_is_bounded_and_never_carries_free_text` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_agent_context_statement_is_bounded_and_never_carries_free_text() {
     const SECRET: &str = "SUPERSECRETPROMPTBODY";
     let root = scratch("receipt-agent-context");
@@ -6762,6 +6782,10 @@ fn receipt_record_requires_the_policy_committed_at_head() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_receipt_statement_is_in_toto_shaped_and_never_printed` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_receipt_statement_is_in_toto_shaped_and_never_printed() {
     let (repo, home) = receipt_fixture("receipt-shape");
     let head = git_in(&repo, &["rev-parse", "HEAD"]);
@@ -6796,6 +6820,10 @@ fn the_receipt_statement_is_in_toto_shaped_and_never_printed() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_committed_repo_config_gates_a_repository` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_committed_repo_config_gates_a_repository() {
     // Consumer #1: the repo's own `batten.toml` must load, and the rule this
     // fixture seeds must fire — asserted over the shipped file, so config that
@@ -6866,6 +6894,10 @@ fn the_committed_repo_config_gates_a_repository() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_committed_delegating_rule_is_refused_by_the_read_only_verb` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_committed_delegating_rule_is_refused_by_the_read_only_verb() {
     // The visible consequence of delegation, pinned rather than left implicit:
     // `batten check` cannot run this repository's own committed config any more,
@@ -6898,6 +6930,10 @@ fn the_committed_delegating_rule_is_refused_by_the_read_only_verb() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_committed_delegating_rule_spawns_nothing_when_its_glob_misses` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_committed_delegating_rule_spawns_nothing_when_its_glob_misses() {
     // "The glob is a gate before it is an argv source", asserted for the SHIPPED
     // rule rather than only in unit fixtures (CLOUD-229's acceptance).
@@ -6981,6 +7017,10 @@ const PORTABILITY_RULES: [&str; 6] = [
 ];
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_committed_repo_agnosticism_rules_fire_on_every_banned_shape` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_committed_repo_agnosticism_rules_fire_on_every_banned_shape() {
     // Non-negotiable rule 1 — "no consumer-specific identifier anywhere in
     // crates/batten" — as a gate rather than a one-time grep (CLOUD-7). The
@@ -7126,6 +7166,10 @@ fn the_committed_repo_agnosticism_rules_fire_on_every_banned_shape() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_committed_portability_rules_fire_on_every_banned_shape` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_committed_portability_rules_fire_on_every_banned_shape() {
     // CLOUD-282. `mise run verify` is the authorization the workflow contract
     // rests on, and on macOS it could not pass: two gates used sed's GNU-only
@@ -7290,6 +7334,10 @@ fn the_committed_portability_rules_fire_on_every_banned_shape() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_committed_example_config_loads_over_the_binary` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_committed_example_config_loads_over_the_binary() {
     // DoD: `batten.example.toml` loads and round-trips — asserted against the
     // shipped file itself, so an example that drifts from the schema fails here.
@@ -7529,6 +7577,10 @@ fn severity_and_scope_serialize_byte_stably_over_the_binary() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `committed_rules_pin_severity_and_scope_explicitly` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn committed_rules_pin_severity_and_scope_explicitly() {
     // Schema conformance over the shipped configs (consumer #1 discipline):
     // every committed rule states both keys in the file itself — the explicit,
@@ -8037,6 +8089,10 @@ fn a_config_declaring_no_budget_is_a_usage_error_not_a_silent_pass() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `this_repos_own_budget_is_pinned_so_raising_it_is_a_visible_diff` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn this_repos_own_budget_is_pinned_so_raising_it_is_a_visible_diff() {
     // The acceptance's "pinned deliberately". These numbers are the bar the
     // deleted `mise-tasks/context-budget.sh` carried, restated for a `<=`
@@ -8425,6 +8481,10 @@ fn store_cmd(dir: &std::path::Path, home: &std::path::Path, args: &[&str]) -> Ou
 /// Read through the marker rather than by scanning the state dir, because the
 /// marker is the repository→store direction the design depends on: a test that
 /// scanned instead would pass even if the marker were never written.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `bound_store_id` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn bound_store_id(dir: &std::path::Path) -> String {
     fs::read_to_string(dir.join(".git").join("batten-store"))
         .expect("the repository carries a store marker")
@@ -8942,6 +9002,10 @@ fn listing_an_unbound_repository_succeeds_and_says_nothing_by_default() {
 // another.
 
 /// The store directory bound to `repo`, located through the marker.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `bound_store_dir` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn bound_store_dir(repo: &std::path::Path, home: &std::path::Path) -> PathBuf {
     let id = bound_store_id(repo);
     let mut found = None;
@@ -8976,6 +9040,10 @@ fn walk_dirs(root: &std::path::Path) -> Vec<PathBuf> {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `migrate_upgrades_an_older_store_and_nothing_else_does` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn migrate_upgrades_an_older_store_and_nothing_else_does() {
     // The keystone of the versioning rule, end to end over the binary: a store
     // pinned to the oldest record version stays there across ordinary verbs, and
@@ -9027,6 +9095,10 @@ fn migrate_upgrades_an_older_store_and_nothing_else_does() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `a_store_newer_than_the_binary_is_read_only_and_still_allows` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn a_store_newer_than_the_binary_is_read_only_and_still_allows() {
     // Degraded read-only: an out-of-date binary is an operator problem, and
     // refusing the agent's work is not how it gets fixed. So this path exits 0,
@@ -9117,6 +9189,10 @@ fn session_cmd(
 /// Read off disk rather than through a verb: no verb reports them, deliberately —
 /// CLOUD-83 adds no command — so the store is the only place to assert the
 /// durable half.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `session_records` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn session_records(store_dir: &std::path::Path) -> Vec<serde_json::Value> {
     let dir = store_dir.join("sessions");
     let Ok(entries) = fs::read_dir(&dir) else {
@@ -9378,6 +9454,10 @@ fn repo_with_transcript(name: &str, transcript: Option<&str>) -> PathBuf {
     dir
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `captured_sample` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn captured_sample() -> String {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/transcripts/session.jsonl.in");
@@ -9646,6 +9726,10 @@ fn no_transcript_text_reaches_any_output_stream() {
 // the memory key, the written body, the target path, the injected message — so
 // the leak test below is total rather than illustrative.
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `unprompted_pack` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn unprompted_pack() -> String {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/transcripts/unprompted-memory-write.jsonl.in");
@@ -9898,6 +9982,10 @@ fn an_unreadable_brief_is_a_usage_error_and_never_a_deny() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `a_brief_arrives_on_stdin_when_no_path_is_given` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn a_brief_arrives_on_stdin_when_no_path_is_given() {
     // A brief is composed in memory by whatever is dispatching; requiring a
     // temporary file would put a write on the path of a `read` verb's caller.
@@ -10013,6 +10101,10 @@ fn claude_event_payload(event: &str) -> String {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `a_declared_action_fires_on_its_event_with_the_substituted_argv` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn a_declared_action_fires_on_its_event_with_the_substituted_argv() {
     // Acceptance (a). Observed through the command's own side effect in a temp
     // dir, because `fire` returns nothing there is no return value to inspect —
@@ -10795,6 +10887,10 @@ fn generated_wiring(harness: &str) -> Output {
 }
 
 /// The checked-in golden for `harness`.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `wiring_golden` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn wiring_golden(harness: &str) -> String {
     let path = common::at_root(&format!(
         "crates/batten/tests/fixtures/hooks/wiring/{harness}.json"
@@ -11180,6 +11276,10 @@ fn run_counted(repo: &std::path::Path, home: &std::path::Path, args: &[&str]) ->
 
 /// How many times the counter child has run.
 #[cfg(unix)]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `runs` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn runs(repo: &std::path::Path) -> usize {
     std::fs::read_to_string(repo.join("runs")).map_or(0, |text| text.len())
 }
@@ -11991,6 +12091,10 @@ fn run_hook_state(
 /// read as a file yields nothing, so a single level of nesting would silently
 /// empty the assertion this feeds.
 #[cfg(unix)]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `files_carrying` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn files_carrying(root: &std::path::Path, needle: &str) -> Vec<String> {
     let mut found = Vec::new();
     let mut stack = vec![root.to_path_buf()];
@@ -12519,6 +12623,10 @@ fn help_leads_with_the_crate_description() {
 /// The banned literal can be written as source text here for the same reason the
 /// portability case can: the row's glob is `**/*.md`, and this file is `.rs`.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `a_tracked_instruction_may_not_prescribe_the_denied_commit_identity` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn a_tracked_instruction_may_not_prescribe_the_denied_commit_identity() {
     let committed = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../batten.toml");
     let contents = fs::read_to_string(&committed).expect("read batten.toml");

@@ -403,6 +403,10 @@ fn declared_runner_sources(root: &Path) -> Vec<String> {
 /// longer applies, or applies and changes nothing, is named. Rust sources are
 /// cargo-mutants' (`MUTANT_RUNNERS`), so the declared runner never applies theirs.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `every_declared_row_applies_in_process_and_changes_its_file` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn every_declared_row_applies_in_process_and_changes_its_file() {
     let root = common::at_root("");
     let mut broken = Vec::new();
@@ -434,6 +438,10 @@ fn every_declared_row_applies_in_process_and_changes_its_file() {
 #[expect(
     clippy::disallowed_types,
     reason = "stays, and test-only: `sed` is the oracle the in-process applier is compared against, never a route the engine takes"
+)]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_in_process_applier_matches_sed_on_every_declared_row` reads a test input: a fixture the case wrote or a file this repository tracks"
 )]
 fn the_in_process_applier_matches_sed_on_every_declared_row() {
     use std::process::{Command, Stdio};
@@ -664,6 +672,10 @@ fn hung_toy(name: &str, note: &Path) -> PathBuf {
 /// that are still running once [`PATIENCE`] is spent. Each survivor is killed
 /// before this returns, so a red case never leaks what it found.
 #[cfg(unix)]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `survivors_of` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn survivors_of(note: &Path) -> Vec<u32> {
     let text = fs::read_to_string(note).expect("the hung case recorded its pids before it hung");
     let pids: Vec<u32> = text
@@ -717,6 +729,10 @@ fn await_gone(pid: u32) -> bool {
 /// Block until a hung case's `note` holds its two pids, failing if the sweep
 /// exits first or [`BUILD_PATIENCE`] runs out — and killing the sweep either way.
 #[cfg(unix)]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `await_note` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn await_note(note: &Path, sweep: &mut std::process::Child) {
     let deadline = std::time::Instant::now() + BUILD_PATIENCE;
     while std::time::Instant::now() < deadline {
@@ -926,6 +942,10 @@ fn a_sweep_reports_its_row_count_and_each_rows_time() {
 /// the row run again.
 #[cfg(unix)]
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `a_caught_row_is_not_run_again_until_its_inputs_change` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn a_caught_row_is_not_run_again_until_its_inputs_change() {
     let root = two_task_repo("task-recorded");
     let (code, out, err) = sweep(&root, "task-a");
@@ -1573,6 +1593,10 @@ fn sweep_command(name: &str, code: i32) -> (PathBuf, i32, String, String) {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `a_command_runner_exit_zero_is_caught` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn a_command_runner_exit_zero_is_caught() {
     // THE TOY GATES ARE `sh` SCRIPTS: off unix there is no gate to sweep, and
     // the case compiles everywhere so the other target type-checks it.
@@ -1838,6 +1862,10 @@ fn a_module_whose_tier_cannot_see_it_reports_a_survivor() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `an_owner_is_echoed_on_a_survivor_and_clears_nothing` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn an_owner_is_echoed_on_a_survivor_and_clears_nothing() {
     // `#MUTANT-OWNER` exists so a predicate already known to be dead is reported
     // with the row that owns it. It must not become an exemption: the finding
@@ -2711,6 +2739,10 @@ fn a_policy_glob_names_each_module_by_its_stem() {
 // ---------------------------------------------------------------------------
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `this_repositorys_own_census_is_closed` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn this_repositorys_own_census_is_closed() {
     // What makes every fixture above evidence about THIS repository. A tree
     // whose census is open is a gate covered by nothing stronger than "its suite

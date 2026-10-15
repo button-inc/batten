@@ -33,6 +33,10 @@ fn supersedes(script: &str) -> bool {
     script.contains(&supersession_call())
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `committed_setup` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn committed_setup() -> String {
     let path = common::at_root("setup.sh");
     std::fs::read_to_string(&path)

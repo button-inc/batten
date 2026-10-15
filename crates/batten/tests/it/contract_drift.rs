@@ -355,6 +355,10 @@ fn each_session_is_told_about_what_moved_under_it_and_not_about_the_rest() {
 /// Fails by: rendering content beside the path. A reminder carrying the new text
 /// is a mirror, and a mirror is cleared by reading the hook instead of the file.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_notice_names_paths_and_never_a_byte_of_one` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_notice_names_paths_and_never_a_byte_of_one() {
     // Assembled rather than written, and the reason is this repo's own gate:
     // a credential-shaped literal in a tracked file is what `source carry unsafe`

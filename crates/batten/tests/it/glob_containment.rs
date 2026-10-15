@@ -53,6 +53,10 @@ use common::{Fixture, git_in, run, stderr, stdout};
 /// loads and the run is a USAGE error, which is exit 1 and not the exit 2 these
 /// cases are about — so a fixture that omitted them would test the declaration
 /// rather than the predicate.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `glob_repo` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn glob_repo(name: &str, config_body: &str, hooks_body: &str) -> PathBuf {
     let config = format!(
         "version = 1\n\n\

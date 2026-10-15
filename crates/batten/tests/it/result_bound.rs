@@ -112,6 +112,10 @@ fn a_result_within_the_bound_is_left_alone() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `an_oversized_result_becomes_a_pointer_to_a_view_of_its_text` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn an_oversized_result_becomes_a_pointer_to_a_view_of_its_text() {
     let dir = repo("result-bound-large");
     let body = payload(2000);
@@ -214,6 +218,10 @@ fn a_raised_bound_keeps_a_spilled_result_whole() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `following_the_pointer_returns_text_not_another_pointer` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn following_the_pointer_returns_text_not_another_pointer() {
     // CLOUD-2228. The pointer's route is `read <view>`, and the view of an
     // oversized result is itself over the bound, so reading it was bounded

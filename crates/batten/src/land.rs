@@ -588,6 +588,10 @@ fn pre_replay_head(root: &Path, branch: &str) -> String {
 /// clone's own head. Whatever it reads, admission still requires containment or
 /// an exact sha this clone pushed, so an older partition can only admit this
 /// clone's own work.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `branch_lap_lines` reads one lap log per branch, which `land` caps at its lap budget"
+)]
 fn branch_lap_lines(root: &Path, branch: &str) -> Vec<String> {
     let Ok(git_dir) = crate::git::git_dir(root) else {
         return Vec::new();

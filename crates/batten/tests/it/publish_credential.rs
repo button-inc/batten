@@ -44,6 +44,10 @@ use std::process::Output;
 use common::{Fixture, git_in, run, stderr, stdout};
 
 /// A repository declaring only this rule, so any finding is the one under test.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `publish_repo` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn publish_repo(name: &str, config: &str, workflows: &[(&str, &str)]) -> PathBuf {
     let mut fixture = Fixture::new(name).config(
         "version = 1\n\n\

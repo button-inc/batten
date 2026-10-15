@@ -27,6 +27,10 @@ use batten::hook::RecordShape;
 use batten::hookcost::{Follow, Window, windows};
 use batten::transcript::parse;
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `main` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn main() -> anyhow::Result<()> {
     let paths: Vec<String> = std::env::args().skip(1).collect();
     anyhow::ensure!(

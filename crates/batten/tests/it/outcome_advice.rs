@@ -39,6 +39,10 @@ use std::fs;
 use batten::outcome::{self, Class, Signature};
 
 /// The measured, sanitized failing payload this repository commits.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `measured` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn measured() -> serde_json::Value {
     let text = fs::read_to_string(common::at_root(
         "crates/batten/tests/fixtures/hooks/claude-code-posttool-failure.json",
@@ -49,6 +53,10 @@ fn measured() -> serde_json::Value {
 
 /// The signatures the committed config declares, read from it rather than
 /// restated: a copy here would pass while the config said something else.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `declared` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn declared() -> Vec<Signature> {
     let text = fs::read_to_string(common::at_root("batten.toml")).expect("the config is committed");
     let config: toml::Value = toml::from_str(&text).expect("the config parses");

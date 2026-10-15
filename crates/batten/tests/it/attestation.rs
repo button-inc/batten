@@ -210,6 +210,10 @@ fn respond(forge: &Path, n: u32, status: u16, body: &str) {
 
 /// What the fixture forge recorded about the requests that went out.
 #[cfg(unix)]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `requests` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn requests(forge: &Path) -> String {
     std::fs::read_to_string(forge.join("args")).unwrap_or_default()
 }
@@ -321,6 +325,10 @@ impl World {
         command.output().expect("the compiled binary runs")
     }
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: `stub_calls` reads a test input: a fixture the case wrote or a file this repository tracks"
+    )]
     fn stub_calls(&self) -> String {
         std::fs::read_to_string(self.log()).unwrap_or_default()
     }

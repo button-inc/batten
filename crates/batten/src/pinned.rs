@@ -191,6 +191,10 @@ pub(crate) fn keyed_paths(configs: &[PathBuf]) -> BTreeSet<PathBuf> {
 /// project with a manifest and no lockfile is a real project. Every member
 /// absent is a different answer, and is `None`: a key over nothing would file
 /// every project's set under one name.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `key` reads a tracked file whole to hash it, so the tracked tree's largest file is the bound"
+)]
 pub(crate) fn key(configs: &[PathBuf]) -> Option<String> {
     let mut material: Vec<u8> = Vec::new();
     let mut any = false;
@@ -226,6 +230,10 @@ fn record_path(root: &Path) -> Option<PathBuf> {
 /// trusted a little — it is an answer about a different toolchain, and reading
 /// it would be the fact model's own could-not-look-as-a-pass failure.
 #[must_use]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `cached` reads one record file this crate writes whole"
+)]
 pub fn cached(root: &Path) -> PinnedFacts {
     let Some(path) = record_path(root) else {
         return Look::CouldNotLook;

@@ -381,6 +381,10 @@ fn the_impersonation_detector_is_live_behind_this_row() {
 /// guard and finding are gone either way, so an inert replacement would be a
 /// deletion that reads as a port. This is the case that reddens on it.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `this_repository_declares_the_names_its_guard_translates` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn this_repository_declares_the_names_its_guard_translates() {
     let text = std::fs::read_to_string(common::at_root("batten.toml")).expect("the config");
     let config: toml::Value = toml::from_str(&text).expect("batten.toml parses");

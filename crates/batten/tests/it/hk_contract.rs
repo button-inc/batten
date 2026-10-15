@@ -77,6 +77,10 @@ fn step_excludes(pkl: &str, step: &str) -> Option<Vec<String>> {
 // killed by hand:
 // MUTANT clippy-runs-per-workspace|s@^    exclude = List("fuzz/\*\*")$@@|every_nested_cargo_workspace_is_excluded_from_the_root_clippy_step
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `every_nested_cargo_workspace_is_excluded_from_the_root_clippy_step` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn every_nested_cargo_workspace_is_excluded_from_the_root_clippy_step() {
     let root = common::at_root(".");
     let pkl = fs::read_to_string(root.join("hk.pkl")).expect("hk.pkl is committed");
@@ -168,6 +172,10 @@ fn a_caller_suppressing_steps_does_not_drift_the_contract() {
 /// with the runner. A shape change would otherwise surface as a `1` from the
 /// gate with no case naming it.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_committed_artifact_reads_back_as_this_builds_shape` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_committed_artifact_reads_back_as_this_builds_shape() {
     let text =
         fs::read_to_string(common::at_root(hk::ARTIFACT)).expect("the artifact is committed");
@@ -331,6 +339,10 @@ fn the_refusal_is_a_declared_class_with_a_route() {
 /// makes the mutation below the ONLY difference, and exercises the writer on
 /// the way past.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `a_drifted_contract_exits_two_and_names_the_class` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn a_drifted_contract_exits_two_and_names_the_class() {
     // `Fixture` rather than a `tempfile`: it is this suite's own scratch
     // convention and needs no dev-dependency the binary does not link.

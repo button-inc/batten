@@ -139,6 +139,10 @@ fn verdict(repo: &Path, input: &str) -> Option<i32> {
 }
 
 /// What the receipt store holds for `name`, or `None` when nothing minted.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `receipt` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn receipt(repo: &Path, name: &str) -> Option<String> {
     std::fs::read_to_string(repo.join(".git/batten-receipts").join(name)).ok()
 }

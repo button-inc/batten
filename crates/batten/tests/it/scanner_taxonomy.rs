@@ -124,6 +124,10 @@ const BARE_PRODUCTS: &[&str] = &["`grep`", "`rg`", "`Grep`", "`Read`", "`Glob`"]
 /// row three names the three tools that do name resolution here.
 const CAPABILITY_ROWS: &[usize] = &[0, 3];
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `rules_text` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn rules_text() -> String {
     fs::read_to_string(at_root(RULES)).expect("`rules/scanning.md` is committed")
 }
@@ -235,6 +239,10 @@ fn the_rules_say_in_as_many_words_that_they_are_feedforward() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_index_routes_a_reader_to_the_rules` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_index_routes_a_reader_to_the_rules() {
     let index = fs::read_to_string(at_root(INDEX)).expect("`AGENTS.md` is committed");
     assert!(

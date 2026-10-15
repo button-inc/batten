@@ -139,6 +139,10 @@ fn config(standards: &str, checker: &str) -> String {
     )
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `repo` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn repo(name: &str) -> PathBuf {
     let dir = scratch(&format!("ntia-{name}"));
     let module = std::fs::read_to_string(at_root("policy/ntia.rego")).expect("the module");
@@ -213,6 +217,10 @@ fn a_conformant_document_passes() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_default_standards_set_is_satisfiable` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_default_standards_set_is_satisfiable() {
     // The committed authority's list, read rather than restated: it must not ask
     // the SPDX-3-only standard a 2.3 document can never satisfy.
@@ -273,6 +281,10 @@ fn the_failure_carries_counts_on_the_record_and_never_in_a_finding() {
 }
 
 /// The one record under `dir` a conformance run wrote, found by its first line.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `recorded` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn recorded(dir: &Path) -> Option<String> {
     for entry in std::fs::read_dir(dir).ok()?.filter_map(Result::ok) {
         let path = entry.path();
@@ -409,6 +421,10 @@ fn a_record_missing_a_reading_is_torn() {
 /// AN ARRAY SINCE CLOUD-1991, so there is no body to hand `bash`: mise runs the
 /// entries in order and stops at the first that fails, with its code. The
 /// wrapper below replays exactly that, which is the property these cases assert.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `check_sequence` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn check_sequence() -> Vec<String> {
     let manifest = std::fs::read_to_string(at_root("mise.toml")).expect("the manifest");
     let parsed: toml::Value = toml::from_str(&manifest).expect("mise.toml parses as TOML");
@@ -474,6 +490,10 @@ fn the_sequence_records_then_decides_then_writes_the_receipt() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `a_conformant_document_records_the_receipt` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn a_conformant_document_records_the_receipt() {
     let dir = repo("wrap-pass");
     let out = wrapper(&dir, &[]);

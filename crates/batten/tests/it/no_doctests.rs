@@ -41,6 +41,10 @@ use std::process::Output;
 use common::{Fixture, git_in, run, stdout};
 
 /// A workspace declaring only this rule, so any finding is the one under test.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `doctest_repo` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn doctest_repo(name: &str, source: &str) -> PathBuf {
     let dir = Fixture::new(name)
         .config(

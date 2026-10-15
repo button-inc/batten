@@ -215,6 +215,10 @@ fn append_to(var: &str, text: &str) -> Result<()> {
 /// that cannot be started; a [`crate::Passthrough`] carrying an unmapped
 /// non-zero code; an I/O error when an output, summary or save file will not
 /// take its write.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `run` reads one step report the step writes whole"
+)]
 pub fn run(request: &StepRequest, out: &mut dyn Write, err: &mut dyn Write) -> Result<ExitCode> {
     let map = mapping(&request.on)?;
     if !map.is_empty() && request.verdict.is_none() {

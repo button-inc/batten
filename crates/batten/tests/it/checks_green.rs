@@ -402,6 +402,10 @@ fn fetched(forge: &std::path::Path) -> std::process::Output {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_fetched_reading_is_the_named_commits` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_fetched_reading_is_the_named_commits() {
     let runs = ["ci", "perf", "final"]
         .iter()

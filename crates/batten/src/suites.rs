@@ -213,6 +213,10 @@ pub fn stale(rows: &[Row], tracked: &BTreeSet<String>) -> Vec<String> {
 /// An internal error (exit `3`) when the report is absent, carries no readable
 /// `<testsuite>` element, or names a suite this tree does not track. All three
 /// are could-not-look, and none of them is an empty corpus.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `derive` reads one suite report"
+)]
 pub fn derive(root: &Path, tracked: &BTreeSet<String>) -> Result<(Vec<Row>, String)> {
     let path = root.join(REPORT);
     let Ok(report) = std::fs::read_to_string(&path) else {
@@ -457,6 +461,10 @@ pub fn nextest_rows(report: &str) -> Vec<Row> {
 ///
 /// A usage error when the report is absent or carries no readable case: both are
 /// could-not-look, never an empty suite.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `derive_nextest` reads one suite report"
+)]
 pub fn derive_nextest(root: &Path, profile: &str) -> Result<(Vec<Row>, String)> {
     let relative = format!("{NEXTEST_REPORT_DIR}/{profile}/{NEXTEST_REPORT_FILE}");
     let Ok(report) = std::fs::read_to_string(root.join(&relative)) else {

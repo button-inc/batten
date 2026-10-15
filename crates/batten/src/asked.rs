@@ -269,6 +269,10 @@ pub fn compare(base: &str, head: &str) -> Ledger {
 ///
 /// Returns an error when `base` does not resolve: a comparison that cannot see
 /// its baseline has not shown what was added, and must not admit.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `added_since` reads the asked ledger, one line per owner ruling, which only the owner's answers grow"
+)]
 pub fn added_since(root: &Path, base: &str) -> Result<Ledger> {
     let fork = crate::git::merge_base(root, base)?.unwrap_or_else(|| base.to_owned());
     let mut base_text = String::new();

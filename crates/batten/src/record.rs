@@ -232,6 +232,10 @@ fn picked(raw: &str, name: &str, token: &str) -> String {
 /// # Errors
 ///
 /// As [`run_tool`].
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `store_tool` reads a tracked file, so the tracked tree's largest file is the bound, and the document is parsed whole"
+)]
 pub(crate) fn store_tool(id: &str, text: &str, overrides: &Overrides) -> Result<()> {
     let rows = declared(overrides)?;
     let Some(row) = rows.into_iter().find(|row| row.id == id) else {
@@ -284,6 +288,10 @@ pub(crate) fn store_tool(id: &str, text: &str, overrides: &Overrides) -> Result<
 /// without an exit code — records NOTHING and answers [`ExitCode::Internal`]: a
 /// validator that never ran has no verdict, and recording one would be the
 /// could-not-look-as-a-finding shape this family exists to keep apart.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `run_validate` reads a tracked file, so the tracked tree's largest file is the bound, and the document is parsed whole"
+)]
 pub fn run_validate(id: &str, overrides: &Overrides, err: &mut dyn Write) -> Result<ExitCode> {
     let rows = declared(overrides)?;
     let Some(row) = rows.into_iter().find(|row| row.id == id) else {
@@ -370,6 +378,10 @@ const RECEIPTS: &str = "batten-tools-asked";
 // answer to a question nobody is asking.
 //MUTANT receipt-never-read|s@^    if already_clean(.record, .receipt, .asked) {$@    if false {@|a_clean_answer_over_the_same_bytes_and_argv_is_not_asked_again
 //MUTANT receipt-ignores-argv|s@^    let same_argv = .*$@    let same_argv = std::fs::metadata(receipt).is_ok();@|a_moved_argv_is_asked_again_over_the_same_bytes
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `already_clean` reads one record file this crate writes whole"
+)]
 fn already_clean(record: &Path, receipt: &Path, asked: &str) -> bool {
     let answered_zero = std::fs::read_to_string(record).is_ok_and(|body| body == "exit 0\n");
     let same_argv = std::fs::read_to_string(receipt).is_ok_and(|held| held == asked);
@@ -1514,6 +1526,10 @@ pub fn decide_record(family: &str, inputs: &[String], overrides: &Overrides) -> 
 ///
 /// A [`UsageError`] for a missing, unaccepted or malformed input, or an
 /// undeclared pattern row.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `turn_reading` reads one record file this crate writes whole"
+)]
 fn turn_reading(
     family: &str,
     inputs: &BTreeMap<String, String>,
@@ -1971,6 +1987,10 @@ pub(crate) fn store_named(verb: &str, family: &str, body: &str) -> Result<()> {
 ///
 /// As [`named_path`], and an internal error when a record exists and will not
 /// read — which is not the same answer as one that is absent.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `load_named` reads one record file this crate writes whole"
+)]
 pub(crate) fn load_named(verb: &str, family: &str) -> Result<Option<String>> {
     let path = named_path(verb, family)?;
     match std::fs::read_to_string(&path) {
@@ -2083,6 +2103,10 @@ fn keyed_path(git_dir: &Path, family: &str, key: &str) -> PathBuf {
 /// argv** (CLOUD-843). `batten step` keys its receipts here, and composing the
 /// path a second time beside [`keyed_path`] would be a second spelling of the key
 /// the two verbs share. `family` must already be a single path component.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `keyed_read` reads one record file this crate writes whole"
+)]
 pub(crate) fn keyed_read(git_dir: &Path, family: &str, key: &str) -> Option<String> {
     std::fs::read_to_string(keyed_path(git_dir, family, key)).ok()
 }
@@ -2161,6 +2185,10 @@ pub fn run_journal(family: &str) -> Result<ExitCode> {
 ///
 /// A [`UsageError`] when the family or key is not a single path component; an
 /// internal error when the git directory cannot be resolved.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `run_keyed_show` reads one record file this crate writes whole"
+)]
 pub fn run_keyed_show(family: &str, key: &str, out: &mut dyn std::io::Write) -> Result<ExitCode> {
     let family = safe_component("family", family)?;
     let git_dir = git::git_dir(Path::new("."))?;

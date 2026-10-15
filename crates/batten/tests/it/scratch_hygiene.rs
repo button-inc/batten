@@ -107,6 +107,10 @@ fn the_collector_ran_for_this_run() {
 }
 
 /// The committed `clear-scratch` command, exactly as nextest runs it.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `collector_command` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn collector_command() -> String {
     let text = std::fs::read_to_string(crate::common::at_root(".config/nextest.toml"))
         .expect("nextest.toml");
@@ -146,6 +150,10 @@ fn line_of(published: &str, key: &str) -> String {
 #[expect(
     clippy::disallowed_types,
     reason = "stays, and test-only: the subject is the shell command nextest runs, so asserting it means running `sh`"
+)]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `collect_seeded` reads a test input: a fixture the case wrote or a file this repository tracks"
 )]
 fn collect_seeded(name: &str, others: &str, seeds: &[&str]) -> (Vec<bool>, String) {
     let root = crate::common::scratch(name);
@@ -250,6 +258,10 @@ fn the_collector_collects_when_it_is_alone() {
 ///
 /// MUTANT: deleting `fail-fast = false` from `[profile.default]` reds this case.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_default_profile_never_fails_fast` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_default_profile_never_fails_fast() {
     let text = std::fs::read_to_string(crate::common::at_root(".config/nextest.toml"))
         .expect("nextest.toml");

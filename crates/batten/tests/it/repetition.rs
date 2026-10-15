@@ -168,6 +168,10 @@ fn jsonl(records: &[serde_json::Value]) -> String {
         .join("\n")
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `fixture` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn fixture(name: &str, module_body: &str, transcript: &str) -> (PathBuf, PathBuf, PathBuf) {
     let dir = scratch(&format!("repetition-{name}"));
     let home = scratch(&format!("repetition-home-{name}"));

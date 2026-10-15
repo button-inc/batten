@@ -104,6 +104,10 @@ fn reference_name() -> String {
 
 /// A fixture repository registering the real module and the preset, with a
 /// fixture build workflow and the reference's `[env]` declaration.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `repo` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn repo(name: &str, workflow: Option<&str>) -> PathBuf {
     let dir = scratch(&format!("release-assets-{name}"));
     let module =
@@ -424,6 +428,10 @@ fn a_name_containing_another_does_not_satisfy_it() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `no_tag_or_an_empty_tag_falls_back_to_the_latest_release` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn no_tag_or_an_empty_tag_falls_back_to_the_latest_release() {
     for (name, tag) in [("absent", None), ("empty", Some(""))] {
         let (dir, forge) = pinned(&format!("latest-{name}"), &complete(&[]));
@@ -631,6 +639,10 @@ fn a_release_record_without_its_census_is_torn_rather_than_clean() {
 
 // --- the committed tasks and workflow -------------------------------------------
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `committed` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn committed(path: &str) -> String {
     std::fs::read_to_string(at_root(path)).expect("committed file")
 }

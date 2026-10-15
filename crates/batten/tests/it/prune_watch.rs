@@ -893,6 +893,10 @@ fn a_step_run_build_is_watched() {
 /// the build, passes the collector first and then runs the compiler with its
 /// own argv and exit code. A fake `rustc` stands in, so the case pays no build.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `a_wrapped_compile_collects_under_pressure` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn a_wrapped_compile_collects_under_pressure() {
     if !cfg!(unix) {
         return;

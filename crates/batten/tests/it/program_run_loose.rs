@@ -11,6 +11,10 @@ use crate::common;
 use common::{Fixture, run, stdout};
 
 /// The `[[rule]]` block whose id is `program run loose`, as `batten.toml` spells it.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `committed_row` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn committed_row() -> String {
     let text = std::fs::read_to_string(common::at_root("batten.toml")).expect("the authority");
     let id = text

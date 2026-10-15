@@ -112,6 +112,10 @@ pub fn parse_btime(stat: &str) -> Option<String> {
 /// # Errors
 ///
 /// [`BootUnreadable`] as above.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `boot_time` reads a kernel-sized /proc record"
+)]
 pub fn boot_time() -> std::result::Result<String, BootUnreadable> {
     if let Some(value) = std::env::var_os(BOOT_TIME_ENV) {
         let value = value.to_str().and_then(parse_override);
@@ -421,6 +425,10 @@ pub fn run_report(once: bool, out: &mut dyn Write, err: &mut dyn Write) -> Resul
 
 /// Whether the once-per-boot mark says `boot`'s verdict was already read. An
 /// absent or unreadable mark says nothing, so the report speaks.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `marked_for` reads one record file this crate writes whole"
+)]
 fn marked_for(mark: &Path, boot: &str) -> bool {
     let seen = std::fs::read_to_string(mark).unwrap_or_default();
     seen.trim_end() == boot

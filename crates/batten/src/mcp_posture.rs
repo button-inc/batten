@@ -50,6 +50,10 @@ pub struct Session {
 ///
 /// A settings file that exists and will not parse — could-not-look, which must
 /// never read as a clean session — and a failed write.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `run` reads one harness settings document"
+)]
 pub fn run(inputs: &Inputs<'_>, session: &Session, err: &mut dyn Write) -> Result<ExitCode> {
     let settings = inputs.settings_label();
     if !inputs.settings.is_file() {
@@ -182,6 +186,10 @@ fn unattached(document: &Node, session: &Session, err: &mut dyn Write) -> Result
 }
 
 /// The newest `.jsonl` log in `dir` by NAME, with its name, or `None`.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `newest_log` reads the newest MCP log, one session's"
+)]
 fn newest_log(dir: &Path) -> Option<(String, String)> {
     let newest = std::fs::read_dir(dir)
         .ok()?
@@ -246,6 +254,10 @@ const AFTER_ATTEMPT: i64 = 35;
 /// never `never-spawned` — a verdict from nothing.
 //MUTANT spawn-window-ignored|s@ && (start - BEFORE_ATTEMPT..=start + AFTER_ATTEMPT).contains(.at)$@@|a_timeout_with_no_spawn_record_for_that_attempt_reads_as_never_spawned
 //MUTANT ledger-wiring-inverted|s@^    if !records.iter().any(@    if records.iter().any(@|a_timeout_with_a_matching_spawn_record_reads_as_spawned_and_unresponsive
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `spawn_verdict` reads one spawn record"
+)]
 fn spawn_verdict(server: &str, log_name: &str, spawns: Option<&Path>) -> String {
     let Some(text) = spawns.and_then(|path| std::fs::read_to_string(path).ok()) else {
         return String::from(
