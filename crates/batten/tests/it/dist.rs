@@ -315,7 +315,7 @@ fn an_unknown_build_tool_is_refused_before_anything_runs() {
     );
     assert_eq!(output.status.code(), Some(ExitCode::Usage.code()));
     assert!(
-        stderr(&output).contains("must be cargo, cross, zigbuild, or cargo-dist"),
+        stderr(&output).contains("must be cargo, cross, or zigbuild"),
         "{}",
         stderr(&output)
     );
@@ -338,7 +338,7 @@ fn the_environment_names_the_builder_when_no_flag_does() {
     );
     assert_eq!(refused.status.code(), Some(ExitCode::Usage.code()));
     assert!(
-        stderr(&refused).contains("must be cargo, cross, zigbuild, or cargo-dist"),
+        stderr(&refused).contains("must be cargo, cross, or zigbuild"),
         "{}",
         stderr(&refused)
     );

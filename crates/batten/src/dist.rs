@@ -413,7 +413,7 @@ pub fn run(
             Ok(tool) => tool,
             Err(named) => {
                 return Err(UsageError::raise(format!(
-                    "dist: --build-tool (or {BUILD_TOOL_ENV}) must be cargo, cross, zigbuild, or {CARGO_DIST}, got '{named}'"
+                    "dist: --build-tool (or {BUILD_TOOL_ENV}) must be cargo, cross, or zigbuild, or {CARGO_DIST} to build through cargo-dist, got '{named}'"
                 )));
             }
         }
