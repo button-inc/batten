@@ -176,10 +176,12 @@ signal-hook.workspace = true
 [target.'cfg(windows)'.dependencies]
 winapi-util.workspace = true
 
-# The global allocator (CLOUD-2315), Linux only: its C source needs a platform
-# SDK to link on macOS, which `macos_link.rs` holds the macOS graph clear of, and
-# the hook's per-call budget is measured on Linux.
-[target.'cfg(target_os = "linux")'.dependencies]
+# The global allocator (CLOUD-2315), Linux glibc only. Its C source needs a
+# platform SDK to link on macOS, which `macos_link.rs` holds the macOS graph clear
+# of; and on musl it needs a musl C compiler the verification path does not have
+# (`cross-check` in `mise.toml`: "failed to find tool x86_64-linux-musl-gcc"), so
+# shipping it there would change an artifact nothing here checks (CLOUD-2344).
+[target.'cfg(all(target_os = "linux", target_env = "gnu"))'.dependencies]
 mimalloc.workspace = true
 
 # The running programs' executables on macOS (CLOUD-2197); Linux reads `/proc`.
