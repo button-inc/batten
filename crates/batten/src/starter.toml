@@ -94,6 +94,41 @@ scope = "tree"
 # row that says neither.
 no_fix_reason = "class 3 (a person's choice of side): resolving a conflict is a judgement no command can make"
 
+# The engine's compiled call gates, one row each. A `native` row names a gate the
+# binary carries and how hard it refuses: "deny" refuses the call, "warn" lets it
+# run and says what it would have refused. Delete a row to switch its gate off.
+#
+#   destructive-reset  a `git reset` that would discard commits no ref holds
+#   singleton          a second copy of a task that runs once per clone
+#   history            a change to a `[[rule]]` row by a context that has not read
+#                      why the row exists (`batten policy explain '<id>' --history`)
+#
+# A file declaring no `native` row at all runs all three at "deny", which is how a
+# config written before this kind existed keeps its gates.
+[[rule]]
+id = "destructive-reset"
+kind = "native"
+gate = "destructive-reset"
+scope = "mediated_call"
+severity = "deny"
+no_fix_reason = "class 3 (a call refused before it runs): the refusal names its own route, `git reflog` or pushing the work first"
+
+[[rule]]
+id = "singleton"
+kind = "native"
+gate = "singleton"
+scope = "mediated_call"
+severity = "deny"
+no_fix_reason = "class 3 (a call refused before it runs): wait for the running copy, which the refusal names"
+
+[[rule]]
+id = "history"
+kind = "native"
+gate = "history"
+scope = "mediated_call"
+severity = "deny"
+no_fix_reason = "class 3 (a call refused before it runs): read the row's history with the command the refusal names, then edit"
+
 # The governing config surface: the files whose bytes `batten config epoch` hashes
 # into one attributable value, so two records carrying the same epoch were
 # produced under provably the same rules.

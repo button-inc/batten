@@ -418,6 +418,55 @@ pub enum RuleKind {
     /// register id. A register that could not be built is could-not-look and is
     /// reported as such, never as an empty set.
     Reference,
+    /// **One of the engine's compiled mediated-call gates, enabled and graded by
+    /// a row** (CLOUD-2291): [`Rule::gate`] names which.
+    ///
+    /// The predicate is the engine's, never the row's — the row says only
+    /// whether the gate runs and at what severity. The verdict strings are the
+    /// gate's own and do not change, so every route, waiver and `policy explain`
+    /// that names one keeps working; the row `id` is the rule id only.
+    ///
+    /// **A config declaring no `native` row keeps every gate at `deny`.** Taking
+    /// the gates away from every repository whose `batten.toml` predates this
+    /// kind would turn off the reset gate (CLOUD-462) on an engine upgrade
+    /// nobody read. Once a config declares one `native` row it declares all of
+    /// them: a gate with no row is off.
+    Native,
+}
+
+/// The compiled gates a [`RuleKind::Native`] row may enable (CLOUD-2291).
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize, JsonSchema,
+)]
+#[serde(rename_all = "kebab-case")]
+#[non_exhaustive]
+pub enum NativeGate {
+    /// A `git reset` that would discard commits no ref holds (CLOUD-462).
+    DestructiveReset,
+    /// A second copy of a one-per-clone task (CLOUD-438).
+    Singleton,
+    /// A config row changed by a context that has not read its history
+    /// (CLOUD-2144).
+    History,
+}
+
+impl NativeGate {
+    /// Every gate, in the order the mediated chain runs them.
+    pub const ALL: &'static [NativeGate] = &[
+        NativeGate::DestructiveReset,
+        NativeGate::Singleton,
+        NativeGate::History,
+    ];
+
+    /// The `gate = "..."` token (§6).
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            NativeGate::DestructiveReset => "destructive-reset",
+            NativeGate::Singleton => "singleton",
+            NativeGate::History => "history",
+        }
+    }
 }
 
 /// The columns a [`RuleKind::Reference`] row accepts (CLOUD-2005): its `cites`
@@ -525,6 +574,7 @@ impl RuleKind {
         RuleKind::Document,
         RuleKind::Policy,
         RuleKind::Reference,
+        RuleKind::Native,
     ];
 
     /// The stable lowercase token used in config and machine output (§6).
@@ -542,6 +592,7 @@ impl RuleKind {
             RuleKind::Document => "document",
             RuleKind::Policy => "policy",
             RuleKind::Reference => "reference",
+            RuleKind::Native => "native",
         }
     }
 
@@ -603,7 +654,10 @@ impl RuleKind {
             | RuleKind::Policy
             // Reads the declared register paths and the citer paths, both
             // through the one document acquisition; it names no program.
-            | RuleKind::Reference => Authority::Supplied,
+            | RuleKind::Reference
+            // The engine's own gate over facts the boundary resolved; the row
+            // names no program and no path.
+            | RuleKind::Native => Authority::Supplied,
             // All three run a program a `batten.toml` named. That a judge's
             // consults a model, a command's decides a gate and a secrets rule's
             // scans for credentials makes no difference to the axis: each starts
@@ -760,6 +814,8 @@ impl RuleKind {
             // register's column has no glob. `validate` carries which citer
             // shape needs which column.
             RuleKind::Reference => &["cites", "severity"],
+            // Which gate, and how hard: the whole of what the row decides.
+            RuleKind::Native => &["gate", "severity"],
         }
     }
 
@@ -817,7 +873,9 @@ impl RuleKind {
             | RuleKind::Policy
             // Is this token a key of that set: a membership test over a set the
             // row declared, which is decided exactly.
-            | RuleKind::Reference => Decidability::Deciding,
+            | RuleKind::Reference
+            // Reachability, a lock holder, a history receipt: each decided.
+            | RuleKind::Native => Decidability::Deciding,
         }
     }
 
@@ -870,7 +928,8 @@ impl RuleKind {
             | RuleKind::Judge
             | RuleKind::Secrets
             | RuleKind::Document
-            | RuleKind::Reference => false,
+            | RuleKind::Reference
+            | RuleKind::Native => false,
         }
     }
 
@@ -984,6 +1043,8 @@ impl RuleKind {
             // second shape column beside it would be a rule with two authorities
             // over one decision.
             RuleKind::Reference => REFERENCE_COLUMNS,
+            // No `reason`: the refusal is the gate's own, with its own routes.
+            RuleKind::Native => &["gate", "severity", "no_fix_reason"],
             RuleKind::Policy => &[
                 // CLOUD-1639, and this is the ONE kind that may carry `fix` at
                 // the mediated boundary: a repair is admissible only where the
@@ -1084,7 +1145,9 @@ impl RuleKind {
             | RuleKind::Secrets
             | RuleKind::Document
             | RuleKind::Reference => &[RuleScope::Tree],
-            RuleKind::Shape | RuleKind::Receipt | RuleKind::Pipeline => &[RuleScope::MediatedCall],
+            RuleKind::Shape | RuleKind::Receipt | RuleKind::Pipeline | RuleKind::Native => {
+                &[RuleScope::MediatedCall]
+            }
             // `Policy` is the only kind that takes BOTH, and CLOUD-833 is why.
             //
             // It arrived `MediatedCall`-alone, which was right for what
@@ -1146,7 +1209,11 @@ impl RuleKind {
             // reads the target off disk to compute it. `facts::PROSPECTIVE` is
             // `Cost::Read`, and a row deciding over a fact is a row reading it.
             // `Receipt` pays a bounded git read for the same class of reason.
-            RuleKind::Shape | RuleKind::Receipt => Class::new(Cost::Read, Surface::Hook),
+            // `Native` reads what the boundary resolved for the gate: the
+            // reset's reachability and the history receipts are bounded reads.
+            RuleKind::Shape | RuleKind::Receipt | RuleKind::Native => {
+                Class::new(Cost::Read, Surface::Hook)
+            }
             // THE ONE KIND WHOSE CLASS DEPENDS ON ITS SCOPE (CLOUD-833), which
             // is why this function takes one at all.
             //
@@ -2182,6 +2249,9 @@ pub struct Rule {
     /// running beside the copy that was meant to replace it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub except: Vec<String>,
+    /// Which compiled gate a [`RuleKind::Native`] row enables (CLOUD-2291).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gate: Option<NativeGate>,
     /// The bundle root this rule enables, as a repository-relative directory
     /// (CLOUD-833). [`RuleKind::Policy`] only, and the **alternative** to
     /// [`Rule::module`] rather than an addition to it.
@@ -3701,6 +3771,12 @@ pub const COLUMN_CENSUS: &[ColumnCensus] = &[
         ),
     },
     ColumnCensus {
+        field: "gate",
+        declares: Declares::NotFactBearing(
+            "names one of the engine's compiled gates; the facts are the gate's own (CLOUD-2291)",
+        ),
+    },
+    ColumnCensus {
         field: "except",
         declares: Declares::NotFactBearing(
             "qualifies `preset`, naming modules it does not compile; the facts stay the \
@@ -4914,7 +4990,7 @@ impl Rule {
     /// about all of them makes that failure impossible, and
     /// [`tests::every_optional_rule_field_is_classified_by_every_kind`] fails if
     /// a column is added here without being placed.
-    fn columns(&self) -> [(&'static str, bool); 57] {
+    fn columns(&self) -> [(&'static str, bool); 58] {
         [
             // In the census because it is now per-kind, which is what makes
             // "required by every kind but the judge" a fact the existing
@@ -4971,6 +5047,8 @@ impl Rule {
             ("verdict", self.verdict.is_some()),
             ("filters", self.filters.is_some()),
             ("substitutes", self.substitutes.is_some()),
+            // CLOUD-2291: a `native` row's whole predicate is which gate.
+            ("gate", self.gate.is_some()),
             // `landing` is NOT here, and neither are `git`, `refs` or `ranges`
             // (CLOUD-880, following CLOUD-907). The census drives the per-kind
             // permit/require validation, and a column in it owes an entry in some
@@ -5744,7 +5822,11 @@ impl Rule {
             // belongs here rather than beside `Judge` — its verdict is a real
             // deny that the engine could re-decide, it simply has no stored
             // finding to re-decide, which is `Shape`'s situation exactly.
-            RuleKind::Shape | RuleKind::Receipt | RuleKind::Pipeline | RuleKind::Policy => None,
+            RuleKind::Shape
+            | RuleKind::Receipt
+            | RuleKind::Pipeline
+            | RuleKind::Policy
+            | RuleKind::Native => None,
             // Neither of the other two answers is true for a judge.
             // `Reevaluate` would claim the engine can re-decide the finding, and
             // it cannot — a model reached that verdict and only the model can
@@ -7996,6 +8078,7 @@ fn run_rule(
         | RuleKind::Pipeline
         | RuleKind::Policy
         | RuleKind::Reference
+        | RuleKind::Native
         | RuleKind::Judge => {} // `Policy` is unreachable here for a THIRD reason as of CLOUD-833: it
                                 // returns above, before the glob gate, because it has no glob to be
                                 // selected by. Left in the list rather than removed so adding a scope to
@@ -15177,6 +15260,7 @@ mod tests {
             // No preset, so nothing here reads a CI provider (CLOUD-1625).
             provider: None,
             except: Vec::new(),
+            gate: None,
             documents: Vec::new(),
             requires_path: Vec::new(),
             sources: Vec::new(),
@@ -16359,6 +16443,7 @@ mod tests {
                                 inverse: false,
                             });
                         }
+                        "gate" => rule.gate = Some(NativeGate::Singleton),
                         other => panic!("unclassified required column `{other}`"),
                     }
                 }
@@ -17004,12 +17089,13 @@ mod tests {
                 | RuleKind::Secrets
                 | RuleKind::Document
                 | RuleKind::Policy
-                | RuleKind::Reference => {}
+                | RuleKind::Reference
+                | RuleKind::Native => {}
             }
         }
         assert_eq!(
             RuleKind::ALL.len(),
-            11,
+            12,
             "a new RuleKind must be added to RuleKind::ALL"
         );
     }

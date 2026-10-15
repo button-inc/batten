@@ -91,6 +91,64 @@ fn refused(line: &str) -> bool {
     line.contains("rule read missing") && line.contains(ROW)
 }
 
+/// A MINIMAL authority holding [`ROW`] and `rows` (CLOUD-2291).
+///
+/// Not [`fixture`]'s full one: there the claim-receipt gate refuses this edit
+/// next in the chain, so a history gate graded `warn` would be hidden behind a
+/// refusal that is not its own. Nothing here gates an edit but the history gate.
+fn fixture_with(name: &str, rows: &str) -> PathBuf {
+    let config = format!(
+        "version = 1\n\
+         protected = [\"guarded.txt\"]\n\n\
+         [[verb]]\n\
+         verb = \"rm\"\n\
+         effect = \"write\"\n\
+         redirect = \"restore it with git\"\n\n\
+         [[rule]]\n\
+         {ROW_LINE}\n\
+         kind = \"forbid\"\n\
+         glob = \"src/**\"\n\
+         pattern = \"never\"\n\
+         scope = \"tree\"\n\
+         severity = \"deny\"\n\
+         no_fix_reason = \"a fixture row\"\n\n\
+         {rows}"
+    );
+    Fixture::new(name)
+        .config(&config)
+        .file("guarded.txt", "guarded\n")
+        .git()
+        .base_commit()
+        .build()
+}
+
+/// Whether the host was told to refuse the call.
+fn denied(line: &str) -> bool {
+    line.contains("\"permissionDecision\":\"deny\"")
+}
+
+/// CLOUD-2291: absent (another gate's row present), `deny` and `warn`.
+#[test]
+fn the_history_gate_runs_only_when_a_row_enables_it_at_its_severity() {
+    let row = crate::singleton_gate::native_row;
+
+    let absent = fixture_with("history-native-absent", &row("singleton", "deny"));
+    let line = edit_row(&absent, "s1");
+    assert!(!refused(&line), "no row, no gate: {line}");
+
+    let deny = fixture_with("history-native-deny", &row("history", "deny"));
+    let line = edit_row(&deny, "s1");
+    assert!(
+        refused(&line) && denied(&line),
+        "a deny row refuses: {line}"
+    );
+
+    let warn = fixture_with("history-native-warn", &row("history", "warn"));
+    let line = edit_row(&warn, "s1");
+    assert!(!denied(&line), "a warn row allows: {line}");
+    assert!(refused(&line), "and says what it would refuse: {line}");
+}
+
 #[test]
 fn an_edit_to_a_rule_row_without_its_history_read_is_refused() {
     let repo = fixture("history-unread");

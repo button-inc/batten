@@ -55,6 +55,73 @@ fn fixture(name: &str) -> PathBuf {
         .build()
 }
 
+/// [`fixture`]'s config with `rows` appended (CLOUD-2291).
+fn fixture_with(name: &str, rows: &str) -> PathBuf {
+    Fixture::new(name)
+        .config(&format!(
+            "version = 1\n\
+             protected = [\"guarded.txt\"]\n\n\
+             [[verb]]\n\
+             verb = \"rm\"\n\
+             effect = \"write\"\n\
+             redirect = \"restore it with git\"\n\n\
+             {rows}"
+        ))
+        .file("guarded.txt", "guarded\n")
+        .git()
+        .base_commit()
+        .build()
+}
+
+/// A `native` row enabling `gate` at `severity`.
+///
+/// The id is three words for the fixtures that load this repository's own
+/// authority, whose vocabulary refuses any other arity; the id is the rule id
+/// only, so its spelling decides nothing.
+pub(crate) fn native_row(gate: &str, severity: &str) -> String {
+    let id = match gate {
+        "destructive-reset" => "gate guard ahead",
+        "singleton" => "gate guard other",
+        _ => "gate guard wrong",
+    };
+    format!(
+        "[[rule]]\nid = \"{id}\"\nkind = \"native\"\ngate = \"{gate}\"\n\
+         scope = \"mediated_call\"\nseverity = \"{severity}\"\n\
+         no_fix_reason = \"the refusal is the gate's own\"\n\n"
+    )
+}
+
+/// CLOUD-2291: the gate runs only where a row enables it, at that row's
+/// severity. Absent — another gate's row present, so the config has opted into
+/// rows — the second start is allowed; `deny` refuses it as before; `warn` allows
+/// it and still names the class.
+#[test]
+fn the_singleton_gate_runs_only_when_a_row_enables_it_at_its_severity() {
+    let absent = fixture_with(
+        "singleton-native-absent",
+        &native_row("destructive-reset", "deny"),
+    );
+    hold(&absent, "land", Some("1"));
+    let (code, cause) = adjudicate(&absent, "mise run land");
+    assert_eq!(code, Some(0), "no row, no gate\n{cause}");
+    assert!(!cause.contains(CLASS), "and nothing said\n{cause}");
+
+    let deny = fixture_with("singleton-native-deny", &native_row("singleton", "deny"));
+    hold(&deny, "land", Some("1"));
+    let (code, cause) = adjudicate(&deny, "mise run land");
+    assert_eq!(code, Some(2), "a deny row refuses\n{cause}");
+    assert!(cause.contains(CLASS), "{cause}");
+
+    let warn = fixture_with("singleton-native-warn", &native_row("singleton", "warn"));
+    hold(&warn, "land", Some("1"));
+    let (code, cause) = adjudicate(&warn, "mise run land");
+    assert_eq!(code, Some(0), "a warn row allows\n{cause}");
+    assert!(
+        cause.contains(CLASS),
+        "and says what it would refuse\n{cause}"
+    );
+}
+
 /// Put the singleton lock for `task` into a named state.
 ///
 /// `holder: None` writes the lock directory with no pid file — a holder caught

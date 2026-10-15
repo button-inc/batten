@@ -51,7 +51,9 @@ use crate::receipt::Validity;
 use crate::redirect::{self, Redirect};
 use crate::refusal::{Fix, Refusal};
 use crate::resolve::Resolved;
-use crate::rules::{CeilingUnit, PathSet, ReceiptKey, ReceiptTrigger, Rule, RuleKind, RuleScope};
+use crate::rules::{
+    CeilingUnit, NativeGate, PathSet, ReceiptKey, ReceiptTrigger, Rule, RuleKind, RuleScope,
+};
 use crate::severity::{self, ReportLevel, RuleSeverity};
 use crate::verbs::{MutatingVerb, OperandScope};
 
@@ -4600,6 +4602,60 @@ fn event_decides(event: Event) -> Option<Decision> {
     }
 }
 
+/// The severity a compiled gate runs at here, or `None` where it is off
+/// (CLOUD-2291).
+///
+/// A config declaring no `native` row runs every gate at `deny`, which is what
+/// every config did before the kind existed: an engine upgrade must not take the
+/// reset gate away from a repository that never read the release notes. Once a
+/// config declares one `native` row, a gate without a row is off.
+fn native_grade(policy: &Policy, gate: NativeGate) -> Option<RuleSeverity> {
+    let mut natives = policy
+        .shapes
+        .iter()
+        .filter(|rule| rule.kind == RuleKind::Native)
+        .peekable();
+    if natives.peek().is_none() {
+        return Some(RuleSeverity::Deny);
+    }
+    natives
+        .find(|rule| rule.gate == Some(gate))
+        .map(Rule::severity)
+}
+
+/// Whether `gate` refuses here.
+fn native_blocks(policy: &Policy, gate: NativeGate) -> bool {
+    native_grade(policy, gate).is_some_and(|severity| blocks(severity, policy.fail_on_warning))
+}
+
+/// The refusals of every compiled gate graded `warn` that fired on this call,
+/// delivered as advisories while the call is allowed (CLOUD-2291).
+fn native_advice(policy: &Policy, facts: &Facts<'_>) -> Vec<Refusal> {
+    let advises = |gate| {
+        native_grade(policy, gate).is_some_and(|severity| {
+            severity != RuleSeverity::Allow && !blocks(severity, policy.fail_on_warning)
+        })
+    };
+    let mut advice = Vec::new();
+    if advises(NativeGate::DestructiveReset)
+        && let crate::facts::Look::Is(unreferenced) = facts.discards
+        && !unreferenced.is_empty()
+    {
+        advice.push(history_drop_refusal(unreferenced));
+    }
+    if advises(NativeGate::Singleton)
+        && let Some((task, holder)) = facts.singleton
+    {
+        advice.push(singleton_held_refusal(task, holder));
+    }
+    if advises(NativeGate::History)
+        && let Some(Decision::Deny(refusal)) = history_gate(facts)
+    {
+        advice.push(refusal);
+    }
+    advice
+}
+
 /// The history gate (CLOUD-2144): a config row changed by a context that has
 /// not read why it exists. Resolved at the boundary, so this is a lookup; the
 /// fact is could-not-look for every call that is not a write to the authority,
@@ -4656,6 +4712,7 @@ fn adjudicated_call_gates(policy: &Policy, envelope: &Envelope, facts: &Facts<'_
     // nothing refused.
     if let crate::facts::Look::Is(unreferenced) = discards
         && !unreferenced.is_empty()
+        && native_blocks(policy, NativeGate::DestructiveReset)
     {
         return Decision::Deny(history_drop_refusal(unreferenced));
     }
@@ -4671,11 +4728,15 @@ fn adjudicated_call_gates(policy: &Policy, envelope: &Envelope, facts: &Facts<'_
     //
     // The same lock, read the same way (`task::singleton_holder`), so there is no
     // second predicate to drift.
-    if let Some((task, holder)) = facts.singleton {
+    if let Some((task, holder)) = facts.singleton
+        && native_blocks(policy, NativeGate::Singleton)
+    {
         return Decision::Deny(singleton_held_refusal(task, holder));
     }
     // THE HISTORY GATE (CLOUD-2144), in its place in the chain.
-    if let Some(denied) = history_gate(facts) {
+    if native_blocks(policy, NativeGate::History)
+        && let Some(denied) = history_gate(facts)
+    {
         return denied;
     }
     // The write gate, before the command gate and not inside it: a write tool
@@ -6924,7 +6985,14 @@ pub fn policy_advice(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) ->
     if turn_end {
         return Vec::new();
     }
-    policy_advisories(policy, envelope, facts)
+    // A compiled gate graded `warn` speaks here, beside the modules (CLOUD-2291).
+    let mut advice = if envelope.event == Event::PreTool && !policy.is_empty() {
+        native_advice(policy, facts)
+    } else {
+        Vec::new()
+    };
+    advice.extend(policy_advisories(policy, envelope, facts));
+    advice
 }
 
 /// The STRONGEST violation any enabled bundle raises, with the severity its
@@ -11126,6 +11194,7 @@ mod tests {
             // No preset, so nothing here reads a CI provider (CLOUD-1625).
             provider: None,
             except: Vec::new(),
+            gate: None,
             documents: Vec::new(),
             requires_path: Vec::new(),
             sources: Vec::new(),

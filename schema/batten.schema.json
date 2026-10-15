@@ -3365,6 +3365,26 @@
         "regex"
       ]
     },
+    "NativeGate": {
+      "description": "The compiled gates a [`RuleKind::Native`] row may enable (CLOUD-2291).",
+      "oneOf": [
+        {
+          "description": "A `git reset` that would discard commits no ref holds (CLOUD-462).",
+          "type": "string",
+          "const": "destructive-reset"
+        },
+        {
+          "description": "A second copy of a one-per-clone task (CLOUD-438).",
+          "type": "string",
+          "const": "singleton"
+        },
+        {
+          "description": "A config row changed by a context that has not read its history\n(CLOUD-2144).",
+          "type": "string",
+          "const": "history"
+        }
+      ]
+    },
     "OperandScope": {
       "description": "Which operands of a matched invocation are write targets.\n\n[`OperandScope::All`] is the default, and that is load-bearing rather than\nincidental: it is the reading that fails toward *refusing*, and it is the one\na move needs — guarding only the source would miss the direction that\ndestroys the destination, which\n`hook::tests::every_operand_is_a_candidate_so_a_destination_is_guarded_too`\npins. [`OperandScope::Last`] is the narrowing a destination-only program\nneeds, where copying a guarded file *out* of the guarded set is a read and\nrefusing it is the false positive that gets a guard switched off.",
       "oneOf": [
@@ -4845,6 +4865,17 @@
             }
           ]
         },
+        "gate": {
+          "description": "Which compiled gate a [`RuleKind::Native`] row enables (CLOUD-2291).",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NativeGate"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "git": {
           "description": "The git facts this policy row reads, **declared** (CLOUD-907).\n\n[`Rule::documents`]'s sibling for the family that is not a file, and the\ndeclaration is load-bearing twice over.\n\n**It is what keeps `Cost::Read` honest.** `bench/gates/RESULTS.md`\nre-derived the corpus and 22 gate tasks need a git fact the engine could\nnot emit; every one of them names which. Resolving the family ambiently\ninstead would make every run pay for every variant — and this tree has\nalready measured that bill: CLOUD-851 took `check` from a p50 of 4.76ms to\n10.01ms, 2.103x, by locating the git dir and reading HEAD unconditionally\nfor a question no rule had asked.\n\n**And it is what makes the acquisition auditable.** A reader of\n`batten.toml` sees exactly which rows read the checkout's state, which is\nthe same property `documents` gives for files.\n\nRefs and ranges are [`Rule::refs`] and [`Rule::ranges`] rather than\nentries here, because those two carry a parameter and these three do not.",
           "type": "array",
@@ -5510,6 +5541,11 @@
           "description": "**Every cited token resolves to a key of a declared `[[register]]`**\n(CLOUD-2005): the predicate a consumer otherwise hand-writes per citation\nshape, measured at 94.6 s for one policy row whose joins rescanned every\nregister row per row.\n\nThe join is the engine's, in [`crate::register::resolve`]: a map probe per\ncitation, never a rescan, so the cost is linear in citations plus keys.\nThe row's [`Rule::cites`] names the register and the citer; the citer's\npaths come from the row's `glob` unless it cites another register.\n\nDeny-only and pointer-only: rule id, citer `path:line` or path, and the\nregister id. A register that could not be built is could-not-look and is\nreported as such, never as an empty set.",
           "type": "string",
           "const": "reference"
+        },
+        {
+          "description": "**One of the engine's compiled mediated-call gates, enabled and graded by\na row** (CLOUD-2291): [`Rule::gate`] names which.\n\nThe predicate is the engine's, never the row's — the row says only\nwhether the gate runs and at what severity. The verdict strings are the\ngate's own and do not change, so every route, waiver and `policy explain`\nthat names one keeps working; the row `id` is the rule id only.\n\n**A config declaring no `native` row keeps every gate at `deny`.** Taking\nthe gates away from every repository whose `batten.toml` predates this\nkind would turn off the reset gate (CLOUD-462) on an engine upgrade\nnobody read. Once a config declares one `native` row it declares all of\nthem: a gate with no row is off.",
+          "type": "string",
+          "const": "native"
         }
       ]
     },

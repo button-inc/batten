@@ -57,6 +57,57 @@ fn fixture(name: &str) -> PathBuf {
         .build()
 }
 
+/// [`fixture`]'s config with `rows` appended (CLOUD-2291).
+fn fixture_with(name: &str, rows: &str) -> PathBuf {
+    Fixture::new(name)
+        .config(&format!(
+            "version = 1\n\
+             protected = [\"guarded.txt\"]\n\n\
+             [[verb]]\n\
+             verb = \"rm\"\n\
+             effect = \"write\"\n\
+             redirect = \"restore it with git\"\n\n\
+             {rows}"
+        ))
+        .file("guarded.txt", "guarded\n")
+        .git()
+        .base_commit()
+        .build()
+}
+
+/// CLOUD-2291: absent (another gate's row present), `deny` and `warn`.
+#[test]
+fn the_destructive_reset_gate_runs_only_when_a_row_enables_it() {
+    let row = crate::singleton_gate::native_row;
+
+    let absent = fixture_with("history-drop-native-absent", &row("singleton", "deny"));
+    unpushed(&absent, "local.txt");
+    let (code, cause) = adjudicate(&absent, "git reset --hard HEAD~1");
+    assert_eq!(code, Some(0), "no row, no gate\n{cause}");
+    assert!(!cause.contains(CLASS), "and nothing said\n{cause}");
+
+    let deny = fixture_with(
+        "history-drop-native-deny",
+        &row("destructive-reset", "deny"),
+    );
+    unpushed(&deny, "local.txt");
+    let (code, cause) = adjudicate(&deny, "git reset --hard HEAD~1");
+    assert_eq!(code, Some(2), "a deny row refuses\n{cause}");
+    assert!(cause.contains(CLASS), "{cause}");
+
+    let warn = fixture_with(
+        "history-drop-native-warn",
+        &row("destructive-reset", "warn"),
+    );
+    unpushed(&warn, "local.txt");
+    let (code, cause) = adjudicate(&warn, "git reset --hard HEAD~1");
+    assert_eq!(code, Some(0), "a warn row allows\n{cause}");
+    assert!(
+        cause.contains(CLASS),
+        "and says what it would refuse\n{cause}"
+    );
+}
+
 /// Commit one more file AND move the remote ref onto it, so the commit counts as
 /// pushed. Needed wherever a case wants a range deeper than one commit.
 fn pushed(dir: &Path, name: &str) {

@@ -621,6 +621,26 @@
         "max_age_days"
       ]
     },
+    "NativeGate": {
+      "description": "The compiled gates a [`RuleKind::Native`] row may enable (CLOUD-2291).",
+      "oneOf": [
+        {
+          "description": "A `git reset` that would discard commits no ref holds (CLOUD-462).",
+          "type": "string",
+          "const": "destructive-reset"
+        },
+        {
+          "description": "A second copy of a one-per-clone task (CLOUD-438).",
+          "type": "string",
+          "const": "singleton"
+        },
+        {
+          "description": "A config row changed by a context that has not read its history\n(CLOUD-2144).",
+          "type": "string",
+          "const": "history"
+        }
+      ]
+    },
     "OutputPattern": {
       "description": "One declared output predicate: a literal that must not appear.",
       "type": "object",
@@ -1231,6 +1251,17 @@
           "anyOf": [
             {
               "$ref": "#/$defs/Format"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "gate": {
+          "description": "Which compiled gate a [`RuleKind::Native`] row enables (CLOUD-2291).",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NativeGate"
             },
             {
               "type": "null"
@@ -1902,6 +1933,11 @@
           "description": "**Every cited token resolves to a key of a declared `[[register]]`**\n(CLOUD-2005): the predicate a consumer otherwise hand-writes per citation\nshape, measured at 94.6 s for one policy row whose joins rescanned every\nregister row per row.\n\nThe join is the engine's, in [`crate::register::resolve`]: a map probe per\ncitation, never a rescan, so the cost is linear in citations plus keys.\nThe row's [`Rule::cites`] names the register and the citer; the citer's\npaths come from the row's `glob` unless it cites another register.\n\nDeny-only and pointer-only: rule id, citer `path:line` or path, and the\nregister id. A register that could not be built is could-not-look and is\nreported as such, never as an empty set.",
           "type": "string",
           "const": "reference"
+        },
+        {
+          "description": "**One of the engine's compiled mediated-call gates, enabled and graded by\na row** (CLOUD-2291): [`Rule::gate`] names which.\n\nThe predicate is the engine's, never the row's — the row says only\nwhether the gate runs and at what severity. The verdict strings are the\ngate's own and do not change, so every route, waiver and `policy explain`\nthat names one keeps working; the row `id` is the rule id only.\n\n**A config declaring no `native` row keeps every gate at `deny`.** Taking\nthe gates away from every repository whose `batten.toml` predates this\nkind would turn off the reset gate (CLOUD-462) on an engine upgrade\nnobody read. Once a config declares one `native` row it declares all of\nthem: a gate with no row is off.",
+          "type": "string",
+          "const": "native"
         }
       ]
     },

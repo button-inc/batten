@@ -4852,6 +4852,7 @@ fn default_rules() -> Vec<Rule> {
         // over conflict markers and reads no CI language at all (CLOUD-1625).
         provider: None,
         except: Vec::new(),
+        gate: None,
         documents: Vec::new(),
         // Unconditional (CLOUD-125): the zero-config layer has no repository
         // shape to declare a precondition against, and a default rule that
