@@ -926,21 +926,30 @@ pub const fn abandons_the_runs(seen: Option<TapVerdict>) -> bool {
 /// re-drafted the pull request while the eleven runs the ready had bought were
 /// already starting.
 ///
-/// So after a fresh ready, a dead end is believed only once a required run has
-/// registered that the first reading did not hold. Until then it is the state the
-/// wait exists to sit in. A ready whose runs never register spends the ask count
-/// and answers [`Waited::Unanswered`], which laps: that is the honest reading of
-/// a matrix that never started, and it costs asks rather than a false stop.
-/// A count, never a clock, for the reason [`Ledger`] gives.
+/// So after a fresh ready, a dead end is believed only once EVERY name it masks
+/// has registered a run the first reading did not hold. Until then it is the
+/// state the wait exists to sit in. A ready whose runs never register spends the
+/// ask count and answers [`Waited::Unanswered`], which laps: that is the honest
+/// reading of a matrix that never started, and it costs asks rather than a false
+/// stop. A count, never a clock, for the reason [`Ledger`] gives.
+///
+/// **EACH MASKED NAME, NOT ANY REQUIRED ONE** (CLOUD-2189). Believing the dead
+/// end once any required name re-registered stopped gke-platform#11 three times:
+/// its fast jobs register within seconds of the ready, but its fan-in `final`
+/// registers only after every job it needs has finished, so for most of the run
+/// the newest `final` was still the draft-era skip. The dead end named `final`;
+/// only a `final` the ready bought can confirm it.
 #[must_use]
 pub fn registered_since(
     before_ready: Option<&std::collections::BTreeSet<u64>>,
     runs: &[crate::checks_green::Run],
-    roster: &crate::checks_green::Roster,
+    masked: &[crate::checks_green::Finding],
 ) -> bool {
     before_ready.is_none_or(|seen| {
-        runs.iter()
-            .any(|run| roster.required.contains(&run.name) && !seen.contains(&run.id))
+        masked.iter().all(|finding| {
+            runs.iter()
+                .any(|run| run.name == finding.check && !seen.contains(&run.id))
+        })
     })
 }
 
@@ -1116,7 +1125,7 @@ pub fn wait_reading(
                     // end it HERE rather than by running out of asks, because
                     // running out spells `Unanswered`, which laps.
                     Ok(crate::checks_green::Verdict::DeadEnd(findings))
-                        if registered_since(before_ready.as_ref(), poll.runs(), roster) =>
+                        if registered_since(before_ready.as_ref(), poll.runs(), &findings) =>
                     {
                         stop.store(true, std::sync::atomic::Ordering::Relaxed);
                         drop(green.send(Waited::DeadEnd { findings }));

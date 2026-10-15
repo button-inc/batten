@@ -28,6 +28,7 @@
 #MUTANT-SUITE crates/batten/tests/it/land.rs
 #MUTANT a-truncated-reading-reads-as-closed|s@        "repos/{}/commits/{}/check-runs?per_page={PER_PAGE}&page={number}",@        "repos/{}/commits/{}/check-runs?per_page={PER_PAGE}",@|a_truncated_reading_is_not_read_as_closed
 #MUTANT dead-end-believed-before-the-ready-registers|s@^    before_ready.is_none_or(|seen| {$@    true || before_ready.is_none_or(|seen| {@|a_dead_end_after_a_fresh_ready_waits_for_the_ready_s_own_runs
+#MUTANT dead-end-confirmed-by-a-sibling|s@run\.name == finding\.check \&\& @@|a_sibling_s_new_run_does_not_confirm_a_dead_end_on_the_fan_in
 #MUTANT red-head-runs-cancelled|s@^    !matches!(seen, Some(TapVerdict::Red \| TapVerdict::Unread))$@    true@|a_red_head_s_other_runs_finish_and_every_other_stop_cancels
 */
 
@@ -871,27 +872,26 @@ fn skipped(name: &str, id: u64) -> batten::checks_green::Run {
 /// with a masked name, so the wait stopped with "no verdict is coming" and
 /// re-drafted the pull request while the ready's own eleven runs were starting.
 ///
-/// After a fresh ready, that reading is not believed until a required run the
-/// first look did not hold has registered. The mutation row above makes the
-/// predicate believe every reading, and is killed here (inert under the sweep,
-/// which rewrites this file; applied to `land.rs` by hand).
+/// After a fresh ready, that reading is not believed until EVERY name the dead
+/// end masks has registered a run the first look did not hold. The mutation row
+/// above makes the predicate believe every reading, and is killed here (inert
+/// under the sweep, which rewrites this file; applied to `land.rs` by hand).
 #[test]
 fn a_dead_end_after_a_fresh_ready_waits_for_the_ready_s_own_runs() {
-    let roster = batten::checks_green::Roster {
-        required: vec![String::from("ci"), String::from("final")],
-        absent_ok: Vec::new(),
-        answered: vec![String::from("success")],
-        fanin: None,
+    let finding = |check: &str| batten::checks_green::Finding {
+        check: check.to_owned(),
+        conclusion: String::from("skipped"),
     };
+    let masked = [finding("ci"), finding("final")];
     let drafted = [skipped("ci", 1), skipped("final", 2)];
     let before: std::collections::BTreeSet<u64> = drafted.iter().map(|run| run.id).collect();
 
     assert!(
-        land::registered_since(None, &drafted, &roster),
+        land::registered_since(None, &drafted, &masked),
         "a wait no ready preceded believes the reading as it is"
     );
     assert!(
-        !land::registered_since(Some(&before), &drafted, &roster),
+        !land::registered_since(Some(&before), &drafted, &masked),
         "the draft-era skips alone are not the ready's answer"
     );
     let unrelated = [
@@ -900,13 +900,49 @@ fn a_dead_end_after_a_fresh_ready_waits_for_the_ready_s_own_runs() {
         skipped("lint-bot", 9),
     ];
     assert!(
-        !land::registered_since(Some(&before), &unrelated, &roster),
-        "a run outside the roster is not the ready's answer either"
+        !land::registered_since(Some(&before), &unrelated, &masked),
+        "a run outside the masked names is not the ready's answer either"
     );
-    let answered = [skipped("ci", 1), skipped("final", 2), skipped("ci", 3)];
+    let answered = [
+        skipped("ci", 1),
+        skipped("final", 2),
+        skipped("ci", 3),
+        skipped("final", 4),
+    ];
     assert!(
-        land::registered_since(Some(&before), &answered, &roster),
-        "a required run the first look did not hold is"
+        land::registered_since(Some(&before), &answered, &masked),
+        "every masked name re-registered since the ready is the ready's answer"
+    );
+}
+
+/// gke-platform#11 (CLOUD-2189): the ready's fast jobs register within seconds,
+/// but the fan-in `final` registers only once every job it needs has finished.
+/// A dead end masking `final` is not confirmed by a sibling's new run: until a
+/// `final` the ready bought exists, the newest `final` is the draft-era skip, and
+/// stopping on it re-drafts the pull request under its own live matrix.
+#[test]
+fn a_sibling_s_new_run_does_not_confirm_a_dead_end_on_the_fan_in() {
+    let masked = [batten::checks_green::Finding {
+        check: String::from("final"),
+        conclusion: String::from("skipped"),
+    }];
+    let drafted = [skipped("ci", 1), skipped("final", 2)];
+    let before: std::collections::BTreeSet<u64> = drafted.iter().map(|run| run.id).collect();
+
+    let siblings_only = [skipped("ci", 1), skipped("final", 2), skipped("ci", 3)];
+    assert!(
+        !land::registered_since(Some(&before), &siblings_only, &masked),
+        "only a final the ready bought can confirm a dead end on final"
+    );
+    let fan_in_too = [
+        skipped("ci", 1),
+        skipped("final", 2),
+        skipped("ci", 3),
+        skipped("final", 4),
+    ];
+    assert!(
+        land::registered_since(Some(&before), &fan_in_too, &masked),
+        "a final the ready bought does"
     );
 }
 
