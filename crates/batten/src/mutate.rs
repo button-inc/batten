@@ -276,7 +276,12 @@ fn task_names(lines: &[String]) -> Vec<String> {
 //MUTANT shard-takes-every-gate|s@^        .filter(\x7c(index, _)\x7c index % n == k)$@        .filter(\x7c_\x7c true)@|shards_partition_the_sorted_gates_and_refuse_a_malformed_value
 //MUTANT every-gate-touched|s@^        \.filter(\x7cname\x7c {$@        .filter(\x7cname\x7c { true \x7c\x7c@|a_change_touching_no_gate_sweeps_nothing
 fn declaring_lines(root: &Path, name: &str, source: &str) -> Option<Vec<String>> {
-    let lines = lines_of(root, source)?;
+    declaring_in(name, source, lines_of(root, source)?)
+}
+
+/// [`declaring_lines`] over a source's lines already read: the task block a
+/// `task-` gate owns, else every line.
+fn declaring_in(name: &str, source: &str, lines: Vec<String>) -> Option<Vec<String>> {
     match name.strip_prefix(TASK_PREFIX) {
         Some(task) if task_manifest().as_deref() == Some(source) => task_block(&lines, task),
         _ => Some(lines),
@@ -1551,7 +1556,10 @@ pub fn run_registered(
             Place::Unsharded => None,
         };
         position += 1;
-        let Some(scope) = test_scope(root, source) else {
+        // ONE READ OF THE SCOPE: the filterset and the target selectors are
+        // both this list's, so it is built once per source.
+        let scope = scope_of(root, source);
+        if scope.is_empty() {
             result.findings.push(Finding {
                 gate: kind.id().to_owned(),
                 slug: Some(source.clone()),
@@ -1561,16 +1569,10 @@ pub fn run_registered(
                 owner: None,
             });
             continue;
-        };
+        }
         let output = runs.join(index.to_string());
         let _ = fs::remove_dir_all(&output);
-        let args = source_args(
-            &patch,
-            source,
-            &output,
-            local,
-            (scope, test_targets(root, source)),
-        );
+        let args = source_args(&patch, source, &output, local, &scope);
         let started = std::time::Instant::now();
         let _ = writeln!(
             progress,
@@ -1656,13 +1658,14 @@ fn shard_plan(
         .collect())
 }
 
-/// One source's cargo-mutants argv; `local` is its `--shard` as `(k, n)`.
+/// One source's cargo-mutants argv; `local` is its `--shard` as `(k, n)`, and
+/// `scope` its [`scope_of`], which names both the filterset and the targets.
 fn source_args(
     patch: &Path,
     source: &str,
     output: &Path,
     local: Option<(usize, usize)>,
-    (scope, targets): (String, Vec<String>),
+    scope: &[(String, String)],
 ) -> Vec<String> {
     let mut args = vec![
         String::from("mutants"),
@@ -1680,7 +1683,11 @@ fn source_args(
     // ONLY THE TARGETS THE SCOPE RUNS ARE BUILT ([`test_targets`]): `--cargo-arg`
     // reaches both the build and the test invocation, so what is compiled per
     // mutant is what the filterset below can select, and nothing else.
-    args.extend(targets.iter().map(|target| format!("--cargo-arg={target}")));
+    args.extend(
+        targets_of(scope)
+            .iter()
+            .map(|target| format!("--cargo-arg={target}")),
+    );
     // NO DEBUG INFO FOR THE CRATE UNDER MUTATION (CLOUD-1746). Measured on
     // this tree, one mutant's `--lib --test=it` rebuild is 25.5s at `debug = 1`
     // and 22.3s at `0`; nothing reads a mutant's debug info. Dependencies are
@@ -1711,7 +1718,7 @@ fn source_args(
         String::from("-v"),
         String::from("--"),
         String::from("-E"),
-        scope,
+        terms_of(scope),
     ]);
     args
 }
@@ -1906,11 +1913,28 @@ impl Outcomes {
 /// judged by the suites it declares: what it generates is what they read.
 #[must_use]
 pub fn test_scope(root: &Path, source: &str) -> Option<String> {
-    let terms: Vec<String> = scope_of(root, source)
-        .into_iter()
-        .map(|(term, _)| term)
-        .collect();
-    (!terms.is_empty()).then(|| terms.join(" | "))
+    let scope = scope_of(root, source);
+    (!scope.is_empty()).then(|| terms_of(&scope))
+}
+
+/// A [`scope_of`]'s filterset: its terms, alternated.
+fn terms_of(scope: &[(String, String)]) -> String {
+    scope
+        .iter()
+        .map(|(term, _)| term.as_str())
+        .collect::<Vec<_>>()
+        .join(" | ")
+}
+
+/// A [`scope_of`]'s target selectors, each once, in order.
+fn targets_of(scope: &[(String, String)]) -> Vec<String> {
+    let mut targets: Vec<String> = Vec::new();
+    for (_, target) in scope {
+        if !targets.contains(target) {
+            targets.push(target.clone());
+        }
+    }
+    targets
 }
 
 /// The cargo target selectors that build exactly the test binaries
@@ -1926,13 +1950,7 @@ pub fn test_scope(root: &Path, source: &str) -> Option<String> {
 /// builds the package's binaries for an integration target by itself.
 #[must_use]
 pub fn test_targets(root: &Path, source: &str) -> Vec<String> {
-    let mut targets: Vec<String> = Vec::new();
-    for (_, target) in scope_of(root, source) {
-        if !targets.contains(&target) {
-            targets.push(target);
-        }
-    }
-    targets
+    targets_of(&scope_of(root, source))
 }
 
 /// Each `(filterset term, cargo target selector)` judging `source`: its own
@@ -4177,7 +4195,11 @@ fn inert_rows(root: &Path, subjects: &BTreeMap<String, String>) -> Vec<(String, 
             let Ok(text) = std::fs::read_to_string(root.join(&source)) else {
                 continue;
             };
-            let Some(lines) = declaring_lines(root, name, &source) else {
+            // ONE READ PER SOURCE: the declaring lines are sliced from the
+            // text this already holds rather than read again.
+            let Some(lines) =
+                declaring_in(name, &source, text.lines().map(str::to_owned).collect())
+            else {
                 continue;
             };
             for row in rows_in(&lines, &source) {
@@ -4543,10 +4565,7 @@ mod tests {
             "crates/k/src/a/b.rs",
             Path::new("out"),
             None,
-            (
-                String::from("scope"),
-                test_targets(&root, "crates/k/src/a/b.rs"),
-            ),
+            &scope_of(&root, "crates/k/src/a/b.rs"),
         );
         for target in [
             "--cargo-arg=--lib",

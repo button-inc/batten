@@ -1981,6 +1981,38 @@ fn run_provision_status(
     Ok(ExitCode::verdict(report.any_stale()))
 }
 
+/// Where this checkout's `[[provision]]` rows are applied: the resolved
+/// config, the repository root, its out-of-tree cache, and whether this engine
+/// may write the host's declared links.
+struct ProvisionSite {
+    config: resolve::Resolved,
+    repo: PathBuf,
+    cache: PathBuf,
+    links_host: bool,
+}
+
+/// The [`ProvisionSite`] for the checkout in the working directory, shared by
+/// `provision apply` and `mcp spawn` so the link rule lives once.
+///
+/// # Errors
+///
+/// A config that will not resolve, or no repository or cache root.
+fn provision_site(overrides: &Overrides) -> Result<ProvisionSite> {
+    let config = resolve::resolve(Path::new("."), overrides)?;
+    let repo = git::repo_root(Path::new("."))?;
+    let cache = provision::cache_root(&repo)?;
+    // ONLY AN INSTALLED ENGINE PROVISIONS THE HOST (CLOUD-2124): a build of
+    // this checkout fills the repository's cache and leaves the host's links
+    // to the binary that owns them.
+    let links_host = std::env::current_exe().map_or(true, |exe| provision::links_host(&exe, &repo));
+    Ok(ProvisionSite {
+        config,
+        repo,
+        cache,
+        links_host,
+    })
+}
+
 /// Fetch, verify, and install every stale manifest entry (CLOUD-90).
 ///
 /// Reports through `err`, never `out`: this verb writes to the cache and has no
@@ -1992,13 +2024,12 @@ fn run_provision_apply(
     overrides: &Overrides,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
-    let config = resolve::resolve(Path::new("."), overrides)?;
-    let repo = git::repo_root(Path::new("."))?;
-    let cache = provision::cache_root(&repo)?;
-    // ONLY AN INSTALLED ENGINE PROVISIONS THE HOST (CLOUD-2124): a build of
-    // this checkout fills the repository's cache and leaves the host's links
-    // to the binary that owns them.
-    let links_host = std::env::current_exe().map_or(true, |exe| provision::links_host(&exe, &repo));
+    let ProvisionSite {
+        config,
+        cache,
+        links_host,
+        ..
+    } = provision_site(overrides)?;
 
     for entry in &config.provisions {
         // A checksum mismatch propagates as a `Denial` (exit 2) from here, so
@@ -3199,14 +3230,16 @@ fn provisioned_launch(command: &[String], overrides: &Overrides) -> Option<Vec<S
     if program.contains(['/', '\\']) || rules::on_path_verbatim(program).is_some() {
         return None;
     }
-    let config = resolve::resolve(Path::new("."), overrides).ok()?;
+    let ProvisionSite {
+        config,
+        repo,
+        cache,
+        links_host,
+    } = provision_site(overrides).ok()?;
     let entry = config
         .provisions
         .iter()
         .find(|entry| entry.binary == *program)?;
-    let repo = git::repo_root(Path::new(".")).ok()?;
-    let cache = provision::cache_root(&repo).ok()?;
-    let links_host = std::env::current_exe().map_or(true, |exe| provision::links_host(&exe, &repo));
     provision::apply(entry, &cache, false, links_host).ok()?;
     let binary = provision::binary_path(&repo, entry).ok()?;
     let mut launch = vec![binary.to_string_lossy().into_owned()];
@@ -3232,8 +3265,11 @@ fn run_mcp(
     if let cli::McpCommand::Spawn { server, command } = command {
         mcp::record_spawn(Path::new("."), server);
         let launch = provisioned_launch(command, overrides).unwrap_or_else(|| command.clone());
-        // Returns only on failure; success replaces this process.
-        return exec::become_argv(&launch).map(|never| match never {});
+        // Returns only on failure; success replaces this process. A failure is
+        // recorded before it returns, for `mcp posture` (CLOUD-2327).
+        let failed = exec::become_argv(&launch).map(|never| match never {});
+        mcp::record_exec_failure(Path::new("."), server);
+        return failed;
     }
     // CLOUD-843: the connector and attach programs, retired onto the engine.
     if let cli::McpCommand::Grant {

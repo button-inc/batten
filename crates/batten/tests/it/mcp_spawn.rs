@@ -317,6 +317,29 @@ fn a_launch_line_that_will_not_start_is_a_refusal_and_not_a_silent_success() {
     assert!(text.contains("could not become"), "{text}");
 }
 
+/// Fails by: a launch line that could not exec leaving only its launch record,
+/// which `mcp posture` reads as a child that ran and did not answer
+/// (CLOUD-2327). The failure is appended while this process still exists.
+#[test]
+fn a_launch_that_cannot_exec_is_recorded_as_failed() {
+    // UNIX ONLY, for the reason every exec case here gives.
+    if !cfg!(unix) {
+        return;
+    }
+    let (dir, _, ledger) = bench("exec-failed-recorded");
+    let output = spawn(&dir, "serena", &dir.join("not-a-program"), &[]);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let lines = ledger_lines(&ledger);
+    assert_eq!(lines.len(), 2, "the launch, then its failure: {lines:?}");
+    assert_eq!(lines[1][1], "serena");
+    assert_eq!(
+        lines[1].get(5).map(String::as_str),
+        Some("exec-failed"),
+        "{lines:?}"
+    );
+    assert_eq!(lines[0].len(), 5, "the launch record keeps its five fields");
+}
+
 /// Fails by: a bare launch program that a committed `[[provision]]` row ships
 /// but `PATH` does not hold is exec'd as-is and refused (`could not become`).
 /// That is how serena failed to attach on every cold container: the client ran

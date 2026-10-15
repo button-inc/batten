@@ -2180,6 +2180,28 @@ pub fn record_spawn(root: &Path, server: &str) {
     drop(crate::durable::append(&ledger, &line));
 }
 
+/// The sixth field of a ledger record whose launch line could not be exec'd.
+pub const EXEC_FAILED: &str = "exec-failed";
+
+/// Append that the launch line could not be exec'd (CLOUD-2327): the launch
+/// record's five fields again, then [`EXEC_FAILED`].
+///
+/// THERE IS AN AFTER WHEN THE EXEC FAILS. `exec` returns only on failure, and
+/// then this process still exists, so it can say so in the file posture reads
+/// rather than leave posture to infer it from the client's copy of its stderr.
+/// Silent for [`record_spawn`]'s reason: stdout is still the transport.
+//MUTANT exec-failure-unrecorded|s@^    drop(crate::durable::append(\&ledger, \&failed));$@    drop((ledger, failed));@|a_launch_that_cannot_exec_is_recorded_as_failed
+pub fn record_exec_failure(root: &Path, server: &str) {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_secs());
+    let Some((ledger, line)) = spawn_record(root, server, now, std::process::id()) else {
+        return;
+    };
+    let failed = format!("{}\t{EXEC_FAILED}\n", line.trim_end_matches('\n'));
+    drop(crate::durable::append(&ledger, &failed));
+}
+
 /// Dispatch one declared method over a mediated MCP connection and return its
 /// reduction (CLOUD-1260).
 ///

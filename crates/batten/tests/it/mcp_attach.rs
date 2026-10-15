@@ -313,14 +313,18 @@ fn a_launch_the_spawn_could_not_exec_reads_as_launch_failed() {
     let s = Session::new("exec-failed");
     let stamp = "2026-10-15T01-30-54-086Z";
     s.log("serena", stamp, &[STARTED, EXEC_FAILED, FAILED_FAST]);
-    let ledger = s.spawns(&format!("{}\tserena\t237\t0.08\t0\n", attempt(stamp)));
+    // The launch record, then the one `mcp spawn` appends when its exec fails.
+    let at = attempt(stamp);
+    let ledger = s.spawns(&format!(
+        "{at}\tserena\t237\t0.08\t0\n{at}\tserena\t237\t0.08\t1\texec-failed\n"
+    ));
     let (code, text) = s.check_with(&["--spawns", &ledger]);
     assert_eq!(code, Some(2), "{text}");
     assert!(text.contains("serena CONNECTION_CLOSED"), "{text}");
     assert!(text.contains("launch-failed"), "{text}");
     assert!(
-        text.contains(&format!("{stamp}.jsonl:2")),
-        "the record is pointed at: {text}"
+        text.contains(&format!("{ledger}:2")),
+        "the ledger's failure record is pointed at: {text}"
     );
     assert!(!text.contains("spawned-and-unresponsive"), "{text}");
     // Pointer-only: where the stderr is, never what it says.
