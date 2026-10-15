@@ -63,7 +63,7 @@ use crate::common;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
-use common::{git_in, run_with_stdin, stdout, write};
+use common::{dispatch_skill as dispatch, git_in, run_with_stdin, stdout, write};
 
 const RECEIPT: &str = "code-review";
 const CODE: &str = "crates/batten/src/lib.rs";
@@ -362,35 +362,9 @@ fn minting_fixture(name: &str) -> PathBuf {
         .build()
 }
 
-/// One post-tool event, as the host sends it.
-fn post(dir: &Path, tool: &str, input: &serde_json::Value, response: &serde_json::Value) {
-    let envelope = serde_json::json!({
-        "hook_event_name": "PostToolUse",
-        "tool_name": tool,
-        "tool_input": input,
-        "tool_response": response,
-    });
-    let output = run_with_stdin(
-        dir,
-        &["adjudicate", "--harness", "exit-code"],
-        &envelope.to_string(),
-    );
-    assert_eq!(output.status.code(), Some(0), "the post-tool hook ran");
-}
-
-/// The dispatch, answered as the live host answers it: prose, not JSON.
-fn dispatch(dir: &Path, skill: &str) {
-    post(
-        dir,
-        "Skill",
-        &serde_json::json!({"skill": skill}),
-        &serde_json::json!(format!("Launching skill: {skill}")),
-    );
-}
-
 /// The review's closing call, with nothing surviving verification.
 fn complete(dir: &Path) {
-    post(
+    common::post_tool(
         dir,
         "ReportFindings",
         &serde_json::json!({"findings": [], "level": "high"}),
@@ -411,7 +385,7 @@ fn a_dispatched_review_answers_only_once_it_completes() {
     dispatch(&dir, RECEIPT);
     denied(&ready(&dir));
     assert_ne!(
-        status(&dir).status.code(),
+        status(&dir, RECEIPT).status.code(),
         Some(0),
         "dispatched, not completed"
     );
@@ -423,7 +397,7 @@ fn a_dispatched_review_answers_only_once_it_completes() {
     assert!(dispatched.exists(), "the dispatch minted its record");
     complete(&dir);
     allowed(&ready(&dir));
-    let answered = status(&dir);
+    let answered = status(&dir, RECEIPT);
     assert_eq!(answered.status.code(), Some(0), "{}", stdout(&answered));
 
     // The dispatch is spent by the completion it admitted, so it cannot answer
@@ -461,7 +435,7 @@ fn one_call_cannot_satisfy_its_own_prerequisite() {
 
     dispatch(&dir, RECEIPT);
     assert_ne!(
-        status(&dir).status.code(),
+        status(&dir, RECEIPT).status.code(),
         Some(0),
         "one dispatch minted its own completion"
     );
@@ -469,7 +443,7 @@ fn one_call_cannot_satisfy_its_own_prerequisite() {
     // call rewrites it, so it is still this call's own.
     dispatch(&dir, RECEIPT);
     assert_ne!(
-        status(&dir).status.code(),
+        status(&dir, RECEIPT).status.code(),
         Some(0),
         "a second dispatch spent the record it had just rewritten"
     );
@@ -504,7 +478,7 @@ fn a_dependent_declared_first_still_waits_for_its_writer() {
     dispatch(&dir, RECEIPT);
     dispatch(&dir, RECEIPT);
     assert_ne!(
-        status(&dir).status.code(),
+        status(&dir, RECEIPT).status.code(),
         Some(0),
         "a dependent declared first spent the dispatch an earlier call left"
     );
@@ -542,13 +516,13 @@ fn an_unresolvable_base_is_refused_rather_than_read_missing() {
 
 /// The question `land` asks before it readies (CLOUD-2260): the same receipt,
 /// read through the verb rather than the hook.
-fn status(dir: &Path) -> Output {
+fn status(dir: &Path, check: &str) -> Output {
     run_with_stdin(
         dir,
         &[
             "receipt",
             "status",
-            RECEIPT,
+            check,
             "--key",
             "delta",
             "--base",
@@ -580,6 +554,113 @@ fn a_completion_without_a_dispatch_of_this_change_mints_nothing() {
     change(&dir, "fn a() {}\nfn b() {}\n");
     complete(&dir);
     denied(&ready(&dir));
+}
+
+// ---------------------------------------------------------------------------
+// READYING OWES ALL THREE (CLOUD-2293), over the COMMITTED rows: a fixture
+// restating them would pass on a `main` that checks `code-review` alone.
+// ---------------------------------------------------------------------------
+
+/// The three skills readying owes, in the order the committed row declares them.
+const OWED: [&str; 3] = ["simplify", "security-review", "code-review"];
+
+/// The committed `[[mint]]` rows for [`OWED`] and the `review ask missing` row,
+/// read out of this repository's `batten.toml` with the base re-pointed at the
+/// ref the fixture pins (`common::Fixture::base_commit`).
+fn committed_ready_config() -> String {
+    let text =
+        std::fs::read_to_string(common::at_root("batten.toml")).expect("the committed authority");
+    let authority: toml::Table = text.parse().expect("the committed authority parses");
+    let rows = |table: &str, field: &str, names: &[&str]| -> Vec<toml::Value> {
+        authority[table]
+            .as_array()
+            .expect("an array of tables")
+            .iter()
+            .filter(|row| names.contains(&row[field].as_str().unwrap_or_default()))
+            .cloned()
+            .map(|mut row| {
+                if let Some(base) = row.get_mut("key_base") {
+                    *base = toml::Value::from("refs/remotes/origin/main");
+                }
+                row
+            })
+            .collect()
+    };
+    let mints = rows("mint", "name", &OWED);
+    assert_eq!(mints.len(), OWED.len(), "each owed skill mints a receipt");
+    let ready = rows("rule", "id", &["review ask missing"]);
+    assert_eq!(ready.len(), 1, "the ready row is committed");
+    let mut config = toml::Table::new();
+    config.insert("version".into(), toml::Value::from(1));
+    config.insert("mint".into(), toml::Value::Array(mints));
+    config.insert("rule".into(), toml::Value::Array(ready));
+    toml::to_string(&config).expect("the fixture config serialises")
+}
+
+fn committed_fixture(name: &str) -> PathBuf {
+    common::Fixture::new(name)
+        .config(&committed_ready_config())
+        .file("README.md", "base\n")
+        .git()
+        .base_commit()
+        .build()
+}
+
+/// EACH MISSING SKILL IS NAMED IN TURN, and only all three admit.
+///
+/// On `main` the committed row checked `code-review` alone, so the ready was
+/// admitted with neither `simplify` nor `security-review` on file. Each refusal
+/// below comes after every skill before it was minted, so each names a check
+/// the row would otherwise not require.
+#[test]
+fn ready_is_refused_until_simplify_and_both_reviews_are_minted() {
+    let dir = committed_fixture("review-owes-three");
+    change(&dir, "fn a() {}\n");
+
+    for skill in OWED {
+        let text = denied(&ready(&dir));
+        // ` at <check>` is the refusal's subject; the bare name is also in the
+        // row's reason, which names all three, so it would match vacuously.
+        assert!(
+            text.contains(&format!(" at {skill}")),
+            "the refusal names `{skill}`: {text}"
+        );
+        dispatch(&dir, skill);
+    }
+    allowed(&ready(&dir));
+}
+
+/// A COMMITTED SIMPLIFICATION RE-OWES ALL THREE, `simplify` included, and
+/// re-running only the simplification does not answer the reviews.
+///
+/// The order the row asks for (simplify, then review) comes from the `delta`
+/// key alone: what the reviews attest is the merge-base diff, and the
+/// simplification moved it.
+#[test]
+fn a_committed_simplification_re_owes_all_three() {
+    let dir = committed_fixture("review-owes-three-again");
+    change(&dir, "fn a() {}\n");
+    for skill in OWED {
+        dispatch(&dir, skill);
+    }
+    allowed(&ready(&dir));
+
+    change(&dir, "fn a() {}\n// simplified\n");
+    for check in OWED {
+        assert_ne!(
+            status(&dir, check).status.code(),
+            Some(0),
+            "`{check}` still answers over the simplified change"
+        );
+    }
+
+    dispatch(&dir, "simplify");
+    let text = denied(&ready(&dir));
+    assert!(text.contains(" at security-review"), "{text}");
+    for skill in ["security-review", "code-review"] {
+        dispatch(&dir, skill);
+    }
+    allowed(&ready(&dir));
 }
 
 // ---------------------------------------------------------------------------

@@ -1514,6 +1514,37 @@ pub(crate) fn run_with_stdin(dir: &Path, args: &[&str], input: &str) -> Output {
     stdin_run(&mut batten(), dir, args, input)
 }
 
+/// One post-tool event, as the host sends it, through the hook in `dir`.
+pub(crate) fn post_tool(
+    dir: &Path,
+    tool: &str,
+    input: &serde_json::Value,
+    response: &serde_json::Value,
+) {
+    let envelope = serde_json::json!({
+        "hook_event_name": "PostToolUse",
+        "tool_name": tool,
+        "tool_input": input,
+        "tool_response": response,
+    });
+    let output = run_with_stdin(
+        dir,
+        &["adjudicate", "--harness", "exit-code"],
+        &envelope.to_string(),
+    );
+    assert_eq!(output.status.code(), Some(0), "the post-tool hook ran");
+}
+
+/// A skill dispatch, answered as the live host answers it: prose, not JSON.
+pub(crate) fn dispatch_skill(dir: &Path, skill: &str) {
+    post_tool(
+        dir,
+        "Skill",
+        &serde_json::json!({"skill": skill}),
+        &serde_json::json!(format!("Launching skill: {skill}")),
+    );
+}
+
 /// The authority minus its `session-start` handler rows.
 ///
 /// A CASE THAT SENDS A REAL `SessionStart` over the committed authority runs this

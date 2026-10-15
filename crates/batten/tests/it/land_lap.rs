@@ -452,6 +452,92 @@ fn the_landings_own_stop_note_is_still_declared() {
     );
 }
 
+/// **THE LAP'S READY ASKS THE RECEIPTS `gh pr ready` ASKS** (CLOUD-2293).
+///
+/// Through `land_ready_owes`, the one call `run_land_ready` makes before it
+/// spends the matrix: a whole lap needs a serving remote this tier does not stand
+/// up (`land.rs`' `a_lap_over_a_clone_with_no_remote_…` says why). On `main` the
+/// lap's ready asked no receipt at all.
+///
+/// The fixture also declares a `head`-keyed row over an agent-sourced fact that
+/// is never recorded, so the final admission is also the case that the lap does
+/// not ask what only an agent's read of the forge can mint.
+#[test]
+fn the_laps_ready_is_refused_by_a_missing_review_receipt() {
+    let dir = common::Fixture::new("land-lap-ready-receipt")
+        .config(
+            r#"version = 1
+
+[[mint]]
+name = "code-review"
+tool = "Skill"
+selects_at = "skill"
+selects = "code-review"
+key = "delta"
+key_base = "refs/remotes/origin/main"
+mode = "replace"
+body = "{git:HEAD} {now}"
+
+[[fact]]
+name = "review-happened"
+returns = "json-array"
+tool = "pull_request_read"
+when = { method = "get_reviews" }
+counts = "."
+
+[[rule]]
+id = "review list unread"
+kind = "receipt"
+scope = "mediated_call"
+severity = "deny"
+pattern = "gh pr ready"
+checks = ["review-happened"]
+key = "head"
+reason = "read the reviews"
+
+[[rule]]
+id = "review ask missing"
+kind = "receipt"
+scope = "mediated_call"
+severity = "deny"
+pattern = "gh pr ready"
+checks = ["code-review"]
+key = "delta"
+key_base = "refs/remotes/origin/main"
+reason = "dispatch the code-review skill"
+"#,
+        )
+        .file("README.md", "base\n")
+        .git()
+        .base_commit()
+        .build();
+    std::fs::write(dir.join("lib.rs"), "fn a() {}\n").expect("the change");
+    common::git_in(&dir, &["add", "-A"]);
+    common::git_in(&dir, &["commit", "-q", "-m", "change"]);
+    // nextest runs each case in its own process, so the move is this case's:
+    // the receipt store is read from the working directory, as on a lap.
+    std::env::set_current_dir(&dir).expect("enter the fixture");
+    let now = std::time::SystemTime::now();
+
+    let owed = batten::land_ready_owes(&dir, now)
+        .expect("the authority resolves")
+        .expect("an unreviewed change owes its review");
+    assert_eq!(owed.rule(), "review ask missing");
+    let line = owed.render_finding(batten::refusal::Arm::Full);
+    assert!(
+        line.contains(" at code-review") && line.contains("dispatch the code-review skill"),
+        "{line}"
+    );
+
+    common::dispatch_skill(&dir, "code-review");
+    assert!(
+        batten::land_ready_owes(&dir, now)
+            .expect("the authority resolves")
+            .is_none(),
+        "a reviewed change owes the lap nothing"
+    );
+}
+
 /// **A LAP NEVER RUNS FROM THE TRUNK.**
 ///
 /// Over the compiled binary, because this is the one property in the file whose

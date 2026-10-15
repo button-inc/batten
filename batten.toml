@@ -1605,6 +1605,39 @@ requires = []
 mode = "replace"
 body = "{git:HEAD} {now}"
 
+# THE OTHER TWO RECEIPTS READYING OWES (CLOUD-2293), shaped exactly like the row
+# above and attesting exactly as little: the skill was dispatched over THIS
+# change. Everything the block above says about `selects`, `requires = []` and the
+# dispatch-not-completion gap holds for both, and CLOUD-2261's completion form
+# converts all three together once a release carries `after`.
+#
+# THE ORDER IS THE KEY'S, NOT A COLUMN. A committed simplification moves the
+# merge-base diff, so every receipt keyed `delta` — `simplify` included — is owed
+# again over the simplified change. Re-running `/simplify` over a diff it leaves
+# alone commits nothing and mints, so simplify-then-review terminates, and a
+# review taken before the simplification is stale by construction.
+[[mint]]
+name = "simplify"
+tool = "Skill"
+selects_at = "skill"
+selects = "simplify"
+key = "delta"
+key_base = "origin/main"
+requires = []
+mode = "replace"
+body = "{git:HEAD} {now}"
+
+[[mint]]
+name = "security-review"
+tool = "Skill"
+selects_at = "skill"
+selects = "security-review"
+key = "delta"
+key_base = "origin/main"
+requires = []
+mode = "replace"
+body = "{git:HEAD} {now}"
+
 # ─── THE BOARD-WRITE RECORD (CLOUD-1051), replacing `board-write-record.sh` ───
 #
 # The sensor half of CLOUD-514: every row this branch put on the board, with the
@@ -8348,19 +8381,23 @@ subject = "tracker-body"
 # expire on every rebase and re-buy a model call each lap, the false-positive rate
 # that gets a guard switched off. One row cannot carry two keyings, and the two
 # questions genuinely have different answers.
+#
+# BOTH READY ROUTES ASK IT (CLOUD-2293): `land`'s own ready adjudicates this row
+# and every receipt-store check a `gh pr ready` row names (`land_ready_owes`,
+# which says why the agent-sourced `[[fact]]` rows are left to the hand route).
 [[rule]]
 id = "review ask missing"
 kind = "receipt"
 scope = "mediated_call"
 severity = "deny"
 pattern = "gh pr ready"
-checks = ["code-review"]
+checks = ["simplify", "security-review", "code-review"]
 key = "delta"
 key_base = "origin/main"
 reason = """
-Dispatch the `code-review` skill over this branch's change, then retry. Readying \
-is what starts CI, so an unreviewed head spends the matrix before anyone has \
-looked at it."""
+Dispatch `/simplify` and commit what it changes, then `/security-review` and \
+`/code-review` over this change, then retry. A committed simplification owes \
+all three again. Readying starts CI, so review first."""
 
 # A HAND-WRITTEN READY MUTATION FUNNELS THROUGH THE ONE GATED DOOR (CLOUD-2260).
 #

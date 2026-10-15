@@ -13505,6 +13505,19 @@ fn run_land_ready(
         }
     }
 
+    // THE RECEIPTS `gh pr ready` OWES, asked of this ready too (CLOUD-2293):
+    // `land_ready_owes` carries why, and which rows it does not ask.
+    if let Some(owed) = land_ready_owes(root, std::time::SystemTime::now())? {
+        output::verdict(
+            err,
+            &format!(
+                "::error:: land: {}",
+                owed.render_finding(refusal::Arm::Full)
+            ),
+        )?;
+        return Ok(ExitCode::Violation);
+    }
+
     spend_the_matrix(root, branch, ledger, out, err)
 }
 
@@ -27088,6 +27101,96 @@ pub fn land_spent_refusal(laps: u32, ledger: &land::Ledger) -> crate::refusal::R
         ],
         crate::refusal::Fix::Run(advice),
     )
+}
+
+/// The refusal `gh pr ready` would draw from its receipt rows, for the lap's own
+/// ready to stop on (CLOUD-2293); `None` when nothing is owed.
+///
+/// The hook's own [`hook::adjudicate`], waivers applied, over a policy narrowed
+/// to the receipt rows the lap asks — so row order, `checks_any` and a waived row
+/// read as they read for `gh pr ready`.
+///
+/// # THE AGENT-SOURCED CHECKS ARE NOT ASKED
+///
+/// A `[[fact]]` check is minted by an agent's read of the forge, over the head
+/// that read saw. A lap replays before it readies, so its head is one no agent
+/// has read, and one such fact's declared command is answered 403 by this
+/// fleet's proxy: asking them would refuse every ready the lap attempts. What is
+/// asked is what a lap can carry — receipts it mints itself (`head`-keyed
+/// `verify`) or ones a replay leaves standing (`delta`-keyed reviews).
+///
+/// `None` also where the receipt store could not be read, the hook's
+/// could-not-look posture, and where no authority is committed at `root`.
+///
+/// # Errors
+///
+/// Returns the error a committed authority that will not resolve carries: a
+/// gate whose rows cannot be read must not read as owing nothing.
+pub fn land_ready_owes(
+    root: &Path,
+    now: std::time::SystemTime,
+) -> Result<Option<refusal::Refusal>> {
+    if !root.join(config::CONFIG_FILE).is_file() {
+        return Ok(None);
+    }
+    let harness = hook::Harness::ClaudeCode;
+    let mut resolved = resolve::resolve(root, &Overrides::default())?;
+    // ONE PREDICATE FOR "AGENT-SOURCED", the declared `[[fact]]` table's.
+    let full = hook::Policy::from_resolved(&resolved, harness, root, None)?;
+    resolved.rules.retain(|rule| {
+        rule.kind == rules::RuleKind::Receipt
+            && rule
+                .receipt_names()
+                .all(|check| full.agent_fact(check).is_none())
+    });
+    let policy = without_set_hatches(hook::Policy::from_resolved(&resolved, harness, root, None)?);
+    // BARE, so no branch name is ever spliced into a command line to be parsed.
+    let raw = serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Bash",
+        "tool_input": {"command": "gh pr ready"},
+    });
+    let Some(envelope) = hook::decode(harness, &raw.to_string()) else {
+        return Ok(None);
+    };
+    let receipted = policy.required_checks_for(&envelope);
+    let recency = Recency {
+        max_ages: &policy.max_age_for(&envelope),
+        now,
+    };
+    let receipts = receipt_facts(&policy, &envelope, &[], None, &receipted, &recency, true);
+    let waived = if resolved.waivers.is_empty() {
+        waiver::Live::new()
+    } else {
+        waiver::live(&resolved.waivers, waiver::today()?)
+    };
+    let keys = facts::Look::IsNot;
+    let stop = stop::StopFacts::default();
+    let sourced = None;
+    let prospective = facts::Look::CouldNotLook;
+    let pinned = pinned_for(&policy, &envelope);
+    let (tasks, extracted) = session_facts(&policy, &envelope);
+    let call = call_facts(&envelope);
+    let facts = hook::Facts {
+        singleton: &call.singleton,
+        discards: &call.discards,
+        unread_history: &call.unread_history,
+        receipts: &receipts,
+        keys: &keys,
+        stop: &stop,
+        waived: &waived,
+        sourced: &sourced,
+        prospective: &prospective,
+        manifest: None,
+        pinned: &pinned,
+        tasks: &tasks,
+        extracted: &extracted,
+        dispatch: &call.dispatch,
+    };
+    match hook::adjudicate(&policy, &envelope, &facts) {
+        hook::Decision::Deny(refused) => Ok(Some(refused)),
+        _ => Ok(None),
+    }
 }
 
 #[cfg(test)]
