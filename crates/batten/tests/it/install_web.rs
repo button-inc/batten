@@ -709,9 +709,10 @@ fn a_declared_ca_bundle_reaches_the_download_in_curls_precedence() {
 /// in, exactly as the release's `installers` job does: one manifest fragment in
 /// the workspace's `target/distrib/`, then `dist build --artifacts=global`.
 ///
-/// IN A SCRATCH WORKSPACE, because dist stages under the workspace whatever
-/// `CARGO_TARGET_DIR` says (`batten::dist::cargo_dist_staging`), so running it
-/// here would merge whatever fragments a local build left. The
+/// IN A SCRATCH WORKSPACE, because dist always stages in the workspace's own
+/// `target/distrib` and ignores `CARGO_TARGET_DIR`
+/// (`batten::dist::cargo_dist_staging`), so running it here would merge
+/// whatever fragments a local build left. The
 /// workspace is a stub `batten` package at this crate's version and repository,
 /// configured by the committed `dist-workspace.toml`, so the generator under
 /// test reads the release's own config.

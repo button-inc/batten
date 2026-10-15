@@ -138,9 +138,12 @@ jobs:
       # top up beats no release at all.
       fail-fast: false
       matrix:
-        # `build-tool` is how dist links the leg (it chooses, from host and
-        # target); `policy/release-assets.rego` demands a binary SBOM from every
-        # leg whose tool is not `cross`, and no leg uses `cross` any more.
+        # `build-tool` builds nothing: every leg runs `batten dist` with
+        # `DIST_BUILD_TOOL: cargo-dist`, and dist chooses the linker from host
+        # and target. It survives only as the label
+        # `policy/release-assets.rego` reads to demand a binary SBOM from every
+        # leg not on `cross`, which no leg is; retiring it with that arm is
+        # CLOUD-2348's.
         include:
           # glibc wherever the host has a new enough one; dist's installer falls
           # back to musl only where it does not (CLOUD-1861's 8.7x cost).

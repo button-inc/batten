@@ -559,6 +559,33 @@ fn stage(
     Ok(Some((archive, built)))
 }
 
+/// What a cargo-dist leg settles before `dist build`, in order:
+///
+/// * the leg's earlier outputs are removed, because `target/distrib` is never
+///   cleaned and a leftover archive, checksum or MSI would pass the post-build
+///   checks for bytes this build did not write;
+/// * the lockfile is current (`cargo metadata --locked`), because dist's inner
+///   `cargo build` takes no `--locked`, and a stale `Cargo.lock` would otherwise
+///   re-resolve into dependencies CI never tested, where the cargo leg refused;
+/// * the MSI template is written ([`CARGO_DIST_MSI_TEMPLATE`]).
+fn dist_preflight(root: &Path, outputs: &[&PathBuf], err: &mut dyn Write) -> Result<bool> {
+    for output in outputs {
+        match std::fs::remove_file(output) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    let locked: Vec<String> = ["cargo", "metadata", "--locked", "--format-version", "1"]
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+    if !ran(root, &locked, err)? {
+        return Ok(false);
+    }
+    ran(root, &CARGO_DIST_MSI_TEMPLATE.map(str::to_owned), err)
+}
+
 /// The leg, built by cargo-dist (CLOUD-2297): `dist build` for `target`, its
 /// manifest fragment saved where the global step reads fragments, and the
 /// binary it built archived under the versioned `stem` too, because every
@@ -570,8 +597,17 @@ fn run_cargo_dist(
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
-    let template = CARGO_DIST_MSI_TEMPLATE.map(str::to_owned);
-    if !ran(&package.root, &template, err)? {
+    let staged = cargo_dist_staging(&package.root);
+    let dist_name = cargo_dist_archive(&package.name, target);
+    let checksum = staged.join(cargo_dist_checksum(&dist_name));
+    let dist_archive = staged.join(dist_name);
+    let manifest = staged.join(cargo_dist_manifest(target));
+    let msi = staged.join(format!("{}-{target}.msi", package.name));
+    if !dist_preflight(
+        &package.root,
+        &[&dist_archive, &checksum, &manifest, &msi],
+        err,
+    )? {
         return Ok(ExitCode::Internal);
     }
     let argv = cargo_dist_argv(target, &package.version);
@@ -590,14 +626,9 @@ fn run_cargo_dist(
         writeln!(err, "dist: `dist build` printed no manifest")?;
         return Ok(ExitCode::Internal);
     }
-    let staged = cargo_dist_staging(&package.root);
     std::fs::create_dir_all(&staged)?;
-    let manifest = staged.join(cargo_dist_manifest(target));
     crate::durable::replace(&manifest, fragment)?;
 
-    let dist_name = cargo_dist_archive(&package.name, target);
-    let checksum = staged.join(cargo_dist_checksum(&dist_name));
-    let dist_archive = staged.join(dist_name);
     for written in [&dist_archive, &checksum] {
         if !written.is_file() {
             writeln!(
@@ -625,7 +656,6 @@ fn run_cargo_dist(
     writeln!(out, "version={}", package.version)?;
     // A Windows leg's MSI (CLOUD-2298), which dist writes only for a Windows
     // target and only when `dist-workspace.toml` declares the installer.
-    let msi = staged.join(format!("{}-{target}.msi", package.name));
     if msi.is_file() {
         writeln!(out, "msi={}", pointer(&msi, &package.root))?;
     }

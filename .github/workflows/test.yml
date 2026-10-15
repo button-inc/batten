@@ -56,11 +56,11 @@ on:
       - ".github/workflows/test.yml"
       - "crates/batten/tests/fixtures/repos/**"
       # The installers and packages the `action` job's cargo-dist leg proves are
-      # generated from these: dist's config and verb, the crate's WiX metadata,
-      # nfpm's config and the Chocolatey package.
+      # generated from these: dist's config and verb, nfpm's config and the
+      # Chocolatey package. Not `crates/batten/Cargo.toml`: its WiX table almost
+      # never moves, and every dependency bump would buy three release builds.
       - "dist-workspace.toml"
       - "crates/batten/src/dist.rs"
-      - "crates/batten/Cargo.toml"
       - "nfpm.yaml"
       - "packaging/chocolatey/**"
 
