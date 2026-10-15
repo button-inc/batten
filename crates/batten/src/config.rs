@@ -1317,7 +1317,7 @@ pub fn declare_for_process(dir: &Path) {
         forge: Option<crate::rest::Forge>,
     }
     let path = dir.join(CONFIG_FILE);
-    let Ok(text) = std::fs::read_to_string(&path) else {
+    let Ok(text) = read_text(&path) else {
         return;
     };
     // THE VALIDATED AUTHORITY, WHEN IT IS ALREADY CACHED FOR THESE BYTES
@@ -4442,6 +4442,48 @@ fn cached_parse(text: &str, source: &str) -> Option<Config> {
     Some(config)
 }
 
+/// The authority's text, read once per process while the file is unchanged
+/// (CLOUD-2315).
+///
+/// A hook call read the 956 KB authority three times — the engine pin, the
+/// `[forge]` prologue and the resolve — each a fresh allocation, a UTF-8 pass
+/// and ~234 newly faulted pages. The memo is keyed by the file's stat identity
+/// (device, inode, size, mtime, ctime), so `./batten.toml` and its absolute path
+/// are one entry, and it is believed only while that identity is unchanged and
+/// the file is not racily clean against the moment it was read
+/// (`crate::cache::Stamp`, git's rule) — an edit between two reads is re-read.
+///
+/// # Errors
+///
+/// As [`fs::read_to_string`], whose error a missing or unreadable file still
+/// returns.
+pub fn read_text(path: &Path) -> io::Result<std::sync::Arc<str>> {
+    type Held = Option<(String, std::time::Duration, std::sync::Arc<str>)>;
+    static LAST_TEXT: std::sync::Mutex<Held> = std::sync::Mutex::new(None);
+    let Some(stamp) = crate::cache::stamp(path) else {
+        return fs::read_to_string(path).map(std::sync::Arc::from);
+    };
+    if let Ok(last) = LAST_TEXT.lock()
+        && let Some((held_fields, at, text)) = last.as_ref()
+        && unchanged_since(held_fields, *at, &stamp)
+    {
+        return Ok(std::sync::Arc::clone(text));
+    }
+    let at = crate::cache::now();
+    let text: std::sync::Arc<str> = fs::read_to_string(path)?.into();
+    if let Ok(mut last) = LAST_TEXT.lock() {
+        *last = Some((stamp.fields, at, std::sync::Arc::clone(&text)));
+    }
+    Ok(text)
+}
+
+/// Whether a file whose stat fields were `held` when read at `at` is the file
+/// `now` describes, by git's racy rule.
+//MUTANT authority-text-memo-never-stale|s@^    held == now.fields \&\& !now.racily_clean(at)$@    true@|an_authority_edited_between_two_reads_is_read_again
+fn unchanged_since(held: &str, at: std::time::Duration, now: &crate::cache::Stamp) -> bool {
+    held == now.fields && !now.racily_clean(at)
+}
+
 /// The name an authority is cached under: its canonical path, so the same file
 /// reached as `./batten.toml` and as an absolute path is ONE entry (CLOUD-2315 —
 /// one hook call reached it both ways and missed itself).
@@ -5048,7 +5090,7 @@ pub fn load(path: &Path) -> Result<Config> {
 ///
 /// As [`load`], minus the missing-file case.
 pub fn load_authority(path: &Path) -> Result<(Config, Authority)> {
-    match fs::read_to_string(path) {
+    match read_text(path) {
         Ok(text) => Ok((
             parse(&text, &path.display().to_string())?,
             Authority::Present,
@@ -6389,6 +6431,24 @@ mod tests {
             "an entry written under another key is never served"
         );
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// CLOUD-2315: the remembered authority text answers a second read of the
+    /// same file — by either spelling of its path — and never one after an edit,
+    /// even an edit of the same length.
+    #[test]
+    fn an_authority_edited_between_two_reads_is_read_again() {
+        let dir = std::env::temp_dir().join(format!("batten-read-text-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("scratch");
+        let path = dir.join(CONFIG_FILE);
+        std::fs::write(&path, "version = 1\n").expect("write");
+        let first = super::read_text(&path).expect("read");
+        let again = super::read_text(&dir.join(".").join(CONFIG_FILE)).expect("read again");
+        assert_eq!(first, again, "either spelling reads the same file");
+        std::fs::write(&path, "version = 2\n").expect("edit");
+        assert_eq!(&*super::read_text(&path).expect("read"), "version = 2\n");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// CLOUD-2315: an edit to the authority is a miss, so a stale validated

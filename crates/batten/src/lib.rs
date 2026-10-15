@@ -671,7 +671,7 @@ fn follow_pin(may_build: bool) -> Result<Option<ExitCode>> {
     let Ok(root) = git::worktree_root(Path::new(".")) else {
         return Ok(None);
     };
-    let Ok(text) = std::fs::read_to_string(root.join(config::CONFIG_FILE)) else {
+    let Ok(text) = config::read_text(&root.join(config::CONFIG_FILE)) else {
         return Ok(None);
     };
     let Some(pin) = engine::stale(&text, engine::running_stamp) else {
