@@ -360,14 +360,18 @@ interface.
 The correct form is **the command alone in the call**:
 
 ```
-mise run <task> >/tmp/<task>.log 2>&1
+mise run <task>
 ```
 
-with `run_in_background` on the tool call itself for anything over ~2 minutes.
+with `run_in_background` on the tool call itself, and **no redirect** — every
+`mise` call, since a foreground one is killed at about two minutes.
 `run_in_background` must wrap the long command, not a launcher that returns
 immediately — a wrapped launcher looks identical in the tool result and silently
-drops the re-invocation. **Read the log in a separate call.** A pager over a
-**file** is fine; over a **live task** it is not.
+drops the re-invocation. The harness writes the output file and names its path in
+the launch result; the exit notification carries the verdict, and the file is
+read only to diagnose, in a separate call (CLOUD-2368 — a `>/tmp/<task>.log`
+redirect here writes where nobody reads, and `redirect write unread` refuses it).
+A pager over a **file** is fine; over a **live task** it is not.
 
 **Nothing may follow it in the same `;` or `||` list.** This note used to
 prescribe `…; echo "EXIT=$?"; tail -20 …`, and that form is now denied

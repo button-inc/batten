@@ -10688,13 +10688,17 @@ fn lease_wait_bound() -> u32 {
 /// The lease waits a landing absorbs when `LAND_MAX_LEASE_WAITS` is unset
 /// (CLOUD-2132).
 ///
-/// **BOUNDED BY THE HOST, NOT ONLY BY PATIENCE.** Each wait is one lease TTL
+/// **A PACING BOUND, AND ONLY THAT.** Each wait is one lease TTL
 /// (`lease_wait_pause`), so this count times the shipped TTL is the free
-/// waiting one run may do. Sixty waits at 120s was 7200s, which is a hosted
-/// harness's whole background lifetime: measured on #1128, a contended trunk
-/// had the run killed mid-wait, with no lap record and no "run this again"
-/// line, which is worse than the stop the refund replaced. Twenty keeps the
-/// waits under an hour, leaving the rest of a lifetime to the paid laps.
+/// waiting one run may do: twenty keeps it to an hour.
+///
+/// IT IS NOT WHAT KEEPS A LANDING INSIDE THE HOST'S BACKGROUND LIMIT, and this
+/// doc once said it was (CLOUD-2368). CLOUD-2132's own record of #1128: `land`
+/// "ran four laps in two hours: two gates passed, two lease losses", then the
+/// host stopped it with SIGTERM mid-wait. Two of sixty waits were spent, so the
+/// paid laps used up the two hours, and twenty waits could not have changed
+/// that. What does is the pinned host maximum (CLOUD-2365) and a crash-only
+/// relaunch: a kill writes no lap record and prints no "run this again" line.
 //MUTANT lease-wait-default-spans-two-hours|s@^const LEASE_WAIT_DEFAULT: u32 = 20;$@const LEASE_WAIT_DEFAULT: u32 = 60;@|the_default_lease_waits_fit_inside_an_hour
 const LEASE_WAIT_DEFAULT: u32 = 20;
 
@@ -11195,7 +11199,7 @@ fn run_land_laps(run: Laps<'_>, out: &mut dyn Write, err: &mut dyn Write) -> Res
     // lost to the lease waits one lease TTL before the next (`lease_wait_pause`):
     // the holder renews every beat, so a TTL is the longest a re-observation can
     // usefully wait, and the default twenty waits then span about forty minutes
-    // (`LEASE_WAIT_DEFAULT`), inside one background lifetime (CLOUD-2132).
+    // (`LEASE_WAIT_DEFAULT`), as pacing (CLOUD-2132, CLOUD-2368).
     // `LAND_MAX_LEASE_WAITS`, `LAND_MAX_GATE_RECLAIMS` and
     // `LAND_MAX_SPECULATIVE_REFUSALS` bound the refunded passes; `budget` bounds
     // the charged ones.
@@ -27992,8 +27996,8 @@ mod tests {
         assert!(!waited.contains("will lose again"), "{waited}");
     }
 
-    /// The default lease waits, at the shipped TTL, fit inside an hour, so the
-    /// free waiting cannot outlast a hosted background lifetime (CLOUD-2132).
+    /// The default lease waits, at the shipped TTL, fit inside an hour: the free
+    /// waiting is bounded to an hour per run (CLOUD-2132, CLOUD-2368).
     #[test]
     fn the_default_lease_waits_fit_inside_an_hour() {
         let waited = i64::from(LEASE_WAIT_DEFAULT) * lease::Terms::default().ttl;

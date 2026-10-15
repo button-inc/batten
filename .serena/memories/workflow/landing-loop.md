@@ -108,6 +108,53 @@ for "the background thing has happened" makes a case pass **vacuously** on a
 loaded box — the process is alive because it never ran, so a regression is
 invisible on exactly the runs where the suite is slowest.
 
+## The host's background time limit
+
+`land` has no clock of its own (above). The **host** does, and it bounds every
+backgrounded call. All of the following was measured on 2026-10-15 in Claude Code
+2.1.301 (CLOUD-2365, CLOUD-2366, CLOUD-2368), and each can be reproduced with
+the command given:
+
+- **The limit and where it came from.** 2.1.285 (29 Sep 2026) added it.
+  2.1.288 limited it to unattended sessions (`-p`, Agent SDK, CI, cloud). Before
+  that, background commands ran unbounded.
+- **The formula.** `grep -aoE 'function hPe\(.{0,260}' /opt/claude-code/bin/claude`:
+  - the default is `BASH_DEFAULT_TIMEOUT_MS`, or 120000 when unset;
+  - `hPe` is `BASH_MAX_TIMEOUT_MS` raised to at least that default, or 600000
+    raised the same way when unset;
+  - the background ceiling is `min(max(7200000, hPe), 2147483647)`, about
+    24.8 days at most;
+  - a call that names no `timeout` gets `max(1800000, BASH_DEFAULT_TIMEOUT_MS)`;
+  - a value that doesn't parse as a positive integer counts as unset.
+
+  `background_max` in `hook.rs` mirrors this, and `timer pin missing` pins its
+  answer. The environment owner sets `BASH_MAX_TIMEOUT_MS`, in the environment's
+  variables. This environment uses 604800000 (one week).
+
+- **The two stop reasons.** `grep -aoE 'kie=\{[^}]*\}' /opt/claude-code/bin/claude`:
+  - `deadline` reads "stopped after reaching its background time limit". Relaunch.
+  - `memory_pressure` reads "stopped because the system is running low on
+    memory". The host's notice says **"Do not start it again on your own"**. It
+    fires only while the session is idle under critical memory pressure.
+- **The tool cgroup.** `cat /proc/self/cgroup` shows
+  `memory:/process_api/<uuid>/claude-code-bash` for every Bash command, even with
+  `CLAUDE_CODE_TOOL_MEMORY_LIMIT` unset. Its `memory.limit_in_bytes` is 14343688192. Each command runs as its own session and process-group leader.
+- **A stop walks the process TREE.** It doesn't stop a process group or a
+  cgroup. Measured with a backgrounded script under `timeout: 60000` that started
+  four children:
+  - the leader and its direct child died;
+  - three children reparented to pid 1 all survived: a plain `&` child (still in
+    the leader's process group), a `setsid -f` child and a double fork;
+  - all three survivors stayed in `claude-code-bash`.
+
+  So a child orphaned before the stop outlives it, and only `land`'s own reap of
+  abandoned groups clears it (`BATTEN_TASK_PROGRAM_ROOT`, CLOUD-2366).
+
+- **What keeps the VM awake.** A harness-tracked background command keeps the
+  session live: #1128's backgrounded `land` lived about two hours, until the
+  limit stopped it (CLOUD-2132). A `nohup`'d process alone is not tracked work.
+  A reclaim ends everything, which is why crash-only stays the design.
+
 ## Verdicts
 
 - One roster, `CI_REQUIRED_CHECKS` in `mise.toml [env]`, read by `checks-green`

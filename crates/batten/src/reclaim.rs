@@ -7,7 +7,7 @@
 //! # Structural, not temporal (CLOUD-491)
 //!
 //! The last seconds of writes do not survive a measured replacement, so no clock
-//! is in the predicate. An `h` when a landing starts and per heartbeat, an `x`
+//! is in the predicate. One `h` when a landing opens (`land_census_window`), an `x`
 //! only where it CHOSE to stop — where the landing returns, never where one lap
 //! hands its lease back and laps — and the verdict is the kind of the last record
 //! written UNDER THE
