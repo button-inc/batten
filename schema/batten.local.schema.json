@@ -1935,7 +1935,7 @@
           "const": "reference"
         },
         {
-          "description": "**One of the engine's compiled mediated-call gates, enabled and graded by\na row** (CLOUD-2291): [`Rule::gate`] names which.\n\nThe predicate is the engine's, never the row's — the row says only\nwhether the gate runs and at what severity. The verdict strings are the\ngate's own and do not change, so every route, waiver and `policy explain`\nthat names one keeps working; the row `id` is the rule id only.\n\n**A config declaring no `native` row keeps every gate at `deny`.** Taking\nthe gates away from every repository whose `batten.toml` predates this\nkind would turn off the reset gate (CLOUD-462) on an engine upgrade\nnobody read. Once a config declares one `native` row it declares all of\nthem: a gate with no row is off.",
+          "description": "**One of the engine's compiled mediated-call gates, enabled and graded by\na row** (CLOUD-2291): [`Rule::gate`] names which.\n\nThe predicate is the engine's, never the row's — the row says only\nwhether the gate runs and at what severity. The verdict strings are the\ngate's own and do not change, so every route, waiver and `policy explain`\nthat names one keeps working; the row `id` is the rule id only.\n\n**A gate with no row runs at `deny`**, and only `severity = \"allow\"`\nswitches one off. A config predating the kind keeps its gates, and no\nadded row can lower a gate it does not name; a row grading one below\n`deny` is a weakening `config lint` reports, and only the committed\nauthority may carry one.",
           "type": "string",
           "const": "native"
         }
