@@ -909,6 +909,9 @@ pub fn load(
     // site exists). Validating again here would be a second authority for one
     // question, which is the shape `rules-drift` exists to refuse.
     let pattern_data = crate::pattern::data_document(patterns);
+    // Its text, written once per load and only by a cache read: every bundle's
+    // key and entry carry it, and each used to serialise it again (CLOUD-2315).
+    let pattern_text = std::cell::OnceCell::new();
     let declared_patterns: BTreeSet<&str> = patterns.iter().map(|p| p.id.as_str()).collect();
     // The refusal vocabulary (CLOUD-1050): the consumer's rows unioned with what
     // this binary ships. The vendored half is not optional politeness — a
@@ -1060,7 +1063,13 @@ pub fn load(
             // `clippy::too_many_lines`: a nameable step lifted out whole, which is
             // the remedy `lib.rs` takes for the same lint rather than raising a cap.
             let sources: Vec<(String, String)> = preset_sources(rule, manifest, name)?;
-            let bundle = compile_for(root, &rule.id, &sources, &pattern_data, checks)?;
+            let bundle = compile_for(
+                root,
+                &rule.id,
+                &sources,
+                (&pattern_data, &pattern_text),
+                checks,
+            )?;
             let declared = bundle.declared.clone();
             check_predicate_severity(rule, &declared, source_key)?;
             // A PRESET IS A MODULE TOO, and this branch's `continue` skipped the
@@ -1099,7 +1108,13 @@ pub fn load(
         // one engine from N sources, which is the whole of CLOUD-837. The hot
         // path reads it from the bytecode cache when nothing it is a function
         // of has changed (CLOUD-2236).
-        let bundle = compile_for(root, &rule.id, &sources, &pattern_data, checks)?;
+        let bundle = compile_for(
+            root,
+            &rule.id,
+            &sources,
+            (&pattern_data, &pattern_text),
+            checks,
+        )?;
         let declared = bundle.declared.clone();
 
         // The pointer a bundle-level fault is reported against.
@@ -1145,11 +1160,12 @@ fn compile_for(
     root: &Path,
     id: &str,
     sources: &[(String, String)],
-    pattern_data: &serde_json::Value,
+    (pattern_data, pattern_text): (&serde_json::Value, &std::cell::OnceCell<String>),
     checks: ModuleChecks,
 ) -> Result<Bundle> {
     if checks == ModuleChecks::SkipOnHotPath {
-        compile_cached(root, id, sources, pattern_data)
+        let text = pattern_text.get_or_init(|| pattern_data.to_string());
+        compile_cached(root, id, sources, pattern_data, text)
     } else {
         compile(id, sources, pattern_data)
     }
@@ -1920,13 +1936,13 @@ fn compile_cached(
     id: &str,
     sources: &[(String, String)],
     data: &serde_json::Value,
+    text: &str,
 ) -> Result<Bundle> {
-    let text = data.to_string();
-    let key = cache_key(id, sources, &text);
+    let key = cache_key(id, sources, text);
     let path = cache_path(root, id);
     if let Some(bundle) = path
         .as_deref()
-        .and_then(|path| read_cached(path, &key, id, sources, &text))
+        .and_then(|path| read_cached(path, &key, id, sources, text))
     {
         return Ok(bundle);
     }
@@ -1965,14 +1981,35 @@ const CACHE_FORMAT: &str = "batten-policy-rvm-2";
 /// row, overwritten on a miss, so the cache never grows past the row count.
 //MUTANT cache-root-relative|s@repo_state_dir(\&crate::git::canonical(root))@repo_state_dir(root)@|a_warm_load_from_the_working_directory_compiles_no_engine
 fn cache_path(root: &Path, id: &str) -> Option<std::path::PathBuf> {
-    // Canonical first: the hook hands `.`, and the state directory is named
-    // from the repository's own directory, which `.` does not carry.
-    let dir = crate::state::repo_state_dir(&crate::git::canonical(root)).ok()?;
-    Some(
-        crate::cache::root_under(&dir)?
-            .join("policy")
-            .join(format!("{}.rvm", blake3::hash(id.as_bytes()).to_hex())),
-    )
+    // Resolved once per root, not once per row (CLOUD-2315): every bundle of a
+    // load asked, and each answer canonicalised the root, derived the state
+    // directory and probed the cache directory again.
+    // Keyed by the state root too, which a test moves under one process.
+    type Held = Option<(
+        (std::path::PathBuf, std::path::PathBuf),
+        Option<std::path::PathBuf>,
+    )>;
+    thread_local! {
+        static DIR: std::cell::RefCell<Held> = const { std::cell::RefCell::new(None) };
+    }
+    let asked = (root.to_path_buf(), crate::state::state_root().ok()?);
+    let dir = DIR.with(|cell| {
+        let mut held = cell.borrow_mut();
+        if let Some((for_asked, dir)) = held.as_ref()
+            && *for_asked == asked
+        {
+            return dir.clone();
+        }
+        // Canonical first: the hook hands `.`, and the state directory is named
+        // from the repository's own directory, which `.` does not carry.
+        let dir = crate::state::repo_state_dir(&crate::git::canonical(root))
+            .ok()
+            .and_then(|dir| crate::cache::root_under(&dir))
+            .map(|cache| cache.join("policy"));
+        *held = Some((asked, dir.clone()));
+        dir
+    })?;
+    Some(dir.join(format!("{}.rvm", blake3::hash(id.as_bytes()).to_hex())))
 }
 
 /// The key an entry must carry to be read: everything the bytecode is a
