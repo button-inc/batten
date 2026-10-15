@@ -4602,25 +4602,21 @@ fn event_decides(event: Event) -> Option<Decision> {
     }
 }
 
-/// The severity a compiled gate runs at here, `allow` where it is off
-/// (CLOUD-2291).
+/// The severity a compiled gate runs at here (CLOUD-2291).
 ///
-/// A config declaring no `native` row runs every gate at `deny`, which is what
-/// every config did before the kind existed: an engine upgrade must not take the
-/// reset gate away from a repository that never read the release notes. Once a
-/// config declares one `native` row, a gate without a row is off.
+/// A gate with no row runs at `deny`, which is what every config did before the
+/// kind existed; it is switched off only by a row saying `severity = "allow"`.
+/// So no addition can lower a gate it does not name — the reading in which one
+/// row's presence switched the others off made adding a `deny` row the way to
+/// disable the reset gate, which a security review caught. Lowering is a row's
+/// own severity, which `config lint` reports as a weakening, and only the
+/// committed authority may carry one (`resolve::apply_local`).
 fn native_grade(policy: &Policy, gate: NativeGate) -> RuleSeverity {
-    let mut natives = policy
+    policy
         .shapes
         .iter()
-        .filter(|rule| rule.kind == RuleKind::Native)
-        .peekable();
-    if natives.peek().is_none() {
-        return RuleSeverity::Deny;
-    }
-    natives
-        .find(|rule| rule.gate == Some(gate))
-        .map_or(RuleSeverity::Allow, Rule::severity)
+        .find(|rule| rule.kind == RuleKind::Native && rule.gate == Some(gate))
+        .map_or(RuleSeverity::Deny, Rule::severity)
 }
 
 /// The first compiled gate that fired at a blocking grade, disposed as its

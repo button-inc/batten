@@ -123,9 +123,16 @@ fn denied(line: &str) -> bool {
 fn the_history_gate_runs_only_when_a_row_enables_it_at_its_severity() {
     let row = common::native_row;
 
-    let absent = fixture_with("history-native-absent", &row("singleton", "deny"));
-    let line = edit_row(&absent, "s1");
-    assert!(!refused(&line), "no row, no gate: {line}");
+    let other = fixture_with("history-native-other", &row("singleton", "deny"));
+    let line = edit_row(&other, "s1");
+    assert!(
+        refused(&line) && denied(&line),
+        "no row of its own still refuses: {line}"
+    );
+
+    let off = fixture_with("history-native-off", &row("history", "allow"));
+    let line = edit_row(&off, "s1");
+    assert!(!refused(&line), "an allow row switches it off: {line}");
 
     let deny = fixture_with("history-native-deny", &row("history", "deny"));
     let line = edit_row(&deny, "s1");

@@ -3756,7 +3756,34 @@ fn rule_weakenings(base: &[Rule], working: &[Rule]) -> Vec<Weakening> {
                 .find(|other| other.id == rule.id)
                 .map_or_else(Vec::new, |other| rule_predicate_weakenings(rule, other))
         }))
+        .chain(native_weakenings(base, working))
         .collect()
+}
+
+/// A `native` row that grades its gate below the implicit `deny` it had before
+/// the row existed (CLOUD-2291).
+///
+/// A compiled gate with no row runs at `deny`, so ADDING a row at `warn` or
+/// `allow` lowers it exactly as editing an existing row's severity would — and
+/// [`rule_weakenings`] keys on the base's rows, so an added one is invisible to
+/// it. Reported as `severity-lowered` from that implicit `deny`.
+fn native_weakenings<'a>(
+    base: &'a [Rule],
+    working: &'a [Rule],
+) -> impl Iterator<Item = Weakening> + 'a {
+    working
+        .iter()
+        .filter(|rule| rule.kind == crate::rules::RuleKind::Native)
+        .filter(|rule| !base.iter().any(|old| old.id == rule.id))
+        .filter(|rule| rule.severity() < crate::severity::RuleSeverity::Deny)
+        .map(|rule| {
+            Weakening::new(
+                WeakeningKind::SeverityLowered,
+                format!("rule[{}].severity", rule.id),
+                severity_token(crate::severity::RuleSeverity::Deny),
+                severity_token(rule.severity()),
+            )
+        })
 }
 
 /// Rule columns that are not the rule's predicate, each with why not.
@@ -5806,6 +5833,29 @@ mod tests {
         let base = config(&rule("r", "deny"));
         let working = config(&rule("r", "warn"));
         assert_eq!(only(&base, &working).kind, WeakeningKind::SeverityLowered);
+    }
+
+    /// A `native` row (CLOUD-2291).
+    fn native(id: &str, gate: &str, severity: &str) -> String {
+        format!(
+            "\n[[rule]]\nid = \"{id}\"\nkind = \"native\"\ngate = \"{gate}\"\n\
+             scope = \"mediated_call\"\nseverity = \"{severity}\"\n"
+        )
+    }
+
+    /// CLOUD-2291: a gate with no row runs at `deny`, so ADDING a row below it is
+    /// the same lowering as editing a row's severity down, and is reported as
+    /// one. An added row AT deny lowers nothing.
+    #[test]
+    fn an_added_native_row_below_deny_is_a_lowered_severity() {
+        let base = config("");
+        for severity in ["warn", "allow"] {
+            let working = config(&native("reset", "destructive-reset", severity));
+            let found = only(&base, &working);
+            assert_eq!(found.kind, WeakeningKind::SeverityLowered, "{severity}");
+        }
+        let working = config(&native("reset", "destructive-reset", "deny"));
+        assert!(weakenings(&base, &working).is_empty());
     }
 
     #[test]

@@ -53,10 +53,20 @@ fn fixture_with(name: &str, rows: &str) -> PathBuf {
 fn the_destructive_reset_gate_runs_only_when_a_row_enables_it() {
     let row = common::native_row;
 
-    let absent = fixture_with("history-drop-native-absent", &row("singleton", "deny"));
-    unpushed(&absent, "local.txt");
-    let (code, cause) = adjudicate(&absent, "git reset --hard HEAD~1");
-    assert_eq!(code, Some(0), "no row, no gate\n{cause}");
+    // ANOTHER GATE'S ROW DOES NOT SWITCH THIS ONE OFF: a gate with no row stays
+    // at deny, or adding a `deny` row would disable the reset gate.
+    let other = fixture_with("history-drop-native-other", &row("singleton", "deny"));
+    unpushed(&other, "local.txt");
+    let (code, cause) = adjudicate(&other, "git reset --hard HEAD~1");
+    assert_eq!(code, Some(2), "no row of its own still refuses\n{cause}");
+
+    let off = fixture_with(
+        "history-drop-native-off",
+        &row("destructive-reset", "allow"),
+    );
+    unpushed(&off, "local.txt");
+    let (code, cause) = adjudicate(&off, "git reset --hard HEAD~1");
+    assert_eq!(code, Some(0), "an allow row switches it off\n{cause}");
     assert!(!cause.contains(CLASS), "and nothing said\n{cause}");
 
     let deny = fixture_with(
@@ -79,6 +89,28 @@ fn the_destructive_reset_gate_runs_only_when_a_row_enables_it() {
         cause.contains(CLASS),
         "and says what it would refuse\n{cause}"
     );
+}
+
+/// CLOUD-2291's security review: `batten.local.toml` is git-ignored, so a
+/// `native` row there would grade a gate where no review sees it. It is
+/// refused, and the reset gate still refuses.
+#[test]
+fn a_local_override_may_not_grade_a_native_gate() {
+    let dir = fixture("history-drop-native-local");
+    unpushed(&dir, "local.txt");
+    common::write(
+        &dir,
+        "batten.local.toml",
+        &format!(
+            "version = 1\n\n{}",
+            common::native_row("destructive-reset", "allow")
+        ),
+    );
+    let (code, cause) = adjudicate(&dir, "git reset --hard HEAD~1");
+    assert_ne!(code, Some(0), "the reset must not be allowed\n{cause}");
+    let shown = run(&dir, &["config", "show"]);
+    assert_eq!(shown.status.code(), Some(1), "{}", stderr(&shown));
+    assert!(stderr(&shown).contains("native"), "{}", stderr(&shown));
 }
 
 /// Commit one more file AND move the remote ref onto it, so the commit counts as

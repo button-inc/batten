@@ -55,13 +55,18 @@ fn fixture_with(name: &str, rows: &str) -> PathBuf {
 #[test]
 fn the_singleton_gate_runs_only_when_a_row_enables_it_at_its_severity() {
     let native_row = common::native_row;
-    let absent = fixture_with(
-        "singleton-native-absent",
+    let other = fixture_with(
+        "singleton-native-other",
         &native_row("destructive-reset", "deny"),
     );
-    hold(&absent, "land", Some("1"));
-    let (code, cause) = adjudicate(&absent, "mise run land");
-    assert_eq!(code, Some(0), "no row, no gate\n{cause}");
+    hold(&other, "land", Some("1"));
+    let (code, cause) = adjudicate(&other, "mise run land");
+    assert_eq!(code, Some(2), "no row of its own still refuses\n{cause}");
+
+    let off = fixture_with("singleton-native-off", &native_row("singleton", "allow"));
+    hold(&off, "land", Some("1"));
+    let (code, cause) = adjudicate(&off, "mise run land");
+    assert_eq!(code, Some(0), "an allow row switches it off\n{cause}");
     assert!(!cause.contains(CLASS), "and nothing said\n{cause}");
 
     let deny = fixture_with("singleton-native-deny", &native_row("singleton", "deny"));

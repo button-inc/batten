@@ -426,11 +426,11 @@ pub enum RuleKind {
     /// gate's own and do not change, so every route, waiver and `policy explain`
     /// that names one keeps working; the row `id` is the rule id only.
     ///
-    /// **A config declaring no `native` row keeps every gate at `deny`.** Taking
-    /// the gates away from every repository whose `batten.toml` predates this
-    /// kind would turn off the reset gate (CLOUD-462) on an engine upgrade
-    /// nobody read. Once a config declares one `native` row it declares all of
-    /// them: a gate with no row is off.
+    /// **A gate with no row runs at `deny`**, and only `severity = "allow"`
+    /// switches one off. A config predating the kind keeps its gates, and no
+    /// added row can lower a gate it does not name; a row grading one below
+    /// `deny` is a weakening `config lint` reports, and only the committed
+    /// authority may carry one.
     Native,
 }
 

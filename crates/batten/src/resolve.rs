@@ -1490,6 +1490,17 @@ fn apply_local(
         )?;
     }
     for rule in local.rules {
+        // A COMPILED GATE IS GRADED BY THE COMMITTED AUTHORITY ONLY (CLOUD-2291).
+        // A gate with no row runs at `deny`, so a local row naming one could only
+        // lower it — and this file is git-ignored, so nothing would ever see it.
+        if rule.kind == crate::rules::RuleKind::Native {
+            return Err(UsageError::raise(format!(
+                "rule {}: a `native` row grades one of the engine's own gates, which {} \
+                 does alone; {LOCAL_CONFIG_FILE} may not carry one",
+                rule.id,
+                config::CONFIG_FILE,
+            )));
+        }
         if tables.rules.iter().any(|committed| committed.id == rule.id) {
             // Redefining a committed rule could weaken it (a narrower glob, a
             // pattern that no longer matches) and Batten cannot tell tightening
