@@ -72,7 +72,10 @@ pub fn root_under(parent: &Path) -> Option<PathBuf> {
     let root = parent.join("cache");
     let name = partition();
     let own = root.join(name);
-    if own.is_dir() {
+    if let Ok(meta) = std::fs::metadata(&own)
+        && meta.is_dir()
+    {
+        refresh_use(&own, &meta);
         return Some(own);
     }
     std::fs::create_dir_all(&own).ok()?;
@@ -82,6 +85,28 @@ pub fn root_under(parent: &Path) -> Option<PathBuf> {
     }
     prune(&root, name);
     Some(own)
+}
+
+/// How stale a partition's use time may grow before a hit refreshes it.
+const USE_REFRESH: std::time::Duration = std::time::Duration::from_hours(24);
+
+/// Mark `own` used, at most once a day, so [`prune`] ranks partitions by LAST
+/// USE (code review of CLOUD-2315). A directory's mtime moves only when an entry
+/// is renamed straight into it, and most entries live a level down, so a binary
+/// that only reads — the installed hook, warm — read as the oldest and was the
+/// one pruned. Unix only: Windows will not open a directory as a file to set
+/// its time, so there the ranking stays the last write.
+//MUTANT partition-use-never-refreshed|s@^    if cfg!(unix) \&\& stale {$@    if false {@|a_partition_in_use_is_refreshed_and_survives_the_prune
+fn refresh_use(own: &Path, meta: &std::fs::Metadata) {
+    let stale = meta
+        .modified()
+        .ok()
+        .and_then(|modified| modified.elapsed().ok())
+        .is_some_and(|age| age > USE_REFRESH);
+    if cfg!(unix) && stale {
+        let _ =
+            std::fs::File::open(own).and_then(|dir| dir.set_modified(std::time::SystemTime::now()));
+    }
 }
 
 /// The running binary's partition name: a short digest of its identity, which
@@ -100,7 +125,7 @@ fn is_partition(name: &str) -> bool {
 }
 
 /// Keep `own` and the newest partitions beside it up to [`KEPT_PARTITIONS`],
-/// newest by when each was created; remove the rest, and anything that is not a
+/// newest by last use ([`refresh_use`]); remove the rest, and anything that is not a
 /// partition — the flat layout entries were written in before partitions
 /// existed. Best-effort: another process pruning the same directory, or one
 /// writing into a partition removed here, costs a miss and never a wrong answer.
@@ -270,7 +295,6 @@ fn uint(bytes: &[u8], at: usize, width: usize, little: bool) -> Option<u64> {
 
 fn elf_build_id(head: &[u8]) -> Option<Vec<u8>> {
     const PT_NOTE: u64 = 4;
-    const NT_GNU_BUILD_ID: u64 = 3;
     let wide = match head.get(4)? {
         1 => false,
         2 => true,
@@ -296,24 +320,40 @@ fn elf_build_id(head: &[u8]) -> Option<Vec<u8>> {
         if uint(head, header, 4, little)? != PT_NOTE {
             continue;
         }
-        let start = usize::try_from(uint(head, header + offset_at, word, little)?).ok()?;
-        let size = usize::try_from(uint(head, header + size_at, word, little)?).ok()?;
-        let notes = head.get(start..start.checked_add(size)?)?;
-        let mut at = 0;
-        while at + 12 <= notes.len() {
-            let name_len = usize::try_from(uint(notes, at, 4, little)?).ok()?;
-            let desc_len = usize::try_from(uint(notes, at + 4, 4, little)?).ok()?;
-            let kind = uint(notes, at + 8, 4, little)?;
-            let name_at = at + 12;
-            let desc_at = name_at.checked_add(align4(name_len))?;
-            let name = notes.get(name_at..name_at.checked_add(name_len)?)?;
-            if kind == NT_GNU_BUILD_ID && name == b"GNU\0" {
-                return notes
-                    .get(desc_at..desc_at.checked_add(desc_len)?)
-                    .map(<[u8]>::to_vec);
-            }
-            at = desc_at.checked_add(align4(desc_len))?;
+        // ONE SEGMENT AT A TIME: a note segment past the head, or a malformed
+        // one, is skipped rather than ending the search, so a build-id note in a
+        // later segment is still found (code review of CLOUD-2315).
+        let segment = (
+            usize::try_from(uint(head, header + offset_at, word, little)?).ok()?,
+            usize::try_from(uint(head, header + size_at, word, little)?).ok()?,
+        );
+        if let Some(id) = build_id_note(head, segment, little) {
+            return Some(id);
         }
+    }
+    None
+}
+
+/// The GNU build-id note in the note segment at `(start, size)` within `head`,
+/// or `None` where the segment is outside it, malformed, or carries none.
+//MUTANT build-id-search-stops-at-a-bad-segment|s@^        if let Some(id) = build_id_note(head, segment, little) {$@        if let Some(id) = Some(build_id_note(head, segment, little)?) {@|a_build_id_after_an_unreadable_note_segment_is_found
+fn build_id_note(head: &[u8], (start, size): (usize, usize), little: bool) -> Option<Vec<u8>> {
+    const NT_GNU_BUILD_ID: u64 = 3;
+    let notes = head.get(start..start.checked_add(size)?)?;
+    let mut at = 0;
+    while at + 12 <= notes.len() {
+        let name_len = usize::try_from(uint(notes, at, 4, little)?).ok()?;
+        let desc_len = usize::try_from(uint(notes, at + 4, 4, little)?).ok()?;
+        let kind = uint(notes, at + 8, 4, little)?;
+        let name_at = at + 12;
+        let desc_at = name_at.checked_add(align4(name_len))?;
+        let name = notes.get(name_at..name_at.checked_add(name_len)?)?;
+        if kind == NT_GNU_BUILD_ID && name == b"GNU\0" {
+            return notes
+                .get(desc_at..desc_at.checked_add(desc_len)?)
+                .map(<[u8]>::to_vec);
+        }
+        at = desc_at.checked_add(align4(desc_len))?;
     }
     None
 }
@@ -363,17 +403,29 @@ pub struct Stamp {
     pub changed: std::time::Duration,
 }
 
+//MUTANT racy-window-unwidened|s@^        self.changed.saturating_add(TIMESTAMP_TICK) >= written$@        self.changed >= written@|a_change_within_one_coarse_tick_is_racy
 impl Stamp {
     /// GIT'S RACY-TIMESTAMP RULE (`Documentation/technical/racy-git`): a file
-    /// whose change time is not strictly older than the moment its entry was
+    /// whose change time is not clearly older than the moment its entry was
     /// written may have changed again within the same timestamp tick, invisibly
-    /// to every field above, so its entry must not be believed. Strict, so a
-    /// filesystem with coarse timestamps errs to a recompute, never a stale hit.
+    /// to every field above, so its entry must not be believed.
+    ///
+    /// **WIDENED BY [`TIMESTAMP_TICK`]** (code review of CLOUD-2315). `written`
+    /// is a fine user-space clock and `changed` is the kernel's coarse one —
+    /// jiffy-granular on Linux, 1-2 s on HFS+, FAT and some NFS — so a rewrite in
+    /// the same tick can carry a `changed` EARLIER than `written`. git compares
+    /// against the index file's own filesystem time to dodge that; with a
+    /// user-space `written`, the window has to cover the coarsest tick instead.
+    /// A file changed in the last two seconds is always re-read.
     #[must_use]
     pub fn racily_clean(&self, written: std::time::Duration) -> bool {
-        self.changed >= written
+        self.changed.saturating_add(TIMESTAMP_TICK) >= written
     }
 }
+
+/// The coarsest file-timestamp granularity [`Stamp::racily_clean`] allows for:
+/// FAT's two seconds, which also covers HFS+ and coarse NFS.
+pub const TIMESTAMP_TICK: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// The stamp for `path`, or `None` when it cannot be stat'ed — a miss for every
 /// caller, never a stamp that pretends.
@@ -535,6 +587,81 @@ mod tests {
             "a note of another kind is not an id"
         );
         assert_eq!(build_id(b"not an image"), None);
+    }
+
+    /// A note segment the head does not reach is skipped, not the end of the
+    /// search: the build ID in the next segment is still found.
+    #[test]
+    fn a_build_id_after_an_unreadable_note_segment_is_found() {
+        let mut image = vec![0_u8; 0x200];
+        image[..4].copy_from_slice(b"\x7fELF");
+        image[4] = 2;
+        image[5] = 1;
+        image[0x20..0x28].copy_from_slice(&64_u64.to_le_bytes());
+        image[0x36..0x38].copy_from_slice(&56_u16.to_le_bytes());
+        image[0x38..0x3a].copy_from_slice(&2_u16.to_le_bytes());
+        // Segment one: a PT_NOTE far past the 0x200-byte head.
+        image[64..68].copy_from_slice(&4_u32.to_le_bytes());
+        image[72..80].copy_from_slice(&0x10_000_u64.to_le_bytes());
+        image[96..104].copy_from_slice(&24_u64.to_le_bytes());
+        // Segment two: a PT_NOTE carrying the build ID.
+        image[120..124].copy_from_slice(&4_u32.to_le_bytes());
+        image[128..136].copy_from_slice(&0x100_u64.to_le_bytes());
+        image[152..160].copy_from_slice(&24_u64.to_le_bytes());
+        image[0x100..0x104].copy_from_slice(&4_u32.to_le_bytes());
+        image[0x104..0x108].copy_from_slice(&8_u32.to_le_bytes());
+        image[0x108..0x10c].copy_from_slice(&3_u32.to_le_bytes());
+        image[0x10c..0x110].copy_from_slice(b"GNU\0");
+        image[0x110..0x118].copy_from_slice(&[8, 7, 6, 5, 4, 3, 2, 1]);
+        assert_eq!(build_id(&image), Some(vec![8, 7, 6, 5, 4, 3, 2, 1]));
+    }
+
+    /// A partition a binary keeps hitting is marked used, so a later binary's
+    /// prune ranks it as recent rather than by when it was first created.
+    #[test]
+    fn a_partition_in_use_is_refreshed_and_survives_the_prune() {
+        let dir = scratch("partition-use");
+        let own = root_under(&dir).expect("own partition");
+        let root = own
+            .parent()
+            .expect("the partition's directory")
+            .to_path_buf();
+        if cfg!(unix) {
+            let age = |path: &Path, step: u64| {
+                let made = std::time::SystemTime::UNIX_EPOCH
+                    + std::time::Duration::from_secs(1_000_000 * step);
+                std::fs::File::open(path)
+                    .and_then(|file| file.set_modified(made))
+                    .expect("age the partition");
+            };
+            let others = ["0000000000000002", "0000000000000003", "0000000000000004"];
+            for (step, name) in others.iter().enumerate() {
+                std::fs::create_dir_all(root.join(name)).expect("partition");
+                age(&root.join(name), step as u64 + 2);
+            }
+            age(&own, 1);
+            let _ = root_under(&dir).expect("a hit");
+            prune(&root, "ffffffffffffffff");
+            assert!(own.is_dir(), "the partition in use survives a later prune");
+            assert!(
+                !root.join(others[0]).exists(),
+                "the least recently used partition goes instead"
+            );
+        }
+    }
+
+    /// A file whose coarse change time reads a moment BEFORE the entry's fine
+    /// write time may still have changed within that tick: it is racy, and only
+    /// one changed clearly earlier is believed.
+    #[test]
+    fn a_change_within_one_coarse_tick_is_racy() {
+        let written = std::time::Duration::from_secs(1_000);
+        let at = |changed: std::time::Duration| Stamp {
+            fields: String::new(),
+            changed,
+        };
+        assert!(at(std::time::Duration::from_millis(999_997)).racily_clean(written));
+        assert!(!at(std::time::Duration::from_secs(940)).racily_clean(written));
     }
 
     /// The directory carries the tag backup tools look for, byte for byte.

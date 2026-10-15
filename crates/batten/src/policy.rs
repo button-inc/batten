@@ -1786,7 +1786,7 @@ impl Evaluator {
 /// call that asks one question.
 ///
 /// `None` is could-not-look: the input will not parse or the bundle faults.
-//MUTANT answer-memo-never-recalled|s@^            if let Some(answer) = Answers::recall(compiled, input) {$@            if let Some(answer) = None::<Answer> {@|one_call_evaluates_each_bundle_once
+//MUTANT answer-memo-never-recalled|s@^                .filter(\x7crule\x7c !evaluated.contains(\*rule))$@                .filter(\x7c_\x7c true)@|one_call_evaluates_each_rule_once
 fn answer(bundle: &Bundle, input: &str, rules: &[&str]) -> Option<Answer> {
     match &bundle.evaluator {
         Evaluator::Interpreted(engine) => {
@@ -1796,18 +1796,29 @@ fn answer(bundle: &Bundle, input: &str, rules: &[&str]) -> Option<Answer> {
             Some(Answer::of(&results))
         }
         Evaluator::Compiled(compiled) => {
-            if let Some(answer) = Answers::recall(compiled, input) {
-                return Some(answer);
-            }
             if !Answers::open() {
                 return compiled.answer(&regorus::Value::from_json_str(input).ok()?, rules);
             }
-            // EVERY ANSWERED RULE, ONCE: the next asker of this bundle on this
-            // input reads its rule out of the same answer, which is what the
-            // interpreter arm above already does by answering the whole package.
-            let answer = compiled.answer(&Answers::parsed(input)?, &ANSWERED_RULES)?;
-            Answers::keep(compiled, input, &answer);
-            Some(answer)
+            // ONLY WHAT IS ASKED, AND EACH RULE ONCE. A rule an earlier ask
+            // already evaluated is read back; the rest are evaluated now, exactly
+            // the set an unscoped call evaluates — so a rule that faults faults
+            // this ask and no other, and the memo never changes a verdict.
+            let (mut evaluated, mut members) = Answers::recall(compiled, input).unwrap_or_default();
+            let missing: Vec<&str> = rules
+                .iter()
+                .copied()
+                .filter(|rule| !evaluated.contains(*rule))
+                .collect();
+            if !missing.is_empty() {
+                let Answer::Members(more) = compiled.answer(&Answers::parsed(input)?, &missing)?
+                else {
+                    return None;
+                };
+                members.extend(more);
+                evaluated.extend(missing.iter().map(|rule| (*rule).to_owned()));
+                Answers::keep(compiled, input, &evaluated, &members);
+            }
+            Some(Answer::Members(members))
         }
     }
 }
@@ -1819,9 +1830,10 @@ fn answer(bundle: &Bundle, input: &str, rules: &[&str]) -> Option<Answer> {
 /// half, `rewrite` for the grant, `preapprove` — and each ask built a VM, cloned
 /// the data document and re-parsed the input. Measured on this repository: 64
 /// evaluations over 19 bundles, 16.7 ms, on an allowed call against a 10 ms
-/// budget. An answer is a pure function of the program and the input, so the
-/// first ask evaluates every rule any caller reads ([`ANSWERED_RULES`]) and the
-/// rest read it back.
+/// budget. An answer is a pure function of the program and the input, so each
+/// rule is evaluated once per input and a later ask for it reads it back. Only
+/// the rules asked are evaluated, never the whole [`ANSWERED_RULES`] set: one
+/// rule's fault must not reach a sibling's verdict (code review of CLOUD-2315).
 ///
 /// **SCOPED, never process-wide**, for `HookLoads`' reason: the memo exists only
 /// while an [`AnswerScope`] is alive, and `run_hook` holds the only one. Keyed
@@ -1832,9 +1844,15 @@ fn answer(bundle: &Bundle, input: &str, rules: &[&str]) -> Option<Answer> {
 /// The INPUT is parsed once per call too: every bundle is handed the same
 /// document text, and each used to parse it into a `regorus::Value` of its own.
 struct Answers {
-    answered: Vec<(std::sync::Arc<Compiled>, String, Answer)>,
+    answered: Vec<(std::sync::Arc<Compiled>, String, Evaluated)>,
     input: Option<(String, regorus::Value)>,
 }
+
+/// The rules evaluated so far for one program and input, and what they defined.
+type Evaluated = (
+    BTreeSet<String>,
+    BTreeMap<(Vec<String>, String), regorus::Value>,
+);
 
 thread_local! {
     static ANSWERS: std::cell::RefCell<Option<Answers>> = const { std::cell::RefCell::new(None) };
@@ -1894,26 +1912,39 @@ impl Answers {
         })
     }
 
-    fn recall(compiled: &std::sync::Arc<Compiled>, input: &str) -> Option<Answer> {
+    fn recall(compiled: &std::sync::Arc<Compiled>, input: &str) -> Option<Evaluated> {
         ANSWERS.with(|cell| {
             cell.borrow().as_ref().and_then(|answers| {
                 answers
                     .answered
                     .iter()
                     .find(|(held, text, _)| std::sync::Arc::ptr_eq(held, compiled) && text == input)
-                    .map(|(_, _, answer)| answer.clone())
+                    .map(|(_, _, evaluated)| evaluated.clone())
             })
         })
     }
 
-    fn keep(compiled: &std::sync::Arc<Compiled>, input: &str, answer: &Answer) {
+    fn keep(
+        compiled: &std::sync::Arc<Compiled>,
+        input: &str,
+        rules: &BTreeSet<String>,
+        members: &BTreeMap<(Vec<String>, String), regorus::Value>,
+    ) {
         ANSWERS.with(|cell| {
             if let Some(answers) = cell.borrow_mut().as_mut() {
-                answers.answered.push((
-                    std::sync::Arc::clone(compiled),
-                    input.to_owned(),
-                    answer.clone(),
-                ));
+                let evaluated = (rules.clone(), members.clone());
+                match answers
+                    .answered
+                    .iter_mut()
+                    .find(|(held, text, _)| std::sync::Arc::ptr_eq(held, compiled) && text == input)
+                {
+                    Some((_, _, held)) => *held = evaluated,
+                    None => answers.answered.push((
+                        std::sync::Arc::clone(compiled),
+                        input.to_owned(),
+                        evaluated,
+                    )),
+                }
             }
         });
     }
@@ -2023,15 +2054,23 @@ fn cache_path(root: &Path, id: &str) -> Option<std::path::PathBuf> {
     // Resolved once per root, not once per row (CLOUD-2315): every bundle of a
     // load asked, and each answer canonicalised the root, derived the state
     // directory and probed the cache directory again.
-    // Keyed by the state root too, which a test moves under one process.
-    type Held = Option<(
-        (std::path::PathBuf, std::path::PathBuf),
+    // Keyed by the state root too, which a test moves under one process, and by
+    // the working directory where `root` is relative — the hook hands `.`, which
+    // names a different repository after a `chdir` (code review of CLOUD-2315).
+    type Asked = (
+        std::path::PathBuf,
         Option<std::path::PathBuf>,
-    )>;
+        std::path::PathBuf,
+    );
+    type Held = Option<(Asked, Option<std::path::PathBuf>)>;
     thread_local! {
         static DIR: std::cell::RefCell<Held> = const { std::cell::RefCell::new(None) };
     }
-    let asked = (root.to_path_buf(), crate::state::state_root().ok()?);
+    let here = root
+        .is_relative()
+        .then(|| std::env::current_dir().ok())
+        .flatten();
+    let asked: Asked = (root.to_path_buf(), here, crate::state::state_root().ok()?);
     let dir = DIR.with(|cell| {
         let mut held = cell.borrow_mut();
         if let Some((for_asked, dir)) = held.as_ref()

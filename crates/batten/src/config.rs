@@ -4329,6 +4329,7 @@ fn parse_ungated(text: &str, source: &str) -> Result<Config> {
 /// load-time report, [`check_min_version`]'s, stays outside so it is still made
 /// on every load. Only a success is kept: a refusal is re-derived, so its
 /// message is never a stale one.
+//MUTANT dropped-row-parse-cached|s@^        if config.unresolvable.is_empty()$@        if true@|an_authority_with_a_dropped_row_is_never_stored_in_the_parse_cache
 fn parse_remembered(text: &str, source: &str) -> Result<Config> {
     if let Some(config) = remembered(text, source) {
         return Ok(config);
@@ -4344,7 +4345,13 @@ fn parse_remembered(text: &str, source: &str) -> Result<Config> {
         config
     } else {
         let config = parse_ungated(text, source)?;
-        if let Some((Some(path), key)) = &persisted {
+        // ONLY A WHOLE PARSE IS STORED. `unresolvable` is `#[serde(skip)]`, so
+        // an entry for an authority with a row this build cannot read would come
+        // back with that list empty and the "enforces nothing" report silent
+        // (code review of CLOUD-2315). Such an authority re-parses every call.
+        if config.unresolvable.is_empty()
+            && let Some((Some(path), key)) = &persisted
+        {
             write_cached_parse(path, key, &config);
         }
         config
@@ -4502,25 +4509,39 @@ pub fn read_text(path: &Path) -> io::Result<std::sync::Arc<String>> {
     let Some(stamp) = crate::cache::stamp(path) else {
         return fs::read_to_string(path).map(std::sync::Arc::from);
     };
+    // A unix stamp names the file itself (device and inode), so two spellings
+    // of one file share an entry; elsewhere it is length and times alone, which
+    // two different files can share, so the path joins it there (code review of
+    // CLOUD-2315).
+    let identity = if cfg!(unix) {
+        stamp.fields.clone()
+    } else {
+        format!("{}\0{}", path.display(), stamp.fields)
+    };
     if let Ok(last) = LAST_TEXT.lock()
-        && let Some((held_fields, at, text)) = last.as_ref()
-        && unchanged_since(held_fields, *at, &stamp)
+        && let Some((held, at, text)) = last.as_ref()
+        && unchanged_since(held, &identity, *at, &stamp)
     {
         return Ok(std::sync::Arc::clone(text));
     }
     let at = crate::cache::now();
     let text = std::sync::Arc::new(fs::read_to_string(path)?);
     if let Ok(mut last) = LAST_TEXT.lock() {
-        *last = Some((stamp.fields, at, std::sync::Arc::clone(&text)));
+        *last = Some((identity, at, std::sync::Arc::clone(&text)));
     }
     Ok(text)
 }
 
-/// Whether a file whose stat fields were `held` when read at `at` is the file
-/// `now` describes, by git's racy rule.
-//MUTANT authority-text-memo-never-stale|s@^    held == now.fields \&\& !now.racily_clean(at)$@    true@|an_authority_edited_between_two_reads_is_read_again
-fn unchanged_since(held: &str, at: std::time::Duration, now: &crate::cache::Stamp) -> bool {
-    held == now.fields && !now.racily_clean(at)
+/// Whether the file read as `held` at `at` is the one `identity` and `now`
+/// describe, by git's racy rule.
+//MUTANT authority-text-memo-never-stale|s@^    held == identity \&\& !now.racily_clean(at)$@    true@|an_authority_edited_between_two_reads_is_read_again
+fn unchanged_since(
+    held: &str,
+    identity: &str,
+    at: std::time::Duration,
+    now: &crate::cache::Stamp,
+) -> bool {
+    held == identity && !now.racily_clean(at)
 }
 
 /// The name an authority is cached under: its canonical path, so the same file
@@ -6770,6 +6791,28 @@ mod tests {
         assert!(
             is_usage_error(&refused),
             "a value whose KEY this build knows is bad input, never a lenient drop"
+        );
+    }
+
+    /// Code review of CLOUD-2315: `unresolvable` is `#[serde(skip)]`, so a parse
+    /// that dropped a row is never stored — served back, it would carry no
+    /// dropped rows and the "enforces nothing" report would go silent.
+    #[test]
+    fn an_authority_with_a_dropped_row_is_never_stored_in_the_parse_cache() {
+        let dir = crate::scratch::scratch("config-dropped-row-uncached");
+        crate::testing::contain_state(&dir.join("state"));
+        persist_parses();
+        let text = format!(
+            "{}from_a_newer_schema = true\n",
+            rule_config("severity = \"deny\"\n", "scope = \"tree\"\n")
+        );
+        let source = dir.join(CONFIG_FILE).to_string_lossy().into_owned();
+        let parsed = parse_remembered(&text, &source).expect("an unknown key costs its row");
+        assert_eq!(parsed.unresolvable.len(), 1, "the fixture drops its row");
+        let entry = parse_cache_path(&source).expect("a cache path");
+        assert!(
+            crate::cache::read(&entry, &parse_cache_key(&text, &source)).is_none(),
+            "a parse that dropped a row must not be served from the cache"
         );
     }
 }

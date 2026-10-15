@@ -2525,9 +2525,13 @@ pub enum SchemaSurface {
 pub fn try_parse() -> Result<Cli, clap::Error> {
     // NARROWED TO THE VERB NAMED, when argv[1] is exactly one (CLOUD-2315); see
     // `surface::command_for` for why every other first argument builds it whole.
-    let verb = std::env::args().nth(1);
+    // `args_os`, never `args`: the latter panics on an argument that is not
+    // UTF-8, where clap's own read turns it into a usage error. A first argument
+    // that is not UTF-8 names no verb, so it builds the whole tree.
+    let verb = std::env::args_os().nth(1);
     Ok(from_matches(
-        &surface::command_for(verb.as_deref()).try_get_matches()?,
+        &surface::command_for(verb.as_deref().and_then(std::ffi::OsStr::to_str))
+            .try_get_matches()?,
     ))
 }
 
