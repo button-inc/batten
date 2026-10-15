@@ -1786,7 +1786,7 @@ impl Evaluator {
 /// call that asks one question.
 ///
 /// `None` is could-not-look: the input will not parse or the bundle faults.
-//MUTANT answer-memo-never-recalled|s@^                .filter(\x7crule\x7c !evaluated.contains(\*rule))$@                .filter(\x7c_\x7c true)@|one_call_evaluates_each_rule_once
+//MUTANT answer-memo-never-recalled|s@^            let recalled = Answers::recall(compiled, input);$@            let recalled: Option<Evaluated> = None;@|one_call_evaluates_each_rule_once
 fn answer(bundle: &Bundle, input: &str, rules: &[&str]) -> Option<Answer> {
     match &bundle.evaluator {
         Evaluator::Interpreted(engine) => {
@@ -1799,26 +1799,28 @@ fn answer(bundle: &Bundle, input: &str, rules: &[&str]) -> Option<Answer> {
             if !Answers::open() {
                 return compiled.answer(&regorus::Value::from_json_str(input).ok()?, rules);
             }
-            // ONLY WHAT IS ASKED, AND EACH RULE ONCE. A rule an earlier ask
-            // already evaluated is read back; the rest are evaluated now, exactly
-            // the set an unscoped call evaluates — so a rule that faults faults
-            // this ask and no other, and the memo never changes a verdict.
-            let (mut evaluated, mut members) = Answers::recall(compiled, input).unwrap_or_default();
-            let missing: Vec<&str> = rules
-                .iter()
-                .copied()
-                .filter(|rule| !evaluated.contains(*rule))
-                .collect();
-            if !missing.is_empty() {
-                let Answer::Members(more) = compiled.answer(&Answers::parsed(input)?, &missing)?
-                else {
-                    return None;
-                };
-                members.extend(more);
-                evaluated.extend(missing.iter().map(|rule| (*rule).to_owned()));
-                Answers::keep(compiled, input, &evaluated, &members);
+            // ONE VM PER BUNDLE PER INPUT, AND EACH FAULT ITS OWN RULE'S. The
+            // first ask evaluates every rule; each later ask reads back exactly
+            // what an unscoped call over its rules returns — could-not-look if
+            // one of THEM faulted, else their members — so a sibling's fault
+            // never reaches a verdict.
+            let recalled = Answers::recall(compiled, input);
+            let (faulted, members) = if let Some(evaluated) = recalled {
+                evaluated
+            } else {
+                let evaluated = compiled.evaluate_all(&Answers::parsed(input)?)?;
+                Answers::keep(compiled, input, evaluated.clone());
+                evaluated
+            };
+            if rules.iter().any(|rule| faulted.contains(*rule)) {
+                return None;
             }
-            Some(Answer::Members(members))
+            Some(Answer::Members(
+                members
+                    .into_iter()
+                    .filter(|((_, rule), _)| rules.contains(&rule.as_str()))
+                    .collect(),
+            ))
         }
     }
 }
@@ -1830,10 +1832,11 @@ fn answer(bundle: &Bundle, input: &str, rules: &[&str]) -> Option<Answer> {
 /// half, `rewrite` for the grant, `preapprove` — and each ask built a VM, cloned
 /// the data document and re-parsed the input. Measured on this repository: 64
 /// evaluations over 19 bundles, 16.7 ms, on an allowed call against a 10 ms
-/// budget. An answer is a pure function of the program and the input, so each
-/// rule is evaluated once per input and a later ask for it reads it back. Only
-/// the rules asked are evaluated, never the whole [`ANSWERED_RULES`] set: one
-/// rule's fault must not reach a sibling's verdict (code review of CLOUD-2315).
+/// budget. An answer is a pure function of the program and the input, so the
+/// first ask evaluates every rule in one VM and a later ask reads it back. A
+/// fault is recorded against its own rule and reaches only an ask that names
+/// it: one rule's fault never reaches a sibling's verdict (code review of
+/// CLOUD-2315), and evaluating per ask instead would build a VM per rule set.
 ///
 /// **SCOPED, never process-wide**, for `HookLoads`' reason: the memo exists only
 /// while an [`AnswerScope`] is alive, and `run_hook` holds the only one. Keyed
@@ -1848,7 +1851,8 @@ struct Answers {
     input: Option<(String, regorus::Value)>,
 }
 
-/// The rules evaluated so far for one program and input, and what they defined.
+/// One program over one input, every rule evaluated: the rules that faulted, and
+/// what the rest defined.
 type Evaluated = (
     BTreeSet<String>,
     BTreeMap<(Vec<String>, String), regorus::Value>,
@@ -1924,27 +1928,14 @@ impl Answers {
         })
     }
 
-    fn keep(
-        compiled: &std::sync::Arc<Compiled>,
-        input: &str,
-        rules: &BTreeSet<String>,
-        members: &BTreeMap<(Vec<String>, String), regorus::Value>,
-    ) {
+    fn keep(compiled: &std::sync::Arc<Compiled>, input: &str, evaluated: Evaluated) {
         ANSWERS.with(|cell| {
             if let Some(answers) = cell.borrow_mut().as_mut() {
-                let evaluated = (rules.clone(), members.clone());
-                match answers
-                    .answered
-                    .iter_mut()
-                    .find(|(held, text, _)| std::sync::Arc::ptr_eq(held, compiled) && text == input)
-                {
-                    Some((_, _, held)) => *held = evaluated,
-                    None => answers.answered.push((
-                        std::sync::Arc::clone(compiled),
-                        input.to_owned(),
-                        evaluated,
-                    )),
-                }
+                answers.answered.push((
+                    std::sync::Arc::clone(compiled),
+                    input.to_owned(),
+                    evaluated,
+                ));
             }
         });
     }
@@ -2057,20 +2048,15 @@ fn cache_path(root: &Path, id: &str) -> Option<std::path::PathBuf> {
     // Keyed by the state root too, which a test moves under one process, and by
     // the working directory where `root` is relative — the hook hands `.`, which
     // names a different repository after a `chdir` (code review of CLOUD-2315).
-    type Asked = (
-        std::path::PathBuf,
-        Option<std::path::PathBuf>,
-        std::path::PathBuf,
-    );
+    type Asked = (std::path::PathBuf, std::path::PathBuf);
     type Held = Option<(Asked, Option<std::path::PathBuf>)>;
     thread_local! {
         static DIR: std::cell::RefCell<Held> = const { std::cell::RefCell::new(None) };
     }
-    let here = root
-        .is_relative()
-        .then(|| std::env::current_dir().ok())
-        .flatten();
-    let asked: Asked = (root.to_path_buf(), here, crate::state::state_root().ok()?);
+    let asked: Asked = (
+        std::path::absolute(root).ok()?,
+        crate::state::state_root().ok()?,
+    );
     let dir = DIR.with(|cell| {
         let mut held = cell.borrow_mut();
         if let Some((for_asked, dir)) = held.as_ref()
@@ -2262,7 +2248,8 @@ impl Compiled {
     }
 
     /// Run the named rules' entry points over `input`.
-    fn answer(&self, input: &regorus::Value, rules: &[&str]) -> Option<Answer> {
+    /// A VM over this program, `data` and `input`: one evaluation.
+    fn vm(&self, input: &regorus::Value) -> Option<regorus::rvm::vm::RegoVM> {
         BYTECODE_EVALUATIONS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let mut vm = regorus::rvm::vm::RegoVM::new();
         vm.load_program(self.program.clone());
@@ -2273,6 +2260,37 @@ impl Compiled {
         vm.set_max_instructions(usize::MAX);
         vm.set_data(self.data.clone()).ok()?;
         vm.set_input(input.clone());
+        Some(vm)
+    }
+
+    /// Every entry evaluated in one VM, each rule's fault recorded against that
+    /// rule alone: a VM that faulted is replaced before the next entry runs, so
+    /// no rule's answer is read off a VM a sibling left mid-fault.
+    ///
+    /// No module can be written to reach this: regorus's VM reads an error in
+    /// a rule body as undefined, and what still propagates is a resource limit
+    /// (none is set) or the VM's own inconsistency. The record is what keeps a
+    /// scoped answer equal to an unscoped one by construction if one does.
+    fn evaluate_all(&self, input: &regorus::Value) -> Option<Evaluated> {
+        let mut vm = self.vm(input)?;
+        let (mut faulted, mut members) = (BTreeSet::new(), BTreeMap::new());
+        for (package, rule) in &self.entries {
+            match vm.execute_entry_point_by_name(&entry_point(package, rule)) {
+                Ok(regorus::Value::Undefined) => {}
+                Ok(value) => {
+                    members.insert((package.clone(), rule.clone()), value);
+                }
+                Err(_) => {
+                    faulted.insert(rule.clone());
+                    vm = self.vm(input)?;
+                }
+            }
+        }
+        Some((faulted, members))
+    }
+
+    fn answer(&self, input: &regorus::Value, rules: &[&str]) -> Option<Answer> {
+        let mut vm = self.vm(input)?;
         let mut members = BTreeMap::new();
         for (package, rule) in &self.entries {
             if !rules.contains(&rule.as_str()) {

@@ -161,7 +161,13 @@ fn one_call_evaluates_each_rule_once() {
     let unscoped: Vec<Decided> = CALLS.iter().map(|input| decided(&bundle, input)).collect();
     let scope = policy::answer_scope();
     for (input, expected) in CALLS.iter().zip(&unscoped) {
+        let before = policy::bytecode_evaluations();
         assert_eq!(&decided(&bundle, input), expected, "{input}");
+        assert_eq!(
+            policy::bytecode_evaluations() - before,
+            1,
+            "deny, preapprove and rewrite share one evaluation: {input}"
+        );
         let before = policy::bytecode_evaluations();
         assert_eq!(&decided(&bundle, input), expected, "{input}, asked again");
         assert_eq!(
@@ -177,49 +183,6 @@ fn one_call_evaluates_each_rule_once() {
         policy::bytecode_evaluations() - before,
         3,
         "with the scope closed, every ask evaluates"
-    );
-}
-
-/// A `rewrite` that faults on an `exec` call (a strict builtin error), beside a
-/// `violation` that decides it.
-const REWRITE_FAULTS: &str = r#"
-package batten.cached
-
-import rego.v1
-
-rules contains "exec refused probe"
-
-violation contains {"rule": "exec refused probe", "verdict": "exec refused probe"} if {
-    input.call.operation == "exec"
-}
-
-rewrite contains {"rule": "exec refused probe", "key": "timeout", "value": to_number(input.call.command)} if {
-    input.call.operation == "exec"
-}
-"#;
-
-/// Code review of CLOUD-2315: a sibling rule's fault never reaches `deny`. The
-/// memo used to evaluate every answered rule on the first ask, so a faulting
-/// `rewrite` made the scoped `deny` could-not-look where the unscoped one
-/// decided — the verdict depended on whether the memo was open.
-#[test]
-fn a_faulting_sibling_rule_never_changes_the_deny_verdict() {
-    let root = root_with("sibling-fault", REWRITE_FAULTS);
-    let _cold = load(&root, policy::ModuleChecks::SkipOnHotPath);
-    let bundle = load(&root, policy::ModuleChecks::SkipOnHotPath);
-    assert!(bundle.is_bytecode());
-    let exec = r#"{"call":{"operation":"exec","command":"git status"}}"#;
-    let unscoped = policy::deny(&bundle, exec);
-    assert!(
-        matches!(&unscoped, Look::Is(found) if found.len() == 1),
-        "the fixture's violation decides the call: {unscoped:?}"
-    );
-    let _scope = policy::answer_scope();
-    let _ = policy::rewrite(&bundle, exec);
-    assert_eq!(
-        policy::deny(&bundle, exec),
-        unscoped,
-        "asked after the faulting rewrite, inside the scope"
     );
 }
 

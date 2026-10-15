@@ -455,12 +455,16 @@ pub fn stamp(path: &Path) -> Option<Stamp> {
             changed: modified.max(ctime),
         })
     }
+    // Without a device and inode, length and times are all a stat says, and two
+    // different files can share them: the path joins them, so the fields still
+    // name one file (code review of CLOUD-2315).
     #[cfg(not(unix))]
     {
         let created = meta.created().ok().and_then(since).unwrap_or_default();
         Some(Stamp {
             fields: format!(
-                "stat:{}:{}:{}",
+                "stat:{}:{}:{}:{}",
+                path.display(),
                 meta.len(),
                 modified.as_nanos(),
                 created.as_nanos()
@@ -616,38 +620,41 @@ mod tests {
         assert_eq!(build_id(&image), Some(vec![8, 7, 6, 5, 4, 3, 2, 1]));
     }
 
+    /// Set a partition's time to `step` million seconds past the epoch, so a
+    /// higher step reads as more recent. Unix only: Windows will not open a
+    /// directory as a file.
+    fn age(partition: &Path, step: u64) {
+        let made =
+            std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000 * step);
+        std::fs::File::open(partition)
+            .and_then(|file| file.set_modified(made))
+            .expect("age the partition");
+    }
+
     /// A partition a binary keeps hitting is marked used, so a later binary's
     /// prune ranks it as recent rather than by when it was first created.
+    /// Unix only, as [`refresh_use`] is.
     #[test]
     fn a_partition_in_use_is_refreshed_and_survives_the_prune() {
+        if !cfg!(unix) {
+            return;
+        }
         let dir = scratch("partition-use");
         let own = root_under(&dir).expect("own partition");
-        let root = own
-            .parent()
-            .expect("the partition's directory")
-            .to_path_buf();
-        if cfg!(unix) {
-            let age = |path: &Path, step: u64| {
-                let made = std::time::SystemTime::UNIX_EPOCH
-                    + std::time::Duration::from_secs(1_000_000 * step);
-                std::fs::File::open(path)
-                    .and_then(|file| file.set_modified(made))
-                    .expect("age the partition");
-            };
-            let others = ["0000000000000002", "0000000000000003", "0000000000000004"];
-            for (step, name) in others.iter().enumerate() {
-                std::fs::create_dir_all(root.join(name)).expect("partition");
-                age(&root.join(name), step as u64 + 2);
-            }
-            age(&own, 1);
-            let _ = root_under(&dir).expect("a hit");
-            prune(&root, "ffffffffffffffff");
-            assert!(own.is_dir(), "the partition in use survives a later prune");
-            assert!(
-                !root.join(others[0]).exists(),
-                "the least recently used partition goes instead"
-            );
+        let root = own.parent().expect("the partition's directory");
+        let others = ["0000000000000002", "0000000000000003", "0000000000000004"];
+        for (step, name) in (2..).zip(others) {
+            std::fs::create_dir_all(root.join(name)).expect("partition");
+            age(&root.join(name), step);
         }
+        age(&own, 1);
+        let _ = root_under(&dir).expect("a hit");
+        prune(root, "ffffffffffffffff");
+        assert!(own.is_dir(), "the partition in use survives a later prune");
+        assert!(
+            !root.join(others[0]).exists(),
+            "the least recently used partition goes instead"
+        );
     }
 
     /// A file whose coarse change time reads a moment BEFORE the entry's fine
@@ -695,15 +702,11 @@ mod tests {
             "0000000000000003",
             "0000000000000004",
         ];
-        for (age, name) in others.iter().enumerate() {
+        for (step, name) in (1..).zip(others) {
             let path = root.join(name);
             std::fs::create_dir_all(&path).expect("partition");
             if aged {
-                let made = std::time::SystemTime::UNIX_EPOCH
-                    + std::time::Duration::from_secs(1_000_000 * (age as u64 + 1));
-                std::fs::File::open(&path)
-                    .and_then(|file| file.set_modified(made))
-                    .expect("age the partition");
+                age(&path, step);
             }
         }
         std::fs::create_dir_all(root.join("policy")).expect("flat layout");

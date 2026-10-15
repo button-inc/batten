@@ -4509,39 +4509,25 @@ pub fn read_text(path: &Path) -> io::Result<std::sync::Arc<String>> {
     let Some(stamp) = crate::cache::stamp(path) else {
         return fs::read_to_string(path).map(std::sync::Arc::from);
     };
-    // A unix stamp names the file itself (device and inode), so two spellings
-    // of one file share an entry; elsewhere it is length and times alone, which
-    // two different files can share, so the path joins it there (code review of
-    // CLOUD-2315).
-    let identity = if cfg!(unix) {
-        stamp.fields.clone()
-    } else {
-        format!("{}\0{}", path.display(), stamp.fields)
-    };
     if let Ok(last) = LAST_TEXT.lock()
         && let Some((held, at, text)) = last.as_ref()
-        && unchanged_since(held, &identity, *at, &stamp)
+        && unchanged_since(held, *at, &stamp)
     {
         return Ok(std::sync::Arc::clone(text));
     }
     let at = crate::cache::now();
     let text = std::sync::Arc::new(fs::read_to_string(path)?);
     if let Ok(mut last) = LAST_TEXT.lock() {
-        *last = Some((identity, at, std::sync::Arc::clone(&text)));
+        *last = Some((stamp.fields, at, std::sync::Arc::clone(&text)));
     }
     Ok(text)
 }
 
-/// Whether the file read as `held` at `at` is the one `identity` and `now`
-/// describe, by git's racy rule.
-//MUTANT authority-text-memo-never-stale|s@^    held == identity \&\& !now.racily_clean(at)$@    true@|an_authority_edited_between_two_reads_is_read_again
-fn unchanged_since(
-    held: &str,
-    identity: &str,
-    at: std::time::Duration,
-    now: &crate::cache::Stamp,
-) -> bool {
-    held == identity && !now.racily_clean(at)
+/// Whether the file read as `held` at `at` is the one `now` describes, by git's
+/// racy rule.
+//MUTANT authority-text-memo-never-stale|s@^    held == now.fields \&\& !now.racily_clean(at)$@    true@|an_authority_edited_between_two_reads_is_read_again
+fn unchanged_since(held: &str, at: std::time::Duration, now: &crate::cache::Stamp) -> bool {
+    held == now.fields && !now.racily_clean(at)
 }
 
 /// The name an authority is cached under: its canonical path, so the same file
