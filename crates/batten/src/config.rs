@@ -4329,14 +4329,22 @@ fn parse_ungated(text: &str, source: &str) -> Result<Config> {
 /// load-time report, [`check_min_version`]'s, stays outside so it is still made
 /// on every load. Only a success is kept: a refusal is re-derived, so its
 /// message is never a stale one.
-//MUTANT dropped-row-parse-cached|s@^        if config.unresolvable.is_empty()$@        if true@|an_authority_with_a_dropped_row_is_never_stored_in_the_parse_cache
 fn parse_remembered(text: &str, source: &str) -> Result<Config> {
+    parse_remembered_with(
+        text,
+        source,
+        PERSIST_PARSES.load(std::sync::atomic::Ordering::Relaxed),
+    )
+}
+
+/// [`parse_remembered`] with the on-disk parse cache switched by `persist`, so a
+/// case can switch it without the process-wide flag every other case reads.
+//MUTANT dropped-row-parse-cached|s@^        if config.unresolvable.is_empty()$@        if true@|an_authority_with_a_dropped_row_is_never_stored_in_the_parse_cache
+fn parse_remembered_with(text: &str, source: &str, persist: bool) -> Result<Config> {
     if let Some(config) = remembered(text, source) {
         return Ok(config);
     }
-    let persisted = PERSIST_PARSES
-        .load(std::sync::atomic::Ordering::Relaxed)
-        .then(|| (parse_cache_path(source), parse_cache_key(text, source)));
+    let persisted = persist.then(|| (parse_cache_path(source), parse_cache_key(text, source)));
     let cached = persisted.as_ref().and_then(|(path, key)| {
         path.as_deref()
             .and_then(|path| read_cached_parse(path, key))
@@ -6785,23 +6793,15 @@ mod tests {
     /// dropped rows and the "enforces nothing" report would go silent.
     #[test]
     fn an_authority_with_a_dropped_row_is_never_stored_in_the_parse_cache() {
-        // The switch is process-wide: put back as it was when the case ends,
-        // panicking or not, so a runner sharing this process parses as before.
-        struct Restored(bool);
-        impl Drop for Restored {
-            fn drop(&mut self) {
-                PERSIST_PARSES.store(self.0, std::sync::atomic::Ordering::Relaxed);
-            }
-        }
         let dir = crate::scratch::scratch("config-dropped-row-uncached");
         crate::testing::contain_state(&dir.join("state"));
-        let _restored = Restored(PERSIST_PARSES.swap(true, std::sync::atomic::Ordering::Relaxed));
         let text = format!(
             "{}from_a_newer_schema = true\n",
             rule_config("severity = \"deny\"\n", "scope = \"tree\"\n")
         );
         let source = dir.join(CONFIG_FILE).to_string_lossy().into_owned();
-        let parsed = parse_remembered(&text, &source).expect("an unknown key costs its row");
+        let parsed =
+            parse_remembered_with(&text, &source, true).expect("an unknown key costs its row");
         assert_eq!(parsed.unresolvable.len(), 1, "the fixture drops its row");
         let entry = parse_cache_path(&source).expect("a cache path");
         assert!(
