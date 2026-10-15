@@ -17581,6 +17581,11 @@ fn run_hook(
         output::message(mode, Verbosity::Verbose, err, &note)?;
         return Ok(ExitCode::Success);
     }
+    // THE OPERATOR SPOKE, so the end-of-turn pointer may speak once more
+    // (CLOUD-2332). Only this event re-arms it: a system reminder is not a prompt.
+    if envelope.event == hook::Event::UserPromptSubmit {
+        rearm_unlanded();
+    }
     // The advisory drain rides the BATCH boundary (CLOUD-79), and which event
     // that is on this host is the capability table's answer rather than a literal
     // here (CLOUD-389). `degrade` hands back `PostToolBatch` where the host emits
@@ -21500,7 +21505,7 @@ fn record_state(overrides: &Overrides) {
 /// `skipped` and `errored` are the engine's words for "did not look", and a
 /// question asked on the strength of a scan that never ran is the false green in
 /// nudge form. Only an observed, positive count is a finding.
-//MUTANT unlanded-pointer-suppressed|s@^    let marked = already_marked(seen.as_deref(), \&key);$@    let marked = already_marked(seen.as_deref(), \&key); if marked { return None; }@|a_later_stop_on_one_claim_still_carries_the_unlanded_pointer
+//MUTANT unlanded-pointer-repeats|s@^    if already_marked(spoken.as_deref(), \&key) {$@    if false \&\& already_marked(spoken.as_deref(), \&key) {@|an_unchanged_unlanded_pointer_is_spoken_once_across_stops
 fn unlanded_pointer() -> Option<refusal::Refusal> {
     let branch = git::current_branch(Path::new(".")).ok().flatten()?;
     let context = format!("refs/heads/{branch}");
@@ -21562,6 +21567,32 @@ fn unlanded_pointer() -> Option<refusal::Refusal> {
         // Best-effort: an unwritable receipt costs nothing the pointer needs.
         let _ = crate::durable::append(path, &key);
     }
+    // ONCE PER CLAIM UNTIL THE OPERATOR SPEAKS (CLOUD-2332), reversing the
+    // every-Stop pointer CLOUD-2078 shipped, and the measurement is why. A Stop
+    // nudge is not an annotation: the host resumes the model with it, after the
+    // operator's message, so each one is a forced turn carrying the freshest
+    // instruction in context (CLOUD-895's mechanism). On #1178, held unlanded on
+    // purpose while its last row was built, the same pointer about the same
+    // head fired on every turn for an hour and was answered every time, burying
+    // the operator's messages. The host's own bound cannot hold it: the
+    // `stop_hook_active` read above resets whenever a system reminder lands
+    // between stops (anthropics/claude-code#54360), and a session with
+    // background tasks interleaves them constantly.
+    //
+    // The shape is llmenv's (#2511, PR #2514): remember what was said, say it
+    // again only after a real user prompt. `rearm_unlanded` clears this marker on
+    // `UserPromptSubmit` — the operator is back, so the level is worth reporting
+    // once more. Its own file, never `unlanded-nudged`: that one is
+    // `turn mint ahead`'s "this claim was told" and must not be cleared.
+    let spoken = seen
+        .as_deref()
+        .map(|path| path.with_file_name(format!("unlanded-spoken.{}", branch.replace('/', "-"))));
+    if already_marked(spoken.as_deref(), &key) {
+        return None;
+    }
+    if let Some(path) = spoken.as_deref() {
+        let _ = crate::durable::append(path, &key);
+    }
     Some(refusal::Refusal::engine(
         verdict::Native::CommitShipMissing,
         &[
@@ -21570,6 +21601,23 @@ fn unlanded_pointer() -> Option<refusal::Refusal> {
         ],
         refusal::Fix::None,
     ))
+}
+
+/// Re-arm the unlanded pointer: the operator has spoken (CLOUD-2332).
+///
+/// Fail-silent like every Stop-path write: a marker that will not clear costs one
+/// pointer, never the prompt.
+//MUTANT-SUITE crates/batten/tests/it/stop_posture.rs
+//MUTANT unlanded-never-rearmed|s@^        let _ = std::fs::remove_file(marker);$@@|an_operator_prompt_rearms_the_unlanded_pointer
+fn rearm_unlanded() {
+    let Some(branch) = git::current_branch(Path::new(".")).ok().flatten() else {
+        return;
+    };
+    if let Ok(git_dir) = git::git_dir(Path::new(".")) {
+        let name = format!("unlanded-spoken.{}", branch.replace('/', "-"));
+        let marker = git_dir.join("batten-receipts").join(name);
+        let _ = std::fs::remove_file(marker);
+    }
 }
 
 /// Whether the claim `key` is already recorded in the marker at `seen`.

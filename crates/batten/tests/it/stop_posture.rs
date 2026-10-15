@@ -971,19 +971,31 @@ fn unlanded_line(stdout: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
-/// A LATER STOP ON ONE CLAIM STILL CARRIES THE POINTER (CLOUD-2078), and a
-/// remedial commit still does not re-arm the paragraph (CLOUD-890).
+/// The operator's prompt, as Claude Code sends it at `UserPromptSubmit`.
+fn prompt_payload(prompt: &str) -> String {
+    serde_json::json!({
+        "hook_event_name": "UserPromptSubmit",
+        "session_id": "s-1",
+        "prompt": prompt,
+    })
+    .to_string()
+}
+
+/// AN UNCHANGED POINTER IS SPOKEN ONCE ACROSS STOPS (CLOUD-2332), reversing
+/// CLOUD-2078's every-Stop pointer, and a remedial commit still does not re-arm
+/// it (CLOUD-890).
 ///
-/// The ladder used to answer the re-arm defect with silence: one advisory per
-/// claim, then nothing, so a claim still unlanded three stops later was invisible
-/// to the reader the whole time it held. The finding grammar bounds the channel
-/// instead — the first stop in a window carries the full arm, every later one the
-/// pointer — so the level is reported while it holds and its paragraph is paid
-/// once. The commits are real rather than simulated, because HEAD moving is the
-/// mechanism CLOUD-890 measured.
+/// Each Stop nudge is a forced model turn delivered after the operator's message,
+/// so repeating an unchanged level is not "reporting it while it holds" — it is
+/// re-prompting the model with the same words and burying the operator's.
+/// Measured on #1178: the same pointer about the same held head on every turn for
+/// an hour. The stops here carry `stop_hook_active: false` every time, which is
+/// what the host sends when system reminders interleave (anthropics/claude-code
+/// #54360), so the host's own bound cannot be what holds it. The commits are real,
+/// because HEAD moving is the mechanism CLOUD-890 measured.
 #[test]
-fn a_later_stop_on_one_claim_still_carries_the_unlanded_pointer() {
-    let (repo, home) = unlanded_fixture("stop-unlanded-rearm");
+fn an_unchanged_unlanded_pointer_is_spoken_once_across_stops() {
+    let (repo, home) = unlanded_fixture("stop-unlanded-once");
     let mut lines = Vec::new();
     for step in 0..3 {
         let stdout = stdout_of(&hook_in(
@@ -991,12 +1003,7 @@ fn a_later_stop_on_one_claim_still_carries_the_unlanded_pointer() {
             &home,
             &stop_payload("Landed and pushed.", false),
         ));
-        lines.push(unlanded_line(&stdout).unwrap_or_else(|| {
-            panic!("stop {step} on a claim still unlanded is silent: {stdout}")
-        }));
-        // THE REMEDY, as the agent would perform it: a commit. It does not land
-        // the work — nothing here can — so the finding still HOLDS, which is
-        // precisely the level this rule must not re-assert on.
+        lines.push(unlanded_line(&stdout));
         common::write(
             &repo,
             &format!("src/step{step}.rs"),
@@ -1007,12 +1014,33 @@ fn a_later_stop_on_one_claim_still_carries_the_unlanded_pointer() {
         common::git_in(&repo, &["commit", "-q", "-m", &format!("wip: step {step}")]);
     }
     assert!(
-        lines[0].contains(" — "),
-        "the first stop carries the full arm: {lines:?}"
+        lines[0].is_some(),
+        "the first stop on the claim speaks: {lines:?}"
     );
     assert!(
-        lines[1..].iter().all(|line| !line.contains(" — ")),
-        "a commit is not a new claim, so later stops carry the pointer only: {lines:?}"
+        lines[1..].iter().all(Option::is_none),
+        "later stops on the same claim, with no operator prompt between, are silent: {lines:?}"
+    );
+}
+
+/// THE OPERATOR SPEAKING RE-ARMS IT (CLOUD-2332): the level is reported once more
+/// to the person who is back, and only their prompt does that.
+#[test]
+fn an_operator_prompt_rearms_the_unlanded_pointer() {
+    let (repo, home) = unlanded_fixture("stop-unlanded-rearm");
+    let stop = || {
+        stdout_of(&hook_in(
+            &repo,
+            &home,
+            &stop_payload("Landed and pushed.", false),
+        ))
+    };
+    assert!(unlanded_line(&stop()).is_some(), "the first stop speaks");
+    assert!(unlanded_line(&stop()).is_none(), "the second is silent");
+    let _ = hook_in(&repo, &home, &prompt_payload("why isn't this landed?"));
+    assert!(
+        unlanded_line(&stop()).is_some(),
+        "after the operator speaks, the still-unlanded claim is reported again"
     );
 }
 

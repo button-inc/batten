@@ -2873,8 +2873,10 @@ the subjects carry both digests.",
         id: "commit ship missing",
         gloss: "the turn declared a stopping point and its commits are not on the landing target",
         class: "Work that is committed and not landed is in no state anyone else can see, \
-and a container reclaim loses it. The subjects count the commits not on the landing target. \
-Land them, or say in the turn what blocks it.",
+and a container reclaim loses whatever is not pushed. The subjects count the commits not on \
+the landing target. This is said once per claim until the operator speaks again: a landing \
+held on purpose is a state, not an omission, and repeating it every turn displaces the \
+operator's own words (CLOUD-2332).",
         routes: &[run("land run first", "batten land lap")],
         applicability: Applicability::Advice,
     },
