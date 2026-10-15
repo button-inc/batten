@@ -266,6 +266,47 @@ fn the_perf_gate_runs_alone_and_last_before_the_receipt() {
     );
 }
 
+/// AN UNCHANGED INPUT IS NOT RE-DERIVED (the CLOUD-2253 residue): each of these
+/// tasks runs its statement through `step run <id>`, and `<id>` is a row in the
+/// committed step table. A wrapper naming no row would key nothing and always
+/// run, and a row no task names would be dead, so the case pins both halves.
+#[test]
+fn the_receipted_tasks_name_their_own_step_rows() {
+    let table: toml::Value = toml::from_str(
+        &std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../batten.toml"))
+            .expect("the committed authority reads"),
+    )
+    .expect("the committed authority parses");
+    let rows: Vec<&str> = table
+        .get("step")
+        .and_then(toml::Value::as_array)
+        .expect("a step table")
+        .iter()
+        .filter_map(|row| row.get("id").and_then(toml::Value::as_str))
+        .collect();
+    for (name, id) in [
+        ("verify:test-replay", "test-replay"),
+        ("test:reference-coverage", "test:reference-coverage"),
+        ("test:skill-contract", "test:skill-contract"),
+        ("test:config-schema", "test:config-schema"),
+        ("hk-drift", "hk-drift"),
+    ] {
+        let run = steps(name);
+        assert_eq!(run.len(), 1, "{name}: {run:?}");
+        assert!(
+            run[0].contains(&format!("step run {id} ")),
+            "{name}: {run:?}"
+        );
+        assert!(rows.contains(&id), "{id} has a [[step]] row: {rows:?}");
+    }
+    // The replay keys the base it was handed, not only the default trunk's.
+    assert!(
+        steps("verify:test-replay")[0].contains("--arg {{env.TEST_REPLAY_BASE}} --"),
+        "{:?}",
+        steps("verify:test-replay")
+    );
+}
+
 /// NO RECLAIM STEP IN THE LAP (CLOUD-2198): the run-wide watcher collects while
 /// the lap runs, so neither verify task opens or closes a prune lap, and the
 /// lap's marker is exported to nothing.

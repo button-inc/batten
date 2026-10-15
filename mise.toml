@@ -1383,17 +1383,17 @@ run = "cargo run --quiet -p batten -- step run test:cargo -- cargo nextest run -
 # to a profile of its own.
 [tasks."test:reference-coverage"]
 description = "Gate: the rendered CLI reference and the command spec name exactly the same flags, in both directions (CLOUD-171)"
-run = "cargo nextest run -p batten --no-tests=fail --test it reference_coverage::"
+run = "cargo run --quiet -p batten -- step run test:reference-coverage -- cargo nextest run -p batten --no-tests=fail --test it reference_coverage::"
 env = { BATTEN_TEST_SCRATCH_LANE = "narrow", NEXTEST_PROFILE = "narrow" }
 
 [tasks."test:skill-contract"]
 description = "Gate: every shipped skill stays inside its line budget and describes only the surface the binary ships (CLOUD-213)"
-run = "cargo nextest run -p batten --no-tests=fail --test it skill_contract::"
+run = "cargo run --quiet -p batten -- step run test:skill-contract -- cargo nextest run -p batten --no-tests=fail --test it skill_contract::"
 env = { BATTEN_TEST_SCRATCH_LANE = "narrow", NEXTEST_PROFILE = "narrow" }
 
 [tasks."test:config-schema"]
 description = "Gate: the committed JSON Schemas match the ones the binary derives from the config types (CLOUD-33)"
-run = "cargo nextest run -p batten --no-tests=fail --test it config_schema::"
+run = "cargo run --quiet -p batten -- step run test:config-schema -- cargo nextest run -p batten --no-tests=fail --test it config_schema::"
 env = { BATTEN_TEST_SCRATCH_LANE = "narrow", NEXTEST_PROFILE = "narrow" }
 
 [tasks."test:hook-profile"]
@@ -3572,7 +3572,7 @@ description = "Gate: the committed plan projection still matches the pinned gate
 # `cargo run` rather than an installed binary, for `completions`' reason: the
 # artifact must track the WORKING TREE's projection, or the gate answers about a
 # canonicaliser nobody is landing.
-run = "cargo run --quiet -p batten -- hk drift"
+run = "cargo run --quiet -p batten -- step run hk-drift -- cargo run --quiet -p batten -- hk drift"
 
 [tasks.man]
 description = "Regenerate the committed man pages from the command surface"
@@ -4693,7 +4693,7 @@ run = "mise run config-lint"
 [tasks."verify:test-replay"]
 description = "Gate: every modified test's base form passes against HEAD, or a recorded answer admits it — invoked through `verify`"
 env = { TEST_REPLAY_BASE = "{{ get_env(name='BATTEN_SPEC_BASE', default='origin/main') }}" }
-run = "{{vars.batten}} test replay --base {{env.TEST_REPLAY_BASE}}"
+run = "{{vars.batten}} step run test-replay --arg {{env.TEST_REPLAY_BASE}} -- {{vars.batten}} test replay --base {{env.TEST_REPLAY_BASE}}"
 
 [tasks.commit-msg]
 description = "Gate: one pending commit message's subject follows the convention (policy: [commit] in batten.toml)"

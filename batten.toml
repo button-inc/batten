@@ -18287,3 +18287,65 @@ tools = [
   ["git", "rev-parse", "-q", "--verify", "origin/main:Cargo.lock"],
   ["git", "log", "--format=%B", "origin/main..HEAD"],
 ]
+
+# THE BASE-TEST REPLAY (CLOUD-2090), keyed on both revisions it compares. HEAD's
+# side is the whole tree, `test:cargo`'s inputs: the replay builds HEAD with each
+# base test body spliced in. The base arrives two ways and both are keyed. The
+# task passes its base REF as an `--arg` (a speculative base is a commit id, so
+# the ref is the revision). `origin/main`'s commit is a tool answer, so a receipt
+# taken over the default base stops answering when trunk moves. The admissions
+# the replay reads are `asked` ledger lines added since the base, which are tree
+# content under those two keys. Measured 14 s on every lap of an unchanged head
+# (CLOUD-2253's breakdown).
+[[step]]
+id = "test-replay"
+inputs = ["."]
+tools = [
+  ["rustc", "--version"],
+  ["cargo", "--version"],
+  ["mise", "tasks", "info", "verify:test-replay", "--json"],
+  ["git", "rev-parse", "-q", "--verify", "origin/main"],
+]
+
+# THE THREE NARROW `it` TIERS hk reaches by name (CLOUD-1164). Each runs a filter
+# of the one test binary `test:cargo` runs whole, so each is keyed exactly as
+# `test:cargo` is: the whole tree, the toolchain and the task's own declaration.
+[[step]]
+id = "test:reference-coverage"
+inputs = ["."]
+tools = [
+  ["rustc", "--version"],
+  ["cargo", "--version"],
+  ["mise", "tasks", "info", "test:reference-coverage", "--json"],
+]
+
+[[step]]
+id = "test:skill-contract"
+inputs = ["."]
+tools = [
+  ["rustc", "--version"],
+  ["cargo", "--version"],
+  ["mise", "tasks", "info", "test:skill-contract", "--json"],
+]
+
+[[step]]
+id = "test:config-schema"
+inputs = ["."]
+tools = [
+  ["rustc", "--version"],
+  ["cargo", "--version"],
+  ["mise", "tasks", "info", "test:config-schema", "--json"],
+]
+
+# THE PLAN PROJECTION (CLOUD-947): the working tree's engine projecting `hk.pkl`
+# under the pinned runner. Keyed on the whole tree rather than a guessed subset:
+# a superset only costs a miss, a missed input mints a false hit. hk's own
+# version is the tool.
+[[step]]
+id = "hk-drift"
+inputs = ["."]
+tools = [
+  ["hk", "--version"],
+  ["rustc", "--version"],
+  ["mise", "tasks", "info", "hk-drift", "--json"],
+]
