@@ -505,9 +505,47 @@ job_display_names contains base_name(name) if {
 	name := object.get(job, "name", key)
 }
 
+# THE DECLARED RETIRING SET (CLOUD-2301). `fast-forward.yml` judges a head
+# against TRUNK's roster, so a job leaves in two steps: off the roster while it
+# still answers, then deleted. The first step is a pull-request job missing from
+# the roster, which the arm below refuses — so the name moves to
+# `CI_RETIRING_CHECKS`, where it is excused from that arm and from nothing else.
+# Unset reads as empty: the set is a transition, not a standing declaration.
+retiring_names contains base_name(trim_space(part)) if {
+	some part in split(object.get(manifest_env, "CI_RETIRING_CHECKS", ""), ",")
+	trim_space(part) != ""
+}
+
 job_in_roster(name) if name in roster_names
 
+job_in_roster(name) if name in retiring_names
+
 roster_name_has_a_job(name) if name in job_display_names
+
+# THE SET MUST NOT BECOME A HOLE, two ways. A retiring name still on the roster
+# is a job both required and excused, so the excuse is a second authority over
+# the same name. A retiring name no pull-request job creates is a step two that
+# deleted the job and kept the declaration, which then excuses whatever job is
+# next given that name.
+violation contains {
+	"rule": "check list other",
+	"verdict": "check list duplicate",
+	"subjects": [{"path": "mise.toml"}, {"artifact": name}],
+} if {
+	governed
+	some name in retiring_names
+	name in roster_names
+}
+
+violation contains {
+	"rule": "check list other",
+	"verdict": "check name stale",
+	"subjects": [{"path": "mise.toml"}, {"artifact": name}],
+} if {
+	governed
+	some name in retiring_names
+	not roster_name_has_a_job(name)
+}
 
 violation contains {
 	"rule": "check list other",
@@ -2173,6 +2211,35 @@ test_a_job_missing_from_the_roster_is_refused if {
 	f.verdict == "job list missing"
 	some s in f.subjects
 	s.artifact == "extra"
+}
+
+test_a_retiring_job_off_the_roster_is_accepted if {
+	wf := object.union(sound_workflow, {"jobs": {"extra": {"name": "extra", "runs-on": "ubuntu-latest", "steps": [{"run": "mise run lint"}]}}})
+	m := object.union(sound_manifest, {"env": object.union(sound_manifest.env, {"CI_RETIRING_CHECKS": "extra"})})
+	docs := object.union(sound_input.tree.documents, {".github/workflows/ci.yml": wf, "mise.toml": m})
+	tree := object.union(object.remove(sound_input.tree, ["documents"]), {"documents": docs})
+	found := violation with input as {"tree": tree}
+	every f in found {
+		f.rule != "check list other"
+	}
+}
+
+test_a_retiring_name_on_the_roster_is_refused if {
+	m := object.union(sound_manifest, {"env": object.union(sound_manifest.env, {"CI_RETIRING_CHECKS": "final"})})
+	found := violation with input as swap("mise.toml", m)
+	some f in found
+	f.verdict == "check list duplicate"
+	some s in f.subjects
+	s.artifact == "final"
+}
+
+test_a_retiring_name_naming_no_job_is_refused if {
+	m := object.union(sound_manifest, {"env": object.union(sound_manifest.env, {"CI_RETIRING_CHECKS": "ghost"})})
+	found := violation with input as swap("mise.toml", m)
+	some f in found
+	f.verdict == "check name stale"
+	some s in f.subjects
+	s.artifact == "ghost"
 }
 
 test_a_roster_name_matching_no_job_is_refused if {

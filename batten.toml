@@ -15120,6 +15120,37 @@ kind = "document"
 target = "mise.toml"
 
 [[verdict]]
+id = "check list duplicate"
+gloss = "a retiring name is still on the required roster, so one job is both required and excused"
+class = """
+`CI_RETIRING_CHECKS` exists for one step: a job dropped from the roster while it \
+still answers, because the fast-forward bot judges a head against the trunk's \
+roster (CLOUD-2301). A name on both lists is two authorities over the same job, \
+and whichever one a reader consults decides whether it is waited on. Move the \
+name to exactly one of them.
+"""
+
+[[verdict.route]]
+id = "task read first"
+kind = "document"
+target = "mise.toml"
+
+[[verdict]]
+id = "check name stale"
+gloss = "a retiring name matches no pull-request job, so the excuse outlived its job"
+class = """
+The retiring set excuses a job from the roster only while the job is being \
+deleted. Once it is gone the name must leave too: a declaration left behind \
+excuses whatever job is next given that name, which is the silently unrequired \
+job the roster sensor exists to refuse.
+"""
+
+[[verdict.route]]
+id = "task read first"
+kind = "document"
+target = "mise.toml"
+
+[[verdict]]
 id = "job list loose"
 gloss = "a release leg provisions every pinned tool, so any one of them can cost a platform binary"
 class = """

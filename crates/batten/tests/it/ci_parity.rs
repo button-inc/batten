@@ -871,6 +871,60 @@ fn a_pull_request_job_missing_from_the_roster_is_refused() {
 }
 
 #[test]
+fn a_retiring_job_off_the_roster_is_accepted() {
+    // CLOUD-2301: step one of retiring a job is dropping it from the roster
+    // while it still answers, because the fast-forward bot judges a head
+    // against TRUNK's roster. The declared retiring set is what admits it.
+    let root = sound("job-retiring");
+    common::write(
+        &root,
+        ".github/workflows/ci.yml",
+        &WORKFLOW.replace(
+            "  final:",
+            "  extra:\n    name: extra\n    runs-on: ubuntu-latest\n    steps:\n      - run: mise run lint\n  final:",
+        ),
+    );
+    common::write(
+        &root,
+        "mise.toml",
+        &MANIFEST.replace(
+            "CI_FANIN_CHECK = ",
+            "CI_RETIRING_CHECKS = \"extra\"\nCI_FANIN_CHECK = ",
+        ),
+    );
+    let raised = verdicts_raised(&root);
+    assert!(
+        !raised.iter().any(|v| v == "job list missing"),
+        "a job declared retiring should not be required: {raised:?}"
+    );
+}
+
+#[test]
+fn a_retiring_name_on_the_roster_or_naming_no_job_is_refused() {
+    // THE SET MUST NOT BECOME A HOLE: a name both required and excused, and a
+    // name that outlived its job, each raise their own verdict.
+    for (retiring, verdict) in [
+        ("final", "check list duplicate"),
+        ("ghost", "check name stale"),
+    ] {
+        let root = sound(&format!("retiring-{retiring}"));
+        common::write(
+            &root,
+            "mise.toml",
+            &MANIFEST.replace(
+                "CI_FANIN_CHECK = ",
+                &format!("CI_RETIRING_CHECKS = \"{retiring}\"\nCI_FANIN_CHECK = "),
+            ),
+        );
+        let raised = verdicts_raised(&root);
+        assert!(
+            raised.iter().any(|v| v == verdict),
+            "retiring `{retiring}` should raise {verdict}: {raised:?}"
+        );
+    }
+}
+
+#[test]
 fn a_roster_name_matching_no_job_is_refused() {
     let root = sound("roster-ghost");
     common::write(
