@@ -1251,6 +1251,15 @@ pub const VENDORED_DOCS: &[VendoredDoc] = &[
         act: &["`batten land replay <base>`", "`git pull --rebase`"],
         dont: &["merge the base into the branch"],
     },
+    VendoredDoc {
+        id: "job read unread",
+        why: Some("A push replacing a red head erases the failed checks nobody read"),
+        act: &["read each named failed job's log: `batten mcp call github get_job_logs`"],
+        dont: &[
+            "push over a failure you have not read",
+            "read one failure and assume the rest match",
+        ],
+    },
     // ── the unclassed emitters' classes ─────────────────────────────────────
     VendoredDoc {
         id: "input parse refused",

@@ -10085,7 +10085,9 @@ pub(crate) fn tree_document(
             // tree surface does not have.
             | crate::facts::Fact::Pinned
             // CLOUD-1978: hook-surface; its question is about a call's argument.
-            | crate::facts::Fact::DispatchCleared => continue,
+            | crate::facts::Fact::DispatchCleared
+            // CLOUD-2270: hook-surface; its question is about a push.
+            | crate::facts::Fact::RedHead => continue,
         };
         tree.insert(key.to_owned(), value);
     }

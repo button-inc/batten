@@ -212,6 +212,7 @@ mod handler_dispatch;
 mod harness_grant;
 mod harness_isolation;
 mod harness_wiring;
+mod head_push_unread;
 mod history_drop;
 mod history_facts;
 mod history_gate;

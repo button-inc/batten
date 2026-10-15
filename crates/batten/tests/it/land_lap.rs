@@ -574,3 +574,29 @@ fn a_lap_refuses_to_run_from_the_trunk() {
         "landing from the trunk must not succeed: {said}"
     );
 }
+
+/// **A RED STOP NAMES WHAT IT ABANDONED STILL RUNNING** (CLOUD-2270).
+///
+/// The incident: the lap stopped on one failure while another required check
+/// still ran, the stop named only the failure, and the other's verdict was
+/// never seen. Both directions, so a renderer that always printed the phrase
+/// would fail the second half.
+#[test]
+fn land_names_checks_still_running_when_it_stops_red() {
+    use batten::refusal::Arm;
+
+    let failed = ["macos failure".to_owned()];
+    let running = batten::land_red_refusal_running("deadbeef", &failed, &["windows".to_owned()])
+        .render_finding(Arm::Full);
+    assert!(
+        running.contains("windows") && running.contains("still running"),
+        "a check the stop abandoned is named: {running}"
+    );
+
+    let settled =
+        batten::land_red_refusal_running("deadbeef", &failed, &[]).render_finding(Arm::Full);
+    assert!(
+        settled.contains("macos failure") && !settled.contains("still running"),
+        "and with nothing running, nothing is said to be: {settled}"
+    );
+}

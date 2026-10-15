@@ -140,6 +140,7 @@ const PRESET_SCOPES: &[(&str, bool)] = &[
     ("commit-hygiene", false),
     ("trunk-based", false),
     ("linear-history", false),
+    ("red-head", false),
     ("git", false),
     ("shell-hygiene", true),
     ("pinned-toolchain", false),

@@ -5131,6 +5131,7 @@
             "supply-chain",
             "trunk-based",
             "linear-history",
+            "red-head",
             "git"
           ]
         },

@@ -395,7 +395,7 @@ pub(crate) fn winner<'a>(runs: &[&'a Run], answered: &[String]) -> Option<&'a Ru
 /// contradict each other. The predecessor's summary had that property by
 /// construction, emitted from inside the same pass; two passes would only have
 /// it by inspection.
-fn latest_per_name<'a>(runs: &'a [Run], roster: &Roster) -> BTreeMap<&'a str, &'a Run> {
+pub(crate) fn latest_per_name<'a>(runs: &'a [Run], roster: &Roster) -> BTreeMap<&'a str, &'a Run> {
     let mut grouped: BTreeMap<&str, Vec<&Run>> = BTreeMap::new();
     for run in runs {
         if !roster.required.iter().any(|name| name == &run.name) {

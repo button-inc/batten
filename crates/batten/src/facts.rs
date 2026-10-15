@@ -796,6 +796,13 @@ pub enum Fact {
     /// prompt edited after approval clears nothing. `false` on every call that is
     /// not such a method; `null` when the store could not be located.
     DispatchCleared,
+    /// The current branch's red-head record: the head a lap's wait stopped red
+    /// on, each failed check's newest run with whether its log was read, and
+    /// each check the stop abandoned still running (CLOUD-2270).
+    ///
+    /// A file read and one stat per failed run under `$GIT_DIR`. `null` when no
+    /// record exists — the branch owes no push a read.
+    RedHead,
 }
 
 /// [`Fact::Receipts`] — a file and two git refs (`hook.rs`'s receipt read).
@@ -1534,6 +1541,10 @@ pub const PINNED: Class = Class::new(Cost::Read, Surface::Hook);
 /// mediated call it is about.
 pub const DISPATCH_CLEARED: Class = Class::new(Cost::Read, Surface::Hook);
 
+/// [`Fact::RedHead`] — one record read and a stat per failed run under
+/// `$GIT_DIR` (CLOUD-2270). A read, asked of the mediated call it gates.
+pub const RED_HEAD: Class = Class::new(Cost::Read, Surface::Hook);
+
 impl Fact {
     /// Every fact the boundary resolves today, so [`Fact::class`] is total.
     pub const ALL: &'static [Fact] = &[
@@ -1580,6 +1591,7 @@ impl Fact {
         Fact::Instant,
         Fact::Pinned,
         Fact::DispatchCleared,
+        Fact::RedHead,
     ];
 
     /// The stable lowercase token (§6) — the field name in `lib.rs`'s `Facts`.
@@ -1629,6 +1641,7 @@ impl Fact {
             Fact::Instant => "instant",
             Fact::Pinned => "pinned-programs",
             Fact::DispatchCleared => "dispatch-cleared",
+            Fact::RedHead => "red-head",
         }
     }
 
@@ -1686,6 +1699,7 @@ impl Fact {
             Fact::Instant => INSTANT,
             Fact::Pinned => PINNED,
             Fact::DispatchCleared => DISPATCH_CLEARED,
+            Fact::RedHead => RED_HEAD,
         }
     }
 
@@ -1773,6 +1787,7 @@ impl Fact {
             | Fact::Records
             | Fact::RecordsBlocked
             | Fact::DispatchCleared
+            | Fact::RedHead
             | Fact::Instant => false,
         }
     }
@@ -1940,7 +1955,10 @@ impl Fact {
             | Fact::Pinned
             // CLOUD-1978. Hook-only: the question is about THIS call's argument,
             // and a tree walk has no call.
-            | Fact::DispatchCleared => None,
+            | Fact::DispatchCleared
+            // CLOUD-2270. Hook-only: what a push over this head owes is a
+            // question about the call, and a tree walk has none.
+            | Fact::RedHead => None,
         }
     }
 
@@ -2052,6 +2070,7 @@ impl Fact {
             | Fact::Tasks
             | Fact::Extracted => Self::described_schema_fragment(self),
             Fact::Pinned => Self::pinned_schema_fragment(),
+            Fact::RedHead => Self::red_head_schema_fragment(),
             // The git and landing families delegate (CLOUD-880). Extracted
             // because this function hit its own 100-line ceiling when `Landing`
             // arrived, and the ceiling is right: a match arm per fact is readable
@@ -2347,6 +2366,7 @@ impl Fact {
             | Fact::Records
             | Fact::RecordsBlocked
             | Fact::Pinned
+            | Fact::RedHead
             | Fact::Review => serde_json::json!({
                 "description": "unrouted fact -- schema_fragment delegated a fact scalar_schema_fragment does not own",
             }),
@@ -2437,6 +2457,7 @@ impl Fact {
             | Fact::Minted
             | Fact::Captured
             | Fact::DispatchCleared
+            | Fact::RedHead
             | Fact::Instant => serde_json::json!({
                 "description": "unrouted fact -- schema_fragment delegated a fact described_schema_fragment does not own",
             }),
@@ -2460,6 +2481,35 @@ impl Fact {
             "type": ["array", "null"],
             "items": {"type": "string"},
             "description": "Fact::Pinned (CLOUD-1028) -- the program NAMES the project's pin puts on PATH, sorted, or null for could-not-look. Names only: what a program is for, and every byte it would print, is somebody else's fact.",
+        })
+    }
+
+    /// The schema fragment for [`Fact::RedHead`] (CLOUD-2270): the record's
+    /// shape, stated so `opa check -s` refuses a module that walks `failed`
+    /// without reading the `null` a branch with no red head carries.
+    fn red_head_schema_fragment() -> serde_json::Value {
+        serde_json::json!({
+            "type": ["object", "null"],
+            "description": "Fact::RedHead (CLOUD-2270) -- the current branch's red-head record, or null when none exists. `head` is the sha a lap's wait stopped red on; `failed` each failed required check's newest run, its id and name, and whether a check-log-read receipt keyed by that id exists; `running` each required check the stop abandoned unconcluded. Pointers only, never a log line.",
+            "properties": {
+                "head": {"type": "string"},
+                "failed": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": {"type": "string"},
+                            "name": {"type": "string"},
+                            "read": {"type": "boolean"},
+                        },
+                        "required": ["id", "name", "read"],
+                        "additionalProperties": false,
+                    },
+                },
+                "running": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["head", "failed", "running"],
+            "additionalProperties": false,
         })
     }
 
@@ -2595,6 +2645,7 @@ impl Fact {
             | Fact::Extracted
             | Fact::Landing
             | Fact::DispatchCleared
+            | Fact::RedHead
             | Fact::Instant => serde_json::json!({
                 "description": "unrouted fact -- schema_fragment delegated a fact keyed_read_schema_fragment does not own",
             }),
@@ -2818,6 +2869,7 @@ impl Fact {
             | Fact::GitConfig
             | Fact::GitIndex
             | Fact::DispatchCleared
+            | Fact::RedHead
             | Fact::Instant => serde_json::json!({
                 "description": "unrouted fact -- schema_fragment delegated a fact git_schema_fragment does not own",
             }),
@@ -2881,6 +2933,7 @@ impl Fact {
             | Fact::Records
             | Fact::RecordsBlocked
             | Fact::Instant
+            | Fact::RedHead
             | Fact::Pinned => serde_json::json!({
                 "description": "unrouted fact -- schema_fragment delegated a fact repository_schema_fragment does not own",
             }),

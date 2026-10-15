@@ -2025,6 +2025,34 @@ fast-forward, after CI has run. `git merge <ref>` writes one, and so does `git p
         }],
         patterns: &[],
     },
+    // CLOUD-2270: a push replacing a head whose wait stopped red erases the
+    // failed checks' verdicts, so each one's log is read before the push. The
+    // record is the `red-head` fact `land` writes; its own bundle, so the row
+    // enabling it names the one class it raises.
+    Manifest {
+        name: "red-head",
+        version: 1,
+        modules: &[PresetModule {
+            scope: RuleScope::MediatedCall,
+            provider: None,
+            pointer: "<preset:red-head>/no-push-over-unread-red.rego",
+            source: include_str!("policy/presets/red-head/no-push-over-unread-red.rego"),
+        }],
+        verdicts: &[VendoredVerdict {
+            id: "job read unread",
+            gloss: "a push would replace a red head whose failed checks were never read",
+            class: "When a landing stops red, the failed checks' logs say why, and a push \
+replacing that head starts a new run that buries them. Reading one failure and pushing \
+erases the others, and a check still running at the stop reports on a head nobody will \
+look at again. Read each named failed job's log first; reading is what admits the push.",
+            routes: &[run(
+                "job read first",
+                "batten mcp call github get_job_logs '{\"owner\":\"<owner>\",\"repo\":\"<repo>\",\"job_id\":<id>,\"return_content\":true}'",
+            )],
+            applicability: crate::verdict::Applicability::Advice,
+        }],
+        patterns: &[],
+    },
     // EVERY GIT CALL BATTEN ALLOWS IS PUT TO NO ONE (CLOUD-2057). One module and
     // no verdicts: it never refuses, it only stops the host re-deciding a call
     // the engine already allowed. Destructive calls are left to the host.

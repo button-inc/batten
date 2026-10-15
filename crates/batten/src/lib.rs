@@ -14272,7 +14272,7 @@ fn run_land_wait(
 
     let trunk = trunk_watch(reference, &base, &config.repo, config.interval);
     let holding = Heartbeat::for_clone(root);
-    let waited = land::wait(
+    let (waited, red) = land::wait_reading(
         &config,
         &roster,
         &trunk,
@@ -14312,7 +14312,22 @@ fn run_land_wait(
         ),
     };
     land::record_wait(root, branch, &answers)?;
-    say_what_the_wait_saw(&waited, &sha, reference, asks, out, err)?;
+    // THE RED HEAD'S DEBT, recorded for `red-head` to read at the next push
+    // (CLOUD-2270): which failed checks a push over this head owes a read, and
+    // which the stop abandoned still running. A green head owes nothing, so its
+    // record goes. A write that fails is said and never changes the verdict:
+    // the wait's answer is about the work, the record is about the clone.
+    let kept = match &waited {
+        land::Waited::Red { .. } => {
+            land::record_red_head(root, branch, &sha, &red.failed, &red.running)
+        }
+        land::Waited::Green { .. } => land::clear_red_head(root, branch),
+        _ => Ok(()),
+    };
+    if let Err(problem) = kept {
+        writeln!(err, "::warning:: land wait: {problem:#}")?;
+    }
+    say_what_the_wait_saw(&waited, &red.running, &sha, reference, asks, out, err)?;
     // THE READING TRAVELS WITH THE CODE, because the exit table cannot carry it:
     // a stale base and an unanswered wait are both a lap, and only one of them
     // took a checks reading at all. Deriving the tap's verdict from the code in
@@ -14338,6 +14353,7 @@ fn run_land_wait(
 /// new arm from being added to the wrong one.
 fn say_what_the_wait_saw(
     waited: &land::Waited,
+    running: &[String],
     sha: &str,
     reference: &str,
     asks: u32,
@@ -14354,7 +14370,7 @@ fn say_what_the_wait_saw(
             // ONE CLASSED LINE (CLOUD-2078): `job run red`, the head and each
             // failing check as subjects, the advice below as its remedy.
             let named: Vec<String> = findings.iter().map(ToString::to_string).collect();
-            let red = land_red_refusal(sha, &named);
+            let red = land_red_refusal_running(sha, &named, running);
             output::verdict(
                 err,
                 &format!("::error:: land: {}", red.render_finding(refusal::Arm::Full)),
@@ -17468,24 +17484,43 @@ fn pinned_for(
     }
 }
 
+/// The current branch's red-head record (CLOUD-2270), behind [`pinned_for`]'s
+/// narrowing and asked only before a call: a repository with no mediated
+/// module opens nothing, and a completed call has no push left to gate.
+fn red_head_for(
+    policy: &hook::Policy,
+    envelope: &hook::Envelope,
+) -> facts::Look<serde_json::Value> {
+    if envelope.event == hook::Event::PreTool && policy.reads_pinned(envelope) {
+        land::red_head_fact(hook_authority_root())
+    } else {
+        facts::Look::CouldNotLook
+    }
+}
+
 /// The per-call facts [`run_hook`] resolves beyond the policy's own: the
 /// destructive pair, the unread history a config write touches, and the
-/// dispatch receipt. One call so `run_hook` stays under its line ceiling, and
-/// a named struct rather than a tuple, so no `type_complexity` escape is owed.
+/// dispatch receipt, the pinned programs and the red-head record (CLOUD-2270).
+/// One call so `run_hook` stays under its line ceiling, and a named struct
+/// rather than a tuple, so no `type_complexity` escape is owed.
 struct CallFacts {
     discards: facts::Look<Vec<String>>,
     singleton: Option<(String, String)>,
     unread_history: facts::Look<Vec<String>>,
     dispatch: facts::Look<()>,
+    pinned: facts::Look<std::collections::BTreeSet<String>>,
+    red_head: facts::Look<serde_json::Value>,
 }
 
-fn call_facts(envelope: &hook::Envelope) -> CallFacts {
+fn call_facts(policy: &hook::Policy, envelope: &hook::Envelope) -> CallFacts {
     let (discards, singleton) = destructive_call_facts(envelope);
     CallFacts {
         discards,
         singleton,
         unread_history: unread_history(envelope),
         dispatch: dispatch_facts(envelope),
+        pinned: pinned_for(policy, envelope),
+        red_head: red_head_for(policy, envelope),
     }
 }
 
@@ -17873,9 +17908,8 @@ fn run_hook(
     // `tracked-artifacts` ceiling — which is every repository today — spawns no
     // git and opens nothing. `None` is could-not-look and allows.
     let manifest = manifest_for(&policy, &envelope);
-    let pinned = pinned_for(&policy, &envelope);
     let (tasks, extracted) = session_facts(&policy, &envelope);
-    let call = call_facts(&envelope);
+    let call = call_facts(&policy, &envelope);
     let facts = hook::Facts {
         singleton: &call.singleton,
         discards: &call.discards,
@@ -17887,10 +17921,11 @@ fn run_hook(
         sourced: &agent_sourced,
         prospective: &prospective,
         manifest,
-        pinned: &pinned,
+        pinned: &call.pinned,
         tasks: &tasks,
         extracted: &extracted,
         dispatch: &call.dispatch,
+        red_head: &call.red_head,
     };
     // THE DOOR (CLOUD-898). Declared handlers run here, under the contract in
     // `crate::handler`: bounded by the parent, fail-open on anything they break,
@@ -27588,6 +27623,19 @@ pub fn land_conflict_stop(
 /// failed and each one, with the reproduce-locally advice as its remedy.
 #[must_use]
 pub fn land_red_refusal(sha: &str, findings: &[String]) -> crate::refusal::Refusal {
+    land_red_refusal_running(sha, findings, &[])
+}
+
+/// [`land_red_refusal`], plus one `<name> still running` subject per required
+/// check whose newest run had not concluded (CLOUD-2270): the stop abandons it
+/// unread, so a reader who acts on the failures alone would never learn its
+/// verdict.
+#[must_use]
+pub fn land_red_refusal_running(
+    sha: &str,
+    findings: &[String],
+    running: &[String],
+) -> crate::refusal::Refusal {
     let count = u64::try_from(findings.len()).unwrap_or(u64::MAX);
     let mut subjects = vec![
         crate::verdict::artifact(sha),
@@ -27597,6 +27645,11 @@ pub fn land_red_refusal(sha: &str, findings: &[String]) -> crate::refusal::Refus
         findings
             .iter()
             .map(|finding| crate::verdict::artifact(finding)),
+    );
+    subjects.extend(
+        running
+            .iter()
+            .map(|name| crate::verdict::artifact(&format!("{name} still running"))),
     );
     crate::refusal::Refusal::engine(
         crate::verdict::Native::JobRunRed,

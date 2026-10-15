@@ -5302,6 +5302,10 @@ pub struct Facts<'a> {
     /// receipts (CLOUD-1978). Could-not-look allows nothing extra: the grant
     /// reads only `true`.
     pub dispatch: &'a crate::facts::Look<()>,
+    /// The current branch's red-head record, already projected to its policy
+    /// shape (CLOUD-2270). Anything but `Is` projects `null`, which a module
+    /// reads as "no push over this head owes a read".
+    pub red_head: &'a crate::facts::Look<serde_json::Value>,
 }
 
 impl<'a> Facts<'a> {
@@ -5351,6 +5355,9 @@ impl<'a> Facts<'a> {
             // Could-not-look, never `false`: a caller that resolved nothing has
             // not established that a prompt is uncleared.
             dispatch: &crate::facts::Look::CouldNotLook,
+            // Could-not-look, never "no red head": a caller that resolved
+            // nothing has not read the branch's record.
+            red_head: &crate::facts::Look::CouldNotLook,
         }
     }
 }
@@ -7332,6 +7339,14 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
                 crate::facts::Look::Is(()) => serde_json::Value::Bool(true),
                 crate::facts::Look::IsNot => serde_json::Value::Bool(false),
                 crate::facts::Look::CouldNotLook => serde_json::Value::Null,
+            }),
+            // THE RECORD OR `null` (CLOUD-2270): no record and a record nobody
+            // could read both owe a push nothing a module can act on.
+            crate::facts::Fact::RedHead => Some(match facts.red_head {
+                crate::facts::Look::Is(record) => record.clone(),
+                crate::facts::Look::IsNot | crate::facts::Look::CouldNotLook => {
+                    serde_json::Value::Null
+                }
             }),
             crate::facts::Fact::AgentSourced => Some(facts.sourced.as_ref().map_or(
                 serde_json::Value::Null,
@@ -11130,6 +11145,7 @@ mod tests {
                 extracted: &crate::facts::Look::CouldNotLook,
                 pinned: &crate::facts::Look::CouldNotLook,
                 dispatch: &crate::facts::Look::CouldNotLook,
+                red_head: &crate::facts::Look::CouldNotLook,
             },
         )
     }

@@ -993,6 +993,25 @@ pub fn wait(
     heartbeat: &(dyn Fn(u64) + Sync),
     out: &mut dyn std::io::Write,
 ) -> Result<Waited> {
+    wait_reading(config, roster, trunk, asks, fresh_ready, heartbeat, out).map(|(waited, _)| waited)
+}
+
+/// [`wait`], and beside its verdict the [`RedReading`] a red one was taken over
+/// (CLOUD-2270): which failed runs a push over this head owes a read, and which
+/// checks the stop abandoned still running.
+///
+/// # Errors
+///
+/// [`wait`]'s.
+pub fn wait_reading(
+    config: &crate::pr_watch::Config,
+    roster: &crate::checks_green::Roster,
+    trunk: &crate::main_watch::Config,
+    asks: u32,
+    fresh_ready: bool,
+    heartbeat: &(dyn Fn(u64) + Sync),
+    out: &mut dyn std::io::Write,
+) -> Result<(Waited, RedReading)> {
     writeln!(
         out,
         "land: waiting on {} — green or stale, whichever answers first",
@@ -1005,10 +1024,15 @@ pub fn wait(
     // kept.
     let (tx, rx) = std::sync::mpsc::channel::<Waited>();
     let decided = std::sync::atomic::AtomicBool::new(false);
+    // THE RED READING RIDES BESIDE THE VERDICT, not inside it (CLOUD-2270):
+    // filled by the green arm before it sends `Red`, so whoever reads the
+    // verdict reads the reading the verdict was taken over.
+    let red = std::sync::Mutex::new(RedReading::default());
 
     let waited = std::thread::scope(|scope| {
         let green = tx.clone();
         let stop = &decided;
+        let red_slot = &red;
         drop(scope.spawn(move || {
             let mut poll = crate::pr_watch::Poll::default();
             // The runs already on the head when a fresh ready's wait first read
@@ -1079,6 +1103,10 @@ pub fn wait(
                     }
                     Ok(crate::checks_green::Verdict::Red(findings)) => {
                         stop.store(true, std::sync::atomic::Ordering::Relaxed);
+                        let (failed, running) = red_runs(poll.runs(), roster, &findings);
+                        if let Ok(mut slot) = red_slot.lock() {
+                            *slot = RedReading { failed, running };
+                        }
                         drop(green.send(Waited::Red { findings }));
                         return;
                     }
@@ -1157,7 +1185,24 @@ pub fn wait(
         rx.recv().ok()
     });
 
-    Ok(waited.unwrap_or(Waited::Unanswered))
+    let waited = waited.unwrap_or(Waited::Unanswered);
+    let reading = match &waited {
+        Waited::Red { .. } => red.into_inner().unwrap_or_default(),
+        _ => RedReading::default(),
+    };
+    Ok((waited, reading))
+}
+
+/// What a red wait saw beside its findings (CLOUD-2270): each failed required
+/// check's newest run as `(run id, name)`, the pointer whose log a push over
+/// this head owes a read, and the required checks whose newest run had not
+/// concluded, which a red stop abandons unread. Empty on every other verdict.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RedReading {
+    /// Each failed required check's newest run, as `(run id, name)`.
+    pub failed: Vec<(u64, String)>,
+    /// Required checks still running when the red answered, sorted.
+    pub running: Vec<String>,
 }
 
 /// Both arms of one wait, from whichever of them answered.
@@ -1207,6 +1252,176 @@ pub fn record_wait(root: &Path, branch: &str, answers: &[Answered]) -> Result<()
         branch,
         &answers.iter().map(Answered::line).collect::<Vec<_>>(),
     )
+}
+
+/// The receipt family recording a head whose wait stopped red (CLOUD-2270).
+///
+/// Branch-keyed, `red-head.<slug>`, and REPLACED rather than appended: it
+/// answers "what does this branch's head owe a push", which is current state,
+/// never history. `red-head` reads it as a mediated fact.
+pub const RED_HEAD: &str = "red-head";
+
+/// A red reading's two pointer lists: each failed required check's newest run
+/// as `(id, name)`, and each required check whose newest run is still going.
+///
+/// Taken over [`crate::checks_green::latest_per_name`], the rows the verdict
+/// itself was taken over, so the record cannot name a run the red never judged.
+#[must_use]
+pub fn red_runs(
+    runs: &[crate::checks_green::Run],
+    roster: &crate::checks_green::Roster,
+    findings: &[crate::checks_green::Finding],
+) -> (Vec<(u64, String)>, Vec<String>) {
+    let latest = crate::checks_green::latest_per_name(runs, roster);
+    let failed = latest
+        .iter()
+        .filter(|(name, _)| findings.iter().any(|finding| finding.check == **name))
+        .map(|(name, run)| (run.id, (*name).to_owned()))
+        .collect();
+    let running = latest
+        .iter()
+        .filter(|(_, run)| !run.completed())
+        .map(|(name, _)| (*name).to_owned())
+        .collect();
+    (failed, running)
+}
+
+/// A branch's red-head key, INJECTIVE where the shared branch-receipt slug is
+/// not (review of #1180): `/` → `-` maps `feature/a` and `feature-a` to one
+/// name, and a green stop on one would then clear the other's unread debt, a
+/// MISSED refusal. Percent-encoding `%` and `/` keeps every branch its own
+/// record and every name a single path component.
+#[must_use]
+pub fn red_head_slug(branch: &str) -> String {
+    branch.replace('%', "%25").replace('/', "%2F")
+}
+
+/// Where a branch's red-head record lives, or `None` with no git dir.
+fn red_head_path(root: &Path, branch: &str) -> Option<std::path::PathBuf> {
+    let git_dir = crate::git::git_dir(root).ok()?;
+    let slug = red_head_slug(branch);
+    Some(
+        git_dir
+            .join("batten-receipts")
+            .join(format!("{RED_HEAD}.{slug}")),
+    )
+}
+
+/// Record that this branch's head stopped red: `head <sha>`, one
+/// `failed <id> <name>` per failed check and one `running <name>` per check the
+/// stop abandoned. Pointer-only (rule 4): ids and names, never a log line.
+///
+/// # Errors
+///
+/// A store directory or file that will not open or write.
+pub fn record_red_head(
+    root: &Path,
+    branch: &str,
+    sha: &str,
+    failed: &[(u64, String)],
+    running: &[String],
+) -> Result<()> {
+    let Some(path) = red_head_path(root, branch) else {
+        return Ok(());
+    };
+    let directory = path.parent().unwrap_or(Path::new("."));
+    std::fs::create_dir_all(directory)
+        .with_context(|| format!("land: create the record store {}", directory.display()))?;
+    let lines = std::iter::once(format!("head {sha}"))
+        .chain(
+            failed
+                .iter()
+                .map(|(id, name)| format!("failed {id} {name}")),
+        )
+        .chain(running.iter().map(|name| format!("running {name}")));
+    let text: String = lines.map(|line| line + "\n").collect();
+    crate::durable::replace(&path, text)
+        .with_context(|| format!("land: write the red-head record {}", path.display()))
+}
+
+/// The receipt family whose `named` receipt, keyed by a run id, says that
+/// run's log was read (CLOUD-2270): `check-log-read.<id>` under the store.
+pub const CHECK_LOG_READ: &str = "check-log-read";
+
+/// The current branch's red-head record as the `red-head` fact projects it:
+/// `{"head", "failed": [{"id", "name", "read"}], "running"}`.
+///
+/// `IsNot` with no record (or a detached `HEAD`, which has nothing to key one
+/// on); `CouldNotLook` outside a repository or on a record that will not read.
+/// `read` is a stat of [`CHECK_LOG_READ`]`.<id>`, never the log itself.
+#[must_use]
+pub fn red_head_fact(root: &Path) -> crate::facts::Look<serde_json::Value> {
+    let Ok(git_dir) = crate::git::git_dir(root) else {
+        return crate::facts::Look::CouldNotLook;
+    };
+    let Ok(branch) = crate::git::current_branch(root) else {
+        return crate::facts::Look::CouldNotLook;
+    };
+    let Some(branch) = branch else {
+        return crate::facts::Look::IsNot;
+    };
+    let store = git_dir.join("batten-receipts");
+    let path = store.join(format!("{RED_HEAD}.{}", red_head_slug(&branch)));
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return crate::facts::Look::IsNot;
+        }
+        Err(_) => return crate::facts::Look::CouldNotLook,
+    };
+    crate::facts::Look::Is(red_head_document(&text, |id| {
+        store.join(format!("{CHECK_LOG_READ}.{id}")).is_file()
+    }))
+}
+
+/// Project a red-head record's text, asking `read` of each failed run's id.
+///
+/// An id that is not all digits was not written by [`record_red_head`] and
+/// is never joined onto a path: it is projected unread.
+fn red_head_document(text: &str, read: impl Fn(&str) -> bool) -> serde_json::Value {
+    let mut head = String::new();
+    let mut failed = Vec::new();
+    let mut running = Vec::new();
+    for line in text.lines() {
+        let mut fields = line.splitn(2, ' ');
+        let (Some(kind), Some(rest)) = (fields.next(), fields.next()) else {
+            continue;
+        };
+        match kind {
+            "head" => rest.clone_into(&mut head),
+            "failed" => {
+                let Some((id, name)) = rest.split_once(' ') else {
+                    continue;
+                };
+                let digits = !id.is_empty() && id.bytes().all(|byte| byte.is_ascii_digit());
+                failed.push(serde_json::json!({
+                    "id": id,
+                    "name": name,
+                    "read": digits && read(id),
+                }));
+            }
+            "running" => running.push(serde_json::Value::from(rest)),
+            _ => {}
+        }
+    }
+    serde_json::json!({"head": head, "failed": failed, "running": running})
+}
+
+/// Remove this branch's red-head record: a green head owes no push a read.
+///
+/// # Errors
+///
+/// A record that exists and will not be removed.
+pub fn clear_red_head(root: &Path, branch: &str) -> Result<()> {
+    let Some(path) = red_head_path(root, branch) else {
+        return Ok(());
+    };
+    match std::fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error)
+            .with_context(|| format!("land: remove the red-head record {}", path.display())),
+    }
 }
 
 /// What the lap's push did to the branch's own ref on the remote.
@@ -2612,6 +2827,11 @@ pub fn retire_branch(root: &Path, remote: &str, branch: &str) -> Retired {
             .filter(|entry| std::fs::remove_file(entry.path()).is_ok())
             .count()
     });
+    // THE RED-HEAD RECORD IS KEYED ITS OWN WAY (`red_head_slug`, injective where
+    // the shared slug is not), so it is cleared through its own spelling rather
+    // than matched by the prefix sweep above.
+    let red = red_head_path(root, branch).filter(|path| path.is_file());
+    let receipts = receipts + usize::from(red.is_some() && clear_red_head(root, branch).is_ok());
 
     Retired {
         remote: remote_gone,
@@ -4700,6 +4920,69 @@ mod tests {
             Some(TapVerdict::Red),
             "and a red answer is an answer, which is what stops the lap"
         );
+    }
+
+    /// A RED READING NAMES ITS FAILED RUNS AND WHAT IT ABANDONED (CLOUD-2270),
+    /// over the latest run per required name: an older failed run of a name
+    /// whose newest is still going is RUNNING, never failed, and a name outside
+    /// the roster is neither.
+    #[test]
+    fn a_red_reading_names_its_failed_runs_and_what_still_runs() {
+        use crate::checks_green::{Finding, Roster, Run};
+        let run = |status: &str, conclusion: &str, name: &str, started_at: &str, id: u64| Run {
+            status: status.to_owned(),
+            conclusion: conclusion.to_owned(),
+            name: name.to_owned(),
+            started_at: started_at.to_owned(),
+            completed_at: String::new(),
+            id,
+        };
+        let roster = Roster {
+            required: vec!["macos".to_owned(), "windows".to_owned(), "linux".to_owned()],
+            absent_ok: Vec::new(),
+            answered: vec!["success".to_owned(), "failure".to_owned()],
+            fanin: None,
+        };
+        let runs = vec![
+            run("completed", "failure", "macos", "2026-01-01T00:00:00Z", 7),
+            run("completed", "failure", "linux", "2026-01-01T00:00:00Z", 8),
+            run("in_progress", "", "linux", "2026-01-01T00:05:00Z", 9),
+            run("in_progress", "", "windows", "2026-01-01T00:00:00Z", 10),
+            run("in_progress", "", "unrelated", "2026-01-01T00:00:00Z", 11),
+        ];
+        let findings = vec![Finding {
+            check: "macos".to_owned(),
+            conclusion: "failure".to_owned(),
+        }];
+        let (failed, running) = red_runs(&runs, &roster, &findings);
+        assert_eq!(failed, vec![(7, "macos".to_owned())]);
+        assert_eq!(running, vec!["linux".to_owned(), "windows".to_owned()]);
+    }
+
+    /// The record round-trips into the fact, with `read` answered per id and an
+    /// id that is not digits never asked about.
+    #[test]
+    fn a_red_head_record_projects_its_reads() {
+        let text = "head abc\nfailed 101 test (ubuntu)\nfailed 102 windows\n\
+                    failed ../x macos\nrunning linux\n";
+        let asked = std::cell::RefCell::new(Vec::new());
+        let document = red_head_document(text, |id| {
+            asked.borrow_mut().push(id.to_owned());
+            id == "101"
+        });
+        assert_eq!(
+            document,
+            serde_json::json!({
+                "head": "abc",
+                "failed": [
+                    {"id": "101", "name": "test (ubuntu)", "read": true},
+                    {"id": "102", "name": "windows", "read": false},
+                    {"id": "../x", "name": "macos", "read": false},
+                ],
+                "running": ["linux"],
+            })
+        );
+        assert_eq!(*asked.borrow(), vec!["101".to_owned(), "102".to_owned()]);
     }
 
     /// And the mapping reaches the decision: a lap that ran out of asks over a

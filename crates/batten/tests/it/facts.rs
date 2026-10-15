@@ -38,8 +38,8 @@ use batten::facts::{
     EXTERNAL, EXTRACTED, FORGE, Fact, GIT_CONFIG, GIT_HEAD, GIT_HISTORY, GIT_INDEX, GIT_RANGE,
     GIT_REF, GIT_REMOTE, GIT_STATUS, GIT_TAGS, GIT_WORKTREES, INSTANT, INVOCATIONS, KEYS, LANDING,
     LINES, Look, MINTED, PINNED, PLAN, PRODUCED, PROSPECTIVE, RECEIPTS, RECORDS, RECORDS_BLOCKED,
-    REVIEW, STAGED, STATE, STOP, SYMBOLS, Surface, TASKS, TOOL_VERDICT, TRACKED, TRAVERSALS, USES,
-    WAIVED,
+    RED_HEAD, REVIEW, STAGED, STATE, STOP, SYMBOLS, Surface, TASKS, TOOL_VERDICT, TRACKED,
+    TRAVERSALS, USES, WAIVED,
 };
 
 #[test]
@@ -163,6 +163,8 @@ fn every_fact_returns_its_stated_const() {
             Fact::Pinned => PINNED,
             // CLOUD-1978. Two file stats for this call's own prompt digest.
             Fact::DispatchCleared => DISPATCH_CLEARED,
+            // CLOUD-2270. One record read and a stat per failed run.
+            Fact::RedHead => RED_HEAD,
         }
     };
 
@@ -171,7 +173,7 @@ fn every_fact_returns_its_stated_const() {
     // rather than quietly shrinking the census.
     assert_eq!(
         Fact::ALL.len(),
-        43,
+        44,
         "the census covers every fact; update this count deliberately when the \
          model gains or loses one"
     );

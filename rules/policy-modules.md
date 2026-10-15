@@ -391,6 +391,9 @@ the gate is right to refuse.
 `input.facts["dispatch-cleared"]` is a boolean for a session-management call
 whose prompt carries both dispatch receipts (CLOUD-1978), `null` when the
 receipt store could not be located.
+`input.facts["red-head"]` is the current branch's red-head record a red landing
+stop wrote — each failed run with whether its log was read, and each check still
+running — or `null` when the branch has none (CLOUD-2270).
 `input.facts["pinned-programs"]` is the landed example; `input.facts.tasks` is
 the task runner's own argv, read from a receipt minted at session start so the
 mediated path parses no manifest (CLOUD-856); and `input.facts.extracted` is a
