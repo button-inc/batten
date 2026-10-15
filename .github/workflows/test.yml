@@ -352,17 +352,23 @@ jobs:
       - name: The dpkg-installed batten runs
         if: runner.os == 'Linux'
         run: /usr/bin/batten --version
-      - name: Install the MSI with msiexec
+      # Chocolatey's package carries dist's MSI, so installing it exercises
+      # both channels: choco hands the MSI to msiexec, into a directory the
+      # MSI's own APPLICATIONFOLDER property names.
+      - name: Pack the Chocolatey package around dist's MSI
         if: runner.os == 'Windows'
         working-directory: dist-src
-        # cmd, because a batch script waits for msiexec to finish and a
-        # PowerShell one does not.
-        shell: cmd
-        run: msiexec /i target\distrib\batten-${{ matrix.target }}.msi /qn /norestart APPLICATIONFOLDER=${{ runner.temp }}\msi
-      - name: The MSI-installed batten runs
+        shell: pwsh
+        run: choco pack packaging/chocolatey/batten.nuspec --version 0.0.0 --outdir target/distrib
+      - name: Install it with Chocolatey
+        if: runner.os == 'Windows'
+        working-directory: dist-src
+        shell: pwsh
+        run: choco install batten --source target/distrib --yes --no-progress --install-arguments=APPLICATIONFOLDER=${{ runner.temp }}/msi
+      - name: The Chocolatey-installed batten runs
         if: runner.os == 'Windows'
         shell: pwsh
-        run: ${{ runner.temp }}\msi\bin\batten.exe --version
+        run: ${{ runner.temp }}/msi/bin/batten.exe --version
 
   # --- the exit-code contract (CLOUD-110) ------------------------------------
   #

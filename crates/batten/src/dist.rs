@@ -593,6 +593,9 @@ fn run_cargo_dist(
     )?;
     writeln!(out, "checksum={}", pointer(&checksum, &package.root))?;
     writeln!(out, "manifest={}", pointer(&manifest, &package.root))?;
+    // The version a package channel stamps (CLOUD-2298): the crate's own, with
+    // no tag prefix, which is the spelling Chocolatey and nfpm want.
+    writeln!(out, "version={}", package.version)?;
     // A Windows leg's MSI (CLOUD-2298), which dist writes only for a Windows
     // target and only when `dist-workspace.toml` declares the installer.
     let msi = staged.join(format!("{}-{target}.msi", package.name));

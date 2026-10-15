@@ -509,3 +509,74 @@ fn the_retired_program_is_gone_and_its_task_name_survives() {
         "and it calls the successor verb"
     );
 }
+
+/// EVERY PACKAGE CHANNEL NAMES ITS GENERATOR, AND THE RELEASE RUNS IT
+/// (CLOUD-2298). A channel is a promise to a user of some package manager, so
+/// each one is held to two committed facts: the generator's own config declares
+/// it, and the release workflow (or, for nix, the flake) produces it. Nothing
+/// here is hand-rolled; each needle is a generator's config or invocation.
+#[test]
+fn every_declared_channel_names_its_generator() {
+    let dist_config =
+        std::fs::read_to_string(at_root("dist-workspace.toml")).expect("dist-workspace.toml");
+    let release = std::fs::read_to_string(at_root(".github/workflows/release-artifacts.yml"))
+        .expect("release-artifacts.yml");
+    let installers = dist_config
+        .lines()
+        .find(|line| line.starts_with("installers ="))
+        .expect("dist-workspace.toml declares its installers");
+
+    // cargo-dist: declared in its config, produced by its global or local step.
+    for (channel, asset) in [
+        ("shell", "target/distrib/batten-installer.sh"),
+        ("powershell", "target/distrib/batten-installer.ps1"),
+        ("homebrew", "target/distrib/batten.rb"),
+        ("npm", "target/distrib/batten-npm-package.tar.gz"),
+        ("msi", "steps.dist.outputs.msi"),
+    ] {
+        assert!(
+            installers.contains(&format!("\"{channel}\"")),
+            "cargo-dist must declare the {channel} installer"
+        );
+        assert!(
+            release.contains(asset),
+            "the release must publish the {channel} channel's {asset}"
+        );
+    }
+
+    // nfpm: one config, three Linux formats, each packed by the release.
+    let nfpm = std::fs::read_to_string(at_root("nfpm.yaml")).expect("nfpm.yaml");
+    assert!(nfpm.contains("name: batten"), "nfpm.yaml packages batten");
+    for packager in ["deb", "rpm", "apk"] {
+        assert!(
+            release.contains(&format!(
+                "nfpm package --config nfpm.yaml --packager {packager}"
+            )),
+            "the release must pack the {packager} channel with nfpm"
+        );
+    }
+
+    // Chocolatey: a nuspec wrapping dist's MSI, packed by the release.
+    let nuspec = std::fs::read_to_string(at_root("packaging/chocolatey/batten.nuspec"))
+        .expect("the Chocolatey nuspec");
+    assert!(
+        nuspec.contains("batten-x86_64-pc-windows-gnu.msi"),
+        "the Chocolatey package carries dist's MSI"
+    );
+    assert!(
+        release.contains("choco pack packaging/chocolatey/batten.nuspec"),
+        "the release must pack the Chocolatey channel"
+    );
+
+    // nix: nixpkgs' own Rust builder over the committed lockfile, pinned.
+    let flake = std::fs::read_to_string(at_root("flake.nix")).expect("flake.nix");
+    assert!(
+        flake.contains("rustPlatform.buildRustPackage")
+            && flake.contains("cargoLock.lockFile = ./Cargo.lock"),
+        "the flake builds with nixpkgs' Rust builder from Cargo.lock"
+    );
+    assert!(
+        at_root("flake.lock").is_file(),
+        "the flake's inputs are locked"
+    );
+}

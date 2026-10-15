@@ -305,13 +305,21 @@ jobs:
           TAG: ${{ inputs.tag }}
           APK: target/distrib/batten-${{ matrix.target }}.apk
         run: mise run batten -- ci step --arg-env TAG --arg-env APK -- gh release upload --clobber
-      - name: Upload the MSI to the release
+      # Chocolatey's package wraps that MSI (`packaging/chocolatey/`), packed at
+      # the crate version `batten dist` reported.
+      - name: Pack the Chocolatey package around the MSI
+        if: steps.dist.outputs.msi != ''
+        env:
+          VERSION: ${{ steps.dist.outputs.version }}
+        run: mise run batten -- ci step --arg-env VERSION -- choco pack packaging/chocolatey/batten.nuspec --outdir target/distrib --version
+      - name: Upload the MSI and the Chocolatey package to the release
         if: steps.dist.outputs.msi != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ inputs.tag }}
           MSI: ${{ steps.dist.outputs.msi }}
-        run: mise run batten -- ci step --arg-env TAG --arg-env MSI -- gh release upload --clobber
+          NUPKG: target/distrib/batten.${{ steps.dist.outputs.version }}.nupkg
+        run: mise run batten -- ci step --arg-env TAG --arg-env MSI --arg-env NUPKG -- gh release upload --clobber
       # The fragment travels to the `installers` job, which generates the
       # installers from every leg's checksum. A build artifact, not a release
       # asset: the installers are what ship.

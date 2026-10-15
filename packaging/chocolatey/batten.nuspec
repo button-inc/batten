@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The Chocolatey channel (CLOUD-2298): a package whose payload is cargo-dist's
+  MSI for x86_64-pc-windows-gnu, installed by Chocolatey's own MSI support.
+  The version is set at pack time by choco pack's version option, so nothing
+  here is rewritten per release; the MSI path is relative to this file.
+-->
+<package xmlns="http://schemas.microsoft.com/packaging/2015/06/nuspec.xsd">
+  <metadata>
+    <id>batten</id>
+    <version>0.0.0</version>
+    <title>batten</title>
+    <authors>Button Inc.</authors>
+    <owners>Button Inc.</owners>
+    <projectUrl>https://github.com/button-inc/batten</projectUrl>
+    <projectSourceUrl>https://github.com/button-inc/batten</projectSourceUrl>
+    <licenseUrl>https://github.com/button-inc/batten/blob/main/LICENSE-APACHE</licenseUrl>
+    <requireLicenseAcceptance>false</requireLicenseAcceptance>
+    <summary>Agent-era completion gate.</summary>
+    <description>Agent-era completion gate: repo-state conformance checks enforced at the agent's tool call.</description>
+    <tags>batten ci git agents conformance cli</tags>
+  </metadata>
+  <files>
+    <file src="tools\chocolateyinstall.ps1" target="tools" />
+    <file src="..\..\target\distrib\batten-x86_64-pc-windows-gnu.msi" target="tools" />
+  </files>
+</package>

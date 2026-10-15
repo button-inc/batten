@@ -143,11 +143,13 @@ fn install_sh_is_the_released_dist_installer() {
             .map(|value| value.as_str().unwrap().to_owned())
             .collect()
     };
-    assert_eq!(
-        listed("installers"),
-        ["powershell", "shell"].map(str::to_owned).into(),
-        "dist generates the POSIX installer and the same installer as ps1"
-    );
+    let installers = listed("installers");
+    for installer in ["shell", "powershell"] {
+        assert!(
+            installers.contains(installer),
+            "dist generates the POSIX installer and the same installer as ps1: {installers:?}"
+        );
+    }
 
     let workflow =
         std::fs::read_to_string(common::at_root(".github/workflows/release-artifacts.yml"))
