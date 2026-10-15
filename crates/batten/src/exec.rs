@@ -1251,7 +1251,7 @@ impl GroupRecord {
 /// Its owned group when Batten leads one, which reaches the grandchildren: TERM,
 /// then KILL to whatever is still there, as [`cancel_owned_group`] does. Never
 /// the caller's group. Then, unless it was already waited, the direct child:
-/// KILLed, whichever group it is in now, and reaped before `exec` returns.
+/// sent KILL, whichever group it is in now, and reaped before `exec` returns.
 struct Reaper {
     /// The child's pid, which is also its group's id when Batten owns one.
     child: u32,
