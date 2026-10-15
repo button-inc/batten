@@ -450,25 +450,6 @@ pub enum NativeGate {
     History,
 }
 
-impl NativeGate {
-    /// Every gate, in the order the mediated chain runs them.
-    pub const ALL: &'static [NativeGate] = &[
-        NativeGate::DestructiveReset,
-        NativeGate::Singleton,
-        NativeGate::History,
-    ];
-
-    /// The `gate = "..."` token (§6).
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            NativeGate::DestructiveReset => "destructive-reset",
-            NativeGate::Singleton => "singleton",
-            NativeGate::History => "history",
-        }
-    }
-}
-
 /// The columns a [`RuleKind::Reference`] row accepts (CLOUD-2005): its `cites`
 /// table, the citer's `glob` with one of `regex` or `format` + `node`, and the
 /// columns every reporting kind shares. A const of its own so

@@ -4602,64 +4602,59 @@ fn event_decides(event: Event) -> Option<Decision> {
     }
 }
 
-/// The severity a compiled gate runs at here, or `None` where it is off
+/// The severity a compiled gate runs at here, `allow` where it is off
 /// (CLOUD-2291).
 ///
 /// A config declaring no `native` row runs every gate at `deny`, which is what
 /// every config did before the kind existed: an engine upgrade must not take the
 /// reset gate away from a repository that never read the release notes. Once a
 /// config declares one `native` row, a gate without a row is off.
-fn native_grade(policy: &Policy, gate: NativeGate) -> Option<RuleSeverity> {
+fn native_grade(policy: &Policy, gate: NativeGate) -> RuleSeverity {
     let mut natives = policy
         .shapes
         .iter()
         .filter(|rule| rule.kind == RuleKind::Native)
         .peekable();
     if natives.peek().is_none() {
-        return Some(RuleSeverity::Deny);
+        return RuleSeverity::Deny;
     }
     natives
         .find(|rule| rule.gate == Some(gate))
-        .map(Rule::severity)
+        .map_or(RuleSeverity::Allow, Rule::severity)
 }
 
-/// Whether `gate` refuses here.
-fn native_blocks(policy: &Policy, gate: NativeGate) -> bool {
-    native_grade(policy, gate).is_some_and(|severity| blocks(severity, policy.fail_on_warning))
+/// The first compiled gate that fired at a blocking grade, disposed as its
+/// grade says (CLOUD-2291). Lifted out of [`adjudicated_call_gates`], whose line
+/// budget the grading spent.
+fn native_denial(policy: &Policy, facts: &Facts<'_>) -> Option<Decision> {
+    native_fired(facts).into_iter().find_map(|(gate, refusal)| {
+        let severity = native_grade(policy, gate);
+        blocks(severity, policy.fail_on_warning).then(|| disposed_at(severity, refusal))
+    })
 }
 
-/// The refusals of every compiled gate graded `warn` that fired on this call,
-/// delivered as advisories while the call is allowed (CLOUD-2291).
+/// The refusals of every compiled gate that fired at a reporting, non-blocking
+/// grade, delivered as advisories while the call is allowed (CLOUD-2291).
 fn native_advice(policy: &Policy, facts: &Facts<'_>) -> Vec<Refusal> {
-    let advises = |gate| {
-        native_grade(policy, gate).is_some_and(|severity| {
+    native_fired(facts)
+        .into_iter()
+        .filter(|(gate, _)| {
+            let severity = native_grade(policy, *gate);
             severity != RuleSeverity::Allow && !blocks(severity, policy.fail_on_warning)
         })
-    };
-    let mut advice = Vec::new();
-    if advises(NativeGate::DestructiveReset)
-        && let crate::facts::Look::Is(unreferenced) = facts.discards
-        && !unreferenced.is_empty()
-    {
-        advice.push(history_drop_refusal(unreferenced));
-    }
-    if advises(NativeGate::Singleton)
-        && let Some((task, holder)) = facts.singleton
-    {
-        advice.push(singleton_held_refusal(task, holder));
-    }
-    if advises(NativeGate::History)
-        && let Some(Decision::Deny(refusal)) = history_gate(facts)
-    {
-        advice.push(refusal);
-    }
-    advice
+        .map(|(_, refusal)| refusal)
+        .collect()
 }
 
-/// The compiled gates that open the mediated chain, each graded by its
-/// `native` row (CLOUD-2291), in the order the chain always ran them. Lifted out
-/// of [`adjudicated_call_gates`], whose line budget their grading spent.
-fn native_denial(policy: &Policy, facts: &Facts<'_>) -> Option<Decision> {
+/// Every compiled gate that FIRED on this call, with its refusal, in the order
+/// the mediated chain has always run them (CLOUD-2291).
+///
+/// The one place each gate's predicate is written: [`native_denial`] and
+/// [`native_advice`] differ only in which grades they take, so the deny and the
+/// advisory cannot disagree about when a gate fires. Facts first, grades after
+/// — the facts are already resolved and nearly always empty.
+fn native_fired(facts: &Facts<'_>) -> Vec<(NativeGate, Refusal)> {
+    let mut fired = Vec::new();
     // THE DESTRUCTIVE-RESET GATE (CLOUD-462), and its predicate is REACHABILITY
     // rather than the verb's spelling.
     //
@@ -4681,9 +4676,11 @@ fn native_denial(policy: &Policy, facts: &Facts<'_>) -> Option<Decision> {
     // nothing refused.
     if let crate::facts::Look::Is(unreferenced) = facts.discards
         && !unreferenced.is_empty()
-        && native_blocks(policy, NativeGate::DestructiveReset)
     {
-        return Some(Decision::Deny(history_drop_refusal(unreferenced)));
+        fired.push((
+            NativeGate::DestructiveReset,
+            history_drop_refusal(unreferenced),
+        ));
     }
     // THE SINGLETON GATE (CLOUD-438), the earliest computable moment for
     // "one `land` per clone".
@@ -4697,26 +4694,24 @@ fn native_denial(policy: &Policy, facts: &Facts<'_>) -> Option<Decision> {
     //
     // The same lock, read the same way (`task::singleton_holder`), so there is no
     // second predicate to drift.
-    if let Some((task, holder)) = facts.singleton
-        && native_blocks(policy, NativeGate::Singleton)
-    {
-        return Some(Decision::Deny(singleton_held_refusal(task, holder)));
+    if let Some((task, holder)) = facts.singleton {
+        fired.push((NativeGate::Singleton, singleton_held_refusal(task, holder)));
     }
     // THE HISTORY GATE (CLOUD-2144), in its place in the chain.
-    if native_blocks(policy, NativeGate::History) {
-        return history_gate(facts);
+    if let Some(refusal) = history_gate(facts) {
+        fired.push((NativeGate::History, refusal));
     }
-    None
+    fired
 }
 
 /// The history gate (CLOUD-2144): a config row changed by a context that has
 /// not read why it exists. Resolved at the boundary, so this is a lookup; the
 /// fact is could-not-look for every call that is not a write to the authority,
 /// and that allows.
-fn history_gate(facts: &Facts<'_>) -> Option<Decision> {
+fn history_gate(facts: &Facts<'_>) -> Option<Refusal> {
     match facts.unread_history {
         crate::facts::Look::Is(unread) if !unread.is_empty() => {
-            Some(Decision::Deny(rule_read_missing_refusal(unread)))
+            Some(rule_read_missing_refusal(unread))
         }
         _ => None,
     }
@@ -6800,7 +6795,12 @@ fn shape_rules(policy: &Policy, envelope: &Envelope, command: &str, keys: &KeyFa
 /// here (`matching_shape_rows` filters on [`blocks`]), so the remaining arm is
 /// `deny` itself.
 fn disposed(rule: &Rule, refusal: Refusal) -> Decision {
-    if rule.severity() == RuleSeverity::Ask {
+    disposed_at(rule.severity(), refusal)
+}
+
+/// [`disposed`] for a grade already read off its row (CLOUD-2291's native gates).
+fn disposed_at(severity: RuleSeverity, refusal: Refusal) -> Decision {
+    if severity == RuleSeverity::Ask {
         return Decision::Ask(refusal);
     }
     Decision::Deny(refusal)
@@ -6990,7 +6990,9 @@ pub fn policy_advice(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) ->
         return Vec::new();
     }
     // A compiled gate graded `warn` speaks here, beside the modules (CLOUD-2291).
-    let mut advice = if envelope.event == Event::PreTool && !policy.is_empty() {
+    // Under the chain's own conditions, so the warn side runs exactly where the
+    // deny side does.
+    let mut advice = if event_decides(envelope.event).is_none() && !policy.is_empty() {
         native_advice(policy, facts)
     } else {
         Vec::new()

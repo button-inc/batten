@@ -97,29 +97,20 @@ fn refused(line: &str) -> bool {
 /// next in the chain, so a history gate graded `warn` would be hidden behind a
 /// refusal that is not its own. Nothing here gates an edit but the history gate.
 fn fixture_with(name: &str, rows: &str) -> PathBuf {
-    let config = format!(
-        "version = 1\n\
-         protected = [\"guarded.txt\"]\n\n\
-         [[verb]]\n\
-         verb = \"rm\"\n\
-         effect = \"write\"\n\
-         redirect = \"restore it with git\"\n\n\
-         [[rule]]\n\
-         {ROW_LINE}\n\
-         kind = \"forbid\"\n\
-         glob = \"src/**\"\n\
-         pattern = \"never\"\n\
-         scope = \"tree\"\n\
-         severity = \"deny\"\n\
-         no_fix_reason = \"a fixture row\"\n\n\
-         {rows}"
-    );
-    Fixture::new(name)
-        .config(&config)
-        .file("guarded.txt", "guarded\n")
-        .git()
-        .base_commit()
-        .build()
+    common::adjudicable_with(
+        name,
+        &format!(
+            "[[rule]]\n\
+             {ROW_LINE}\n\
+             kind = \"forbid\"\n\
+             glob = \"src/**\"\n\
+             pattern = \"never\"\n\
+             scope = \"tree\"\n\
+             severity = \"deny\"\n\
+             no_fix_reason = \"a fixture row\"\n\n\
+             {rows}"
+        ),
+    )
 }
 
 /// Whether the host was told to refuse the call.
@@ -130,7 +121,7 @@ fn denied(line: &str) -> bool {
 /// CLOUD-2291: absent (another gate's row present), `deny` and `warn`.
 #[test]
 fn the_history_gate_runs_only_when_a_row_enables_it_at_its_severity() {
-    let row = crate::singleton_gate::native_row;
+    let row = common::native_row;
 
     let absent = fixture_with("history-native-absent", &row("singleton", "deny"));
     let line = edit_row(&absent, "s1");

@@ -1747,6 +1747,49 @@ pub(crate) fn scratch_outside_tree(group: &str, name: &str) -> PathBuf {
     make_empty(batten::scratch::root().join(group).join(in_lane(name)))
 }
 
+/// A repository whose mediated policy is adjudicable at all, with `rows`
+/// appended to its authority.
+///
+/// THE `protected` SET AND THE `[[verb]]` ROW ARE LOAD-BEARING AND MATCH NOTHING
+/// a gate case runs. `Policy::is_empty` short-circuits `adjudicate` before any
+/// gate when a config declares neither, so a fixture without them would allow
+/// every call and pass for the wrong reason. `base_commit` commits AND pins
+/// `refs/remotes/origin/main` there, so what is committed here is pushed.
+pub(crate) fn adjudicable_with(name: &str, rows: &str) -> PathBuf {
+    Fixture::new(name)
+        .config(&format!(
+            "version = 1\n\
+             protected = [\"guarded.txt\"]\n\n\
+             [[verb]]\n\
+             verb = \"rm\"\n\
+             effect = \"write\"\n\
+             redirect = \"restore it with git\"\n\n\
+             {rows}"
+        ))
+        .file("guarded.txt", "guarded\n")
+        .git()
+        .base_commit()
+        .build()
+}
+
+/// A `native` row enabling `gate` at `severity` (CLOUD-2291).
+///
+/// The id is three words for a fixture loading this repository's own
+/// vocabulary, which refuses any other arity; it is the rule id only, so its
+/// spelling decides nothing.
+pub(crate) fn native_row(gate: &str, severity: &str) -> String {
+    let id = match gate {
+        "destructive-reset" => "gate guard ahead",
+        "singleton" => "gate guard other",
+        _ => "gate guard wrong",
+    };
+    format!(
+        "[[rule]]\nid = \"{id}\"\nkind = \"native\"\ngate = \"{gate}\"\n\
+         scope = \"mediated_call\"\nseverity = \"{severity}\"\n\
+         no_fix_reason = \"the refusal is the gate's own\"\n\n"
+    )
+}
+
 /// `name` qualified by this runner's lane and invocation, so no two concurrent
 /// runs covering one binary resolve the same directory. See [`scratch`] for why
 /// that happens and why the pid rides the lane rather than every path.

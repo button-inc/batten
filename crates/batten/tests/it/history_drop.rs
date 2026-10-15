@@ -40,45 +40,18 @@ const CLASS: &str = "history drop unpushed";
 /// every reset and every case below would pass for the wrong reason. The same
 /// trap `mediated_admission.rs` records at its own fixture.
 fn fixture(name: &str) -> PathBuf {
-    Fixture::new(name)
-        .config(
-            "version = 1\n\
-             protected = [\"guarded.txt\"]\n\n\
-             [[verb]]\n\
-             verb = \"rm\"\n\
-             effect = \"write\"\n\
-             redirect = \"restore it with git\"\n",
-        )
-        .file("guarded.txt", "guarded\n")
-        .git()
-        // `base_commit` commits AND pins `refs/remotes/origin/main` at it, so
-        // everything committed here is "on a remote" as far as reachability goes.
-        .base_commit()
-        .build()
+    fixture_with(name, "")
 }
 
-/// [`fixture`]'s config with `rows` appended (CLOUD-2291).
+/// [`fixture`] with `rows` appended (CLOUD-2291).
 fn fixture_with(name: &str, rows: &str) -> PathBuf {
-    Fixture::new(name)
-        .config(&format!(
-            "version = 1\n\
-             protected = [\"guarded.txt\"]\n\n\
-             [[verb]]\n\
-             verb = \"rm\"\n\
-             effect = \"write\"\n\
-             redirect = \"restore it with git\"\n\n\
-             {rows}"
-        ))
-        .file("guarded.txt", "guarded\n")
-        .git()
-        .base_commit()
-        .build()
+    common::adjudicable_with(name, rows)
 }
 
 /// CLOUD-2291: absent (another gate's row present), `deny` and `warn`.
 #[test]
 fn the_destructive_reset_gate_runs_only_when_a_row_enables_it() {
-    let row = crate::singleton_gate::native_row;
+    let row = common::native_row;
 
     let absent = fixture_with("history-drop-native-absent", &row("singleton", "deny"));
     unpushed(&absent, "local.txt");

@@ -29,7 +29,7 @@ use crate::common;
 
 use std::path::{Path, PathBuf};
 
-use common::{Fixture, run_with_stdin, stderr};
+use common::{run_with_stdin, stderr};
 
 /// The class the gate refuses under — the engine's own token.
 const CLASS: &str = "task run twice";
@@ -40,55 +40,12 @@ const CLASS: &str = "task run twice";
 /// here, for `Policy::is_empty`'s reason — the same trap `history_drop.rs` and
 /// `mediated_admission.rs` both record at their own fixtures.
 fn fixture(name: &str) -> PathBuf {
-    Fixture::new(name)
-        .config(
-            "version = 1\n\
-             protected = [\"guarded.txt\"]\n\n\
-             [[verb]]\n\
-             verb = \"rm\"\n\
-             effect = \"write\"\n\
-             redirect = \"restore it with git\"\n",
-        )
-        .file("guarded.txt", "guarded\n")
-        .git()
-        .base_commit()
-        .build()
+    fixture_with(name, "")
 }
 
-/// [`fixture`]'s config with `rows` appended (CLOUD-2291).
+/// [`fixture`] with `rows` appended (CLOUD-2291).
 fn fixture_with(name: &str, rows: &str) -> PathBuf {
-    Fixture::new(name)
-        .config(&format!(
-            "version = 1\n\
-             protected = [\"guarded.txt\"]\n\n\
-             [[verb]]\n\
-             verb = \"rm\"\n\
-             effect = \"write\"\n\
-             redirect = \"restore it with git\"\n\n\
-             {rows}"
-        ))
-        .file("guarded.txt", "guarded\n")
-        .git()
-        .base_commit()
-        .build()
-}
-
-/// A `native` row enabling `gate` at `severity`.
-///
-/// The id is three words for the fixtures that load this repository's own
-/// authority, whose vocabulary refuses any other arity; the id is the rule id
-/// only, so its spelling decides nothing.
-pub(crate) fn native_row(gate: &str, severity: &str) -> String {
-    let id = match gate {
-        "destructive-reset" => "gate guard ahead",
-        "singleton" => "gate guard other",
-        _ => "gate guard wrong",
-    };
-    format!(
-        "[[rule]]\nid = \"{id}\"\nkind = \"native\"\ngate = \"{gate}\"\n\
-         scope = \"mediated_call\"\nseverity = \"{severity}\"\n\
-         no_fix_reason = \"the refusal is the gate's own\"\n\n"
-    )
+    common::adjudicable_with(name, rows)
 }
 
 /// CLOUD-2291: the gate runs only where a row enables it, at that row's
@@ -97,6 +54,7 @@ pub(crate) fn native_row(gate: &str, severity: &str) -> String {
 /// it and still names the class.
 #[test]
 fn the_singleton_gate_runs_only_when_a_row_enables_it_at_its_severity() {
+    let native_row = common::native_row;
     let absent = fixture_with(
         "singleton-native-absent",
         &native_row("destructive-reset", "deny"),
