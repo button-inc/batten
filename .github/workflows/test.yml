@@ -55,7 +55,7 @@ on:
       - "action.yml"
       - ".github/workflows/test.yml"
       - "crates/batten/tests/fixtures/repos/**"
-      # The installer the `installer` job proves is generated from these.
+      # The installer the `action` job's cargo-dist leg proves is generated from these.
       - "dist-workspace.toml"
       - "crates/batten/src/dist.rs"
 
@@ -67,9 +67,18 @@ concurrency:
 
 permissions: {}
 
+# The `action` job installs through mise-action for its cargo-dist leg, and an
+# install outside the lockfile's tool set must fail rather than fetch.
+env:
+  MISE_TASK_RUN_AUTO_INSTALL: "false"
+  MISE_EXEC_AUTO_INSTALL: "false"
+  MISE_LOCKFILE: "true"
+
 jobs:
   action:
-    name: action
+    # Named from `os` alone, so the `target` the matrix adds for the installer
+    # leg does not rename the required checks.
+    name: action (${{ matrix.os }})
     # Draft = still being verified locally; no CI. Also the lever a red run
     # pulls — `land` re-drafts a failing PR, and a job missing this guard would
     # keep spending while the failure is diagnosed.
@@ -81,7 +90,16 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-    timeout-minutes: 10 # budget: grandfathered measured=2026-08-11
+        # The host target each OS's cargo-dist leg builds (CLOUD-2297). Windows
+        # is the gnu triple the release ships.
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-gnu
+    timeout-minutes: 45 # budget: grandfathered measured=2026-10-15
     permissions:
       # The action downloads a release asset from this repository with the job
       # token, which is the whole of what it needs.
@@ -254,6 +272,64 @@ jobs:
       # musl asset, and runs `batten check` in the workspace root, which is now
       # the fixture repository. The step fails unless Batten exits 0.
       - uses: ./action
+
+      # --- cargo-dist's installer on this OS (CLOUD-2297) -------------------
+      #
+      # Its minimal job is installing a batten, proved here on all three OSes:
+      # cargo-dist builds this OS's archive from the PR's tree, its global step
+      # generates the shell and PowerShell installers from that archive's
+      # manifest, and the generated installer installs the binary from a
+      # `file://` release directory, which then runs. In THIS job, after the
+      # Action's own steps, so it shares the lease precondition above rather
+      # than repeating its shell. The tamper refusal is
+      # `install_web.rs::the_dist_installer_refuses_a_digest_mismatch`.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          path: dist-src
+          persist-credentials: false
+      - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5 (CLOUD-404 retry fix, now a release)
+        with:
+          version: 2026.9.1
+          working_directory: dist-src
+          install_args: rust aqua:axodotdev/cargo-dist github:rust-secure-code/cargo-auditable
+      # Its own family, written by this leg alone, as `semver` keeps one.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          # The profile is part of the key — see `ci.yml`'s `ci` job.
+          shared-key: installer-
+          workspaces: dist-src
+      - name: Add the Rust target
+        working-directory: dist-src
+        env:
+          TARGET: ${{ matrix.target }}
+        run: mise run batten -- ci step --arg-env TARGET -- rustup target add
+      - name: Build this OS's archive with cargo-dist
+        working-directory: dist-src
+        env:
+          DIST_BUILD_TOOL: cargo-dist
+          DIST_TARGET: ${{ matrix.target }}
+        run: mise run batten -- ci step --arg-env DIST_TARGET -- mise run batten -- dist
+      - name: Generate the installers from its manifest
+        working-directory: dist-src
+        run: mise exec -- dist build --artifacts=global
+      - name: Install from the generated shell installer
+        if: runner.os != 'Windows'
+        working-directory: dist-src
+        env:
+          BATTEN_DOWNLOAD_URL: file://${{ github.workspace }}/dist-src/target/distrib
+          BATTEN_UNMANAGED_INSTALL: ${{ runner.temp }}/installed
+        run: sh target/distrib/batten-installer.sh
+      - name: Install from the generated PowerShell installer
+        if: runner.os == 'Windows'
+        working-directory: dist-src
+        shell: pwsh
+        env:
+          BATTEN_DOWNLOAD_URL: file:///${{ github.workspace }}/dist-src/target/distrib
+          BATTEN_UNMANAGED_INSTALL: ${{ runner.temp }}/installed
+        run: ./target/distrib/batten-installer.ps1
+      - name: The installed batten runs
+        shell: pwsh
+        run: ${{ runner.temp }}/installed/batten --version
 
   # --- the exit-code contract (CLOUD-110) ------------------------------------
   #
@@ -759,114 +835,6 @@ jobs:
         if: ${{ steps.readable.outputs.exit-code != '2' }}
         run: exit 1
 
-  # --- cargo-dist's installer on all three platforms (CLOUD-2297) ------------
-  #
-  # The installer's minimal job is installing a batten, and this proves it does
-  # on each OS: cargo-dist builds this OS's archive from the PR's tree, its
-  # global step generates the shell and PowerShell installers from that
-  # archive's manifest, and the generated installer installs the binary from a
-  # `file://` release directory, which then runs. On Linux and macOS a tampered
-  # archive must also be refused. The PowerShell installer carries no digest
-  # check at all (cargo-dist 0.33.0), which CLOUD-2307 fixes upstream, so the
-  # refusal is not asserted on Windows until that ships.
-  installer:
-    name: installer
-    if: ${{ github.event.pull_request.draft == false }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-          - os: macos-latest
-            target: aarch64-apple-darwin
-          - os: windows-latest
-            target: x86_64-pc-windows-gnu
-    timeout-minutes: 45 # budget: unmeasured, two release-profile builds of batten
-    permissions:
-      contents: read
-      actions: write
-    env:
-      # `lockfile = false` turns the lockfile off entirely, so mise-action
-      # installs unlocked unless the job turns it back on (`lock cover partial`).
-      MISE_LOCKFILE: "true"
-    steps:
-      - name: Landing lease precondition
-        # Not on Windows, for the `action` job's reason (CLOUD-1460).
-        if: runner.os != 'Windows'
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          LEASE_HEAD_REF: ${{ github.head_ref }}
-          LEASE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          LEASE_RUN_ID: ${{ github.run_id }}
-        run: |
-          installer=$(gh api -H "Accept: application/vnd.github.raw" \
-            "repos/$GH_REPO/contents/install.sh?ref=main") || exit 0
-          printf '%s\n' "$installer" | \
-            BATTEN_VERSION_FROM_REF=main BATTEN_INSTALL_DIR="$RUNNER_TEMP/batten-bin" \
-            BATTEN_ALLOW_OFF_PATH=1 BATTEN_REQUIRE="lease guard" sh || exit 0
-          mkdir -p "$RUNNER_TEMP/batten-config" || exit 0
-          gh api -H "Accept: application/vnd.github.raw" \
-            "repos/$GH_REPO/contents/batten.toml?ref=main" \
-            >"$RUNNER_TEMP/batten-config/batten.toml" || exit 0
-          "$RUNNER_TEMP/batten-bin/batten" --config-in "$RUNNER_TEMP/batten-config" \
-            lease guard \
-            "$LEASE_HEAD_SHA" "$LEASE_HEAD_REF" "$LEASE_RUN_ID" || exit 0
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          persist-credentials: false
-      - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5 (CLOUD-404 retry fix, now a release)
-        with:
-          version: 2026.9.1
-          install_args: rust aqua:axodotdev/cargo-dist github:rust-secure-code/cargo-auditable
-      # Its own family, written by this job alone, as `semver` keeps one: the
-      # `dist` profile per OS shares an entry with no other job's build.
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          # The profile is part of the key — see `ci.yml`'s `ci` job.
-          shared-key: installer-
-      - name: Add the Rust target
-        shell: bash
-        env:
-          TARGET: ${{ matrix.target }}
-        run: mise run batten -- ci step --arg-env TARGET -- rustup target add
-      - name: Build this OS's archive with cargo-dist
-        shell: bash
-        env:
-          DIST_BUILD_TOOL: cargo-dist
-          DIST_TARGET: ${{ matrix.target }}
-        run: mise run batten -- ci step --arg-env DIST_TARGET -- mise run dist --
-      - name: Generate the installers from its manifest
-        shell: bash
-        run: mise exec -- dist build --artifacts=global
-      - name: Install from the generated shell installer
-        if: runner.os != 'Windows'
-        shell: bash
-        run: BATTEN_DOWNLOAD_URL="file://$PWD/target/distrib" BATTEN_UNMANAGED_INSTALL="$RUNNER_TEMP/installed" sh target/distrib/batten-installer.sh
-      - name: Install from the generated PowerShell installer
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $env:BATTEN_DOWNLOAD_URL = "file:///" + ((Join-Path $PWD 'target/distrib') -replace '\\', '/')
-          $env:BATTEN_UNMANAGED_INSTALL = Join-Path $env:RUNNER_TEMP 'installed'
-          ./target/distrib/batten-installer.ps1
-      - name: The installed batten runs
-        shell: bash
-        run: '"$RUNNER_TEMP/installed/batten" --version'
-      - name: Stage a tampered copy of the archive
-        if: runner.os != 'Windows'
-        shell: bash
-        env:
-          TARGET: ${{ matrix.target }}
-        run: mkdir -p "$RUNNER_TEMP/tampered" && cp "target/distrib/batten-$TARGET.tar.gz" "$RUNNER_TEMP/tampered/" && truncate -s +1 "$RUNNER_TEMP/tampered/batten-$TARGET.tar.gz"
-      - name: A tampered archive is refused and nothing is installed
-        if: runner.os != 'Windows'
-        shell: bash
-        run: '! BATTEN_DOWNLOAD_URL="file://$RUNNER_TEMP/tampered" BATTEN_UNMANAGED_INSTALL="$RUNNER_TEMP/refused" sh target/distrib/batten-installer.sh && test ! -e "$RUNNER_TEMP/refused/batten"'
-
   action-final:
     name: action-final
     # `always()`, for the reason `ci.yml`'s `final` carries at length: an
@@ -877,7 +845,7 @@ jobs:
     # passed. Without `always()` at all this job is skipped whenever a leg fails,
     # and `checks-green` reads a skip as no answer and polls forever.
     if: ${{ always() && github.event.pull_request.draft == false }}
-    needs: [action, action-violation, action-deny, action-usage, action-internal, installer]
+    needs: [action, action-violation, action-deny, action-usage, action-internal]
     runs-on: ubuntu-latest
     timeout-minutes: 5 # budget: grandfathered measured=2026-08-12
     permissions:

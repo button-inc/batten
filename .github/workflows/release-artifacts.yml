@@ -327,7 +327,7 @@ jobs:
     name: installers
     needs: dist
     runs-on: ubuntu-latest
-    timeout-minutes: 15 # budget: unmeasured, a manifest merge and two templates
+    timeout-minutes: 15 # budget: grandfathered measured=2026-10-15
     permissions:
       contents: write # upload the installers to the release
     steps:

@@ -564,7 +564,7 @@ fn run_cargo_dist(
     let staged = package.target_dir.join(CARGO_DIST_DIR);
     std::fs::create_dir_all(&staged)?;
     let manifest = staged.join(format!("{target}-dist-manifest.json"));
-    std::fs::write(&manifest, fragment)?;
+    crate::durable::replace(&manifest, fragment)?;
 
     let dist_archive = staged.join(cargo_dist_archive(&package.name, target));
     let checksum = staged.join(format!(
