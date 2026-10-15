@@ -791,8 +791,6 @@ mod tests {
         );
     }
 
-    /// dist's name carries no version and keeps the per-target extension; the
-    /// versioned stem the engine fetches is a different name for the same target.
     /// THE MSI'S WIX TABLE IS PINNED HERE, so editing it touches this file,
     /// which `test.yml`'s path filter watches, and the three-OS MSI and
     /// Chocolatey install proof runs. The filter does not watch
@@ -814,6 +812,8 @@ mod tests {
         assert_eq!(wix.as_table().map(toml::Table::len), Some(4));
     }
 
+    /// dist's name carries no version and keeps the per-target extension; the
+    /// versioned stem the engine fetches is a different name for the same target.
     #[test]
     fn cargo_dists_archive_name_is_versionless_and_differs_from_the_stem() {
         assert_eq!(
