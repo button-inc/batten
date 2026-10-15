@@ -611,13 +611,17 @@ fn a_feat_row_without_prior_art_is_not_ready() {
             stderr(&output)
         );
     }
+    let without_prior_art = || {
+        let mut object = complete_claims();
+        object
+            .as_object_mut()
+            .expect("the fixture is an object")
+            .remove("prior_art");
+        object
+    };
     // And `feat!` is a `feat`.
-    let mut breaking = complete_claims();
+    let mut breaking = without_prior_art();
     breaking["commit_type"] = serde_json::json!("feat!");
-    breaking
-        .as_object_mut()
-        .expect("the fixture is an object")
-        .remove("prior_art");
     let output = lint(&dir, &dated_claims(&breaking, AFTER_CUTOVER));
     assert!(
         stderr(&output).contains("claim-missing (prior_art)"),
@@ -627,12 +631,7 @@ fn a_feat_row_without_prior_art_is_not_ready() {
 
     // THE RATCHET: the same `feat` row created before the declared cutover is
     // judged as it was groomed, so the queue already Ready stays Ready.
-    let mut groomed_before = complete_claims();
-    groomed_before
-        .as_object_mut()
-        .expect("the fixture is an object")
-        .remove("prior_art");
-    let output = lint(&dir, &dated_claims(&groomed_before, BEFORE_CUTOVER));
+    let output = lint(&dir, &dated_claims(&without_prior_art(), BEFORE_CUTOVER));
     assert_eq!(code(&output), 0, "{}", stderr(&output));
 }
 

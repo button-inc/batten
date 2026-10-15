@@ -1027,23 +1027,8 @@ pub fn lint(grammar: &Grammar, payload: &Payload, root: &Path) -> Result<Report>
     // the board's whole ready frontier dark in one step — CLOUD-858's measured
     // shape, where three rows did exactly that.
     //
-    // COULD-NOT-LOOK PASSES, TWICE OVER, and both are the same posture. A
-    // consumer that declares no cutover has not asked for the ratchet, and a
-    // payload carrying no creation instant cannot be placed against one — so each
-    // leaves the row judged exactly as it was before this clause existed.
-    // Reading either as "past the cutover" would turn a verdict about the
-    // environment into a verdict about the row.
-    //
-    // Both sides are fixed-width ISO-8601 UTC as the tracker stamps them, so a
-    // lexical comparison IS a chronological one — the same reading, and the same
-    // reasoning, as `policy/filed-here.rego`'s `predates_the_branch`.
-    if !structured
-        && let Some(from) = grammar.prose_dialect_required_from.as_deref()
-        && payload
-            .created_at
-            .as_deref()
-            .is_some_and(|created| created >= from)
-    {
+    // Past the declared cutover, read as [`owed_from`] reads every ratchet here.
+    if !structured && owed_from(grammar.prose_dialect_required_from.as_deref(), payload) {
         report.findings.push(Finding {
             line: ready_start,
             rule: "claims-object-absent".to_owned(),
@@ -1074,12 +1059,7 @@ pub fn lint(grammar: &Grammar, payload: &Payload, root: &Path) -> Result<Report>
     // environment that cannot be asked). `review::for_body` returns
     // `CouldNotLook` for the third, so the only refusal left is a review that
     // was asked for and did not answer.
-    if let Some(from) = grammar.pressure_test_required_from.as_deref()
-        && payload
-            .created_at
-            .as_deref()
-            .is_some_and(|created| created >= from)
-    {
+    if owed_from(grammar.pressure_test_required_from.as_deref(), payload) {
         for row in &grammar.pressure_test_reviews {
             if matches!(
                 crate::review::for_body(root, row, &payload.description),
@@ -1347,6 +1327,8 @@ fn check_claims(
         .get("commit_type")
         .and_then(serde_json::Value::as_str)
         .map(|declared| declared.trim().to_ascii_lowercase());
+    // `eq_ignore_ascii_case` is redundant over the lowercased value and kept: it
+    // is the text `empty-tests-admitted-beyond-docs` rewrites.
     let prose_only = declared
         .as_deref()
         .is_some_and(|declared| declared.eq_ignore_ascii_case("docs") || declared == "none");
@@ -1357,15 +1339,7 @@ fn check_claims(
     let owes_prior_art = declared
         .as_deref()
         .is_some_and(|declared| declared.trim_end_matches('!') == "feat")
-        && grammar
-            .prior_art_required_from
-            .as_deref()
-            .is_some_and(|from| {
-                payload
-                    .created_at
-                    .as_deref()
-                    .is_some_and(|created| created >= from)
-            });
+        && owed_from(grammar.prior_art_required_from.as_deref(), payload);
     for key in REQUIRED_CLAIMS
         .into_iter()
         .chain(owes_prior_art.then_some("prior_art"))
@@ -1475,6 +1449,24 @@ fn check_claimed_prior_art(claims: &serde_json::Value, line: usize, report: &mut
             });
         }
     }
+}
+
+/// Whether a row created at `payload`'s instant is past the `from` cutover, so
+/// the ratchet that cutover declares applies to it.
+///
+/// COULD-NOT-LOOK PASSES, TWICE OVER, and both are the same posture. A consumer
+/// that declares no cutover has not asked for the ratchet, and a payload carrying
+/// no creation instant cannot be placed against one — so each leaves the row
+/// judged exactly as it was before the clause existed. Reading either as "past
+/// the cutover" would turn a verdict about the environment into a verdict about
+/// the row.
+///
+/// Both sides are fixed-width ISO-8601 UTC as the tracker stamps them, so a
+/// lexical comparison IS a chronological one — the same reading, and the same
+/// reasoning, as `policy/filed-here.rego`'s `predates_the_branch`.
+fn owed_from(from: Option<&str>, payload: &Payload) -> bool {
+    from.zip(payload.created_at.as_deref())
+        .is_some_and(|(from, created)| created >= from)
 }
 
 /// Whether `entry[key]` is a string with something in it — the one reading of
