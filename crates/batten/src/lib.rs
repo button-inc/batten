@@ -20416,9 +20416,6 @@ fn extracted_facts(
     let Some(path) = envelope.transcript.as_deref() else {
         return facts::Look::CouldNotLook;
     };
-    let Ok(body) = std::fs::read_to_string(path) else {
-        return facts::Look::CouldNotLook;
-    };
     // THE GRAMMAR IS THE POLICY'S HOST, not a guess (CLOUD-1624). `--harness`
     // declared it, so this path never has to sniff one; an unsurveyed host has no
     // `RecordShape` to parse with and joins the could-not-look answers above
@@ -20427,10 +20424,11 @@ fn extracted_facts(
     let hook::TranscriptShape::Surveyed(shape) = policy.harness().transcript_shape() else {
         return facts::Look::CouldNotLook;
     };
-    // POINTER-ONLY EVEN ON FAILURE: `parse` reports a `<label>:<line>` pointer
-    // and never the line, and the label here is the path the host named rather
-    // than anything read out of the file.
-    let Ok(stream) = transcript::parse(&body, path, shape) else {
+    // ONLY WHAT WAS APPENDED SINCE THE LAST CALL (CLOUD-2315): the whole file
+    // was parsed on every call — 22 ms at 8.7 MB, growing with the session.
+    // `transcript::tally_appended` answers what a whole parse answers, including
+    // could-not-look on a line that will not decode.
+    let Some(stream) = transcript::tally_appended(Path::new(path), shape) else {
         return facts::Look::CouldNotLook;
     };
     // PER-EXTRACTION COULD-NOT-LOOK (CLOUD-1344). An extraction this host records

@@ -3906,8 +3906,11 @@ impl Extraction {
     /// Exhaustive with no wildcard arm, like every other axis match in this
     /// module: a member added later decides here or fails to compile, rather than
     /// defaulting to a count of something else.
+    ///
+    /// Generic over [`crate::transcript::Summary`] so the hook's incremental
+    /// [`crate::transcript::Tally`] is read by this same decision (CLOUD-2315).
     #[must_use]
-    pub fn of(self, stream: &crate::transcript::Stream) -> Option<usize> {
+    pub fn of(self, stream: &impl crate::transcript::Summary) -> Option<usize> {
         use crate::transcript::Kind;
         let records = stream.records();
         let recorded = |kind: Kind| records.contains(&kind);

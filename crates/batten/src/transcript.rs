@@ -628,6 +628,276 @@ pub struct Repeats {
     pub agent_turn_run: usize,
 }
 
+/// What [`Stream::counts`], [`Stream::records`] and [`Stream::repeats`] answer,
+/// carried as a FORWARD fold so a transcript can be read once and then only its
+/// new tail (CLOUD-2315).
+///
+/// Every mediated call used to read and parse the WHOLE session transcript to
+/// answer a declared extraction — measured, 22 ms on an 8.7 MB transcript, and
+/// growing with the session against a 10 ms per-call budget. A transcript is
+/// append-only JSONL, so the answer for `prefix ++ tail` is the prefix's fold
+/// continued over the tail, provided every member folds forward:
+///
+/// * `counts` and `records` are sums and a set union — they just add;
+/// * `agent_turn_run`, a TRAILING run read backwards, is forwards a counter an
+///   assistant turn bumps and a tool call or an operator turn resets;
+/// * `unanswered_human_calls`, also read backwards, is forwards the tool calls
+///   since the last marker — assistant text or an authored operator turn —
+///   counted only when that marker was the operator.
+///
+/// `a_split_fold_answers_as_the_whole_parse` holds the equivalence over every
+/// split point of generated sessions, so the backward scans stay the
+/// specification and this is only a faster way to compute them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, serde::Deserialize)]
+pub struct Tally {
+    turns: usize,
+    tool_calls: usize,
+    tool_errors: usize,
+    hook_decisions: usize,
+    hook_denials: usize,
+    saw_turns: bool,
+    saw_tool_calls: bool,
+    saw_tool_results: bool,
+    saw_hook_decisions: bool,
+    agent_turn_run: usize,
+    /// The last marker was an authored operator turn (`true`) or assistant text
+    /// (`false`); `None` before either.
+    operator_marker: Option<bool>,
+    calls_since_marker: usize,
+}
+
+/// The transcript at `path`, tallied by reading only what was appended since the
+/// last call (CLOUD-2315). `None` is could-not-look, exactly where a whole parse
+/// would have failed.
+///
+/// **The same answer as parsing the whole file.** The persisted state advances
+/// over COMPLETE lines only; an unterminated final line — a host mid-write — is
+/// parsed into a copy for this answer and never persisted, so a half-written
+/// line is could-not-look now, as a whole parse would say, and is read whole
+/// once its newline lands.
+///
+/// **Reset, never trusted, when the file is not the one tallied**: the entry is
+/// keyed on the canonical path plus device and inode, and carries the length it
+/// covered and a digest of the file's first line. A shorter file, a different
+/// first line (an inode reused for a new session), or any unreadable state is a
+/// full re-read from byte zero.
+#[must_use]
+pub fn tally_appended(path: &Path, shape: RecordShape) -> Option<Tally> {
+    let canonical = std::fs::canonicalize(path).ok()?;
+    let label = canonical.to_string_lossy().into_owned();
+    let meta = std::fs::metadata(&canonical).ok()?;
+    let entry = crate::cache::root_under(&crate::state::state_root().ok()?)?
+        .join("transcript")
+        .join(blake3::hash(label.as_bytes()).to_hex().as_str());
+    let key = crate::cache::key(
+        TALLY_FORMAT,
+        &[label.as_bytes(), file_identity(&meta).as_bytes()],
+    );
+    use std::io::{Read as _, Seek as _};
+    let mut file = std::fs::File::open(&canonical).ok()?;
+    let len = usize::try_from(meta.len()).ok()?;
+    // THE HEAD LINE AND THE TAIL, NEVER THE WHOLE FILE: reading 8.7 MB to skip
+    // parsing it would keep most of the cost this exists to remove.
+    let mut first = Vec::new();
+    (&mut file).take(HEAD_PROBE).read_to_end(&mut first).ok()?;
+    let head = blake3::hash(
+        first
+            .split(|byte| *byte == b'\n')
+            .next()
+            .unwrap_or_default(),
+    )
+    .to_hex()
+    .to_string();
+    let saved = crate::cache::read(&entry, &key)
+        .and_then(|body| serde_json::from_slice::<Tallied>(&body).ok())
+        .filter(|saved| saved.head == head && saved.offset <= len);
+    let (mut tally, offset) =
+        saved.map_or((Tally::default(), 0), |saved| (saved.tally, saved.offset));
+    file.seek(std::io::SeekFrom::Start(u64::try_from(offset).ok()?))
+        .ok()?;
+    let mut tail = Vec::new();
+    file.read_to_end(&mut tail).ok()?;
+    let whole = tail
+        .iter()
+        .rposition(|byte| *byte == b'\n')
+        .map_or(0, |at| at + 1);
+    let (complete, partial) = tail.as_slice().split_at(whole);
+    parse(std::str::from_utf8(complete).ok()?, &label, shape)
+        .ok()?
+        .fold_into(&mut tally);
+    let advanced = Tallied {
+        offset: offset + whole,
+        head,
+        tally,
+    };
+    if whole > 0
+        && let Ok(body) = serde_json::to_vec(&advanced)
+    {
+        crate::cache::write(&entry, &key, &body);
+    }
+    if !partial.iter().all(u8::is_ascii_whitespace) {
+        parse(std::str::from_utf8(partial).ok()?, &label, shape)
+            .ok()?
+            .fold_into(&mut tally);
+    }
+    Some(tally)
+}
+
+/// How much of the file's start is read to find its first line.
+const HEAD_PROBE: u64 = 64 * 1024;
+
+/// Bump on any change to [`Tally`] or [`Tallied`]; every older entry misses.
+const TALLY_FORMAT: &str = "batten-transcript-tally-1";
+
+/// What [`tally_appended`] persists between calls.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct Tallied {
+    /// Bytes of the file the tally covers, always ending on a newline.
+    offset: usize,
+    /// Digest of the file's first line, so a reused inode is not mistaken for
+    /// the session that was tallied.
+    head: String,
+    tally: Tally,
+}
+
+/// Device and inode, so a replaced file at the same path is another key.
+fn file_identity(meta: &std::fs::Metadata) -> String {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        format!("{}:{}", meta.dev(), meta.ino())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = meta;
+        String::new()
+    }
+}
+
+/// What an extraction reads off a session, whether parsed whole ([`Stream`]) or
+/// folded incrementally ([`Tally`]) — one reader of both, so
+/// `crate::facts::Extraction::of` holds one decision rather than two.
+pub trait Summary {
+    /// As [`Stream::counts`].
+    fn counts(&self) -> Counts;
+    /// As [`Stream::records`].
+    fn records(&self) -> std::collections::BTreeSet<Kind>;
+    /// As [`Stream::repeats`].
+    fn repeats(&self) -> Repeats;
+}
+
+impl Summary for Stream {
+    fn counts(&self) -> Counts {
+        Stream::counts(self)
+    }
+    fn records(&self) -> std::collections::BTreeSet<Kind> {
+        Stream::records(self)
+    }
+    fn repeats(&self) -> Repeats {
+        Stream::repeats(self)
+    }
+}
+
+impl Summary for Tally {
+    fn counts(&self) -> Counts {
+        Tally::counts(self)
+    }
+    fn records(&self) -> std::collections::BTreeSet<Kind> {
+        Tally::records(self)
+    }
+    fn repeats(&self) -> Repeats {
+        Tally::repeats(self)
+    }
+}
+
+impl Tally {
+    fn fold(&mut self, event: &Event) {
+        match event {
+            Event::Turn(role, origin) => {
+                self.turns += 1;
+                self.saw_turns = true;
+                match role {
+                    Role::Assistant => self.agent_turn_run += 1,
+                    Role::User => {
+                        self.agent_turn_run = 0;
+                        if *origin == Origin::Authored {
+                            self.operator_marker = Some(true);
+                            self.calls_since_marker = 0;
+                        }
+                    }
+                }
+            }
+            Event::TurnEnd(_) => self.saw_turns = true,
+            Event::ToolCall { .. } => {
+                self.tool_calls += 1;
+                self.saw_tool_calls = true;
+                self.agent_turn_run = 0;
+                self.calls_since_marker += 1;
+            }
+            Event::ToolResult { failed, .. } => {
+                self.saw_tool_results = true;
+                if *failed {
+                    self.tool_errors += 1;
+                }
+            }
+            Event::HookDecision { exit_code, .. } => {
+                self.saw_hook_decisions = true;
+                self.hook_decisions += 1;
+                if *exit_code == DENY_EXIT {
+                    self.hook_denials += 1;
+                }
+            }
+            Event::AssistantText => {
+                self.operator_marker = Some(false);
+                self.calls_since_marker = 0;
+            }
+            Event::MemoryInjection { .. }
+            | Event::HookOutput { .. }
+            | Event::SessionBoundary
+            | Event::Refused { .. } => {}
+        }
+    }
+
+    /// As [`Stream::counts`].
+    #[must_use]
+    pub fn counts(&self) -> Counts {
+        Counts {
+            turns: self.turns,
+            tool_calls: self.tool_calls,
+            tool_errors: self.tool_errors,
+            hook_decisions: self.hook_decisions,
+            hook_denials: self.hook_denials,
+        }
+    }
+
+    /// As [`Stream::records`].
+    #[must_use]
+    pub fn records(&self) -> std::collections::BTreeSet<Kind> {
+        [
+            (self.saw_turns, Kind::Turns),
+            (self.saw_tool_calls, Kind::ToolCalls),
+            (self.saw_tool_results, Kind::ToolResults),
+            (self.saw_hook_decisions, Kind::HookDecisions),
+        ]
+        .into_iter()
+        .filter_map(|(saw, kind)| saw.then_some(kind))
+        .collect()
+    }
+
+    /// As [`Stream::repeats`].
+    #[must_use]
+    pub fn repeats(&self) -> Repeats {
+        Repeats {
+            unanswered_human_calls: if self.operator_marker == Some(true) {
+                self.calls_since_marker
+            } else {
+                0
+            },
+            agent_turn_run: self.agent_turn_run,
+        }
+    }
+}
+
 /// Whether the transcript capability is available for this run.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Capability {
@@ -804,6 +1074,13 @@ impl Stream {
             repeats.unanswered_human_calls = calls;
         }
         repeats
+    }
+
+    /// Fold every record, in file order, into `tally` (CLOUD-2315).
+    pub fn fold_into(&self, tally: &mut Tally) {
+        for record in &self.records {
+            tally.fold(&record.event);
+        }
     }
 
     /// How many times each memory document was delivered into this session
@@ -2058,6 +2335,117 @@ mod tests {
 
     fn sample() -> Stream {
         parse(SAMPLE, "t.jsonl", RecordShape::Jsonl).expect("parses")
+    }
+
+    /// One record of every shape the backward scans tell apart: an assistant
+    /// tool call, a hook decision (denying and not), a failed and a clean tool
+    /// result, an authored operator turn, assistant text, an empty assistant
+    /// turn, and a line the counts ignore.
+    const POOL: [&str; 9] = [
+        r#"{"type":"assistant","sessionId":"s-1","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls"}}]}}"#,
+        r#"{"type":"attachment","sessionId":"s-1","attachment":{"type":"hook_success","hookEvent":"PreToolUse","hookName":"PreToolUse:Bash","toolUseID":"t1","exitCode":2,"stderr":"x"}}"#,
+        r#"{"type":"attachment","sessionId":"s-1","attachment":{"type":"hook_success","hookEvent":"PreToolUse","hookName":"PreToolUse:Bash","toolUseID":"t1","exitCode":0}}"#,
+        r#"{"type":"user","sessionId":"s-1","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","is_error":true,"content":"x"}]}}"#,
+        r#"{"type":"user","sessionId":"s-1","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","is_error":false,"content":"x"}]}}"#,
+        r#"{"type":"user","sessionId":"s-1","message":{"role":"user","content":"an operator message"}}"#,
+        r#"{"type":"assistant","sessionId":"s-1","message":{"role":"assistant","content":[{"type":"text","text":"an answer"}]}}"#,
+        r#"{"type":"assistant","sessionId":"s-1","message":{"role":"assistant","content":[]}}"#,
+        r#"{"type":"queue-operation","sessionId":"s-1","content":"ignored"}"#,
+    ];
+
+    /// CLOUD-2315: the incremental reader answers what a whole parse answers as
+    /// the file grows, could-not-look on a half-written final line, and starts
+    /// over — never trusting its entry — when the file shrank or was replaced.
+    //MUTANT tally-entry-trusted-after-replace|s@^        .filter(\|saved\| saved.head == head \&\& saved.offset <= len);$@        .filter(\|_\| true);@|the_incremental_reader_answers_as_a_whole_parse
+    #[test]
+    fn the_incremental_reader_answers_as_a_whole_parse() {
+        let dir = std::env::temp_dir().join(format!("batten-tally-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("scratch");
+        crate::testing::contain_state(&dir.join("state"));
+        let path = dir.join("session.jsonl");
+        let whole = |text: &str| parse(text, "t", RecordShape::Jsonl).expect("parses");
+        let mut written = String::new();
+        for line in POOL.iter().chain(POOL.iter().rev()) {
+            written.push_str(line);
+            written.push('\n');
+            std::fs::write(&path, &written).expect("append");
+            let tally = tally_appended(&path, RecordShape::Jsonl).expect("tallies");
+            let expected = whole(&written);
+            assert_eq!(tally.counts(), expected.counts());
+            assert_eq!(tally.repeats(), expected.repeats());
+            assert_eq!(tally.records(), expected.records());
+        }
+        std::fs::write(&path, format!("{written}{{\"type\":\"assi")).expect("half a line");
+        assert!(
+            tally_appended(&path, RecordShape::Jsonl).is_none(),
+            "a half-written final line is could-not-look, as a whole parse says"
+        );
+        let shorter = format!("{}\n", POOL[5]);
+        std::fs::write(&path, &shorter).expect("truncate");
+        assert_eq!(
+            tally_appended(&path, RecordShape::Jsonl).map(|tally| tally.counts()),
+            Some(whole(&shorter).counts()),
+            "a file shorter than the tallied offset is read from the start"
+        );
+        let replaced = format!("{}\n{}\n", POOL[6], POOL[0]);
+        std::fs::write(&path, &replaced).expect("replace");
+        assert_eq!(
+            tally_appended(&path, RecordShape::Jsonl).map(|tally| tally.counts()),
+            Some(whole(&replaced).counts()),
+            "another first line is another session, read from the start"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// CLOUD-2315: folding a session's prefix and then its tail answers exactly
+    /// what one parse of the whole session answers, at EVERY split point, over
+    /// generated sessions mixing every record shape. The backward scans are the
+    /// specification; the fold must never disagree with them.
+    //MUTANT tally-text-not-a-marker|s@^                self.operator_marker = Some(false);$@                {}@|a_split_fold_answers_as_the_whole_parse
+    #[test]
+    fn a_split_fold_answers_as_the_whole_parse() {
+        let mut seed: u64 = 0x2315;
+        let mut next = |bound: usize| {
+            seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+            usize::try_from(seed >> 33).unwrap_or(0) % bound
+        };
+        let mut sessions_with_an_unanswered_call = 0;
+        for _ in 0..300 {
+            let length = next(24);
+            let lines: Vec<&str> = (0..length).map(|_| POOL[next(POOL.len())]).collect();
+            let whole = parse(&lines.join("\n"), "t.jsonl", RecordShape::Jsonl).expect("parses");
+            if whole.repeats().unanswered_human_calls > 0 {
+                sessions_with_an_unanswered_call += 1;
+            }
+            for split in 0..=lines.len() {
+                let mut tally = Tally::default();
+                for part in [&lines[..split], &lines[split..]] {
+                    parse(&part.join("\n"), "t.jsonl", RecordShape::Jsonl)
+                        .expect("parses")
+                        .fold_into(&mut tally);
+                }
+                assert_eq!(
+                    tally.counts(),
+                    whole.counts(),
+                    "counts at {split}: {lines:?}"
+                );
+                assert_eq!(
+                    tally.records(),
+                    whole.records(),
+                    "kinds at {split}: {lines:?}"
+                );
+                assert_eq!(
+                    tally.repeats(),
+                    whole.repeats(),
+                    "repeats at {split}: {lines:?}"
+                );
+            }
+        }
+        assert!(
+            sessions_with_an_unanswered_call > 10,
+            "the generator must reach the ignored-operator shape it exists to test"
+        );
     }
 
     /// The home a host would hand over, in the shape the resolver takes it.

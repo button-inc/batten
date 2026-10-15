@@ -326,10 +326,6 @@ fn temp_name(target: &Path, pid: u32, nanos: u128, sequence: u64) -> PathBuf {
     target.with_file_name(format!(".{name}.{pid}.{nanos}.{sequence}.tmp"))
 }
 
-fn write_temp(temp: &Path, target: &Path, contents: &[u8]) -> std::io::Result<()> {
-    write_temp_as(temp, target, contents, Persist::Synced)
-}
-
 fn write_temp_as(
     temp: &Path,
     target: &Path,

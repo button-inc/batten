@@ -1768,6 +1768,7 @@ pub fn bytecode_evaluations() -> usize {
 }
 
 /// The guard [`answer_scope`] returns: the memo dies with it.
+#[derive(Debug)]
 pub struct AnswerScope;
 
 impl Drop for AnswerScope {
