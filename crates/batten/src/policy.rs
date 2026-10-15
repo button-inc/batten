@@ -1056,7 +1056,13 @@ pub fn load(
             // refuse, arriving through the one source that bypasses it.
             if checks != ModuleChecks::SkipOnHotPath {
                 check_tree_paths_are_emittable(rule, &bundle, source_key)?;
-                check_no_inline_regex(rule, &bundle, &declared_patterns, source_key)?;
+                check_no_inline_regex(
+                    rule,
+                    &bundle,
+                    &declared_patterns,
+                    source_key,
+                    &BTreeMap::new(),
+                )?;
                 check_verdicts_are_declared(rule, &bundle, &registry, source_key)?;
                 record_raised(rule, &bundle, &mut emitted, &mut per_rule);
             }
@@ -1090,7 +1096,13 @@ pub fn load(
 
         if checks != ModuleChecks::SkipOnHotPath {
             check_tree_paths_are_emittable(rule, &bundle, where_it_came_from)?;
-            check_no_inline_regex(rule, &bundle, &declared_patterns, where_it_came_from)?;
+            check_no_inline_regex(
+                rule,
+                &bundle,
+                &declared_patterns,
+                where_it_came_from,
+                &ejected_originals(&sources),
+            )?;
             check_verdicts_are_declared(rule, &bundle, &registry, where_it_came_from)?;
             record_raised(rule, &bundle, &mut emitted, &mut per_rule);
         }
@@ -1151,7 +1163,41 @@ fn preset_sources(
     // deciding task argv on any host. Filtering rather than refusing the
     // whole preset is what keeps the second one working off GitHub.
     let declared_provider = rule.provider.as_deref();
-    let sources: Vec<(String, String)> = manifest.modules_for(rule.scope, declared_provider);
+    // AN `except` NAMING NO MODULE IS REFUSED (CLOUD-2290), because it excepts
+    // nothing: the vendored module it meant to switch off keeps running beside
+    // the copy that was meant to replace it, and the two collide or, worse, both
+    // decide. Checked against the module's scope too, since a row compiles only
+    // its own scope's modules and excepting one from the other scope is the same
+    // no-op.
+    if let Some(unknown) = rule.except.iter().find(|excepted| {
+        manifest
+            .module(excepted)
+            .is_none_or(|module| module.scope != rule.scope)
+    }) {
+        let here: Vec<&str> = manifest
+            .modules
+            .iter()
+            .filter(|module| module.scope == rule.scope)
+            .map(crate::preset::PresetModule::name)
+            .collect();
+        return Err(UsageError::raise(format!(
+            "rule `{}` excepts `{unknown}`, which the preset `{name}` does not ship at scope \
+             `{}`; the modules there are {}",
+            rule.id,
+            rule.scope.as_str(),
+            here.join(", ")
+        )));
+    }
+    let sources: Vec<(String, String)> =
+        manifest.modules_for(rule.scope, declared_provider, &rule.except);
+    if sources.is_empty() && !rule.except.is_empty() {
+        return Err(UsageError::raise(format!(
+            "rule `{}` excepts every module the preset `{name}` compiles at scope `{}`, so it \
+             decides nothing; delete the row instead",
+            rule.id,
+            rule.scope.as_str()
+        )));
+    }
     // REFUSED WHEN THE SELECTION IS EMPTY, for the reason the scope arm
     // refuses: a row that compiles no modules is a rule that decides
     // nothing, and shipping it silently is the state this row exists to
@@ -1178,6 +1224,20 @@ fn preset_sources(
 /// the line ceiling, and the seam is where the I/O already was: everything past
 /// this read is pure, which is what lets [`compile`]'s composition property be
 /// tested without a filesystem.
+/// Each source `batten preset eject` wrote, keyed by path, to the vendored
+/// module source its header names (CLOUD-2290). A header naming nothing this
+/// binary ships maps to nothing, so it exempts nothing.
+fn ejected_originals(sources: &[(String, String)]) -> BTreeMap<String, &'static str> {
+    sources
+        .iter()
+        .filter_map(|(path, text)| {
+            let (preset, module, _) = crate::preset::ejected_from(text)?;
+            let original = crate::preset::find(&preset)?.module(&module)?.source;
+            Some((path.clone(), original))
+        })
+        .collect()
+}
+
 fn read_sources(
     root: &Path,
     paths: &[String],
@@ -2922,6 +2982,8 @@ fn check_no_inline_regex(
     bundle: &Bundle,
     declared: &BTreeSet<&str>,
     source: &str,
+    // Module path to the VENDORED source it was ejected from (CLOUD-2290).
+    vendored: &BTreeMap<String, &'static str>,
 ) -> Result<()> {
     let Some(described) = bundle.described() else {
         // Could-not-look on the AST is not a refusal, for the reason the sibling
@@ -2958,9 +3020,18 @@ fn check_no_inline_regex(
         return Ok(());
     }
     for module in described {
+        // The vendored source of an ejected copy (CLOUD-2290): what the copy
+        // inherits from it is exempt below, and nothing else.
+        let original = vendored.get(&module.path);
         for rule_ast in &module.rules {
             for referenced in &rule_ast.pattern_refs {
                 if declared.contains(referenced.as_str()) {
+                    continue;
+                }
+                // A preset may read a consumer pattern that is optional — "no
+                // row, no grant" — and its copy reads it the same way.
+                let spelled = format!("data.batten.patterns[\"{referenced}\"]");
+                if original.is_some_and(|text| text.contains(&spelled)) {
                     continue;
                 }
                 let mut known: Vec<&str> = declared.iter().copied().collect();
@@ -2981,7 +3052,16 @@ reference would be undefined and the predicate silent. Declared: {}",
             if rule_ast.name.starts_with("test_") {
                 continue;
             }
-            let Some(pattern) = rule_ast.inline_regex.first() else {
+            // AN EJECTED COPY KEEPS THE PRESET'S OWN PATTERNS (CLOUD-2290), and
+            // only those. The exemption above is the preset's, and a copy
+            // `batten preset eject` wrote is the preset's text; but the
+            // exemption follows the PATTERN, not the file, so a regex the
+            // consumer adds to the copy afterwards is refused like any other.
+            let Some(pattern) = rule_ast
+                .inline_regex
+                .iter()
+                .find(|pattern| !original.is_some_and(|text| text.contains(pattern.as_str())))
+            else {
                 continue;
             };
             return Err(UsageError::raise(format!(

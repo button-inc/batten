@@ -227,9 +227,9 @@ use anyhow::Result;
 pub use cli::{
     AttributionCommand, ChecksCommand, ClaimCommand, Cli, Command, CommitCommand, ConfigCommand,
     DefectsCommand, DesignCommand, GenerateCommand, HkCommand, LandedCommand, LintCommand,
-    OverrideCommand, PolicyCommand, PrCommand, ProvisionCommand, ReadyCommand, ReceiptCommand,
-    SemverCommand, SingletonCommand, SpecFormat, StateCommand, TaskCommand, WiringCommand,
-    WorktreeCommand,
+    OverrideCommand, PolicyCommand, PrCommand, PresetCommand, ProvisionCommand, ReadyCommand,
+    ReceiptCommand, SemverCommand, SingletonCommand, SpecFormat, StateCommand, TaskCommand,
+    WiringCommand, WorktreeCommand,
 };
 pub use config::Config;
 pub use effect::Effect;
@@ -395,6 +395,11 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         // layer and nothing a `batten.local.toml` could weaken.
         Some(Command::Lint { command }) => match command {
             LintCommand::Brief { path, json } => run_lint_brief(path.as_deref(), json, out),
+        },
+        // Edits the COMMITTED authority, never a layered view of it: the rows
+        // it changes have to exist in the file it writes (CLOUD-2290).
+        Some(Command::Preset { command }) => match command {
+            PresetCommand::Eject { target } => run_preset_eject(&target, out),
         },
         // Commit metadata is neither tree content nor a mediated call, so the §8
         // config chain supplies the patterns and git supplies the object. The
@@ -8461,6 +8466,32 @@ fn run_policy(
         // every line and memory naming it still resolves, byte-identically.
         PolicyCommand::Rule { id, json } => run_policy_explain(&[id], json, overrides, out),
     }
+}
+
+/// `batten preset eject <preset>/<module>` (CLOUD-2290): one pointer per file
+/// written, then the two rows it touched.
+fn run_preset_eject(target: &str, out: &mut dyn Write) -> Result<ExitCode> {
+    let root = Path::new(".");
+    let site = config::authority_site(root, None);
+    let (committed, _) = config::load_site(&site)?;
+    let ejection = preset::eject(root, &site.path, &committed.rules, target)?;
+    for path in &ejection.written {
+        writeln!(out, "{path} ejected")?;
+    }
+    writeln!(
+        out,
+        "{} rule `{}` except",
+        config::CONFIG_FILE,
+        ejection.row
+    )?;
+    let verb = if ejection.added { "added" } else { "kept" };
+    writeln!(
+        out,
+        "{} rule `{}` {verb}",
+        config::CONFIG_FILE,
+        ejection.copies
+    )?;
+    Ok(ExitCode::Success)
 }
 
 /// The `[[rule]]` row whose module declares this finding id (CLOUD-1638).

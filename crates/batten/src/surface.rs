@@ -5352,6 +5352,31 @@ pub const SURFACE: &[CommandDecl] = &[
         exits: EXITS_STANDARD,
         flags: &[RULE_ID_ARG, JSON],
     },
+    // CLOUD-2290. The `preset` noun dispatches, and its one verb WRITES: the
+    // copies under `policy/<preset>/` and two edits to `batten.toml`. So the noun
+    // states `write` rather than inheriting `read`, and neither row lands on the
+    // derived read-only allowlist.
+    CommandDecl {
+        path: "preset",
+        id: "preset",
+        about: "Take a vendored preset's modules into this repository",
+        data_channel: false,
+        exits: EXITS_DISPATCHES,
+        effect: Effect::Write,
+        flags: &[],
+    },
+    CommandDecl {
+        path: "preset eject",
+        id: "preset.eject",
+        about: "Copy a preset module and its call closure into policy/<preset>/ and load the copies instead",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Write,
+        flags: &[FlagDecl::positional(
+            "target",
+            "The module to eject, as <preset>/<module>, e.g. claude-code-cloud/plan-mode-refuses-writes",
+        )],
+    },
     // The `attribution` noun only dispatches, and like `worktree` it cannot be
     // `read`: its subtree carries `identity`, which writes `.git/config`. It is
     // deliberately NOT a verb under `policy` for exactly the reason that row

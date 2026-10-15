@@ -69,6 +69,9 @@ pub enum Scalar {
     Integer(i64),
     /// A string, rendered in the backend's default quoting.
     String(String),
+    /// An array of strings: a row's `except` list (CLOUD-2290), the first
+    /// structured value a consumer of this seam needed.
+    Strings(Vec<String>),
 }
 
 /// One edit, addressed by a key path from the document root.
@@ -92,6 +95,30 @@ pub enum Edit {
     Remove {
         /// The keys from the root to the one removed.
         path: Vec<String>,
+    },
+    /// Apply `edits`, each a [`Edit::Set`] or [`Edit::Remove`] addressed from
+    /// the row, inside the one row of the array of tables `array` whose `id` is
+    /// `id` (CLOUD-2290). A key path cannot address a `[[rule]]` row, because
+    /// the rows share one key and are told apart by a value.
+    ///
+    /// No row, or more than one, with that `id` is refused rather than guessed.
+    InRow {
+        /// The array of tables, as `rule` for `[[rule]]`.
+        array: String,
+        /// The `id` value naming the row.
+        id: String,
+        /// What is applied inside it.
+        edits: Vec<Edit>,
+    },
+    /// Append a new row to the array of tables `array`, carrying `fields` in
+    /// order. It renders at the end of the file, after every table already
+    /// there, so it can never land between another row and that row's own
+    /// nested tables.
+    AppendRow {
+        /// The array of tables, as `rule` for `[[rule]]`.
+        array: String,
+        /// The row's keys and values, in the order they are written.
+        fields: Vec<(String, Scalar)>,
     },
 }
 
@@ -138,11 +165,94 @@ fn toml(source: &str, edits: &[Edit]) -> Result<String> {
         .context("the source does not parse as TOML")?;
     for edit in edits {
         match edit {
-            Edit::Set { path, value } => set(&mut doc, path, value)?,
-            Edit::Remove { path } => remove(&mut doc, path)?,
+            Edit::Set { path, value } => set(doc.as_table_mut(), path, value)?,
+            Edit::Remove { path } => remove(doc.as_table_mut(), path)?,
+            Edit::InRow { array, id, edits } => {
+                let rows = rows_mut(&mut doc, array)?;
+                let index = row_index(rows, array, id)?;
+                let row = rows
+                    .get_mut(index)
+                    .with_context(|| format!("no `[[{array}]]` row has id `{id}`"))?;
+                for edit in edits {
+                    match edit {
+                        Edit::Set { path, value } => set(row, path, value)?,
+                        Edit::Remove { path } => remove(row, path)?,
+                        Edit::InRow { .. } | Edit::AppendRow { .. } => {
+                            bail!("an edit inside a row addresses a key, never another row")
+                        }
+                    }
+                }
+            }
+            Edit::AppendRow { array, fields } => {
+                let position = last_position(doc.as_table()).map_or(0, |last| last + 1);
+                let mut row = toml_edit::Table::new();
+                for (key, value) in fields {
+                    row.insert(key, Item::Value(value_of(value)));
+                }
+                row.set_position(Some(position));
+                match doc.get_mut(array) {
+                    None => {
+                        let mut rows = toml_edit::ArrayOfTables::new();
+                        rows.push(row);
+                        doc.insert(array, Item::ArrayOfTables(rows));
+                    }
+                    Some(item) => item
+                        .as_array_of_tables_mut()
+                        .with_context(|| format!("`{array}` is not an array of tables"))?
+                        .push(row),
+                }
+            }
         }
     }
     Ok(render(&doc))
+}
+
+fn rows_mut<'a>(doc: &'a mut DocumentMut, array: &str) -> Result<&'a mut toml_edit::ArrayOfTables> {
+    doc.get_mut(array)
+        .and_then(Item::as_array_of_tables_mut)
+        .with_context(|| format!("`{array}` is not an array of tables"))
+}
+
+fn row_index(rows: &toml_edit::ArrayOfTables, array: &str, id: &str) -> Result<usize> {
+    let matching: Vec<usize> = rows
+        .iter()
+        .enumerate()
+        .filter(|(_, row)| row.get("id").and_then(Item::as_str) == Some(id))
+        .map(|(index, _)| index)
+        .collect();
+    match matching.as_slice() {
+        [one] => Ok(*one),
+        [] => bail!("no `[[{array}]]` row has id `{id}`"),
+        _ => bail!("{} `[[{array}]]` rows have id `{id}`", matching.len()),
+    }
+}
+
+/// The greatest document position any table under `table` holds.
+///
+/// A table with no position renders beside the last positioned one before it,
+/// which for an appended row is the previous row — and that row's own nested
+/// tables come after it, so they would read as the new row's. Positioning the
+/// new row past every table is what keeps the append from adopting them.
+fn last_position(table: &toml_edit::Table) -> Option<isize> {
+    let mut last = table.position();
+    for (_, item) in table {
+        let nested = match item {
+            Item::Table(inner) => last_position(inner),
+            Item::ArrayOfTables(rows) => rows.iter().filter_map(last_position).max(),
+            Item::None | Item::Value(_) => None,
+        };
+        last = last.max(nested);
+    }
+    last
+}
+
+fn value_of(value: &Scalar) -> Value {
+    match value {
+        Scalar::Bool(flag) => Value::from(*flag),
+        Scalar::Integer(number) => Value::from(*number),
+        Scalar::String(text) => Value::from(text.as_str()),
+        Scalar::Strings(texts) => Value::Array(texts.iter().map(String::as_str).collect()),
+    }
 }
 
 /// The document as text.
@@ -165,29 +275,18 @@ fn split(path: &[String]) -> Result<(&[String], &str)> {
     Ok((parents, leaf.as_str()))
 }
 
-fn set(doc: &mut DocumentMut, path: &[String], value: &Scalar) -> Result<()> {
+fn set(root: &mut toml_edit::Table, path: &[String], value: &Scalar) -> Result<()> {
     let (parents, leaf) = split(path)?;
-    let mut item = doc.as_item_mut();
+    let mut table: &mut dyn toml_edit::TableLike = root;
     for key in parents {
-        // Indexing a missing key creates a table, and indexing a scalar would
-        // panic. So the parent is checked first, and a scalar in the path is
-        // refused rather than overwritten.
-        if !(item.is_none() || item.is_table_like()) {
-            bail!("`{key}` is under a key that is not a table");
-        }
-        item = &mut item[key.as_str()];
+        // A missing key becomes a table, and a scalar in the path is refused
+        // rather than overwritten.
+        let item = table.entry(key.as_str()).or_insert_with(toml_edit::table);
+        table = item
+            .as_table_like_mut()
+            .with_context(|| format!("`{key}` is under a key that is not a table"))?;
     }
-    if item.is_none() {
-        *item = toml_edit::table();
-    }
-    let table = item
-        .as_table_like_mut()
-        .with_context(|| format!("`{leaf}` is under a key that is not a table"))?;
-    let new = match value {
-        Scalar::Bool(flag) => Value::from(*flag),
-        Scalar::Integer(number) => Value::from(*number),
-        Scalar::String(text) => Value::from(text.as_str()),
-    };
+    let new = value_of(value);
     match table.get_mut(leaf) {
         Some(Item::Value(existing)) => {
             // Keep the existing value's decor (the space after `=` and any
@@ -204,21 +303,17 @@ fn set(doc: &mut DocumentMut, path: &[String], value: &Scalar) -> Result<()> {
     Ok(())
 }
 
-fn remove(doc: &mut DocumentMut, path: &[String]) -> Result<()> {
+fn remove(root: &mut toml_edit::Table, path: &[String]) -> Result<()> {
     let (parents, leaf) = split(path)?;
-    let mut item = doc.as_item_mut();
+    let mut table: &mut dyn toml_edit::TableLike = root;
     for key in parents {
-        let table = item
-            .as_table_like_mut()
-            .with_context(|| format!("`{key}` is under a key that is not a table"))?;
         let Some(next) = table.get_mut(key) else {
             return Ok(());
         };
-        item = next;
+        table = next
+            .as_table_like_mut()
+            .with_context(|| format!("`{key}` is under a key that is not a table"))?;
     }
-    let table = item
-        .as_table_like_mut()
-        .with_context(|| format!("`{leaf}` is under a key that is not a table"))?;
     table.remove(leaf);
     Ok(())
 }

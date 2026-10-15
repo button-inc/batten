@@ -2168,6 +2168,20 @@ pub struct Rule {
     /// qualifies keeps the configuration narrow, which is rule 6.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider: Option<String>,
+    /// Modules of the enabled preset this row does NOT compile, by name — the
+    /// file stem, as `plan-mode-refuses-writes` (CLOUD-2290).
+    ///
+    /// The half of ejecting a module that the binary owns: a local copy declares
+    /// the ids the vendored module did, and `claim_ids` refuses one id from two
+    /// bundles, so the vendored module has to step aside for the copy to load.
+    /// `batten preset eject` writes this key; it is ordinary config, so a
+    /// consumer may write it by hand too.
+    ///
+    /// A name the preset does not ship is refused at load (exit `1`), never
+    /// ignored: an `except` that excepts nothing would leave the vendored module
+    /// running beside the copy that was meant to replace it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub except: Vec<String>,
     /// The bundle root this rule enables, as a repository-relative directory
     /// (CLOUD-833). [`RuleKind::Policy`] only, and the **alternative** to
     /// [`Rule::module`] rather than an addition to it.
@@ -3687,6 +3701,13 @@ pub const COLUMN_CENSUS: &[ColumnCensus] = &[
         ),
     },
     ColumnCensus {
+        field: "except",
+        declares: Declares::NotFactBearing(
+            "qualifies `preset`, naming modules it does not compile; the facts stay the \
+             remaining modules' own declarations (CLOUD-2290)",
+        ),
+    },
+    ColumnCensus {
         field: "bundle",
         declares: Declares::NotFactBearing("names a vendored bundle, as `preset` does"),
     },
@@ -4683,6 +4704,14 @@ impl Rule {
                 "rule {}: `provider` qualifies `preset`, and this row names no preset; \
                  nothing reads the column, so it would declare a CI provider that \
                  selects nothing",
+                self.id
+            )));
+        }
+        // `except` qualifies `preset` exactly as `provider` does (CLOUD-2290).
+        if !self.except.is_empty() && self.preset.is_none() {
+            return Err(UsageError::raise(format!(
+                "rule {}: `except` names modules of a preset to skip, and this row names \
+                 no preset; nothing reads the column, so it would skip nothing",
                 self.id
             )));
         }
@@ -7348,6 +7377,12 @@ fn evaluate_rules(
     scan: &mut Scan,
 ) -> anyhow::Result<()> {
     for rule in rules {
+        // A COPY BEHIND ITS PRESET (CLOUD-2290), on the tree verbs only and for
+        // every scope: an ejected module usually decides the mediated call, which
+        // `check` never evaluates, so this cannot wait for the row to run.
+        if rule.kind == RuleKind::Policy && inputs.surface != crate::facts::Surface::Hook {
+            ejected_behind(rule, root, inputs.verdicts, &mut scan.findings);
+        }
         // THE DECLARED INPUT-PRECONDITION, BEFORE THE BODY (CLOUD-125). Here
         // rather than inside `run_rule` for the reason the row's acceptance
         // states as a clause: "the precondition never invokes the check body".
@@ -10034,6 +10069,75 @@ fn resolved_of<'a>(inputs: &RunInputs<'a>) -> Resolved<'a> {
         plan: inputs.plan,
         minted: inputs.minted,
         captured: inputs.captured,
+    }
+}
+
+/// The class a copy behind its preset raises (CLOUD-2290).
+pub const MODULE_PIN_STALE: &str = "module pin stale";
+
+/// Warn for each module this row loads that `batten preset eject` copied at a
+/// preset version older than the one this binary ships (CLOUD-2290).
+///
+/// A pointer and two numbers, never a diff (rule 4): what changed upstream is
+/// the release notes' to say, and merging it is the consumer's call.
+fn ejected_behind(
+    rule: &Rule,
+    root: &Path,
+    registry: &[crate::verdict::DeclaredVerdict],
+    findings: &mut Vec<Finding>,
+) {
+    let paths: Vec<String> = match (rule.module.as_deref(), rule.bundle.as_deref()) {
+        (Some(module), _) => vec![module.to_owned()],
+        (None, Some(bundle)) => {
+            let Ok(entries) = std::fs::read_dir(root.join(bundle)) else {
+                return;
+            };
+            let mut paths: Vec<String> = entries
+                .filter_map(Result::ok)
+                .filter_map(|entry| entry.file_name().into_string().ok())
+                .filter(|file| file.ends_with(".rego"))
+                .map(|file| format!("{}/{file}", bundle.trim_end_matches('/')))
+                .collect();
+            paths.sort();
+            paths
+        }
+        (None, None) => return,
+    };
+    for path in paths {
+        let Ok(source) = std::fs::read_to_string(root.join(&path)) else {
+            continue;
+        };
+        let Some((preset, module, recorded)) = crate::preset::ejected_from(&source) else {
+            continue;
+        };
+        let Some(shipped) = crate::preset::find(&preset).map(|manifest| manifest.version) else {
+            continue;
+        };
+        if recorded >= shipped {
+            continue;
+        }
+        let Ok(default) = identity::code_fingerprint(
+            &rule.id,
+            &path,
+            &format!("{MODULE_PIN_STALE} {preset}/{module} {recorded} {shipped}"),
+            identity::SpanNormalization::Verbatim,
+        ) else {
+            continue;
+        };
+        findings.push(Finding {
+            carried: vec![format!(
+                "{preset}/{module} copied at version {recorded}, shipped at {shipped}"
+            )],
+            owner: Some(rule.id.clone()),
+            rule: MODULE_PIN_STALE.to_owned(),
+            severity: RuleSeverity::Warn,
+            path,
+            line: Some(1),
+            identity: identity_of(rule, identity::FindingKind::Code, default),
+            check: Check::Reevaluate,
+            remediation: policy_remediation(registry, MODULE_PIN_STALE),
+            reason: None,
+        });
     }
 }
 
@@ -15068,6 +15172,7 @@ mod tests {
             preset: None,
             // No preset, so nothing here reads a CI provider (CLOUD-1625).
             provider: None,
+            except: Vec::new(),
             documents: Vec::new(),
             requires_path: Vec::new(),
             sources: Vec::new(),

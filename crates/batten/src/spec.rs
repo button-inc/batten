@@ -1159,6 +1159,10 @@ mod tests {
             // read-only allowlist.
             "pr unsubscribed".to_owned(),
             "pr watch".to_owned(),
+            // CLOUD-2290: copies a vendored module out and edits the authority,
+            // so both rows are `write` and stay off the read-only list above.
+            "preset".to_owned(),
+            "preset eject".to_owned(),
             "provision".to_owned(),
             "provision apply".to_owned(),
             "provision status".to_owned(),

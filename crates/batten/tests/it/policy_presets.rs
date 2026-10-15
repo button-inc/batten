@@ -18,6 +18,8 @@
 use std::fs;
 use std::path::PathBuf;
 
+use crate::common;
+
 use batten::facts::Look;
 use batten::policy;
 use batten::rules::Rule;
@@ -1374,4 +1376,282 @@ fn the_landing_loop_preset_refuses_a_lap_that_read_both_answers() {
         decided(&bundle, r#"{"tree":{"records":null}}"#).is_empty(),
         "no recorder declared is could-not-look, and it allows"
     );
+}
+
+// --- ejecting a vendored module (CLOUD-2290) ---------------------------------
+
+/// The `claude-code-cloud` row, mediated, excepting `except`.
+fn cloud_row(except: &[&str]) -> Rule {
+    serde_json::from_value(serde_json::json!({
+        "id": "cloud",
+        "kind": "policy",
+        "scope": "mediated_call",
+        "preset": "claude-code-cloud",
+        "except": except,
+        "severity": "deny",
+    }))
+    .expect("a preset row with an except list")
+}
+
+/// A plan-mode Edit of a tracked file: the call `plan write refused` exists for.
+const PLAN_MODE_EDIT: &str = r#"{"call":{"event":"pre-tool","permission-mode":"plan","tool":"Edit","arguments":{"file_path":"/repo/src/lib.rs"},"segments":null,"programs":[]}}"#;
+
+/// A module excepted from its preset no longer claims its ids, so a local copy
+/// declaring the same ids loads beside the rest of the preset. Without the
+/// `except` the same two rows collide, which is what makes the case discriminate.
+#[test]
+fn an_excepted_module_lets_a_local_copy_load_without_collision() {
+    let manifest = batten::preset::find("claude-code-cloud").expect("the preset ships");
+    let dispatch = manifest
+        .module("dispatch-is-preapproved")
+        .expect("the module ships");
+    assert_eq!(
+        manifest.closure(dispatch).len(),
+        1,
+        "the premise: this module calls no sibling's helper, so it can move alone"
+    );
+    let root = scratch("except-copy");
+    // The header an eject writes, which is what lets the copy keep the preset's
+    // own inline patterns.
+    let copied = format!(
+        "# batten-ejected: claude-code-cloud/dispatch-is-preapproved version {}\n{}",
+        manifest.version, dispatch.source
+    );
+    fs::write(root.join("dispatch.rego"), &copied).expect("write the copy");
+    let copy: Rule = serde_json::from_value(serde_json::json!({
+        "id": "mine",
+        "kind": "policy",
+        "scope": "mediated_call",
+        "module": "dispatch.rego",
+        "severity": "deny",
+    }))
+    .expect("an in-repo row");
+
+    let collision = policy::load(
+        &root,
+        &[cloud_row(&[]), copy.clone()],
+        policy::Vocabulary::EMPTY,
+        policy::ModuleChecks::Run,
+        None,
+    )
+    .expect_err("without except, the copy and the vendored module claim one id");
+    assert!(
+        format!("{collision}").contains("dispatch.rego"),
+        "{collision}"
+    );
+
+    let bundles = policy::load(
+        &root,
+        &[cloud_row(&["dispatch-is-preapproved"]), copy.clone()],
+        policy::Vocabulary::EMPTY,
+        policy::ModuleChecks::Run,
+        None,
+    )
+    .expect("the excepted module steps aside for the copy");
+    assert_eq!(bundles.len(), 2);
+
+    // The copy keeps the PRESET'S patterns, not a licence for new ones.
+    fs::write(
+        root.join("dispatch.rego"),
+        format!("{copied}\nextra(tool) if regex.match(`^mine$`, tool)\n"),
+    )
+    .expect("extend the copy");
+    let added = policy::load(
+        &root,
+        &[cloud_row(&["dispatch-is-preapproved"]), copy],
+        policy::Vocabulary::EMPTY,
+        policy::ModuleChecks::Run,
+        None,
+    )
+    .expect_err("a regex the consumer wrote is declared as a [[pattern]] row");
+    assert!(format!("{added}").contains("^mine$"), "{added}");
+}
+
+#[test]
+fn an_except_naming_no_module_is_refused_at_load() {
+    let root = scratch("except-unknown");
+    let err = policy::load(
+        &root,
+        &[cloud_row(&["plan-mode-refuses-write"])],
+        policy::Vocabulary::EMPTY,
+        policy::ModuleChecks::Run,
+        None,
+    )
+    .expect_err("an except that excepts nothing");
+    let text = format!("{err}");
+    assert!(
+        text.contains("plan-mode-refuses-write`"),
+        "names it: {text}"
+    );
+    assert!(
+        text.contains("plan-mode-refuses-writes"),
+        "and what the preset does ship there: {text}"
+    );
+    // A module the preset ships at the OTHER scope excepts nothing here either.
+    assert!(
+        policy::load(
+            &root,
+            &[cloud_row(&["mcp-grants-are-honoured"])],
+            policy::Vocabulary::EMPTY,
+            policy::ModuleChecks::Run,
+            None,
+        )
+        .is_err(),
+        "a tree module named on a mediated row"
+    );
+}
+
+const CLOUD_CONFIG: &str = r#"version = 1
+
+[[rule]]
+id = "cloud"
+kind = "policy"
+scope = "mediated_call"
+preset = "claude-code-cloud"
+severity = "deny"
+"#;
+
+/// The closure of `plan-mode-refuses-writes` in the shipped preset: the two
+/// modules it calls; `allowed-call-is-preapproved`, which calls
+/// `some_output_redirect` out of `read-only-is-preapproved` and so cannot stay
+/// vendored once that module leaves; and `write-is-preapproved`, which declares
+/// `call grant now` beside it, an id two bundles cannot both claim.
+const PLAN_CLOSURE: &[&str] = &[
+    "policy/claude-code-cloud/allowed-call-is-preapproved.rego",
+    "policy/claude-code-cloud/plan-mode-refuses-writes.rego",
+    "policy/claude-code-cloud/read-only-is-preapproved.rego",
+    "policy/claude-code-cloud/unwatch-is-preapproved.rego",
+    "policy/claude-code-cloud/write-is-preapproved.rego",
+];
+
+/// Eject into a fresh repository holding only [`CLOUD_CONFIG`].
+fn ejected(name: &str) -> PathBuf {
+    let dir = common::scratch_repo(name);
+    common::write(&dir, "batten.toml", CLOUD_CONFIG);
+    let outcome = common::run(
+        &dir,
+        &[
+            "preset",
+            "eject",
+            "claude-code-cloud/plan-mode-refuses-writes",
+        ],
+    );
+    assert!(
+        outcome.status.success(),
+        "{}{}",
+        common::stdout(&outcome),
+        common::stderr(&outcome)
+    );
+    dir
+}
+
+/// `plan-mode-refuses-writes` calls `read_only` and `unwatch_method`, which two
+/// siblings define, so ejecting it alone would not compile. The eject carries
+/// both, excepts all three, and the copies decide a plan-mode write exactly as
+/// the vendored modules did.
+#[test]
+fn ejecting_plan_mode_refuses_writes_carries_its_call_closure() {
+    let dir = ejected("eject-closure");
+    for path in PLAN_CLOSURE {
+        let text = fs::read_to_string(dir.join(path)).expect("the copy is written");
+        assert!(
+            text.starts_with("# batten-ejected: claude-code-cloud/"),
+            "{path} records where it came from"
+        );
+        assert!(
+            !text.contains("#MUTANT"),
+            "{path} drops the rows naming this crate's suite"
+        );
+    }
+    let written = fs::read_dir(dir.join("policy/claude-code-cloud"))
+        .expect("the folder")
+        .count();
+    assert_eq!(written, PLAN_CLOSURE.len(), "the closure and nothing more");
+
+    let (config, _) =
+        batten::config::load_authority(&dir.join("batten.toml")).expect("the edited config");
+    let cloud = config
+        .rules
+        .iter()
+        .find(|rule| rule.id == "cloud")
+        .expect("kept");
+    assert_eq!(
+        cloud.except,
+        [
+            "allowed-call-is-preapproved",
+            "plan-mode-refuses-writes",
+            "read-only-is-preapproved",
+            "unwatch-is-preapproved",
+            "write-is-preapproved"
+        ]
+    );
+    let bundles = policy::load(
+        &dir,
+        &config.rules,
+        policy::Vocabulary::EMPTY,
+        policy::ModuleChecks::Run,
+        None,
+    )
+    .expect("the vendored remainder and the copies both load");
+    let copies = bundles
+        .iter()
+        .find(|bundle| bundle.id() == "claude-code-cloud ejected")
+        .expect("the copies' row");
+    let refused = decided(copies, PLAN_MODE_EDIT);
+    assert!(
+        refused
+            .iter()
+            .any(|violation| violation.verdict == "plan write refused"),
+        "the copy refuses the write: {refused:?}"
+    );
+    let vendored = bundles
+        .iter()
+        .find(|bundle| bundle.id() == "cloud")
+        .expect("kept");
+    assert!(
+        decided(vendored, PLAN_MODE_EDIT).is_empty(),
+        "and the vendored remainder no longer does"
+    );
+
+    // A second eject of the same module finds its copy and changes nothing.
+    let again = common::run(
+        &dir,
+        &[
+            "preset",
+            "eject",
+            "claude-code-cloud/plan-mode-refuses-writes",
+        ],
+    );
+    assert!(!again.status.success(), "a copy already exists");
+}
+
+/// A copy recorded at an older preset version than this binary ships is a
+/// `warn` naming the file; at the shipped version it is silent.
+#[test]
+fn an_ejected_module_behind_the_manifest_version_is_reported() {
+    let dir = ejected("eject-drift");
+    let current = common::run(&dir, &["check"]);
+    let said = format!("{}{}", common::stdout(&current), common::stderr(&current));
+    assert!(!said.contains("module pin stale"), "fresh copies: {said}");
+
+    let path = "policy/claude-code-cloud/unwatch-is-preapproved.rego";
+    let shipped = batten::preset::find("claude-code-cloud")
+        .expect("the preset ships")
+        .version;
+    let text = fs::read_to_string(dir.join(path)).expect("the copy");
+    let behind = text.replacen(
+        &format!("version {shipped}\n"),
+        &format!("version {}\n", shipped - 1),
+        1,
+    );
+    assert_ne!(behind, text, "the premise: the header carried the version");
+    fs::write(dir.join(path), behind).expect("rewind the copy");
+
+    let stale = common::run(&dir, &["check"]);
+    let said = format!("{}{}", common::stdout(&stale), common::stderr(&stale));
+    assert!(
+        said.contains("module pin stale") && said.contains(path),
+        "names the class and the copy: {said}"
+    );
+    assert!(stale.status.success(), "a warning, never a refusal: {said}");
 }

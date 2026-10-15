@@ -46,7 +46,11 @@
 //! `manifests_are_inside_the_rule_one_glob` asserts that coverage rather than
 //! leaving it true by accident.
 
-use crate::rules::RuleScope;
+use std::collections::BTreeSet;
+use std::path::Path;
+
+use crate::error::UsageError;
+use crate::rules::{Rule, RuleKind, RuleScope};
 use crate::verdict::{DeclaredVerdict, VendoredVerdict, admit, read, run};
 
 /// One module inside a preset, with the surface it decides.
@@ -85,6 +89,16 @@ pub struct PresetModule {
     pub pointer: &'static str,
     /// The module source, `include_str!`d at build time.
     pub source: &'static str,
+}
+
+impl PresetModule {
+    /// The module's name: its file stem, as a row's `except` and
+    /// `batten preset eject` spell it (CLOUD-2290).
+    #[must_use]
+    pub fn name(&self) -> &'static str {
+        let file = self.pointer.rsplit('/').next().unwrap_or(self.pointer);
+        file.strip_suffix(".rego").unwrap_or(file)
+    }
 }
 
 /// One vendored preset, declared once.
@@ -202,8 +216,17 @@ impl Manifest {
     /// deciding task argv on a host whose workflow language its sibling module
     /// cannot read. The caller refuses when this comes back EMPTY, because a row
     /// compiling no modules is a rule that decides nothing.
+    ///
+    /// A module named in `except` is skipped (CLOUD-2290), so a local copy of
+    /// it can claim its ids. Whether every name in `except` exists is the
+    /// caller's question, asked before this.
     #[must_use]
-    pub fn modules_for(&self, scope: RuleScope, provider: Option<&str>) -> Vec<(String, String)> {
+    pub fn modules_for(
+        &self,
+        scope: RuleScope,
+        provider: Option<&str>,
+        except: &[String],
+    ) -> Vec<(String, String)> {
         self.modules
             .iter()
             .filter(|module| module.scope == scope)
@@ -211,7 +234,79 @@ impl Manifest {
                 None => true,
                 Some(reads) => provider == Some(reads),
             })
+            .filter(|module| !except.iter().any(|name| name == module.name()))
             .map(|module| (module.pointer.to_owned(), module.source.to_owned()))
+            .collect()
+    }
+
+    /// The module named `name`, if this preset ships one.
+    #[must_use]
+    pub fn module(&self, name: &str) -> Option<&'static PresetModule> {
+        self.modules.iter().find(|module| module.name() == name)
+    }
+
+    /// The modules that must leave the binary together with `module` for
+    /// either side to compile (CLOUD-2290).
+    ///
+    /// Modules at one scope compile into ONE engine, so a helper one defines is
+    /// callable from another: `plan-mode-refuses-writes` calls `read_only` and
+    /// `unwatch_method`, which its siblings define. Ejecting a module alone
+    /// would leave the copy calling helpers that are not in its bundle, and
+    /// ejecting a helper's definer alone would leave the vendored caller calling
+    /// one that is gone. So the closure is the CONNECTED COMPONENT of the
+    /// reference graph at the module's scope — what it calls, what calls it,
+    /// transitively — which is the smallest set both halves still compile from.
+    ///
+    /// A reference is a whole-word use, outside comments, of a helper another
+    /// module defines at column zero. Reading Rego as text can over-include, a
+    /// helper's name also used as a local, and never under-includes a call; an
+    /// over-included module is one more file copied, not a bundle that fails.
+    #[must_use]
+    pub fn closure(&self, module: &PresetModule) -> Vec<&'static PresetModule> {
+        let peers: Vec<&'static PresetModule> = self
+            .modules
+            .iter()
+            .filter(|peer| peer.scope == module.scope)
+            .collect();
+        let defined: Vec<BTreeSet<String>> = peers
+            .iter()
+            .map(|peer| helpers_defined(peer.source))
+            .collect();
+        let code: Vec<String> = peers.iter().map(|peer| uncommented(peer.source)).collect();
+        // A SHARED ID IS AN EDGE TOO. Two modules may each add to one
+        // `rules contains` id (`call grant now` has two), and `claim_ids`
+        // refuses an id two bundles declare, so splitting them collides.
+        let ids: Vec<BTreeSet<String>> = peers
+            .iter()
+            .map(|peer| crate::policy::finding_ids(peer.source))
+            .collect();
+        let linked = |a: usize, b: usize| {
+            a != b
+                && (defined[b].iter().any(|name| uses(&code[a], name))
+                    || defined[a].iter().any(|name| uses(&code[b], name))
+                    || !ids[a].is_disjoint(&ids[b]))
+        };
+        let mut member: Vec<bool> = peers
+            .iter()
+            .map(|peer| peer.pointer == module.pointer)
+            .collect();
+        let mut grew = true;
+        while grew {
+            grew = false;
+            for candidate in 0..peers.len() {
+                if member[candidate] {
+                    continue;
+                }
+                if (0..peers.len()).any(|held| member[held] && linked(held, candidate)) {
+                    member[candidate] = true;
+                    grew = true;
+                }
+            }
+        }
+        peers
+            .into_iter()
+            .zip(member)
+            .filter_map(|(peer, held)| held.then_some(peer))
             .collect()
     }
 
@@ -1957,6 +2052,262 @@ pub fn names() -> Vec<&'static str> {
 #[must_use]
 pub fn find(name: &str) -> Option<&'static Manifest> {
     MANIFESTS.iter().find(|manifest| manifest.name == name)
+}
+
+/// The helpers a module defines at column zero: functions and complete rules,
+/// never the `contains` sets every module adds to (`rules`, `violation`, …),
+/// which the engine aggregates rather than any module calling another's.
+fn helpers_defined(source: &str) -> BTreeSet<String> {
+    let mut names = BTreeSet::new();
+    for line in source.lines() {
+        let name: String = line
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+            .collect();
+        if name.is_empty()
+            || !line.starts_with(|c: char| c.is_ascii_lowercase() || c == '_')
+            || matches!(name.as_str(), "package" | "import" | "default")
+            || name.starts_with("test_")
+        {
+            continue;
+        }
+        let rest = line[name.len()..].trim_start();
+        // A function is kept with its `(`, so only a call matches it: a test
+        // helper named `call(…)` must not link every module reading `input.call`.
+        if rest.starts_with('(') {
+            names.insert(format!("{name}("));
+        } else if rest.starts_with(":=")
+            || rest.starts_with("if ")
+            || rest.starts_with("if{")
+            || (rest.starts_with('=') && !rest.starts_with("=="))
+        {
+            names.insert(name);
+        }
+    }
+    names
+}
+
+/// The source with every `#` comment removed, so a comment naming a helper
+/// links nothing.
+fn uncommented(source: &str) -> String {
+    source
+        .lines()
+        .map(|line| line.split_once('#').map_or(line, |(code, _)| code))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Whether `name` — a rule, or a function spelled with its `(` — occurs in
+/// `code` as a whole word that is not a field (`input.call` is no use of a
+/// helper named `call`).
+fn uses(code: &str, name: &str) -> bool {
+    let word = |c: char| c.is_ascii_alphanumeric() || c == '_' || c == '.';
+    code.match_indices(name).any(|(at, _)| {
+        let before = code[..at].chars().next_back();
+        let after = code[at + name.len()..].chars().next();
+        !before.is_some_and(word) && (name.ends_with('(') || !after.is_some_and(word))
+    })
+}
+
+/// The header line `batten preset eject` writes first into every copy, and the
+/// one `batten check` reads back to find a copy behind its preset.
+const EJECTED: &str = "# batten-ejected: ";
+
+/// What an ejected file's header records: the preset, the module and the
+/// manifest version it was copied at. `None` for a file no eject wrote.
+#[must_use]
+pub fn ejected_from(source: &str) -> Option<(String, String, u32)> {
+    let header = source.lines().find_map(|line| line.strip_prefix(EJECTED))?;
+    let (target, version) = header.split_once(" version ")?;
+    let (preset, module) = target.split_once('/')?;
+    Some((
+        preset.to_owned(),
+        module.to_owned(),
+        version.trim().parse().ok()?,
+    ))
+}
+
+/// The copy of `module` an eject writes: the header, then the vendored source
+/// without the `#MUTANT` rows, which name a suite inside this crate that the
+/// consumer does not have.
+fn ejected_source(manifest: &Manifest, module: &PresetModule) -> String {
+    let mut text = format!(
+        "{EJECTED}{}/{} version {}\n\
+         # Copied out of the vendored preset by `batten preset eject`, and this repository's\n\
+         # own now. `batten check` warns once the binary ships a newer version of the preset.\n",
+        manifest.name,
+        module.name(),
+        manifest.version,
+    );
+    for line in module.source.lines() {
+        if line.starts_with("#MUTANT") {
+            continue;
+        }
+        text.push_str(line);
+        text.push('\n');
+    }
+    text
+}
+
+/// What one `batten preset eject` wrote.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct Ejection {
+    /// The files written, repository-relative, in manifest order.
+    pub written: Vec<String>,
+    /// The preset row that now excepts them.
+    pub row: String,
+    /// The row that loads the copies.
+    pub copies: String,
+    /// Whether this eject appended `copies` rather than finding it.
+    pub added: bool,
+}
+
+/// Copy a vendored module and its call closure into `policy/<preset>/`, and
+/// switch the vendored ones off in favour of the copies (CLOUD-2290).
+///
+/// Everything is decided before anything is written: an unknown name, a
+/// preset no row enables at the module's scope, a copy already on disk, or a
+/// copy row at another scope is refused with nothing changed.
+///
+/// # Errors
+///
+/// A [`UsageError`] for any of the refusals above; an internal error when a file
+/// or `config` cannot be written.
+pub fn eject(root: &Path, config: &Path, rules: &[Rule], target: &str) -> anyhow::Result<Ejection> {
+    let (preset, name) = target.split_once('/').ok_or_else(|| {
+        UsageError::raise(format!(
+            "preset eject: `{target}` is not `<preset>/<module>`"
+        ))
+    })?;
+    let manifest = find(preset).ok_or_else(|| {
+        UsageError::raise(format!(
+            "preset eject: this binary ships no preset `{preset}`; the ones it does are {}",
+            names().join(", ")
+        ))
+    })?;
+    let module = manifest.module(name).ok_or_else(|| {
+        let shipped: Vec<&str> = manifest.modules.iter().map(PresetModule::name).collect();
+        UsageError::raise(format!(
+            "preset eject: `{preset}` ships no module `{name}`; it ships {}",
+            shipped.join(", ")
+        ))
+    })?;
+    let enabling: Vec<&Rule> = rules
+        .iter()
+        .filter(|rule| {
+            rule.kind == RuleKind::Policy
+                && rule.preset.as_deref() == Some(preset)
+                && rule.scope == module.scope
+        })
+        .collect();
+    let [row] = enabling.as_slice() else {
+        return Err(UsageError::raise(format!(
+            "preset eject: {} rows enable `{preset}` at scope `{}`, and an eject edits exactly one",
+            enabling.len(),
+            module.scope.as_str()
+        )));
+    };
+    let folder = format!("policy/{preset}");
+    let existing = rules
+        .iter()
+        .find(|rule| rule.bundle.as_deref() == Some(folder.as_str()));
+    if let Some(other) = existing.filter(|rule| rule.scope != module.scope) {
+        return Err(UsageError::raise(format!(
+            "preset eject: `{folder}` is already loaded by rule `{}` at scope `{}`, and `{name}` \
+             decides `{}`; one folder compiles at one scope",
+            other.id,
+            other.scope.as_str(),
+            module.scope.as_str()
+        )));
+    }
+    let closure = manifest.closure(module);
+    let written: Vec<String> = closure
+        .iter()
+        .map(|member| format!("{folder}/{}.rego", member.name()))
+        .collect();
+    if let Some(present) = written.iter().find(|path| root.join(path).exists()) {
+        return Err(UsageError::raise(format!(
+            "preset eject: `{present}` already exists; this repository already holds a copy"
+        )));
+    }
+    let copies_id = format!("{preset} ejected");
+    if existing.is_none() && rules.iter().any(|rule| rule.id == copies_id) {
+        return Err(UsageError::raise(format!(
+            "preset eject: a rule already has the id `{copies_id}` the copies' row would take"
+        )));
+    }
+
+    std::fs::create_dir_all(root.join(&folder))?;
+    for (member, path) in closure.iter().zip(&written) {
+        crate::durable::replace(&root.join(path), ejected_source(manifest, member))?;
+    }
+
+    let mut except: Vec<String> = row.except.clone();
+    except.extend(closure.iter().map(|member| member.name().to_owned()));
+    except.sort();
+    except.dedup();
+    let mut edits = vec![crate::config_edit::Edit::InRow {
+        array: String::from("rule"),
+        id: row.id.clone(),
+        edits: vec![crate::config_edit::Edit::Set {
+            path: vec![String::from("except")],
+            value: crate::config_edit::Scalar::Strings(except),
+        }],
+    }];
+    let copies = existing.map_or(copies_id, |rule| rule.id.clone());
+    if existing.is_none() {
+        edits.push(crate::config_edit::Edit::AppendRow {
+            array: String::from("rule"),
+            fields: copy_row(row, &copies, &folder),
+        });
+    }
+    crate::config_edit::apply_file(crate::config_edit::Format::Toml, config, &edits)?;
+    Ok(Ejection {
+        written,
+        row: row.id.clone(),
+        copies,
+        added: existing.is_none(),
+    })
+}
+
+/// The row that loads the copies: the preset row's scope, severity, remedy and
+/// declared inputs, with `bundle` where `preset` was.
+fn copy_row(row: &Rule, id: &str, folder: &str) -> Vec<(String, crate::config_edit::Scalar)> {
+    use crate::config_edit::Scalar;
+    let mut fields = vec![
+        (String::from("id"), Scalar::String(id.to_owned())),
+        (String::from("kind"), Scalar::String(String::from("policy"))),
+        (
+            String::from("scope"),
+            Scalar::String(row.scope.as_str().to_owned()),
+        ),
+        (String::from("bundle"), Scalar::String(folder.to_owned())),
+        (
+            String::from("severity"),
+            Scalar::String(row.severity().as_str().to_owned()),
+        ),
+    ];
+    if let Some(reason) = &row.no_fix_reason {
+        fields.push((
+            String::from("no_fix_reason"),
+            Scalar::String(reason.clone()),
+        ));
+    }
+    let selectors = [
+        ("documents", &row.documents),
+        ("sources", &row.sources),
+        ("line_sources", &row.line_sources),
+        ("invocation_sources", &row.invocation_sources),
+        ("use_sources", &row.use_sources),
+        ("delta_sources", &row.delta_sources),
+    ];
+    for (key, values) in selectors {
+        if !values.is_empty() {
+            fields.push((key.to_owned(), Scalar::Strings(values.clone())));
+        }
+    }
+    fields
 }
 
 /// The `claude-code-cloud` modules that read the host's permission mode, as

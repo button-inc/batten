@@ -11125,6 +11125,7 @@ mod tests {
             preset: None,
             // No preset, so nothing here reads a CI provider (CLOUD-1625).
             provider: None,
+            except: Vec::new(),
             documents: Vec::new(),
             requires_path: Vec::new(),
             sources: Vec::new(),

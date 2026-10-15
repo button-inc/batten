@@ -2008,6 +2008,19 @@ whose every row would need the same history read for no different decision",
         ],
         applicability: Applicability::Advice,
     },
+    // CLOUD-2290. Raised by `rules::ejected_behind`, never by a module.
+    VendoredVerdict {
+        id: "module pin stale",
+        gloss: "a module ejected from a preset was copied at an older preset version than this binary ships",
+        class: "`batten preset eject` copies a vendored module into this repository and records \
+the preset version it copied, so the copy stops changing when the binary does. That is the \
+point of ejecting, and it is also how a copy quietly misses a fix the preset shipped later. \
+This is a WARNING and a pointer, never a diff: what changed is the release notes' to say, and \
+whether to take it is this repository's call. Take it by hand and raise the recorded version, \
+or raise the version alone to say the change was read and declined.",
+        routes: &[run("module read first", "batten preset eject --help")],
+        applicability: Applicability::Advice,
+    },
     VendoredVerdict {
         id: "task run twice",
         gloss: "a live process in this clone already holds this task's lock",

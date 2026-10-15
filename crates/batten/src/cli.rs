@@ -225,6 +225,11 @@ pub enum Command {
         /// The chosen kind.
         command: LintCommand,
     },
+    /// Take a vendored preset's modules into this repository (CLOUD-2290).
+    Preset {
+        /// The chosen sub-verb.
+        command: PresetCommand,
+    },
     /// Design-evidence claims and the integrity of the record behind them.
     Design {
         /// The chosen sub-verb.
@@ -1294,6 +1299,17 @@ pub enum LintCommand {
         path: Option<String>,
         /// Emit the report as byte-stable JSON instead of pointer lines.
         json: bool,
+    },
+}
+
+/// Subcommands of `preset` (CLOUD-2290).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PresetCommand {
+    /// Copy a module and its call closure out of the binary.
+    Eject {
+        /// `<preset>/<module>`.
+        target: String,
     },
 }
 
@@ -2618,6 +2634,16 @@ fn policy_of(matches: &ArgMatches) -> Option<PolicyCommand> {
     }
 }
 
+fn preset_of(matches: &ArgMatches) -> Option<PresetCommand> {
+    match matches.subcommand()? {
+        ("eject", matches) => Some(PresetCommand::Eject {
+            // Required by the declaration, so `clap` refuses the absent case.
+            target: matches.get_one::<String>("target").cloned()?,
+        }),
+        _ => None,
+    }
+}
+
 fn attribution_of(matches: &ArgMatches) -> Option<AttributionCommand> {
     match matches.subcommand()? {
         ("check", matches) => Some(AttributionCommand::Check {
@@ -3863,6 +3889,7 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
             dry_run: flag(matches, "dry_run"),
         }),
         "policy" => policy_of(matches).map(|command| Command::Policy { command }),
+        "preset" => preset_of(matches).map(|command| Command::Preset { command }),
         "startup" => Some(Command::Startup {
             repair: flag(matches, "repair"),
             json: flag(matches, "json"),
