@@ -39,6 +39,12 @@ bin-dir = "{ bin }{ binary-ext }"
 [package.metadata.binstall.overrides.x86_64-pc-windows-gnu]
 pkg-fmt = "zip"
 
+[package.metadata.wix]
+upgrade-guid = "4970C541-6183-44FB-BB48-BBCEDC121C9D"
+path-guid = "55F605A4-F4D8-4892-8617-C81D1C14F137"
+license = false
+eula = false
+
 [[bin]]
 name = "batten"
 path = "src/main.rs"

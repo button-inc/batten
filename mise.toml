@@ -280,8 +280,12 @@ zig = "0.16" # the linker for the macOS release build and the darwin-link gate: 
 # installer is hand-rolled here. `dist-workspace.toml` is its config;
 # `cargo-dist-version` there must equal this pin.
 "aqua:axodotdev/cargo-dist" = "0.33.0"
-zizmor = "1.30.0"                      # GitHub Actions static analysis; run via `mise run zizmor` (in `verify` and CI)
-uv = "0.12.5"                          # fast Rust installer the pipx: backend uses to fetch Serena
+# nfpm (CLOUD-2298): the .deb, .rpm and .apk channels, from `nfpm.yaml` over the
+# binary cargo-dist built. Chosen over cargo-deb, whose releases ship only its own
+# .deb and no binary `[tools]` can pin (`no-source-built-tool` forbids the build).
+"aqua:goreleaser/nfpm" = "2.48.0"
+zizmor = "1.30.0"                 # GitHub Actions static analysis; run via `mise run zizmor` (in `verify` and CI)
+uv = "0.12.5"                     # fast Rust installer the pipx: backend uses to fetch Serena
 # Serena's LSP-backed semantic code tools (see .mcp.json). Pinned here — not in
 # .mcp.json — so its version lives with every other tool and lands in mise.lock.
 # The pipx backend installs it with `uv` (present above), keeping the fast resolver.

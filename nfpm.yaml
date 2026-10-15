@@ -1,0 +1,31 @@
+# The Linux package channels (CLOUD-2298): one config, three formats.
+#
+# nfpm packages the binary cargo-dist already built for the leg — it compiles
+# nothing — so a .deb, .rpm or .apk carries exactly the bytes the release
+# archive does. The leg supplies three values through the environment:
+#
+#   NFPM_ARCH        the package architecture (amd64, arm64)
+#   BATTEN_VERSION   the crate version the release announces, no leading `v`
+#   BATTEN_BINARY    the path of the binary cargo-dist built
+#
+# Metadata mirrors the workspace manifest's `[workspace.package]`.
+name: batten
+arch: ${NFPM_ARCH}
+platform: linux
+version: ${BATTEN_VERSION}
+section: devel
+priority: optional
+# The one maintainer address the repository publishes (CODE_OF_CONDUCT.md).
+maintainer: Button Inc. <conduct@button.is>
+vendor: Button Inc.
+description: Agent-era completion gate — repo-state conformance checks enforced at the agent's tool call.
+homepage: https://github.com/button-inc/batten
+license: Apache-2.0
+contents:
+  # `expand` is what makes nfpm read `${BATTEN_BINARY}` here; contents are
+  # literal without it (nfpm.go `expandEnvVarsContents`).
+  - src: ${BATTEN_BINARY}
+    dst: /usr/bin/batten
+    expand: true
+    file_info:
+      mode: 0755
