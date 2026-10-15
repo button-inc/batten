@@ -1221,6 +1221,7 @@ impl RunnerKind {
 //MUTANT missed-unread|s@^    let missed: Vec<String> = lines("missed.txt")@    let missed: Vec<String> = lines("absent.txt")@|a_missed_mutant_is_a_survivor_named_by_pointer_alone
 //MUTANT failed-run-reads-caught|s@^        } else if !ran.passed() \&\& found.is_empty() {$@        } else if false {@|a_failed_run_with_nothing_missed_is_never_every_mutant_caught
 //MUTANT row-judged-under-first-suite|s@^            above = Some(suite);$@            above = first.clone().or(Some(suite));@|a_row_is_judged_under_the_suite_above_it
+//MUTANT later-unrecognized-costs-the-gate|s@^                None if index == 0 => unrunnable@                None if true => unrunnable@|a_later_unrecognized_suite_costs_only_the_rows_under_it
 //MUTANT suite-first-only|s@^            Some(declared) => Suite::declared(declared),$@            Some(_) => self.suite.clone(),@|each_preset_module_row_runs_under_its_own_declared_suite
 //MUTANT-SUITE crates/batten/tests/it/mutate.rs
 //MUTANT later-suites-unread|s@^                    own.push(resolved);$@                    if own.is_empty() { own.push(resolved); }@|a_change_to_a_sources_second_suite_sweeps_its_gate
@@ -1674,6 +1675,12 @@ fn source_args(
     // reaches both the build and the test invocation, so what is compiled per
     // mutant is what the filterset below can select, and nothing else.
     args.extend(targets.iter().map(|target| format!("--cargo-arg={target}")));
+    // NO DEBUG INFO FOR THE CRATE UNDER MUTATION (CLOUD-1746). Measured on
+    // this tree, one mutant's `--lib --test=it` rebuild is 25.5s at `debug = 1`
+    // and 22.3s at `0`; nothing reads a mutant's debug info. Dependencies are
+    // already `debug = 0` (`profile.dev.package."*"`), so only the workspace's
+    // own crates build once more into the staged target.
+    args.push(String::from("--cargo-arg=--config=profile.test.debug=0"));
     // A SHARD SKIPS THE BASELINE, as the book's CI recipe does
     // (mutants.rs/shards.html). One invocation per source meant every shard
     // built and tested 157 unmutated baselines, most for sources with no
@@ -4275,6 +4282,45 @@ mod tests {
         );
     }
 
+    /// Fails by: a later declaration no runner recognizes costing the whole
+    /// gate (`unrunnable`) instead of only the rows under it (CLOUD-2193).
+    /// cargo-mutants' in-diff run over this change missed exactly that:
+    /// `replace match guard index == 0 with true in resolve`.
+    #[test]
+    fn a_later_unrecognized_suite_costs_only_the_rows_under_it() {
+        let root = std::env::temp_dir().join(format!(
+            "batten-mutate-later-suite-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("policy")).unwrap_or_else(|e| panic!("mkdir: {e}"));
+        std::fs::write(
+            root.join("policy/probe.rego"),
+            [
+                format!("#{SUITE}tests/it/a.rs"),
+                format!("#{ROW}one|s/x/y/|case_a"),
+                format!("#{SUITE}tests/it/b.unknown"),
+                format!("#{ROW}two|s/x/y/|case_b"),
+            ]
+            .join("\n"),
+        )
+        .unwrap_or_else(|e| panic!("write: {e}"));
+        let Some(gate) = resolve(&root, "probe") else {
+            panic!("the module resolves to a gate");
+        };
+        let _ = std::fs::remove_dir_all(&root);
+        assert_eq!(gate.unrunnable, None, "the gate itself stays runnable");
+        let suite_of = |slug: &str| {
+            let Some(row) = gate.rows.iter().find(|row| row.slug == slug) else {
+                panic!("row {slug} is declared");
+            };
+            gate.suite_for(row).map(|suite| suite.path().to_owned())
+        };
+        assert_eq!(suite_of("one").as_deref(), Some("tests/it/a.rs"));
+        assert_eq!(suite_of("two"), None, "only the row under it has no suite");
+    }
+
     fn row_from(source: &str) -> Row {
         Row {
             slug: String::from("s"),
@@ -4500,6 +4546,7 @@ mod tests {
             "--cargo-arg=--lib",
             "--cargo-arg=--test=it",
             "--cargo-arg=--test=solo",
+            "--cargo-arg=--config=profile.test.debug=0",
         ] {
             assert!(args.iter().any(|arg| arg == target), "{target} in {args:?}");
         }
@@ -4507,7 +4554,7 @@ mod tests {
             args.iter()
                 .filter(|arg| arg.starts_with("--cargo-arg="))
                 .count(),
-            3
+            4
         );
         let _ = fs::remove_dir_all(&root);
     }
