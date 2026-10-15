@@ -3572,7 +3572,9 @@ prompt\t'The prompt a subagent spawn commits a fresh context window to'
 run-in-background\t'Whether the host was asked to run this call in the background'
 input-id\t'The `id` a structured call names its subject by (CLOUD-987)'
 input-state\t'The `state` a structured call moves its subject to (CLOUD-987)'
-input-draft\t'Whether a structured call sets its subject\'s `draft` flag (CLOUD-2260)'"
+input-draft\t'Whether a structured call sets its subject\'s `draft` flag (CLOUD-2260)'
+input-owner\t'The `owner` a structured forge call targets (CLOUD-2271)'
+input-repo\t'The `repo` a structured forge call targets (CLOUD-2271), on [`Field::InputOwner`]\'s argument'"
 complete -c batten -n "__fish_batten_using_subcommand payload; and __fish_seen_subcommand_from field" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"

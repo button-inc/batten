@@ -11346,7 +11346,7 @@ _batten() {
                     return 0
                     ;;
                 --name)
-                    COMPREPLY=($(compgen -W "hook-event-name session-id tool-name command cwd stop-hook-active last-assistant-message transcript-path prompt run-in-background input-id input-state input-draft" -- "${cur}"))
+                    COMPREPLY=($(compgen -W "hook-event-name session-id tool-name command cwd stop-hook-active last-assistant-message transcript-path prompt run-in-background input-id input-state input-draft input-owner input-repo" -- "${cur}"))
                     return 0
                     ;;
                 --strictness)

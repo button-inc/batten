@@ -467,6 +467,16 @@
           "description": "Whether a structured call sets its subject's `draft` flag (CLOUD-2260).\n\n`\"true\"` or `\"false\"`, [`Field::RunInBackground`]'s rendering and its\nsafety argument: a boolean projection of one named key cannot carry a\nsecret. It exists because readying a pull request is not only a shell\ncommand — a forge connector's update call setting `draft` to `false` fires\nthe same `ready_for_review` and buys the same CI matrix, and a gate keyed on\n`gh pr ready` alone left that route open.\n\nAPPENDED, never inserted, for the reason stated on [`Field::Prompt`].",
           "type": "string",
           "const": "input-draft"
+        },
+        {
+          "description": "The `owner` a structured forge call targets (CLOUD-2271).\n\nRead for [`crate::rules::Rule::while_marker_scope`]: a branch-keyed marker\nlives in the clone the hook runs from, and one session can open pull\nrequests in several repositories from the same branch name. Without the\ntarget, a marker minted for one repository refused the next repository's\nfirst pull request. An identifier, never prose, through `as_str` like\n[`Field::InputId`].\n\nAPPENDED, never inserted, for the reason stated on [`Field::Prompt`].",
+          "type": "string",
+          "const": "input-owner"
+        },
+        {
+          "description": "The `repo` a structured forge call targets (CLOUD-2271), on\n[`Field::InputOwner`]'s argument.\n\nAPPENDED, never inserted, for the reason stated on [`Field::Prompt`].",
+          "type": "string",
+          "const": "input-repo"
         }
       ]
     },
@@ -1864,6 +1874,13 @@
             "null"
           ],
           "maxLength": 1536
+        },
+        "while_marker_scope": {
+          "description": "The call projections a [`Rule::while_marker`] must name before it counts\n(CLOUD-2271).\n\n**A marker is filed in the clone the hook runs from, under a branch name,\nand a branch name does not say which repository it belongs to.** One\nsession opening pull requests in two repositories from the same branch\nname shared one `pr-open` marker, so the second repository's first pull\nrequest was refused as a duplicate. With a scope, the projections' values\njoined by `/` and wrapped in `/` must appear in the marker's recorded\nbody, which for `pr-open` is the pull request's url.\n\n**Unreadable counts.** A projection reading nothing, or a body that will\nnot read, leaves the marker counting, the direction\n[`Rule::while_marker`]'s own unreadable arms take. Refused at load on a\nrow with no `while_marker`, where it would read nothing.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Field"
+          }
         },
         "while_unpushed": {
           "description": "Fire only while `HEAD` exists in this clone and on no remote-tracking ref\n(CLOUD-843).\n\n**The harm a punt row names, measured rather than proxied.** `turn mint\nahead` refuses because work \"committed nowhere but this container\" dies\nwith a reclaim, and its remedy says a push is what makes stopping safe —\nbut nothing it selected on read a push. Its only lever was a `verify`\nreceipt for `HEAD`, and on a tree that compiles only after edits that\nreceipt cannot be earned without the writes the row refuses: a deadlock\nwhose sole exit, a head-bound admission, every commit voids.\n\nConjoined with the other modifiers, so a row carrying `while_marker` too\nfires while the marker exists AND `HEAD` is unpushed. Could-not-look\nselects the row, the direction `while_marker`'s own unreadable arms take:\nan unknown answer must not switch a refusal off.",

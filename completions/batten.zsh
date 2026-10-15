@@ -5793,7 +5793,9 @@ prompt\:"The prompt a subagent spawn commits a fresh context window to"
 run-in-background\:"Whether the host was asked to run this call in the background"
 input-id\:"The \`id\` a structured call names its subject by (CLOUD-987)"
 input-state\:"The \`state\` a structured call moves its subject to (CLOUD-987)"
-input-draft\:"Whether a structured call sets its subject'\''s \`draft\` flag (CLOUD-2260)"))' \
+input-draft\:"Whether a structured call sets its subject'\''s \`draft\` flag (CLOUD-2260)"
+input-owner\:"The \`owner\` a structured forge call targets (CLOUD-2271)"
+input-repo\:"The \`repo\` a structured forge call targets (CLOUD-2271), on \[\`Field\:\:InputOwner\`\]'\''s argument"))' \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
