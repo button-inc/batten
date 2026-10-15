@@ -8292,6 +8292,23 @@ fn parent_of(path: &str) -> &str {
     path.rsplit_once(' ').map_or("", |(parent, _)| parent)
 }
 
+/// Whether `prefix` is `path`'s parent: `parent_of(path) == prefix`, decided
+/// without searching `path` backwards for its last space.
+///
+/// Building the tree asks this of every row for every node, twice (attach and
+/// [`has_children`]), and the backward search was 74% of the instructions
+/// `batten --version` ran (CLOUD-2315). A row under another parent fails here
+/// on its first differing byte.
+fn is_child_of(path: &str, prefix: &str) -> bool {
+    let rest = if prefix.is_empty() {
+        Some(path)
+    } else {
+        path.strip_prefix(prefix)
+            .and_then(|rest| rest.strip_prefix(' '))
+    };
+    rest.is_some_and(|rest| !rest.contains(' '))
+}
+
 /// The trailing segment of a command path, which is the name `clap` knows it by.
 fn leaf_of(path: &str) -> &str {
     path.rsplit_once(' ').map_or(path, |(_, leaf)| leaf)
@@ -8374,7 +8391,7 @@ fn arg_of(decl: &FlagDecl) -> Arg {
 
 /// Whether any row declares `path` as its parent.
 fn has_children(path: &str) -> bool {
-    SURFACE.iter().any(|decl| parent_of(decl.path) == path)
+    SURFACE.iter().any(|decl| is_child_of(decl.path, path))
 }
 
 /// Whether `decl` is a **noun** — a row that dispatches and performs no default
@@ -8407,28 +8424,33 @@ fn attach(parent: Command, prefix: &str) -> Command {
 }
 
 /// [`attach`], keeping only the child named `only` when one is given.
-//MUTANT narrowed-tree-keeps-everything|s@^        .filter(\|decl\| only.is_none_or(\|name\| leaf_of(decl.path) == name))$@@|a_narrowed_tree_parses_as_the_whole_one
+//MUTANT narrowed-tree-keeps-everything|s@^            .filter(\|decl\| only.is_none_or(\|name\| leaf_of(decl.path) == name))$@@|a_narrowed_tree_parses_as_the_whole_one
+//
+// ONE MOVE PER NODE, NOT ONE PER FLAG. `clap`'s builder takes `Command` by
+// value, so folding `.arg` over a row's flags and `.subcommand` over its
+// children copied the whole node once per flag and once per child; on
+// `batten --version` that was half of every instruction the process ran, in
+// `memcpy` (CLOUD-2315). `args` and `subcommands` take the lot in one move.
 fn attach_only(parent: Command, prefix: &str, only: Option<&str>) -> Command {
-    SURFACE
-        .iter()
-        .filter(|decl| parent_of(decl.path) == prefix)
-        .filter(|decl| only.is_none_or(|name| leaf_of(decl.path) == name))
-        .fold(parent, |parent, decl| {
-            let sub = Command::new(leaf_of(decl.path)).about(decl.about);
-            let sub = decl
-                .flags
-                .iter()
-                .fold(sub, |sub, flag| sub.arg(arg_of(flag)));
-            let sub = attach(sub, decl.path);
-            // A noun performs no default action: it lists its sub-verbs (§2).
-            // A row that nests AND declares an answer keeps acting bare.
-            let sub = if is_noun(decl) {
-                sub.subcommand_required(true).arg_required_else_help(true)
-            } else {
-                sub
-            };
-            parent.subcommand(sub)
-        })
+    parent.subcommands(
+        SURFACE
+            .iter()
+            .filter(|decl| is_child_of(decl.path, prefix))
+            .filter(|decl| only.is_none_or(|name| leaf_of(decl.path) == name))
+            .map(|decl| {
+                let sub = Command::new(leaf_of(decl.path))
+                    .about(decl.about)
+                    .args(decl.flags.iter().map(arg_of));
+                let sub = attach(sub, decl.path);
+                // A noun performs no default action: it lists its sub-verbs (§2).
+                // A row that nests AND declares an answer keeps acting bare.
+                if is_noun(decl) {
+                    sub.subcommand_required(true).arg_required_else_help(true)
+                } else {
+                    sub
+                }
+            }),
+    )
 }
 
 /// The live [`clap::Command`] tree, built from [`ROOT`] and [`SURFACE`].
@@ -8475,17 +8497,33 @@ fn command_narrowed(only: Option<&str>) -> Command {
         // what a code means (CLOUD-66).
         .after_help(format!("Exit codes:\n{}", crate::exit::table()))
         .arg_required_else_help(true);
-    let root = ROOT
-        .flags
-        .iter()
-        .fold(root, |root, flag| root.arg(arg_of(flag)));
-    attach_only(root, "", only)
+    attach_only(root.args(ROOT.flags.iter().map(arg_of)), "", only)
 }
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod narrowed_tests {
-    use super::{SURFACE, command, command_for, parent_of};
+    use super::{SURFACE, command, command_for, is_child_of, parent_of};
+
+    /// The prefix test answers as the backward search it replaced, for every
+    /// declared path against every declared parent (and the root).
+    #[test]
+    fn the_prefix_test_answers_as_the_parent_search() {
+        let prefixes: Vec<&str> = std::iter::once("")
+            .chain(SURFACE.iter().map(|decl| decl.path))
+            .chain(["adjudicat", "config "])
+            .collect();
+        for decl in SURFACE {
+            for prefix in &prefixes {
+                assert_eq!(
+                    is_child_of(decl.path, prefix),
+                    parent_of(decl.path) == *prefix,
+                    "{:?} under {prefix:?}",
+                    decl.path
+                );
+            }
+        }
+    }
 
     /// CLOUD-2315: the narrowed tree is the whole tree's subtree for that verb,
     /// node for node — the same help, every flag, every sub-verb — and a first
