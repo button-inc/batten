@@ -120,12 +120,15 @@ pub enum BuildTool {
     /// cargo-zigbuild: zig as the linker, which also writes the ad-hoc signature
     /// Apple Silicon requires before it will exec an arm64 binary.
     Zigbuild,
-    /// cargo-dist (CLOUD-2297): `dist build --artifacts=local` compiles through
-    /// `cargo auditable`, picks the linker for host and target itself, and
-    /// writes its own archive, its `.sha256`, and the manifest fragment its
-    /// global step generates the installers from.
-    CargoDist,
 }
+
+/// The `--build-tool` that hands the leg to cargo-dist (CLOUD-2297):
+/// `dist build --artifacts=local` compiles through `cargo auditable`, picks the
+/// linker for host and target itself, and writes its own archive, its
+/// `.sha256`, and the manifest fragment its global step generates the
+/// installers from. Not a [`BuildTool`]: dist owns the whole build, so it has
+/// no argv in that table's shape.
+pub const CARGO_DIST: &str = "cargo-dist";
 
 /// What cargo-dist names a target's archive: `name-TARGET` plus the extension
 /// `dist-workspace.toml` declares, which is this module's [`archive_ext`].
@@ -171,18 +174,17 @@ impl BuildTool {
             "cargo" => Some(Self::Cargo),
             "cross" => Some(Self::Cross),
             "zigbuild" => Some(Self::Zigbuild),
-            "cargo-dist" => Some(Self::CargoDist),
             _ => None,
         }
     }
 
-    /// The build argv for one target, binary and package version.
+    /// The build argv for one target and binary.
     ///
     /// `--locked`, so a release build resolves exactly the versions the lockfile
     /// pins; a release that silently floated a dependency is not the artifact CI
-    /// tested. The version is read only by [`Self::CargoDist`], whose tag names it.
+    /// tested.
     #[must_use]
-    pub fn argv(self, target: &str, bin: &str, version: &str) -> Vec<String> {
+    pub fn argv(self, target: &str, bin: &str) -> Vec<String> {
         let head: &[&str] = match self {
             // `auditable` wraps rustc rather than the subcommand, so it composes
             // with both of these.
@@ -192,8 +194,6 @@ impl BuildTool {
             // container is unmeasured, and an unproven wrapper does not enter a
             // matrix that once shipped six releases with zero binaries.
             Self::Cross => &["cross", "build"],
-            // dist resolves profile, locking and wrapper from its own config.
-            Self::CargoDist => return cargo_dist_argv(target, version),
         };
         head.iter()
             .map(|word| (*word).to_owned())
@@ -403,16 +403,48 @@ pub fn run(
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
     let from_env = std::env::var(BUILD_TOOL_ENV).ok();
-    // `None` here IS the stem request: it builds nothing, so it resolves no builder.
-    let tool = match builder_for(stem, build_tool, from_env.as_deref()) {
-        Ok(tool) => tool,
-        Err(named) => {
-            return Err(UsageError::raise(format!(
-                "dist: --build-tool (or {BUILD_TOOL_ENV}) must be cargo, cross, zigbuild, or cargo-dist, got '{named}'"
-            )));
+    let by_dist =
+        !stem && named_build_tool(build_tool, from_env.as_deref()).as_deref() == Some(CARGO_DIST);
+    // `None` here IS the stem request (or cargo-dist's, which is no `BuildTool`).
+    let tool = if by_dist {
+        None
+    } else {
+        match builder_for(stem, build_tool, from_env.as_deref()) {
+            Ok(tool) => tool,
+            Err(named) => {
+                return Err(UsageError::raise(format!(
+                    "dist: --build-tool (or {BUILD_TOOL_ENV}) must be cargo, cross, zigbuild, or {CARGO_DIST}, got '{named}'"
+                )));
+            }
         }
     };
+    let Some(package) = read_package(err)? else {
+        return Ok(ExitCode::Internal);
+    };
 
+    let stem = archive_stem(&package.name, &package.version, target);
+    if by_dist {
+        return run_cargo_dist(target, &package, &stem, out, err);
+    }
+    let Some(tool) = tool else {
+        writeln!(out, "{stem}")?;
+        return Ok(ExitCode::Success);
+    };
+    if !ran(&package.root, &tool.argv(target, &package.bin), err)? {
+        return Ok(ExitCode::Internal);
+    }
+    let Some((archive, built)) = stage(&package, target, &stem, err)? else {
+        return Ok(ExitCode::Internal);
+    };
+    writeln!(out, "archive={}", pointer(&archive, &package.root))?;
+    writeln!(out, "binary={}", pointer(&built, &package.root))?;
+    Ok(ExitCode::Success)
+}
+
+/// The one releasable package of the workspace this verb stands in.
+///
+/// `Ok(None)` is could-not-look, its pointer already on `err`.
+fn read_package(err: &mut dyn Write) -> Result<Option<Package>> {
     let here = std::env::current_dir()?;
     let metadata_argv: Vec<String> = ["cargo", "metadata", "--no-deps", "--format-version", "1"]
         .into_iter()
@@ -424,59 +456,33 @@ pub fn run(
             err,
             "dist: cargo metadata could not read a workspace here, so no archive can be named"
         )?;
-        return Ok(ExitCode::Internal);
+        return Ok(None);
     };
     let Ok(metadata) = serde_json::from_str::<Value>(&document) else {
         writeln!(
             err,
             "dist: cargo metadata answered something that is not JSON"
         )?;
-        return Ok(ExitCode::Internal);
+        return Ok(None);
     };
-    let package = match package(&metadata) {
-        Ok(package) => package,
+    match package(&metadata) {
+        Ok(package) => Ok(Some(package)),
         Err(reason) => {
             writeln!(err, "dist: {reason}")?;
-            return Ok(ExitCode::Internal);
+            Ok(None)
         }
-    };
-
-    let stem = archive_stem(&package.name, &package.version, target);
-    let Some(tool) = tool else {
-        writeln!(out, "{stem}")?;
-        return Ok(ExitCode::Success);
-    };
-
-    let argv = tool.argv(target, &package.bin, &package.version);
-    let manifest = package
-        .target_dir
-        .join(CARGO_DIST_DIR)
-        .join(format!("{target}-dist-manifest.json"));
-    if tool == BuildTool::CargoDist {
-        // stdout IS the manifest fragment; the build log stays on stderr, where
-        // a failure's reason is the step's only evidence.
-        let Some((code, fragment)) =
-            exec::piped_argv(&package.root, &argv, "", Diagnostics::Pass, &[])
-        else {
-            writeln!(err, "dist: could not start `dist`")?;
-            return Ok(ExitCode::Internal);
-        };
-        if code != 0 {
-            writeln!(err, "dist: `dist` exited {code}")?;
-            return Ok(ExitCode::Internal);
-        }
-        if serde_json::from_str::<Value>(&fragment).is_err() {
-            writeln!(err, "dist: `dist build` printed no manifest")?;
-            return Ok(ExitCode::Internal);
-        }
-        if let Some(parent) = manifest.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::write(&manifest, fragment)?;
-    } else if !ran(&package.root, &argv, err)? {
-        return Ok(ExitCode::Internal);
     }
+}
 
+/// Archive the binary the build wrote under the versioned `stem`, binary at
+/// the archive root. `Ok(Some((archive, binary)))`, or `Ok(None)` with the
+/// pointer on `err`.
+fn stage(
+    package: &Package,
+    target: &str,
+    stem: &str,
+    err: &mut dyn Write,
+) -> Result<Option<(PathBuf, PathBuf)>> {
     let file = binary_file(&package.bin, target);
     let built_dir = package.target_dir.join(target).join(PROFILE);
     let built = built_dir.join(&file);
@@ -486,7 +492,7 @@ pub fn run(
             "dist: expected a binary at {}, found none",
             pointer(&built, &package.root)
         )?;
-        return Ok(ExitCode::Internal);
+        return Ok(None);
     }
 
     let out_dir = package.root.join(OUT_DIR);
@@ -523,36 +529,70 @@ pub fn run(
             "dist: no archive at {}",
             pointer(&archive, &package.root)
         )?;
+        return Ok(None);
+    }
+    Ok(Some((archive, built)))
+}
+
+/// The leg, built by cargo-dist (CLOUD-2297): `dist build` for `target`, its
+/// manifest fragment saved where the global step reads fragments, and the
+/// binary it built archived under the versioned `stem` too, because every
+/// shipped engine fetches that name (`engine::release_asset`).
+fn run_cargo_dist(
+    target: &str,
+    package: &Package,
+    stem: &str,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let argv = cargo_dist_argv(target, &package.version);
+    // stdout IS the manifest fragment; the build log stays on stderr, where a
+    // failure's reason is the step's only evidence.
+    let Some((code, fragment)) = exec::piped_argv(&package.root, &argv, "", Diagnostics::Pass, &[])
+    else {
+        writeln!(err, "dist: could not start `dist`")?;
+        return Ok(ExitCode::Internal);
+    };
+    if code != 0 {
+        writeln!(err, "dist: `dist` exited {code}")?;
         return Ok(ExitCode::Internal);
     }
+    if serde_json::from_str::<Value>(&fragment).is_err() {
+        writeln!(err, "dist: `dist build` printed no manifest")?;
+        return Ok(ExitCode::Internal);
+    }
+    let staged = package.target_dir.join(CARGO_DIST_DIR);
+    std::fs::create_dir_all(&staged)?;
+    let manifest = staged.join(format!("{target}-dist-manifest.json"));
+    std::fs::write(&manifest, fragment)?;
 
+    let dist_archive = staged.join(cargo_dist_archive(&package.name, target));
+    let checksum = staged.join(format!(
+        "{}.sha256",
+        cargo_dist_archive(&package.name, target)
+    ));
+    for written in [&dist_archive, &checksum] {
+        if !written.is_file() {
+            writeln!(
+                err,
+                "dist: expected cargo-dist's {}, found none",
+                pointer(written, &package.root)
+            )?;
+            return Ok(ExitCode::Internal);
+        }
+    }
+    let Some((archive, built)) = stage(package, target, stem, err)? else {
+        return Ok(ExitCode::Internal);
+    };
     writeln!(out, "archive={}", pointer(&archive, &package.root))?;
     writeln!(out, "binary={}", pointer(&built, &package.root))?;
-    if tool == BuildTool::CargoDist {
-        let staged = package.target_dir.join(CARGO_DIST_DIR);
-        let dist_archive = staged.join(cargo_dist_archive(&package.name, target));
-        let checksum = staged.join(format!(
-            "{}.sha256",
-            cargo_dist_archive(&package.name, target)
-        ));
-        for written in [&dist_archive, &checksum] {
-            if !written.is_file() {
-                writeln!(
-                    err,
-                    "dist: expected cargo-dist's {}, found none",
-                    pointer(written, &package.root)
-                )?;
-                return Ok(ExitCode::Internal);
-            }
-        }
-        writeln!(
-            out,
-            "dist_archive={}",
-            pointer(&dist_archive, &package.root)
-        )?;
-        writeln!(out, "checksum={}", pointer(&checksum, &package.root))?;
-        writeln!(out, "manifest={}", pointer(&manifest, &package.root))?;
-    }
+    writeln!(
+        out,
+        "dist_archive={}",
+        pointer(&dist_archive, &package.root)
+    )?;
+    writeln!(out, "checksum={}", pointer(&checksum, &package.root))?;
+    writeln!(out, "manifest={}", pointer(&manifest, &package.root))?;
     Ok(ExitCode::Success)
 }
 
@@ -645,28 +685,23 @@ mod tests {
                 .collect()
         };
         assert_eq!(
-            BuildTool::Cargo.argv("t", "b", "1.2.3"),
+            BuildTool::Cargo.argv("t", "b"),
             expect(&["cargo", "auditable", "build"])
         );
         assert_eq!(
-            BuildTool::Zigbuild.argv("t", "b", "1.2.3"),
+            BuildTool::Zigbuild.argv("t", "b"),
             expect(&["cargo", "auditable", "zigbuild"])
         );
-        assert_eq!(
-            BuildTool::Cross.argv("t", "b", "1.2.3"),
-            expect(&["cross", "build"])
-        );
+        assert_eq!(BuildTool::Cross.argv("t", "b"), expect(&["cross", "build"]));
     }
 
     /// dist announces the package's own version as its tag, and builds only the
     /// named target: an argv that drops either builds the wrong release.
     #[test]
     fn cargo_dist_builds_one_target_under_the_packages_version() {
-        assert_eq!(
-            BuildTool::parse(Some("cargo-dist")),
-            Some(BuildTool::CargoDist)
-        );
-        let argv = BuildTool::CargoDist.argv("x86_64-unknown-linux-gnu", "batten", "1.2.3");
+        // cargo-dist is requested by name and is no `BuildTool`: dist owns the build.
+        assert_eq!(BuildTool::parse(Some(CARGO_DIST)), None);
+        let argv = cargo_dist_argv("x86_64-unknown-linux-gnu", "1.2.3");
         assert_eq!(
             argv,
             [

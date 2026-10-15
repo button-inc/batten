@@ -787,6 +787,10 @@ jobs:
     permissions:
       contents: read
       actions: write
+    env:
+      # `lockfile = false` turns the lockfile off entirely, so mise-action
+      # installs unlocked unless the job turns it back on (`lock cover partial`).
+      MISE_LOCKFILE: "true"
     steps:
       - name: Landing lease precondition
         # Not on Windows, for the `action` job's reason (CLOUD-1460).
@@ -818,6 +822,12 @@ jobs:
         with:
           version: 2026.9.1
           install_args: rust aqua:axodotdev/cargo-dist github:rust-secure-code/cargo-auditable
+      # Its own family, written by this job alone, as `semver` keeps one: the
+      # `dist` profile per OS shares an entry with no other job's build.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          # The profile is part of the key — see `ci.yml`'s `ci` job.
+          shared-key: installer-
       - name: Add the Rust target
         shell: bash
         env:

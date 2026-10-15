@@ -78,6 +78,38 @@ checksum = "sha256:5e4bc3e6b6344b4625de0f7aa5351aaa72856d11d78462972de0a101ee2c1
 url = "https://github.com/anchore/syft/releases/download/v1.51.1/syft_1.51.1_windows_amd64.zip"
 url_api = "https://api.github.com/repos/anchore/syft/releases/assets/532610136"
 
+[[tools."aqua:axodotdev/cargo-dist"]]
+version = "0.33.0"
+backend = "aqua:axodotdev/cargo-dist"
+
+[tools."aqua:axodotdev/cargo-dist"."platforms.linux-arm64"]
+checksum = "sha256:4761cff5fc547ad66d1449abbf321380b0e6bd8093b1fe6593852a3314fd0c19"
+url = "https://github.com/axodotdev/cargo-dist/releases/download/v0.33.0/cargo-dist-aarch64-unknown-linux-musl.tar.xz"
+
+[tools."aqua:axodotdev/cargo-dist"."platforms.linux-arm64-musl"]
+checksum = "sha256:4761cff5fc547ad66d1449abbf321380b0e6bd8093b1fe6593852a3314fd0c19"
+url = "https://github.com/axodotdev/cargo-dist/releases/download/v0.33.0/cargo-dist-aarch64-unknown-linux-musl.tar.xz"
+
+[tools."aqua:axodotdev/cargo-dist"."platforms.linux-x64"]
+checksum = "sha256:b8e95bc76c63375958173ef5ae2dbd8e9211cc1ed03cdee0899702766b4c2a2e"
+url = "https://github.com/axodotdev/cargo-dist/releases/download/v0.33.0/cargo-dist-x86_64-unknown-linux-musl.tar.xz"
+
+[tools."aqua:axodotdev/cargo-dist"."platforms.linux-x64-musl"]
+checksum = "sha256:b8e95bc76c63375958173ef5ae2dbd8e9211cc1ed03cdee0899702766b4c2a2e"
+url = "https://github.com/axodotdev/cargo-dist/releases/download/v0.33.0/cargo-dist-x86_64-unknown-linux-musl.tar.xz"
+
+[tools."aqua:axodotdev/cargo-dist"."platforms.macos-arm64"]
+checksum = "sha256:7b3cbe25511de01d74c0f5fcb7909edabd379bea9cfa284d93af5a3cdfa3247c"
+url = "https://github.com/axodotdev/cargo-dist/releases/download/v0.33.0/cargo-dist-aarch64-apple-darwin.tar.xz"
+
+[tools."aqua:axodotdev/cargo-dist"."platforms.macos-x64"]
+checksum = "sha256:6a49bfb61bd86770d79c27f3d2b40c6b2e71cde940d3d31a6ccaaffc124d7a29"
+url = "https://github.com/axodotdev/cargo-dist/releases/download/v0.33.0/cargo-dist-x86_64-apple-darwin.tar.xz"
+
+[tools."aqua:axodotdev/cargo-dist"."platforms.windows-x64"]
+checksum = "sha256:9a36d70795e14326a5ec4bf17aee085df00ab85a322739291ea5d4b1b5f693cd"
+url = "https://github.com/axodotdev/cargo-dist/releases/download/v0.33.0/cargo-dist-x86_64-pc-windows-msvc.zip"
+
 [[tools."aqua:cli/cli"]]
 version = "2.98.0"
 backend = "aqua:cli/cli"
