@@ -2157,7 +2157,7 @@ fn siblings_within(ledger: &Path, now: u64) -> usize {
     text.lines()
         // A failure record (CLOUD-2327) is the same launch said twice, never
         // a sibling of its own.
-        .filter(|line| line.split('\t').nth(5) != Some(EXEC_FAILED))
+        .filter(|line| !is_exec_failure(line))
         .filter_map(|line| line.split('\t').next())
         .filter_map(|stamp| stamp.parse::<u64>().ok())
         .filter(|stamp| *stamp <= now && now - *stamp <= SPAWN_WINDOW)
@@ -2186,6 +2186,13 @@ pub fn record_spawn(root: &Path, server: &str) -> Option<SpawnRecord> {
 
 /// The sixth field of a ledger record whose launch line could not be exec'd.
 pub const EXEC_FAILED: &str = "exec-failed";
+
+/// Whether a ledger line is a launch's failure record rather than a launch: the
+/// one place the ledger's layout says which field marks it.
+#[must_use]
+pub fn is_exec_failure(line: &str) -> bool {
+    line.split('\t').nth(5) == Some(EXEC_FAILED)
+}
 
 /// A launch's ledger record, as [`record_spawn`] composed it.
 #[derive(Debug)]

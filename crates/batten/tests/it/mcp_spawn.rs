@@ -135,7 +135,7 @@ fn ledger_lines(ledger: &Path) -> Vec<Vec<String>> {
 fn launch_lines(ledger: &Path) -> Vec<Vec<String>> {
     ledger_lines(ledger)
         .into_iter()
-        .filter(|fields| fields.get(5).map(String::as_str) != Some(batten::mcp::EXEC_FAILED))
+        .filter(|fields| !batten::mcp::is_exec_failure(&fields.join("\t")))
         .collect()
 }
 

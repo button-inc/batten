@@ -280,7 +280,7 @@ fn spawn_verdict(server: &str, log_name: &str, spawns: Option<&Path>) -> String 
         let fields: Vec<&str> = line.split('\t').collect();
         let at = fields.first()?.parse::<i64>().ok()?;
         (fields.get(1) == Some(&server)
-            && fields.get(5) == Some(&crate::mcp::EXEC_FAILED)
+            && crate::mcp::is_exec_failure(line)
             && (start - BEFORE_ATTEMPT..=start + AFTER_ATTEMPT).contains(&at))
         .then_some(index + 1)
     });
