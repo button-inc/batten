@@ -135,11 +135,10 @@ pub fn describe_cached(dir: &Path, base_ref: Option<&str>) -> Result<(String, Ve
     let stamps = stamp_tracked(dir, &tracked);
 
     if let Some(stamps) = stamps.as_ref()
-        && let Some(cached) = read_cache(dir)
-        && cached.schema == CACHE_SCHEMA
-        && cached.tracked == *stamps
+        && let Some(path) = cache_path(dir)
+        && let Some(epoch) = read_cache(&path, &cache_key(&tracked, stamps), stamps)
     {
-        return Ok((cached.epoch, tracked));
+        return Ok((epoch, tracked));
     }
 
     let (epoch, tracked) = describe(dir, base_ref)?;
@@ -147,8 +146,10 @@ pub fn describe_cached(dir: &Path, base_ref: Option<&str>) -> Result<(String, Ve
     // rewritten between the two would otherwise be cached under the mtime it had
     // before the change, and the next run would serve a hash of bytes that are
     // already gone.
-    if let Some(stamps) = stamp_tracked(dir, &tracked) {
-        write_cache(dir, &epoch, &stamps);
+    if let Some(stamps) = stamp_tracked(dir, &tracked)
+        && let Some(path) = cache_path(dir)
+    {
+        write_cache(&path, &cache_key(&tracked, &stamps), &epoch);
     }
     Ok((epoch, tracked))
 }
@@ -174,65 +175,47 @@ pub fn describe(dir: &Path, base_ref: Option<&str>) -> Result<(String, Vec<Strin
     Ok((surface_fingerprint(&entries).to_hex(), tracked))
 }
 
-/// The cache record's on-disk format version.
-///
-/// Its own number, not `batten.toml`'s config version: the cache's layout and
-/// the config schema move for unrelated reasons. An unrecognised value is a
-/// miss, so an older or newer binary recomputes rather than misreading a record
-/// it does not understand.
-const CACHE_SCHEMA: u32 = 1;
+/// The cache entry's format, through [`crate::cache::key`]: a change to how an
+/// entry is written bumps it, which makes every older entry a miss. `2` since
+/// the cache moved onto `crate::cache` (CLOUD-2315).
+const CACHE_FORMAT: &str = "batten-epoch-2";
 
-/// The cache file's name inside the repository's state directory.
-const CACHE_FILE: &str = "epoch.json";
+/// The entry's name under the repository's cache directory.
+const CACHE_FILE: &str = "epoch";
 
-/// One tracked path's staleness stamp: the etag, not the content.
-///
-/// `len` alongside the timestamp because either alone is weak — a same-second
-/// rewrite usually changes the length, and a length-preserving rewrite usually
-/// changes the timestamp. Seconds and nanoseconds as separate integers rather
-/// than one 128-bit value so the record stays ordinary JSON.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-struct Stamp {
-    path: String,
-    len: u64,
-    secs: u64,
-    nanos: u32,
-}
-
-/// The cached epoch and the stamps that vouch for it.
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
-struct CacheRecord {
-    schema: u32,
-    epoch: String,
-    /// The stamped set, which carries the tracked **list** as well as each
-    /// file's state — so adding or removing a path invalidates even when every
-    /// surviving file is byte-identical.
-    tracked: Vec<Stamp>,
-}
+/// The entry's retired name, removed on a write so it does not linger.
+const RETIRED_FILE: &str = "epoch.json";
 
 /// Stamp every tracked path, or `None` if any one of them cannot be stamped.
 ///
 /// All-or-nothing on purpose: a partial stamp set would revalidate against the
 /// paths that still exist and say nothing about the one that does not, which is
 /// the silent-skip failure wearing a different hat.
-fn stamp_tracked(dir: &Path, tracked: &[String]) -> Option<Vec<Stamp>> {
+///
+/// THE STAMP IS `crate::cache`'s (CLOUD-2315), not a second one here. This used
+/// to stamp size and mtime alone and called the pair strong because "either
+/// alone is weak"; the shared stamp adds inode and ctime, which a `touch -r` or
+/// a fixed-mtime extraction cannot restore.
+fn stamp_tracked(dir: &Path, tracked: &[String]) -> Option<Vec<crate::cache::Stamp>> {
     tracked
         .iter()
-        .map(|path| {
-            let meta = std::fs::metadata(dir.join(path)).ok()?;
-            let modified = meta.modified().ok()?;
-            let since = modified.duration_since(std::time::UNIX_EPOCH).ok()?;
-            Some(Stamp {
-                path: path.clone(),
-                len: meta.len(),
-                secs: since.as_secs(),
-                nanos: since.subsec_nanos(),
-            })
-        })
+        .map(|path| crate::cache::stamp(&dir.join(path)))
         .collect()
 }
 
-/// This repository's cache file, or `None` when no state directory resolves.
+/// The key the entry is filed under: each tracked PATH and its stamp, so adding
+/// or removing a path invalidates even when every surviving file is unchanged.
+//MUTANT epoch-key-ignores-paths|s@^        fields.push(path.as_bytes());$@        let _ = path;@|adding_a_tracked_path_invalidates_even_when_no_file_changed
+fn cache_key(tracked: &[String], stamps: &[crate::cache::Stamp]) -> String {
+    let mut fields: Vec<&[u8]> = Vec::with_capacity(2 * tracked.len());
+    for (path, stamp) in tracked.iter().zip(stamps) {
+        fields.push(path.as_bytes());
+        fields.push(stamp.fields.as_bytes());
+    }
+    crate::cache::key(CACHE_FORMAT, &fields)
+}
+
+/// This repository's cache entry, or `None` when no state directory resolves.
 ///
 /// Canonicalized first, and that is load-bearing rather than tidy: callers reach
 /// this with `Path::new(".")`, whose final component is `None`, so
@@ -241,51 +224,51 @@ fn stamp_tracked(dir: &Path, tracked: &[String]) -> Option<Vec<Stamp>> {
 /// it is a feature that reports success and does nothing.
 fn cache_path(dir: &Path) -> Option<PathBuf> {
     let absolute = std::fs::canonicalize(dir).ok()?;
-    crate::state::repo_state_dir(&absolute)
-        .ok()
-        .map(|state| state.join(CACHE_FILE))
+    let state = crate::state::repo_state_dir(&absolute).ok()?;
+    Some(crate::cache::root_under(&state)?.join(CACHE_FILE))
 }
 
-/// The cached record, or `None` for absent, unreadable, or unparseable.
+/// The cached epoch, or `None` for absent, unreadable, torn, another key — or
+/// racily clean.
 ///
 /// Every failure is the same answer — recompute — so none of them is
 /// distinguished, and a corrupted cache costs a run nothing but the work it was
 /// meant to save.
-fn read_cache(dir: &Path) -> Option<CacheRecord> {
-    let text = std::fs::read_to_string(cache_path(dir)?).ok()?;
-    serde_json::from_str(&text).ok()
+///
+/// RACILY CLEAN IS A MISS (CLOUD-2315), git's rule from
+/// `Documentation/technical/racy-git`: a tracked file whose change time is not
+/// strictly older than the entry's write time may have been rewritten in the
+/// same timestamp tick, with every stamped field unchanged, so the entry cannot
+/// vouch for it.
+//MUTANT epoch-racy-entry-served|s@^    if stamps.iter().any(\|stamp\| stamp.racily_clean(written)) {$@    if false {@|a_tracked_file_changed_after_the_entry_was_written_is_not_served
+fn read_cache(path: &Path, key: &str, stamps: &[crate::cache::Stamp]) -> Option<String> {
+    let body = String::from_utf8(crate::cache::read(path, key)?).ok()?;
+    let (written, epoch) = body.split_once(' ')?;
+    let (secs, nanos) = written.split_once('.')?;
+    let written = std::time::Duration::new(secs.parse().ok()?, nanos.parse().ok()?);
+    if stamps.iter().any(|stamp| stamp.racily_clean(written)) {
+        return None;
+    }
+    Some(epoch.to_owned())
 }
 
-/// Publish the cache record, ignoring every failure.
-///
-/// Temp file plus rename within the state directory, the same construction
-/// `store::write_record` uses: a concurrent reader sees either the old record or
-/// the new one, never a torn one that would parse as garbage and be discarded.
+/// Publish the entry, ignoring every failure: `<written> <epoch>`, where the
+/// write time is what [`read_cache`]'s racy check compares against.
 ///
 /// Nothing here can fail the run. A read-only state directory, a full disk, or a
 /// racing writer all leave the epoch already computed and correct — the cache is
 /// an optimization, and an optimization that can refuse the answer is a defect.
-fn write_cache(dir: &Path, epoch: &str, tracked: &[Stamp]) {
-    let Some(path) = cache_path(dir) else { return };
-    let Some(parent) = path.parent() else { return };
-    if std::fs::create_dir_all(parent).is_err() {
-        return;
-    }
-    let record = CacheRecord {
-        schema: CACHE_SCHEMA,
-        epoch: epoch.to_owned(),
-        tracked: tracked.to_vec(),
-    };
-    let Ok(json) = serde_json::to_string_pretty(&record) else {
-        return;
-    };
-    let temp = parent.join(format!("{CACHE_FILE}.{}.tmp", std::process::id()));
-    if crate::durable::replace(&temp, format!("{json}\n")).is_err() {
-        return;
-    }
-    if std::fs::rename(&temp, &path).is_err() {
-        // Leaving the temp behind would accumulate one file per failed publish.
-        let _ = std::fs::remove_file(&temp);
+fn write_cache(path: &Path, key: &str, epoch: &str) {
+    let written = crate::cache::now();
+    let body = format!(
+        "{}.{:09} {epoch}",
+        written.as_secs(),
+        written.subsec_nanos()
+    );
+    crate::cache::write(path, key, body.as_bytes());
+    // The retired record sat beside the state rather than under `cache/`.
+    if let Some(state) = path.parent().and_then(Path::parent) {
+        let _ = std::fs::remove_file(state.join(RETIRED_FILE));
     }
 }
 
@@ -324,6 +307,36 @@ mod tests {
 
     fn parse(text: &str) -> Config {
         config::parse(text, "test").unwrap()
+    }
+
+    /// GIT'S RACY RULE, held (CLOUD-2315): an entry vouches only for files whose
+    /// change time is strictly older than the entry's write. A file changed at or
+    /// after it may differ with every stamped field equal, so it is a miss.
+    #[test]
+    fn a_tracked_file_changed_after_the_entry_was_written_is_not_served() {
+        let dir = std::env::temp_dir().join(format!("batten-epoch-racy-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("epoch");
+        let stamp = |changed: std::time::Duration| crate::cache::Stamp {
+            fields: "stat:fixed".to_owned(),
+            changed,
+        };
+        let tracked = vec!["batten.toml".to_owned()];
+        let before = crate::cache::now() - std::time::Duration::from_secs(60);
+        let key = cache_key(&tracked, &[stamp(before)]);
+        write_cache(&path, &key, "the-epoch");
+        assert_eq!(
+            read_cache(&path, &key, &[stamp(before)]).as_deref(),
+            Some("the-epoch"),
+            "a file changed well before the write is vouched for"
+        );
+        let after = crate::cache::now() + std::time::Duration::from_secs(60);
+        assert!(
+            read_cache(&path, &key, &[stamp(after)]).is_none(),
+            "a file changed at or after the write is racily clean: a miss"
+        );
+        let _ = fs::remove_dir_all(&dir);
     }
 
     /// A scratch repository whose `batten.toml` is `text`.

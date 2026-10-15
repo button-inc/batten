@@ -264,39 +264,88 @@ fn macho_uuid(head: &[u8]) -> Option<Vec<u8>> {
     None
 }
 
-/// The stat tuple an image without a build ID is identified by: inode and
-/// ctime beside size and mtime, the set Bazel's digest cache needed after a
-/// tar with fixed mtimes and an inode-preserving `mv` read stale.
-fn stat_identity(path: &Path) -> Option<String> {
+/// One file's stat stamp, for a cache whose whole point is NOT to read the file
+/// (`crate::epoch`), and for an image that carries no build ID.
+///
+/// `fields` is the tuple a key is built over: inode and ctime beside size and
+/// mtime, the set Bazel's digest cache needed after a tar with fixed mtimes and
+/// an inode-preserving `mv` read stale. ctime cannot be set from userspace, so a
+/// `touch -r` or `cp -p` cannot restore it.
+///
+/// `changed` is the later of mtime and ctime, for [`Stamp::racily_clean`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Stamp {
+    /// The tuple, rendered for a key.
+    pub fields: String,
+    /// The later of the file's mtime and ctime, since the epoch.
+    pub changed: std::time::Duration,
+}
+
+impl Stamp {
+    /// GIT'S RACY-TIMESTAMP RULE (`Documentation/technical/racy-git`): a file
+    /// whose change time is not strictly older than the moment its entry was
+    /// written may have changed again within the same timestamp tick, invisibly
+    /// to every field above, so its entry must not be believed. Strict, so a
+    /// filesystem with coarse timestamps errs to a recompute, never a stale hit.
+    #[must_use]
+    pub fn racily_clean(&self, written: std::time::Duration) -> bool {
+        self.changed >= written
+    }
+}
+
+/// The stamp for `path`, or `None` when it cannot be stat'ed — a miss for every
+/// caller, never a stamp that pretends.
+#[must_use]
+pub fn stamp(path: &Path) -> Option<Stamp> {
     let meta = std::fs::metadata(path).ok()?;
+    let since = |time: std::time::SystemTime| time.duration_since(std::time::UNIX_EPOCH).ok();
+    let modified = since(meta.modified().ok()?)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt as _;
-        Some(format!(
-            "stat:{}:{}:{}:{}.{}:{}.{}",
-            meta.dev(),
-            meta.ino(),
-            meta.size(),
-            meta.mtime(),
-            meta.mtime_nsec(),
-            meta.ctime(),
-            meta.ctime_nsec()
-        ))
+        let ctime = std::time::Duration::new(
+            u64::try_from(meta.ctime()).ok()?,
+            u32::try_from(meta.ctime_nsec()).ok()?,
+        );
+        Some(Stamp {
+            fields: format!(
+                "stat:{}:{}:{}:{}.{}:{}.{}",
+                meta.dev(),
+                meta.ino(),
+                meta.size(),
+                meta.mtime(),
+                meta.mtime_nsec(),
+                meta.ctime(),
+                meta.ctime_nsec()
+            ),
+            changed: modified.max(ctime),
+        })
     }
     #[cfg(not(unix))]
     {
-        let nanos = |time: std::io::Result<std::time::SystemTime>| {
-            time.ok()
-                .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
-                .map_or(0, |since| since.as_nanos())
-        };
-        Some(format!(
-            "stat:{}:{}:{}",
-            meta.len(),
-            nanos(meta.modified()),
-            nanos(meta.created())
-        ))
+        let created = meta.created().ok().and_then(since).unwrap_or_default();
+        Some(Stamp {
+            fields: format!(
+                "stat:{}:{}:{}",
+                meta.len(),
+                modified.as_nanos(),
+                created.as_nanos()
+            ),
+            changed: modified.max(created),
+        })
     }
+}
+
+/// Now, as a duration since the epoch, for an entry's write time.
+#[must_use]
+pub fn now() -> std::time::Duration {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+}
+
+fn stat_identity(path: &Path) -> Option<String> {
+    stamp(path).map(|stamp| stamp.fields)
 }
 
 fn hex(bytes: &[u8]) -> String {

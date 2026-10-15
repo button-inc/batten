@@ -191,25 +191,39 @@ pub(crate) fn keyed_paths(configs: &[PathBuf]) -> BTreeSet<PathBuf> {
 /// project with a manifest and no lockfile is a real project. Every member
 /// absent is a different answer, and is `None`: a key over nothing would file
 /// every project's set under one name.
+//MUTANT pinned-key-unframed-absence|s@^            Err(_) => owned.push((path_bytes, None)),$@            Err(_) => owned.push((path_bytes, Some(b"-".to_vec()))),@|an_absent_member_never_collides_with_a_present_one
 pub(crate) fn key(configs: &[PathBuf]) -> Option<String> {
-    let mut material: Vec<u8> = Vec::new();
+    let mut owned: Vec<(Vec<u8>, Option<Vec<u8>>)> = Vec::new();
     let mut any = false;
     for path in keyed_paths(configs) {
-        material.extend_from_slice(path.to_string_lossy().as_bytes());
+        let path_bytes = path.to_string_lossy().into_owned().into_bytes();
         match std::fs::read(&path) {
             Ok(bytes) => {
                 any = true;
-                material.extend_from_slice(&bytes);
+                owned.push((path_bytes, Some(bytes)));
             }
             // An absent member contributes a stable token, so a lockfile that
             // appears LATER changes the key rather than being absorbed by it.
-            Err(_) => material.push(b'-'),
+            Err(_) => owned.push((path_bytes, None)),
         }
     }
-    // The crate's one hex spelling, reused rather than re-derived: a second
-    // renderer is a second thing to drift, and this digest is compared only
-    // against itself.
-    any.then(|| crate::provision::digest(&material))
+    // THE CRATE'S ONE FRAMING (CLOUD-2315), not a concatenation. This was
+    // `path ‖ bytes ‖ path ‖ bytes` with no boundary, so moving bytes between a
+    // path and its contents left the digest unchanged, and an absent member's
+    // `-` token equalled a present file holding `-`. Each part is now its own
+    // length-prefixed field, and presence is a field of its own.
+    let mut fields: Vec<&[u8]> = Vec::with_capacity(3 * owned.len());
+    for (path, bytes) in &owned {
+        fields.push(path);
+        match bytes {
+            Some(bytes) => {
+                fields.push(b"present");
+                fields.push(bytes);
+            }
+            None => fields.push(b"absent"),
+        }
+    }
+    any.then(|| crate::identity::cache_key(&fields).to_hex())
 }
 
 /// Where the record lives for `root`'s checkout.
@@ -618,6 +632,31 @@ fn executable(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// CLOUD-2315: an absent member and a present member holding the absence
+    /// token's bytes are two different keys. Unframed, both concatenated to the
+    /// same material, so a record keyed over one answered for the other.
+    #[test]
+    #[expect(
+        clippy::expect_used,
+        reason = "a fixture that cannot be written is a broken test"
+    )]
+    fn an_absent_member_never_collides_with_a_present_one() {
+        let dir = std::env::temp_dir().join(format!("batten-pinned-key-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("scratch");
+        std::fs::write(dir.join("a.cfg"), "A").expect("a");
+        let configs = vec![dir.join("a.cfg"), dir.join("b.cfg")];
+        let absent = key(&configs);
+        std::fs::write(dir.join("b.cfg"), "-").expect("b");
+        let present = key(&configs);
+        assert!(
+            absent.is_some() && present.is_some(),
+            "one member present keys"
+        );
+        assert_ne!(absent, present, "absent and present-as-`-` are two answers");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn the_difference_is_what_the_pin_adds() {

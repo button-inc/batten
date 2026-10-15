@@ -391,7 +391,10 @@ fn cache_home(name: &str) -> PathBuf {
 fn cache_file(home: &Path, dir: &Path) -> PathBuf {
     let canonical = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
     let segment = batten::state::derive_repo_name(&canonical).expect("derive the state segment");
-    home.join("batten").join(segment).join("epoch.json")
+    home.join("batten")
+        .join(segment)
+        .join("cache")
+        .join("epoch")
 }
 
 #[test]
@@ -510,17 +513,17 @@ fn a_future_cache_format_is_a_miss_rather_than_a_misread() {
     let expected = value(&epoch_in(&dir, &home, &["--no-cache"]));
     epoch_in(&dir, &home, &[]);
     let path = cache_file(&home, &dir);
-    let mut record: serde_json::Value =
-        serde_json::from_str(&fs::read_to_string(&path).expect("read cache"))
-            .expect("cache is JSON");
-    record["schema"] = serde_json::json!(u32::MAX);
-    record["epoch"] = serde_json::json!("0".repeat(64));
-    fs::write(&path, record.to_string()).expect("write cache");
+    // An entry filed under ANOTHER key — another format, another binary — whose
+    // body is otherwise whole and claims a different epoch (CLOUD-2315: the key
+    // line replaced the JSON `schema` field this case used to forge).
+    let text = fs::read_to_string(&path).expect("read cache");
+    let (_, rest) = text.split_once('\n').expect("a key line");
+    fs::write(&path, format!("{}\n{rest}", "f".repeat(64))).expect("write cache");
 
     assert_eq!(
         value(&epoch_in(&dir, &home, &[])),
         expected,
-        "a record from an unrecognised format version was believed"
+        "an entry filed under another key was believed"
     );
 }
 
