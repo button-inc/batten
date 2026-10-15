@@ -3318,6 +3318,14 @@ enum CensusCall {
     /// The connector verbs are decided by the name alone, so the input is empty:
     /// a case supplying one would be asserting over a field the row never reads.
     Verb(&'static str),
+    /// A tool call with an input, for a row keyed on `tool` that reads input
+    /// fields (`when_present`, `when_absent`, `when_value`) (CLOUD-2294).
+    Call {
+        /// The tool the call names, as the host spells it.
+        tool: &'static str,
+        /// The call's input, as JSON.
+        input: &'static str,
+    },
     /// A subagent spawn, for a row keyed on `tool` and measuring `prompt`.
     Spawn {
         /// The tool the call names, as the host spells it.
@@ -3341,7 +3349,9 @@ impl CensusCall {
     fn describe(&self) -> &'static str {
         match self {
             CensusCall::Command(command) => command,
-            CensusCall::Verb(tool) | CensusCall::Spawn { tool, .. } => tool,
+            CensusCall::Verb(tool)
+            | CensusCall::Call { tool, .. }
+            | CensusCall::Spawn { tool, .. } => tool,
         }
     }
 }
@@ -3462,6 +3472,16 @@ const SHAPE_CENSUS: &[ShapeCase] = &[
     ShapeCase {
         call: CensusCall::Verb("mcp__Linear__get_issue"),
         rule: "issue read loose",
+        site: CensusSite::Checkout,
+    },
+    // CLOUD-2294. A create (no `id`) straight into Todo; the promotion that
+    // carries an `id` is `todo_promotion.rs`'s.
+    ShapeCase {
+        call: CensusCall::Call {
+            tool: "mcp__Linear__save_issue",
+            input: r#"{"title":"t","team":"a-team","state":"Todo"}"#,
+        },
+        rule: "plan file loose",
         site: CensusSite::Checkout,
     },
     // The token ceiling reads only the envelope, so no fact about the tree can
@@ -3705,6 +3725,13 @@ fn the_committed_shape_rules_fire_on_every_banned_shape() {
         let payload = match &case.call {
             CensusCall::Command(command) => claude_payload(command),
             CensusCall::Verb(tool) => claude_verb_payload(tool),
+            CensusCall::Call { tool, input } => serde_json::json!({
+                "hook_event_name": "PreToolUse",
+                "tool_name": tool,
+                "tool_input": serde_json::from_str::<serde_json::Value>(input)
+                    .expect("a census input is JSON"),
+            })
+            .to_string(),
             CensusCall::Spawn {
                 tool,
                 prompt,

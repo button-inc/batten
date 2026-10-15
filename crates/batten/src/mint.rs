@@ -652,6 +652,52 @@ pub fn render(
     Some(out)
 }
 
+/// The subject columns of one row (CLOUD-2294): where a `named` row reads its
+/// subject from, and that no other keying declares a column only it reads.
+fn validate_subject(mint: &Declared) -> anyhow::Result<()> {
+    // A `named` row takes its subject from EXACTLY ONE source: none files
+    // nothing, and two would be a precedence nobody declared.
+    if mint.key == MintKey::Named && mint.key_from.is_some() == mint.key_from_input.is_some() {
+        return Err(crate::error::UsageError::raise(format!(
+            "`[[mint]]` `{}` is keyed `named` and must declare exactly one of `key_from` \
+             (a result path) and `key_from_input` (an input path)",
+            mint.name
+        )));
+    }
+    // THE SYMMETRIC CASE to the `key_base` arm. A `key_from` on a row keyed
+    // `delta` or `branch` is read by nothing exactly as a `key_base` on a
+    // `named` one is — the same inert declaration, and refusing one while
+    // ignoring the other is the half-coverage `validate` exists to refuse. The
+    // same holds for `key_from_input` and `key_shape`.
+    if mint.key != MintKey::Named
+        && let Some(column) = [
+            ("key_from", mint.key_from.is_some()),
+            ("key_from_input", mint.key_from_input.is_some()),
+            ("key_shape", mint.key_shape.is_some()),
+        ]
+        .into_iter()
+        .find_map(|(column, declared)| declared.then_some(column))
+    {
+        return Err(crate::error::UsageError::raise(format!(
+            "`[[mint]]` `{}` declares a `{column}` and is not keyed `named`, so the \
+             projection would be read by nothing",
+            mint.name
+        )));
+    }
+    // A SHAPE IS JUDGED ONLY WHERE IT IS READ, after the arm above, so a stray
+    // one is told to go rather than to be fixed; and only as a `receipt` rule's
+    // `key_shape` is, so one pattern loads on both rows.
+    if let Some(shape) = mint.key_shape.as_deref()
+        && let Err(problem) = regex::Regex::new(shape)
+    {
+        return Err(crate::error::UsageError::raise(format!(
+            "`[[mint]]` `{}`: `key_shape` is not a valid regular expression: {problem}",
+            mint.name
+        )));
+    }
+    Ok(())
+}
+
 /// Refuse a malformed `[[mint]]` table.
 ///
 /// Each refusal below is a row that would parse, read as configured, and mint
@@ -681,15 +727,6 @@ pub fn validate(mints: &[Declared]) -> anyhow::Result<()> {
                 mint.name
             )));
         }
-        // A `named` row takes its subject from EXACTLY ONE source (CLOUD-2294):
-        // none files nothing, and two would be a precedence nobody declared.
-        if mint.key == MintKey::Named && mint.key_from.is_some() == mint.key_from_input.is_some() {
-            return Err(crate::error::UsageError::raise(format!(
-                "`[[mint]]` `{}` is keyed `named` and must declare exactly one of `key_from` \
-                 (a result path) and `key_from_input` (an input path)",
-                mint.name
-            )));
-        }
         if mint.key == MintKey::Delta && mint.key_base.is_none() {
             return Err(crate::error::UsageError::raise(format!(
                 "`[[mint]]` `{}` is keyed `delta` and declares no `key_base`, so nothing says \
@@ -708,37 +745,7 @@ pub fn validate(mints: &[Declared]) -> anyhow::Result<()> {
                 mint.name
             )));
         }
-        // THE SYMMETRIC CASE, which the arm above left silent. A `key_from` on a
-        // row keyed `delta` or `branch` is read by nothing exactly as a `key_base`
-        // on a `named` one is — the same inert declaration, and refusing one while
-        // ignoring the other is the half-coverage this function exists to refuse.
-        // The same holds for `key_from_input` and `key_shape` (CLOUD-2294).
-        if mint.key != MintKey::Named
-            && let Some(column) = [
-                ("key_from", mint.key_from.is_some()),
-                ("key_from_input", mint.key_from_input.is_some()),
-                ("key_shape", mint.key_shape.is_some()),
-            ]
-            .into_iter()
-            .find_map(|(column, declared)| declared.then_some(column))
-        {
-            return Err(crate::error::UsageError::raise(format!(
-                "`[[mint]]` `{}` declares a `{column}` and is not keyed `named`, so the \
-                 projection would be read by nothing",
-                mint.name
-            )));
-        }
-        // A SHAPE IS JUDGED ONLY WHERE IT IS READ, after the arm above, so a
-        // stray one is told to go rather than to be fixed; and only as a
-        // `receipt` rule's `key_shape` is, so one pattern loads on both rows.
-        if let Some(shape) = mint.key_shape.as_deref()
-            && let Err(problem) = regex::Regex::new(shape)
-        {
-            return Err(crate::error::UsageError::raise(format!(
-                "`[[mint]]` `{}`: `key_shape` is not a valid regular expression: {problem}",
-                mint.name
-            )));
-        }
+        validate_subject(mint)?;
         // HALF A SELECTOR IS THE DANGEROUS HALF. `selects_at` alone would leave
         // the row minting on every result its tool matched while LOOKING
         // narrowed, which is the reading a reviewer takes from the column's
