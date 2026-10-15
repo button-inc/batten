@@ -192,64 +192,10 @@ pub(crate) fn keyed_paths(configs: &[PathBuf]) -> BTreeSet<PathBuf> {
 /// absent is a different answer, and is `None`: a key over nothing would file
 /// every project's set under one name.
 //MUTANT pinned-key-unframed-absence|s@^            Err(_) => owned.push((path_bytes, None)),$@            Err(_) => owned.push((path_bytes, Some(b"-".to_vec()))),@|an_absent_member_never_collides_with_a_present_one
-//MUTANT pinned-key-memo-never-stale|s@^        unchanged.then(\x7c\x7c key.clone())$@        Some(key.clone())@|an_edit_between_two_asks_is_never_answered_from_memory
 pub(crate) fn key(configs: &[PathBuf]) -> Option<String> {
-    // ONE DIGEST PER PROCESS WHILE NOTHING MOVED (CLOUD-2315): the hook asks
-    // twice a call — this record and `taskset`'s — and each read and hashed the
-    // whole manifest and lockfile again. The last answer is reused only while
-    // every keyed file's stat tuple is the one it was computed over and none is
-    // racily clean against that moment (`crate::cache::Stamp`, git's rule), so
-    // an edit between two asks is a recompute, never a stale key.
-    let paths: Vec<PathBuf> = keyed_paths(configs).into_iter().collect();
-    let stamps: Vec<Option<crate::cache::Stamp>> =
-        paths.iter().map(|path| crate::cache::stamp(path)).collect();
-    if let Some(key) = KEY_MEMO.with(|cell| {
-        let held = cell.borrow();
-        let (held_paths, held_fields, at, key) = held.as_ref()?;
-        let unchanged = *held_paths == paths
-            && held_fields.len() == stamps.len()
-            && held_fields.iter().zip(&stamps).all(|(held, now)| {
-                held.as_deref() == now.as_ref().map(|stamp| stamp.fields.as_str())
-                    && !now.as_ref().is_some_and(|stamp| stamp.racily_clean(*at))
-            });
-        unchanged.then(|| key.clone())
-    }) {
-        return key;
-    }
-    let at = crate::cache::now();
-    let key = digest(&paths);
-    KEY_MEMO.with(|cell| {
-        *cell.borrow_mut() = Some((
-            paths,
-            stamps
-                .into_iter()
-                .map(|stamp| stamp.map(|stamp| stamp.fields))
-                .collect(),
-            at,
-            key.clone(),
-        ));
-    });
-    key
-}
-
-/// [`key`]'s last answer: the keyed paths, each one's stat fields (or absence),
-/// when it was computed, and the key.
-type KeyMemo = Option<(
-    Vec<PathBuf>,
-    Vec<Option<String>>,
-    std::time::Duration,
-    Option<String>,
-)>;
-
-thread_local! {
-    static KEY_MEMO: std::cell::RefCell<KeyMemo> = const { std::cell::RefCell::new(None) };
-}
-
-/// The digest over `paths`' contents, read now.
-fn digest(paths: &[PathBuf]) -> Option<String> {
     let mut owned: Vec<(Vec<u8>, Option<Vec<u8>>)> = Vec::new();
     let mut any = false;
-    for path in paths {
+    for path in keyed_paths(configs) {
         let path_bytes = path.to_string_lossy().into_owned().into_bytes();
         match std::fs::read(&path) {
             Ok(bytes) => {
@@ -709,26 +655,6 @@ mod tests {
             "one member present keys"
         );
         assert_ne!(absent, present, "absent and present-as-`-` are two answers");
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// CLOUD-2315: the remembered key is reused only while nothing moved — an
-    /// edit of the same length within the same timestamp tick is still seen.
-    #[test]
-    #[expect(
-        clippy::expect_used,
-        reason = "a fixture that cannot be written is a broken test"
-    )]
-    fn an_edit_between_two_asks_is_never_answered_from_memory() {
-        let dir = std::env::temp_dir().join(format!("batten-pinned-memo-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("scratch");
-        std::fs::write(dir.join("a.cfg"), "A").expect("a");
-        let configs = vec![dir.join("a.cfg")];
-        let first = key(&configs);
-        assert_eq!(key(&configs), first, "an unchanged manifest keys the same");
-        std::fs::write(dir.join("a.cfg"), "B").expect("edit");
-        assert_ne!(key(&configs), first, "the edit moves the key");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
