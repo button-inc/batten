@@ -13876,10 +13876,17 @@ impl Sets {
 /// file at every depth and a rule scoped to one directory would silently widen.
 /// Widening is the single direction a policy engine may never drift, and
 /// [`tests::glob_semantics_are_pinned_at_the_shipped_patterns`] is what holds it.
+///
+/// **Parsed at load, compiled at first match** (CLOUD-2315). A malformed glob is
+/// still refused when the rule loads, because parsing is what refuses it; the
+/// regex a match runs is built the first time something asks. The hook loads
+/// ~108 selectors per call and matches a handful, and compiling every one was
+/// 14% of the instructions a warm call ran.
 #[derive(Debug, Clone)]
 pub struct Selector {
     pattern: String,
-    matcher: globset::GlobMatcher,
+    glob: globset::Glob,
+    matcher: std::sync::OnceLock<globset::GlobMatcher>,
 }
 
 impl Selector {
@@ -13900,14 +13907,17 @@ impl Selector {
             .map_err(|err| UsageError::raise(format!("glob `{pattern}` is not valid: {err}")))?;
         Ok(Selector {
             pattern: pattern.to_owned(),
-            matcher: glob.compile_matcher(),
+            glob,
+            matcher: std::sync::OnceLock::new(),
         })
     }
 
     /// Whether `path` — repo-relative, `/`-separated — is selected.
     #[must_use]
     pub fn matches(&self, path: &str) -> bool {
-        self.matcher.is_match(path)
+        self.matcher
+            .get_or_init(|| self.glob.compile_matcher())
+            .is_match(path)
     }
 
     /// The pattern this was compiled from, as the consumer wrote it.
