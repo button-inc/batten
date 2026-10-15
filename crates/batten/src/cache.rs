@@ -552,11 +552,13 @@ mod tests {
     /// two binaries never evict each other; partitions past the bound and the
     /// retired flat layout go.
     ///
-    /// Unix only: ageing a directory opens it as a file, which Windows refuses
-    /// without a backup-semantics flag `std` does not expose.
-    #[cfg(unix)]
+    /// Compiled everywhere; AGED on unix only. Ageing a directory opens it as a
+    /// file, which Windows refuses without a backup-semantics flag `std` does not
+    /// expose, so there the partitions share a creation time and the case holds
+    /// the bound alone — which one goes is then the platform's tie.
     #[test]
     fn a_new_partition_keeps_its_neighbours_up_to_the_bound() {
+        let aged = cfg!(unix);
         let dir = scratch("partitions");
         let root = dir.join("cache");
         let others = [
@@ -568,11 +570,13 @@ mod tests {
         for (age, name) in others.iter().enumerate() {
             let path = root.join(name);
             std::fs::create_dir_all(&path).expect("partition");
-            let made = std::time::SystemTime::UNIX_EPOCH
-                + std::time::Duration::from_secs(1_000_000 * (age as u64 + 1));
-            std::fs::File::open(&path)
-                .and_then(|file| file.set_modified(made))
-                .expect("age the partition");
+            if aged {
+                let made = std::time::SystemTime::UNIX_EPOCH
+                    + std::time::Duration::from_secs(1_000_000 * (age as u64 + 1));
+                std::fs::File::open(&path)
+                    .and_then(|file| file.set_modified(made))
+                    .expect("age the partition");
+            }
         }
         std::fs::create_dir_all(root.join("policy")).expect("flat layout");
         std::fs::write(root.join("epoch"), "flat").expect("flat layout");
@@ -582,12 +586,16 @@ mod tests {
         assert!(own.is_dir());
         assert!(!root.join("policy").exists(), "the flat layout is retired");
         assert!(!root.join("epoch").exists(), "the flat layout is retired");
-        assert!(
-            !root.join(others[0]).exists(),
-            "the oldest partition past the bound goes"
-        );
-        for kept in &others[1..] {
-            assert!(root.join(kept).is_dir(), "{kept} is kept");
+        let kept = others
+            .iter()
+            .filter(|name| root.join(name).is_dir())
+            .count();
+        assert_eq!(kept, KEPT_PARTITIONS - 1, "own partition plus the bound");
+        if aged {
+            assert!(
+                !root.join(others[0]).exists(),
+                "the oldest partition past the bound goes"
+            );
         }
         assert!(root.join("CACHEDIR.TAG").exists());
     }

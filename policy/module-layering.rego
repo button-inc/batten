@@ -62,7 +62,7 @@ rules contains "layer place wrong"
 # Every module this table has placed. A module in the judged set and absent here
 # is refused rather than allowed.
 declared_modules := {
-	"action", "admission", "attribution", "baseline", "budget", "bypass", "capture", "ci",
+	"action", "admission", "attribution", "baseline", "budget", "bypass", "cache", "capture", "ci",
 	"cli", "commit", "completion", "config", "contract", "decision", "defects",
 	"design", "doctor", "drain", "effect", "emission", "epoch", "error", "exec",
 	"exit", "facts", "findings", "git", "graph", "handler", "hook", "identity", "init",

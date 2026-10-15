@@ -603,6 +603,20 @@ pub enum Kind {
     HookDecisions,
 }
 
+impl Kind {
+    /// This kind's bit in [`Tally`]'s presence set: four flags as one byte
+    /// rather than four `bool` fields, which `clippy::struct_excessive_bools`
+    /// refuses and no lint escape may be added for (`policy/spawn-widening.rego`).
+    const fn bit(self) -> u8 {
+        match self {
+            Kind::Turns => 1,
+            Kind::ToolCalls => 2,
+            Kind::ToolResults => 4,
+            Kind::HookDecisions => 8,
+        }
+    }
+}
+
 /// Reductions over RUNS, beside [`Counts`]'s totals.
 ///
 /// A separate document for a separate question, which is why it is not a field on
@@ -649,21 +663,15 @@ pub struct Repeats {
 /// split point of generated sessions, so the backward scans stay the
 /// specification and this is only a faster way to compute them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, serde::Deserialize)]
-#[expect(
-    clippy::struct_excessive_bools,
-    reason = "each `saw_*` is one independent presence the whole parse reports; \
-              they are not states of one machine an enum could name"
-)]
 pub struct Tally {
     turns: usize,
     tool_calls: usize,
     tool_errors: usize,
     hook_decisions: usize,
     hook_denials: usize,
-    saw_turns: bool,
-    saw_tool_calls: bool,
-    saw_tool_results: bool,
-    saw_hook_decisions: bool,
+    /// Which [`Kind`]s of record the file carried, one bit each by
+    /// [`Kind::bit`] — the presences [`Stream::records`] reports.
+    seen: u8,
     agent_turn_run: usize,
     /// The last marker was an authored operator turn (`true`) or assistant text
     /// (`false`); `None` before either.
@@ -753,7 +761,7 @@ pub fn tally_appended(path: &Path, shape: RecordShape) -> Option<Tally> {
 const HEAD_PROBE: u64 = 64 * 1024;
 
 /// Bump on any change to [`Tally`] or [`Tallied`]; every older entry misses.
-const TALLY_FORMAT: &str = "batten-transcript-tally-1";
+const TALLY_FORMAT: &str = "batten-transcript-tally-2";
 
 /// What [`tally_appended`] persists between calls.
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -822,7 +830,7 @@ impl Tally {
         match event {
             Event::Turn(role, origin) => {
                 self.turns += 1;
-                self.saw_turns = true;
+                self.seen |= Kind::Turns.bit();
                 match role {
                     Role::Assistant => self.agent_turn_run += 1,
                     Role::User => {
@@ -834,21 +842,21 @@ impl Tally {
                     }
                 }
             }
-            Event::TurnEnd(_) => self.saw_turns = true,
+            Event::TurnEnd(_) => self.seen |= Kind::Turns.bit(),
             Event::ToolCall { .. } => {
                 self.tool_calls += 1;
-                self.saw_tool_calls = true;
+                self.seen |= Kind::ToolCalls.bit();
                 self.agent_turn_run = 0;
                 self.calls_since_marker += 1;
             }
             Event::ToolResult { failed, .. } => {
-                self.saw_tool_results = true;
+                self.seen |= Kind::ToolResults.bit();
                 if *failed {
                     self.tool_errors += 1;
                 }
             }
             Event::HookDecision { exit_code, .. } => {
-                self.saw_hook_decisions = true;
+                self.seen |= Kind::HookDecisions.bit();
                 self.hook_decisions += 1;
                 if *exit_code == DENY_EXIT {
                     self.hook_denials += 1;
@@ -881,13 +889,13 @@ impl Tally {
     #[must_use]
     pub fn records(&self) -> std::collections::BTreeSet<Kind> {
         [
-            (self.saw_turns, Kind::Turns),
-            (self.saw_tool_calls, Kind::ToolCalls),
-            (self.saw_tool_results, Kind::ToolResults),
-            (self.saw_hook_decisions, Kind::HookDecisions),
+            Kind::Turns,
+            Kind::ToolCalls,
+            Kind::ToolResults,
+            Kind::HookDecisions,
         ]
         .into_iter()
-        .filter_map(|(saw, kind)| saw.then_some(kind))
+        .filter(|kind| self.seen & kind.bit() != 0)
         .collect()
     }
 

@@ -1145,6 +1145,13 @@ fn check_preset_scope(rule: &Rule, manifest: &crate::preset::Manifest, name: &st
     )))
 }
 
+/// What a load records as raised: the union every closing check reads, and the
+/// same per row for the collapse predicate (CLOUD-1638).
+type Raised<'a> = (
+    &'a mut BTreeSet<String>,
+    &'a mut BTreeMap<String, BTreeSet<String>>,
+);
+
 /// The checks one loaded bundle owes off the hot path (CLOUD-885): the tree keys
 /// it reads are emittable, it cites no inline regex, every class it raises is
 /// declared, and what it raises is recorded for the load's own closing checks.
@@ -1156,10 +1163,7 @@ fn check_loaded(
     (declared_patterns, sources): (&BTreeSet<&str>, Option<&[(String, String)]>),
     registry: &[crate::verdict::DeclaredVerdict],
     source: &str,
-    (emitted, per_rule): (
-        &mut BTreeSet<String>,
-        &mut BTreeMap<String, BTreeSet<String>>,
-    ),
+    (emitted, per_rule): Raised<'_>,
 ) -> Result<()> {
     check_tree_paths_are_emittable(rule, bundle, source)?;
     // A module row's sources may be copies `batten preset eject` wrote
