@@ -38,6 +38,9 @@ read_tools(tool) if {
 	tool in {
 		"Read", "Grep", "Glob", "LS", "NotebookRead", "ToolSearch", "TaskGet", "TaskList",
 		"TaskOutput", "WebSearch", "WebFetch", "ListMcpResourcesTool", "ReadMcpResourceTool",
+		# The session's own notification queue (CLOUD-2289). Marking an entry
+		# delivered is session state, never the tree.
+		"ReadNotifications",
 	}
 }
 

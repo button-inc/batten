@@ -605,6 +605,14 @@ fn a_plan_mode_batten_mcp_read_is_allowed_and_a_write_is_not() {
     ));
 }
 
+/// CLOUD-2289: reading the session's own notification queue is a read.
+#[test]
+fn a_plan_mode_read_notifications_is_allowed() {
+    let read = envelope("plan", "ReadNotifications", &serde_json::json!({}));
+    assert_not_plan_refused(&read);
+    assert_granted_by(&read, "call read now");
+}
+
 #[test]
 fn a_batten_mcp_read_is_preapproved_outside_plan_mode() {
     assert_granted_by(
