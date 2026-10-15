@@ -434,6 +434,28 @@ fn a_cache_hit_equals_the_cold_recompute() {
     assert!(cache_file(&home, &dir).exists(), "nothing was cached");
 }
 
+/// The record the cache retired sat beside the state, as `epoch.json`; the
+/// first write under `cache/` removes it rather than leaving it forever (code
+/// review of CLOUD-2315 — the removal looked one level too low).
+#[test]
+fn a_cache_write_removes_the_retired_record() {
+    let dir = repo("retired-record", "version = 1\n", &[("AGENTS.md", "a\n")]);
+    let home = cache_home("retired-record");
+    let canonical = dir.canonicalize().unwrap_or_else(|_| dir.clone());
+    let segment = batten::state::derive_repo_name(&canonical).expect("derive the state segment");
+    let state = home.join("batten").join(segment);
+    fs::create_dir_all(&state).expect("state dir");
+    fs::write(state.join("epoch.json"), "{}").expect("retired record");
+
+    assert_eq!(epoch_in(&dir, &home, &[]).status.code(), Some(0));
+
+    assert!(cache_file(&home, &dir).exists(), "nothing was cached");
+    assert!(
+        !state.join("epoch.json").exists(),
+        "the retired record outlived the write"
+    );
+}
+
 #[test]
 fn editing_a_tracked_file_invalidates_the_cache() {
     let dir = repo(

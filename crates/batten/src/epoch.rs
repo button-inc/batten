@@ -266,8 +266,9 @@ fn write_cache(path: &Path, key: &str, epoch: &str) {
         written.subsec_nanos()
     );
     crate::cache::write(path, key, body.as_bytes());
-    // The retired record sat beside the state rather than under `cache/`.
-    if let Some(state) = path.parent().and_then(Path::parent) {
+    // The retired record sat beside the state rather than under `cache/`; the
+    // entry is `<state>/cache/<partition>/epoch`, three levels below it.
+    if let Some(state) = path.ancestors().nth(3) {
         let _ = std::fs::remove_file(state.join(RETIRED_FILE));
     }
 }

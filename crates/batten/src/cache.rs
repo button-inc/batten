@@ -69,6 +69,12 @@ const KEPT_PARTITIONS: usize = 4;
 //MUTANT partitions-never-pruned|s@^    prune(\&root, name);$@@|a_new_partition_keeps_its_neighbours_up_to_the_bound
 #[must_use]
 pub fn root_under(parent: &Path) -> Option<PathBuf> {
+    // A binary that cannot name itself caches nothing: every such binary would
+    // share the empty identity, and an upgrade would read its predecessor's
+    // entries (code review of CLOUD-2315).
+    if running_binary().is_empty() {
+        return None;
+    }
     let root = parent.join("cache");
     let name = partition();
     let own = root.join(name);
@@ -87,10 +93,14 @@ pub fn root_under(parent: &Path) -> Option<PathBuf> {
     Some(own)
 }
 
-/// How stale a partition's use time may grow before a hit refreshes it.
-const USE_REFRESH: std::time::Duration = std::time::Duration::from_hours(24);
+/// How stale a partition's use time may grow before a hit refreshes it: short
+/// against a burst of rebuilds, each a new partition that prunes the oldest, so
+/// a binary in use is never the oldest while it is in use (code review of
+/// CLOUD-2315 — a day let four rebuilds evict the installed hook). The cost is
+/// one `utimensat` a minute.
+const USE_REFRESH: std::time::Duration = std::time::Duration::from_mins(1);
 
-/// Mark `own` used, at most once a day, so [`prune`] ranks partitions by LAST
+/// Mark `own` used, at most once a minute, so [`prune`] ranks partitions by LAST
 /// USE (code review of CLOUD-2315). A directory's mtime moves only when an entry
 /// is renamed straight into it, and most entries live a level down, so a binary
 /// that only reads — the installed hook, warm — read as the oldest and was the

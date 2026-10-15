@@ -1786,7 +1786,7 @@ impl Evaluator {
 /// call that asks one question.
 ///
 /// `None` is could-not-look: the input will not parse or the bundle faults.
-//MUTANT answer-memo-never-recalled|s@^            let recalled = Answers::recall(compiled, input);$@            let recalled: Option<Evaluated> = None;@|one_call_evaluates_each_rule_once
+//MUTANT answer-memo-never-recalled|s@^            if let Some(answer) = Answers::recall(compiled, input, \x7cheld\x7c select(held, rules)) {$@            if let Some(answer) = None::<Option<Answer>> {@|one_call_evaluates_each_rule_once
 fn answer(bundle: &Bundle, input: &str, rules: &[&str]) -> Option<Answer> {
     match &bundle.evaluator {
         Evaluator::Interpreted(engine) => {
@@ -1804,25 +1804,31 @@ fn answer(bundle: &Bundle, input: &str, rules: &[&str]) -> Option<Answer> {
             // what an unscoped call over its rules returns — could-not-look if
             // one of THEM faulted, else their members — so a sibling's fault
             // never reaches a verdict.
-            let recalled = Answers::recall(compiled, input);
-            let (faulted, members) = if let Some(evaluated) = recalled {
-                evaluated
-            } else {
-                let evaluated = compiled.evaluate_all(&Answers::parsed(input)?)?;
-                Answers::keep(compiled, input, evaluated.clone());
-                evaluated
-            };
-            if rules.iter().any(|rule| faulted.contains(*rule)) {
-                return None;
+            if let Some(answer) = Answers::recall(compiled, input, |held| select(held, rules)) {
+                return answer;
             }
-            Some(Answer::Members(
-                members
-                    .into_iter()
-                    .filter(|((_, rule), _)| rules.contains(&rule.as_str()))
-                    .collect(),
-            ))
+            let evaluated = compiled.evaluate_all(&Answers::parsed(input)?)?;
+            let answer = select(&evaluated, rules);
+            Answers::keep(compiled, evaluated);
+            answer
         }
     }
+}
+
+/// What an unscoped call over `rules` answers, read off a bundle's evaluation:
+/// could-not-look if one of them faulted, else their members.
+fn select(evaluated: &Evaluated, rules: &[&str]) -> Option<Answer> {
+    let (faulted, members) = evaluated;
+    if rules.iter().any(|rule| faulted.contains(*rule)) {
+        return None;
+    }
+    Some(Answer::Members(
+        members
+            .iter()
+            .filter(|((_, rule), _)| rules.contains(&rule.as_str()))
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect(),
+    ))
 }
 
 /// ONE EVALUATION PER BUNDLE PER CALL (CLOUD-2315).
@@ -1847,7 +1853,9 @@ fn answer(bundle: &Bundle, input: &str, rules: &[&str]) -> Option<Answer> {
 /// The INPUT is parsed once per call too: every bundle is handed the same
 /// document text, and each used to parse it into a `regorus::Value` of its own.
 struct Answers {
-    answered: Vec<(std::sync::Arc<Compiled>, String, Evaluated)>,
+    /// Every bundle evaluated over `input`, and what it answered.
+    answered: Vec<(std::sync::Arc<Compiled>, Evaluated)>,
+    /// The input every entry of `answered` was evaluated over, held once.
     input: Option<(String, regorus::Value)>,
 }
 
@@ -1900,7 +1908,8 @@ impl Answers {
         ANSWERS.with(|cell| cell.borrow().is_some())
     }
 
-    /// `input` parsed, once per distinct text within the scope.
+    /// `input` parsed, once per distinct text within the scope. Another text
+    /// forgets every answer, which were all over the text it replaces.
     fn parsed(input: &str) -> Option<regorus::Value> {
         ANSWERS.with(|cell| {
             let mut borrowed = cell.borrow_mut();
@@ -1912,30 +1921,39 @@ impl Answers {
             }
             let value = regorus::Value::from_json_str(input).ok()?;
             answers.input = Some((input.to_owned(), value.clone()));
+            answers.answered.clear();
             Some(value)
         })
     }
 
-    fn recall(compiled: &std::sync::Arc<Compiled>, input: &str) -> Option<Evaluated> {
+    /// `read` over `compiled`'s evaluation of `input`, if it was evaluated: read
+    /// under the borrow, so nothing unasked is copied out.
+    fn recall<R>(
+        compiled: &std::sync::Arc<Compiled>,
+        input: &str,
+        read: impl FnOnce(&Evaluated) -> R,
+    ) -> Option<R> {
         ANSWERS.with(|cell| {
-            cell.borrow().as_ref().and_then(|answers| {
-                answers
-                    .answered
-                    .iter()
-                    .find(|(held, text, _)| std::sync::Arc::ptr_eq(held, compiled) && text == input)
-                    .map(|(_, _, evaluated)| evaluated.clone())
-            })
+            let borrowed = cell.borrow();
+            let answers = borrowed.as_ref()?;
+            if answers.input.as_ref().is_none_or(|(text, _)| text != input) {
+                return None;
+            }
+            let (_, evaluated) = answers
+                .answered
+                .iter()
+                .find(|(held, _)| std::sync::Arc::ptr_eq(held, compiled))?;
+            Some(read(evaluated))
         })
     }
 
-    fn keep(compiled: &std::sync::Arc<Compiled>, input: &str, evaluated: Evaluated) {
+    /// Hold `compiled`'s evaluation over the input [`Answers::parsed`] last read.
+    fn keep(compiled: &std::sync::Arc<Compiled>, evaluated: Evaluated) {
         ANSWERS.with(|cell| {
             if let Some(answers) = cell.borrow_mut().as_mut() {
-                answers.answered.push((
-                    std::sync::Arc::clone(compiled),
-                    input.to_owned(),
-                    evaluated,
-                ));
+                answers
+                    .answered
+                    .push((std::sync::Arc::clone(compiled), evaluated));
             }
         });
     }
