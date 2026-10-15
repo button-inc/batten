@@ -145,7 +145,7 @@ jobs:
     # `runnerOS-runnerArch` lands at `config.ts:93`, INSIDE the prefix assigned to
     # `restoreKey` at `:133`, so the `ci-` family's readers and its one writer are
     # a single set: move any of them alone and the readers restore nothing. The
-    # readers are `ci` and `bats` (ci.yml) and `commit-lint` (commit-lint.yml),
+    # readers are `ci` (ci.yml) and `commit-lint` (commit-lint.yml),
     # all now `ubuntu-24.04-arm`.
     #
     # `cache-warm-windows` below is a DIFFERENT family and stays where it is.
@@ -197,8 +197,8 @@ jobs:
   # rust-cache's `config.ts:93`, INSIDE the prefix assigned to `restoreKey` at
   # `:133`, so `ci-` on arm64 and `ci-` on x64 are two entries that cannot
   # contend, cannot overwrite one another, and cannot hand a reader the other's
-  # tree. `cache-warm-linux` above writes the arm64 one, read by `ci` and `bats`
-  # (ci.yml) and `commit-lint` (commit-lint.yml). THIS writes the x64 one, and
+  # tree. `cache-warm-linux` above writes the arm64 one, read by `ci` (ci.yml)
+  # and `commit-lint` (commit-lint.yml). THIS writes the x64 one, and
   # `batten-check` is its only reader — the one job of the family that cannot
   # move to arm64, because `batten enforce` carries `no-secrets` and no
   # ripsecrets release has ever published a linux-aarch64 artifact. CLOUD-1431

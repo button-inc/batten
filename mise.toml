@@ -411,8 +411,9 @@ CI_REQUIRED_CHECKS = "ci,batten-check,cross,musl,commit-lint,zizmor,darwin-link 
 # fast-forward bot judges a head against TRUNK's roster, so a job is retired in
 # two landings: its name moves here while the job still answers, then the job is
 # deleted and the name leaves. `ci-local-parity` excuses a name here from the
-# roster and refuses one that is also on it or that names no job.
-CI_RETIRING_CHECKS = "bats"
+# roster and refuses one that is also on it or that names no job. Empty between
+# retirements: `bats` passed through it (CLOUD-2301) and is gone.
+CI_RETIRING_CHECKS = ""
 
 # ─── THE LAP'S READY PHASE (CLOUD-1148) ───────────────────────────────────────
 #

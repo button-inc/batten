@@ -827,7 +827,7 @@ jobs:
           # a discarded restore. `prefix-key` (`:73`) is the manual escape hatch
           # if a target dir is ever genuinely poisoned.
           #
-          # A DISTINCT FAMILY, unlike `bats`, which now reads `ci-`: this job's
+          # A DISTINCT FAMILY, unlike the linux jobs that read `ci-`: this job's
           # target dir is built by a different host toolchain, so an entry shared
           # with a linux job would thrash rather than warm. It stays a writer on
           # `main` for the same reason `cross` and `semver` do.
