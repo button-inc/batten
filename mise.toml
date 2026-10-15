@@ -4624,10 +4624,16 @@ depends = ["tree-clean", "ci", "cross-check", "darwin-link", "zizmor", "semver"]
 # * `config-lint` against the trusted base (CLOUD-236, CLOUD-1702) —
 #   `verify:config-lint` carries it.
 # * `evaluator-io-record` then its verdict row (CLOUD-1717, CLOUD-831).
-# * `perf-gate` in the body, where it does not compete with the test builds
-#   (CLOUD-1891).
 # * `prose-only-check` last of the content gates (CLOUD-827), stating no remedy of
 #   its own (CLOUD-1050): the gate's message is the remedy.
+# * `perf-gate` ALONE AND LAST before the receipt (CLOUD-2283), after every
+#   other step has exited: in the body it does not compete with the test builds
+#   (CLOUD-1891), and last it does not compete with its body siblings either.
+#   Measured on #1132, `hook` read 1.322x inside `verify` and within 1.3x alone
+#   on the same head. Hyperfine's outlier warning is NOT read as contention:
+#   measured 2026-10-15 with this step alone and last, one outlier in 100 runs
+#   of `passthrough` still fired it, and `compare` grades on p50, which a lone
+#   outlier does not move (CLOUD-2283).
 # * THE LAP'S CLOSE (CLOUD-861): the same reclaim that opened it, recording what
 #   the lap consumed. A lap that ended below its floor leaves no receipt.
 # * The receipt (CLOUD-203), keyed to the exact commit verified. `receipt record`
@@ -4651,9 +4657,9 @@ run = [
   "mise run evaluator-io-record",
   "mise run batten -- check --rule 'test cover never'",
   "mise run engine-pin-check",
-  "mise run perf-gate",
   "mise run prose-only-check",
   "mise run batten -- ci step --verdict needed --on 0=true --on 2=false -- mise run ci-slow-needed origin/main",
+  "mise run perf-gate",
   "cargo run --quiet -p batten -- receipt record verify",
 ]
 

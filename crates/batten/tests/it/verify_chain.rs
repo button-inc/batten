@@ -249,6 +249,23 @@ fn the_receipt_is_the_last_step() {
     );
 }
 
+/// THE PERF GATE MEASURES ALONE (CLOUD-2283): it is the last step before the
+/// receipt, so every other body step has exited when it starts, and it is not a
+/// `depends` entry, which mise would run beside the rest of the fan.
+#[test]
+fn the_perf_gate_runs_alone_and_last_before_the_receipt() {
+    let gated = steps("verify:gated");
+    let perf = step_at(&gated, "mise run perf-gate");
+    assert_eq!(perf, gated.len() - 2, "{gated:?}");
+    assert!(
+        !depends_of("verify:gated")
+            .iter()
+            .any(|entry| entry.contains("perf")),
+        "{:?}",
+        depends_of("verify:gated")
+    );
+}
+
 /// NO RECLAIM STEP IN THE LAP (CLOUD-2198): the run-wide watcher collects while
 /// the lap runs, so neither verify task opens or closes a prune lap, and the
 /// lap's marker is exported to nothing.
