@@ -337,6 +337,10 @@ fn the_shipped_floor_agrees_with_its_declared_basis() {
 
 /// The retired program is gone and no caller resolves it by path.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_retired_program_is_not_tracked_and_no_caller_names_it` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_retired_program_is_not_tracked_and_no_caller_names_it() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()

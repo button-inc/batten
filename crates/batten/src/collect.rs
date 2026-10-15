@@ -202,6 +202,10 @@ fn program_name(path: &str) -> String {
 /// Linux and Android read `/proc/<pid>/exe` and field 22 of `/proc/<pid>/stat`,
 /// clock ticks since boot, against `/proc/stat`'s `btime`.
 #[cfg(any(target_os = "linux", target_os = "android"))]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `processes` reads a kernel-sized /proc record"
+)]
 fn processes() -> Option<Vec<Process>> {
     let boot = proc_stat::boot_seconds(&std::fs::read_to_string("/proc/stat").ok()?)?;
     let ticks = rustix::param::clock_ticks_per_second().max(1);

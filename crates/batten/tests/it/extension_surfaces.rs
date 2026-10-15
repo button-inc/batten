@@ -31,6 +31,10 @@ use common::{Fixture, StateHome, at_root, batten, scratch};
 /// The README section these examples are drawn from.
 const SECTION: &str = "## Extending Batten: eleven rule kinds, and which to reach for";
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `readme` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn readme() -> String {
     fs::read_to_string(at_root("README.md")).expect("read README.md")
 }
@@ -296,6 +300,10 @@ fn the_doc_records_the_decision_rather_than_an_open_asymmetry() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `only_exec_claims_a_channel_carrying_codes_batten_did_not_choose` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn only_exec_claims_a_channel_carrying_codes_batten_did_not_choose() {
     // CLOUD-292's third obligation. `exec` is the one verb whose channel carries
     // codes Batten did not choose, and `exit.rs` — the §1 authority for what a
@@ -429,6 +437,10 @@ fn the_extension_headings_count_matches_the_enum() {
 /// from scratch. That argument was unrealised while the starter mentioned none of
 /// them: the feature shipped and the documented path did not reach it.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_starter_config_names_every_shipped_preset` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_starter_config_names_every_shipped_preset() {
     for file in ["crates/batten/src/starter.toml", "batten.example.toml"] {
         let text =

@@ -1047,6 +1047,10 @@ fn the_acceptance_runner_is_the_landed_rule_engine() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_published_schema_takes_the_effect_vocabulary_from_one_place` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_published_schema_takes_the_effect_vocabulary_from_one_place() {
     // `Effect` hand-writes Serialize/Deserialize/JsonSchema, so three
     // spellings of the vocabulary could drift apart. All three read
@@ -1081,6 +1085,10 @@ fn the_published_schema_takes_the_effect_vocabulary_from_one_place() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_crate_bakes_in_no_consumer_vocabulary` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_crate_bakes_in_no_consumer_vocabulary() {
     // Non-negotiable rule 1, over the whole library: every token this fixture
     // config declares is a consumer's word, and a grep of `crates/batten/src`
@@ -1177,6 +1185,10 @@ fn a_sequence_finding_open_at_fork_time_follows_the_fork() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `no_session_scoped_field_enters_a_code_log_or_scope_identity` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn no_session_scoped_field_enters_a_code_log_or_scope_identity() {
     // CLOUD-83's §7 (d). These three kinds survive a restart by CONSTRUCTION —
     // their tuples carry nothing process-local — and that is a property worth a
@@ -1386,6 +1398,10 @@ const NO_PREMISE: &str = r#"    fn t() {
 "#;
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `every_permission_drop_asserts_its_own_premise` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn every_permission_drop_asserts_its_own_premise() {
     // CLOUD-249. This environment runs as root, and root ignores the permission
     // bits: a `set_permissions(0o000)` followed by `expect_err` passed here
@@ -1456,6 +1472,10 @@ fn xdg_needle() -> String {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `no_suite_sets_the_state_dir_variables_itself` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn no_suite_sets_the_state_dir_variables_itself() {
     // CLOUD-619. `state::root` resolves through `etcetera`'s base strategy — XDG
     // on Linux and macOS, the roaming known folder on Windows — so a case that
@@ -1649,6 +1669,10 @@ fn path_joined_portably(body: &str) -> Result<(), &'static str> {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `every_path_override_is_composed_with_join_paths` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn every_path_override_is_composed_with_join_paths() {
     // CLOUD-617/CLOUD-113. `judge_kind` built `format!("{bin}:{inherited}")`, so
     // on Windows the fixture's stub was not on PATH at all and seven of fourteen
@@ -1718,6 +1742,10 @@ fn basic_string_interpolation(key: &str) -> String {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `every_path_valued_toml_key_uses_a_literal_string` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn every_path_valued_toml_key_uses_a_literal_string() {
     // CLOUD-113, found three separate times on three separate Windows runs, each
     // costing a round trip and each looking like a defect in the subject rather
@@ -1843,6 +1871,10 @@ fn a_nested_change_is_recognised_when_it_lands_on_a_moved_base() {
 // admission `policy/fixture-forks.rego` reserves for a case whose assertion is
 // initialisation itself, and this is the first thing that gate fired on.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `a_copied_repository_is_what_a_fresh_init_would_have_written` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn a_copied_repository_is_what_a_fresh_init_would_have_written() {
     let forked = common::scratch("template/forked");
     common::git_in(&forked, &["init", "-q"]);
@@ -1969,6 +2001,10 @@ fn an_outside_tree_repository_still_forks_git() {
 /// delete it out from under every concurrent case in the run — and the next one
 /// would rebuild it, which makes the symptom intermittent rather than loud.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `no_case_names_the_template_directory` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn no_case_names_the_template_directory() {
     let named: Vec<(usize, String)> = common::rust_sources()
         .into_iter()

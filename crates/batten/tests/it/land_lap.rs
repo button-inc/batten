@@ -415,6 +415,10 @@ fn the_shipped_lap_validates_and_ends_at_the_commit_point() {
 /// record an `h`, and every successful landing then reads as *the container died
 /// under active work*.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_landings_own_stop_note_is_still_declared` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_landings_own_stop_note_is_still_declared() {
     let manifest =
         std::fs::read_to_string("../../mise.toml").expect("read the consumer's manifest");

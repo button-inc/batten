@@ -80,10 +80,18 @@ impl Bench {
         self.repo.join(".git/batten-wiring/at-load.json")
     }
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: `surface_text` reads a test input: a fixture the case wrote or a file this repository tracks"
+    )]
     fn surface_text(&self) -> String {
         std::fs::read_to_string(self.surface()).expect("the surface is readable")
     }
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: `record_text` reads a test input: a fixture the case wrote or a file this repository tracks"
+    )]
     fn record_text(&self) -> String {
         std::fs::read_to_string(self.record()).expect("the record is readable")
     }
@@ -503,6 +511,10 @@ fn a_merged_surface_that_is_not_a_wiring_file_is_left_alone() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `a_checkout_sitting_at_the_home_directory_is_never_its_own_merged_surface` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn a_checkout_sitting_at_the_home_directory_is_never_its_own_merged_surface() {
     // The `same_file` arm, driven by the collision its comment describes: every
     // path `merge_surfaces` declares is resolved against BOTH the home directory

@@ -2514,6 +2514,10 @@ impl Local {
     /// holder id that fell back to a constant would let two clones that both
     /// failed to write one recognise each other's leases as their own, which is
     /// the two-holders bug arriving through the identity rather than the CAS.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: `holder` reads one record file this crate writes whole"
+    )]
     pub fn holder(&self) -> Result<String> {
         let path = self.dir.join("holder");
         if let Ok(existing) = std::fs::read_to_string(&path) {
@@ -2580,6 +2584,10 @@ impl Local {
     /// bare sha is what the FIRST spelling of this wrote and reading it loosely
     /// would resurrect the assumption the tab exists to remove.
     #[must_use]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: `poisoned` reads one record file this crate writes whole"
+    )]
     pub fn poisoned(&self) -> Option<(String, String)> {
         let record = std::fs::read_to_string(self.dir.join("poisoned")).ok()?;
         let (tracking, at) = record.trim().split_once('\t')?;
@@ -2610,6 +2618,10 @@ impl Local {
     /// A first sighting is `0`, and a value this clone cannot record is `0` too —
     /// a corroboration clock that cannot be kept has corroborated nothing.
     #[must_use]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: `held_for` reads one record file this crate writes whole"
+    )]
     pub fn held_for(&self, name: &str, token: &str, now: i64) -> i64 {
         let path = self.dir.join(name);
         let seen = std::fs::read_to_string(&path).unwrap_or_default();
@@ -2858,6 +2870,10 @@ impl Progress {
 /// registered is not evidence of a stall**, and killing one on that reading would
 /// be inventing the finding.
 #[must_use]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `progress_of` reads one record file this crate writes whole"
+)]
 pub fn progress_of(git_dir: &std::path::Path, pid: u32) -> Option<Progress> {
     let text = std::fs::read_to_string(git_dir.join("batten-tasks").join(pid.to_string())).ok()?;
     let field = |name: &str| -> i64 {
@@ -2972,6 +2988,10 @@ pub fn bail(
 /// that follows silently from a missing file.
 #[must_use]
 #[cfg(target_os = "linux")]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `holder_alive` reads a kernel-sized /proc record"
+)]
 pub fn holder_alive(pid: u32, marker: &str) -> bool {
     let Ok(raw) = std::fs::read(format!("/proc/{pid}/cmdline")) else {
         return false;
@@ -4540,6 +4560,10 @@ mod tests {
 
     #[test]
     #[cfg(target_os = "linux")]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: `this_process_is_alive_under_a_marker_it_carries` reads a fixture this case wrote"
+    )]
     fn this_process_is_alive_under_a_marker_it_carries() {
         // The anti-vacuity mirror: without it the case above is satisfied by a
         // predicate that answers `false` for everything.

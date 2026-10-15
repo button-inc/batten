@@ -58,6 +58,10 @@ const REPO: &str = "example/pkg";
 
 /// The archive payload: a `batten` stub at the archive root, which is where
 /// `batten dist` puts the binary and where the bootstrap extracts it from.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `tarball` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn tarball(dir: &std::path::Path) -> Vec<u8> {
     let stage = dir.join("stage");
     std::fs::create_dir_all(&stage).unwrap();

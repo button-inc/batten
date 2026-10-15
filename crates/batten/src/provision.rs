@@ -649,6 +649,10 @@ pub fn links_host(exe: &Path, repo_root: &Path) -> bool {
     !exe.starts_with(repo_root)
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `freshness_of` reads one cached download, whose size the pinned digest fixes"
+)]
 fn freshness_of(entry: &Provision, cache_root: &Path, links_host: bool) -> Result<Freshness> {
     let dir = entry_dir(cache_root, entry);
     let binary = dir.join(BIN_DIR).join(&entry.binary);
@@ -863,6 +867,10 @@ fn install(entry: &Provision, cache_root: &Path, bytes: &[u8], links_host: bool)
 /// which sends the caller to the network, which is the direction a miss must fail
 /// in. It never reports an error of its own: a cache this cannot read is not a
 /// finding, it is a reason to fetch.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `cached_artifact_matching_pin` reads one cached download, whose size the pinned digest fixes"
+)]
 fn cached_artifact_matching_pin(
     entry: &Provision,
     cache_root: &Path,
@@ -1015,6 +1023,10 @@ struct Launch {
 /// `true` for a plain copy, which has no interpreter to lose — the question does
 /// not apply, and answering `false` there would make every ordinary linked
 /// binary permanently stale.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `relaunches_a_present_interpreter` reads one launcher script"
+)]
 fn relaunches_a_present_interpreter(linked: &Path) -> bool {
     let Ok(bytes) = fs::read(linked) else {
         // Unreadable is not this predicate's finding: the `is_file` check above
@@ -1048,6 +1060,10 @@ fn relaunches_a_present_interpreter(linked: &Path) -> bool {
 /// answered above, and re-linking does not fix a permissions failure. A body
 /// that will not parse is `false`, because that is precisely the launcher
 /// [`exec_launcher`] refuses and tells the operator to rewrite.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `launcher_declares` reads one launcher script"
+)]
 fn launcher_declares(linked: &Path, entry: &Provision) -> bool {
     let Ok(bytes) = fs::read(linked) else {
         return true;
@@ -1077,6 +1093,10 @@ fn launcher_declares(linked: &Path, entry: &Provision) -> bool {
 /// instructions this build knows how to follow — which is a batten and a
 /// launcher that disagree, and is repaired by `provision apply`. On Unix a
 /// successful `exec` never returns, so a returned error is always a real one.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `exec_launcher` reads one launcher script"
+)]
 pub fn exec_launcher(
     script: &Path,
     args: &[std::ffi::OsString],
@@ -1159,6 +1179,10 @@ const SYSTEM_TRUST_BUNDLE: &str = "/etc/ssl/certs/ca-certificates.crt";
 /// fails in, and the safe one here: the cost of a wrong `false` is a refusal the
 /// operator can see, and the cost of a wrong `true` is traffic silently leaving
 /// a path they chose.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `trust_names` reads one trust bundle"
+)]
 fn trust_names(org: &str) -> bool {
     // A VARIABLE THAT IS SET DECIDES WHICH BUNDLE, EVEN IF IT CANNOT BE READ.
     // Falling through to the system store when the named file is missing would
@@ -1312,6 +1336,10 @@ const CREDENTIAL_MAX_AGE: u64 = 300;
 /// Failure to look is `false`, and the direction is deliberate: an unprovable
 /// candidate is skipped rather than trusted, and if NO candidate proves usable
 /// the caller keeps the host's own wiring instead of stripping it.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `credential_usable` reads one record file this crate writes whole"
+)]
 fn credential_usable(value: &Secret, probe: &str) -> bool {
     let Some(receipt) = credential_receipt_path(value) else {
         return false;
@@ -1912,6 +1940,10 @@ fn make_executable(_path: &Path) -> Result<()> {
 /// Plain `http://` is absent on purpose: a pinned checksum makes tampering
 /// detectable, not impossible to attempt, and there is no reason to fetch a
 /// pinned artifact over a channel that can be rewritten in flight.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `fetch` reads one pinned artifact, whose size its pinned `digest` fixes; into memory is the verify-before-`install` contract, so it does not stream"
+)]
 fn fetch(url: &str) -> Result<Vec<u8>> {
     if let Some(path) = url.strip_prefix("file://") {
         return fs::read(path).with_context(|| format!("fetch {url}"));

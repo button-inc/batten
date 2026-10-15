@@ -133,6 +133,10 @@ fn materialize(name: &str) -> PathBuf {
 /// alone, red beside its sibling. Process-per-test does not fix it — nextest
 /// isolates processes and they still share a filesystem path — so the slot is
 /// part of the address rather than something a runner setting can paper over.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `materialize_into` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn materialize_into(name: &str, slot: &str) -> PathBuf {
     let source = corpus_root().join(name);
     let dir = common::scratch_repo(&format!("fixture-repos/{slot}/{name}"));
@@ -152,6 +156,10 @@ fn materialize_into(name: &str, slot: &str) -> PathBuf {
 }
 
 /// The expectation `name` commits.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `expectation` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn expectation(name: &str) -> Expectation {
     let path = corpus_root().join(name).join(EXPECTED_FILE);
     let text = fs::read_to_string(&path).unwrap_or_else(|_| {
@@ -292,6 +300,10 @@ fn without_head(line: &str) -> &str {
 /// numbering is the one a reader sees in the committed file — materialization
 /// only strips a suffix from the name, never a line from the body, so the two
 /// agree, and reading the source keeps that assumption visible.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `cases_in` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn cases_in(name: &str) -> Vec<Case> {
     let mut cases = Vec::new();
     let mut files: Vec<PathBuf> = fs::read_dir(corpus_root().join(name))
@@ -533,6 +545,10 @@ fn a_wrong_expectation_is_reported_as_a_mismatch() {
 // --- (c) one fixture per rule kind -------------------------------------------
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_corpus_covers_every_rule_kind` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_corpus_covers_every_rule_kind() {
     // A presence predicate over the engine's own table, which `forbid` cannot
     // express: the domain is `RuleKind::ALL`, not the repository's files. Same

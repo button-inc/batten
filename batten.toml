@@ -6035,14 +6035,23 @@ no_fix_reason = "class 3 (a port onto a rule kind): migrate the predicate onto a
 # records — it makes the migration MONOTONIC, so no twelfth can arrive while it
 # is pending.
 #
-# `disallowed_methods` rather than the sleep paths specifically: the same
-# argument applies to every ban in that list, and a row that named only the sleep
-# would leave the multi-thread-runtime ban waivable at will for the same reason.
+# Every ban this argument covers — both delays and the multi-thread runtime —
+# rather than the sleep paths alone, because a row that named only the sleep
+# would leave the runtime ban waivable at will for the same reason.
+#
+# COUNTED ON THE WAIVED CALLS, NOT ON THE LINT NAME (CLOUD-1525). The row used to
+# count `clippy::disallowed_methods`, which equalled its subject only while every
+# entry in that list was a delay or the runtime. CLOUD-1525 put the whole-file
+# reads in the same list, and its mechanism IS a per-site annotation declaring
+# the file's bound — an inventory row like the spawn census's, not a waiver of a
+# delay — so counting the lint would refuse the census for being taken. A banned
+# call cannot stand without its waiver, so the calls count the waivers exactly,
+# and a new delay or runtime still raises the count.
 [[rule]]
 id = "waiver add refused"
 kind = "ratchet"
 glob = "crates/batten/src/**/*.rs"
-pattern = "clippy::disallowed_methods"
+regex = '\bsleep\(|new_multi_thread'
 direction = "non_increasing"
 base = "origin/main"
 severity = "deny"

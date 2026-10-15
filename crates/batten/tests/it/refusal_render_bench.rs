@@ -336,6 +336,10 @@ fn the_projection_is_the_declared_table() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_committed_report_is_what_this_tree_renders` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_committed_report_is_what_this_tree_renders() {
     // The drift check, and the reason the benchmark task can stay off the landing
     // path: the committed file is re-derived here from the same authority the

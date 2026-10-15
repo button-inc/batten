@@ -144,6 +144,10 @@ fn claim_check(dir: &Path) -> Output {
     run_with_stdin(dir, &["claim", "check"], &payload.to_string())
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `claim_receipt` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn claim_receipt(dir: &Path) -> Option<String> {
     std::fs::read_to_string(receipts(dir).join("claim.feature-claim")).ok()
 }

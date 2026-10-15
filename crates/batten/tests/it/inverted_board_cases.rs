@@ -72,6 +72,10 @@ const LEDGERS: &[(&str, &str)] = &[("tests/ready-lint.bats", "crates/batten/test
 /// the retired suite declared; `changed` records that its property later moved
 /// (CLOUD-1771 retired the §8 sentence parser two of these successors asserted),
 /// which is a statement about the case, not its removal from the suite.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `declared` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn declared(suite: &str) -> Vec<String> {
     if let Ok(text) = fs::read_to_string(at_root(suite)) {
         return case_names(&text);

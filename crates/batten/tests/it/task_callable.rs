@@ -87,6 +87,10 @@ severity = "deny"
 /// The REAL module and the REAL row, never a fixture copy: the whole point of
 /// this tier is that the module decides over the engine's own projection, and a
 /// stand-in would be one more `with input as` wearing a different costume.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `repo_with` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn repo_with(name: &str, tasks: &[&str], programs: &[&str], workflow: &str) -> std::path::PathBuf {
     let dir = scratch(&format!("task-callable-{name}"));
     let module = std::fs::read_to_string("../../policy/task-callable.rego")
@@ -301,6 +305,10 @@ fn a_comment_naming_an_absent_task_is_not_judged() {
 
 /// A repository whose files are exactly these — for the manifest and `hk.pkl`
 /// caller populations, which a workflow-shaped fixture cannot reach.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `repo_files` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn repo_files(name: &str, files: &[(&str, &str)]) -> std::path::PathBuf {
     let dir = scratch(&format!("task-callable-{name}"));
     let module = std::fs::read_to_string("../../policy/task-callable.rego")

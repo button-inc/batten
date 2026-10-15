@@ -162,6 +162,10 @@ const DISPOSITIONS: &[Disposition] = &[
 /// Located from `CARGO_MANIFEST_DIR` rather than `file!()`: that macro yields a
 /// workspace-relative path, and the test process's working directory is not the
 /// workspace root.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `this_file` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn this_file() -> String {
     fs::read_to_string(
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/it/acceptance_corpus.rs"),
@@ -184,6 +188,10 @@ fn materialize(name: &str) -> PathBuf {
     dir
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `copy_inert` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn copy_inert(from: &Path, to: &Path) {
     for entry in fs::read_dir(from).expect("read the fixture source") {
         let entry = entry.expect("read a fixture entry");
@@ -217,6 +225,10 @@ fn make_executable(path: &Path) {
 fn make_executable(_path: &Path) {}
 
 /// The materialized ruleset, parsed.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `materialized_config` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn materialized_config(dir: &Path) -> Config {
     let text = fs::read_to_string(dir.join("batten.toml")).expect("read the materialized config");
     toml::from_str(&text).expect("the materialized fixture is a valid batten.toml")
@@ -373,6 +385,10 @@ fn every_source_item_has_exactly_one_recorded_disposition() {
 // --- (§4) the fixture is a real batten.toml, judged by the published schema ---
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_materialized_fixture_validates_against_the_derived_schema` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_materialized_fixture_validates_against_the_derived_schema() {
     // The `.in` copy is inert bytes; what the suite writes is what the schema
     // judges. Without this the port could introduce a config shape the schema

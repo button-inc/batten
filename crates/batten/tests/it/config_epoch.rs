@@ -503,6 +503,10 @@ fn a_corrupt_cache_costs_the_run_nothing() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `a_future_cache_format_is_a_miss_rather_than_a_misread` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn a_future_cache_format_is_a_miss_rather_than_a_misread() {
     let dir = repo("cache-future", "version = 1\n", &[]);
     let home = cache_home("cache-future");

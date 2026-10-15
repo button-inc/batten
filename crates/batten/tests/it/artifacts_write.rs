@@ -50,6 +50,10 @@ fn scratch(name: &str) -> PathBuf {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `completions_are_the_bytes_generate_emits` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn completions_are_the_bytes_generate_emits() {
     let dir = scratch("completions");
     let output = run(&dir, &["artifacts", "write", "--completions", "out"]);
@@ -69,6 +73,10 @@ fn completions_are_the_bytes_generate_emits() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `every_schema_surface_is_the_bytes_generate_emits` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn every_schema_surface_is_the_bytes_generate_emits() {
     let dir = scratch("schema");
     let output = run(&dir, &["artifacts", "write", "--schema", "out"]);
@@ -97,6 +105,10 @@ fn spec_paths(node: &serde_json::Value, into: &mut Vec<String>) {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `one_page_per_command_plus_the_root_and_each_is_generates_bytes` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn one_page_per_command_plus_the_root_and_each_is_generates_bytes() {
     let dir = scratch("man");
     let output = run(&dir, &["artifacts", "write", "--man", "out"]);
@@ -160,6 +172,10 @@ fn a_stale_page_is_removed_and_nothing_else_is() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_reference_is_written_and_named_on_one_line` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_reference_is_written_and_named_on_one_line() {
     let dir = scratch("reference");
     let output = run(

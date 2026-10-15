@@ -237,6 +237,10 @@ fn a_script_and_prose_are_not_committed_binaries() {
 
 /// The retired program is gone, and the NAME its four callers use still answers.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_retired_program_is_gone_and_its_task_name_survives` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_retired_program_is_gone_and_its_task_name_survives() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()

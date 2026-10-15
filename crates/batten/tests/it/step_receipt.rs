@@ -228,6 +228,10 @@ impl Repo {
     }
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `read` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn read(path: &Path) -> String {
     std::fs::read_to_string(path).unwrap_or_default()
 }
@@ -701,6 +705,10 @@ fn a_passing_step_whose_record_refuses_stays_green() {
 /// the step would silently stop caching. And a caller still spelling the retired
 /// task would fail at the task runner rather than at a gate.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `every_step_a_task_names_is_declared_and_the_retired_task_is_gone` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn every_step_a_task_names_is_declared_and_the_retired_task_is_gone() {
     let manifest = std::fs::read_to_string(common::at_root("mise.toml")).expect("mise.toml");
     let config = std::fs::read_to_string(common::at_root("batten.toml")).expect("batten.toml");

@@ -166,6 +166,10 @@ fn the_answer_is_byte_stable() {
 
 /// The retired program is gone, and no `[program]` row still resolves it.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_retired_program_is_not_tracked_and_no_row_names_it` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_retired_program_is_not_tracked_and_no_row_names_it() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()

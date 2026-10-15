@@ -92,6 +92,10 @@ fn inline_finding_renderings(source: &str) -> Vec<(usize, String)> {
         .collect()
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `lib_source` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn lib_source() -> String {
     fs::read_to_string(at_root("crates/batten/src/lib.rs")).expect("read lib.rs")
 }
@@ -223,6 +227,10 @@ fn sources(dir: &std::path::Path, into: &mut Vec<std::path::PathBuf>) {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `no_finding_label_is_spelled_outside_the_projection` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn no_finding_label_is_spelled_outside_the_projection() {
     let mut files = Vec::new();
     sources(&at_root("crates/batten/src"), &mut files);
@@ -370,6 +378,10 @@ fn string_consts(source: &str) -> Vec<(String, String)> {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `every_refusal_id_the_engine_raises_resolves` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn every_refusal_id_the_engine_raises_resolves() {
     let mut files = Vec::new();
     sources(&at_root("crates/batten/src"), &mut files);
@@ -498,6 +510,10 @@ fn unclassed_advice(source: &str) -> Vec<(usize, String)> {
 ///
 /// The suite `capture-notice-free-text` is killed in.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `every_advisory_push_carries_a_class` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn every_advisory_push_carries_a_class() {
     let mut files = Vec::new();
     sources(&at_root("crates/batten/src"), &mut files);

@@ -138,6 +138,10 @@ fn declared_first_sighting_ceiling() -> usize {
     declared("first_sighting_max_tokens")
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `declared` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn declared(key: &str) -> usize {
     let text = std::fs::read_to_string(root().join("batten.toml"))
         .expect("the committed config is readable");
@@ -153,6 +157,10 @@ fn declared(key: &str) -> usize {
 }
 
 /// The committed `reason` of one `[[rule]]` row.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `rule_reason` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn rule_reason(id: &str) -> String {
     let text = std::fs::read_to_string(root().join("batten.toml"))
         .expect("the committed config is readable");
@@ -694,6 +702,10 @@ fn two_contexts_in_one_clone_each_get_the_full_text() {
 /// the two `SessionStart` cases below would still be fast for a reason this case
 /// no longer proves.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_session_fixture_carries_no_session_provisioning` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_session_fixture_carries_no_session_provisioning() {
     let (startup, handlers) = session_provisioning(COMMITTED);
     assert!(
@@ -966,6 +978,10 @@ fn an_undelivered_channel_marks_nothing() {
 /// An edit to a definition mid-cycle is a new item (CLOUD-2075 §7 case 7,
 /// CLOUD-1582's pair absorbed).
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `an_edited_definition_is_a_new_item_mid_cycle` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn an_edited_definition_is_a_new_item_mid_cycle() {
     let repo = fixture("definition-edited");
     let command = "head -40 batten.toml";
@@ -1216,6 +1232,10 @@ fn every_class_routed_only_into_a_protected_path_is_admissible() {
 /// declared table: a class whose only routes are `override` renders no way out,
 /// and `override` is excluded from the clause by construction.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `no_declared_class_would_render_a_first_sighting_with_no_route` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn no_declared_class_would_render_a_first_sighting_with_no_route() {
     let text = std::fs::read_to_string(root().join("batten.toml"))
         .expect("the committed config is readable");

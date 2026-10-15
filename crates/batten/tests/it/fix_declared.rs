@@ -103,6 +103,10 @@ fn the_class_grammar_is_exact() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `every_rule_in_this_repository_declares_its_remedy` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn every_rule_in_this_repository_declares_its_remedy() {
     // The whole-tree instance of the predicate, over this repository's own
     // authority — the consumer this gate exists for is first of all this one.

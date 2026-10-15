@@ -422,6 +422,10 @@ fn a_consumer_declaring_no_census_is_not_banned() {
 /// growing it is how a ban becomes a hatch — so it is pinned here, and a change
 /// to it is a failing test a reviewer must read.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_exemption_set_is_exactly_the_files_that_must_be_shell` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_exemption_set_is_exactly_the_files_that_must_be_shell() {
     let authority: toml::Value =
         toml::from_str(&std::fs::read_to_string(common::at_root("batten.toml")).unwrap()).unwrap();
@@ -446,6 +450,10 @@ fn the_exemption_set_is_exactly_the_files_that_must_be_shell() {
 /// cannot see, and it would pass silently over every change to it — the census
 /// would count a home the gate never judged.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `this_repositorys_ban_reads_every_declared_home` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn this_repositorys_ban_reads_every_declared_home() {
     let authority: toml::Value =
         toml::from_str(&std::fs::read_to_string(common::at_root("batten.toml")).unwrap()).unwrap();
@@ -489,6 +497,10 @@ fn this_repositorys_ban_reads_every_declared_home() {
 /// The real tree, against its own base: this repository is clean today, so a
 /// ban that refused its own checkout would be switched off on the first run.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `this_repositorys_own_tree_passes` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn this_repositorys_own_tree_passes() {
     let root = common::at_root(".");
     let authority: toml::Value =

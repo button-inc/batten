@@ -157,11 +157,19 @@ fn query(dir: &Path, forge: &Path) -> Output {
 }
 
 /// What the fixture recorded about the requests that went out.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `requests` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn requests(forge: &Path) -> String {
     std::fs::read_to_string(forge.join("args")).unwrap_or_default()
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `a_declared_query_is_walked_reduced_and_decided_over` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn a_declared_query_is_walked_reduced_and_decided_over() {
     // THE WHOLE PATH. Two pages, a `total_count` the walk reaches, one failed
     // run — and the module reports it, which is the claim a consumer depends on.

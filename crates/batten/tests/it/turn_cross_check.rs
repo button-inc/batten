@@ -171,6 +171,10 @@ fn the_failure_is_announced_on_stdout_and_then_cleared() {
 /// whole output. The pattern must span colour escapes: three drafts died
 /// anchoring on a literal `: error`, which the escapes split.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_pointers_are_capped_and_name_the_full_log` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_pointers_are_capped_and_name_the_full_log() {
     let dir = repo("capped");
     let command = failing(&dir);

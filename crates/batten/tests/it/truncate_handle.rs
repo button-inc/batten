@@ -120,6 +120,10 @@ fn rust_sources(dir: &Path, out: &mut Vec<PathBuf>) {
 /// THE GATE: every `set_len` in every crate's `src` truncates through an inline
 /// write handle.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `every_truncation_goes_through_a_write_handle` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn every_truncation_goes_through_a_write_handle() {
     let crates = common::at_root("crates");
     let mut sources = Vec::new();

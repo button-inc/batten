@@ -28,6 +28,10 @@ use crate::common;
 
 /// The `reason` of the one config row whose `id` is `id`, from whichever
 /// array of tables carries it. `None` when no row carries one as a string.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `reason` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn reason(id: &str) -> Option<String> {
     let text = std::fs::read_to_string(common::at_root("batten.toml")).expect("the config");
     let config: toml::Value = toml::from_str(&text).expect("batten.toml parses");

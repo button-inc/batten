@@ -319,6 +319,10 @@ fn a_config_change_beyond_the_engine_line_is_failure() {
 /// The verb end to end over a fixture repository: an inherited pin is success,
 /// read from git alone, and `--post` posts it on the graded head.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `release_path_posts_success_for_an_inherited_pin_on_the_graded_head` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn release_path_posts_success_for_an_inherited_pin_on_the_graded_head() {
     // THE RUNNING VERSION, because every load checks the pin against the
     // binary's own version first, and a pin naming another release is an
@@ -756,6 +760,10 @@ fn an_unusable_version_bumps_all_four_paths() {
 /// `discard` end to end over the fixture forge: a draft is found in the list,
 /// then the draft and its tag are deleted, in that order.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `release_discard_deletes_a_draft_and_its_tag_over_the_forge` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn release_discard_deletes_a_draft_and_its_tag_over_the_forge() {
     let repo = common::Fixture::new("release-discard-draft")
         .config("")

@@ -62,6 +62,10 @@ fn root() -> PathBuf {
 }
 
 /// The committed `batten.toml`, parsed.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `authority` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn authority() -> toml::Value {
     let text = fs::read_to_string(common::at_root("batten.toml")).expect("the committed config");
     toml::from_str(&text).expect("batten.toml parses as TOML")
@@ -84,6 +88,10 @@ fn attribution_list(authority: &toml::Value, key: &str) -> Vec<String> {
 ///
 /// Asserted on the step block rather than on the whole file: the surrounding
 /// comments name the tasks too, and a comment is not a call site.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `hk_step` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn hk_step(step: &str) -> Vec<String> {
     let config = fs::read_to_string(common::at_root("hk.pkl")).expect("the hook config");
     let opener = format!("[\"{step}\"] {{");
@@ -168,6 +176,10 @@ fn the_attribution_tasks_resolve_to_the_engine() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_policy_is_data_no_configured_pattern_appears_under_crates` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_policy_is_data_no_configured_pattern_appears_under_crates() {
     // CLOUD-274's third acceptance bullet, and non-negotiable rule 1 extended from
     // consumers to vendors. THE PREDICATE IS THE CONFIGURED PATTERNS, NOT THE
@@ -205,6 +217,10 @@ fn the_policy_is_data_no_configured_pattern_appears_under_crates() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_accountable_identity_is_config_too_and_not_compiled_in` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_accountable_identity_is_config_too_and_not_compiled_in() {
     let name = authority()
         .get("attribution")
@@ -243,6 +259,10 @@ fn this_repos_posture_is_silent_the_allow_set_is_empty() {
 // --- commit-convention -------------------------------------------------------
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_variable_is_gone_no_conventional_re_survives_in_mise_toml` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_variable_is_gone_no_conventional_re_survives_in_mise_toml() {
     // THE ASSERTION THAT KEEPS THIS DONE. A re-added variable read by a re-added
     // grep passes every other check in this repo.
@@ -251,6 +271,10 @@ fn the_variable_is_gone_no_conventional_re_survives_in_mise_toml() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_pattern_lives_in_batten_toml_and_exactly_once` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_pattern_lives_in_batten_toml_and_exactly_once() {
     let text = fs::read_to_string(common::at_root("batten.toml")).expect("the committed config");
     let declared = text
@@ -300,6 +324,10 @@ fn the_convention_tasks_resolve_to_the_engine() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `no_task_greps_a_subject_pattern_of_its_own` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn no_task_greps_a_subject_pattern_of_its_own() {
     // The shape that would reintroduce the defect without naming the variable: a
     // task inlining the regex rather than reading the config.

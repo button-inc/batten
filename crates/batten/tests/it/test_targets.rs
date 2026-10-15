@@ -328,6 +328,10 @@ fn every_added_target_is_named() {
 /// Both directions, because one alone is satisfiable by a degenerate tree: an
 /// empty group declares nothing and is missing nothing.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `every_grouped_test_file_is_declared_and_every_declaration_resolves` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn every_grouped_test_file_is_declared_and_every_declaration_resolves() {
     let group = common::at_root("crates/batten/tests/it");
     let main = fs::read_to_string(group.join("main.rs")).expect("the group harness");

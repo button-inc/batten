@@ -467,6 +467,10 @@ fn sequence_refusal(issue: &Issue, description: &str, receipts: &Path) -> Result
 /// # Errors
 ///
 /// [`UsageError`] when the receipt or the store exists and will not read.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `read_baseline` reads one record file this crate writes whole"
+)]
 fn read_baseline(receipt: &Path, store: &Path) -> Result<Option<String>> {
     match std::fs::read_to_string(receipt) {
         Ok(text) => Ok(text
@@ -618,6 +622,10 @@ fn carried_ids(receipt: &Path, base: Option<&str>) -> Vec<String> {
 ///
 /// `-` never matches, because [`mint`] writes it for a base that did not resolve
 /// and two unresolvable bases are not evidence of the same branch.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `receipt_on_the_same_base` reads one record file this crate writes whole"
+)]
 fn receipt_on_the_same_base(receipt: &Path, base: Option<&str>) -> Option<String> {
     let base = base?;
     let existing = std::fs::read_to_string(receipt).ok()?;
@@ -650,6 +658,10 @@ fn receipt_on_the_same_base(receipt: &Path, base: Option<&str>) -> Option<String
 /// the caller keeps the unpartitioned path for it rather than inventing a
 /// partition, so a branch with no claim behaves exactly as it did before.
 #[must_use]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `claimed_token` reads one record file this crate writes whole"
+)]
 pub fn claimed_token(receipts: &Path, branch: &str) -> Option<String> {
     let body = std::fs::read_to_string(receipts.join(receipt_name(branch))).ok()?;
     // LINE 1 IS THE ID LIST and `mint` says so in as many words, so this reads the
@@ -806,6 +818,10 @@ pub struct Orphan {
 ///
 /// [`UsageError`] when this branch already carries a receipt, when nothing is
 /// adoptable, or when more than one candidate is and `from` did not pick one.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `adopt` reads one record file this crate writes whole"
+)]
 pub fn adopt(
     receipts: &Path,
     branch: &str,
@@ -982,6 +998,10 @@ mod tests {
 
     /// Mint through the real function, so these cases exercise the write the
     /// engine actually performs rather than a hand-rolled file.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: `mint_one` reads a fixture this case wrote"
+    )]
     fn mint_one(receipts: &Path, id: &str, base: Option<&str>) -> String {
         let dest = mint(
             receipts,

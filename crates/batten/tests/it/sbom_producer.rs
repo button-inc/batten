@@ -344,6 +344,10 @@ impl Fixture {
         (self.read("batten.spdx.json"), self.read("batten.cdx.json"))
     }
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: `read` reads a test input: a fixture the case wrote or a file this repository tracks"
+    )]
     fn read(&self, name: &str) -> Value {
         let text = fs::read_to_string(self.repo().join("out").join(name)).expect("a document");
         serde_json::from_str(&text).expect("the document parses")
@@ -535,6 +539,10 @@ fn names_answer_without_scanning() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_scan_passes_the_declared_exclusions_subject_and_version` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_scan_passes_the_declared_exclusions_subject_and_version() {
     let fixture = Fixture::new("argv");
     fixture.documents_produced();
@@ -967,6 +975,10 @@ fn no_sbom_table_is_a_usage_error_never_a_guess() {
 // --- `--record`: the inventory reduction (retiring `[tasks.record-sbom]`) ----------
 
 /// The recorded counts, read back through the tool store's projection.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `recorded` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn recorded(fixture: &Fixture) -> Option<Vec<String>> {
     let store = fixture.repo().join(".git/batten-tools");
     let entry = fs::read_dir(&store).ok()?.next()?.ok()?;
@@ -1051,6 +1063,10 @@ fn row() -> Rule {
     .expect("the loader accepts the committed row's shape")
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `patterns` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn patterns() -> Vec<batten::pattern::NamedPattern> {
     let config = fs::read_to_string(common::at_root("batten.toml")).expect("the committed config");
     let parsed: toml::Value = toml::from_str(&config).expect("batten.toml parses");
@@ -1111,6 +1127,10 @@ fn judged(name: &str, rows: &[&str]) -> Vec<(String, Option<usize>)> {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_committed_table_is_whole_and_pinned` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_committed_table_is_whole_and_pinned() {
     let committed = fs::read_to_string(common::at_root(TABLE)).expect("the committed table");
     let rows: Vec<&str> = committed.lines().collect();

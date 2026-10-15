@@ -820,10 +820,8 @@ impl Index {
     #[must_use]
     pub fn current(&self, locator: &Locator) -> Option<identity::ContentAddress> {
         let prefix = format!("{}\t", locator.render());
-        self.lines()?
-            .into_iter()
-            .find_map(|line| line.strip_prefix(&prefix).map(str::to_owned))
-            .and_then(|rendered| identity::ContentAddress::parse(&rendered).ok())
+        let rendered = self.entry(&prefix).ok()??;
+        identity::ContentAddress::parse(&rendered).ok()
     }
 
     /// Compare what a caller expected against what is current, reading NO payload.
@@ -833,34 +831,62 @@ impl Index {
     /// deciding freshness never costs the bytes it is deciding about.
     #[must_use]
     pub fn compare(&self, locator: &Locator, expected: &identity::ContentAddress) -> Freshness {
-        let Some(lines) = self.lines() else {
+        let prefix = format!("{}\t", locator.render());
+        let Ok(entry) = self.entry(&prefix) else {
             // COULD NOT LOOK, never `Absent`: an unreadable index says nothing
             // about whether an entry exists, and a caller that treats the two
             // alike will re-fetch a payload it already had.
             return Freshness::Unavailable;
         };
-        let prefix = format!("{}\t", locator.render());
-        match lines
-            .into_iter()
-            .find_map(|line| line.strip_prefix(&prefix).map(str::to_owned))
-        {
+        match entry {
             None => Freshness::Absent,
             Some(rendered) if rendered == expected.render() => Freshness::Unchanged,
             Some(_) => Freshness::Stale,
         }
     }
 
-    /// The index's lines, or `None` where it could not be read.
+    /// What follows `prefix` on the first index line carrying it: `Ok(None)`
+    /// where no line does, and an error where the index could not be read.
     ///
     /// An ABSENT index reads as an empty set rather than as could-not-look: a
     /// repository that has recorded nothing yet has an empty index, and calling
     /// that unreadable would make every first comparison `Unavailable`.
+    ///
+    /// Streamed a line at a time (CLOUD-1525): the index gains a line per locator
+    /// and this runs per lookup. It reads to the end even after a match, because
+    /// a line that is not text makes the whole index unreadable, which is what the
+    /// whole-file read this replaces answered.
+    fn entry(&self, prefix: &str) -> std::io::Result<Option<String>> {
+        let mut found = None;
+        self.each_line(|line| {
+            if found.is_none() {
+                found = line.strip_prefix(prefix).map(str::to_owned);
+            }
+        })?;
+        Ok(found)
+    }
+
+    /// The index's lines, or `None` where it could not be read — what
+    /// [`Index::record_locked`] rewrites, so every line is held there by design.
     fn lines(&self) -> Option<Vec<String>> {
-        match std::fs::read_to_string(&self.at) {
-            Ok(text) => Some(text.lines().map(str::to_owned).collect()),
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Some(Vec::new()),
-            Err(_) => None,
+        let mut lines = Vec::new();
+        self.each_line(|line| lines.push(line.to_owned())).ok()?;
+        Some(lines)
+    }
+
+    /// Visit each index line, a line at a time; an error where the index could
+    /// not be read, and nothing visited over an absent one.
+    fn each_line(&self, mut visit: impl FnMut(&str)) -> std::io::Result<()> {
+        use std::io::BufRead as _;
+        let file = match std::fs::File::open(&self.at) {
+            Ok(file) => file,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(err) => return Err(err),
+        };
+        for line in std::io::BufReader::new(file).lines() {
+            visit(&line?);
         }
+        Ok(())
     }
 }
 
@@ -1259,6 +1285,10 @@ pub fn read_live(
 /// # Errors
 ///
 /// As [`read_live`].
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `read_live_in` reads one watermark record"
+)]
 pub fn read_live_in(
     dir: &Path,
     stream: LiveStream,
@@ -1325,6 +1355,10 @@ pub fn live_watermark(repo_root: &Path, stream: LiveStream, key: &str) -> Result
 
 /// [`live_watermark`] in a directory named outright — [`Spool::open_in`]'s seam.
 #[must_use]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `live_watermark_in` reads one watermark record"
+)]
 pub fn live_watermark_in(dir: &Path, stream: LiveStream, key: &str) -> Option<u64> {
     let path = dir.join(format!("{}.watermark", live_handle(stream, key)));
     std::fs::read_to_string(&path)
@@ -1342,6 +1376,10 @@ pub fn live_watermark_in(dir: &Path, stream: LiveStream, key: &str) -> Option<u6
 ///
 /// Returns an error when the state root cannot be resolved or the record cannot
 /// be read.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `read` reads one capture, bounded by the capture budget `evict_to_budget_in` enforces"
+)]
 pub fn read(repo_root: &Path, capture: &Capture) -> Result<Vec<u8>> {
     let path = captures_dir(repo_root)?.join(format!("{}-{}", capture.stream, capture.digest));
     std::fs::read(&path).with_context(|| format!("read the capture {}", path.display()))
@@ -2594,31 +2632,73 @@ fn trim_calls(dir: &Path, ordered: &[CallRow], max_records: u64) -> Result<()> {
 /// common case — a session appending to its own recent rows — is the last line.
 /// A session with no rows yet walks the log once and answers zero; the bound on
 /// THAT is the log trimming in [`evict_to_budget_in`].
+///
+/// **AND IT READS BACKWARDS FROM THE FILE, NOT FROM A COPY OF IT** (CLOUD-1525).
+/// The scan used to read the whole log and then walk its lines in reverse, which
+/// stopped the PARSING early and still paid for every byte on every call. It now
+/// seeks to the end and pulls [`TAIL_CHUNK`] bytes at a time, so the common case
+/// reads one chunk, and what is held is the chunk plus at most one partial line.
+/// A line that does not parse is skipped, as it always was; a line that is not
+/// text now skips too, where it used to make the whole log read as empty.
 fn next_order(path: &Path, session: &str) -> u64 {
-    let Ok(text) = std::fs::read_to_string(path) else {
+    use std::io::{Read as _, Seek as _, SeekFrom};
+    let order_of = |line: &[u8]| {
+        serde_json::from_slice::<CallRow>(line)
+            .ok()
+            .filter(|row| row.session == session)
+            .map(|row| row.order.saturating_add(1))
+    };
+    let Ok(mut file) = std::fs::File::open(path) else {
         return 0;
     };
-    for line in text.lines().rev() {
-        if let Ok(row) = serde_json::from_str::<CallRow>(line)
-            && row.session == session
-        {
-            return row.order.saturating_add(1);
+    let Ok(mut unread) = file.seek(SeekFrom::End(0)) else {
+        return 0;
+    };
+    // The bytes read but not yet split into whole lines, in file order.
+    let mut tail: Vec<u8> = Vec::new();
+    loop {
+        while let Some(at) = tail.iter().rposition(|byte| *byte == b'\n') {
+            let line = tail.split_off(at + 1);
+            tail.truncate(at);
+            if let Some(order) = order_of(&line) {
+                return order;
+            }
         }
+        if unread == 0 {
+            return order_of(&tail).unwrap_or(0);
+        }
+        let start = unread.saturating_sub(TAIL_CHUNK);
+        let Ok(width) = usize::try_from(unread - start) else {
+            return 0;
+        };
+        let mut chunk = vec![0; width];
+        if file.seek(SeekFrom::Start(start)).is_err() || file.read_exact(&mut chunk).is_err() {
+            return 0;
+        }
+        chunk.append(&mut tail);
+        tail = chunk;
+        unread = start;
     }
-    0
 }
+
+/// How many bytes [`next_order`] pulls from the end of the log per read.
+const TAIL_CHUNK: u64 = 8 * 1024;
 
 /// Read the log, skipping any line that does not parse.
 ///
 /// A torn or hand-edited line is skipped rather than reported, for [`list`]'s
 /// reason: a row nothing wrote is not evidence about a call, and inventing one
-/// from it would be a fabricated provenance record.
+/// from it would be a fabricated provenance record. Streamed a line at a time
+/// (CLOUD-1525), so the rows are held and the file is not held beside them.
 fn read_calls(path: &Path) -> Vec<CallRow> {
-    let Ok(text) = std::fs::read_to_string(path) else {
+    use std::io::BufRead as _;
+    let Ok(file) = std::fs::File::open(path) else {
         return Vec::new();
     };
-    text.lines()
-        .filter_map(|line| serde_json::from_str::<CallRow>(line).ok())
+    std::io::BufReader::new(file)
+        .split(b'\n')
+        .map_while(Result::ok)
+        .filter_map(|line| serde_json::from_slice::<CallRow>(&line).ok())
         .collect()
 }
 
@@ -2759,6 +2839,10 @@ pub fn find_any_tool(repo_root: &Path, selector: &Selector<'_>) -> Result<Option
 /// and a row whose blob has been pruned is skipped. Both are ordinary states of
 /// a store rather than a failure to look, so there is no error to report and the
 /// wrappers above supply the `Ok` their published signatures promise.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `find_in_filtered` reads one capture, bounded by the capture budget `evict_to_budget_in` enforces"
+)]
 fn find_in_filtered(dir: &Path, selector: &Selector<'_>, by_tool: bool) -> Option<Resolved> {
     for row in read_calls(&dir.join("calls")).iter().rev() {
         let Some(digest) = row.digest.as_deref() else {
@@ -3167,6 +3251,45 @@ mod tests {
             "the newest capture was evicted because its session name sorted first"
         );
         assert!(!left.contains(&old.digest));
+    }
+
+    #[test]
+    fn next_order_reads_the_tail_across_chunk_boundaries() {
+        // CLOUD-1525's reverse seek, against the answer the whole-file read gave.
+        // The log is several `TAIL_CHUNK`s long so a row is found in the first
+        // chunk, in a later one, and straddling a boundary, and a session that
+        // never wrote walks to the head and answers zero. The last line carries
+        // no newline, as a log mid-append would.
+        let dir = scratch_store("tail-chunks");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("calls");
+        let mut log = String::new();
+        let rendered = |session: &str, order: u64| {
+            let mut call = row(session, Some("beef"), None);
+            call.order = order;
+            serde_json::to_string(&call).unwrap()
+        };
+        log.push_str(&rendered("early", 6));
+        log.push('\n');
+        let mut order = 0;
+        while u64::try_from(log.len()).unwrap() < TAIL_CHUNK * 3 {
+            log.push_str(&rendered("busy", order));
+            log.push('\n');
+            order += 1;
+        }
+        log.push_str(&rendered("late", 41));
+        std::fs::write(&path, &log).unwrap();
+
+        assert_eq!(
+            next_order(&path, "late"),
+            42,
+            "the last row, in the first chunk"
+        );
+        assert_eq!(next_order(&path, "busy"), order, "the newest of many rows");
+        assert_eq!(next_order(&path, "early"), 7, "the head row, chunks away");
+        assert_eq!(next_order(&path, "never"), 0, "a session with no rows");
+        assert_eq!(next_order(&dir.join("absent"), "late"), 0);
+        drop(std::fs::remove_dir_all(&dir));
     }
 
     #[test]

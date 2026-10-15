@@ -187,15 +187,27 @@ impl Fixture {
         )
     }
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: `calls` reads a test input: a fixture the case wrote or a file this repository tracks"
+    )]
     fn calls(&self) -> u32 {
         std::fs::read_to_string(self.dir.join("calls"))
             .map_or(0, |raw| raw.trim().parse().unwrap_or(0))
     }
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: `args` reads a test input: a fixture the case wrote or a file this repository tracks"
+    )]
     fn args(&self) -> String {
         std::fs::read_to_string(self.dir.join("args")).unwrap_or_default()
     }
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: `signals` reads a test input: a fixture the case wrote or a file this repository tracks"
+    )]
     fn signals(&self) -> Vec<String> {
         std::fs::read_to_string(self.dir.join("signals"))
             .unwrap_or_default()

@@ -435,6 +435,10 @@ fn changed_fields(recorded: &KeyMaterial, observed: &KeyMaterial) -> Vec<String>
 /// unparseable, or future-schema record is not partially trusted. Returning
 /// `None` routes it through the same path as "no store here", which ends in a
 /// loud fresh-mint or a stranger report rather than a silent half-read.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `read_record` reads one record file this crate writes whole"
+)]
 fn read_record(dir: &Path) -> Option<StoreRecord> {
     let text = std::fs::read_to_string(dir.join(STORE_FILE)).ok()?;
     let record: StoreRecord = serde_json::from_str(&text).ok()?;
@@ -467,6 +471,10 @@ fn write_marker(common_dir: &str, id: &StoreId) -> Result<()> {
 }
 
 /// The store id this repository's marker names, if any.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `read_marker` reads one record file this crate writes whole"
+)]
 fn read_marker(common_dir: &str) -> Option<StoreId> {
     let text = std::fs::read_to_string(Path::new(common_dir).join(MARKER_FILE)).ok()?;
     let trimmed = text.trim();
@@ -872,6 +880,10 @@ pub enum Provenance {
 /// through the boundary this function exists to be. The provenance is returned
 /// beside the outcome so its use is recorded rather than invisible.
 #[must_use]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `resolve_address` reads one record file this crate writes whole"
+)]
 pub fn resolve_address(
     dir: &Path,
     domain: identity::AddressDomain,

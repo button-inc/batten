@@ -139,6 +139,10 @@ fn recording_the_same_locator_twice_replaces_rather_than_appends() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_index_is_byte_stable_whatever_order_entries_arrive_in` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_index_is_byte_stable_whatever_order_entries_arrive_in() {
     // §6. Two runs recording the same set in different orders must produce
     // identical bytes, or a diff of this file is unreadable.
@@ -321,6 +325,10 @@ fn a_record_preserves_every_entry_it_did_not_replace() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `a_reader_never_sees_a_truncated_index_mid_record` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn a_reader_never_sees_a_truncated_index_mid_record() {
     // CodeRabbit on #879, and the half a lock does NOT fix. `std::fs::write`
     // truncates before it writes, so a `compare` landing in that window read an

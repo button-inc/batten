@@ -483,6 +483,10 @@ impl Grammar {
     /// this therefore asserts, as a side effect, that the committed table still
     /// declares the whole of [`REQUIRED_PATTERNS`].
     #[cfg(test)]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: `committed` reads the committed config, one human-edited document"
+    )]
     pub(crate) fn committed() -> Self {
         let text =
             std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../batten.toml"))
@@ -836,6 +840,10 @@ fn first_line(pattern: &Regex, lines: &[&str]) -> Option<usize> {
 /// [`UsageError`] when it cannot be read: a gate that cannot establish its own
 /// regime must not guess, because guessing either way manufactures a violation
 /// or launders one.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `workspace_version` reads the workspace `Cargo.toml`, one manifest"
+)]
 pub fn workspace_version(root: &Path) -> Result<String> {
     let manifest = std::fs::read_to_string(root.join("Cargo.toml")).map_err(|_| {
         UsageError::raise(format!(

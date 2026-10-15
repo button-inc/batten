@@ -57,6 +57,10 @@ const TOKEN_ENV: &str = "CLAUDE_SESSION_INGRESS_TOKEN_FILE";
 
 /// The committed task's argv after `cargo run --quiet -p batten --`, split the
 /// way `sh` splits it: whitespace, and single quotes grouping.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `committed_argv` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn committed_argv() -> Vec<String> {
     let text = std::fs::read_to_string(at_root("mise.toml")).expect("the manifest");
     let parsed: toml::Value = toml::from_str(&text).expect("mise.toml parses");
@@ -87,6 +91,10 @@ fn committed_argv() -> Vec<String> {
 }
 
 /// A throwaway repository registering the real module, with no origin.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `repo` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn repo(name: &str) -> PathBuf {
     let dir = scratch(&format!("pr-unsubscribed-{name}"));
     let module =
@@ -206,6 +214,10 @@ fn answer_for(pr: &str) -> String {
 }
 
 /// Everything under the receipt store, as one string.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `receipts` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn receipts(dir: &Path) -> String {
     let store = dir.join(".git/batten-receipts");
     let Ok(entries) = std::fs::read_dir(&store) else {

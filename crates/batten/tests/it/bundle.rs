@@ -451,6 +451,10 @@ fn live_child(name: &str, line: &str) -> (PathBuf, PathBuf) {
     clippy::disallowed_types,
     reason = "stays, and test-only: the live child is a real process the case left running, and ending it is a signal to its pid"
 )]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `end_live_child` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn end_live_child(note: &Path) {
     if let Ok(pid) = fs::read_to_string(note) {
         let _ = Command::new("kill").args(["-KILL", pid.trim()]).status();
@@ -458,6 +462,10 @@ fn end_live_child(note: &Path) {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `a_second_process_reads_a_live_capture_and_never_passes_the_watermark` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn a_second_process_reads_a_live_capture_and_never_passes_the_watermark() {
     // `flock(1)` is util-linux: on every Linux leg and on no macOS one. So the
     // platform is a `cfg!` arm, and a Linux host without it FAILS rather than
@@ -538,6 +546,10 @@ fn a_second_process_reads_a_live_capture_and_never_passes_the_watermark() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `a_killed_writer_leaves_a_reader_a_defined_answer_rather_than_a_hang` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn a_killed_writer_leaves_a_reader_a_defined_answer_rather_than_a_hang() {
     // The clause the `fs4` decision was made for: what a reader sees when the
     // writer was `SIGKILL`ed. The answer must be a defined prefix and a takeable

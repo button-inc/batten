@@ -366,6 +366,10 @@ fn an_answer_inherited_from_the_base_admits_nothing() {
 /// A ledger whose recorded lines were edited records nothing, so it admits
 /// nothing — even when the edited line now reads as an admission.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `a_rewritten_ledger_admits_nothing` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn a_rewritten_ledger_admits_nothing() {
     let base = "version = 1\nmust_land_on = \"origin/main\"\n\n[[rule]]\nid = \"no-todo\"\nkind = \"forbid\"\nglob = \"**/*.rs\"\npattern = \"x\"\nseverity = \"deny\"\n";
     let dir = Fixture::new("lint-admit-rewritten")
@@ -1678,6 +1682,10 @@ fn an_unknown_ci_key_is_named_without_killing_the_file() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_drift_report_is_byte_stable_and_reads_stdin` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_drift_report_is_byte_stable_and_reads_stdin() {
     let dir = repo_with_config(
         "ci-stable",

@@ -79,6 +79,10 @@ use std::path::{Path, PathBuf};
 use common::{batten, scratch, stderr, stdout};
 
 /// A git repository with a committer, and no remote unless a case adds one.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `repo` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn repo(name: &str) -> PathBuf {
     let dir = scratch(name);
     let repo = gix::init(&dir).expect("init");
@@ -90,6 +94,10 @@ fn repo(name: &str) -> PathBuf {
 }
 
 /// Point the fixture at a remote by URL, without a network round trip to set it.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `remote` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn remote(dir: &Path, url: &str) {
     let config = std::fs::read_to_string(dir.join(".git/config")).expect("read config");
     let with_remote = format!("{config}[remote \"origin\"]\n\turl = {url}\n");

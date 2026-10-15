@@ -168,6 +168,10 @@ fn git(dir: &Path, args: &[&str]) {
 }
 
 /// The record this branch accumulated, or the empty string when none was written.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `record` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn record(dir: &Path) -> String {
     fs::read_to_string(dir.join(".git/batten-receipts/board-writes.work")).unwrap_or_default()
 }
@@ -188,6 +192,10 @@ fn claim(dir: &Path, ids: &str) {
 }
 
 /// The record filed under one claim's partition.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `record_under` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn record_under(dir: &Path, claim: &str) -> String {
     fs::read_to_string(dir.join(format!(".git/batten-receipts/board-writes.work.{claim}")))
         .unwrap_or_default()

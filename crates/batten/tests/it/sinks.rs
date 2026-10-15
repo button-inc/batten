@@ -63,6 +63,10 @@ fn repo(name: &str, kind: &str, key: &str) -> PathBuf {
 /// Where a record lands, mirroring `sink::path` rather than importing it — a
 /// test that computes the path with the code under test asserts nothing about
 /// where the record actually went.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `record` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn record(dir: &Path, kind: &str, rule: &str, discriminator: &str) -> Option<String> {
     fs::read_to_string(
         dir.join(".git/batten-sinks")
@@ -830,6 +834,10 @@ fn a_policy_rows_sink_counts_the_violations_its_module_reported() {
 /// `rule` instead of sitting beside it, every waiver written against a module
 /// predicate would have silently stopped matching.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `a_waiver_on_a_predicate_id_still_covers_a_module_finding` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn a_waiver_on_a_predicate_id_still_covers_a_module_finding() {
     let module = "package batten\n\
         \n\

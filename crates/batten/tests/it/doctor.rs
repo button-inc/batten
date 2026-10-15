@@ -829,6 +829,10 @@ fn help_prints_the_exit_code_table() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_readme_documents_every_code_the_binary_renders` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_readme_documents_every_code_the_binary_renders() {
     // The drift gate behind "documented". A hand-written second copy of the
     // table is exactly what renumbering (CLOUD-226) left silently wrong across
@@ -1271,6 +1275,10 @@ fn the_verdict_never_carries_the_values_it_read() {
 /// a judgement and is deliberately ungated — the same bound
 /// `.claude/rules/scanning.md` records for its own suitability axis.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `agents_md_does_not_promise_that_this_verb_answers_whether_the_work_works` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn agents_md_does_not_promise_that_this_verb_answers_whether_the_work_works() {
     let agents = std::fs::read_to_string(
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))

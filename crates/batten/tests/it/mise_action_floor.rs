@@ -52,6 +52,10 @@ const FORWARD: &str = "1111111111111111111111111111111111111111";
 /// The `[[pattern]]` row is carried in beside the two `[[verdict]]` rows for the
 /// same reason: a module referencing a pattern no row declares is refused AT
 /// LOAD, which is a usage error rather than the verdict these cases are about.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `floor_repo` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn floor_repo(name: &str, workflows: &[(&str, &str)]) -> PathBuf {
     let mut fixture = Fixture::new(name).config(
         "version = 1\n\n\

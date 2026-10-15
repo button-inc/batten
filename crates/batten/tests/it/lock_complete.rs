@@ -136,6 +136,10 @@ fn manifest(tools: &str) -> String {
 /// longer load. The `[[pattern]]` and `[[verdict]]` rows are restated, because
 /// they are CONSUMER config and the engine refuses at load a module raising a
 /// token no row declares.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `fixture` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn fixture(name: &str, files: &[(&str, &str)]) -> PathBuf {
     let dir = scratch(name);
     let module = std::fs::read_to_string(

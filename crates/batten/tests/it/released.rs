@@ -500,6 +500,10 @@ fn a_released_record_without_its_census_is_torn() {
 /// the reading spells no pull request, and names no marker literal — the task
 /// hands it the one `[[pattern]]` row by id.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_reading_carries_no_pr_predicate_and_the_marker_has_one_authority` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_reading_carries_no_pr_predicate_and_the_marker_has_one_authority() {
     let source = include_str!("../../src/released.rs");
     let pull = ["pull", "/"].concat();

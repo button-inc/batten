@@ -78,6 +78,10 @@ fn inputs(dir: &Path) -> Vec<PathBuf> {
 type Exercise = fn(&[u8]);
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `every_corpus_input_still_satisfies_every_property` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn every_corpus_input_still_satisfies_every_property() {
     // Named per target so a failure names the surface, and so a corpus that
     // emptied for one target cannot hide behind the other's count.

@@ -161,6 +161,10 @@ impl Declared {
     }
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `declared` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn declared() -> Declared {
     let text = fs::read_to_string(at_root("batten.toml")).expect("read the committed config");
     let mut rows: std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>> =

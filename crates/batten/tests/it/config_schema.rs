@@ -88,6 +88,10 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 // --- the schema is derived, published, and agrees with the binary ------------
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_committed_schema_is_the_one_the_binary_derives` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_committed_schema_is_the_one_the_binary_derives() {
     // DoR §4's byte-for-byte drift assertion, over the compiled binary rather
     // than only through the shell gate — so a stale committed schema fails the
@@ -123,6 +127,10 @@ fn the_schema_is_byte_stable_across_runs() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_schema_validates_the_committed_example_config` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_schema_validates_the_committed_example_config() {
     // CLOUD-33's headline acceptance. `batten.example.toml` is what a consumer
     // copies, so a schema that rejects it would fail every new adopter in their
@@ -161,6 +169,10 @@ fn the_schema_validates_the_shipped_starter_config() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_schema_validates_this_repositorys_own_config` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_schema_validates_this_repositorys_own_config() {
     // Consumer #1 in practice, not just in principle: the schema Batten ships
     // is asserted against the config Batten itself is gated by.
@@ -453,6 +465,10 @@ fn show_in(dir: &std::path::Path) -> Output {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_committed_override_schema_is_the_one_the_binary_derives` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_committed_override_schema_is_the_one_the_binary_derives() {
     let committed = fs::read_to_string(at_root("schema/batten.local.schema.json"))
         .expect("read the committed override schema");
@@ -732,6 +748,10 @@ fn the_honoured_keys_still_load_together() {
 // authority that goes stale the same way the first one did.
 
 /// The `crates/batten/src/*.rs` entries of `hk.pkl`'s `schema-check` glob.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `schema_check_globbed_modules` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn schema_check_globbed_modules() -> Vec<String> {
     let hk = fs::read_to_string(at_root("hk.pkl")).expect("read hk.pkl");
     let start = hk
@@ -756,6 +776,10 @@ fn schema_check_globbed_modules() -> Vec<String> {
 
 /// Every module under `crates/batten/src` that derives `JsonSchema`, which is
 /// exactly the set either schema can be reachable from.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `modules_deriving_json_schema` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn modules_deriving_json_schema() -> Vec<String> {
     let mut modules: Vec<String> = fs::read_dir(at_root("crates/batten/src"))
         .expect("read the crate source directory")
@@ -844,6 +868,10 @@ fn derived_for(surface: &str) -> Vec<u8> {
 ///
 /// Both surfaces are judged before returning, so one run names every drifted
 /// artifact rather than only the first.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `drift_findings` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn drift_findings(root: &std::path::Path) -> Vec<String> {
     let mut findings = Vec::new();
     for (surface, committed) in SURFACES {
@@ -976,6 +1004,10 @@ fn the_drift_report_is_pointer_only_and_echoes_no_schema_body() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_reading_leaves_the_tree_it_judges_unmodified` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_reading_leaves_the_tree_it_judges_unmodified() {
     // A check that rewrites what it judges cannot fail twice: the second run would
     // pass, laundering the drift into a clean result.

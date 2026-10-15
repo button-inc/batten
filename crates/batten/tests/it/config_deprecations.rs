@@ -351,6 +351,10 @@ fn output_is_pointer_only_and_echoes_no_schema_body() {
 // --- the check does not write what it judges -----------------------------------------
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_check_leaves_the_tree_it_judges_unmodified` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_check_leaves_the_tree_it_judges_unmodified() {
     // A check that rewrites what it judges cannot fail twice: the second run would
     // pass, laundering the drift into a clean result.

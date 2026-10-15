@@ -139,6 +139,10 @@ fn rules_fired(root: &Path) -> Vec<String> {
 /// reddens exactly here, and a fixture-only suite could not see the regression
 /// this refuses.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_committed_landing_workflow_is_guarded` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_committed_landing_workflow_is_guarded() {
     let committed = fs::read_to_string(common::at_root(LANDING))
         .expect("the committed landing workflow is where the row says it is");

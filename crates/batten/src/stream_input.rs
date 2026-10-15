@@ -81,6 +81,10 @@ pub const RESTORE_MAX_BYTES: u64 = 1 << 20;
 /// record as `unready`, and the filed-row guard then refused every edit
 /// (CLOUD-2224's regression). What reaches the MODEL is still the pointer.
 #[must_use]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `restore` reads one spilled leaf, and only one under `RESTORE_MAX_BYTES`"
+)]
 pub fn restore(value: &Value, spilled: &[Spilled]) -> Value {
     fn put(value: &mut Value, marker: &str, text: &str) {
         match value {
@@ -367,6 +371,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: `a_result_over_the_bound_spills_and_one_under_it_is_kept` reads a fixture this case wrote"
+    )]
     fn a_result_over_the_bound_spills_and_one_under_it_is_kept() {
         let dir = scratch("bound");
         let big = "word ".repeat(40_000);
@@ -400,6 +408,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: `the_spool_holds_the_exact_bytes_the_host_sent` reads a fixture this case wrote"
+    )]
     fn the_spool_holds_the_exact_bytes_the_host_sent() {
         let dir = scratch("raw");
         let sent = format!("\u{feff}{}", payload("é and \\\"quoted\\\" text"));

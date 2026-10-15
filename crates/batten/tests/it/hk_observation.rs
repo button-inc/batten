@@ -223,6 +223,10 @@ fn a_changed_digest_is_observed_afresh() {
 /// a field that quietly carried it would be indistinguishable from one that did
 /// not until somebody read a record.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `no_record_carries_the_raw_session_or_a_path` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn no_record_carries_the_raw_session_or_a_path() {
     let dir = common::scratch("hk-observation-pointer-only");
     common::init_repo(&dir);

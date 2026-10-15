@@ -1301,6 +1301,10 @@ pub fn parse(text: &str, source: &str) -> Result<Config> {
 /// stays strict, so a `[forge]` key this build predates declares nothing rather
 /// than half a table.
 //MUTANT forge-declared-by-full-parse|s@    let Ok(only) = toml::from_str::<ForgeOnly>(&text) else {@    let Ok(only) = parse_ungated(&text, "x").map(\x7cconfig\x7c ForgeOnly { forge: config.forge }) else {@|declaring_the_forge_parses_no_config
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `declare_for_process` reads the committed config, one human-edited document"
+)]
 pub fn declare_for_process(dir: &Path) {
     /// The one table this read needs. No `deny_unknown_fields`: every other
     /// key in the authority is some other reader's.
@@ -3243,6 +3247,10 @@ fn is_unknown_key(err: &toml::de::Error) -> bool {
 /// **Absent or unreadable is `false`**: could-not-look must not buy the lenient
 /// arm. Only a measured disagreement does. Reached only on a load that already
 /// failed, so the clean path pays nothing.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `binary_is_behind_the_config` reads the committed config, one human-edited document"
+)]
 fn binary_is_behind_the_config(source: &str, text: &str) -> bool {
     if floor_is_above_this_build(text) {
         return true;
@@ -4902,6 +4910,10 @@ pub fn load(path: &Path) -> Result<Config> {
 /// # Errors
 ///
 /// As [`load`], minus the missing-file case.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `load_authority` reads the committed config, one human-edited document"
+)]
 pub fn load_authority(path: &Path) -> Result<(Config, Authority)> {
     match fs::read_to_string(path) {
         Ok(text) => Ok((
@@ -4995,6 +5007,10 @@ pub fn load_override(path: &Path) -> Result<OverrideConfig> {
 
 /// Read a config file, mapping a missing file to a [`UsageError`] and any other
 /// I/O failure to an internal error (→ exit `3`).
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `read` reads the committed config, one human-edited document"
+)]
 fn read(path: &Path) -> Result<String> {
     match fs::read_to_string(path) {
         Ok(text) => Ok(text),

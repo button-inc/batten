@@ -364,6 +364,10 @@ const REQUIRED_LINES: [&str; 13] = [
 ];
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_committed_records_satisfy_this_gate` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_committed_records_satisfy_this_gate() {
     // THE PER-COMMIT GATE, and the one case whose subject is this repository. It
     // is also the replay's zero: a false positive here would make every fired
@@ -486,6 +490,10 @@ const REPLAYED_BLOCKS: usize = 6;
 ///
 /// Recorded because the wrong number is the tempting one: timing the cheap
 /// primitive a helper calls, rather than the helper, reads as rigour and is not.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `replay_block` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn replay_block(block: usize) {
     let trials = std::fs::read_to_string(common::at_root(TRIALS)).expect("the trials record");
     let method = std::fs::read_to_string(common::at_root(METHOD)).expect("the method record");
@@ -521,6 +529,10 @@ fn replay_block(block: usize) {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_replay_covers_every_trial_block` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_replay_covers_every_trial_block() {
     // THE ANTI-VACUITY OF THE SPLIT. Six `#[test]` functions replay six blocks by
     // name; nothing else notices a seventh. A corpus that outgrows them must fail

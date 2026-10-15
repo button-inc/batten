@@ -1125,6 +1125,10 @@ impl Cites {
     ///
     /// `Err` is could-not-look: a set that is not payloads carrying a body, or a
     /// tree that cannot be enumerated or holds nothing to resolve against.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: `read` reads the declared board documents, each one tracker payload"
+    )]
     fn read(
         &self,
         set: &[Value],
@@ -1401,6 +1405,10 @@ impl Refs {
     /// Every clause citation in the tracked tree, deduplicated and ordered.
     ///
     /// A file carrying a NUL byte is binary and skipped, `grep -I`'s reading.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: `hits` reads a tracked file, so the tracked tree's largest file is the bound, and the document is parsed whole"
+    )]
     fn hits(&self, root: &Path) -> std::result::Result<BTreeSet<Hit>, String> {
         let everything = [crate::rules::Selector::new("**")
             .map_err(|_| "the whole-tree glob does not compile".to_owned())?];

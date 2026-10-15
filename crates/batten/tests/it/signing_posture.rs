@@ -555,6 +555,10 @@ fn the_repair_leaves_a_verifiable_signer_alone_rather_than_switching_signing_off
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_repair_writes_the_override_local_only_and_is_idempotent` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_repair_writes_the_override_local_only_and_is_idempotent() {
     let (dir, global) = repo("repair-broken");
     signing_key(&dir, "");

@@ -76,6 +76,10 @@ const ADOPTED_DEPENDENCY_OPT_LEVEL: i64 = 2;
 /// The glob cargo spells "every dependency, but not workspace members".
 const DEPENDENCY_GLOB: &str = "*";
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `manifest` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn manifest() -> toml::Value {
     let text = std::fs::read_to_string(common::at_root("Cargo.toml"))
         .expect("the workspace manifest is where the profiles are declared");
@@ -197,6 +201,10 @@ fn the_dependency_closure_is_optimised() {
 /// MUTANT: re-adding `opt-level = 2` under `[profile.dev.package.batten]` reds
 /// this case.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `no_workspace_member_is_optimised_in_the_dev_loop` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn no_workspace_member_is_optimised_in_the_dev_loop() {
     let parsed = manifest();
     let profiles = parsed.get("profile").expect("[profile] is declared");

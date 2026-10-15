@@ -142,6 +142,10 @@ select = ["head.ref", "merged_at"]
 "#;
 
 /// A committed consumer registering the real module, and its fixture forge.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `consumer` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn consumer(name: &str) -> (PathBuf, PathBuf) {
     let dir = scratch(&format!("branch-age-{name}"));
     init_repo(&dir);
@@ -299,6 +303,10 @@ fn the_trunk_is_never_counted_however_old() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_tip_age_is_the_producers_count_of_days` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_tip_age_is_the_producers_count_of_days() {
     // THE ONE STEP THE MODULE CANNOT TAKE: the producer's record carries each
     // distinct tip once, tagged with its sha, with an age in whole days — and

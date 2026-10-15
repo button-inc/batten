@@ -283,6 +283,10 @@ pub fn record_read(
 /// Whether `context` holds a read of `id`'s history at `digest`.
 //MUTANT history-receipt-ignores-digest|s@^        .is_some_and(|held| held == digest)$@        .is_some()@|a_new_commit_to_the_rule_invalidates_the_history_receipt
 #[must_use]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `admits` reads one record file this crate writes whole"
+)]
 pub fn admits(git_dir: &Path, context: &str, id: &str, digest: &str) -> bool {
     std::fs::read_to_string(receipt_path(git_dir, id, context))
         .ok()

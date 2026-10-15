@@ -258,6 +258,10 @@ fn a_current_mediator_produces_no_advisory_on_the_same_call() {
 /// The payload is written in a shape no serializer emits (spacing, key order),
 /// so a re-serialization cannot pass. `#MUTANT handler-bytes-reserialized`.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `a_handler_reads_the_payload_the_host_sent` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn a_handler_reads_the_payload_the_host_sent() {
     use std::io::Write as _;
     use std::os::unix::fs::PermissionsExt as _;

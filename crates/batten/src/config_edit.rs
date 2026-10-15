@@ -118,6 +118,10 @@ pub fn apply(format: Format, source: &str, edits: &[Edit]) -> Result<String> {
 ///
 /// When the file cannot be read or written, or for any reason [`apply`]
 /// refuses. A refused edit writes nothing.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `apply_file` reads the committed config, one human-edited document"
+)]
 pub fn apply_file(format: Format, path: &Path, edits: &[Edit]) -> Result<bool> {
     let source =
         fs::read_to_string(path).with_context(|| format!("reading `{}`", path.display()))?;

@@ -200,6 +200,10 @@ pub fn validate(table: &[Marker]) -> Result<()> {
 /// Returns a [`UsageError`] (→ exit `1`) for a malformed marker, and an
 /// internal error (→ exit `3`) when the tree cannot be walked or a file cannot
 /// be read.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `find` reads a tracked file, so the tracked tree's largest file is the bound, and the document is parsed whole"
+)]
 pub fn find(root: &Path, markers: &[Marker]) -> Result<Vec<Hit>> {
     validate(markers)?;
     // Cheap when irrelevant (house-style §4): no markers configured means no
@@ -353,6 +357,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: `an_unreadable_file_propagates_through_the_walk` reads a fixture this case wrote"
+    )]
     fn an_unreadable_file_propagates_through_the_walk() {
         // The end-to-end companion to the classifier test, and the site
         // CLOUD-249 exists for: a permission drop is a *premise*, and this test

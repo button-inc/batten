@@ -28,6 +28,10 @@ fn junit_path(config: &toml::Table, profile: &str) -> Option<String> {
 }
 
 /// The committed nextest config, parsed.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `nextest_config` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn nextest_config() -> toml::Table {
     std::fs::read_to_string(common::at_root(".config/nextest.toml"))
         .expect("read the committed nextest config")
@@ -91,6 +95,10 @@ fn every_report_lands_where_record_suites_reads_it() {
 /// filtered nextest selects a declared profile of its own, never the one the full
 /// suite reports into.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `a_subset_gate_never_overwrites_the_full_suites_report` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn a_subset_gate_never_overwrites_the_full_suites_report() {
     let nextest = nextest_config();
     let manifest: toml::Table = std::fs::read_to_string(common::at_root("mise.toml"))

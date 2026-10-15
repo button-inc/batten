@@ -150,6 +150,10 @@ impl Env {
     /// need a *settled* record because that is the state custody has to be able to
     /// keep across a rotation and to undo on a loss, and asserting on a state the
     /// fixture cannot create would be asserting its own premise.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: `settle` reads a test input: a fixture the case wrote or a file this repository tracks"
+    )]
     fn settle(&self, fingerprint: &str, disposition: &str) {
         let path = self
             .segment()
@@ -925,6 +929,10 @@ fn secrets_config(url: &str, sha: &str) -> String {
 }
 
 /// A fixture whose `enforce` produces one secret-class record.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `secret_env` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn secret_env(name: &str) -> Env {
     let env = Env::new(name);
     env.file("src/a.rs", "fn main() {}\n");
@@ -991,6 +999,10 @@ fn a_secret_class_finding_reaches_the_store_carrying_no_kind() {
 
 // (d) key loss: the loud orphan event, and never a silent re-mint.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `a_lost_key_re_opens_its_findings_loudly_and_re_mints_nothing` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn a_lost_key_re_opens_its_findings_loudly_and_re_mints_nothing() {
     let env = secret_env("enforce-journal-orphan");
     let before = env.record("source carry unsafe").unwrap();
@@ -1053,6 +1065,10 @@ fn a_lost_key_re_opens_its_findings_loudly_and_re_mints_nothing() {
 // carrying everything the old one knew, and closing the window is what says the
 // rotation finished.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `a_rotation_join_moves_the_record_and_keeps_its_disposition` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn a_rotation_join_moves_the_record_and_keeps_its_disposition() {
     let env = secret_env("enforce-journal-rotate");
     let old = env.record("source carry unsafe").unwrap()["identity"]["fingerprint"]

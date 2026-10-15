@@ -66,6 +66,10 @@ const CITED: &str = "The ordering key is wrong at mise-tasks/checks-green.sh:164
 
 /// The committed task's argv after `cargo run --quiet -p batten --`, split the
 /// way `sh` splits it: whitespace, and single quotes grouping.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `committed_argv` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn committed_argv() -> Vec<String> {
     let text = std::fs::read_to_string(common::at_root("mise.toml")).expect("the manifest");
     let parsed: toml::Value = toml::from_str(&text).expect("mise.toml parses");
@@ -97,6 +101,10 @@ fn committed_argv() -> Vec<String> {
 
 /// A scratch repository registering the real module, the committed pattern
 /// rows, and the rule, verdict and record the module needs.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `repo_at` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn repo_at(repo: &Path) {
     let module =
         std::fs::read_to_string(common::at_root("policy/finding-sink.rego")).expect("the module");
@@ -654,6 +662,10 @@ fn a_concurrent_decide_waits_for_the_one_holding_the_record() {
 
 /// The declared door the engine's end-of-turn ladder runs.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_stop_handler_row_runs_this_task` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_stop_handler_row_runs_this_task() {
     let text = std::fs::read_to_string(common::at_root("batten.toml")).expect("the config");
     let config: toml::Value = toml::from_str(&text).expect("parses");

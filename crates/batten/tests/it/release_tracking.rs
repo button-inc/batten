@@ -273,6 +273,10 @@ fn row() -> Rule {
     .expect("the loader accepts the committed row's shape")
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `patterns` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn patterns() -> Vec<batten::pattern::NamedPattern> {
     let config = fs::read_to_string(common::at_root("batten.toml")).expect("the committed config");
     let parsed: toml::Value = toml::from_str(&config).expect("batten.toml parses");
@@ -368,6 +372,10 @@ fn backfill_with(name: &str, backfill: &str) -> Vec<String> {
 // --- the ties to reality ------------------------------------------------------
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_committed_workflows_pass` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_committed_workflows_pass() {
     let release = fs::read_to_string(common::at_root(RELEASE)).expect("the release workflow");
     let backfill = fs::read_to_string(common::at_root(BACKFILL)).expect("the backfill workflow");

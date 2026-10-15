@@ -117,6 +117,10 @@ impl Forge {
     }
 
     /// Every request the forge was asked, one per line.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: `asked` reads a test input: a fixture the case wrote or a file this repository tracks"
+    )]
     fn asked(&self) -> String {
         std::fs::read_to_string(self.answers.join("args")).unwrap_or_default()
     }
@@ -221,6 +225,10 @@ fn no_resolvable_repository_is_a_failed_diagnosis() {
 /// on this repository and diagnoses nothing. Every case above declares its own
 /// table, so this is the one that reddens on the committed rows being absent.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `this_repository_declares_the_claims_its_tasks_need` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn this_repository_declares_the_claims_its_tasks_need() {
     let text = std::fs::read_to_string(common::at_root("batten.toml")).expect("the config");
     let config: toml::Value = toml::from_str(&text).expect("batten.toml parses");

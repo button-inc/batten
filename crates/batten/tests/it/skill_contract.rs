@@ -362,6 +362,10 @@ fn vendor_findings(root: &Path, authored: &str) -> Vec<String> {
 /// `batten --help`, so they are assertions about a skill that DESCRIBES BATTEN and
 /// mean nothing over one that does not — running them everywhere would report
 /// every sentence of a Serena skill as fiction.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `generic_findings` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn generic_findings(root: &Path, max_lines: usize) -> Vec<String> {
     let mut findings = Vec::new();
     for authored in authored_skills(root) {
@@ -379,6 +383,10 @@ fn generic_findings(root: &Path, max_lines: usize) -> Vec<String> {
 /// would otherwise ship fiction nothing reads. A skill with no command phrase
 /// yields nothing, so "names `batten`" needs no predicate of its own. The exit
 /// arm stays batten-only: it asserts the skill that TEACHES the exit contract.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `authored_verb_findings` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn authored_verb_findings(
     root: &Path,
     paths: &BTreeSet<String>,
@@ -458,6 +466,10 @@ impl Fixture {
         self
     }
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: `append` reads a test input: a fixture the case wrote or a file this repository tracks"
+    )]
     fn append(&self, name: &str, text: &str) -> &Self {
         let path = self.root.join(AUTHORED).join(name).join("SKILL.md");
         let mut body = fs::read_to_string(&path).expect("read the skill");
@@ -466,6 +478,10 @@ impl Fixture {
         self
     }
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: `text` reads a test input: a fixture the case wrote or a file this repository tracks"
+    )]
     fn text(&self, name: &str) -> String {
         fs::read_to_string(self.root.join(AUTHORED).join(name).join("SKILL.md"))
             .expect("read the skill")
@@ -493,6 +509,10 @@ fn conforming(name: &str, table: &[(String, String)]) -> Fixture {
 // --- the predicate, over the real tree ------------------------------------------
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_repository_as_it_stands_is_clean` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_repository_as_it_stands_is_clean() {
     let root = at_root("");
     let (paths, parents) = declared_commands();
@@ -538,6 +558,10 @@ fn numbered_steps(text: &str, heading: &str) -> Vec<String> {
 /// agent following the steps as written ran an hour-long `verify` twice.
 //MUTANT workflow-step-restored|s@^    let steps = numbered_steps(\&text, CONTRACT);$@    let steps = [vec![String::from("2. **`mise run verify` green before readying.**")], numbered_steps(\&text, CONTRACT)].concat();@|the_workflow_contract_lands_without_prescribing_its_parts
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_workflow_contract_lands_without_prescribing_its_parts` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_workflow_contract_lands_without_prescribing_its_parts() {
     const CONTRACT: &str = "## Workflow contract";
     let text = fs::read_to_string(at_root("AGENTS.md")).expect("AGENTS.md is readable");
@@ -560,6 +584,10 @@ fn the_workflow_contract_lands_without_prescribing_its_parts() {
 /// The skill teaches the legend the engine prints, byte for byte (CLOUD-2145):
 /// the pre-1050 example it carried taught a format no refusal had used since.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_skill_carries_the_engines_legend_verbatim` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_skill_carries_the_engines_legend_verbatim() {
     let text = fs::read_to_string(at_root(&format!("{AUTHORED}/batten/SKILL.md")))
         .expect("the shipped skill is readable");
@@ -950,6 +978,10 @@ fn a_second_skill_over_budget_is_reported_against_its_own_path() {
 // --- the wiring -------------------------------------------------------------------
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_skill_contract_is_wired_into_the_hk_gate` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_skill_contract_is_wired_into_the_hk_gate() {
     // The retired suite asserted `hk.pkl` still carried `mise run skill-check`.
     // The step survives the retirement and its check now names the task that runs

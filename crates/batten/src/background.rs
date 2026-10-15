@@ -174,6 +174,10 @@ fn tag<'a>(text: &'a str, name: &str) -> Option<&'a str> {
 //MUTANT-SUITE crates/batten/tests/it/recorder_background.rs
 //MUTANT background-output-unfollowed|s@^                    resolved.push((pending, text));$@@|a_backgrounded_fetch_records_its_output_when_the_task_exits
 #[must_use]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `resolve` reads one task's pending record and the output capture it names, bounded by the capture budget"
+)]
 pub fn resolve(git_dir: &Path, transcript: Option<&Path>, now: u64) -> Vec<(Pending, String)> {
     let dir = git_dir.join(DIR);
     let Ok(entries) = std::fs::read_dir(&dir) else {

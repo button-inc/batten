@@ -223,6 +223,10 @@ fn no_effect_fact_is_hook_resolvable() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `every_class_arm_names_its_own_const` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn every_class_arm_names_its_own_const() {
     // THE HALF A VALUE COMPARISON CANNOT MAKE, and it was measured rather than
     // reasoned. `every_fact_returns_its_stated_const` compares `Class` VALUES,
@@ -410,6 +414,10 @@ fn the_three_valued_answer_keeps_could_not_look_apart_from_is_not() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `no_axis_match_carries_a_wildcard_arm` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn no_axis_match_carries_a_wildcard_arm() {
     // The one case the compiler cannot give us. Exhaustiveness is only a totality
     // guarantee while no arm is a wildcard: `_ => Cost::Free` compiles happily and

@@ -295,6 +295,10 @@ mod tests {
     /// must not become the head of the next record. Plain [`append`] glues them;
     /// this drops the fragment, keeps every whole line, and appends whole.
     #[test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: `a_torn_tail_is_dropped_before_the_next_append` reads a fixture this case wrote"
+    )]
     fn a_torn_tail_is_dropped_before_the_next_append() {
         let dir = scratch("torn-tail");
         let path = dir.join("shard.jsonl");
@@ -317,6 +321,10 @@ mod tests {
     /// to create one name, exactly one is told it created it, and its contents
     /// are what the file holds.
     #[test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: `exactly_one_of_many_concurrent_creators_wins` reads a fixture this case wrote"
+    )]
     fn exactly_one_of_many_concurrent_creators_wins() {
         let dir = scratch("exclusive");
         let path = dir.join("mark");
@@ -365,6 +373,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: `replace_leaves_no_temp_and_the_new_contents` reads a fixture this case wrote"
+    )]
     fn replace_leaves_no_temp_and_the_new_contents() {
         let dir = scratch("replace");
         let path = dir.join("state");
@@ -398,6 +410,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: `replace_through_a_symlink_writes_the_target_and_keeps_the_link` reads a fixture this case wrote"
+    )]
     fn replace_through_a_symlink_writes_the_target_and_keeps_the_link() {
         // Compiled everywhere; creating a symlink needs privileges Windows does
         // not grant by default, so the link half runs where links are ordinary.
@@ -422,6 +438,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: `concurrent_appends_never_interleave_inside_a_line` reads a fixture this case wrote"
+    )]
     fn concurrent_appends_never_interleave_inside_a_line() {
         // THE DISCRIMINATING CASE. Long lines, many writers: a `writeln!` split
         // across writes tears here; one `write(2)` per record does not.

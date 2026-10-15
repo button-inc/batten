@@ -297,6 +297,10 @@ struct Row {
 /// lines up to the next table header. `every_handler_row_is_read` asserts the
 /// scan actually found rows, so a header this repository re-spells cannot turn
 /// every case below vacuous.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `handler_rows` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn handler_rows() -> Vec<Row> {
     let text = std::fs::read_to_string(at_root("batten.toml"))
         .expect("the committed authority is readable");
@@ -332,6 +336,10 @@ fn session_rows() -> Vec<Row> {
 // ---------------------------------------------------------------------------
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_steps_run_in_declaration_order` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_steps_run_in_declaration_order() {
     // CARRIES `"doctor runs inside the synchronous window — after install, before
     // the preflight"`, and it is a strictly better instrument than what it
@@ -370,6 +378,10 @@ fn the_steps_run_in_declaration_order() {
 // carried: "session:stamp: the session boundary is written first, before any provisioning step" crates/batten/src/lib.rs kind:mechanism crates/batten/tests/it/session_provisioning.rs
 // changed: "session:stamp: the stamp is a declared handler row a consumer runs" crates/batten/src/lib.rs `claim check` reads the stamp, so `batten hook` writes it at SessionStart ahead of every handler; the `session-stamp` row and its `mise` task are withdrawn, and a repository that never declared them is now dated too
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `a_session_start_writes_the_stamp_before_any_row_runs` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn a_session_start_writes_the_stamp_before_any_row_runs() {
     // THE STAMP IS THE ENGINE'S (CLOUD-1991). The step below records whether the
     // stamp already existed when it ran, which is the ordering the claim gate's
@@ -458,6 +470,10 @@ fn a_step_that_passes_says_nothing() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `a_step_that_hangs_is_killed_at_its_declared_bound` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn a_step_that_hangs_is_killed_at_its_declared_bound() {
     // SUBSUMES `"the hook is synchronous — async would restore the race it
     // closes"`, and it is the half that was never testable before.
@@ -1037,6 +1053,10 @@ fn local_install_stamps_the_installed_binary_by_its_path() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `no_by_path_registration_survives_on_the_session_start_surface` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn no_by_path_registration_survives_on_the_session_start_surface() {
     // THE OTHER HALF OF THE RETIRED REGISTRATION CASE, in the direction that
     // matters now. That case asserted a by-path command was PRESENT; the point

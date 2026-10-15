@@ -292,6 +292,10 @@ fn a_tool_carrying_no_content_could_not_look_rather_than_landing_nothing() {
 /// which is why the projection carries a shape and a count and the bytes stop at
 /// the typed predicate.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `a_planted_secret_in_the_content_reaches_no_output_and_nothing_on_disk` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn a_planted_secret_in_the_content_reaches_no_output_and_nothing_on_disk() {
     // Assembled rather than written, for the reason `contract_drift.rs` gives:
     // a credential-shaped literal in a tracked file is what `source carry unsafe` exists

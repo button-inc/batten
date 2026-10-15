@@ -219,6 +219,10 @@ fn an_empty_census_and_an_unsupported_host_are_distinguishable() {
 /// redaction marker is in the file, so if the parser ever started carrying
 /// bodies this would catch it.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `no_delivered_document_body_reaches_a_record` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn no_delivered_document_body_reaches_a_record() {
     let raw = fs::read_to_string(common::at_root(
         "crates/batten/tests/fixtures/transcripts/memory-injection.jsonl.in",

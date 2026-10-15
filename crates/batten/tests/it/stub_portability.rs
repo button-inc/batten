@@ -186,6 +186,10 @@ fn rust_sources(dir: &Path, out: &mut Vec<PathBuf>) {
 
 /// THE GATE: no stub this suite writes carries a GNU-only spelling.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `every_executed_test_stub_is_portable` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn every_executed_test_stub_is_portable() {
     let rows = rows();
     let mut loaded: Vec<&str> = rows.iter().map(|row| row.id.as_str()).collect();

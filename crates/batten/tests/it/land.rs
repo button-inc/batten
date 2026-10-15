@@ -462,6 +462,10 @@ fn gate(repo: &Path, name: &str, code: i32) -> String {
 
 /// The lap record this branch has accumulated, or an empty string where the
 /// writer never reached it.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `lap_record` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn lap_record(repo: &Path, branch: &str) -> String {
     let dir = common::git_in(repo, &["rev-parse", "--git-dir"]);
     let path = repo
@@ -804,6 +808,10 @@ fn no_pull_request_to_ask_is_could_not_look_and_never_a_refusal() {
 /// what a reader meets: driving the verb to a conflict needs a live remote, and
 /// `crates/batten/tests/it/rebase.rs` already owns the mechanism end to end.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_conflict_stop_and_its_gate_name_a_route_that_exists` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_conflict_stop_and_its_gate_name_a_route_that_exists() {
     // THE MESSAGE MOVED, AND THIS FOLLOWS IT. It was written inline in the
     // dispatch arm when this case was; `land_conflict_stop` (in `lib.rs`, since CLOUD-2078 kept `land` plumbing) owns it now,

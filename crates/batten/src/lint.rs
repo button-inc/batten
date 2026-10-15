@@ -592,6 +592,10 @@ pub fn smells(
 ///
 /// Returns a [`crate::UsageError`] (→ exit `1`) when the working config or the
 /// base-ref config cannot be read or parsed.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `run` reads a tracked file, so the tracked tree's largest file is the bound, and the document is parsed whole"
+)]
 pub fn run(dir: &Path, base_ref: Option<&str>, today: crate::waiver::Date) -> Result<Vec<Smell>> {
     let path = dir.join(config::CONFIG_FILE);
     // THE BASE REF IS LOADED FIRST, and the order is the contract rather than a
@@ -690,6 +694,10 @@ pub fn run(dir: &Path, base_ref: Option<&str>, today: crate::waiver::Date) -> Re
 /// or is not a rules-API array, and when the config declares no `[ci]` at all —
 /// the caller asked for a comparison one side cannot participate in, and
 /// answering "no drift" there would be a pass over nothing.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `host_drift` reads a tracked file, so the tracked tree's largest file is the bound, and the document is parsed whole"
+)]
 pub fn host_drift(
     dir: &Path,
     source: &str,
@@ -805,6 +813,10 @@ fn deferral_smells(config: &Config, source: &str) -> Vec<Smell> {
 }
 
 /// The workspace `rust-version`, or `None` when the manifest cannot be read.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `workspace_rust_version` reads the workspace `Cargo.toml`, one manifest"
+)]
 fn workspace_rust_version(source: &str) -> Option<String> {
     let beside = std::path::Path::new(source)
         .parent()

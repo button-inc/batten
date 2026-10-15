@@ -37,6 +37,10 @@ fn census(source: &str) -> ClockCensus {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `no_assertion_in_the_crate_reads_the_clock` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn no_assertion_in_the_crate_reads_the_clock() {
     let root = common::at_root("crates/batten");
     let sources = common::rust_sources();

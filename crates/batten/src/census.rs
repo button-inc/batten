@@ -545,6 +545,10 @@ fn manifest_entries(path: &str, lines: &[&str], manifest: &Manifest) -> Vec<Mani
 /// refuses, and an internal error (→ exit `3`) for a declared manifest that
 /// cannot be read — a census that skipped it would report a smaller number than
 /// the tree carries.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `take` reads a tracked file, so the tracked tree's largest file is the bound, and the document is parsed whole"
+)]
 pub fn take(root: &Path, declared: &ShellCensus, tracked: &BTreeSet<String>) -> Result<Report> {
     declared.validate()?;
     let exempt: Vec<Selector> = declared

@@ -638,6 +638,10 @@ fn arms_suspect(null: bool, base_built_now: bool, identical: bool) -> bool {
 }
 
 /// Whether two files hold the same bytes; an unreadable side is never "same".
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `same_bytes` reads two release binaries to compare them, whose size the release build bounds"
+)]
 fn same_bytes(left: &Path, right: &Path) -> bool {
     match (std::fs::read(left), std::fs::read(right)) {
         (Ok(left), Ok(right)) => left == right,
@@ -797,6 +801,10 @@ pub fn keep_as_base(perf_dir: &Path, key: &str, head_bin: &Path, keep: &str) -> 
 }
 
 /// Whether the `built-for` marker names `key`.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `marked_for` reads one record file this crate writes whole"
+)]
 fn marked_for(perf_dir: &Path, key: &str) -> bool {
     std::fs::read_to_string(built_for(perf_dir, key)).is_ok_and(|text| text == key)
 }
@@ -934,6 +942,10 @@ fn out_dir(repo: &Path) -> Result<PathBuf> {
 /// `0` again after the fix, which is a reading that cannot tell the two apart.
 /// Cargo's progress goes to stderr, so nothing changes for `perf-gate.sh`, which
 /// redirects this command's STDOUT to a file and greps `^arm=`.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `build` reads one record file this crate writes whole"
+)]
 fn build(dir: &Path, target_dir: Option<&Path>, what: &str, profile: &str) -> Result<()> {
     let args = build_args(profile, dir);
     let env: Vec<(String, String)> = target_dir
@@ -1074,6 +1086,10 @@ fn mediation_verb(bin: &Path) -> Result<String> {
 /// invokes the binary directly while the base tree still routed through a
 /// launcher script, so a hardcoded launcher path could not measure the pair at
 /// all — and did not, which is how it was found.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `wired_command` reads one harness settings document"
+)]
 fn wired_command(tree: &Path, bin: &Path) -> Result<Vec<String>> {
     let harness = Harness::ClaudeCode;
     let Some(wiring) = harness.wiring() else {
@@ -1676,6 +1692,10 @@ fn measure_arm(
 /// One invocation rather than one per arm, because arms measured back to back in
 /// a single process share a machine state that separate runs do not — which for
 /// a ratio is the whole point, and for an absolute figure costs nothing.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `bench` reads one hyperfine report, sized by its run count"
+)]
 fn bench(
     dir: &Path,
     out: &Path,
@@ -2482,6 +2502,10 @@ const LOAD_SAMPLES_VAR: &str = "BENCH_LOAD_SAMPLES";
 /// A file that cannot be read or does not parse — properties of the checkout
 /// rather than verdicts about the cost — and a sample count that is zero or
 /// unparseable. Never an empty measurement reported as a reading.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `config_load` reads the committed config, one human-edited document"
+)]
 pub fn config_load(path: &Path) -> Result<Sweep> {
     let samples: usize = env_or(LOAD_SAMPLES_VAR, DEFAULT_LOAD_SAMPLES)
         .parse()
@@ -3330,6 +3354,10 @@ mod tests {
     /// CLOUD-2097: a head filed under its tree key answers as that tree's base,
     /// and the cache keeps only the live base and the kept head.
     #[test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: `a_kept_head_answers_as_the_next_base` reads a fixture this case wrote"
+    )]
     fn a_kept_head_answers_as_the_next_base() -> Result<()> {
         let perf = std::env::temp_dir().join(format!("batten-perf-keep-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&perf);
@@ -3439,6 +3467,10 @@ mod tests {
     /// MUTANT: keeping the base arm inside the shared directory lets the head
     /// build replace it, and this case goes red.
     #[test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: `the_shared_arms_directory_keeps_each_arm_apart` reads a fixture this case wrote"
+    )]
     fn the_shared_arms_directory_keeps_each_arm_apart() -> Result<()> {
         let scratch = std::env::temp_dir().join(format!("batten-perf-arms-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&scratch);
@@ -3675,6 +3707,10 @@ mod tests {
         clippy::expect_used,
         reason = "test-only: a failed fixture write should fail the case loudly"
     )]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: `a_missing_base_is_seeded_from_the_newest_previous_build` reads a fixture this case wrote"
+    )]
     fn a_missing_base_is_seeded_from_the_newest_previous_build() {
         let perf = perf_scratch("seed-newest");
         sibling(&perf, "a", 600);
@@ -3710,6 +3746,10 @@ mod tests {
     #[expect(
         clippy::expect_used,
         reason = "test-only: a failed fixture write should fail the case loudly"
+    )]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: `a_present_key_is_left_alone` reads a fixture this case wrote"
     )]
     fn a_present_key_is_left_alone() {
         let perf = perf_scratch("seed-present");

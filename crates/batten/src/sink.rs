@@ -193,6 +193,10 @@ pub fn path(git_dir: &Path, kind: Production, rule: &str, discriminator: &str) -
 /// # Errors
 ///
 /// Any filesystem error other than `NotFound` while reading a DECLARED record.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `store` reads only kinds that `reads_back`, each one line `durable::replace` writes whole; the appended journal kind never reaches it"
+)]
 pub fn store(
     git_dir: &Path,
     declared: &BTreeSet<Declared>,

@@ -318,6 +318,10 @@ fn a_consumer_with_another_board_vocabulary_is_swept() {
 /// An undeclared table makes `board sweep` refuse on every run, so a sweep this
 /// repository could not run would otherwise read as a gate it has.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `this_repositorys_sweep_declares_the_board_check_and_the_drain` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn this_repositorys_sweep_declares_the_board_check_and_the_drain() {
     let text = std::fs::read_to_string(common::at_root("batten.toml")).expect("the config");
     let config: toml::Value = toml::from_str(&text).expect("the config parses");

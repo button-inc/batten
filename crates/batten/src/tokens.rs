@@ -160,6 +160,10 @@ pub struct Workloads {
 /// the INPUTS, not defaults this program supplies** — a benchmark that invented
 /// a divisor when it could not read one would publish a number with no primary
 /// behind it.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `method` reads one bench fixture document"
+)]
 pub fn method(root: &Path) -> Result<Method> {
     let path = root.join(METHOD);
     let text = std::fs::read_to_string(&path).with_context(|| {
@@ -173,6 +177,10 @@ pub fn method(root: &Path) -> Result<Method> {
 /// # Errors
 ///
 /// A file that is missing or will not parse.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `workloads` reads one bench fixture document"
+)]
 pub fn workloads(root: &Path) -> Result<Workloads> {
     let path = root.join(WORKLOADS);
     let text = std::fs::read_to_string(&path).with_context(|| {

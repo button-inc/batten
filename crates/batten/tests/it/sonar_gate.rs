@@ -96,6 +96,10 @@ const VOCABULARY: [&str; 8] = [
 ];
 
 /// The committed `batten.toml`, parsed.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `committed` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn committed() -> toml::Value {
     toml::from_str(&std::fs::read_to_string(at_root("batten.toml")).expect("the config"))
         .expect("batten.toml parses")
@@ -168,6 +172,10 @@ fn respond(forge: &Path, n: u32, status: u16, body: &str) {
 }
 
 /// What the fixture recorded about the requests that went out.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `requests` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn requests(forge: &Path) -> String {
     std::fs::read_to_string(forge.join("args")).unwrap_or_default()
 }

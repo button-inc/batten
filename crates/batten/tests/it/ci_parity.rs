@@ -948,6 +948,10 @@ fn a_zero_concurrent_limit_is_not_a_bound() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_committed_lane_reserves_a_slot_a_freeze_cannot_consume` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_committed_lane_reserves_a_slot_a_freeze_cannot_consume() {
     // CLOUD-1881, and the subject is a COMPOSITION rather than either key alone.
     //

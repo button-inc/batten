@@ -90,6 +90,10 @@ fn result(index: usize) -> serde_json::Value {
     })
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `fixture` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn fixture(name: &str, records: &[serde_json::Value]) -> (PathBuf, PathBuf, PathBuf) {
     let dir = scratch(&format!("answer-operator-{name}"));
     let home = scratch(&format!("answer-operator-home-{name}"));

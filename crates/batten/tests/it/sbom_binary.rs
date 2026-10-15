@@ -367,6 +367,10 @@ fn no_target_is_a_usage_error_never_a_pass() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_binary_task_produces_and_its_check_task_decides` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_binary_task_produces_and_its_check_task_decides() {
     // Two tasks because two channels: `sbom-binary`'s stdout is appended to
     // `$GITHUB_OUTPUT`, so it may carry the producer's KEY=VALUE pointers and
@@ -398,6 +402,10 @@ fn the_binary_task_produces_and_its_check_task_decides() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_release_workflow_uploads_the_binary_sbom_only_after_the_task_passes` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_release_workflow_uploads_the_binary_sbom_only_after_the_task_passes() {
     // The other half of "a refused inventory is never published": the asset
     // stays on the runner's disk after a refusal, so what keeps it off the

@@ -251,6 +251,10 @@ fn cache_path(dir: &Path) -> Option<PathBuf> {
 /// Every failure is the same answer — recompute — so none of them is
 /// distinguished, and a corrupted cache costs a run nothing but the work it was
 /// meant to save.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `read_cache` reads one record file this crate writes whole"
+)]
 fn read_cache(dir: &Path) -> Option<CacheRecord> {
     let text = std::fs::read_to_string(cache_path(dir)?).ok()?;
     serde_json::from_str(&text).ok()
@@ -302,6 +306,10 @@ fn authority(dir: &Path, base_ref: Option<&str>) -> Result<Config> {
 ///
 /// A failure names the path: a refusal the reader cannot act on is barely
 /// better than a silent skip.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `read_tracked` reads a tracked file whole to hash it, so the tracked tree's largest file is the bound"
+)]
 fn read_tracked(dir: &Path, path: &str, base_ref: Option<&str>) -> Result<Vec<u8>> {
     match base_ref {
         Some(reference) => git::show(dir, reference, path).map(String::into_bytes),

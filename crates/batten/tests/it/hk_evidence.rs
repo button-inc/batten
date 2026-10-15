@@ -39,6 +39,10 @@ use std::fs;
 use batten::hk::{self, Event, Evidence, ExecutionEvents, Incomplete};
 
 /// The fixture this repository ships.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `committed` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn committed() -> Evidence {
     let text = fs::read_to_string(common::at_root(hk::EVIDENCE))
         .expect("the capability fixture is committed");
@@ -336,6 +340,10 @@ fn the_fixture_names_the_runner_it_was_established_against() {
 /// which is the fight `completions/*` is excluded from `shfmt` for. This is what
 /// owns them instead, so the file has a formatter rather than none.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_committed_fixture_is_in_this_builds_own_shape` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_committed_fixture_is_in_this_builds_own_shape() {
     let text = fs::read_to_string(common::at_root(hk::EVIDENCE))
         .expect("the capability fixture is committed");
@@ -351,6 +359,10 @@ fn the_committed_fixture_is_in_this_builds_own_shape() {
 /// The tier a fixture cannot reach: a capability recorded against one version
 /// and shipped beside another answers for a runner nobody measured.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_fixture_and_the_committed_contract_name_one_runner` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_fixture_and_the_committed_contract_name_one_runner() {
     let evidence = committed();
     let text = fs::read_to_string(common::at_root(hk::ARTIFACT))

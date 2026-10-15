@@ -110,6 +110,10 @@ impl Board {
     }
 
     /// Answer one forge endpoint with a JSON body, through `rest`'s seam.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: `forge` reads a test input: a fixture the case wrote or a file this repository tracks"
+    )]
     fn forge(&self, needle: &str, file: &str, body: &str) {
         let forge = self.root.join("forge");
         let routes = std::fs::read_to_string(forge.join("routes")).unwrap_or_default();
@@ -570,6 +574,10 @@ fn a_gather_whose_merged_pull_requests_cannot_be_read_is_could_not_look() {
 /// gather reading the literal is could-not-look forever; reading `must_land_on`
 /// it finds the closing key and the row is landed-unswept.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_gather_reads_the_declared_trunk_not_origin_main` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_gather_reads_the_declared_trunk_not_origin_main() {
     let b = Board::new("declared-trunk");
     let config = std::fs::read_to_string(b.repo.join("batten.toml")).expect("config");

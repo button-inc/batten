@@ -240,6 +240,10 @@ fn a_budget_matching_its_measurement_is_clean() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_job_durations_are_the_producers_subtraction` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_job_durations_are_the_producers_subtraction() {
     // THE ONE STEP THE MODULE CANNOT TAKE, and the producer's record carries it:
     // each leg's `seconds`, tagged with the run it came from, and nothing the

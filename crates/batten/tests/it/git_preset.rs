@@ -117,6 +117,10 @@ fn runnable(target: &str) -> String {
 
 /// Every `command` route that runs `git`, from the consumer's registry and the
 /// vendored one, as `(class, route target)`.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `git_routes` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn git_routes() -> Vec<(String, String)> {
     let mut routes = Vec::new();
     let text = std::fs::read_to_string(common::at_root("batten.toml")).expect("read batten.toml");

@@ -751,6 +751,10 @@ const STATED_RESIDUE: &[(&str, &str)] = &[
 ];
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `no_artifact_name_reaches_the_core` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn no_artifact_name_reaches_the_core() {
     // Non-negotiable rule 1, computed. Scans `crates/batten/src` — the core —
     // and not `tests/`, where a fixture legitimately writes a workflow file to
@@ -795,6 +799,10 @@ fn no_artifact_name_reaches_the_core() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_stated_residue_is_a_ratchet_and_not_a_suppression` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_stated_residue_is_a_ratchet_and_not_a_suppression() {
     // A declared exemption that no longer names a real hit is an exemption
     // nobody will notice has gone stale, and the list would only ever grow. So

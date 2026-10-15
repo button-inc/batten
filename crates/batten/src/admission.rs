@@ -692,6 +692,10 @@ fn lock(dir: &Path) -> Result<std::fs::File> {
 /// Fail-closed on an unreadable record, the same posture [`crate::receipt`] takes:
 /// a record that cannot be read is never an authorization.
 #[must_use]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `load` reads one record file this crate writes whole"
+)]
 pub fn load(repo_root: &Path, admission: &str) -> Option<Record> {
     let path = record_path(repo_root, admission).ok()?;
     let bytes = std::fs::read(path).ok()?;
@@ -861,6 +865,10 @@ fn chain_terminates(repo_root: &Path, record: &Record) -> bool {
 /// # Errors
 ///
 /// Returns an error when the store cannot be read.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `chain_head` reads one record file this crate writes whole"
+)]
 pub fn chain_head(repo_root: &Path, rule: &str, subject: &str) -> Result<Option<String>> {
     let dir = store_dir(repo_root)?;
     let Ok(entries) = std::fs::read_dir(&dir) else {
@@ -929,6 +937,10 @@ pub fn chain_head(repo_root: &Path, rule: &str, subject: &str) -> Result<Option<
 /// store, an unparseable record and an absent directory are all "no admission" —
 /// a store this cannot read must not be able to ADMIT anything, which is the
 /// fail-closed direction for a suppression.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `admitted` reads one record file this crate writes whole"
+)]
 pub fn admitted(
     repo_root: &Path,
     rule: &str,

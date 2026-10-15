@@ -63,6 +63,10 @@ fn fmt_body(manifest: &str) -> String {
 /// invokes. That keeps the gate narrow enough to survive a rewrite of the
 /// paragraph and specific enough to have caught the defect it was written for.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_rules_file_names_the_command_fmt_runs` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_rules_file_names_the_command_fmt_runs() {
     let manifest = fs::read_to_string(at_root(TASKS)).unwrap();
     let prose = fs::read_to_string(at_root(RULES)).unwrap();
@@ -98,6 +102,10 @@ fn the_rules_file_names_the_command_fmt_runs() {
 /// fixer-bearing steps in both directions. Prose alone was never the mechanism;
 /// it is the half a reader sees.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `fmt_is_described_as_the_formatters_only_subset_it_now_is` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn fmt_is_described_as_the_formatters_only_subset_it_now_is() {
     let prose = fs::read_to_string(at_root(RULES)).unwrap();
     assert!(

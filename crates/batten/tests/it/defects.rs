@@ -46,6 +46,10 @@ fn check(dir: &Path) -> Output {
     run(dir, &["check"])
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `ledger_text` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn ledger_text(dir: &Path) -> String {
     std::fs::read_to_string(dir.join("defects.jsonl")).unwrap_or_default()
 }

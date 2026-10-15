@@ -142,6 +142,10 @@ fn the_task_pins_prose_wrap_preserve_which_is_a_predicate_and_not_a_style() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_hk_step_calls_this_task_rather_than_re_deriving_the_file_set` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_hk_step_calls_this_task_rather_than_re_deriving_the_file_set() {
     // A comment is not a call site: bounded to the `deno-fmt` step block, up to
     // the next step header.

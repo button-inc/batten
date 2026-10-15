@@ -303,6 +303,10 @@ pub fn parametric(first: (&str, &str), second: (&str, &str)) -> bool {
 /// "is a binary committed here", and a path it cannot open is not evidence that
 /// one is.
 #[must_use]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `committed_binaries` reads one release binary, whose size the release build bounds"
+)]
 pub fn committed_binaries(root: &Path, tracked: &BTreeSet<String>) -> Vec<String> {
     tracked
         .iter()

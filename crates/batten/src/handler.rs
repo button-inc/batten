@@ -977,6 +977,10 @@ impl Payload {
     /// ladder's, whose payloads carry no tool result). A spool that cannot be
     /// read is empty, the could-not-look every reader of it already handles.
     #[must_use]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: `text` reads one handler input the caller spilled, bounded by the spill bound"
+    )]
     pub fn text(&self) -> std::borrow::Cow<'_, str> {
         match self {
             Payload::Text(text) => std::borrow::Cow::Borrowed(text),

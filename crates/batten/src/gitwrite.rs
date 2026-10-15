@@ -1014,6 +1014,10 @@ enum Settled {
 /// conflict stop `land` prints names one route for all of them.
 ///
 /// `trees` is `[ancestor, ours, theirs]`, read only to write candidates.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `settle` reads a tracked file whole to hash it, so the tracked tree's largest file is the bound"
+)]
 fn settle(
     dir: &Path,
     repo: &gix::Repository,
@@ -1115,6 +1119,10 @@ fn settle(
 ///
 /// Literal only: a pattern with a glob character is skipped rather than
 /// matched, so a union is never taken for a path the file did not name.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `union_paths` reads a tracked file, so the tracked tree's largest file is the bound, and the document is parsed whole"
+)]
 fn union_paths(dir: &Path) -> std::collections::BTreeSet<String> {
     // stream: the repository's own attributes file, a handful of lines.
     let Ok(text) = std::fs::read_to_string(dir.join(".gitattributes")) else {
@@ -1511,6 +1519,10 @@ pub fn init_on_main(dir: &Path) -> Result<()> {
 ///
 /// A directory that will not initialise or open, a file that will not read, an
 /// object the odb refuses, or an index that will not write.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `commit_paths` reads a tracked file whole to hash it, so the tracked tree's largest file is the bound"
+)]
 pub fn commit_paths(dir: &Path, paths: &[String], message: &str) -> Result<()> {
     let repo = if dir.join(".git").exists() {
         gix::open(dir)
@@ -1672,6 +1684,10 @@ pub fn seed(dir: &Path) -> Result<()> {
 ///
 /// `.git` is skipped: a repository's own store is not part of what it tracks,
 /// and walking into it would hash every object twice.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `tree_from_dir` reads a tracked file whole to hash it, so the tracked tree's largest file is the bound"
+)]
 fn tree_from_dir(repo: &gix::Repository, dir: &Path) -> Result<gix::ObjectId> {
     let mut entries: Vec<gix::objs::tree::Entry> = Vec::new();
     let listing = std::fs::read_dir(dir)

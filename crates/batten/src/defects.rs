@@ -154,11 +154,43 @@ impl Record {
 fn parse_lines(text: &str) -> Result<Vec<Record>, usize> {
     let mut records = Vec::new();
     for (index, line) in text.lines().enumerate() {
-        if line.trim().is_empty() {
-            continue;
+        if let Some(record) = parse_row(index, line)? {
+            records.push(record);
         }
-        let record: Record = serde_json::from_str(line).map_err(|_| index + 1)?;
-        records.push(record);
+    }
+    Ok(records)
+}
+
+/// One ledger row: `None` for a blank line, the 1-based line where it fails.
+fn parse_row(index: usize, line: &str) -> Result<Option<Record>, usize> {
+    if line.trim().is_empty() {
+        return Ok(None);
+    }
+    serde_json::from_str(line).map(Some).map_err(|_| index + 1)
+}
+
+/// [`parse`] over a reader, a line at a time (CLOUD-1525).
+///
+/// The ledger gains a row per recorded defect and nothing truncates it, so the
+/// verbs that list it hold the records and never the file beside them. The same
+/// row parser as [`parse`], so the two cannot disagree about what a row is.
+///
+/// # Errors
+///
+/// As [`parse`], plus the reader's own error — a ledger that is there and cannot
+/// be read is never an empty one.
+pub fn parse_reader(reader: impl std::io::BufRead) -> Result<Vec<Record>> {
+    let mut records = Vec::new();
+    for (index, line) in reader.lines().enumerate() {
+        match parse_row(index, &line?) {
+            Ok(Some(record)) => records.push(record),
+            Ok(None) => {}
+            Err(line) => {
+                return Err(UsageError::raise(format!(
+                    "defects: line {line} does not parse as a record"
+                )));
+            }
+        }
     }
     Ok(records)
 }
@@ -284,6 +316,10 @@ fn bases(repo: &Path) -> Result<Vec<String>> {
 /// Returns an error only when git itself cannot be run. A malformed ledger is a
 /// finding here, not a usage error: `check` must be able to report it beside
 /// everything else it found rather than aborting the whole run on one bad row.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `gate` reads the declared defects ledger whole, because the append-only check compares it as a byte prefix"
+)]
 pub fn gate(repo: &Path, declared: &Defects) -> Result<Vec<Finding>> {
     let working = std::fs::read_to_string(repo.join(&declared.path)).unwrap_or_default();
 

@@ -48,6 +48,10 @@ use common::at_root;
 /// The module whose doc comment carries the premise.
 const LEASE: &str = "crates/batten/src/lease.rs";
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `lease_source` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn lease_source() -> String {
     fs::read_to_string(at_root(LEASE)).expect("the lease module is readable")
 }

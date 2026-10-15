@@ -1289,6 +1289,10 @@ mod graph_check {
     }
 
     #[test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: `a_coherent_board_records_one_receipt_per_id_it_judged` reads a test input: a fixture the case wrote or a file this repository tracks"
+    )]
     fn a_coherent_board_records_one_receipt_per_id_it_judged() {
         let (dir, config) = repo("receipts");
         let mut board = Board::default();
@@ -1358,6 +1362,10 @@ mod graph_check {
     }
 
     #[test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: `an_earlier_closure_stays_judged_because_each_id_has_its_own_receipt` reads a test input: a fixture the case wrote or a file this repository tracks"
+    )]
     fn an_earlier_closure_stays_judged_because_each_id_has_its_own_receipt() {
         let (dir, config) = repo("accumulate");
         let mut first = Board::default();
@@ -1372,6 +1380,10 @@ mod graph_check {
     }
 
     #[test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: `the_receipt_is_pointer_only_an_id_and_an_epoch` reads a test input: a fixture the case wrote or a file this repository tracks"
+    )]
     fn the_receipt_is_pointer_only_an_id_and_an_epoch() {
         let (dir, config) = repo("receipt-pointer");
         let mut board = Board::default();
@@ -1640,6 +1652,10 @@ mod ready_cites {
     }
 
     #[test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: `a_superseded_obligation_naming_two_deleted_tests_is_refused_over_the_real_tree` reads a test input: a fixture the case wrote or a file this repository tracks"
+    )]
     fn a_superseded_obligation_naming_two_deleted_tests_is_refused_over_the_real_tree() {
         // The FETCHED fixture, over this repository's own tree and config. The
         // two tokens are assembled from halves so this tracked file cannot
@@ -1671,6 +1687,10 @@ mod ready_cites {
     }
 
     #[test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: `a_citation_resolving_only_in_the_excluded_fixtures_is_refused_over_the_real_tree` reads a test input: a fixture the case wrote or a file this repository tracks"
+    )]
     fn a_citation_resolving_only_in_the_excluded_fixtures_is_refused_over_the_real_tree() {
         // The vacuity guard over the real tree: the snapshot citation resolves
         // only in a fixture QUOTING it, and that fixture is excluded.
@@ -1692,6 +1712,10 @@ mod ready_cites {
     }
 
     #[test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: `a_body_with_a_superseded_block_and_a_live_one_is_judged_on_the_live_one` reads a test input: a fixture the case wrote or a file this repository tracks"
+    )]
     fn a_body_with_a_superseded_block_and_a_live_one_is_judged_on_the_live_one() {
         let payload = std::fs::read_to_string(common::at_root(
             "tests/fixtures/ready-cites-check/CLOUD-740-live.json",

@@ -37,6 +37,10 @@ use std::process::Output;
 use common::{Fixture, git_in, run, stderr, stdout};
 
 /// A repository declaring only this rule, so any finding is the one under test.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `map_repo` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn map_repo(name: &str, map: Option<&str>, modules: &[(&str, &str)]) -> PathBuf {
     // The two `[[verdict]]` rows are carried into the fixture rather than
     // assumed: a verdict is emittable only where a row declares it, and the

@@ -127,6 +127,10 @@ fn dist(bench: &Bench, args: &[&str], env: &[(&str, &str)]) -> Output {
 }
 
 /// Every stub invocation, in order.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `calls` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn calls(bench: &Bench) -> Vec<String> {
     std::fs::read_to_string(&bench.log)
         .unwrap_or_default()
@@ -135,6 +139,10 @@ fn calls(bench: &Bench) -> Vec<String> {
         .collect()
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `opens_with` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn opens_with(path: &Path, magic: &[u8]) -> bool {
     std::fs::read(path).is_ok_and(|bytes| bytes.starts_with(magic))
 }
@@ -492,6 +500,10 @@ fn outside_a_workspace_is_could_not_look() {
 /// The retired program and suite are gone, and the task name the release
 /// workflow calls still answers, through the verb.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_retired_program_is_gone_and_its_task_name_survives` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_retired_program_is_gone_and_its_task_name_survives() {
     for path in ["mise-tasks/dist.sh", "tests/dist.bats"] {
         assert!(

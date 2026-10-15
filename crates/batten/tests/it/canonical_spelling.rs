@@ -37,6 +37,10 @@ const CEILINGS: &[(&str, usize)] = &[
 const NEEDLE: &str = ".canonicalize()";
 
 /// Bare calls per tracked engine source under `root`, comment lines excluded.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `bare_calls` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn bare_calls(root: &Path) -> BTreeMap<String, usize> {
     let tracked = batten::git::tracked_paths(root).expect("the tracked set");
     let mut counts = BTreeMap::new();

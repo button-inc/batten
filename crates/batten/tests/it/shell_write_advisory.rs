@@ -90,6 +90,10 @@ fn bash_payload(command: &str) -> String {
 /// Measured — the suite passed 10/10 run alone, twice, and lost two cases to
 /// `update-ref ... not a git repository` under the full parallel run. Per case is
 /// also what every other fixture in this suite already does.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `bench` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn bench(name: &str) -> PathBuf {
     let module = std::fs::read_to_string(root().join("policy/shell-write-advisory.rego"))
         .expect("the advisory module is readable");
@@ -231,6 +235,10 @@ fn a_call_carrying_no_write_target_is_silent() {
 /// Fails by: editing either module's prefix test or its two suffix exclusions
 /// without editing the other.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_two_authorities_agree_on_what_is_governed` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_two_authorities_agree_on_what_is_governed() {
     // Read the tree module's own predicate out of its source rather than
     // restating it a THIRD time here, which would make this gate part of the
@@ -290,6 +298,10 @@ fn the_two_authorities_agree_on_what_is_governed() {
 /// `mise-tasks/**`, which makes a `Write` there a protected mutation, while the
 /// advisory module governs the same path. Both fire, from config the test owns.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `an_advised_and_denied_call_emits_only_the_refusal` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn an_advised_and_denied_call_emits_only_the_refusal() {
     let module = std::fs::read_to_string(root().join("policy/shell-write-advisory.rego"))
         .expect("the advisory module is readable");

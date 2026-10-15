@@ -909,6 +909,10 @@ fn reason_kinds(entry: &serde_json::Value) -> Vec<String> {
 /// Pointer-only in the value it produces: the digest carries no path and no byte
 /// to any reader (rule 4). The paths are inputs to a hash, never output.
 #[must_use]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `fingerprint` reads a tracked file whole to hash it, so the tracked tree's largest file is the bound"
+)]
 pub fn fingerprint(root: &Path) -> Look<String> {
     let Ok(head) = crate::git::head_fact(root) else {
         return Look::CouldNotLook;
@@ -941,6 +945,10 @@ pub fn fingerprint(root: &Path) -> Look<String> {
 /// `[[rule.tools]]`'s keying exists to remove. Here the fact simply cannot be
 /// stale, because it is taken now.
 #[must_use]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `acquire` reads the generated hk contract artifact, one document"
+)]
 pub fn acquire(root: &Path, query: &PlanQuery) -> Look<Planned> {
     let Some(argv) = SURFACES.iter().find(|argv| hook_of(argv) == query.hook) else {
         return Look::CouldNotLook;
@@ -1117,6 +1125,10 @@ pub fn observation_path(git_dir: &Path, session: &str, contract_digest: &str) ->
 
 /// Read back one observation, if this session already made it.
 #[must_use]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `observed` reads one record file this crate writes whole"
+)]
 pub fn observed(git_dir: &Path, session: &str, contract_digest: &str) -> Look<Observation> {
     let path = observation_path(git_dir, session, contract_digest);
     let Ok(text) = std::fs::read_to_string(path) else {
@@ -1185,6 +1197,10 @@ pub fn capability(committed: Option<&Contract>, current: Option<&Contract>) -> C
 /// # Errors
 ///
 /// Propagates an I/O failure creating the directory or writing the record.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `observe` reads the generated hk contract artifact, one document"
+)]
 pub fn observe(
     root: &Path,
     git_dir: &Path,

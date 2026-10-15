@@ -264,6 +264,10 @@ fn max_age_bounds_an_agent_sourced_record_and_an_unaged_one_still_passes() {
 
 // ported: "a named keying over an agent-sourced fact is refused at LOAD, not at decision" crates/batten/tests/it/fact_record_keying.rs subject:crates/batten/src/facts.rs
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `a_named_keying_over_an_agent_sourced_fact_is_refused_at_load_not_at_decision` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn a_named_keying_over_an_agent_sourced_fact_is_refused_at_load_not_at_decision() {
     // The two halves run on different envelopes: the record is written on the
     // post-tool event of the fact's own command, and a `named` subject is

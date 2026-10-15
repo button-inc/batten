@@ -444,6 +444,10 @@ fn reclaim_superseded_debuginfo(deps: &Path) -> (usize, u64) {
 
 /// Every `<owner>.….rcgu.dwo` name `owner`'s own artifacts in `deps` carry.
 //MUTANT superseded-dwo-kept|s@^            named.extend(@            let _ = (@|a_live_units_superseded_dwo_are_reclaimed_and_its_current_set_kept
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `named_debuginfo` reads one build artifact, whose size the build bounds"
+)]
 fn named_debuginfo(deps: &Path, owner: &str) -> std::collections::BTreeSet<String> {
     let mut named = std::collections::BTreeSet::new();
     let Ok(pattern) = regex::bytes::Regex::new(&format!(
@@ -577,6 +581,10 @@ fn unit_identities(fingerprints: &Path) -> BTreeMap<String, String> {
 /// The document is the directory's `*.json` whose name is not `dep-*`; where
 /// there are several, the first by name, so the answer is a function of the
 /// directory rather than of `read_dir`'s order.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `unit_identity` reads one cargo fingerprint record"
+)]
 fn unit_identity(dir: &Path) -> Option<String> {
     let mut documents: Vec<PathBuf> = std::fs::read_dir(dir)
         .ok()?
@@ -766,6 +774,10 @@ pub fn sampler(path: PathBuf) -> Result<impl FnMut() -> Result<u64> + Send> {
 //MUTANT prune-table-alone-unread|s@    let declared = table.get("prune")?.as_table()?;@    let declared = table.get("prune-unread")?.as_table()?;@|a_config_this_build_outran_still_yields_its_prune_table
 //MUTANT prune-table-alone-unvalidated|s@    prune.validate().ok()?;@    let _ = prune.validate();@|a_prune_table_that_fails_validation_is_not_read_alone
 #[must_use]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `declared_alone` reads the committed config, one human-edited document"
+)]
 pub fn declared_alone(dir: &Path) -> Option<Prune> {
     let text = std::fs::read_to_string(dir.join(crate::config::CONFIG_FILE)).ok()?;
     let table: toml::Table = toml::from_str(&text).ok()?;

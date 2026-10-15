@@ -166,6 +166,10 @@ fn this_repository_is_clean_today() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `a_drifted_version_in_this_repository_is_refused` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn a_drifted_version_in_this_repository_is_refused() {
     // THE DISCRIMINATING TWIN OF THE CASE ABOVE, and the only case in this file
     // that can fail if the `sources` glob stops delivering `batten.toml`. Every

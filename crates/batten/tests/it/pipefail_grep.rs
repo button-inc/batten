@@ -38,6 +38,10 @@ use std::process::Output;
 
 use common::{Fixture, git_in, run, stdout};
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `pipefail_repo` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn pipefail_repo(name: &str, program: &str) -> PathBuf {
     let dir = Fixture::new(name)
         .config(

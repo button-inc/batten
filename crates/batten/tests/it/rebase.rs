@@ -95,6 +95,10 @@ use common::scratch;
 type Files<'a> = &'a [(&'a str, &'a str)];
 
 /// Initialise a repository with a worktree and a configured committer.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `init` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn init(name: &str) -> (PathBuf, gix::Repository) {
     let dir = scratch(name);
     let repo = gix::init(&dir).expect("init");
@@ -400,6 +404,10 @@ fn the_conflict_stop_names_every_path_and_the_route_out() {
 /// **The case the design exists for.** Two sides edit one path, and the replay
 /// REFUSES rather than resolving. Nothing moves.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `a_conflicting_replay_refuses` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn a_conflicting_replay_refuses() {
     let (dir, repo) = init("rebase-conflict");
     let root: Files<'_> = &[("shared.txt", "base\n")];
@@ -475,6 +483,10 @@ fn a_conflicting_replay_refuses() {
 /// as unrelated work, because by now they genuinely differ. Only the CHANGE is
 /// the same.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `a_commit_whose_change_is_already_on_the_base_is_dropped_rather_than_conflicting` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn a_commit_whose_change_is_already_on_the_base_is_dropped_rather_than_conflicting() {
     let (dir, repo) = init("rebase-already-upstream");
     let root: Files<'_> = &[("shared.txt", "base\n")];
@@ -534,6 +546,10 @@ fn a_commit_whose_change_is_already_on_the_base_is_dropped_rather_than_conflicti
 /// moves on a conflict" survives — a run that resolves either completes or
 /// refuses, exactly as before.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `a_named_path_takes_its_resolution_from_the_worktree` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn a_named_path_takes_its_resolution_from_the_worktree() {
     let (dir, repo) = init("rebase-resolve");
     let root: Files<'_> = &[("shared.txt", "base\n")];
@@ -602,6 +618,10 @@ fn a_named_path_takes_its_resolution_from_the_worktree() {
 /// real branch conflicted at `fetch.rs` on one commit and `egress-fencing.rego`
 /// on another.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `a_chain_of_conflicts_at_different_paths_resolves_in_one_run` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn a_chain_of_conflicts_at_different_paths_resolves_in_one_run() {
     let (dir, repo) = init("rebase-resolve-chain");
     let root: Files<'_> = &[("first.txt", "base\n"), ("second.txt", "base\n")];
@@ -672,6 +692,10 @@ fn a_chain_of_conflicts_at_different_paths_resolves_in_one_run() {
 /// somebody wrote for it, and what changed is that a second version is now
 /// writable at all.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `a_chain_of_conflicts_at_the_same_path_resolves_with_one_entry_each` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn a_chain_of_conflicts_at_the_same_path_resolves_with_one_entry_each() {
     let (dir, repo) = init("rebase-resolve-same-path");
     let root: Files<'_> = &[("shared.txt", "base\n")];

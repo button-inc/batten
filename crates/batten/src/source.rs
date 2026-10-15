@@ -121,6 +121,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: `one_rust_parse_exists` reads one crate source file the case names"
+    )]
     fn one_rust_parse_exists() {
         // THE GATE THAT SHIPS WITH THE RULE (non-negotiable rule 2), on the
         // source-level model `rules::tests::one_document_acquisition_exists`

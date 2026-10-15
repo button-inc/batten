@@ -223,6 +223,10 @@ pub fn prompt(id: &str) -> Option<(&'static str, String)> {
 /// fact may refuse on. A file present with no findings means it ran and pointed
 /// at nothing.
 #[must_use]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `read` reads one record file this crate writes whole"
+)]
 pub fn read(path: &Path) -> Look<Vec<Finding>> {
     let Ok(text) = std::fs::read_to_string(path) else {
         return Look::IsNot;
@@ -261,6 +265,10 @@ pub fn read(path: &Path) -> Look<Vec<Finding>> {
 /// empty finding list is what stops a gate reporting clean over a review that
 /// never happened.
 #[must_use]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `resolve` reads a tracked file whole to hash it, so the tracked tree's largest file is the bound"
+)]
 pub fn resolve(
     root: &Path,
     declared: &[crate::facts::ReviewQuery],

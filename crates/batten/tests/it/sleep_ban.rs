@@ -57,12 +57,20 @@ const ASYNC_SLEEP: &str = "tokio::time::sleep";
 const TIME: &str = "time";
 
 /// `clippy.toml`, read once per case.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `clippy_toml` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn clippy_toml() -> String {
     fs::read_to_string(at_root("clippy.toml")).expect("clippy.toml is committed")
 }
 
 /// The workspace manifest, through the fact the engine already owns rather than
 /// a second TOML reader.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `manifest` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn manifest() -> Node {
     let text = fs::read_to_string(at_root("Cargo.toml")).expect("the workspace manifest is here");
     match Format::Toml.read(&text) {
@@ -196,6 +204,10 @@ fn the_async_row_is_live_exactly_while_the_time_feature_is_on() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `every_delay_carries_an_expect_naming_a_bound_that_resolves` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn every_delay_carries_an_expect_naming_a_bound_that_resolves() {
     // THE PREDICATE THIS ROW IS ABOUT. Every other assertion here is about the
     // config; this one is about the annotations the config forced into
@@ -278,6 +290,10 @@ fn every_delay_carries_an_expect_naming_a_bound_that_resolves() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_inventory_is_not_empty` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_inventory_is_not_empty() {
     // The anti-vacuity arm, and it is not a formality: every assertion above
     // passes trivially over a crate carrying no annotation at all, which is

@@ -55,6 +55,10 @@ use common::at_root;
 /// `CLAUDE.md` is a symlink to this; the tracked path is the one asserted.
 const INDEX: &str = "AGENTS.md";
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `index` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn index() -> String {
     fs::read_to_string(at_root(INDEX)).unwrap()
 }

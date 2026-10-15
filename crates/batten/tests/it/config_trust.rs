@@ -905,6 +905,10 @@ fn unfetch_base(repo: &Path) {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `a_run_that_reaches_a_verdict_records_the_config_it_was_judged_by` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn a_run_that_reaches_a_verdict_records_the_config_it_was_judged_by() {
     let repo = pr_fixture(
         "trust-pin-minted",
@@ -985,6 +989,10 @@ fn an_unreachable_ref_refuses_when_the_key_is_off() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `an_unreachable_ref_is_served_from_the_pin_when_the_key_is_on` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn an_unreachable_ref_is_served_from_the_pin_when_the_key_is_on() {
     // The §4 degrade, and the only state that may take it. stdout must be
     // byte-identical to the run that reached the ref — a caller parsing findings
@@ -1076,6 +1084,10 @@ fn a_ref_that_resolves_with_no_config_never_degrades() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `a_pin_whose_bytes_do_not_match_its_digest_refuses` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn a_pin_whose_bytes_do_not_match_its_digest_refuses() {
     // Self-verification, and the reason an unreadable pin is LOUD where an
     // unreadable epoch cache is silent: the cache is an optimization, and this

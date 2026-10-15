@@ -460,6 +460,10 @@ fn every_advertised_preset_name_actually_loads() {
 /// a fact. Fails by: moving the presets outside `crates/`, which is the only way
 /// the existing rows could stop seeing them.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `presets_are_inside_the_rule_one_glob` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn presets_are_inside_the_rule_one_glob() {
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let presets = manifest.join("src/policy/presets");

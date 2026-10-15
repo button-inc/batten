@@ -120,6 +120,10 @@ fn base_paths(dir: &Path) -> BTreeSet<String> {
 /// worktree whose content matches the main one cannot distinguish the two
 /// readings at all.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `a_linked_worktree_counts_its_own_files_rather_than_the_main_checkouts` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn a_linked_worktree_counts_its_own_files_rather_than_the_main_checkouts() {
     let main = Fixture::new("worktree-own-files")
         .file("shared.txt", "main's own text\n")

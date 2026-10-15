@@ -70,6 +70,10 @@ const MODULE_RULES: &str = "rules/policy-modules.md";
 /// anti-drift assertion rather than a second copy of the predicate.
 const CLASSIFIERS: &[&str] = &["governed_at_head", "governed_when_deleted"];
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `rules_text` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn rules_text() -> String {
     fs::read_to_string(at_root(RULES)).expect("`rules/toolchain.md` is committed")
 }
@@ -108,6 +112,10 @@ fn the_rules_name_the_module_and_the_verdict_that_decide() {
 /// The asymmetry, in both directions: the prose points at the classifiers, and
 /// the module still declares them.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_rules_carry_the_edit_versus_deletion_asymmetry` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_rules_carry_the_edit_versus_deletion_asymmetry() {
     let text = rules_text();
     let module = fs::read_to_string(at_root(MODULE)).expect("the module is committed");
@@ -166,6 +174,10 @@ fn the_rules_say_what_a_retirement_owes_and_which_edit_is_admitted() {
 /// arms. Dropping the preset arm — the one no landed row has used — is the failure
 /// this pins, because it is the arm whose absence pushes an author toward the core.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_rules_name_the_three_homes_and_the_module_admits_them` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_rules_name_the_three_homes_and_the_module_admits_them() {
     let text = squashed(&rules_text());
     for clause in [
@@ -212,6 +224,10 @@ fn the_rules_name_the_three_homes_and_the_module_admits_them() {
 /// retirement, and a test asserting it would fail on correct work — the same
 /// reason this file pins no glob.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_rules_name_the_successor_kind_field_and_the_module_admits_it` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_rules_name_the_successor_kind_field_and_the_module_admits_it() {
     let text = squashed(&rules_text());
     for clause in ["kind:verb", "kind:mechanism", "shell port unnamed"] {
@@ -264,6 +280,10 @@ fn the_rules_name_the_wrong_conclusion_the_gap_produced() {
 /// The `$MUTANT_GATES` clause cannot be read as demanding a suite for a gate that
 /// was just retired.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_module_rules_scope_the_mutant_gates_clause_to_a_gate_that_stays` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_module_rules_scope_the_mutant_gates_clause_to_a_gate_that_stays() {
     let text =
         fs::read_to_string(at_root(MODULE_RULES)).expect("`rules/policy-modules.md` is committed");
@@ -277,6 +297,10 @@ fn the_module_rules_scope_the_mutant_gates_clause_to_a_gate_that_stays() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_index_routes_a_reader_to_the_rules_with_the_warning_in_the_cell` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_index_routes_a_reader_to_the_rules_with_the_warning_in_the_cell() {
     let index = fs::read_to_string(at_root(INDEX)).expect("`AGENTS.md` is committed");
     let row = index

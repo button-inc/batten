@@ -248,6 +248,10 @@ fn lane_run(repo: &Path, args: &[&str]) -> (Option<i32>, String, String) {
 }
 
 /// The `body` field a write sent, or empty where none was sent.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `sent_body` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn sent_body(recorded: &Path, route: &str) -> String {
     std::fs::read_to_string(recorded.join(format!("{route}.request")))
         .ok()
@@ -569,6 +573,10 @@ fn closes_writes_nothing() {
 /// short one, because that is the text a tracker row will actually carry, and it
 /// is the one a formatter can silently reshape out from under the grammar.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_derived_block_passes_ready_lint` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_derived_block_passes_ready_lint() {
     let (repo, _) = lane("lane-ready-lint", &Forge::default());
     let template = std::fs::read_to_string(crate::common::at_root(".github/bot-lane-row.md"))
@@ -589,6 +597,10 @@ fn the_derived_block_passes_ready_lint() {
 // -- the receipt -------------------------------------------------------------
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `a_bot_branch_whose_facts_hold_earns_the_receipt` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn a_bot_branch_whose_facts_hold_earns_the_receipt() {
     // THE PREMISE. Every refusal below is a refusal against this one, which is
     // what keeps them from being satisfied by a verb that refuses everything.

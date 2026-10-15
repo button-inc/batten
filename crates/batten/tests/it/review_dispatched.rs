@@ -111,6 +111,10 @@ fn stub(root: &Path, emits: &str, code: i32) {
     }
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `calls` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn calls(root: &Path) -> usize {
     fs::read_to_string(root.join("calls")).map_or(0, |text| text.lines().count())
 }
@@ -453,6 +457,10 @@ fn the_committed_row_is_the_one_these_cases_exercise() {
 /// show it: a review dispatched with the prompt discarded writes a record
 /// byte-identical to one dispatched with it delivered, which is exactly why the
 /// defect this case exists for survived being tested.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `last_call` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn last_call(root: &Path) -> String {
     fs::read_to_string(root.join("calls")).unwrap_or_default()
 }

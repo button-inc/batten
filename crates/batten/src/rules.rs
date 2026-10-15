@@ -7628,19 +7628,31 @@ fn dedup_scoped(findings: &mut Vec<Finding>) {
 /// A malformed line is skipped rather than judged, matching every other record
 /// reader here: the writer already refused a bad line, so anything unparseable at
 /// read time is a torn store and not an author's claim.
+///
+/// Streamed (CLOUD-1525): the store grows by a line per blocked call and the fold
+/// keeps one entry per recorder, so the map is bounded by the declared rows while
+/// the file is bounded by nothing. A line that is not text leaves the whole store
+/// unread, as the whole-file read this replaces did.
 fn recorder_blocked(git_dir: &std::path::Path, branch: &str) -> BTreeMap<String, String> {
+    use std::io::BufRead as _;
     let claim = crate::claim::claimed_token(&git_dir.join("batten-receipts"), branch);
     let path = crate::recorder::blocked_path(git_dir, branch, claim.as_deref());
-    let Ok(text) = std::fs::read_to_string(path) else {
+    let Ok(file) = std::fs::File::open(path) else {
         return BTreeMap::new();
     };
-    text.lines()
-        .filter_map(|line| {
-            let (recorder, reason) = line.split_once(' ')?;
-            (!recorder.is_empty() && !reason.is_empty())
-                .then(|| (recorder.to_owned(), reason.to_owned()))
-        })
-        .collect()
+    let mut blocked = BTreeMap::new();
+    for line in std::io::BufReader::new(file).lines() {
+        let Ok(line) = line else {
+            return BTreeMap::new();
+        };
+        if let Some((recorder, reason)) = line.split_once(' ')
+            && !recorder.is_empty()
+            && !reason.is_empty()
+        {
+            blocked.insert(recorder.to_owned(), reason.to_owned());
+        }
+    }
+    blocked
 }
 
 // THE PROJECTION'S OWN DISCRIMINATION (CLOUD-1810). The first mutation is the
@@ -7715,10 +7727,20 @@ fn recorder_records(
         // surface rests on: an unreadable store leaves the key out of the map so
         // a module sees *does not hold*, where an empty file is a key whose value
         // is the empty list — "nothing was recorded" rather than "nothing looked".
-        let Ok(text) = std::fs::read_to_string(&path) else {
+        //
+        // Read a line at a time (CLOUD-1525) rather than whole and then split: the
+        // projection is every line, so the list is the fact, but the file is not
+        // held a second time beside it. A line that is not text leaves the key
+        // absent, as the whole-file read did.
+        let Ok(file) = std::fs::File::open(&path) else {
             continue;
         };
-        found.insert(name.to_owned(), text.lines().map(str::to_owned).collect());
+        let Ok(lines) = std::io::BufRead::lines(std::io::BufReader::new(file))
+            .collect::<std::io::Result<Vec<String>>>()
+        else {
+            continue;
+        };
+        found.insert(name.to_owned(), lines);
     }
     found
 }
@@ -8234,6 +8256,10 @@ pub fn rule_costs() -> Vec<RuleCost> {
 ///
 /// `format` is `None` when the caller could not classify the extension; that is
 /// [`NotAcquired::UnknownFormat`] and costs no I/O.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `acquire` reads a tracked file, so the tracked tree's largest file is the bound, and the document is parsed whole"
+)]
 pub(crate) fn acquire(root: &Path, rel_path: &str, want: Option<Want>) -> Acquired {
     let Some(want) = want else {
         // Before any I/O, deliberately: an extension this build cannot parse is
@@ -10404,6 +10430,10 @@ fn fingerprint_of(violation: &crate::policy::Violation) -> String {
 /// resolve — never a pass. A ratchet that cannot see its own baseline has not
 /// established that the count held.
 //MUTANT ratchet-regex-uncounted|s@^        (Some(expression), _) => expression.find_iter(text).count(),$@        (Some(_), _) => 0,@|a_ratchet_regex_counts_every_spelling_of_the_token
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `ratchet_rule` reads a tracked file, so the tracked tree's largest file is the bound, and the document is parsed whole"
+)]
 fn ratchet_rule(
     rule: &Rule,
     root: &Path,
@@ -11045,6 +11075,10 @@ struct Mapping<'a> {
 /// nothing rather than failing the scan: it cannot be a successor a mapping
 /// names, and a mapping that could not be read reports through the unmapped
 /// cases it fails to claim — which is the refusing direction.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `claimed_cases` reads a tracked file, so the tracked tree's largest file is the bound, and the document is parsed whole"
+)]
 fn claimed_cases(root: &Path, conserves: &Conserves, files: &[String]) -> ClaimedCases {
     let Ok(selector) = Selector::new(&conserves.declared_in) else {
         // Unreachable: `validate_conserves` compiled this at load. Reached only
@@ -11447,6 +11481,10 @@ fn ported_subject_finding(
 /// different question — the SUITE's size — and stays conditional on the ratchet
 /// firing; this one is about whether each dropped name has a successor somebody
 /// named.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `conserve_case_names` reads a tracked file, so the tracked tree's largest file is the bound, and the document is parsed whole"
+)]
 fn conserve_case_names(
     rule: &Rule,
     root: &Path,
@@ -12494,6 +12532,10 @@ impl Matcher {
 /// the *line* loop because "`Regex::new` is the expensive half". It was right
 /// about the cost and stopped one loop short; the expression is a property of the
 /// ROW, so it is compiled where the row is.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `forbid_in_files` reads a tracked file, so the tracked tree's largest file is the bound, and the document is parsed whole"
+)]
 fn forbid_in_files(
     rule: &Rule,
     root: &Path,
@@ -13846,6 +13888,10 @@ mod tests {
     /// and private to that module. Copied rather than hoisted deliberately:
     /// making it shared would put a test helper on the crate's real surface to
     /// save fifteen lines, and the two gates it serves are independent.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: `crate_sources` reads one crate source file the case names"
+    )]
     fn crate_sources() -> Vec<(std::path::PathBuf, String)> {
         let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         let mut sources = Vec::new();
@@ -14345,6 +14391,10 @@ mod tests {
     /// reader copies the text. CLOUD-589's class, given a mechanism instead of a
     /// second pair of eyes.
     #[test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: `every_input_path_in_the_module_doc_names_a_key_the_engine_emits` reads a fixture this case wrote"
+    )]
     fn every_input_path_in_the_module_doc_names_a_key_the_engine_emits() {
         let root = std::env::temp_dir();
         let emitted = emitted_tree_keys(&root);
@@ -17817,6 +17867,10 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
     /// Every call is recorded, because *which programs were tried, in what
     /// order* is the property — a ladder that reached the right answer by a wrong
     /// route would pass a bare assertion on the outcome.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: `windows_like_spawn` reads one test binary the case resolved, whose size the build bounds"
+    )]
     fn windows_like_spawn<'a>(
         cwd: &'a Path,
         dirs: &'a [std::path::PathBuf],

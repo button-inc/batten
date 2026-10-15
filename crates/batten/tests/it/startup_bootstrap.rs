@@ -41,6 +41,10 @@ fn root() -> PathBuf {
 ///
 /// Read rather than restated: a fixture spelling its own rows would assert that
 /// the FIXTURE is ordered, which is the tautology this file exists to avoid.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `committed` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn committed() -> String {
     std::fs::read_to_string(root().join("batten.toml")).expect("the authority is readable")
 }

@@ -407,6 +407,10 @@ mod tests {
     /// THE SUBJECT IS THE BINARY, NOT THE ARCHIVE, found however deep the
     /// archive nests it.
     #[test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: `a_nested_binary_is_unpacked_out_of_the_tarball` reads a fixture this case wrote"
+    )]
     fn a_nested_binary_is_unpacked_out_of_the_tarball() {
         let dir = scratch("nested");
         let archive = tarball(

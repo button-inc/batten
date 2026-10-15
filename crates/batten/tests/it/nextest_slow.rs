@@ -136,6 +136,10 @@ fn rules_fired(root: &Path) -> Vec<String> {
 /// reports every class the other rules would have raised.
 /// `#MUTANT declaration-unread` reddens exactly here.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_committed_config_declares_a_terminating_slow_timeout` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_committed_config_declares_a_terminating_slow_timeout() {
     let committed = fs::read_to_string(common::at_root(CONFIG))
         .expect("the committed runner config is where the row says it is");

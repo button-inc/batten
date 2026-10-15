@@ -172,6 +172,10 @@ fn session_authority_file(state: &Path, session: &str) -> PathBuf {
 ///
 /// Returns an error when the state root cannot be resolved or the record cannot
 /// be written.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `record_session_authority` reads one record file this crate writes whole"
+)]
 pub fn record_session_authority(session: &str, root: &Path) -> Result<()> {
     let path = session_authority_file(&state_root()?, session);
     let text = root.to_string_lossy();
@@ -202,6 +206,10 @@ pub fn recorded_session_authority(session: &str, file: &str) -> Option<PathBuf> 
 //MUTANT-SUITE crates/batten/src/state.rs
 //MUTANT session-authority-ghost-admitted|s@^    (root\.is_absolute() && root\.join(file)\.is_file())\.then_some(root)$@    root.is_absolute().then_some(root)@|a_recorded_root_that_lost_its_authority_is_not_used
 #[must_use]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `recorded_session_authority_in` reads one record file this crate writes whole"
+)]
 pub fn recorded_session_authority_in(state: &Path, session: &str, file: &str) -> Option<PathBuf> {
     let root = PathBuf::from(std::fs::read_to_string(session_authority_file(state, session)).ok()?);
     (root.is_absolute() && root.join(file).is_file()).then_some(root)

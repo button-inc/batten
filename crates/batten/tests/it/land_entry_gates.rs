@@ -92,6 +92,10 @@ fn gate(dir: &std::path::Path, name: &str, code: i32) -> String {
 }
 
 /// What the gates recorded about how they were called.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `asked` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn asked(dir: &std::path::Path) -> String {
     std::fs::read_to_string(dir.join("asked")).unwrap_or_default()
 }

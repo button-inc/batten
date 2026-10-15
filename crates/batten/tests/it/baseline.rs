@@ -102,6 +102,10 @@ fn run(repo: &Path, home: &Path, args: &[&str]) -> (i32, String, String) {
 /// repository→store direction the design depends on: scanning the state dir for
 /// a `baseline.json` would pass even if the artifact landed in a store this
 /// checkout is not bound to.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `baseline_file` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn baseline_file(repo: &Path, home: &Path) -> Option<PathBuf> {
     let id = std::fs::read_to_string(repo.join(".git").join("batten-store")).ok()?;
     let mut found = None;

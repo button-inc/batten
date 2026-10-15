@@ -5031,6 +5031,10 @@ pub type ProspectiveFacts = crate::facts::Look<String>;
 /// unread would be the widest hole a content-keyed gate can have — the same edit,
 /// spelled the other way, inspected by nothing.
 #[must_use]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `prospective_facts` reads a tracked file, so the tracked tree's largest file is the bound, and the document is parsed whole"
+)]
 pub fn prospective_facts(root: &std::path::Path, envelope: &Envelope) -> ProspectiveFacts {
     use crate::facts::Look;
 

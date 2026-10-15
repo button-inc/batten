@@ -23,6 +23,10 @@ const OPENER: &str = "//MUTANT";
 /// marker, as `path:line`.
 //MUTANT-SUITE crates/batten/tests/it/mutant_rows.rs
 //MUTANT indented-row-unread|s@^            let indented = indent > 0 \&\& line\[indent..\].starts_with(OPENER);$@            let indented = false;@|an_indented_row_in_a_tracked_source_is_found
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `indented_rows` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn indented_rows(root: &Path) -> Vec<String> {
     let tracked = batten::git::tracked_paths(root).expect("the tracked set");
     let mut found = Vec::new();

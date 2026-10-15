@@ -107,6 +107,10 @@ impl Env {
     }
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `collect` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn collect(root: &Path, dir: &Path, out: &mut Vec<(String, Vec<u8>)>) {
     let Ok(entries) = fs::read_dir(dir) else {
         return;
@@ -166,6 +170,10 @@ fn a_manifest_over_an_empty_cache_is_stale_and_names_the_entry() {
 // --- (b) apply populates the cache, out of tree --------------------------------
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `apply_installs_out_of_tree_and_leaves_the_repository_untouched` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn apply_installs_out_of_tree_and_leaves_the_repository_untouched() {
     let env = Env::new("provision-apply");
     let (url, sha) = env.artifact("demo", BINARY);
@@ -230,6 +238,10 @@ fn apply_installs_out_of_tree_and_leaves_the_repository_untouched() {
 /// and it fails on the implementation this replaced without needing to get a
 /// process executing inside a test.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `a_reinstall_replaces_the_cached_binary_rather_than_writing_through_it` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn a_reinstall_replaces_the_cached_binary_rather_than_writing_through_it() {
     use std::io::Read as _;
 
@@ -470,6 +482,10 @@ fn an_unreachable_url_is_exit_3_and_leaves_the_cache_alone() {
 // --- unpacking ------------------------------------------------------------------
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `a_tar_gz_artifact_yields_the_named_binary_from_a_nested_path` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn a_tar_gz_artifact_yields_the_named_binary_from_a_nested_path() {
     // Matching on the archive path's *file name* is what lets a release tarball
     // nest its binary under a versioned directory without the manifest restating
@@ -713,6 +729,10 @@ fn the_timeout_is_what_ends_it_rather_than_an_instant_failure() {
 /// is a VALUE and a status can therefore be chosen. Do not re-add it here.
 #[cfg(target_os = "linux")]
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `host_ca_configuration_reaches_the_fetch` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn host_ca_configuration_reaches_the_fetch() {
     use std::net::TcpListener;
     #[expect(
@@ -872,6 +892,10 @@ const ENV_ROWS: &str = "\n[[provision.env]]\nname = \"NO_PROXY\"\n\
 /// none and must still be a plain copy a shell can run with no interpreter.
 #[cfg(unix)]
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `an_entry_declaring_no_environment_is_still_a_plain_copy` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn an_entry_declaring_no_environment_is_still_a_plain_copy() {
     let env = Env::new("provision-plain-copy");
     let dest = env.repo.parent().unwrap().join("bin-plain");
@@ -894,6 +918,10 @@ fn an_entry_declaring_no_environment_is_still_a_plain_copy() {
 /// same defect one layer down as the `[env]` one this replaces.
 #[cfg(unix)]
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `a_launcher_hands_the_tool_an_environment_a_manifest_could_not` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn a_launcher_hands_the_tool_an_environment_a_manifest_could_not() {
     let system_env = env_binary();
     let env = Env::new("provision-launcher-env");
@@ -958,6 +986,10 @@ fn a_launcher_hands_the_tool_an_environment_a_manifest_could_not() {
 /// `argv[0]`.
 #[cfg(unix)]
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `a_launcher_reached_through_a_symlink_hands_the_tool_that_name` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn a_launcher_reached_through_a_symlink_hands_the_tool_that_name() {
     let bash = ["/bin/bash", "/usr/bin/bash"]
         .into_iter()
@@ -1004,6 +1036,10 @@ fn a_launcher_reached_through_a_symlink_hands_the_tool_that_name() {
 /// not get it twice.
 #[cfg(unix)]
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_prepend_adds_nothing_it_already_carries` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_prepend_adds_nothing_it_already_carries() {
     let system_env = env_binary();
     let env = Env::new("provision-launcher-idempotent");
@@ -1035,6 +1071,10 @@ fn the_prepend_adds_nothing_it_already_carries() {
 /// case, where no session credential exists yet, is exactly this arm.
 #[cfg(unix)]
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `a_credential_no_source_carries_is_left_unset` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn a_credential_no_source_carries_is_left_unset() {
     let system_env = env_binary();
     let env = Env::new("provision-launcher-no-token");
@@ -1206,6 +1246,10 @@ fn one_certificate_bundle(into: &Path) -> String {
 /// a build that ignores the condition entirely and applies every row.
 #[cfg(unix)]
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `a_conditioned_row_applies_only_where_the_trust_bundle_names_that_authority` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn a_conditioned_row_applies_only_where_the_trust_bundle_names_that_authority() {
     let system_env = env_binary();
     let env = Env::new("provision-trust-condition");
@@ -1253,6 +1297,10 @@ fn a_conditioned_row_applies_only_where_the_trust_bundle_names_that_authority() 
 /// on the strength of a file this process failed to open.
 #[cfg(unix)]
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `an_unreadable_trust_bundle_does_not_apply_the_bypass` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn an_unreadable_trust_bundle_does_not_apply_the_bypass() {
     let system_env = env_binary();
     let env = Env::new("provision-trust-unreadable");
@@ -1403,6 +1451,10 @@ fn the_agnostic_scan_would_find_a_violation() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_engine_names_no_consumer_of_its_own` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_engine_names_no_consumer_of_its_own() {
     let fragments = forbidden_fragments();
     let mut findings = Vec::new();

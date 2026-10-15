@@ -571,6 +571,10 @@ fn record_path(store_dir: &Path, fingerprint: Fingerprint) -> PathBuf {
 /// is what lets a new binary run against a store it has not migrated. A record
 /// from the *future* is still absent — that half stays fail-closed, because a
 /// field this binary cannot see is a field it would silently drop on write.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `read_record` reads one record file this crate writes whole"
+)]
 fn read_record(path: &Path) -> Option<FindingRecord> {
     let text = std::fs::read_to_string(path).ok()?;
     let record: FindingRecord = serde_json::from_str(&text).ok()?;
@@ -1205,6 +1209,10 @@ mod tests {
     /// which is the thing CLOUD-80 §7 asks to be byte-identical across
     /// observations. A `PartialEq` over a deserialized enum cannot see a write
     /// path that re-serialized the field differently.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: `stored_tier_bytes` reads a fixture this case wrote"
+    )]
     fn stored_tier_bytes(dir: &Path, fingerprint: Fingerprint) -> String {
         let text = std::fs::read_to_string(record_path(dir, fingerprint)).unwrap();
         text.lines()

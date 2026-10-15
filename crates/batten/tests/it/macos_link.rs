@@ -53,6 +53,10 @@ use crate::common;
 use common::{git_in, init_repo, run, run_with_stdin, scratch, write};
 
 /// A repository registering the real module against the declared family.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `repo` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn repo(name: &str) -> std::path::PathBuf {
     let dir = scratch(&format!("macos-link-{name}"));
     let module = std::fs::read_to_string("../../policy/macos-link.rego")

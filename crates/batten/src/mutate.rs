@@ -702,6 +702,10 @@ fn has_extension(path: &str, extension: &str) -> bool {
 }
 
 /// Every line of `path` under `root`, or `None` where it will not read.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `lines_of` reads a tracked file, so the tracked tree's largest file is the bound, and the document is parsed whole"
+)]
 fn lines_of(root: &Path, path: &str) -> Option<Vec<String>> {
     let text = std::fs::read_to_string(root.join(path)).ok()?;
     Some(text.lines().map(str::to_owned).collect())
@@ -1739,6 +1743,10 @@ fn pointer_of(line: &str) -> Option<String> {
 
 /// Read a run's outcome files. Absent files are empty: a run that never got as
 /// far as writing them is told apart by [`Outcomes::findings`] from its exit.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `read_outcomes` reads one mutation run's outcome documents"
+)]
 fn read_outcomes(dir: &Path) -> Outcomes {
     let lines = |name: &str| -> Vec<String> {
         fs::read_to_string(dir.join(name))
@@ -1900,6 +1908,10 @@ fn tests_of(root: &Path, path: &str) -> Option<String> {
 
 /// The package whose manifest is nearest above `path`, and that manifest's
 /// directory, repo-relative.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `package_of` reads one crate manifest"
+)]
 fn package_of(root: &Path, path: &str) -> Option<(String, PathBuf)> {
     let mut dir = Path::new(path).parent();
     while let Some(candidate) = dir {
@@ -1942,6 +1954,10 @@ impl Staged {
     /// # Errors
     ///
     /// Any failure to stage is could-not-look (→ exit `3`).
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: `new` reads a staged copy of a tracked file to compare it, so the tracked tree's largest file is the bound"
+    )]
     pub fn new(root: &Path, dir: PathBuf) -> Result<Self> {
         let tracked = crate::git::tracked_paths(root)
             .context("mutate: could not list the tracked tree to stage it")?;
@@ -2055,6 +2071,10 @@ impl Staged {
 /// A copy always bumps the destination's mtime, so staging the clean subject
 /// and restoring it made cargo see a changed source on every row and rebuild
 /// inside the timed run. Leaving identical bytes untouched keeps the tree warm.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `copy_if_changed` reads a staged copy of a tracked file to compare it, so the tracked tree's largest file is the bound"
+)]
 fn copy_if_changed(from: &Path, to: &Path) -> std::io::Result<()> {
     let wanted = std::fs::read(from)?;
     if std::fs::read(to).is_ok_and(|have| have == wanted) {
@@ -2081,6 +2101,10 @@ const MANIFEST: &str = ".mutate-staged";
 /// live sweep — so the walk then spent its time recursing through, and deleting,
 /// a build nothing asked it to judge. The manifest touches exactly the paths a
 /// run put there and never looks at anything else.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `reconcile` reads the stage manifest, one line per staged file"
+)]
 fn reconcile(dir: &Path, tracked: &std::collections::BTreeSet<String>) -> Result<()> {
     let previous = std::fs::read_to_string(dir.join(MANIFEST)).unwrap_or_default();
     for path in previous.lines() {
@@ -2154,6 +2178,10 @@ impl Ran {
 ///
 /// When `root` is not a repository this binary can open, or `base` resolves to
 /// something that is not a tree.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `in_diff_patch` reads a tracked file, so the tracked tree's largest file is the bound, and the document is parsed whole"
+)]
 pub fn in_diff_patch(root: &Path, base: &str, sources: &[String]) -> Result<String> {
     use std::fmt::Write as _;
     let mut patch = String::new();
@@ -2470,6 +2498,10 @@ fn reraise(signal: i32) -> Result<()> {
 ///
 /// One place, because both the ordinary exit and the hang path answer with the
 /// same shape and a second copy is how the two drift apart.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `finish` reads one suite run's output, bounded by the suite's own timeout"
+)]
 fn finish(
     status: std::process::ExitStatus,
     out_path: &Path,
@@ -2724,6 +2756,10 @@ fn spawn_arm(
 /// invoking task provides, exactly as `sed` and `cargo` do, so one missing
 /// program used to end the whole sweep with an error naming nothing about the
 /// gates it never reached.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `run_suite` reads one junit report"
+)]
 fn run_suite(staged: &Staged, root: &Path, suite: &Suite, want: &str) -> Selection {
     let env = suite_env(root);
     let dir = staged.dir();
@@ -3168,6 +3204,10 @@ fn total_cases(root: &Path, suite: &Suite) -> usize {
 ///
 /// `None` when it applied, else `unappliable-mutation`: a source that does not
 /// read, or a script outside the one-substitution subset.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `apply` reads a tracked file, so the tracked tree's largest file is the bound, and the document is parsed whole"
+)]
 fn apply(staged: &Staged, row: &Row) -> Result<Option<Verdict>> {
     let path = staged.dir().join(&row.source);
     let Ok(before) = std::fs::read_to_string(&path) else {
@@ -3326,6 +3366,10 @@ fn sed_replacement(replacement: &str, delimiter: char) -> String {
 /// gate's behaviour is untouched, and the mutation SURVIVES every run while
 /// reading as enforced coverage. Measured: `board-write-record`'s
 /// `overlap-frozen-at-write-time` had done exactly that for its whole life.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `diff_shape` reads a tracked file, so the tracked tree's largest file is the bound, and the document is parsed whole"
+)]
 fn diff_shape(root: &Path, staged: &Staged, source: &str) -> (bool, usize) {
     let before = std::fs::read_to_string(root.join(source)).unwrap_or_default();
     let after = std::fs::read_to_string(staged.dir().join(source)).unwrap_or_default();
@@ -3538,6 +3582,10 @@ fn unreported(run: &Selection, suite: &Suite, row: &Row) -> Option<Verdict> {
 const CAUGHT_RECORD: &str = "caught.tsv";
 
 /// A row's key: its script, the bytes it mutates, and the bytes of its suite.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `row_key` reads a tracked file whole to hash it, so the tracked tree's largest file is the bound"
+)]
 fn row_key(root: &Path, gate: &Gate, row: &Row) -> String {
     let mut material = row.script.clone().into_bytes();
     material.push(0);
@@ -3550,6 +3598,10 @@ fn row_key(root: &Path, gate: &Gate, row: &Row) -> String {
 }
 
 /// The keys recorded caught; an unreadable record is an empty one.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `recorded_caught` reads one record file this crate writes whole"
+)]
 fn recorded_caught(record: &Path) -> std::collections::HashSet<String> {
     std::fs::read_to_string(record)
         .map(|text| text.lines().map(str::to_owned).collect())
@@ -4540,6 +4592,10 @@ mod tests {
     }
 
     /// The recorded output of one harness, its version line dropped.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "bounded: `recorded` reads a fixture this case wrote"
+    )]
     fn recorded(arm: &str, state: &str) -> String {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/mutate")

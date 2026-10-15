@@ -847,6 +847,10 @@ fn find_in(dir: &Path, home: &Path, args: &[&str]) -> Output {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `this_change_introduces_no_consumer_identifier_into_the_crate` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn this_change_introduces_no_consumer_identifier_into_the_crate() {
     // NON-NEGOTIABLE RULE 1, AS AN ACCEPTANCE TEST rather than a style note. The
     // whole design rests on the crate knowing only "dispatch a declared method;
@@ -941,6 +945,10 @@ fn sources(root: &Path) -> Vec<PathBuf> {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `a_reduced_read_points_at_a_view_whose_lines_hold_each_field` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn a_reduced_read_points_at_a_view_whose_lines_hold_each_field() {
     // CLOUD-2207. A stored tracker response is one JSON line, so the handle
     // `mcp call` printed named bytes no line read could slice, and the reader

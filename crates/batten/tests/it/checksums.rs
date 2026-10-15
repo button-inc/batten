@@ -103,10 +103,18 @@ fn run_sums(dir: &Path, forge: &Path, extra: &[&str]) -> Output {
         .expect("the compiled binary runs")
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `sums` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn sums(dir: &Path) -> String {
     std::fs::read_to_string(dir.join("out").join(manifest_name())).unwrap_or_default()
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `requests` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn requests(forge: &Path) -> String {
     std::fs::read_to_string(forge.join("args")).unwrap_or_default()
 }
@@ -183,6 +191,10 @@ fn sha256sum_accepts_the_manifest_and_a_corrupted_asset_fails_it() {
 
 /// What `sha256sum -c` decides, in-process: every line is `<64 hex>  <name>`
 /// and the hex is the named file's digest.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `sums_hold` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn sums_hold(release: &Path) -> bool {
     use sha2::Digest as _;
     let manifest = std::fs::read_to_string(release.join(manifest_name())).expect("the manifest");
@@ -250,6 +262,10 @@ fn no_tag_or_an_empty_tag_falls_back_to_the_latest_release() {
 /// could write the manifest, and the publish step after it never ran: v0.0.206
 /// stayed a draft while `main` pinned it.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `a_draft_release_is_read_from_the_release_list` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn a_draft_release_is_read_from_the_release_list() {
     let (dir, forge) = bench("draft", RELEASE);
     let listing: Vec<serde_json::Value> = RELEASE
@@ -283,6 +299,10 @@ fn a_draft_release_is_read_from_the_release_list() {
 /// ANTI-VACUITY for the case above: a list that carries no entry for the tag is
 /// still could-not-look, so the fallback never invents a release.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `a_tag_neither_read_nor_listed_is_could_not_look` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn a_tag_neither_read_nor_listed_is_could_not_look() {
     let (dir, forge) = bench("unlisted", RELEASE);
     write(
@@ -306,6 +326,10 @@ fn a_tag_neither_read_nor_listed_is_could_not_look() {
 /// triggers no workflow on `created` for a draft release, so a `release:` trigger
 /// here never ran for v0.0.206 and the draft was never built or published.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_release_artifacts_run_only_by_dispatch` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_release_artifacts_run_only_by_dispatch() {
     use yaml_rust2::YamlLoader;
     let text = std::fs::read_to_string(common::at_root(".github/workflows/release-artifacts.yml"))
@@ -324,6 +348,10 @@ fn the_release_artifacts_run_only_by_dispatch() {
 /// it drafted and the release head it drafted it at, and only after it created
 /// that draft — never the job that once tagged `HEAD` after the push.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_cut_dispatches_the_artifacts_for_the_draft_it_created` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_cut_dispatches_the_artifacts_for_the_draft_it_created() {
     use yaml_rust2::{Yaml, YamlLoader};
     let text = std::fs::read_to_string(common::at_root(".github/workflows/auto-release-land.yml"))

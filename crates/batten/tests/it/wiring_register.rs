@@ -47,6 +47,10 @@ fn register(home: &Path, repo: &Path, environment: &str, args: &[&str]) -> Outpu
         .expect("the binary runs")
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `registers_batten` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn registers_batten(root: &Path) -> bool {
     std::fs::read_to_string(root.join(".claude/settings.json"))
         .is_ok_and(|text| text.contains("batten adjudicate"))

@@ -362,6 +362,10 @@ fn landed_fixture(name: &str) -> (PathBuf, PathBuf) {
 /// One builder rather than two, because the pair only discriminates if
 /// everything else about them is identical — same config, same module, same
 /// transcript, same marker.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `completion_fixture` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn completion_fixture(name: &str, diverge: bool) -> (PathBuf, PathBuf) {
     let root = scratch(name);
     let repo = root.join("repo");
@@ -737,6 +741,10 @@ fn stub(dir: &Path, exit: i32, stdout: &str) {
 
 /// [`stub`], declared under the row id `id`, so one fixture can carry two rungs.
 #[cfg(unix)]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `stub_as` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn stub_as(dir: &Path, id: &str, exit: i32, stdout: &str) {
     let path = dir.join(format!("{id}-stub.sh"));
     fs::write(
@@ -1198,6 +1206,10 @@ target = "a fixture route, never followed"
 "#;
 
 /// The completion fixture plus a tree-scoped rule that always fires.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `holds_fixture` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn holds_fixture(name: &str) -> (PathBuf, PathBuf) {
     let (repo, home) = unlanded_fixture(name);
     let config = fs::read_to_string(repo.join("batten.toml")).expect("read fixture config");

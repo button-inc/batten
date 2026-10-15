@@ -28,6 +28,10 @@ fn bench(name: &str) -> PathBuf {
 }
 
 /// [`bench`] with `extra` appended to the fixture's config.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `bench_with` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn bench_with(name: &str, extra: &str) -> PathBuf {
     let module = std::fs::read_to_string(root().join("policy/forge-read-first.rego"))
         .expect("the module is readable");

@@ -139,6 +139,10 @@ fn names_verb(rule: &str, alias: &str, verb: &str) -> bool {
 ///
 /// An absent arm is an empty list rather than `None`: a file that parses and
 /// states no deny has answered.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `rules_in` reads one harness settings document"
+)]
 fn rules_in(settings: &Path, arm: &str) -> Option<Vec<String>> {
     let text = std::fs::read_to_string(settings).ok()?;
     let document = crate::rules::parse_node(Format::Json, &text).ok()?;

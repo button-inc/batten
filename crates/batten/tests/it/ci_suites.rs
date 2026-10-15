@@ -311,6 +311,10 @@ fn the_reason_stays_off_the_channel_a_caller_parses() {
 /// and the verb no caller here; it stays in the engine for a consumer that runs
 /// shell suites, and the cases above are what hold it.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `the_retired_program_is_not_tracked_and_its_caller_moved` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn the_retired_program_is_not_tracked_and_its_caller_moved() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()

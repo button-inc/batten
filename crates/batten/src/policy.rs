@@ -1178,6 +1178,10 @@ fn preset_sources(
 /// the line ceiling, and the seam is where the I/O already was: everything past
 /// this read is pure, which is what lets [`compile`]'s composition property be
 /// tested without a filesystem.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `read_sources` reads one policy module"
+)]
 fn read_sources(
     root: &Path,
     paths: &[String],
@@ -1803,6 +1807,10 @@ fn cache_key(id: &str, sources: &[(String, String)], data: &serde_json::Value) -
 
 /// The cached bundle for `id`, when the entry at `path` was written from
 /// exactly these inputs.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `read_cached` reads one compiled policy bundle"
+)]
 fn read_cached(
     path: &Path,
     key: &str,

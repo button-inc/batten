@@ -333,6 +333,10 @@ fn a_present_but_unrunnable_hook_reads_as_missing() {
 /// because those are different claims — a remedy could name a second dead path
 /// and pass the weaker one.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `every_remedy_the_hook_check_prints_names_something_that_resolves` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn every_remedy_the_hook_check_prints_names_something_that_resolves() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()

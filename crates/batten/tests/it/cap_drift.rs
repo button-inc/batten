@@ -47,6 +47,10 @@ use std::process::Output;
 use common::{Fixture, git_in, run, stderr, stdout};
 
 /// A repository declaring only this rule, so any finding is the one under test.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `cap_repo` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn cap_repo(name: &str, manifest: &str, bot: &str) -> PathBuf {
     let dir = Fixture::new(name)
         .config(

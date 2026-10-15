@@ -127,6 +127,10 @@ fn the_document_is_byte_stable_across_two_runs() {
 /// A local helper rather than a shared one: this is the only caller, and a
 /// whole-tree snapshot is the wrong instrument for the targeted read-backs the
 /// other suites do (`config_schema` reads back the one artifact it doctored).
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `snapshot` reads a test input: a fixture the case wrote or a file this repository tracks"
+)]
 fn snapshot(dir: &std::path::Path) -> Vec<(String, Vec<u8>)> {
     let mut found = Vec::new();
     let mut stack = vec![dir.to_path_buf()];

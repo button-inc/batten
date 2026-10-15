@@ -121,6 +121,10 @@ fn record_path(root: &Path) -> Option<PathBuf> {
 /// discriminates the two: it records over a manifest that is not valid TOML, so a
 /// read that parsed would answer could-not-look and a read that digests answers.
 #[must_use]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `cached` reads one record file this crate writes whole"
+)]
 pub fn cached(root: &Path) -> TaskFacts {
     let Some(path) = record_path(root) else {
         return Look::CouldNotLook;
@@ -159,6 +163,10 @@ pub fn cached(root: &Path) -> TaskFacts {
 /// resolved set, and the next session resolves again, which is the same
 /// could-not-look the reader already handles.
 #[must_use]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "bounded: `refresh` reads one record file this crate writes whole"
+)]
 pub fn refresh(root: &Path, declared: &[TaskQuery]) -> TaskFacts {
     if declared.is_empty() {
         // NOBODY ASKED, which is could-not-look and not an empty task table: a
