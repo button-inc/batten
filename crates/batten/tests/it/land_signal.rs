@@ -124,9 +124,7 @@ fn armed_child() {
     let dir = std::env::var(CHILD).expect("spawned by a case below, which names the repository");
     let undo = std::env::var(UNDO).expect("the head to unwind to");
     let dir = Path::new(&dir);
-    let bet_head = common::git_in(dir, &["rev-parse", "HEAD"])
-        .trim()
-        .to_owned();
+    let bet_head = batten::git::head_commit(dir).expect("the bet's head");
     speculation::arm(dir, "work", &undo, &bet_head);
     if std::env::var_os(SETTLED).is_some() {
         speculation::disarm();
@@ -175,7 +173,7 @@ fn a_sigterm_mid_speculation_leaves_the_branch_on_its_own_head() {
 fn a_sigterm_after_new_work_leaves_the_branch_alone() {
     let (dir, own, _) = speculating("land-signal-new-work");
     let died = terminated(&dir, &own, false, || {
-        std::fs::write(dir.join("later.txt"), "made after the bet\n").expect("write");
+        common::write(&dir, "later.txt", "made after the bet\n");
         common::git_in(&dir, &["add", "-A"]);
         common::git_in(&dir, &["commit", "-q", "-m", "later"]);
     });

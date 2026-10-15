@@ -12279,12 +12279,14 @@ fn place_the_bet(
             )?;
             Ok(())
         }
-        Ok(_) => {
+        Ok(replay) => {
             // A SIGNAL MUST NOT STRAND THE BET (CLOUD-1747). Armed over the head
             // the replay left, so a signal never unwinds work made after it.
-            if let Ok(bet_head) = git::head_commit(root) {
-                speculation::arm(root, branch, &undo, &bet_head);
-            }
+            let bet_head = match &replay {
+                gitwrite::Rebase::Replayed { head, .. } => head.as_str(),
+                _ => undo.as_str(),
+            };
+            speculation::arm(root, branch, &undo, bet_head);
             bet.base = Some(candidate.clone());
             bet.undo = Some(undo);
             bet.main_at_bet = main_at_bet;

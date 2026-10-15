@@ -475,14 +475,14 @@ pub fn carries(dir: &Path, candidate: &str, tip: &str) -> bool {
 //MUTANT signal-keeps-live-ref|s@^                let _ = crate::gitwrite::delete_ref(&at, LIVE_REF);$@@|a_sigterm_mid_speculation_leaves_the_branch_on_its_own_head
 //MUTANT signal-discards-new-work|s@^        if !untouched {$@        if false {@|a_sigterm_after_new_work_leaves_the_branch_alone
 pub fn arm(root: &Path, branch: &str, undo: &str, bet_head: &str) {
-    let (at, name, full, unwind_to, left) = (
+    let (at, name, unwind_to, left) = (
         root.to_path_buf(),
         branch.to_owned(),
-        format!("refs/heads/{branch}"),
         undo.to_owned(),
         bet_head.to_owned(),
     );
     crate::exec::on_terminate(move || {
+        let full = format!("refs/heads/{name}");
         let checked_out = crate::git::current_branch(&at).ok().flatten().as_deref() == Some(&*name);
         let tip = crate::git::resolve_ref(&at, &full).ok().flatten();
         let untouched = checked_out && tip.as_deref() == Some(&*left);
