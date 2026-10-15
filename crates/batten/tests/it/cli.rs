@@ -2328,7 +2328,11 @@ fn a_class_still_explains_when_the_config_cannot_be_read() {
 #[test]
 fn policy_explain_answers_a_rule_a_class_and_a_native() {
     let root = common::at_root("");
-    let names = ["tool select other", "tool run loose", "program-unknown"];
+    let names = [
+        "verdict guard missing",
+        "verdict read dropped",
+        "program-unknown",
+    ];
     let mut args = vec!["policy", "explain"];
     args.extend(names);
     let explained = batten_with(&root, &args, &[]);
@@ -2360,17 +2364,21 @@ fn policy_explain_answers_a_rule_a_class_and_a_native() {
     );
 
     // `policy rule` is `explain` with one name, byte for byte.
-    let rule = batten_with(&root, &["policy", "rule", "tool select other"], &[]);
-    let one = batten_with(&root, &["policy", "explain", "tool select other"], &[]);
+    let rule = batten_with(&root, &["policy", "rule", "verdict guard missing"], &[]);
+    let one = batten_with(&root, &["policy", "explain", "verdict guard missing"], &[]);
     assert_eq!(rule.stdout, one.stdout, "one projection, two spellings");
     assert_eq!(rule.status.code(), Some(0));
 
     // `-J` is one array, one element per section.
-    let json = batten_with(&root, &["policy", "explain", "-J", "tool run loose"], &[]);
+    let json = batten_with(
+        &root,
+        &["policy", "explain", "-J", "verdict read dropped"],
+        &[],
+    );
     let document: serde_json::Value =
         serde_json::from_slice(&json.stdout).expect("-J is one JSON document");
     assert_eq!(
-        document[0]["name"], "tool run loose",
+        document[0]["name"], "verdict read dropped",
         "each section names what was asked: {document}"
     );
 }

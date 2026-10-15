@@ -22,8 +22,8 @@
 //! the ceiling is reported; the allow half — anti-vacuity, and the load-bearing
 //! one (CLOUD-418) — is that every refusal this repository can actually emit
 //! passes. A ceiling that refuses correct output is a gate somebody switches
-//! off, and the converted `tool select other` refusal is the specific line
-//! the row names.
+//! off. The row named the converted `tool select other` refusal, which
+//! CLOUD-2362 retired; the fixture cases below still measure its class.
 //!
 //! **BOTH ARMS ARE MEASURED HERE NOW, EACH AGAINST ITS OWN CEILING**
 //! (CLOUD-1637). The paragraph above is right that the two are different
@@ -106,11 +106,7 @@ fn repeat_refusal(payload: &str) -> Option<String> {
 
 /// One firing, whatever the store says.
 fn refusal_once(payload: &str) -> Option<String> {
-    // A HOME THAT RESOLVES `serena` (CLOUD-2229): the memories row is refused
-    // only where its read route can be taken, and this suite measures that
-    // refusal. Every other row reads nothing from the home.
     let mut command = common::batten();
-    command.env("HOME", common::serena_home());
     let run = common::stdin_run(
         &mut command,
         &root(),
@@ -152,11 +148,10 @@ fn declared(key: &str) -> usize {
     .expect("a ceiling is not negative")
 }
 
-/// The committed `reason` of one `[[rule]]` row.
+/// The `reason` of one `[[rule]]` row a fixture here stages.
 fn rule_reason(id: &str) -> String {
-    let text = std::fs::read_to_string(root().join("batten.toml"))
-        .expect("the committed config is readable");
-    let config: toml::Value = toml::from_str(&text).expect("the committed config parses");
+    let text = format!("{COMMITTED}\n{SUBSTITUTION_ROW}");
+    let config: toml::Value = toml::from_str(&text).expect("the staged config parses");
     config
         .get("rule")
         .and_then(toml::Value::as_array)
@@ -182,10 +177,10 @@ fn estimated_tokens(line: &str) -> usize {
 /// Not every declared class — the ones reachable from a mediated command line,
 /// because those are what the ~300 firings a session are made of.
 const CORPUS: &[&str] = &[
-    // The row CLOUD-1286's acceptance names by name.
-    "sed -n '1,40p' AGENTS.md",
-    "head -40 batten.toml",
-    "cat .serena/project.yml",
+    // The row CLOUD-1286's acceptance named, `tool select other`, was retired
+    // under CLOUD-2362; the fixture cases below still measure its class. A
+    // shape row with an override route stands in, the widest a Bash call emits.
+    "cargo build",
     // The three discard shapes.
     "mise run verify | tail -1",
     "mise run verify >log 2>&1; ls",
@@ -215,53 +210,13 @@ fn every_mediated_refusal_this_tree_emits_is_within_the_declared_ceiling() {
 }
 
 #[test]
-fn a_routed_read_of_every_committed_memory_is_within_the_declared_ceiling() {
-    // THE CORPUS ABOVE IS BASH ONLY, and `path read routed` fires on a `Read`
-    // (CLOUD-1929): its line carries the path AND the row's `read` remedy, so its
-    // cost grows with the name. Every memory is enumerated rather than one named,
-    // because the longest name is the one that breaches — measured at 101 bytes
-    // against a 96-byte ceiling while the tool rode as a third subject.
-    let ceiling = declared_ceiling();
-    let memories = root().join(".serena/memories");
-    let mut measured = 0_usize;
-    let mut over: Vec<(usize, String)> = Vec::new();
-    for entry in std::fs::read_dir(&memories).expect("the committed memories are listable") {
-        let name = entry.expect("a memory entry").file_name();
-        let path = format!(".serena/memories/{}", name.to_string_lossy());
-        // IN THE SUITE'S SESSION, like every Bash payload here: sightings are kept
-        // per context, so a payload naming none is a first sighting every time and
-        // the "repeat" this measures would be the full arm.
-        let read = serde_json::json!({
-            "hook_event_name": "PreToolUse",
-            "session_id": SUITE_SESSION,
-            "tool_name": "Read",
-            "tool_input": {"file_path": path},
-        })
-        .to_string();
-        let Some(line) = repeat_refusal(&read) else {
-            panic!("a generic read of a memory must refuse, or this measures nothing: {path}");
-        };
-        measured += 1;
-        let cost = estimated_tokens(&line);
-        if cost > ceiling {
-            over.push((cost, line));
-        }
-    }
-    assert!(measured > 0, "the memory store is not empty");
-    assert!(
-        over.is_empty(),
-        "every routed-read line must be within the declared ceiling of {ceiling}: {over:?}"
-    );
-}
-
-#[test]
 fn a_declared_refusal_emits_its_class_and_its_pointers_and_stops() {
     // The acceptance, asserted on the shape rather than on the count: no
     // `Refused by` prefix, no parenthetical gloss, no `Fix:` clause, and no
     // hatch sentence. Each of the four was a copy of something declared once.
-    let line = refusal("sed -n '1,40p' AGENTS.md").expect("the row refuses");
+    let line = refusal("cargo build").expect("the row refuses");
     assert!(
-        line.starts_with("batten deny tool run loose"),
+        line.starts_with("batten deny call name refused"),
         "the violation's class leads the line: {line}"
     );
     for wrapper in ["Refused by", "Fix:", "Bypass with", " ("] {
@@ -277,10 +232,10 @@ fn no_refusal_lost_its_pointer() {
     // The acceptance clause that keeps this from being achieved by saying less
     // about WHICH file. The prose is what shortened; the pointer is what the
     // reader acts on, and it stayed inline for exactly that reason.
-    let line = refusal("head -40 batten.toml").expect("the row refuses");
+    let line = refusal("cargo build").expect("the row refuses");
     assert!(
-        line.contains("batten.toml"),
-        "the operand a caller can act on stays inline: {line}"
+        line.contains("at cargo"),
+        "the subject a caller can act on stays inline: {line}"
     );
 }
 
@@ -353,9 +308,27 @@ fn session_provisioning(config: &str) -> (usize, usize) {
     (startup, handlers)
 }
 
-/// Stage `config` and the committed policy modules in a fixture named `name`.
+/// The substitution row this repository carried until CLOUD-2362 retired it,
+/// staged into every fixture here as a FIXTURE row.
+///
+/// The fixture cases test the renderer over a `document`-route class, and
+/// `head -40 batten.toml` under this row was their canonical firing. The engine
+/// still offers the family to any consumer that declares it, so the row stands
+/// in for such a consumer rather than for this repository's policy.
+const SUBSTITUTION_ROW: &str = r#"
+[[rule]]
+id = "tool select other"
+kind = "pipeline"
+scope = "mediated_call"
+severity = "deny"
+substitutes = ["cat", "head", "tail", "sed:-n", "grep", "rg", "find", "ls", "wc"]
+reason = "Use the structured surface this session offers: a range of one file, a pattern across the tree, paths by glob, or what a name resolves to, `rules/scanning.md` picks between them. After a pipe these utilities are allowed."
+"#;
+
+/// Stage `config`, the fixture [`SUBSTITUTION_ROW`] and the committed policy
+/// modules in a fixture named `name`.
 fn stage(name: &str, config: &str) -> PathBuf {
-    let staged = Fixture::new(name).config(config);
+    let staged = Fixture::new(name).config(&format!("{config}\n{SUBSTITUTION_ROW}"));
     let modules = staged.path().join("policy");
     std::fs::create_dir_all(&modules).expect("the fixture's policy directory is creatable");
     let committed = Path::new(env!("CARGO_MANIFEST_DIR"))

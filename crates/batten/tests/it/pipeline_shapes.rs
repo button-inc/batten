@@ -28,9 +28,9 @@
 
 use crate::common;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use common::{run, run_with_stdin, stderr};
+use common::{Fixture, run, run_with_stdin, stderr};
 
 fn root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -94,19 +94,6 @@ fn assert_allowed_backgrounded(command: &str) {
         .status
         .code();
     assert_eq!(code, Some(0), "must allow a backgrounded: {command}");
-}
-
-/// The refusal text, for the cases where WHICH operand a deny names is the thing
-/// under test rather than the verdict. A free function beside the two above
-/// because both families need it now: the discard family asserts that three
-/// shapes render three causes, and the substitution family asserts that the
-/// cause points at the operand a caller can act on.
-fn cause(command: &str) -> String {
-    stderr(&run_with_stdin(
-        &root(),
-        &["adjudicate", "--harness", "exit-code"],
-        &payload(command),
-    ))
 }
 
 #[test]
@@ -408,20 +395,105 @@ fn each_shape_renders_its_own_cause() {
 // because they are decided over the same parse and by the same row kind, and
 // splitting them would hide that the ALLOW half of each is the other's deny:
 // a filter downstream of a pipe is refused by `verdict guard missing` when its
-// producer carries a verdict, and allowed by `tool select other` always.
+// producer carries a verdict, and allowed by a substitution row always.
+//
+// JUDGED AGAINST A FIXTURE, unlike the discard family above (CLOUD-2362). This
+// repository retired its own substitution row, `tool select other`, for want of
+// any evidence it improved an outcome, so the committed config no longer carries
+// one. The engine still offers the family to any consumer that declares it, and
+// these cases pin the engine's reading of such a row: the row below is the one
+// this repository carried, verbatim in everything the predicate reads.
+
+/// A repository whose only rule is a substitution row.
+///
+/// One per case, for the reason `shell_write_advisory.rs` measured: a shared
+/// fixture is wiped by the next `Fixture::new` while another thread uses it.
+fn substitution_repo(name: &str) -> PathBuf {
+    Fixture::new(&format!("substitution-{name}"))
+        .config(
+            "version = 1\n\n\
+             [[rule]]\n\
+             id = \"tool select other\"\n\
+             kind = \"pipeline\"\n\
+             scope = \"mediated_call\"\n\
+             severity = \"deny\"\n\
+             substitutes = [\"cat\", \"head\", \"tail\", \"sed:-n\", \"grep\", \"rg\", \"find\", \"ls\", \"wc\"]\n\
+             reason = \"Use the structured surface this session offers.\"\n",
+        )
+        .git()
+        .base_commit()
+        .build()
+}
+
+fn verdict_in(dir: &Path, command: &str) -> Option<i32> {
+    run_with_stdin(
+        dir,
+        &["adjudicate", "--harness", "exit-code"],
+        &payload(command),
+    )
+    .status
+    .code()
+}
+
+fn deny_in(dir: &Path, command: &str) {
+    assert_eq!(verdict_in(dir, command), Some(2), "must refuse: {command}");
+}
+
+fn allow_in(dir: &Path, command: &str) {
+    assert_eq!(verdict_in(dir, command), Some(0), "must allow: {command}");
+}
+
+fn cause_in(dir: &Path, command: &str) -> String {
+    stderr(&run_with_stdin(
+        dir,
+        &["adjudicate", "--harness", "exit-code"],
+        &payload(command),
+    ))
+}
+
+/// `find`'s expression is never a target (CLOUD-2362).
+///
+/// Measured in a live session: `find / -maxdepth 6 -name '*.jsonl'` searched
+/// from outside the repository and was refused naming `*.jsonl`, because the
+/// value of `-name` has an extension and so read as a repository file. The
+/// start points come before the expression in `find`'s own grammar, so they are
+/// the only operands that can name where it reads. A start point inside the
+/// repository still refuses, so the fix narrows to the grammar rather than
+/// exempting `find`.
+#[test]
+fn a_find_expression_operand_is_never_a_target() {
+    let dir = substitution_repo("find-expression");
+    allow_in(
+        &dir,
+        "find / -maxdepth 6 -name '*.jsonl' -path '*projects*'",
+    );
+    allow_in(&dir, "find -L /tmp -name x.md");
+    allow_in(&dir, "find /tmp ! -name a.rs");
+    let inside = cause_in(&dir, "find crates/batten -name '*.rs'");
+    assert!(
+        inside.contains("crates/batten"),
+        "a start point inside the repository is still the target: {inside}"
+    );
+    assert!(
+        !inside.contains("*.rs"),
+        "the pattern is never named: {inside}"
+    );
+    deny_in(&dir, "find -L crates/batten -type f");
+}
 
 #[test]
 fn a_text_utility_aimed_at_a_repository_path_is_refused() {
+    let dir = substitution_repo("a-text-utility-aimed-at-a-repository-path-is-ref");
     // The measured shapes, from the transcript that produced the issue: 15
     // `head -N`, 13 `grep`, 12 `ls`, 5 `cat`, 5 `sed -n`, 2 `find -name`.
-    assert_denied("sed -n '1,40p' AGENTS.md");
-    assert_denied("head -40 batten.toml");
-    assert_denied("cat .serena/project.yml");
-    assert_denied("grep -rn CLOUD crates/");
-    assert_denied("wc -l AGENTS.md");
+    deny_in(&dir, "sed -n '1,40p' AGENTS.md");
+    deny_in(&dir, "head -40 batten.toml");
+    deny_in(&dir, "cat .serena/project.yml");
+    deny_in(&dir, "grep -rn CLOUD crates/");
+    deny_in(&dir, "wc -l AGENTS.md");
     // A path that only LOOKS like a path because it has an extension is still a
     // path: the operand names a file this repository tracks.
-    assert_denied("tail -5 mise.toml");
+    deny_in(&dir, "tail -5 mise.toml");
 }
 
 /// TWO EVASIONS, AND THE FIRST HAD NOTHING TO DO WITH NEWLINES (CLOUD-1381).
@@ -443,11 +515,12 @@ fn a_text_utility_aimed_at_a_repository_path_is_refused() {
 /// is indistinguishable from a clean adjudication.
 #[test]
 fn a_utility_behind_a_program_less_element_is_still_refused() {
-    assert_denied("FOO=1 && grep needle crates/batten/src/lib.rs");
-    assert_denied("echo hi\ngrep needle crates/batten/src/lib.rs");
+    let dir = substitution_repo("a-utility-behind-a-program-less-element-is-still");
+    deny_in(&dir, "FOO=1 && grep needle crates/batten/src/lib.rs");
+    deny_in(&dir, "echo hi\ngrep needle crates/batten/src/lib.rs");
     // The assignment form on a later LINE as well, so neither fix alone passes
     // this case.
-    assert_denied("echo hi\nFOO=1 head -5 AGENTS.md");
+    deny_in(&dir, "echo hi\nFOO=1 head -5 AGENTS.md");
 }
 
 /// HALF A NORMALISATION IS ITS OWN BUG (CLOUD-1381).
@@ -464,8 +537,9 @@ fn a_utility_behind_a_program_less_element_is_still_refused() {
 /// on the other.
 #[test]
 fn a_grouped_utility_is_still_refused() {
-    assert_denied("(grep needle crates/batten/src/lib.rs)");
-    assert_denied("(head -5 AGENTS.md)");
+    let dir = substitution_repo("a-grouped-utility-is-still-refused");
+    deny_in(&dir, "(grep needle crates/batten/src/lib.rs)");
+    deny_in(&dir, "(head -5 AGENTS.md)");
 }
 
 /// The anti-vacuity half: the three clauses that must still allow, or the row
@@ -476,36 +550,39 @@ fn a_grouped_utility_is_still_refused() {
 /// which is the direction that gets a guard switched off rather than tightened.
 #[test]
 fn the_three_allow_clauses_survive_the_per_line_walk() {
+    let dir = substitution_repo("the-three-allow-clauses-survive-the-per-line-wal");
     // Clause 2: downstream of a pipe, so it filters another command's output.
-    assert_allowed("git ls-files | grep crates/batten");
+    allow_in(&dir, "git ls-files | grep crates/batten");
     // Clause 3: a path outside the repository names nothing a tool replaces.
-    assert_allowed("grep needle /tmp/scratch.txt");
+    allow_in(&dir, "grep needle /tmp/scratch.txt");
     // The redirect destination is written, not read instead of using a tool.
-    assert_allowed("grep pat > out.txt");
+    allow_in(&dir, "grep pat > out.txt");
 }
 
 #[test]
 fn the_same_utility_downstream_of_a_pipe_is_a_filter_and_is_untouched() {
+    let dir = substitution_repo("the-same-utility-downstream-of-a-pipe-is-a-filte");
     // THE LOAD-BEARING HALF, and the reason this row is a `pipeline` and not a
     // `shape`. `matching_shape_rows` iterates every segment with no index in
     // scope, so a shape row carrying these programs would refuse every line
     // below — ordinary work, and the false-positive class CLOUD-199 measured
     // gets a guard bypassed.
-    assert_allowed("git ls-files | grep crates/batten");
-    assert_allowed("git status --short | grep '^ M'");
-    assert_allowed("git ls-files 'mise-tasks/*' | wc -l");
-    assert_allowed("git log --oneline | sed -n '1,3p'");
+    allow_in(&dir, "git ls-files | grep crates/batten");
+    allow_in(&dir, "git status --short | grep '^ M'");
+    allow_in(&dir, "git ls-files 'mise-tasks/*' | wc -l");
+    allow_in(&dir, "git log --oneline | sed -n '1,3p'");
     // Two stages down is still downstream.
-    assert_allowed("git ls-files | sort | head -20");
+    allow_in(&dir, "git ls-files | sort | head -20");
 }
 
 #[test]
 fn a_target_outside_the_repository_is_not_a_substitution() {
+    let dir = substitution_repo("a-target-outside-the-repository-is-not-a-substit");
     // `>/tmp/<task>.log` is the shape `verdict guard missing` MANDATES, so a row
     // that refused reading one back would put the two rows in contradiction.
-    assert_allowed("cat /tmp/verify.log");
-    assert_allowed("tail -20 /tmp/land.log");
-    assert_allowed("cat ~/.config/some.conf");
+    allow_in(&dir, "cat /tmp/verify.log");
+    allow_in(&dir, "tail -20 /tmp/land.log");
+    allow_in(&dir, "cat ~/.config/some.conf");
 }
 
 /// **A LEADING `cd` MOVES WHERE THE NEXT STAGE'S OPERAND IS RESOLVED** (CLOUD-1690).
@@ -518,43 +595,55 @@ fn a_target_outside_the_repository_is_not_a_substitution() {
 /// directory rather than exempting anything behind a `cd`.
 #[test]
 fn a_leading_cd_out_of_the_repository_moves_the_containment_check() {
-    assert_allowed("cd /tmp/batten-scratch && wc -c phase1/corpus.tsv");
-    assert_allowed("cd /tmp/batten-scratch; head -5 notes/a.md");
+    let dir = substitution_repo("a-leading-cd-out-of-the-repository-moves-the-con");
+    allow_in(&dir, "cd /tmp/batten-scratch && wc -c phase1/corpus.tsv");
+    allow_in(&dir, "cd /tmp/batten-scratch; head -5 notes/a.md");
     // SINGLE-QUOTED because the line is shell: on Windows the canonical root is
     // `\\?\D:\…`, and unquoted its backslashes are escapes that mangle the
     // operand before any containment check sees it.
-    let inside = root().canonicalize().expect("the repository root resolves");
-    assert_denied(&format!("cd '{}' && wc -l AGENTS.md", inside.display()));
+    let inside = dir.canonicalize().expect("the repository root resolves");
+    deny_in(
+        &dir,
+        &format!("cd '{}' && wc -l AGENTS.md", inside.display()),
+    );
     // Back out and in again: the LAST `cd` decides.
-    assert_denied(&format!(
-        "cd /tmp/batten-scratch && cd '{}' && head -5 AGENTS.md",
-        inside.display()
-    ));
+    deny_in(
+        &dir,
+        &format!(
+            "cd /tmp/batten-scratch && cd '{}' && head -5 AGENTS.md",
+            inside.display()
+        ),
+    );
 }
 
 /// The forms a static reading cannot follow leave the directory where it was, so
 /// they judge exactly as they did before CLOUD-1690 — never more permissively.
 #[test]
 fn a_cd_this_reading_cannot_follow_changes_nothing() {
+    let dir = substitution_repo("a-cd-this-reading-cannot-follow-changes-nothing");
     // A subshell's `cd` does not outlive its parentheses.
-    assert_denied("(cd /tmp/batten-scratch; wc -l AGENTS.md) && wc -l AGENTS.md");
+    deny_in(
+        &dir,
+        "(cd /tmp/batten-scratch; wc -l AGENTS.md) && wc -l AGENTS.md",
+    );
     // An expansion names a directory no static reading knows.
-    assert_denied("cd \"$HOME\" && wc -l AGENTS.md");
-    assert_denied("cd - && wc -l AGENTS.md");
+    deny_in(&dir, "cd \"$HOME\" && wc -l AGENTS.md");
+    deny_in(&dir, "cd - && wc -l AGENTS.md");
     // `$(cd …)` runs in a subshell as well, so the stage after it is judged
     // from the directory the call started in.
-    assert_denied("echo $(cd /tmp/batten-scratch) && wc -l AGENTS.md");
+    deny_in(&dir, "echo $(cd /tmp/batten-scratch) && wc -l AGENTS.md");
 }
 
 #[test]
 fn an_operand_that_is_not_a_path_is_not_a_substitution() {
+    let dir = substitution_repo("an-operand-that-is-not-a-path-is-not-a-substitut");
     // A bare pattern, and stdin. `grep CLOUD` with no file is reading its input
     // from somewhere else; refusing it would refuse a pipeline's tail written as
     // two calls.
-    assert_allowed("grep -c CLOUD");
-    assert_allowed("cat -");
+    allow_in(&dir, "grep -c CLOUD");
+    allow_in(&dir, "cat -");
     // A flag's value is not an operand: `-n 40` must not read as a path.
-    assert_allowed("head -n 40");
+    allow_in(&dir, "head -n 40");
 }
 
 // The two defects this row committed against its own author within the hour it
@@ -565,16 +654,18 @@ fn an_operand_that_is_not_a_path_is_not_a_substitution() {
 
 #[test]
 fn a_redirection_is_not_an_operand_and_never_the_named_target() {
+    let dir = substitution_repo("a-redirection-is-not-an-operand-and-never-the-na");
     // Observed: refused naming `2>/dev/null` "a path in this repository".
-    assert!(cause("tail -40 batten.toml 2>/dev/null").contains("batten.toml"));
+    assert!(cause_in(&dir, "tail -40 batten.toml 2>/dev/null").contains("batten.toml"));
     // And the scan STOPS there, so a stdin-fed call writing into the tree is not
     // a substitution — nothing was read instead of reaching for a tool.
-    assert_allowed("grep -c CLOUD > counts.txt");
-    assert_allowed("sort < input.txt");
+    allow_in(&dir, "grep -c CLOUD > counts.txt");
+    allow_in(&dir, "sort < input.txt");
 }
 
 #[test]
 fn a_substitutes_entry_may_be_qualified_by_a_flag() {
+    let dir = substitution_repo("a-substitutes-entry-may-be-qualified-by-a-flag");
     // `sed` reads a file two ways and only one of them has a first-class
     // equivalent, so the row spells the entry `sed:-n`. The deny half is already
     // covered above (`sed -n '1,40p' AGENTS.md`); these are the allows that make
@@ -582,37 +673,41 @@ fn a_substitutes_entry_may_be_qualified_by_a_flag() {
     //
     // A TRANSFORM. No tool applies a substitution expression, so refusing this
     // would state a reason that is not true — the defect the qualifier fixes.
-    assert_allowed("sed s/old/new/ batten.toml");
-    assert_allowed("sed -e s/a/b/ mise.toml");
+    allow_in(&dir, "sed s/old/new/ batten.toml");
+    allow_in(&dir, "sed -e s/a/b/ mise.toml");
     // Bundled and value-carrying spellings of the flag still select: a caller
     // does not escape the row by writing `-ne` instead of `-n`.
-    assert_denied("sed -ne 1p batten.toml");
+    deny_in(&dir, "sed -ne 1p batten.toml");
     // ...and a LONG option that merely contains the letter does not. `sed
     // --no-autoprint` is `-n`'s own long form, but `--posix` is not, and a
     // `contains` over the whole token would read the `n` in it as the flag.
-    assert_allowed("sed --posix s/a/b/ batten.toml");
+    allow_in(&dir, "sed --posix s/a/b/ batten.toml");
     // The unqualified entries are unaffected — one program's qualifier must not
     // silently narrow the other eight.
-    assert_denied("cat batten.toml");
-    assert_denied("head -5 mise.toml");
+    deny_in(&dir, "cat batten.toml");
+    deny_in(&dir, "head -5 mise.toml");
 }
 
 #[test]
 fn a_regex_alternation_is_a_pattern_however_much_it_looks_like_a_path() {
+    let dir = substitution_repo("a-regex-alternation-is-a-pattern-however-much-it");
     // Observed: `.bats|basename` parsed as an extension, so the PATTERN was
     // named as the target and the real operands never reached the test.
-    assert_allowed("grep -E 'mise-tasks|BATS_TEST_FILENAME|%.bats|basename'");
+    allow_in(
+        &dir,
+        "grep -E 'mise-tasks|BATS_TEST_FILENAME|%.bats|basename'",
+    );
     // With real file operands it still denies — on the files, not the pattern.
-    assert!(cause("grep -E 'a|b.bats' tests/land.bats").contains("tests/land.bats"));
+    assert!(cause_in(&dir, "grep -E 'a|b.bats' tests/land.bats").contains("tests/land.bats"));
     // THE SECOND ESCAPE, which the `|` test alone did not catch: a character
     // class carrying a `/` and no alternation at all.
-    assert_allowed(r"grep -oE '\)/[A-Za-z0-9_][A-Za-z0-9._-]*'");
+    allow_in(&dir, r"grep -oE '\)/[A-Za-z0-9_][A-Za-z0-9._-]*'");
     assert!(
-        cause(r"grep -oE '^\s+[a-z]+/' batten.toml").contains("batten.toml"),
+        cause_in(&dir, r"grep -oE '^\s+[a-z]+/' batten.toml").contains("batten.toml"),
         "the file operand is the target, never the anchored pattern"
     );
     // A GLOB IS STILL A PATH, and must stay denied — `Glob` is precisely the
     // tool for it, so excluding `*` along with the regex metacharacters would
     // have opened the hole this row exists to close.
-    assert_denied("ls mise-tasks/*.sh");
+    deny_in(&dir, "ls mise-tasks/*.sh");
 }
