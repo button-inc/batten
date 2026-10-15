@@ -1,0 +1,25 @@
+[workspace]
+members = ["cargo:."]
+
+# cargo-dist builds, archives, checksums and writes the installers (CLOUD-2297).
+# It does not own a workflow: `release-artifacts.yml` runs `dist build` inside
+# the dispatched draft -> verify -> publish path (CLOUD-2033), so no `ci` key.
+[dist]
+cargo-dist-version = "0.33.0"
+installers = ["shell", "powershell"]
+targets = [
+  "aarch64-apple-darwin",
+  "aarch64-unknown-linux-gnu",
+  "aarch64-unknown-linux-musl",
+  "x86_64-apple-darwin",
+  "x86_64-unknown-linux-gnu",
+  "x86_64-pc-windows-gnu",
+  "x86_64-unknown-linux-musl",
+]
+unix-archive = ".tar.gz"
+windows-archive = ".zip"
+checksum = "sha256"
+cargo-auditable = true
+install-path = "CARGO_HOME"
+hosting = "github"
+install-updater = false
