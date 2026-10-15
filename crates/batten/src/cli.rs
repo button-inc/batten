@@ -2523,7 +2523,12 @@ pub enum SchemaSurface {
 /// distinguishes them with [`clap::Error::use_stderr`] so a help request is not
 /// charged as a usage error.
 pub fn try_parse() -> Result<Cli, clap::Error> {
-    Ok(from_matches(&surface::command().try_get_matches()?))
+    // NARROWED TO THE VERB NAMED, when argv[1] is exactly one (CLOUD-2315); see
+    // `surface::command_for` for why every other first argument builds it whole.
+    let verb = std::env::args().nth(1);
+    Ok(from_matches(
+        &surface::command_for(verb.as_deref()).try_get_matches()?,
+    ))
 }
 
 /// Give the parsed matches their typed shape.

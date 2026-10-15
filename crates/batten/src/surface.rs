@@ -8403,9 +8403,16 @@ pub fn is_noun(decl: &CommandDecl) -> bool {
 
 /// Attach every direct child of `prefix` to `parent`, recursively.
 fn attach(parent: Command, prefix: &str) -> Command {
+    attach_only(parent, prefix, None)
+}
+
+/// [`attach`], keeping only the child named `only` when one is given.
+//MUTANT narrowed-tree-keeps-everything|s@^        .filter(\|decl\| only.is_none_or(\|name\| leaf_of(decl.path) == name))$@@|a_narrowed_tree_parses_as_the_whole_one
+fn attach_only(parent: Command, prefix: &str, only: Option<&str>) -> Command {
     SURFACE
         .iter()
         .filter(|decl| parent_of(decl.path) == prefix)
+        .filter(|decl| only.is_none_or(|name| leaf_of(decl.path) == name))
         .fold(parent, |parent, decl| {
             let sub = Command::new(leaf_of(decl.path)).about(decl.about);
             let sub = decl
@@ -8431,6 +8438,32 @@ fn attach(parent: Command, prefix: &str) -> Command {
 /// of them can disagree with the declaration.
 #[must_use]
 pub fn command() -> Command {
+    command_narrowed(None)
+}
+
+/// The tree [`command`] builds, with only the top-level verb `verb` attached
+/// when `verb` names one — the same declaration, the same parser, a subset of
+/// the nodes (CLOUD-2315).
+///
+/// Every invocation built the WHOLE tree to dispatch one verb, and the hook runs
+/// one invocation per tool call: building it was most of the ~4 ms between
+/// `main` and the dispatch, against a 10 ms per-call budget. A caller hands the
+/// first argument only when it is EXACTLY a declared top-level verb; anything
+/// else — a leading flag, a misspelling clap would suggest a fix for, `help`, a
+/// bare invocation — builds the whole tree, so every answer that needs the
+/// siblings still has them. `a_narrowed_tree_parses_as_the_whole_one` holds the
+/// two to one parse for every declared top-level verb.
+#[must_use]
+pub fn command_for(verb: Option<&str>) -> Command {
+    let declared = verb.filter(|name| {
+        SURFACE
+            .iter()
+            .any(|decl| parent_of(decl.path).is_empty() && decl.path == *name)
+    });
+    command_narrowed(declared)
+}
+
+fn command_narrowed(only: Option<&str>) -> Command {
     // arg_required_else_help: a bare invocation lists the subcommands and never
     // performs a default action (§2). clap renders the listing on its error path
     // (stderr, exit 1), so stdout stays the answer channel.
@@ -8446,7 +8479,55 @@ pub fn command() -> Command {
         .flags
         .iter()
         .fold(root, |root, flag| root.arg(arg_of(flag)));
-    attach(root, "")
+    attach_only(root, "", only)
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod narrowed_tests {
+    use super::{SURFACE, command, command_for, parent_of};
+
+    /// CLOUD-2315: the narrowed tree is the whole tree's subtree for that verb,
+    /// node for node — the same help, every flag, every sub-verb — and a first
+    /// argument that is not exactly a top-level verb builds the whole tree.
+    #[test]
+    fn a_narrowed_tree_parses_as_the_whole_one() {
+        let mut whole = command();
+        let verbs: Vec<&str> = SURFACE
+            .iter()
+            .filter(|decl| parent_of(decl.path).is_empty())
+            .map(|decl| decl.path)
+            .collect();
+        assert!(
+            verbs.contains(&"adjudicate"),
+            "the hook's verb is top-level"
+        );
+        for verb in &verbs {
+            let mut narrowed = command_for(Some(verb));
+            assert_eq!(
+                narrowed.get_subcommands().count(),
+                1,
+                "`{verb}` alone is attached"
+            );
+            let in_whole = whole
+                .find_subcommand_mut(verb)
+                .expect("declared")
+                .render_long_help();
+            let alone = narrowed
+                .find_subcommand_mut(verb)
+                .expect("attached")
+                .render_long_help();
+            assert_eq!(in_whole.to_string(), alone.to_string(), "`{verb}`");
+        }
+        let total = whole.get_subcommands().count();
+        for other in [None, Some("--strictness"), Some("adjudicat"), Some("help")] {
+            assert_eq!(
+                command_for(other).get_subcommands().count(),
+                total,
+                "{other:?} builds the whole tree"
+            );
+        }
+    }
 }
 
 #[cfg(test)]
