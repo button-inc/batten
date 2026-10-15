@@ -226,7 +226,8 @@ fn alias_of(inputs: &Inputs<'_>, key: &str) -> Option<String> {
 ///
 /// Deny is tested before allow, or an allow glob would pre-approve a verb the
 /// same file denies.
-//MUTANT deny-loses-to-allow-glob|s@^    let verdict = if states("deny") {@    let verdict = if false \&\& states("deny") {@|a_deny_outranks_an_allow_glob_over_the_same_server
+//MUTANT deny-loses-to-allow-glob|s@^        if states("deny") {$@        if false \&\& states("deny") {@|a_deny_outranks_an_allow_glob_over_the_same_server
+//MUTANT literal-name-silenced|s@^    match verdict_for(server) {$@    match Verdict::Silence {@|a_committed_rule_applies_under_the_literal_name_as_well
 //MUTANT bare-grant-unhonoured|s@^        None => mcp::is_bare_server_rule(rule, alias),@        None => false,@|a_bare_server_rule_grants_every_verb_and_a_deny_still_wins
 #[must_use]
 pub fn resolve(inputs: &Inputs<'_>, tool: &str) -> Resolution {
@@ -236,33 +237,47 @@ pub fn resolve(inputs: &Inputs<'_>, tool: &str) -> Resolution {
     if !inputs.settings.is_file() {
         return Resolution::silence(None);
     }
-    // A NAME THE COMMITTED FILE SPELLS NEEDS NO TRANSLATION: the host matches it
-    // literally, so applying the file again would only restate its answer.
-    if inputs
-        .config
-        .permission_aliases
-        .iter()
-        .any(|alias| alias == server)
-    {
-        return Resolution::silence(Some(server.to_owned()));
+    let verdict_for = |alias: &str| {
+        let states = |arm: &str| {
+            rules_in(inputs.settings, arm)
+                .is_some_and(|rules| rules.iter().any(|rule| names_verb(rule, alias, verb)))
+        };
+        if states("deny") {
+            Verdict::Deny
+        } else if states("allow") {
+            Verdict::Allow
+        } else {
+            Verdict::Silence
+        }
+    };
+    if let Some(alias) = alias_of(inputs, server) {
+        return Resolution {
+            verdict: verdict_for(&alias),
+            alias: Some(alias),
+        };
     }
-    let Some(alias) = alias_of(inputs, server) else {
-        return Resolution::silence(None);
-    };
-    let states = |arm: &str| {
-        rules_in(inputs.settings, arm)
-            .is_some_and(|rules| rules.iter().any(|rule| names_verb(rule, &alias, verb)))
-    };
-    let verdict = if states("deny") {
-        Verdict::Deny
-    } else if states("allow") {
-        Verdict::Allow
-    } else {
+    // A NAME THE COMMITTED FILE SPELLS LITERALLY IS APPLIED TOO. This used to be
+    // silence, on the premise that the host matches a literal rule itself so
+    // applying the file would only restate its answer. Measured false in a cloud
+    // session: the host prompts for an MCP tool `permissions.allow` names
+    // verbatim (upstream #67371, `mem:workflow/agent-fanout`), so every Serena
+    // memory write asked the owner although the committed file allows it. The
+    // verdict is still the committed file's own — a name no rule mentions stays
+    // silence and reports no alias.
+    match verdict_for(server) {
         Verdict::Silence
-    };
-    Resolution {
-        verdict,
-        alias: Some(alias),
+            if !inputs
+                .config
+                .permission_aliases
+                .iter()
+                .any(|alias| alias == server) =>
+        {
+            Resolution::silence(None)
+        }
+        verdict => Resolution {
+            verdict,
+            alias: Some(server.to_owned()),
+        },
     }
 }
 
@@ -341,23 +356,29 @@ fn guard(
         return Ok(ExitCode::Success);
     };
     let settings = inputs.settings_label();
+    // Why the host did not already apply the rule: a renamed key does not match
+    // it, and a literal one is not honoured for an MCP tool in a cloud session.
+    let why = if split_tool(tool).is_some_and(|(server, _)| server == alias) {
+        "The host does not honour that rule for an MCP tool in this session"
+    } else {
+        "The host is exposing that server under a different name this session, so the \
+         committed rule does not match it literally"
+    };
     match answer.verdict {
         Verdict::Allow => {
             writeln!(
                 out,
-                "mcp grant: {settings} already allows {verb} on {alias}. The host is exposing \
-                 that server under a different name this session, so the committed rule does \
-                 not match it literally — this applies the committed verdict, and grants \
-                 nothing the file does not already state (CLOUD-191)."
+                "mcp grant: {settings} already allows {verb} on {alias}. {why} — this applies \
+                 the committed verdict, and grants nothing the file does not already state \
+                 (CLOUD-191)."
             )?;
             Ok(ExitCode::Success)
         }
         Verdict::Deny => {
             writeln!(
                 err,
-                "mcp grant: {settings} denies {verb} on {alias}, and the host is exposing that \
-                 server under a different name this session, so the committed deny rule does not \
-                 match it literally. This applies it (CLOUD-191)."
+                "mcp grant: {settings} denies {verb} on {alias}. {why}, so this applies it \
+                 (CLOUD-191)."
             )?;
             Ok(ExitCode::Violation)
         }
