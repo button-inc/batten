@@ -3016,7 +3016,7 @@ description = "Provision the host dependencies mise does not: the released `batt
 # has a `batten`: the bootstrap is the setup script's `curl … | sh`, and from
 # then on the binary installs the binary. Reinstalling the latest release here
 # is how an engine came to disagree with its pin. `program run loose` holds it.
-run = ["batten engine update", "batten wiring reclaim -y"]
+run = ["batten engine install", "batten wiring reclaim -y"]
 
 # The report half of the same seam, and the setup script calls this one too.
 #
@@ -3266,9 +3266,9 @@ silent = "stdout"
 # `batten` on PATH by the time this runs, so the installer has no job left here:
 # it fetched the LATEST release over that binary every session, and a pin naming
 # any other build then refused every call until something rebuilt it, measured
-# twice on PR #1102. `batten engine update` converges on the committed pin, and
+# twice on PR #1102. `batten engine install` converges on the committed pin, and
 # an unpinned checkout pays nothing for it. `program run loose` holds the line.
-run = "batten engine update"
+run = "batten engine install"
 
 [tasks."session:git-hooks"]
 description = "Session start: install the repo-owned git hooks, the per-clone step nothing performed for 24 commits (CLOUD-476)"

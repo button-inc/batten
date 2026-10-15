@@ -31,25 +31,29 @@ no package manager, no clone, and nothing harness-specific:
 curl -fsSL https://raw.githubusercontent.com/button-inc/batten/main/install.sh | sh
 ```
 
-The script is **generated** from Batten's own target table and does the bare
-minimum: it detects your platform, takes the release a `batten.toml` **pins** —
-the one above your working directory, else `main`'s, never the latest release —
-fetches that target's archive and the release's `SHA256SUMS` from the
-public download URL — never the GitHub API, so no token and no rate limit —
-**refuses to run bytes whose SHA-256 the release did not publish**, and hands
-over to `batten engine install`. A download that fails names the HTTP status and
-the URL that answered.
+The script is **generated** from `install.lock` and does the bare minimum, with
+**no version choice**: it detects your platform, fetches the archive of the
+release the lock names from the public download URL — never the GitHub API, so
+no token and no rate limit — **refuses to run bytes whose SHA-256 is not the one
+baked beside the tag**, and hands over to `batten engine install`. A download
+that fails names the HTTP status and the URL that answered. Each release bakes
+its own tag and digests into `install.lock` and regenerates the script before
+`main` fast-forwards to it, so `main`'s script always installs the latest
+release, verified.
 
-`batten engine install` is tested Rust, and it puts `batten` in a directory
-already on `PATH`: `${XDG_BIN_HOME:-$HOME/.local/bin}` when that is on it,
-otherwise a writable `/usr/local/bin`. `BATTEN_VERSION` names a tag outright,
-`BATTEN_VERSION_FROM_REF` takes the pin of a ref's `batten.toml`, and
-`BATTEN_INSTALL_DIR` a different destination.
+`batten engine install` is tested Rust, and **it always installs the pin**: the
+release your repository's `batten.toml` pins, fetched and verified, or with no
+pin in scope the binary the script just verified. A cached or image-baked copy
+of the script therefore still lands on your pin. It puts `batten` in a
+directory already on `PATH`: `${XDG_BIN_HOME:-$HOME/.local/bin}` when that is on
+it, otherwise a writable `/usr/local/bin`. `BATTEN_VERSION_FROM_REF` takes the
+pin of a ref's `batten.toml`, `BATTEN_INSTALL_DIR` a different destination, and
+`BATTEN_VERSION` names a tag outright — an escape hatch honoured only where no
+pin is in scope, and refused by name against one it disagrees with.
 
-The script comes from `main` and the **binary is a pinned release, never the
-latest one**. `main` only ever pins a release that is published, immutable,
-complete and verified, so what installs is a tested artifact rather than a
-branch tip or whatever was published last.
+To move a repository to a newer Batten, `batten engine update` moves its
+`batten.toml` pin forward to the latest release — never backward — and then
+installs it.
 
 Installing somewhere not on `PATH` is a **refusal**, not a warning: every hook
 registration names `batten` bare, so a binary the shell cannot resolve is

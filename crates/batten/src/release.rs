@@ -993,8 +993,8 @@ pub fn run(
         crate::cli::ReleaseCommand::Discard { tag } => {
             crate::release_state::run_discard(&tag, out, err)
         }
-        crate::cli::ReleaseCommand::InFlight { workflow } => {
-            crate::release_state::run_in_flight(&workflow, out, err)
+        crate::cli::ReleaseCommand::InFlight { workflows } => {
+            crate::release_state::run_in_flight(&workflows, out, err)
         }
         crate::cli::ReleaseCommand::LandState { tag, sha } => {
             crate::release_state::run_land_state(&tag, &sha, out, err)
@@ -1009,7 +1009,14 @@ pub fn run(
             sha,
             changelog,
             workflow,
-        } => crate::release_state::run_cut(&tag, &sha, (&changelog, &workflow), out, err),
+            land_workflow,
+        } => crate::release_state::run_cut(
+            &tag,
+            &sha,
+            (&changelog, &workflow, land_workflow.as_deref()),
+            out,
+            err,
+        ),
         crate::cli::ReleaseCommand::Pin { at } => {
             crate::release_state::run_pin(at.as_deref(), out, err)
         }
@@ -1019,6 +1026,18 @@ pub fn run(
         crate::cli::ReleaseCommand::Guard { tag, sha } => {
             crate::release_state::run_guard(&tag, &sha, out, err)
         }
+        crate::cli::ReleaseCommand::Bake {
+            tag,
+            sha,
+            branch,
+            write_only,
+        } => crate::release_state::run_bake(
+            &tag,
+            (sha.as_deref(), branch.as_deref()),
+            write_only,
+            out,
+            err,
+        ),
         crate::cli::ReleaseCommand::Install
         | crate::cli::ReleaseCommand::Verify { .. }
         | crate::cli::ReleaseCommand::Path { .. } => Err(anyhow::anyhow!(

@@ -76,7 +76,10 @@ name: auto-release-land
 # — refuses while a release is in flight, bumps an unusable version on the
 # release branch and stops, else discards any stale draft, creates the draft at
 # the release head and dispatches `release-artifacts` with its tag and sha.
-# That workflow's `land` job publishes, verifies and fast-forwards `main`. The
+# That workflow builds, then BAKES `install.lock` onto the release head as one
+# commit (CLOUD-2287), whose CI brings this job back: a baked head of the open
+# draft's target is dispatched to `release-land.yml`, never cut again, and that
+# workflow's `land` job publishes, verifies and fast-forwards `main`. The
 # cut creates no tag itself and executes no PR content: it reads the head's
 # version and changelog with `git show`, and runs `main`'s own engine, built
 # from the trunk's tree because the verbs it calls ship there first.
@@ -453,7 +456,7 @@ jobs:
       queue: max
     permissions:
       contents: write # create the draft
-      actions: write # dispatch release-artifacts, and read the guard's settings run
+      actions: write # dispatch release-artifacts or release-land, and read the guard's settings run
     env:
       SHA: ${{ needs.fast-forward-release-pr.outputs.sha }}
       BRANCH: ${{ needs.fast-forward-release-pr.outputs.branch }}
@@ -476,7 +479,7 @@ jobs:
       # again. Exit 3, could-not-look, fails the run.
       - name: Hold while a release is in flight
         id: freeze
-        run: mise run batten -- ci step --verdict clear --on 0=yes --on 1=no -- mise run batten -- release in-flight --workflow release-artifacts.yml
+        run: mise run batten -- ci step --verdict clear --on 0=yes --on 1=no -- mise run batten -- release in-flight --workflow release-artifacts.yml --workflow release-land.yml
       - name: Which version does the release head carry?
         if: steps.freeze.outputs.clear == 'yes'
         id: version
@@ -496,9 +499,11 @@ jobs:
       # THE CUT ITSELF: any stale draft of the version discarded, the draft
       # created at the release head with the section of its changelog, and the
       # build dispatched with that tag and sha. No tag is created here: a draft's
-      # tag is made by the publish, in `land`.
+      # tag is made by the publish, in `land`. CUT OR LAND (CLOUD-2287): a head
+      # that is the bake of the open draft's target is dispatched to
+      # `release-land.yml` instead, so the bake's own CI never re-cuts it.
       - name: Draft the release at its head and dispatch its build
         if: startsWith(steps.bump.outputs.verdict, 'usable')
         env:
           TAG: ${{ steps.version.outputs.tag }}
-        run: mise run batten -- ci step --arg-env SHA --arg-env TAG -- mise run batten -- release cut --changelog crates/batten/CHANGELOG.md --workflow release-artifacts.yml --sha
+        run: mise run batten -- ci step --arg-env SHA --arg-env TAG -- mise run batten -- release cut --changelog crates/batten/CHANGELOG.md --workflow release-artifacts.yml --land-workflow release-land.yml --sha

@@ -103,7 +103,7 @@ test_a_session_restart_handed_to_the_human_is_named if {
 
 test_the_agent_running_it_is_not_a_punt if {
 	# THE NARROWNESS BOUNDARY: the agent reporting its own run is the work, not an offer.
-	count(offered("I ran `batten engine update`, then pushed. Once it ran, the hook loaded.")) == 0
+	count(offered("I ran `batten engine install`, then pushed. Once it ran, the hook loaded.")) == 0
 }
 
 test_a_decision_already_made_is_not_a_punt if {

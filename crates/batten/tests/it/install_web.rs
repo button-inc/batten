@@ -1,21 +1,28 @@
-//! The generated `install.sh` (CLOUD-2203), run end to end over a loopback
-//! release host.
+//! The generated `install.sh` (CLOUD-2203, CLOUD-2287), run end to end over a
+//! loopback release host.
 //!
-//! The script is `install::render_bootstrap`'s output and nothing else: detect
-//! the target, take the tag a `batten.toml` pins (or `BATTEN_VERSION`) and
-//! never the latest release (CLOUD-2033), fetch `SHA256SUMS` and the archive
-//! from `releases/download`, check the digest, and run `batten engine install`.
-//! Everything after the hand-over is Rust and is tested where it lives
-//! (`install.rs`, `engine_install.rs`). This tier proves what only the script can:
-//! that the tag resolves, that the digest gate refuses bytes the release did not
-//! publish, and that a refused download names what answered.
+//! The script is `install::render_bootstrap`'s output from an `install.lock` and
+//! nothing else: detect the target, download the BAKED tag's archive, compare it
+//! with the baked sha256, and run `batten engine install`, which follows the
+//! pin from there. It makes no version choice — no `batten.toml` is read, no
+//! ref, never the latest release — and `BATTEN_VERSION` is the one escape hatch,
+//! checked against that release's own `SHA256SUMS`. Everything after the
+//! hand-over is Rust and is tested where it lives (`install.rs`,
+//! `engine_install.rs`). This tier proves what only the script can: that the
+//! baked tag is what is fetched, that the digest gate refuses bytes the lock or
+//! the release did not name, and that a refused download names what answered.
+//!
+//! # Rendered per case, from a fixture lock
+//!
+//! The committed `install.sh` carries a real release's digests, which a fixture
+//! archive can never match; `install_script.rs` pins those bytes. Each case here
+//! renders the same template from a lock naming the fixture's own archive, so a
+//! change to the template is exercised here before it is committed.
 //!
 //! # A loopback HTTP host rather than a `file://` tree
 //!
-//! The pin comes off the same host the script downloads from — `main`'s
-//! `batten.toml` on the raw-file host, which a fixture base serves at
-//! `<base>/main/batten.toml` — and a logged host is what lets a case show the
-//! latest release was never asked for. Nothing leaves the machine.
+//! A logged host is what lets a case show a pin, a ref or the latest release
+//! was never asked for. Nothing leaves the machine.
 //!
 //! # The archive's `batten` is a stub
 //!
@@ -188,30 +195,16 @@ fn serve(mut stream: TcpStream, routes: &[Route], log: &Mutex<Vec<String>>) {
     let _ = stream.flush();
 }
 
-/// `main`'s `batten.toml`, pinning `tag`.
-fn pin_route(reference: &str, tag: &str) -> Route {
-    Route {
-        path: format!("/{REPO}/{reference}/batten.toml"),
-        status: 200,
-        location: None,
-        body: format!("version = 1\nengine = {{ release = \"{tag}\" }}\n").into_bytes(),
-    }
-}
-
-/// The routes a complete release serves: `main`'s pin naming it,
-/// `SHA256SUMS`, and the archive under every bootstrap target's name, so a case
-/// passes on whichever host runs it.
+/// The routes a complete release serves: `SHA256SUMS`, and the archive under
+/// every bootstrap target's name, so a case passes on whichever host runs it.
 fn release_routes(_base: &str, archive: &[u8]) -> Vec<Route> {
     let sums = sums_for(&digest(archive));
-    let mut routes = vec![
-        pin_route("main", TAG),
-        Route {
-            path: format!("/{REPO}/releases/download/{TAG}/SHA256SUMS"),
-            status: 200,
-            location: None,
-            body: sums.into_bytes(),
-        },
-    ];
+    let mut routes = vec![Route {
+        path: format!("/{REPO}/releases/download/{TAG}/SHA256SUMS"),
+        status: 200,
+        location: None,
+        body: sums.into_bytes(),
+    }];
     for target in batten::install::TARGETS {
         routes.push(Route {
             path: format!("/{REPO}/releases/download/{TAG}/{}", asset(target)),
@@ -234,16 +227,42 @@ fn sums_for(digest: &str) -> String {
 }
 
 /// The index of the `SHA256SUMS` route in [`release_routes`].
-const SUMS: usize = 1;
+const SUMS: usize = 0;
 
-/// Run the committed `install.sh` against `web`, with every credential unset.
-///
-/// The scratch directory carries a `batten.toml` pinning nothing, so the
-/// script's walk up from its working directory stops there — the scratch root
-/// lives inside this repository, whose own pin it would otherwise read — and
-/// falls through to `main`'s pin on the fixture host.
-fn install(name: &str, web: &str, env: &[(&str, &str)]) -> (Option<i32>, String, String) {
-    install_in(name, "version = 1\n", web, env)
+/// The lock a bake of the fixture release writes, naming `digest` for every
+/// target archive.
+fn lock_for(digest: &str) -> batten::install::Lock {
+    batten::install::Lock::from_sums("batten", TAG, &sums_for(digest))
+        .expect("the fixture names every target")
+}
+
+/// A lock baked for some OTHER release, so a case can show `BATTEN_VERSION`
+/// fetches its own tag and its own `SHA256SUMS` rather than the baked ones.
+fn other_lock() -> batten::install::Lock {
+    batten::install::Lock {
+        tag: String::from("v1.0.0"),
+        sums: Vec::new(),
+    }
+}
+
+/// How many requests `log` holds whose path ends with `suffix`.
+fn requests_ending(log: &Mutex<Vec<String>>, suffix: &str) -> usize {
+    log.lock()
+        .unwrap()
+        .iter()
+        .filter(|seen| seen.ends_with(suffix))
+        .count()
+}
+
+/// Run the bootstrap rendered from `lock` against `web`, with every credential
+/// unset, from a scratch directory whose `batten.toml` pins nothing.
+fn install(
+    name: &str,
+    web: &str,
+    lock: &batten::install::Lock,
+    env: &[(&str, &str)],
+) -> (Option<i32>, String, String) {
+    install_in(name, "version = 1\n", web, lock, env)
 }
 
 /// [`install`], from a scratch directory whose `batten.toml` is `config`.
@@ -251,17 +270,24 @@ fn install_in(
     name: &str,
     config: &str,
     web: &str,
+    lock: &batten::install::Lock,
     env: &[(&str, &str)],
 ) -> (Option<i32>, String, String) {
     let dir = scratch(name);
     std::fs::write(dir.join("batten.toml"), config).unwrap();
+    let script = dir.join("install.sh");
+    std::fs::write(
+        &script,
+        batten::install::render_bootstrap("batten", "https://example.invalid/unused", lock),
+    )
+    .unwrap();
     #[expect(
         clippy::disallowed_types,
         reason = "stays, and test-only: the subject of this suite IS a shell program, so there is nothing to assert without running it"
     )]
     let mut command = Command::new("sh");
     command
-        .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/../../install.sh"))
+        .arg(&script)
         .current_dir(&dir)
         .env_clear()
         // No `batten` resolvable by name (CLOUD-1951): CI's runner has none, so
@@ -283,41 +309,77 @@ fn install_in(
     )
 }
 
-/// No token, no API: the tag is `main`'s pin, the digest gate runs, and the
-/// verified binary is handed `engine install`.
+/// No token, no API, no pin: the baked tag's archive is fetched, checked against
+/// the baked sha256 — no `SHA256SUMS` request — and handed `engine install`.
 #[test]
-fn install_installs_mains_pin() {
+fn install_installs_its_baked_tag() {
     let dir = scratch("install-web-happy");
     let archive = tarball(&dir);
-    let web = host(|base| release_routes(base, &archive));
+    let (web, log) = logged_host(|base| release_routes(base, &archive));
 
-    let (code, stdout, stderr) = install("install-web-ok", &web, &[]);
+    let (code, stdout, stderr) = install("install-web-ok", &web, &lock_for(&digest(&archive)), &[]);
     assert_eq!(code, Some(0), "install failed: {stdout}{stderr}");
     assert!(
         stdout.contains("ran engine install"),
         "the verified binary must be run with `engine install`: {stdout}"
     );
+    assert_eq!(
+        requests_ending(&log, "/SHA256SUMS"),
+        0,
+        "the baked sha256 needs no manifest"
+    );
 }
 
-/// `BATTEN_VERSION` names the tag, so no pin is read.
+/// `BATTEN_VERSION` is the escape hatch: that tag is fetched and checked against
+/// its own release's `SHA256SUMS`, whatever the lock baked.
 #[test]
-fn a_named_version_reads_no_pin() {
+fn a_named_version_reads_its_own_sha256sums() {
     let dir = scratch("install-web-named");
     let archive = tarball(&dir);
-    let web = host(|base| {
-        let mut routes = release_routes(base, &archive);
-        // Drop main's pin: a script that still read it would fail on the 404.
-        routes.remove(0);
-        routes
-    });
+    let (web, log) = logged_host(|base| release_routes(base, &archive));
 
-    let (code, stdout, stderr) = install("install-web-named-run", &web, &[("BATTEN_VERSION", TAG)]);
+    let (code, stdout, stderr) = install(
+        "install-web-named-run",
+        &web,
+        &other_lock(),
+        &[("BATTEN_VERSION", TAG)],
+    );
     assert_eq!(code, Some(0), "install failed: {stdout}{stderr}");
     assert!(stdout.contains("ran engine install"), "{stdout}");
+    assert_eq!(
+        requests(&log, &format!("/{REPO}/releases/download/{TAG}/SHA256SUMS")),
+        1
+    );
 }
 
-/// A `SHA256SUMS` disagreeing with the bytes is a REFUSAL, and the bytes are
-/// never run.
+/// A served archive whose sha256 is not the one the lock baked is a REFUSAL,
+/// and the bytes are never run (CLOUD-2287).
+#[test]
+fn a_served_archive_disagreeing_with_the_lock_installs_nothing() {
+    let dir = scratch("install-web-badlock");
+    let archive = tarball(&dir);
+    let web = host(|base| release_routes(base, &archive));
+
+    let (code, stdout, stderr) = install(
+        "install-web-badlock-run",
+        &web,
+        &lock_for(&"1".repeat(64)),
+        &[],
+    );
+    assert_eq!(
+        code,
+        Some(1),
+        "a digest mismatch is a refusal: {stdout}{stderr}"
+    );
+    assert!(stderr.contains("does not match"), "{stderr}");
+    assert!(
+        !stdout.contains("ran engine install"),
+        "unverified bytes must never be run: {stdout}"
+    );
+}
+
+/// Under `BATTEN_VERSION`, a `SHA256SUMS` disagreeing with the bytes is a
+/// REFUSAL, and the bytes are never run.
 #[test]
 fn a_sha256sums_that_disagrees_with_the_bytes_installs_nothing() {
     let dir = scratch("install-web-badsum");
@@ -329,7 +391,12 @@ fn a_sha256sums_that_disagrees_with_the_bytes_installs_nothing() {
         routes
     });
 
-    let (code, stdout, stderr) = install("install-web-bad", &web, &[]);
+    let (code, stdout, stderr) = install(
+        "install-web-bad",
+        &web,
+        &other_lock(),
+        &[("BATTEN_VERSION", TAG)],
+    );
     assert_eq!(
         code,
         Some(1),
@@ -355,7 +422,12 @@ fn an_asset_absent_from_sha256sums_installs_nothing() {
         routes
     });
 
-    let (code, stdout, stderr) = install("install-web-nosum-run", &web, &[]);
+    let (code, stdout, stderr) = install(
+        "install-web-nosum-run",
+        &web,
+        &other_lock(),
+        &[("BATTEN_VERSION", TAG)],
+    );
     assert_eq!(
         code,
         Some(1),
@@ -365,8 +437,8 @@ fn an_asset_absent_from_sha256sums_installs_nothing() {
     assert!(!stdout.contains("ran engine install"), "{stdout}");
 }
 
-/// A release with no `SHA256SUMS` is the RELEASE's fault once its tag resolved:
-/// exit 1, naming the status and the URL that answered, and nothing is run.
+/// A named release with no `SHA256SUMS` is the RELEASE's fault: exit 1, naming
+/// the status and the URL that answered, and nothing is run.
 #[test]
 fn a_release_publishing_no_sha256sums_names_the_status_and_url() {
     let dir = scratch("install-web-nomanifest");
@@ -377,7 +449,12 @@ fn a_release_publishing_no_sha256sums_names_the_status_and_url() {
         routes
     });
 
-    let (code, stdout, stderr) = install("install-web-nomanifest-run", &web, &[]);
+    let (code, stdout, stderr) = install(
+        "install-web-nomanifest-run",
+        &web,
+        &other_lock(),
+        &[("BATTEN_VERSION", TAG)],
+    );
     assert_eq!(code, Some(1), "{stdout}{stderr}");
     assert!(
         stderr.contains("SHA256SUMS: 404 http://127.0.0.1:"),
@@ -386,7 +463,8 @@ fn a_release_publishing_no_sha256sums_names_the_status_and_url() {
     assert!(!stdout.contains("ran engine install"), "{stdout}");
 }
 
-/// A release carrying no archive for this target is exit 1, naming the asset.
+/// A named release carrying no archive for this target is exit 1, naming the
+/// asset.
 #[test]
 fn a_release_carrying_no_asset_for_this_target_is_exit_1_naming_it() {
     let dir = scratch("install-web-noasset");
@@ -397,7 +475,12 @@ fn a_release_carrying_no_asset_for_this_target_is_exit_1_naming_it() {
         routes
     });
 
-    let (code, stdout, stderr) = install("install-web-noasset-run", &web, &[]);
+    let (code, stdout, stderr) = install(
+        "install-web-noasset-run",
+        &web,
+        &other_lock(),
+        &[("BATTEN_VERSION", TAG)],
+    );
     assert_eq!(code, Some(1), "{stdout}{stderr}");
     assert!(
         stderr.contains(&format!("batten-{TAG}-")) && stderr.contains(".tar.gz: 404"),
@@ -406,73 +489,78 @@ fn a_release_carrying_no_asset_for_this_target_is_exit_1_naming_it() {
     assert!(!stdout.contains("ran engine install"), "{stdout}");
 }
 
-/// A `main` that pins no release is refused, and the latest release is never
-/// asked for in its place (CLOUD-2033).
+/// The script makes no version choice (CLOUD-2287): no `batten.toml` is read,
+/// on the host or off it, and the latest release is never asked for.
 #[test]
-fn a_main_pinning_no_release_is_refused_never_latest() {
-    let dir = scratch("install-web-nopin");
+fn the_script_never_asks_for_a_pin_or_the_latest_release() {
+    let dir = scratch("install-web-nochoice");
     let archive = tarball(&dir);
-    let (web, log) = logged_host(|base| {
-        let mut routes = release_routes(base, &archive);
-        routes[0].body = b"version = 1\n".to_vec();
-        routes
-    });
+    let (web, log) = logged_host(|base| release_routes(base, &archive));
 
-    let (code, stdout, stderr) = install("install-web-nopin-run", &web, &[]);
-    assert_eq!(code, Some(1), "{stdout}{stderr}");
-    assert!(stderr.contains("pins no release"), "{stderr}");
+    let (code, stdout, stderr) = install(
+        "install-web-nochoice-run",
+        &web,
+        &lock_for(&digest(&archive)),
+        &[],
+    );
+    assert_eq!(code, Some(0), "{stdout}{stderr}");
+    assert_eq!(requests_ending(&log, "/batten.toml"), 0, "no pin is read");
     assert_eq!(
         requests(&log, &format!("/{REPO}/releases/latest")),
         0,
         "the latest release is never asked for"
     );
-    assert!(!stdout.contains("ran engine install"), "{stdout}");
 }
 
-/// The pin of the `batten.toml` above the working directory wins over
-/// `main`'s: a consumer gets the release their repository pins (CLOUD-2033).
+/// Run from a directory whose `batten.toml` pins another release, with neither
+/// environment variable set, the script still fetches its baked tag: following
+/// the pin is the binary's job, which the hand-over gives it.
 #[test]
-fn install_installs_the_consumers_pin() {
+fn a_consumers_pin_never_changes_the_baked_tag() {
     let dir = scratch("install-web-consumer");
     let archive = tarball(&dir);
-    let (web, log) = logged_host(|base| {
-        let mut routes = release_routes(base, &archive);
-        // main pins something else, which must not be read.
-        routes[0] = pin_route("main", "v0.0.1");
-        routes
-    });
+    let (web, log) = logged_host(|base| release_routes(base, &archive));
 
-    let pinned = format!("version = 1\nengine = {{ release = \"{TAG}\" }}\n");
-    let (code, stdout, stderr) = install_in("install-web-consumer-run", &pinned, &web, &[]);
+    let pinned = "version = 1\nengine = { release = \"v0.0.1\" }\n";
+    let (code, stdout, stderr) = install_in(
+        "install-web-consumer-run",
+        pinned,
+        &web,
+        &lock_for(&digest(&archive)),
+        &[],
+    );
     assert_eq!(code, Some(0), "{stdout}{stderr}");
     assert!(stdout.contains("ran engine install"), "{stdout}");
-    assert_eq!(
-        requests(&log, &format!("/{REPO}/main/batten.toml")),
-        0,
-        "a consumer's pin is read before main's"
+    assert!(
+        !log.lock()
+            .unwrap()
+            .iter()
+            .any(|seen| seen.contains("v0.0.1")),
+        "nothing of the consumer's pin is fetched"
     );
 }
 
-/// `BATTEN_VERSION_FROM_REF` installs the release that ref's `batten.toml`
-/// pins — the CI guard's property (CLOUD-420) — over the working directory's.
+/// `BATTEN_VERSION_FROM_REF` is the binary's to honour, not the script's: the
+/// ref's `batten.toml` is never read here, and the baked bytes are run.
 #[test]
-fn a_ref_installs_the_release_its_batten_toml_pins() {
+fn a_ref_is_left_to_the_binary() {
     let dir = scratch("install-web-ref");
     let archive = tarball(&dir);
-    let web = host(|base| {
-        let mut routes = release_routes(base, &archive);
-        routes[0] = pin_route("trunk", TAG);
-        routes
-    });
+    let (web, log) = logged_host(|base| release_routes(base, &archive));
 
-    let (code, stdout, stderr) = install_in(
+    let (code, stdout, stderr) = install(
         "install-web-ref-run",
-        "version = 1\nengine = { release = \"v0.0.1\" }\n",
         &web,
+        &lock_for(&digest(&archive)),
         &[("BATTEN_VERSION_FROM_REF", "trunk")],
     );
     assert_eq!(code, Some(0), "{stdout}{stderr}");
     assert!(stdout.contains("ran engine install"), "{stdout}");
+    assert_eq!(
+        requests_ending(&log, "/batten.toml"),
+        0,
+        "the ref is never read"
+    );
 }
 
 /// A transient answer is retried, a bounded number of times, and then reported
@@ -483,20 +571,26 @@ fn the_retry_is_bounded_and_reports_rather_than_looping() {
     let archive = tarball(&dir);
     let (web, log) = logged_host(|base| {
         let mut routes = release_routes(base, &archive);
-        routes[SUMS].status = 503;
+        for route in &mut routes {
+            route.status = 503;
+        }
         routes
     });
 
-    let (code, stdout, stderr) = install("install-web-retry-run", &web, &[]);
+    let (code, stdout, stderr) = install(
+        "install-web-retry-run",
+        &web,
+        &lock_for(&digest(&archive)),
+        &[],
+    );
     assert_eq!(code, Some(2), "{stdout}{stderr}");
-    assert!(stderr.contains("SHA256SUMS: 503"), "{stderr}");
+    assert!(stderr.contains(".tar.gz: 503"), "{stderr}");
     assert_eq!(
-        requests(&log, &format!("/{REPO}/releases/download/{TAG}/SHA256SUMS")),
+        requests_ending(&log, ".tar.gz"),
         4,
         "one attempt and three retries, then stop"
     );
 }
-
 /// A platform no release builds is refused before any request is made.
 #[test]
 fn a_platform_no_release_builds_is_refused_before_any_request() {
@@ -517,24 +611,30 @@ fn a_platform_no_release_builds_is_refused_before_any_request() {
             .expect("a PATH entry carries no separator");
     let path = path.to_string_lossy();
 
-    let (code, stdout, stderr) = install("install-web-platform-run", &web, &[("PATH", &path)]);
+    let (code, stdout, stderr) = install(
+        "install-web-platform-run",
+        &web,
+        &lock_for(&"0".repeat(64)),
+        &[("PATH", &path)],
+    );
     assert_eq!(code, Some(1), "{stdout}{stderr}");
     assert!(stderr.contains("no release for Linux/riscv64"), "{stderr}");
     assert!(log.lock().unwrap().is_empty(), "no request is made");
 }
 
 /// A web host that serves nothing is "could not look" (2), never a broken
-/// release (1). This is the private-repository shape.
+/// release (1): the baked tag was published, so its `404` is the
+/// private-repository shape.
 #[test]
 fn a_web_host_that_serves_nothing_is_could_not_look() {
     let web = host(|_| Vec::new());
-    let (code, stdout, stderr) = install("install-web-404", &web, &[]);
+    let (code, stdout, stderr) = install("install-web-404", &web, &lock_for(&"0".repeat(64)), &[]);
     assert_eq!(
         code,
         Some(2),
         "an unreadable release is environment, not a bad release: {stdout}{stderr}"
     );
-    assert!(stderr.contains("main/batten.toml: 404"), "{stderr}");
+    assert!(stderr.contains(".tar.gz: 404"), "{stderr}");
     assert!(!stdout.contains("ran engine install"), "{stdout}");
 }
 
@@ -590,7 +690,8 @@ fn a_declared_ca_bundle_reaches_the_download_in_curls_precedence() {
     for (name, declared, want) in arms {
         let mut env = vec![("BATTEN_VERSION", TAG)];
         env.extend_from_slice(declared);
-        let (code, stdout, stderr) = install(&format!("install-web-ca-{name}"), &web, &env);
+        let (code, stdout, stderr) =
+            install(&format!("install-web-ca-{name}"), &web, &other_lock(), &env);
         assert_eq!(code, Some(want), "{name}: {stdout}{stderr}");
         assert_eq!(
             stdout.contains("ran engine install"),

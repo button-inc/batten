@@ -1165,6 +1165,9 @@ _batten() {
             batten__subcmd__help__subcmd__release,backfill)
                 cmd="batten__subcmd__help__subcmd__release__subcmd__backfill"
                 ;;
+            batten__subcmd__help__subcmd__release,bake)
+                cmd="batten__subcmd__help__subcmd__release__subcmd__bake"
+                ;;
             batten__subcmd__help__subcmd__release,bump-unusable)
                 cmd="batten__subcmd__help__subcmd__release__subcmd__bump__subcmd__unusable"
                 ;;
@@ -1912,6 +1915,9 @@ _batten() {
             batten__subcmd__release,backfill)
                 cmd="batten__subcmd__release__subcmd__backfill"
                 ;;
+            batten__subcmd__release,bake)
+                cmd="batten__subcmd__release__subcmd__bake"
+                ;;
             batten__subcmd__release,bump-unusable)
                 cmd="batten__subcmd__release__subcmd__bump__subcmd__unusable"
                 ;;
@@ -1953,6 +1959,9 @@ _batten() {
                 ;;
             batten__subcmd__release__subcmd__help,backfill)
                 cmd="batten__subcmd__release__subcmd__help__subcmd__backfill"
+                ;;
+            batten__subcmd__release__subcmd__help,bake)
+                cmd="batten__subcmd__release__subcmd__help__subcmd__bake"
                 ;;
             batten__subcmd__release__subcmd__help,bump-unusable)
                 cmd="batten__subcmd__release__subcmd__help__subcmd__bump__subcmd__unusable"
@@ -8334,7 +8343,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__help__subcmd__release)
-            opts="install sums verify path discard in-flight land-state bump-unusable guard cut pin settings backfill"
+            opts="install sums verify path discard in-flight land-state bump-unusable guard cut bake pin settings backfill"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -8348,6 +8357,20 @@ _batten() {
             return 0
             ;;
         batten__subcmd__help__subcmd__release__subcmd__backfill)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        batten__subcmd__help__subcmd__release__subcmd__bake)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -14194,7 +14217,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__release)
-            opts="-q -v -y -h --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help install sums verify path discard in-flight land-state bump-unusable guard cut pin settings backfill help"
+            opts="-q -v -y -h --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help install sums verify path discard in-flight land-state bump-unusable guard cut bake pin settings backfill help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -14277,6 +14300,44 @@ _batten() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
+        batten__subcmd__release__subcmd__bake)
+            opts="-q -v -y -h --sha --branch --write-only --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --sha)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --branch)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --strictness)
+                    COMPREPLY=($(compgen -W "permissive standard strict" -- "${cur}"))
+                    return 0
+                    ;;
+                --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --config-in)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --log-level)
+                    COMPREPLY=($(compgen -W "silent quiet normal verbose debug trace" -- "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
         batten__subcmd__release__subcmd__bump__subcmd__unusable)
             opts="-q -v -y -h --branch --changelog --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
@@ -14316,7 +14377,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__release__subcmd__cut)
-            opts="-q -v -y -h --sha --changelog --workflow --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
+            opts="-q -v -y -h --sha --changelog --workflow --land-workflow --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -14331,6 +14392,10 @@ _batten() {
                     return 0
                     ;;
                 --workflow)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --land-workflow)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -14422,7 +14487,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__release__subcmd__help)
-            opts="install sums verify path discard in-flight land-state bump-unusable guard cut pin settings backfill help"
+            opts="install sums verify path discard in-flight land-state bump-unusable guard cut bake pin settings backfill help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -14436,6 +14501,20 @@ _batten() {
             return 0
             ;;
         batten__subcmd__release__subcmd__help__subcmd__backfill)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        batten__subcmd__release__subcmd__help__subcmd__bake)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )

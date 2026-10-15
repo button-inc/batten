@@ -1,0 +1,25 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-release-bake 1  batten 
+.SH NAME
+batten\-release\-bake \- Bake a release\*(Aqs tag and archive digests into install.lock and install.sh, as one commit on its release head
+.SH SYNOPSIS
+\fBbatten release bake\fR [\fB\-\-sha\fR] [\fB\-\-branch\fR] [\fB\-\-write\-only\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fItag\fR> 
+.SH DESCRIPTION
+Bake a release\*(Aqs tag and archive digests into install.lock and install.sh, as one commit on its release head
+.SH OPTIONS
+.TP
+\fB\-\-sha\fR \fI<sha>\fR
+The release head the bake is committed onto; required unless \-\-write\-only
+.TP
+\fB\-\-branch\fR \fI<branch>\fR
+The release branch moved to the bake commit; required unless \-\-write\-only
+.TP
+\fB\-\-write\-only\fR
+Write install.lock and install.sh to the working tree and commit nothing
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fItag\fR>
+The release\*(Aqs tag

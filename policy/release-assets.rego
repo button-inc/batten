@@ -228,12 +228,14 @@ fixture(record, upload_steps) := document if {
 	}}
 }
 
-uploads := [{"run": `gh release upload "$TAG" schema/batten.schema.json install.sh "$SPDX" --clobber`}]
+# A `.sh` operand stands for any script asset. Not `install.sh`, which a
+# release no longer uploads: it is baked onto the release head (CLOUD-2287).
+uploads := [{"run": `gh release upload "$TAG" schema/batten.schema.json setup.sh "$SPDX" --clobber`}]
 
 # The same upload as one `ci step` argv, its literal operands in `env:`.
 argv_uploads := [{
-	"run": "mise run batten -- ci step --arg-env TAG --arg-env SCHEMA --arg-env INSTALLER --arg-env SPDX -- gh release upload --clobber",
-	"env": {"TAG": "v1.2.3", "SCHEMA": "schema/batten.schema.json", "INSTALLER": "install.sh", "SPDX": "${{ steps.sbom.outputs.spdx }}"},
+	"run": "mise run batten -- ci step --arg-env TAG --arg-env SCHEMA --arg-env SCRIPT --arg-env SPDX -- gh release upload --clobber",
+	"env": {"TAG": "v1.2.3", "SCHEMA": "schema/batten.schema.json", "SCRIPT": "setup.sh", "SPDX": "${{ steps.sbom.outputs.spdx }}"},
 }]
 
 complete := [
@@ -242,7 +244,7 @@ complete := [
 	"release-asset\tbatten-v1.2.3-aarch64-unknown-linux-gnu.tar.gz",
 	"release-asset\tbatten-v1.2.3-x86_64-unknown-linux-gnu.spdx.json",
 	"release-asset\tbatten.schema.json",
-	"release-asset\tinstall.sh",
+	"release-asset\tsetup.sh",
 	"release-asset\tbatten.spdx.json",
 	"release-asset\tbatten.cdx.json",
 	"release-asset\tref.md",
@@ -258,11 +260,11 @@ test_an_operand_in_the_upload_env_is_demanded if {
 	count(violation) == 0 with input as fixture(complete, argv_uploads)
 		with data.batten.patterns as patterns
 	found := violation with input as fixture(
-		[line | some line in complete; line != "release-asset\tinstall.sh"],
+		[line | some line in complete; line != "release-asset\tsetup.sh"],
 		argv_uploads,
 	)
 		with data.batten.patterns as patterns
-	{entry.subjects[0].artifact | some entry in found} == {"install.sh"}
+	{entry.subjects[0].artifact | some entry in found} == {"setup.sh"}
 }
 
 test_an_sbom_does_not_stand_in_for_an_archive if {

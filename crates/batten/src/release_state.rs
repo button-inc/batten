@@ -196,6 +196,72 @@ pub struct LandFacts {
     pub pin_at_target: Option<String>,
     /// The version at the draft's target.
     pub version_at_target: Option<String>,
+    /// `sha` as a release head, read where the draft targets another commit:
+    /// whether it is that target's bake is [`baked_onto`]'s (CLOUD-2287).
+    pub head: Option<Head>,
+    /// The draft's own `SHA256SUMS`, read where `head` is.
+    pub draft_sums: Option<String>,
+}
+
+/// A release head as the bake's readers see it (CLOUD-2287).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Head {
+    /// Its first parent, or `None` for a root commit.
+    pub parent: Option<String>,
+    /// The paths it changes from that parent.
+    pub changed: std::collections::BTreeSet<String>,
+    /// Its `install.lock`, where it carries one.
+    pub lock: Option<String>,
+}
+
+/// Whether `head` is a BAKED head of the draft target `target` (CLOUD-2287): a
+/// child of it whose diff is exactly `install.lock` and `install.sh`, and whose
+/// lock names release `tag` with every line the draft's `sums` publishes.
+#[must_use]
+pub fn baked_onto(head: &Head, target: &str, tag: &str, sums: &str) -> bool {
+    let baked: std::collections::BTreeSet<String> = [crate::install::LOCK_FILE, BOOTSTRAP_FILE]
+        .into_iter()
+        .map(String::from)
+        .collect();
+    let lock_agrees = head
+        .lock
+        .as_deref()
+        .and_then(|text| crate::install::Lock::parse(text).ok())
+        .is_some_and(|lock| {
+            lock.tag == tag && !lock.sums.is_empty() && lock.disagreements(sums).is_empty()
+        });
+    head.parent.as_deref() == Some(target) && head.changed == baked && lock_agrees
+}
+
+/// What the release-head build does with a draft already open (CLOUD-2287).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CutOrLand {
+    /// Discard the draft and cut again at the head: the release head moved.
+    Cut,
+    /// The head is the draft target's bake: land it, never cut it again.
+    Land,
+}
+
+/// `run_cut`'s decision, before it discards anything: a green baked head of the
+/// open draft's target is landed; any other head is cut as before, which is what
+/// keeps the bake from looping — its own CI completing on the release branch
+/// would otherwise discard the draft it was baked from.
+//MUTANT-SUITE crates/batten/tests/it/release_verify.rs
+//MUTANT baked-head-recut|s@^    if draft_target.is_some_and(\x7ctarget\x7c baked_onto(head, target, tag, sums)) {$@    if false {@|cut_or_land_lands_a_baked_head_and_cuts_any_other
+#[must_use]
+pub fn cut_or_land(draft_target: Option<&str>, head: &Head, tag: &str, sums: &str) -> CutOrLand {
+    if draft_target.is_some_and(|target| baked_onto(head, target, tag, sums)) {
+        return CutOrLand::Land;
+    }
+    CutOrLand::Cut
+}
+
+/// Whether `facts.sha` is the bake of the draft target `target`.
+fn is_baked(facts: &LandFacts, target: &str) -> bool {
+    match (&facts.head, facts.draft_sums.as_deref()) {
+        (Some(head), Some(sums)) => baked_onto(head, target, &facts.tag, sums),
+        _ => false,
+    }
 }
 
 /// `land`'s branch, as one line the workflow `case`s on.
@@ -235,7 +301,11 @@ fn full_sha(text: &str) -> bool {
     text.len() == 40 && text.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
-/// `land`'s step (a), decided.
+/// `land`'s step (a), decided. A draft targeting A is landed at `sha` when
+/// `sha` is A itself or A's bake (CLOUD-2287): the bake commits only the
+/// install lock and the script rendered from it, so A's pin, version and
+/// relation to `main` are the release's.
+//MUTANT baked-head-refused|s@^            let baked = is_baked(facts, target);$@            let baked = false;@|a_baked_head_of_the_drafts_target_is_draft_ok
 //MUTANT land-state-resume-as-burned|s@^                (true, Relation::MainBehind) => LandState::ResumeAtD,$@                (true, Relation::MainBehind) => LandState::Burned,@|land_state_resumes_a_published_release_main_is_behind
 #[must_use]
 pub fn land_state(facts: &LandFacts) -> LandState {
@@ -251,7 +321,8 @@ pub fn land_state(facts: &LandFacts) -> LandState {
         }
         Read::Draft { target } => {
             let version = facts.tag.trim_start_matches('v');
-            if !full_sha(target) || *target != facts.sha {
+            let baked = is_baked(facts, target);
+            if !full_sha(target) || (*target != facts.sha && !baked) {
                 LandState::DraftBad(format!("its target {target} is not {}", facts.sha))
             } else if facts.tag_ref.as_ref().is_some_and(|at| at != target) {
                 LandState::DraftBad(format!("refs/tags/{} is at another commit", facts.tag))
@@ -579,24 +650,30 @@ fn land_failed_ago(
     Ok(failed.map(|at| u64::try_from(now.saturating_sub(at)).unwrap_or(0)))
 }
 
-/// Everything the freeze reads, from the forge: the build `workflow`'s runs,
-/// titled by their tag, and the releases.
+/// Everything the freeze reads, from the forge: each release `workflow`'s runs
+/// — the build's and, since CLOUD-2287, the land's — titled by their tag, and
+/// the releases.
 ///
 /// # Errors
 ///
 /// The could-not-look pointer: any read that did not answer.
 pub fn read_flight(
     slug: &str,
-    (main, workflow): (&str, &str),
+    (main, workflows): (&str, &[String]),
     now: i64,
     land_hold: u64,
     get: Get<'_>,
 ) -> Result<Flight, String> {
-    let runs_path = format!("repos/{slug}/actions/workflows/{workflow}/runs?per_page=30");
-    let runs = json_at(get, &runs_path)?
-        .and_then(|value| value.get("workflow_runs").cloned())
-        .and_then(|runs| runs.as_array().cloned())
-        .unwrap_or_default();
+    let mut runs = Vec::new();
+    for workflow in workflows {
+        let runs_path = format!("repos/{slug}/actions/workflows/{workflow}/runs?per_page=30");
+        runs.extend(
+            json_at(get, &runs_path)?
+                .and_then(|value| value.get("workflow_runs").cloned())
+                .and_then(|runs| runs.as_array().cloned())
+                .unwrap_or_default(),
+        );
+    }
     let active_run = runs
         .iter()
         .find(|run| crate::forge::RunState::of_row(run).conclusion().is_none())
@@ -733,7 +810,7 @@ pub fn run_discard(
     Ok(crate::ExitCode::Success)
 }
 
-/// `batten release in-flight --workflow <file>`: exit 0 when nothing is in
+/// `batten release in-flight --workflow <file>...`: exit 0 when nothing is in
 /// flight, 1 naming what is, 3 when it could not look. `workflow` is the build
 /// workflow's file, whose runs are titled by their tag.
 ///
@@ -741,7 +818,7 @@ pub fn run_discard(
 ///
 /// Only a failed write to `out` or `err`.
 pub fn run_in_flight(
-    workflow: &str,
+    workflows: &[String],
     out: &mut dyn std::io::Write,
     err: &mut dyn std::io::Write,
 ) -> anyhow::Result<crate::ExitCode> {
@@ -751,7 +828,7 @@ pub fn run_in_flight(
     let get = |path: &str| crate::rest::get(path, None);
     let now = i64::try_from(crate::now_unix()).unwrap_or(i64::MAX);
     let flight = trunk()
-        .and_then(|(_, short)| read_flight(&slug, (&short, workflow), now, LAND_HOLD_SECS, &get));
+        .and_then(|(_, short)| read_flight(&slug, (&short, workflows), now, LAND_HOLD_SECS, &get));
     match flight.map(|flight| in_flight(&flight)) {
         Ok(None) => {
             writeln!(out, "release in-flight: nothing is in flight")?;
@@ -792,7 +869,16 @@ fn land_facts(slug: &str, tag: &str, sha: &str, get: Get<'_>) -> Result<LandFact
             .as_deref()
             .and_then(|commit| crate::git::show(here, commit, path).ok())
     };
+    let (head, draft_sums) = match &read {
+        Read::Draft { target } if target != sha => (
+            Some(read_head(here, sha)?),
+            release_sums(slug, tag, get)?.ok(),
+        ),
+        _ => (None, None),
+    };
     Ok(LandFacts {
+        head,
+        draft_sums,
         tag_ref: matches!(read, Read::Draft { .. })
             .then(|| crate::release_verify::tag_commit(slug, tag, get))
             .flatten(),
@@ -936,7 +1022,7 @@ fn judge_unusable(slug: &str, tag: &str, get: Get<'_>) -> Result<Option<Unusable
 fn commit_onto(
     slug: &str,
     (branch, head): (&str, &str),
-    files: &[(&str, &str)],
+    files: &[(&str, &str, &str)],
     message: &str,
     get: Get<'_>,
 ) -> Result<String, String> {
@@ -950,16 +1036,15 @@ fn commit_onto(
         })
         .ok_or_else(|| format!("{commit_path} names no tree"))?;
     let mut entries = Vec::new();
-    for (path, text) in files {
+    for (path, text, mode) in files {
         let body = serde_json::json!({ "content": text, "encoding": "utf-8" });
         let blob = sha_in(
             crate::rest::post_json(&format!("repos/{slug}/git/blobs"), &body),
             &format!("the blob for {path}"),
             "/sha",
         )?;
-        entries.push(
-            serde_json::json!({ "path": path, "mode": "100644", "type": "blob", "sha": blob }),
-        );
+        entries
+            .push(serde_json::json!({ "path": path, "mode": mode, "type": "blob", "sha": blob }));
     }
     let tree = sha_in(
         crate::rest::post_json(
@@ -1068,10 +1153,10 @@ pub fn run_bump_unusable(
     };
     let message = format!("chore(release): {tag} is {reason}; bump to v{to}");
     let written = [
-        (paths[0], bumped.manifest.as_str()),
-        (paths[1], bumped.lock.as_str()),
-        (paths[2], bumped.config.as_str()),
-        (paths[3], bumped.changelog.as_str()),
+        (paths[0], bumped.manifest.as_str(), "100644"),
+        (paths[1], bumped.lock.as_str(), "100644"),
+        (paths[2], bumped.config.as_str(), "100644"),
+        (paths[3], bumped.changelog.as_str(), "100644"),
     ];
     match commit_onto(&slug, (branch, &head), &written, &message, &get) {
         Ok(commit) => {
@@ -1141,7 +1226,7 @@ fn perform_discard(slug: &str, tag: &str, get: Get<'_>) -> Result<Result<usize, 
 pub fn run_cut(
     tag: &str,
     sha: &str,
-    (changelog, workflow): (&str, &str),
+    (changelog, workflow, land_workflow): (&str, &str, Option<&str>),
     out: &mut dyn std::io::Write,
     err: &mut dyn std::io::Write,
 ) -> anyhow::Result<crate::ExitCode> {
@@ -1149,8 +1234,31 @@ pub fn run_cut(
         return Ok(crate::ExitCode::Internal);
     };
     let get = |path: &str| crate::rest::get(path, None);
-    let cut = (|| -> Result<Result<(), String>, String> {
+    let dispatch = |file: &str, trunk: &str| -> Result<(), String> {
+        let body = serde_json::json!({ "ref": trunk, "inputs": { "tag": tag, "sha": sha } });
+        let path = format!("repos/{slug}/actions/workflows/{file}/dispatches");
+        match crate::rest::post_json(&path, &body) {
+            Some(answer) if (200..300).contains(&answer.status) => Ok(()),
+            Some(answer) => Err(format!("{path} answered {}", answer.status)),
+            None => Err(format!("{path} did not answer")),
+        }
+    };
+    let cut = (|| -> Result<Result<Option<String>, String>, String> {
         let (_, trunk) = trunk()?;
+        // CUT OR LAND, BEFORE ANYTHING IS DISCARDED (CLOUD-2287): the bake's own
+        // CI on the release branch brings this job back at B, and cutting B
+        // again would discard the draft B was baked from, forever.
+        if let Some(land) = land_workflow
+            && let Read::Draft { target } = read_release(&slug, tag, &get)?
+            && target != sha
+            && let Ok(sums) = release_sums(&slug, tag, &get)?
+        {
+            let head = read_head(std::path::Path::new("."), sha)?;
+            if cut_or_land(Some(&target), &head, tag, &sums) == CutOrLand::Land {
+                dispatch(land, &trunk)?;
+                return Ok(Ok(Some(land.to_owned())));
+            }
+        }
         if let Err(why) = perform_discard(&slug, tag, &get)? {
             return Ok(Err(why));
         }
@@ -1173,16 +1281,18 @@ pub fn run_cut(
             &format!("the draft {tag}"),
             "/tag_name",
         )?;
-        let dispatch = serde_json::json!({ "ref": trunk, "inputs": { "tag": tag, "sha": sha } });
-        let path = format!("repos/{slug}/actions/workflows/{workflow}/dispatches");
-        match crate::rest::post_json(&path, &dispatch) {
-            Some(answer) if (200..300).contains(&answer.status) => Ok(Ok(())),
-            Some(answer) => Err(format!("{path} answered {}", answer.status)),
-            None => Err(format!("{path} did not answer")),
-        }
+        dispatch(workflow, &trunk)?;
+        Ok(Ok(None))
     })();
     match cut {
-        Ok(Ok(())) => {
+        Ok(Ok(Some(land))) => {
+            writeln!(
+                out,
+                "release cut: {sha} is the bake of {tag}'s draft; {land} dispatched"
+            )?;
+            Ok(crate::ExitCode::Success)
+        }
+        Ok(Ok(None)) => {
             writeln!(
                 out,
                 "release cut: {tag} drafted at {sha}; {workflow} dispatched"
@@ -1195,6 +1305,183 @@ pub fn run_cut(
         }
         Err(why) => {
             writeln!(err, "batten: release cut: could not look: {why}")?;
+            Ok(crate::ExitCode::Internal)
+        }
+    }
+}
+
+/// The lock release `tag` bakes: its `SHA256SUMS`, read through the assets API
+/// for a draft or its public URL once published, cut to the bootstrap's targets.
+/// `Ok(Err)` is the release's fault, `Err` could-not-look.
+fn read_lock(
+    slug: &str,
+    tag: &str,
+    get: Get<'_>,
+) -> Result<Result<crate::install::Lock, String>, String> {
+    let sums = match release_sums(slug, tag, get)? {
+        Ok(sums) => sums,
+        Err(why) => return Ok(Err(why)),
+    };
+    Ok(
+        crate::install::Lock::from_sums(env!("CARGO_PKG_NAME"), tag, &sums)
+            .map_err(|why| why.to_string()),
+    )
+}
+
+/// Release `tag`'s `SHA256SUMS` text: through the assets API for a draft, its
+/// public URL once published. `Ok(Err)` for a release carrying none.
+fn release_sums(slug: &str, tag: &str, get: Get<'_>) -> Result<Result<String, String>, String> {
+    let release = crate::release_verify::read(slug, tag, get)?;
+    let Some(manifest) = release
+        .published
+        .assets
+        .iter()
+        .find(|asset| asset.name == crate::release_verify::SUMS)
+    else {
+        return Ok(Err(format!(
+            "{tag} carries no {}",
+            crate::release_verify::SUMS
+        )));
+    };
+    let sums =
+        crate::release_verify::fetch(slug, tag, release.draft, manifest, &crate::rest::download)?;
+    Ok(Ok(String::from_utf8_lossy(&sums).into_owned()))
+}
+
+/// `sha` as a release head, read from the local clone.
+fn read_head(here: &std::path::Path, sha: &str) -> Result<Head, String> {
+    let parent =
+        crate::git::resolve_ref(here, &format!("{sha}^")).map_err(|why| why.to_string())?;
+    let changed = match &parent {
+        Some(parent) => crate::git::paths_changed_between(here, parent, sha)
+            .map_err(|why| why.to_string())?
+            .into_iter()
+            .collect(),
+        None => std::collections::BTreeSet::new(),
+    };
+    Ok(Head {
+        parent,
+        changed,
+        lock: crate::git::show(here, sha, crate::install::LOCK_FILE).ok(),
+    })
+}
+
+/// The branch of the open pull request whose head is `sha`: the release PR
+/// the bake commits onto.
+fn head_branch(slug: &str, sha: &str, get: Get<'_>) -> Result<String, String> {
+    let path = format!("repos/{slug}/commits/{sha}/pulls");
+    let pulls = json_at(get, &path)?.ok_or_else(|| format!("{path} answered 404"))?;
+    pulls
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|pull| {
+            pull.get("state").and_then(serde_json::Value::as_str) == Some("open")
+                && pull
+                    .pointer("/head/sha")
+                    .and_then(serde_json::Value::as_str)
+                    == Some(sha)
+        })
+        .and_then(|pull| {
+            pull.pointer("/head/ref")
+                .and_then(serde_json::Value::as_str)
+        })
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| format!("no open pull request's head is {sha}; name --branch"))
+}
+
+/// The bootstrap script's path, beside the lock it is rendered from.
+pub const BOOTSTRAP_FILE: &str = "install.sh";
+
+/// `batten release bake <tag> (--sha <sha> --branch <branch> | --write-only)`
+/// (CLOUD-2287): bake release `tag` into `install.lock` — its tag and each
+/// bootstrap archive's `SHA256SUMS` line — and render `install.sh` from it.
+///
+/// With `--sha` and `--branch` the two files are committed onto the release
+/// head `sha` as one commit, `chore(release): bake install.lock for <tag>`,
+/// made through the forge so the credential that moves the branch is the one
+/// that fires its CI, fast-forward only; the commit's sha is printed. With
+/// `--write-only` they are written to the working tree, nothing is committed,
+/// and their paths are printed. Exit 1 for a release whose sums cannot be
+/// baked, 3 when it could not look or could not write.
+///
+/// # Errors
+///
+/// Only a failed write to `out` or `err`.
+pub fn run_bake(
+    tag: &str,
+    (sha, branch): (Option<&str>, Option<&str>),
+    write_only: bool,
+    out: &mut dyn std::io::Write,
+    err: &mut dyn std::io::Write,
+) -> anyhow::Result<crate::ExitCode> {
+    let onto = match (write_only, sha, branch) {
+        (true, None, None) => None,
+        (false, Some(sha), branch) => Some((sha, branch)),
+        _ => {
+            return Err(crate::error::UsageError::raise(String::from(
+                "release bake: name --sha (and --branch, or the open pull request whose head \
+                 it is names it), or --write-only alone",
+            )));
+        }
+    };
+    let Some(slug) = slug_or_say("bake", err)? else {
+        return Ok(crate::ExitCode::Internal);
+    };
+    let get = |path: &str| crate::rest::get(path, None);
+    let lock = match read_lock(&slug, tag, &get) {
+        Ok(Ok(lock)) => lock,
+        Ok(Err(why)) => {
+            writeln!(err, "release bake: {tag}: {why}")?;
+            return Ok(crate::ExitCode::Violation);
+        }
+        Err(why) => {
+            writeln!(err, "batten: release bake: could not look: {why}")?;
+            return Ok(crate::ExitCode::Internal);
+        }
+    };
+    let locked = lock.render();
+    let script = crate::install::render_bootstrap(
+        env!("CARGO_PKG_NAME"),
+        env!("CARGO_PKG_REPOSITORY"),
+        &lock,
+    );
+    let Some((sha, branch)) = onto else {
+        let root = crate::git::worktree_root(std::path::Path::new("."))?;
+        for (path, text) in [
+            (crate::install::LOCK_FILE, &locked),
+            (BOOTSTRAP_FILE, &script),
+        ] {
+            crate::durable::replace(root.join(path), text)?;
+            if path == BOOTSTRAP_FILE {
+                crate::engine::make_executable(&root.join(path))?;
+            }
+            writeln!(out, "{path}")?;
+        }
+        return Ok(crate::ExitCode::Success);
+    };
+    let files = [
+        (crate::install::LOCK_FILE, locked.as_str(), "100644"),
+        (BOOTSTRAP_FILE, script.as_str(), "100755"),
+    ];
+    let message = format!("chore(release): bake install.lock for {tag}");
+    let branch = match branch {
+        Some(branch) => branch.to_owned(),
+        None => match head_branch(&slug, sha, &get) {
+            Ok(branch) => branch,
+            Err(why) => {
+                writeln!(err, "batten: release bake: could not look: {why}")?;
+                return Ok(crate::ExitCode::Internal);
+            }
+        },
+    };
+    match commit_onto(&slug, (&branch, sha), &files, &message, &get) {
+        Ok(commit) => {
+            writeln!(out, "{commit}")?;
+            Ok(crate::ExitCode::Success)
+        }
+        Err(why) => {
+            writeln!(err, "batten: release bake: could not write: {why}")?;
             Ok(crate::ExitCode::Internal)
         }
     }

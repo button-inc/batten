@@ -134,7 +134,7 @@ fn hex(bytes: &[u8]) -> String {
 /// binary under `root` is cargo's output, not an installed engine. Under
 /// `mise exec` that output is first on `PATH`, and the one past it is what the
 /// hook runs — the case #1132 measured.
-//MUTANT-SUITE crates/batten/tests/it/engine_update.rs
+//MUTANT-SUITE crates/batten/tests/it/engine_install.rs
 //MUTANT source-update-installs-nothing|s@^        targets.push(resolved);$@@|a_source_pin_update_installs_where_the_hook_resolves
 #[must_use]
 pub fn install_targets(
@@ -157,6 +157,43 @@ pub fn install_targets(
         targets.push(resolved);
     }
     targets
+}
+
+/// Whether `running` is an installed engine rather than the bootstrap's
+/// download (CLOUD-2287): it is the first `batten` on `path`, or it lies under
+/// the worktree at `root`, where `mise exec` puts the checkout's build first.
+///
+/// An installed engine is repaired in place over [`install_targets`]; anything
+/// else is a fresh binary to place where `install::destination` says.
+#[must_use]
+pub fn is_installed(running: &Path, path: Option<&std::ffi::OsStr>, root: Option<&Path>) -> bool {
+    let running = crate::git::canonical(running);
+    let in_tree = root.is_some_and(|root| running.starts_with(crate::git::canonical(root)));
+    let first = path
+        .map(std::env::split_paths)
+        .into_iter()
+        .flatten()
+        .map(|dir| dir.join("batten"))
+        .find(|candidate| candidate.is_file())
+        .map(|candidate| crate::git::canonical(&candidate));
+    in_tree || first.as_deref() == Some(running.as_path())
+}
+
+/// Whether release `latest` is newer than release `current`, both `v`-prefixed
+/// tags (CLOUD-2287): `engine update` only ever moves a pin forward.
+///
+/// # Errors
+///
+/// A [`UsageError`] naming a tag that is not a version.
+pub fn is_newer(latest: &str, current: &str) -> Result<bool> {
+    let parse = |tag: &str| {
+        semver::Version::parse(tag.trim_start_matches('v')).map_err(|_| {
+            UsageError::raise(format!(
+                "engine update: {tag} is not a release tag (v0.0.201)"
+            ))
+        })
+    };
+    Ok(parse(latest)? > parse(current)?)
 }
 
 /// Write `digest` as the stamp beside `binary`.
@@ -193,7 +230,7 @@ pub fn declared(text: &str) -> Option<Pin> {
 /// floor over an unloadable config admits exactly it. A remedy naming a
 /// consumer's installer was one the floor refused, so a skewed container could
 /// run nothing at all, including the line its own refusal printed.
-pub const REPAIR: &str = "batten engine update";
+pub const REPAIR: &str = "batten engine install";
 
 /// [`REPAIR`] run under the project's pinned toolchain (CLOUD-2172).
 ///
@@ -203,7 +240,7 @@ pub const REPAIR: &str = "batten engine update";
 /// floor admits this spelling too, as one whole string for [`REPAIR`]'s reason,
 /// so the build can be given the pin's environment without opening a shell to
 /// composition.
-pub const REPAIR_PINNED: &str = "mise exec -- batten engine update";
+pub const REPAIR_PINNED: &str = "mise exec -- batten engine install";
 
 /// Whether `command` is one of the repair's two whole spellings: equality, so
 /// no shell composition rides either.
@@ -291,7 +328,7 @@ pub(crate) fn runs_local() -> bool {
 /// `crates/`, and following only an exact stamp stranded the hook on every
 /// refresh until a release build finished. Whether the pin is current is
 /// `engine-pin:check`'s question. One `stat`, so the hook path can take it.
-//MUTANT-SUITE crates/batten/tests/it/engine_update.rs
+//MUTANT-SUITE crates/batten/tests/it/engine_install.rs
 //MUTANT source-pin-unfollowed|s@^    build.is_file().then_some(build)$@    None::<PathBuf>.filter(\x7c_\x7c build.is_file())@|a_source_pin_is_followed_to_the_checkouts_build
 #[must_use]
 pub fn checkout_build(root: &Path) -> Option<PathBuf> {
@@ -313,7 +350,7 @@ pub fn checkout_build(root: &Path) -> Option<PathBuf> {
 /// A [`UsageError`] naming both identities and the update, when the pin names
 /// another release or another source, names both or neither, or names a source
 /// this binary carries no stamp for.
-//MUTANT-SUITE crates/batten/tests/it/engine_update.rs
+//MUTANT-SUITE crates/batten/tests/it/engine_install.rs
 //MUTANT in-tree-build-unaccepted|s@^            if built_in(source) \x7c\x7c runs_local() {$@            if runs_local() {@|the_checkouts_own_build_satisfies_its_source_pin
 pub fn check(text: &str, source: &str, stamp: impl FnOnce() -> Option<String>) -> Result<()> {
     let Some(pin) = declared(text) else {
@@ -327,10 +364,10 @@ pub fn check(text: &str, source: &str, stamp: impl FnOnce() -> Option<String>) -
                 // CLOUD-2220 named `cargo build` here for a stale in-tree binary,
                 // and that build reports the tag's version without being the
                 // release: the pin is then satisfied by a binary it does not
-                // name. The update installs the pinned release over the running
-                // binary, in-tree included — measured 2026-10-14, `mise exec --
-                // batten engine update` replaced `target/release` at 0.0.215
-                // with the published 0.0.216. In-tree, the pinned spelling, so
+                // name. The install puts the pinned release over the running
+                // binary, in-tree included — measured 2026-10-14, the repair
+                // (then spelled `engine update`, CLOUD-2287) replaced
+                // `target/release` at 0.0.215 with the published 0.0.216. In-tree, the pinned spelling, so
                 // it runs as the binary `_.path` resolves.
                 let repair = if built_in(source) {
                     REPAIR_PINNED
@@ -480,13 +517,13 @@ pub fn published_digest(sums: &str, asset: &str) -> Option<String> {
 pub fn verify(archive: &[u8], sums: &str, asset: &str) -> Result<()> {
     let want = published_digest(sums, asset).ok_or_else(|| {
         UsageError::raise(format!(
-            "engine update: the release publishes no digest for {asset}, so it cannot be verified"
+            "engine install: the release publishes no digest for {asset}, so it cannot be verified"
         ))
     })?;
     let got = crate::receipt::hex_sha256(archive);
     if got != want {
         return Err(UsageError::raise(format!(
-            "engine update: {asset} hashes {got}, not the {want} its release published; nothing was installed"
+            "engine install: {asset} hashes {got}, not the {want} its release published; nothing was installed"
         )));
     }
     Ok(())
@@ -495,8 +532,9 @@ pub fn verify(archive: &[u8], sums: &str, asset: &str) -> Result<()> {
 /// The engine binary of release `tag`, fetched from `repository` for this build's
 /// own target and checked against that release's `SHA256SUMS` (CLOUD-2062).
 ///
-/// The one network door this module opens, and only `batten engine update` and
-/// the startup update off the hook path reach it.
+/// The one network door this module opens, and only `batten engine install`
+/// (with `engine update` in front of it) and the startup follow off the hook
+/// path reach it.
 ///
 /// # Errors
 ///
@@ -509,7 +547,7 @@ pub fn fetch_release(repository: &str, tag: &str) -> Result<Vec<u8>> {
     let sums = crate::fetch::get(&release_url(repository, tag, "SHA256SUMS"), &[])?;
     if archive.status != 200 || sums.status != 200 {
         return Err(UsageError::raise(format!(
-            "engine update: {tag} answered {} for {asset} and {} for SHA256SUMS; nothing was installed",
+            "engine install: {tag} answered {} for {asset} and {} for SHA256SUMS; nothing was installed",
             archive.status, sums.status
         )));
     }
@@ -586,62 +624,6 @@ pub fn fetch_published(repository: &str, tag: &str) -> Result<Release> {
     fetch_release(repository, tag).map(Release::Published)
 }
 
-/// What `engine install` installs (CLOUD-2203).
-#[derive(Debug, PartialEq, Eq)]
-pub enum Pick {
-    /// The running binary, under its own tag.
-    Running,
-    /// Another release's binary.
-    Fetched {
-        /// The release's tag.
-        tag: String,
-        /// Its verified binary.
-        bytes: Vec<u8>,
-    },
-    /// The running binary, because the release a ref names is not published.
-    Unpublished {
-        /// The tag the ref named.
-        wanted: String,
-    },
-}
-
-/// Decide which release `engine install` installs, with the network injected so
-/// every arm is a unit case.
-///
-/// - **A named version wins, and the ref is never read.** The bootstrap already
-///   fetched and verified the release `BATTEN_VERSION` named, and that is the
-///   binary running; replacing it with the ref's would install a version nobody
-///   asked for.
-/// - With no ref, the running binary.
-/// - A ref naming the running release needs no fetch.
-/// - A ref naming another release installs that release, or — only when the
-///   host answers that it is not published — the running binary, said so.
-///
-/// # Errors
-///
-/// Whatever `ref_version` or `fetch` raises: a ref that cannot be read, or a
-/// release that cannot be fetched for any reason but not being published.
-pub fn pick_release(
-    running: &str,
-    named: bool,
-    ref_version: impl FnOnce() -> Result<Option<String>>,
-    fetch: impl FnOnce(&str) -> Result<Release>,
-) -> Result<Pick> {
-    if named {
-        return Ok(Pick::Running);
-    }
-    let Some(wanted) = ref_version()? else {
-        return Ok(Pick::Running);
-    };
-    if wanted == running {
-        return Ok(Pick::Running);
-    }
-    Ok(match fetch(&wanted)? {
-        Release::Published(bytes) => Pick::Fetched { tag: wanted, bytes },
-        Release::Unpublished => Pick::Unpublished { wanted },
-    })
-}
-
 /// The `bin` entry at the root of a `.tar.gz` release archive.
 ///
 /// # Errors
@@ -663,7 +645,7 @@ pub fn extract(archive: &[u8], bin: &str) -> Result<Vec<u8>> {
         }
     }
     Err(UsageError::raise(format!(
-        "engine update: the release archive carries no {bin} at its root"
+        "engine install: the release archive carries no {bin} at its root"
     )))
 }
 
@@ -813,109 +795,6 @@ pub(crate) fn make_executable(_path: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// A `ref_version` a case asserts is never consulted.
-    fn unread() -> Result<Option<String>> {
-        panic!("the ref must not be read")
-    }
-
-    /// A `fetch` a case asserts is never called.
-    fn unfetched(_: &str) -> Result<Release> {
-        panic!("no release may be fetched")
-    }
-
-    #[test]
-    fn a_named_version_never_reads_the_ref_or_fetches() -> Result<()> {
-        assert_eq!(
-            pick_release("v1.0.0", true, unread, unfetched)?,
-            Pick::Running
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn no_ref_installs_the_running_binary() -> Result<()> {
-        assert_eq!(
-            pick_release("v1.0.0", false, || Ok(None), unfetched)?,
-            Pick::Running
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn a_ref_naming_the_running_release_fetches_nothing() -> Result<()> {
-        assert_eq!(
-            pick_release("v1.0.0", false, || Ok(Some("v1.0.0".into())), unfetched)?,
-            Pick::Running
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn the_version_comes_from_the_refs_manifest() -> Result<()> {
-        let pick = pick_release(
-            "v1.0.0",
-            false,
-            || Ok(Some("v2.0.0".into())),
-            |tag| {
-                assert_eq!(tag, "v2.0.0", "the ref's version is the one fetched");
-                Ok(Release::Published(b"two".to_vec()))
-            },
-        )?;
-        assert_eq!(
-            pick,
-            Pick::Fetched {
-                tag: "v2.0.0".into(),
-                bytes: b"two".to_vec()
-            }
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn an_unpublished_ref_release_falls_back_to_the_running_binary() -> Result<()> {
-        let pick = pick_release(
-            "v1.0.0",
-            false,
-            || Ok(Some("v2.0.0".into())),
-            |_| Ok(Release::Unpublished),
-        )?;
-        assert_eq!(
-            pick,
-            Pick::Unpublished {
-                wanted: "v2.0.0".into()
-            }
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn a_fetch_that_fails_for_any_other_reason_is_never_a_fallback() {
-        let pick = pick_release(
-            "v1.0.0",
-            false,
-            || Ok(Some("v2.0.0".into())),
-            |_| Err(UsageError::raise("digest disagrees")),
-        );
-        assert!(
-            matches!(&pick, Err(err) if err.to_string().contains("digest disagrees")),
-            "a failed fetch is propagated, not read as unpublished: {pick:?}"
-        );
-    }
-
-    #[test]
-    fn a_ref_that_cannot_be_read_is_a_refusal() {
-        let pick = pick_release(
-            "v1.0.0",
-            false,
-            || Err(UsageError::raise("manifest answered 500")),
-            unfetched,
-        );
-        assert!(
-            matches!(&pick, Err(err) if err.to_string().contains("500")),
-            "an unreadable ref installs nothing: {pick:?}"
-        );
-    }
 
     #[test]
     fn a_pin_is_rewritten_in_place_or_inserted_above_every_table() {

@@ -57,7 +57,7 @@ run-name: "release-artifacts ${{ inputs.tag }}"
 # locally, so the archive CI uploads is the archive you can reproduce.
 #
 # TRIGGER: DISPATCHED, NEVER A RELEASE EVENT (CLOUD-2121). The release is a
-# DRAFT until this workflow's `land` job publishes it, and GitHub triggers no
+# DRAFT until `release-land.yml` publishes it, and GitHub triggers no
 # workflow on `created` for a draft. The cut (`auto-release-land.yml`) is the
 # ONE dispatcher (CLOUD-2033): it creates the draft at the release head `sha`
 # and sends it here with that tag and that sha.
@@ -67,16 +67,17 @@ run-name: "release-artifacts ${{ inputs.tag }}"
 # never whatever `main` has drifted to — and every `--clobber` upload first runs
 # `batten release guard`, which refuses a release that is not a draft of that
 # sha: a build of one commit never fills a draft for another, and a published
-# release's assets are never replaced. Nothing here publishes except `land`,
-# which runs last, in the `main-writer` group, from `main`'s own code, and is
-# the only job that moves `main`. `cleanup` discards the draft when a BUILD job
-# failed or was cancelled — never on a `land` failure, so "Re-run failed jobs"
+# release's assets are never replaced. Nothing here publishes: the last job,
+# `bake`, commits `install.lock` onto the release head (CLOUD-2287), and the
+# publish and the move of `main` are `release-land.yml`'s, dispatched by the
+# cut once that bake is green. `cleanup` discards the draft when a BUILD job
+# failed or was cancelled — never on a `bake` failure, so "Re-run failed jobs"
 # always finds its draft.
 #
-# RECOVERY. A failed `land` is re-run with "Re-run failed jobs": the build jobs
-# already succeeded, and `land`'s first step is idempotent. A manual dispatch
-# with a draft's `tag` and `sha` rebuilds it; against a published release the
-# guard refuses every upload, so nothing changes.
+# RECOVERY. A failed `bake` is re-run with "Re-run failed jobs": the build jobs
+# already succeeded, and the bake's commit is fast-forward only. A manual
+# dispatch with a draft's `tag` and `sha` rebuilds it; against a published
+# release the guard refuses every upload, so nothing changes.
 
 on:
   # The only trigger. Publishing is this workflow's last job, once every asset is
@@ -424,8 +425,7 @@ jobs:
           # appends in order and the tag must be the first positional.
           SCHEMA: schema/batten.schema.json
           LOCAL_SCHEMA: schema/batten.local.schema.json
-          INSTALLER: install.sh
-        run: mise run batten -- ci step --arg-env TAG --arg-env SCHEMA --arg-env LOCAL_SCHEMA --arg-env INSTALLER --arg-env SPDX --arg-env CDX --arg-env REFERENCE -- gh release upload --clobber
+        run: mise run batten -- ci step --arg-env TAG --arg-env SCHEMA --arg-env LOCAL_SCHEMA --arg-env SPDX --arg-env CDX --arg-env REFERENCE -- gh release upload --clobber
 
   # The checksum manifest (CLOUD-278), the value every packaging channel consumes:
   # a Homebrew formula pins it, an aqua/mise registry entry carries it, and
@@ -494,9 +494,9 @@ jobs:
 
   # DISCARD ON A BUILD FAILURE, AND ONLY THEN (CLOUD-2033 P3.3). A build job that
   # failed or was cancelled leaves a draft nothing will finish, so it is deleted
-  # with any tag it carried and the next cut reuses the version. `land` is not
-  # in `needs:`, so a `land` failure never reaches here: recovery by re-running
-  # `land` always finds its draft.
+  # with any tag it carried and the next cut reuses the version. `bake` is not
+  # in `needs:`, and `land` is another workflow, so neither failure reaches
+  # here: recovery by re-running either always finds its draft.
   cleanup:
     name: cleanup
     needs: [dist, schema, checksums]
@@ -521,153 +521,38 @@ jobs:
           TAG: ${{ inputs.tag }}
         run: mise run batten -- ci step --arg-env TAG -- mise run batten -- release discard
 
-  # THE ONE JOB THAT PUBLISHES, AND THE ONE THAT MOVES `main` (CLOUD-2033 P3.4).
-  #
-  # It checks out `main`, never `inputs.sha`, so every predicate it runs is
-  # `main`'s own code; the release head is fetched beside it for `git show` and
-  # `merge-base`. It runs in `main-writer`, so no lander moves `main` under it.
-  # Its branch is one tested verb, `release land-state`, whose line each step
-  # below conditions on. A could-not-look (exit 3) anywhere discards nothing;
-  # only a refusal (exit 1) in (a) or (b) does.
-  land:
-    name: land
+  # THE BAKE (CLOUD-2287), the job that used to be `land`'s place. The draft's
+  # archives and `SHA256SUMS` exist now, so `install.lock` — the tag and each
+  # bootstrap archive's line — is written and `install.sh` regenerated from it,
+  # and both are committed onto the release head A as one commit B, pushed to
+  # the release PR's branch through the forge with RELEASE_PLZ_TOKEN: a branch
+  # moved by the job token fires no workflow, and B's CI is what brings
+  # `auto-release-land`'s cut back to land it (`release cut --land-workflow`).
+  # It checks out A, never `main`: B's own `install_script.rs` gate renders the
+  # script from B's template, so the bake must render from the same one. It
+  # runs no PR content beyond what A already is — release-plz's version bump
+  # over `main`.
+  bake:
+    name: bake
     needs: checksums
     runs-on: ubuntu-latest
-    timeout-minutes: 45 # budget: p95=900s x3 measured=2026-10-12
-    concurrency:
-      group: main-writer
-      cancel-in-progress: false
-      queue: max
+    timeout-minutes: 30 # budget: p95=600s x3 measured=2026-10-12
     permissions:
-      contents: write # publish the release and mark it latest
-      statuses: write # post release-path on the release head
+      contents: read
     env:
       TAG: ${{ inputs.tag }}
       SHA: ${{ inputs.sha }}
-      BATTEN_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          ref: main
-          fetch-depth: 0
+          ref: ${{ inputs.sha }}
           persist-credentials: false
       - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5 (CLOUD-404 retry fix, now a release)
         with:
           version: 2026.9.1
           cache: false
-          install_args: rust aqua:cli/cli
-      - name: Fetch the release head beside main
-        run: mise run batten -- ci step --arg-env SHA -- git fetch origin
-      - name: (a) Which branch of land is this release on?
-        id: state
-        run: mise run batten -- ci step --capture state --arg-env SHA --arg-env TAG -- mise run batten -- release land-state --sha
-      - name: (a) A draft that fails an assertion is discarded
-        if: startsWith(steps.state.outputs.state, 'draft-bad')
-        run: mise run batten -- ci step --arg-env TAG -- mise run batten -- release discard
-      - name: (a) The draft failed an assertion of land's first step and was discarded
-        if: startsWith(steps.state.outputs.state, 'draft-bad')
-        run: exit 1
-      - name: (a) Nothing here can land - the release is absent, or burned
-        if: steps.state.outputs.state == 'absent' || steps.state.outputs.state == 'burned'
-        run: exit 1
-      # (b) A REFUSAL DISCARDS AND A COULD-NOT-LOOK DOES NOT: exit 1 is mapped
-      # to `refused`, and exit 3 stays the step's own failure.
-      - name: (b) Verify the draft
-        if: steps.state.outputs.state == 'draft-ok'
-        id: verify
-        run: mise run batten -- ci step --verdict verify --on 0=ok --on 1=refused --arg-env TAG -- mise run batten -- release verify --draft
-      - name: (b) Discard the draft the verify refused
-        if: steps.verify.outputs.verify == 'refused'
-        run: mise run batten -- ci step --arg-env TAG -- mise run batten -- release discard
-      - name: (b) The draft did not verify and was discarded
-        if: steps.verify.outputs.verify == 'refused'
-        run: exit 1
-      # (c) PUBLISHING CREATES THE TAG AT THE TARGET AND MAKES THE RELEASE
-      # IMMUTABLE. Published as a non-latest pre-release: nothing pins it yet,
-      # and `latest` moves only in (f), after `main` does.
-      - name: (c) Publish as a non-latest pre-release
-        if: steps.verify.outputs.verify == 'ok'
+          install_args: rust
+      - name: Bake install.lock onto the release head
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: mise run batten -- ci step --arg-env TAG -- gh release edit --draft=false --prerelease --latest=false
-      - name: (c) Verify it published, immutable and tagged at its head
-        if: steps.verify.outputs.verify == 'ok'
-        run: mise run batten -- ci step --arg-env TAG -- mise run batten -- release verify
-      - name: (d) Post release-path on the release head
-        if: steps.verify.outputs.verify == 'ok' || steps.state.outputs.state == 'resume-at-d'
-        run: mise run batten -- ci step --arg-env SHA -- mise run batten -- release path --post
-      # (e) `force=false` IS THE FAST-FORWARD ASSERTION, made by the server
-      # atomically with the write, with RELEASE_PLZ_TOKEN because a ref moved by
-      # the job token fires no workflow. A refusal is a stale status or a race
-      # with a `ci` re-run while `main` is still behind the head: (d) is
-      # re-posted and the write retried, three attempts in all. A `main` that
-      # moved past the head refuses all three, and the release stays a
-      # non-latest pre-release nothing pins.
-      - name: (e) Fast-forward main to the release head
-        if: steps.verify.outputs.verify == 'ok' || steps.state.outputs.state == 'resume-at-d'
-        id: first
-        env:
-          GH_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
-          FIELD: sha=${{ inputs.sha }}
-          ROUTE: repos/${{ github.repository }}/git/refs/heads/main
-        run: mise run batten -- ci step --verdict moved --on 0=yes --on 1=no --arg-env FIELD --arg-env ROUTE -- gh api -X PATCH -F force=false -f
-      - name: (e) Re-post release-path after a refused write
-        if: steps.first.outputs.moved == 'no'
-        run: mise run batten -- ci step --arg-env SHA -- mise run batten -- release path --post
-      - name: (e) Fast-forward main to the release head, second attempt
-        if: steps.first.outputs.moved == 'no'
-        id: second
-        env:
-          GH_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
-          FIELD: sha=${{ inputs.sha }}
-          ROUTE: repos/${{ github.repository }}/git/refs/heads/main
-        run: mise run batten -- ci step --verdict moved --on 0=yes --on 1=no --arg-env FIELD --arg-env ROUTE -- gh api -X PATCH -F force=false -f
-      - name: (e) Re-post release-path after a second refused write
-        if: steps.second.outputs.moved == 'no'
-        run: mise run batten -- ci step --arg-env SHA -- mise run batten -- release path --post
-      - name: (e) Fast-forward main to the release head, last attempt
-        if: steps.second.outputs.moved == 'no'
-        env:
-          GH_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
-          FIELD: sha=${{ inputs.sha }}
-          ROUTE: repos/${{ github.repository }}/git/refs/heads/main
-        run: mise run batten -- ci step --arg-env FIELD --arg-env ROUTE -- gh api -X PATCH -F force=false -f
-      - name: (f) Mark it the latest release
-        if: steps.verify.outputs.verify == 'ok' || steps.state.outputs.state == 'resume-at-d' || steps.state.outputs.state == 'skip-to-f'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: mise run batten -- ci step --arg-env TAG -- gh release edit --prerelease=false --latest
-      # THE RELEASE IS RECORDED WHERE IT IS MADE (CLOUD-2033, moved from
-      # release-plz.yml). The tag exists from (c) on, so it is fetched before the
-      # tracking reads its range.
-      - name: Fetch the release tag (f) left on main
-        run: git fetch --force --tags origin
-      # An empty secret must FAIL a release, never skip tracking quietly: the
-      # job stays green, and nothing anywhere says the release was never
-      # recorded. `LINEAR_ACCESS_KEY` is asserted to exist; nothing in this tree
-      # can confirm it, so this step is where a wrong assertion surfaces.
-      - name: Release tracking requires its credential
-        env:
-          LINEAR_ACCESS_KEY: ${{ secrets.LINEAR_ACCESS_KEY }}
-        run: mise run batten -- ci step --require-env LINEAR_ACCESS_KEY -- true
-      # TWO INVOCATIONS, AND THE SECOND IS NOT OPTIONAL. `sync` records the
-      # release object and attaches the `CLOUD-*` issues in the tag's range; the
-      # pipeline is `type: scheduled`, so `complete` is what marks it Released.
-      - name: Record the release in Linear
-        uses: linear/linear-release-action@0a25abab892a91062ebf42260dbb2ce6277aa205 # v0.16.0
-        with:
-          access_key: ${{ secrets.LINEAR_ACCESS_KEY }}
-          command: sync
-          version: ${{ inputs.tag }}
-      - name: Complete the Linear release
-        uses: linear/linear-release-action@0a25abab892a91062ebf42260dbb2ce6277aa205 # v0.16.0
-        with:
-          access_key: ${{ secrets.LINEAR_ACCESS_KEY }}
-          command: complete
-          version: ${{ inputs.tag }}
-      # CLOUD-174: `Done` means released, and no integration supplies that
-      # transition, so the list of issues this release finished is printed into
-      # the run summary. `--stdin /dev/null` is the refs-only arm: it reports
-      # and decides nothing.
-      - name: Report which issues this release shipped
-        run: mise run batten -- ci step --summary "Issues this release tag shipped - move any still In Review to Done, the only transition that sets Done, which done-check refuses early" --stdin /dev/null --arg-env TAG -- mise run released
+          BATTEN_GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
+        run: mise run batten -- ci step --arg-env SHA --arg-env TAG -- mise run batten -- release bake --sha

@@ -104,7 +104,7 @@ fn a_release_pin_naming_another_build_is_refused_with_its_install() {
     // command the hook's floor admits over this same skew, so it is the only
     // remedy a refused session can actually run.
     assert!(
-        said.contains("v0.0.1") && said.contains("`batten engine update`"),
+        said.contains("v0.0.1") && said.contains("`batten engine install`"),
         "the refusal names the pin and the install: {said}"
     );
     assert!(
@@ -205,7 +205,7 @@ fn a_source_pin_without_a_stamp_is_refused() {
         "an unstamped engine must not load: {said}"
     );
     assert!(
-        said.contains("`batten engine update`"),
+        said.contains("`batten engine install`"),
         "the refusal names the build: {said}"
     );
 }

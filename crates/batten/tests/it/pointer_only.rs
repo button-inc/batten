@@ -1067,6 +1067,7 @@ const MAY_ANSWER_COULD_NOT_LOOK: &[&str] = &[
     "release bump-unusable",
     "release guard",
     "release cut",
+    "release bake",
     "release settings",
     // `release pin` reads the corpus's own `batten.toml`, which may not exist,
     // and that is could-not-look rather than a pin.
@@ -2189,7 +2190,8 @@ const CENSUS: &[Verb] = &[
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
-    // CLOUD-2062: with no pin in the corpus it is a no-op that prints nothing.
+    // CLOUD-2287: with no pin in the corpus there is nothing to move, and the
+    // refusal names the config's path and none of its bytes.
     Verb {
         path: "engine update",
         args: &[],
@@ -2759,6 +2761,14 @@ const CENSUS: &[Verb] = &[
             "--workflow",
             "release-artifacts.yml",
         ],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    // CLOUD-2287: it reads the release from the forge remote the corpus does
+    // not name, and names only the files it would write.
+    Verb {
+        path: "release bake",
+        args: &["v0.0.1", "--write-only"],
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },

@@ -1147,7 +1147,7 @@ trace\:"Add everything"))' \
 ;;
 (in-flight)
 _arguments "${_arguments_options[@]}" : \
-'--workflow=[The workflow'\''s file name, as the forge'\''s workflow API names it]:workflow:_default' \
+'*--workflow=[A release workflow'\''s file name, as the forge'\''s workflow API names it (repeatable)]:workflow:_default' \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
@@ -1274,6 +1274,7 @@ _arguments "${_arguments_options[@]}" : \
 '--sha=[The commit the build was dispatched with]:sha:_default' \
 '--changelog=[The changelog carrying the release'\''s \`## \[X\]\` section]:changelog:_default' \
 '--workflow=[The workflow'\''s file name, as the forge'\''s workflow API names it]:workflow:_default' \
+'--land-workflow=[The land workflow a baked head of the open draft'\''s target is dispatched to, instead of a new cut]:land_workflow:_default' \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
@@ -1285,6 +1286,39 @@ normal\:"The default"
 verbose\:"Explain what is being checked"
 debug\:"Add resolution detail"
 trace\:"Add everything"))' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+':tag -- The release'\''s tag:_default' \
+&& ret=0
+;;
+(bake)
+_arguments "${_arguments_options[@]}" : \
+'--sha=[The release head the bake is committed onto; required unless --write-only]:sha:_default' \
+'--branch=[The release branch moved to the bake commit; required unless --write-only]:branch:_default' \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--write-only[Write install.lock and install.sh to the working tree and commit nothing]' \
 '--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
 '*--silent[Say nothing but a verdict or a usage error]' \
 '*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
@@ -1448,6 +1482,10 @@ _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
 (cut)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(bake)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -9550,6 +9588,10 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
+(bake)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
 (pin)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
@@ -11665,9 +11707,9 @@ _batten__subcmd__engine_commands() {
     local commands; commands=(
 'digest:Print the source digest of this tree'\''s tracked engine inputs, the value a source pin names' \
 'stamp:Record this tree'\''s source digest beside the running binary, so a source pin can be checked' \
-'update:Install the engine this config pins over the running binary, from its release or from this tree' \
+'update:Move this config'\''s release pin forward to the latest release, then install it' \
 'pin:Set the config'\''s engine pin, or refresh a declared source pin to this tree'\''s digest' \
-'install:Place this binary in a directory on PATH\: the generated install.sh'\''s last step' \
+'install:Install the engine the batten.toml pin names, from its release or from this tree' \
 'gate:Refuse a source pin, or a release pin that cannot load this config or lacks a verb the released lanes call' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
@@ -11688,9 +11730,9 @@ _batten__subcmd__engine__subcmd__help_commands() {
     local commands; commands=(
 'digest:Print the source digest of this tree'\''s tracked engine inputs, the value a source pin names' \
 'stamp:Record this tree'\''s source digest beside the running binary, so a source pin can be checked' \
-'update:Install the engine this config pins over the running binary, from its release or from this tree' \
+'update:Move this config'\''s release pin forward to the latest release, then install it' \
 'pin:Set the config'\''s engine pin, or refresh a declared source pin to this tree'\''s digest' \
-'install:Place this binary in a directory on PATH\: the generated install.sh'\''s last step' \
+'install:Install the engine the batten.toml pin names, from its release or from this tree' \
 'gate:Refuse a source pin, or a release pin that cannot load this config or lacks a verb the released lanes call' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
@@ -12251,9 +12293,9 @@ _batten__subcmd__help__subcmd__engine_commands() {
     local commands; commands=(
 'digest:Print the source digest of this tree'\''s tracked engine inputs, the value a source pin names' \
 'stamp:Record this tree'\''s source digest beside the running binary, so a source pin can be checked' \
-'update:Install the engine this config pins over the running binary, from its release or from this tree' \
+'update:Move this config'\''s release pin forward to the latest release, then install it' \
 'pin:Set the config'\''s engine pin, or refresh a declared source pin to this tree'\''s digest' \
-'install:Place this binary in a directory on PATH\: the generated install.sh'\''s last step' \
+'install:Install the engine the batten.toml pin names, from its release or from this tree' \
 'gate:Refuse a source pin, or a release pin that cannot load this config or lacks a verb the released lanes call' \
     )
     _describe -t commands 'batten help engine commands' commands "$@"
@@ -12965,6 +13007,7 @@ _batten__subcmd__help__subcmd__release_commands() {
 'bump-unusable:Move a burned or stray-tagged version to the next one in all four release paths, as one commit on the release branch' \
 'guard:Exit 0 only when a build of the commit may upload into the release\: a draft that targets it' \
 'cut:Discard any draft of the version, draft it at the release head and dispatch its build' \
+'bake:Bake a release'\''s tag and archive digests into install.lock and install.sh, as one commit on its release head' \
 'pin:Print the release batten.toml pins, in the working tree or at a revision' \
 'settings:Exit 0 only when the rulesets and release settings the release path rests on hold' \
 'backfill:Dispatch a backfill workflow once per release tag, oldest first, waiting on each run and stopping at the first that does not succeed' \
@@ -12975,6 +13018,11 @@ _batten__subcmd__help__subcmd__release_commands() {
 _batten__subcmd__help__subcmd__release__subcmd__backfill_commands() {
     local commands; commands=()
     _describe -t commands 'batten help release backfill commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__release__subcmd__bake_commands] )) ||
+_batten__subcmd__help__subcmd__release__subcmd__bake_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help release bake commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__help__subcmd__release__subcmd__bump-unusable_commands] )) ||
 _batten__subcmd__help__subcmd__release__subcmd__bump-unusable_commands() {
@@ -14672,6 +14720,7 @@ _batten__subcmd__release_commands() {
 'bump-unusable:Move a burned or stray-tagged version to the next one in all four release paths, as one commit on the release branch' \
 'guard:Exit 0 only when a build of the commit may upload into the release\: a draft that targets it' \
 'cut:Discard any draft of the version, draft it at the release head and dispatch its build' \
+'bake:Bake a release'\''s tag and archive digests into install.lock and install.sh, as one commit on its release head' \
 'pin:Print the release batten.toml pins, in the working tree or at a revision' \
 'settings:Exit 0 only when the rulesets and release settings the release path rests on hold' \
 'backfill:Dispatch a backfill workflow once per release tag, oldest first, waiting on each run and stopping at the first that does not succeed' \
@@ -14683,6 +14732,11 @@ _batten__subcmd__release_commands() {
 _batten__subcmd__release__subcmd__backfill_commands() {
     local commands; commands=()
     _describe -t commands 'batten release backfill commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__release__subcmd__bake_commands] )) ||
+_batten__subcmd__release__subcmd__bake_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten release bake commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__release__subcmd__bump-unusable_commands] )) ||
 _batten__subcmd__release__subcmd__bump-unusable_commands() {
@@ -14717,6 +14771,7 @@ _batten__subcmd__release__subcmd__help_commands() {
 'bump-unusable:Move a burned or stray-tagged version to the next one in all four release paths, as one commit on the release branch' \
 'guard:Exit 0 only when a build of the commit may upload into the release\: a draft that targets it' \
 'cut:Discard any draft of the version, draft it at the release head and dispatch its build' \
+'bake:Bake a release'\''s tag and archive digests into install.lock and install.sh, as one commit on its release head' \
 'pin:Print the release batten.toml pins, in the working tree or at a revision' \
 'settings:Exit 0 only when the rulesets and release settings the release path rests on hold' \
 'backfill:Dispatch a backfill workflow once per release tag, oldest first, waiting on each run and stopping at the first that does not succeed' \
@@ -14728,6 +14783,11 @@ _batten__subcmd__release__subcmd__help_commands() {
 _batten__subcmd__release__subcmd__help__subcmd__backfill_commands() {
     local commands; commands=()
     _describe -t commands 'batten release help backfill commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__release__subcmd__help__subcmd__bake_commands] )) ||
+_batten__subcmd__release__subcmd__help__subcmd__bake_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten release help bake commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__release__subcmd__help__subcmd__bump-unusable_commands] )) ||
 _batten__subcmd__release__subcmd__help__subcmd__bump-unusable_commands() {

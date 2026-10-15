@@ -273,7 +273,7 @@ pub use severity::{AdvisoryTier, Mapping, ReportLevel, RuleSeverity};
 // follows a release pin but never BUILDS a source pin inline. Dropping the
 // `hook_path` term lets a hook run a cargo build, which the hook-path case
 // catches.
-//MUTANT-SUITE crates/batten/tests/it/engine_update.rs
+//MUTANT-SUITE crates/batten/tests/it/engine_install.rs
 //MUTANT hook-path-builds|s@^    let may_build = !hook_path;$@    let may_build = true;@|the_hook_path_never_builds_a_source_pin
 #[expect(
     clippy::too_many_lines,
@@ -658,7 +658,7 @@ const ENGINE_UPDATED: &str = "BATTEN_ENGINE_UPDATED";
 /// `batten.toml`, there is no pin to honour and the verb runs as it is. The
 /// FETCH is not best-effort — a pin that cannot be fetched is reported, since
 /// running anyway would decide under the very engine the pin refuses.
-//MUTANT-SUITE crates/batten/tests/it/engine_update.rs
+//MUTANT-SUITE crates/batten/tests/it/engine_install.rs
 //MUTANT checkout-build-replaced|s@^    if exe.starts_with(\&root) {$@    if false {@|a_build_inside_the_checkout_is_never_replaced
 //MUTANT follow-pin-source-unfollowed|s@^            Some(build) => build,$@            Some(_) => return Ok(None),@|a_verb_is_followed_to_the_checkouts_build
 fn follow_pin(may_build: bool) -> Result<Option<ExitCode>> {
@@ -691,7 +691,7 @@ fn follow_pin(may_build: bool) -> Result<Option<ExitCode>> {
                 // refusal floor, which still decides the call and admits the
                 // one repair verb (CLOUD-2116). An error here would end the
                 // hook before that floor answered: measured, the admitted
-                // `batten engine update` was refused at exit 1.
+                // repair (`batten engine install`) was refused at exit 1.
                 Err(_) if !may_build => return Ok(None),
                 Err(err) => return Err(err),
             }
@@ -704,7 +704,9 @@ fn follow_pin(may_build: bool) -> Result<Option<ExitCode>> {
         (None, Some(_)) => match engine::checkout_build(&root) {
             Some(build) => build,
             None if may_build => {
-                engine_update(&root, &mut std::io::sink())?;
+                if let Some(digest) = pin.source.as_deref() {
+                    install_source(&root, digest, &mut std::io::sink())?;
+                }
                 exe
             }
             None => return Ok(None),
@@ -734,106 +736,254 @@ fn follow_pin(may_build: bool) -> Result<Option<ExitCode>> {
     .map(Some)
 }
 
-/// `batten engine update` (CLOUD-2062): install the pinned engine over the
-/// running binary. A release is fetched from the engine's own repository and
-/// verified against its `SHA256SUMS`; a source pin is built from this tree and
-/// stamped. Either is swapped in by rename, so a crash leaves the old binary.
-//MUTANT-SUITE crates/batten/tests/it/engine_update.rs
-//MUTANT update-judges-only-itself|s@^    if engine::runs_local() {$@    if engine::runs_local() \x7c\x7c engine::running_stamp().as_deref() == Some(want) {@|a_current_engine_replaces_a_stale_installed_copy
-fn engine_update(root: &Path, out: &mut dyn Write) -> Result<ExitCode> {
-    let Ok(text) = std::fs::read_to_string(root.join(config::CONFIG_FILE)) else {
-        return Ok(ExitCode::Success);
-    };
-    let Some(pin) = engine::declared(&text) else {
-        return Ok(ExitCode::Success);
-    };
-    let binary = std::env::current_exe()?;
-    let want = match (pin.release.as_deref(), pin.source.as_deref()) {
-        (Some(tag), None) => {
-            if engine::stale(&text, engine::running_stamp).is_none() {
-                return Ok(ExitCode::Success);
-            }
-            let bytes = engine::fetch_release(env!("CARGO_PKG_REPOSITORY"), tag)?;
-            durable::replace(&binary, bytes)?;
-            writeln!(out, "{}", binary.display())?;
-            return Ok(ExitCode::Success);
+/// `batten engine update` (CLOUD-2287): move this worktree's release pin to the
+/// latest published release, then install it as [`engine_install`] does.
+///
+/// "Latest" is `main`'s pin, read off the raw-file host by
+/// [`engine::ref_release`] — never the API — because `main` only ever pins a
+/// release that is published, immutable, complete and verified (CLOUD-2033).
+/// The pin only moves FORWARD: a pin at or past `main`'s is left as it is and
+/// only the install runs, so the verb can never be the downgrade its old body
+/// was. The pin is written before the install, so an install that fails leaves
+/// the right pin and a re-runnable `engine install`.
+//MUTANT-SUITE crates/batten/tests/it/engine_install.rs
+//MUTANT update-skips-the-bump|s@^        durable::replace(&path, engine::rewrite(&text, &latest_pin))?;$@@|an_update_moves_an_older_pin_forward_and_installs_it
+//MUTANT update-moves-the-pin-backward|s@^    if engine::is_newer(&latest, &current)? {$@    if latest != current {@|an_update_never_moves_a_pin_backward
+fn engine_update(out: &mut dyn Write) -> Result<ExitCode> {
+    let root = git::worktree_root(Path::new("."))?;
+    let path = root.join(config::CONFIG_FILE);
+    let text = std::fs::read_to_string(&path).map_err(|why| {
+        UsageError::raise(format!(
+            "engine update: cannot read {} ({why}), so there is no pin to move",
+            path.display()
+        ))
+    })?;
+    let current = match engine::declared(&text) {
+        Some(engine::Pin {
+            release: Some(tag),
+            source: None,
+        }) => tag,
+        Some(engine::Pin {
+            release: None,
+            source: Some(_),
+        }) => {
+            return Err(UsageError::raise(format!(
+                "engine update: {} pins a source build, which `batten engine pin source` \
+                 moves; there is no release to move forward",
+                path.display()
+            )));
         }
-        (None, Some(want)) => want,
-        _ => {
-            return Err(UsageError::raise(String::from(
-                "engine update: `engine` names exactly one of `release` or `source`",
+        Some(_) => {
+            return Err(UsageError::raise(format!(
+                "engine update: {}: `engine` names exactly one of `release` or `source`",
+                path.display()
+            )));
+        }
+        None => {
+            return Err(UsageError::raise(format!(
+                "engine update: {} declares no engine pin, so there is nothing to move; pin a \
+                 release with `batten engine pin <tag>`",
+                path.display()
             )));
         }
     };
-    if engine::runs_local() {
-        return Ok(ExitCode::Success);
+    let latest = engine::ref_release(&releases_repository(), "main")?;
+    if engine::is_newer(&latest, &current)? {
+        let latest_pin = engine::Pin {
+            release: Some(latest.clone()),
+            source: None,
+        };
+        durable::replace(&path, engine::rewrite(&text, &latest_pin))?;
+        writeln!(out, "{}", path.display())?;
     }
-    // EVERY TARGET IS JUDGED BY ITS OWN STAMP, NEVER BY THE RUNNING BINARY'S
-    // (CLOUD-2226). Since CLOUD-2232 the installed engine hands this verb to the
-    // checkout's build, which satisfies the pin: judging the running binary
-    // returned success at once and left the copy the hook runs behind. Measured
-    // on #1132: the floor's one repair ran, exited 0 and changed nothing.
-    let behind: Vec<std::path::PathBuf> =
-        engine::install_targets(&binary, std::env::var_os("PATH").as_deref(), root)
-            .into_iter()
-            .filter(|target| engine::stamp_of(target).as_deref() != Some(want))
-            .collect();
-    if behind.is_empty() {
-        return Ok(ExitCode::Success);
-    }
-    // A CURRENT RUNNING BINARY IS COPIED, NOT REBUILT: it is the pinned engine
-    // already, by its stamp, and a build would be the same bytes slower.
-    let (bytes, digest) = if engine::running_stamp().as_deref() == Some(want) {
-        (std::fs::read(&binary)?, want.to_owned())
-    } else {
-        let build: Vec<String> = ["cargo", "build", "--release", "-p", "batten"]
-            .iter()
-            .map(|word| (*word).to_owned())
-            .collect();
-        // A FAILED BUILD NAMES ITSELF (CLOUD-2172): the child's output is
-        // captured, so a bare `?` surfaced only its exit status, and a build
-        // the ambient toolchain could not compile read as a silent 101.
-        exec::run_in(root, &build).map_err(|why| {
-            UsageError::raise(format!(
-                "engine update: `{}` failed ({why}); it builds on the ambient \
-                 toolchain, so run `{}` to build on the project's",
-                build.join(" "),
-                engine::REPAIR_PINNED,
-            ))
-        })?;
-        let target_dir = std::env::var_os("CARGO_TARGET_DIR")
-            .map_or_else(|| root.join("target"), std::path::PathBuf::from);
-        // The digest is read first, so a tree naming no source installs nothing.
-        let digest = engine::digest(root)?;
-        (
-            std::fs::read(target_dir.join("release").join("batten"))?,
-            digest,
-        )
-    };
-    for target in behind {
-        durable::replace(&target, &bytes)?;
-        engine::stamp(&target, &digest)?;
-        writeln!(out, "{}", target.display())?;
-    }
-    Ok(ExitCode::Success)
+    engine_install(out)
 }
 
-/// `batten engine install` (CLOUD-2203): the generated `install.sh`'s last step.
+/// The repository releases are fetched from: `BATTEN_RELEASES`, the
+/// bootstrap's own seam so a suite serves both halves of an install from one
+/// fixture host, else the engine's own.
+fn releases_repository() -> String {
+    std::env::var("BATTEN_RELEASES")
+        .ok()
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| String::from(env!("CARGO_PKG_REPOSITORY")))
+}
+
+/// What `engine install` installs, decided before anything is fetched
+/// (CLOUD-2287).
+#[derive(Debug, PartialEq, Eq)]
+enum Want {
+    /// The running binary: nothing in scope pins anything.
+    Running,
+    /// A published release, by tag.
+    Release(String),
+    /// The engine built from this tree's source at a digest.
+    Source(String),
+}
+
+/// The `engine` pin of the worktree at `root`, when there is one.
+fn worktree_pin(root: Option<&Path>) -> Option<engine::Pin> {
+    let text = std::fs::read_to_string(root?.join(config::CONFIG_FILE)).ok()?;
+    engine::declared(&text)
+}
+
+/// The engine `engine install` installs: the release `BATTEN_VERSION_FROM_REF`'s
+/// ref pins, else the worktree's own pin, else the running binary.
 ///
-/// The bootstrap has fetched this binary and checked its digest; everything
-/// after that is here, in tested Rust, rather than in the script. The binary is
-/// placed where [`install::destination`] says, and the knobs the workflows
-/// already pass keep their meaning: `BATTEN_INSTALL_DIR` names the directory,
-/// `BATTEN_ALLOW_OFF_PATH=1` admits one `PATH` does not reach,
-/// `BATTEN_VERSION_FROM_REF` installs the release a ref's `batten.toml` pins
-/// (refused when that release is not published, CLOUD-2033) unless
-/// `BATTEN_VERSION` named one, which always wins ([`engine::pick_release`]), and
-/// `BATTEN_REQUIRE` refuses a binary that lacks the verb its caller is about to
-/// run.
+/// **`BATTEN_VERSION` IS AN ESCAPE HATCH, NEVER A SELECTOR (CLOUD-2287).** It is
+/// honoured only with no pin in scope. With a pin in scope it disagrees with, it
+/// is refused by name and nothing is installed: the pin is the one authority, and
+/// a named version silently outranking it was how a cached script installed
+/// something no `batten.toml` asked for.
+//MUTANT-SUITE crates/batten/tests/it/engine_install.rs
+//MUTANT worktree-pin-outranks-the-ref|s@^        Some(tag) => Some(Want::Release(tag)),$@        Some(tag) => Some(pinned_by(pin)?.unwrap_or(Want::Release(tag))),@|the_ref_outranks_the_worktree_pin
+//MUTANT a-named-version-overrides-the-pin|s@^    if named.is_some_and(\x7cnamed\x7c pinned != Want::Release(named.to_owned())) {$@    if false {@|a_named_version_never_overrides_the_worktree_pin
+fn install_want(
+    named: Option<&str>,
+    by_ref: Option<String>,
+    pin: Option<engine::Pin>,
+) -> Result<Want> {
+    let scope = if by_ref.is_some() {
+        "BATTEN_VERSION_FROM_REF"
+    } else {
+        "this worktree's batten.toml"
+    };
+    let pinned = match by_ref {
+        Some(tag) => Some(Want::Release(tag)),
+        None => pinned_by(pin)?,
+    };
+    let Some(pinned) = pinned else {
+        return Ok(named.map_or(Want::Running, |tag| Want::Release(tag.to_owned())));
+    };
+    if named.is_some_and(|named| pinned != Want::Release(named.to_owned())) {
+        let pins = match &pinned {
+            Want::Release(tag) => tag.clone(),
+            Want::Source(digest) => format!("the source build {digest}"),
+            Want::Running => String::from("nothing"),
+        };
+        return Err(UsageError::raise(format!(
+            "engine install: BATTEN_VERSION names {} and {scope} pins {pins}; the pin wins, \
+             so nothing was installed. Unset BATTEN_VERSION, which is honoured only where no \
+             pin is in scope",
+            named.unwrap_or_default()
+        )));
+    }
+    Ok(pinned)
+}
+
+/// [`Want`] for a declared pin.
+fn pinned_by(pin: Option<engine::Pin>) -> Result<Option<Want>> {
+    Ok(match pin {
+        None => None,
+        Some(engine::Pin {
+            release: Some(tag),
+            source: None,
+        }) => Some(Want::Release(tag)),
+        Some(engine::Pin {
+            release: None,
+            source: Some(digest),
+        }) => Some(Want::Source(digest)),
+        Some(_) => {
+            return Err(UsageError::raise(String::from(
+                "engine install: `engine` names exactly one of `release` or `source`",
+            )));
+        }
+    })
+}
+
+/// The verified bytes of release `tag`: the running binary when it IS that
+/// release, else fetched from `repository` and checked against its
+/// `SHA256SUMS`. A tag the host does not publish is refused (CLOUD-2033), never
+/// answered with whatever binary is running.
+fn release_bytes(tag: &str, exe: &Path, repository: &str) -> Result<Vec<u8>> {
+    if tag == engine::release() {
+        return Ok(std::fs::read(exe)?);
+    }
+    match engine::fetch_published(repository, tag)? {
+        engine::Release::Published(bytes) => Ok(bytes),
+        engine::Release::Unpublished => Err(UsageError::raise(format!(
+            "engine install: the release {tag} that the pin names is not published; nothing \
+             was installed"
+        ))),
+    }
+}
+
+/// `batten engine install` (CLOUD-2203, CLOUD-2287): install the `batten.toml`
+/// pin.
+///
+/// **WHAT IS INSTALLED** is [`install_want`]'s answer: the release a ref's
+/// `batten.toml` pins (`BATTEN_VERSION_FROM_REF`, which CI sets to `main`), else
+/// the pin of the worktree the shell stands in, else the running binary. Only
+/// the binary can follow the pin: the bootstrap script is cached and baked into
+/// images, so any choice it made would be frozen at the copy's version.
+///
+/// **WHERE** depends on what is running. An installed engine — the first
+/// `batten` on `PATH`, or the checkout's own build under `mise exec` — is
+/// repaired in place over [`engine::install_targets`], writing a target only
+/// when its bytes (or, for a source pin, its stamp) differ, so a session start
+/// in an unpinned or current checkout writes nothing (CLOUD-2123). Anything else
+/// is the bootstrap's verified download, placed where [`install::destination`]
+/// says, and the knobs the workflows already pass keep their meaning:
+/// `BATTEN_INSTALL_DIR` names the directory, `BATTEN_ALLOW_OFF_PATH=1` admits
+/// one `PATH` does not reach, and `BATTEN_REQUIRE` refuses a binary that lacks
+/// the verb its caller is about to run.
 ///
 /// Off `PATH` is a refusal, as it always was: every hook registration names
 /// `batten` bare, so a binary the shell cannot resolve is not installed.
+//MUTANT-SUITE crates/batten/tests/it/engine_install.rs
+//MUTANT install-ignores-the-worktree-pin|s@^    let pin = worktree_pin(root.as_deref());$@    let pin: Option<engine::Pin> = None;@|a_pinned_worktree_installs_its_pin
+//MUTANT bootstrap-skips-a-current-pin|s@^    let installed = engine::is_installed(&exe, path.as_deref(), root.as_deref());$@    let installed = true;@|the_bootstrap_places_a_running_pin
 fn engine_install(out: &mut dyn Write) -> Result<ExitCode> {
+    let var = |name: &str| std::env::var(name).ok().filter(|value| !value.is_empty());
+    let repository = releases_repository();
+    let root = git::worktree_root(Path::new(".")).ok();
+    let by_ref = var("BATTEN_VERSION_FROM_REF")
+        .map(|reference| engine::ref_release(&repository, &reference))
+        .transpose()?;
+    let pin = worktree_pin(root.as_deref());
+    let want = install_want(var("BATTEN_VERSION").as_deref(), by_ref, pin)?;
+    let exe = std::env::current_exe()?;
+    let path = std::env::var_os("PATH");
+    let installed = engine::is_installed(&exe, path.as_deref(), root.as_deref());
+    if !installed {
+        return place_download(&exe, want, &repository, out);
+    }
+    match want {
+        // NOTHING PINS ANYTHING, SO THERE IS NOTHING TO FOLLOW: an installed
+        // engine is left exactly as it is (CLOUD-2123).
+        Want::Running => Ok(ExitCode::Success),
+        Want::Source(digest) => match root {
+            Some(root) => install_source(&root, &digest, out),
+            None => Ok(ExitCode::Success),
+        },
+        Want::Release(tag) => {
+            let bytes = release_bytes(&tag, &exe, &repository)?;
+            let fence = root.unwrap_or_else(|| exe.with_file_name(""));
+            for target in engine::install_targets(&exe, path.as_deref(), &fence) {
+                if std::fs::read(&target).ok().as_deref() == Some(bytes.as_slice()) {
+                    continue;
+                }
+                durable::replace(&target, &bytes)?;
+                engine::make_executable(&target)?;
+                writeln!(out, "{}", target.display())?;
+            }
+            Ok(ExitCode::Success)
+        }
+    }
+}
+
+/// The bootstrap half of [`engine_install`]: place the verified download, or the
+/// release the pin names in its stead, where [`install::destination`] says.
+///
+/// A SOURCE PIN IS NEVER BUILT HERE. A provisioning path cannot assume a Rust
+/// toolchain (`install-does-one-thing`), so the download is placed as it is and
+/// the installed engine then follows the pin to the checkout's build.
+fn place_download(
+    exe: &Path,
+    want: Want,
+    repository: &str,
+    out: &mut dyn Write,
+) -> Result<ExitCode> {
     let var = |name: &str| std::env::var(name).ok().filter(|value| !value.is_empty());
     let on_path: Vec<std::path::PathBuf> = std::env::var_os("PATH")
         .map(|path| std::env::split_paths(&path).collect())
@@ -853,33 +1003,11 @@ fn engine_install(out: &mut dyn Write) -> Result<ExitCode> {
         &on_path,
         writable_dir,
     );
-    // `BATTEN_RELEASES` is the bootstrap's own seam, so a suite serves both
-    // halves of the install from one fixture host.
-    let repository =
-        var("BATTEN_RELEASES").unwrap_or_else(|| String::from(env!("CARGO_PKG_REPOSITORY")));
-    let running = format!("v{}", env!("CARGO_PKG_VERSION"));
-    let pick = engine::pick_release(
-        &running,
-        var("BATTEN_VERSION").is_some(),
-        || {
-            var("BATTEN_VERSION_FROM_REF")
-                .map(|reference| engine::ref_release(&repository, &reference))
-                .transpose()
-        },
-        |wanted| engine::fetch_published(&repository, wanted),
-    )?;
-    let (tag, bytes) = match pick {
-        engine::Pick::Fetched { tag, bytes } => (tag, bytes),
-        engine::Pick::Running => (running, std::fs::read(std::env::current_exe()?)?),
-        // REFUSED, NEVER THE RUNNING BINARY (CLOUD-2033). A ref's pin names a
-        // release `main` only pins once it is published, so an unpublished one
-        // is a wrong pin, and installing whatever is running in its place is
-        // the "latest release" the invariant forbids.
-        engine::Pick::Unpublished { wanted } => {
-            return Err(UsageError::raise(format!(
-                "engine install: the release {wanted} that BATTEN_VERSION_FROM_REF pins is not \
-                 published; nothing was installed"
-            )));
+    let (tag, bytes) = match want {
+        Want::Running | Want::Source(_) => (engine::release(), std::fs::read(exe)?),
+        Want::Release(tag) => {
+            let bytes = release_bytes(&tag, exe, repository)?;
+            (tag, bytes)
         }
     };
     std::fs::create_dir_all(&dest).map_err(|why| {
@@ -923,6 +1051,67 @@ fn engine_install(out: &mut dyn Write) -> Result<ExitCode> {
     Ok(ExitCode::Success)
 }
 
+/// Install the engine built from this tree's source at `want` (CLOUD-2062,
+/// CLOUD-2226): built from the checkout, or copied from the running binary when
+/// it already carries that stamp, then swapped in by rename and stamped, so a
+/// crash leaves the old binary.
+//MUTANT-SUITE crates/batten/tests/it/engine_install.rs
+//MUTANT update-judges-only-itself|s@^    if engine::runs_local() {$@    if engine::runs_local() \x7c\x7c engine::running_stamp().as_deref() == Some(want) {@|a_current_engine_replaces_a_stale_installed_copy
+fn install_source(root: &Path, want: &str, out: &mut dyn Write) -> Result<ExitCode> {
+    let binary = std::env::current_exe()?;
+    if engine::runs_local() {
+        return Ok(ExitCode::Success);
+    }
+    // EVERY TARGET IS JUDGED BY ITS OWN STAMP, NEVER BY THE RUNNING BINARY'S
+    // (CLOUD-2226). Since CLOUD-2232 the installed engine hands this verb to the
+    // checkout's build, which satisfies the pin: judging the running binary
+    // returned success at once and left the copy the hook runs behind. Measured
+    // on #1132: the floor's one repair ran, exited 0 and changed nothing.
+    let behind: Vec<std::path::PathBuf> =
+        engine::install_targets(&binary, std::env::var_os("PATH").as_deref(), root)
+            .into_iter()
+            .filter(|target| engine::stamp_of(target).as_deref() != Some(want))
+            .collect();
+    if behind.is_empty() {
+        return Ok(ExitCode::Success);
+    }
+    // A CURRENT RUNNING BINARY IS COPIED, NOT REBUILT: it is the pinned engine
+    // already, by its stamp, and a build would be the same bytes slower.
+    let (bytes, digest) = if engine::running_stamp().as_deref() == Some(want) {
+        (std::fs::read(&binary)?, want.to_owned())
+    } else {
+        let build: Vec<String> = ["cargo", "build", "--release", "-p", "batten"]
+            .iter()
+            .map(|word| (*word).to_owned())
+            .collect();
+        // A FAILED BUILD NAMES ITSELF (CLOUD-2172): the child's output is
+        // captured, so a bare `?` surfaced only its exit status, and a build
+        // the ambient toolchain could not compile read as a silent 101.
+        exec::run_in(root, &build).map_err(|why| {
+            UsageError::raise(format!(
+                "engine install: `{}` failed ({why}); it builds on the ambient \
+                 toolchain, so run `{}` to build on the project's",
+                build.join(" "),
+                engine::REPAIR_PINNED,
+            ))
+        })?;
+        let target_dir = std::env::var_os("CARGO_TARGET_DIR")
+            .map_or_else(|| root.join("target"), std::path::PathBuf::from);
+        // The digest is read first, so a tree naming no source installs nothing.
+        let digest = engine::digest(root)?;
+        (
+            std::fs::read(target_dir.join("release").join("batten"))?,
+            digest,
+        )
+    };
+    for target in behind {
+        durable::replace(&target, &bytes)?;
+        engine::stamp(&target, &digest)?;
+        writeln!(out, "{}", target.display())?;
+    }
+    Ok(ExitCode::Success)
+}
+
 /// Whether a directory accepts a new file, asked of the kernel rather than by
 /// writing one.
 fn writable_dir(dir: &Path) -> bool {
@@ -939,9 +1128,12 @@ fn writable_dir(dir: &Path) -> bool {
 /// The tree is the WORKTREE's, `census`' reasoning: what a branch's engine is
 /// built from is what that checkout carries.
 fn run_engine(command: cli::EngineCommand, out: &mut dyn Write) -> Result<ExitCode> {
-    // BEFORE THE ROOT: the bootstrap runs it on a host with no repository.
-    if matches!(command, cli::EngineCommand::Install) {
-        return engine_install(out);
+    // BEFORE THE ROOT: the bootstrap runs it on a host with no repository, and
+    // `update` names its own refusal for one.
+    match command {
+        cli::EngineCommand::Install => return engine_install(out),
+        cli::EngineCommand::Update => return engine_update(out),
+        _ => {}
     }
     let root = git::worktree_root(Path::new("."))?;
     let digest = engine::digest(&root)?;
@@ -952,7 +1144,7 @@ fn run_engine(command: cli::EngineCommand, out: &mut dyn Write) -> Result<ExitCo
             engine::stamp(&binary, &digest)?;
             writeln!(out, "{}", engine::stamp_path(&binary).display())?;
         }
-        cli::EngineCommand::Update => return engine_update(&root, out),
+        cli::EngineCommand::Update => return engine_update(out),
         cli::EngineCommand::Pin { value, check } => {
             return engine_pin(&root, &digest, value.as_deref(), check, out);
         }
@@ -18196,7 +18388,7 @@ fn hook_config_or_floor(
 ///
 /// `None` when there is nothing to hand to: no source pin, no checkout build,
 /// this IS that build, or this call was already handed once.
-//MUTANT-SUITE crates/batten/tests/it/engine_update.rs
+//MUTANT-SUITE crates/batten/tests/it/engine_install.rs
 //MUTANT hook-handoff-skipped|s@^    let Some(build) = engine::checkout_build(root) else {$@    let Some(build) = None::<PathBuf> else {@|a_hook_outside_the_checkout_hands_off_to_the_authoritys_build
 fn hand_to_checkout_build(raw: &str, out: &mut dyn Write) -> Result<Option<ExitCode>> {
     if std::env::var_os(ENGINE_UPDATED).is_some() {
@@ -24603,6 +24795,32 @@ fn release_verdict(
         release_verify::fetch(&slug, tag, release.draft, asset, &rest::download)
     };
     let verdict = release_verify::judge(&release, draft, missing, &mut fetch);
+    // THE LOCK AT THE RELEASE'S OWN COMMIT (CLOUD-2287): the tag's once
+    // published, the target's while a draft. Absent, there is nothing to check.
+    let at = release
+        .tag_commit
+        .clone()
+        .unwrap_or_else(|| release.target.clone());
+    let lock = match release_verify::committed_lock(&slug, &at, &get) {
+        Ok(lock) => lock,
+        Err(why) => return (Some(release), release_verify::Verdict::CouldNotLook(why)),
+    };
+    let manifest = release
+        .published
+        .assets
+        .iter()
+        .find(|asset| asset.name == release_verify::SUMS);
+    let refused = match (lock.as_deref(), manifest) {
+        (Some(text), Some(manifest)) => match fetch(manifest) {
+            Ok(sums) => {
+                release_verify::judge_lock(Some(text), tag, &String::from_utf8_lossy(&sums))
+            }
+            Err(why) => return (Some(release), release_verify::Verdict::CouldNotLook(why)),
+        },
+        // No manifest is the sums check's refusal already; no lock, nothing to check.
+        _ => Vec::new(),
+    };
+    let verdict = release_verify::with_lock(verdict, refused);
     (Some(release), verdict)
 }
 

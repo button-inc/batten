@@ -1,9 +1,9 @@
 # Prose naming `./install.sh` in backticks is not a call.
 [tasks."session:batten"]
-run = ["./install.sh", "batten engine update"]
+run = ["./install.sh", "batten engine install"]
 
 [tasks."deps-install"]
 run = "./install.sh"
 
 [tasks."ok"]
-run = ["batten engine update", "batten wiring reclaim -y"]
+run = ["batten engine install", "batten wiring reclaim -y"]

@@ -12,6 +12,10 @@
 //!   record, never restated here.
 //! * **sums** — `SHA256SUMS` has exactly one line per other asset, and every
 //!   asset hashes to its line.
+//! * **lock** — where the release's commit carries an `install.lock`
+//!   (CLOUD-2287), it names this release and every line of it is the line
+//!   `SHA256SUMS` publishes. An absent lock — every release before the bake,
+//!   and every consumer's — is nothing to check.
 //!
 //! Everything a run needs is an argument, so the decision is testable with no
 //! network: [`judge`] is pure over a read [`Release`], and [`read`] is the one
@@ -64,6 +68,9 @@ pub enum Refusal {
     Unsummed(String),
     /// An asset whose bytes do not hash to its line, or a line naming nothing.
     Mismatched(String),
+    /// A committed `install.lock` line `SHA256SUMS` does not publish, or a lock
+    /// naming another release or none (CLOUD-2287).
+    LockDisagrees(String),
 }
 
 impl Refusal {
@@ -81,6 +88,10 @@ impl Refusal {
             Self::Mismatched(name) => {
                 format!("release verify: {name} does not hash to its {SUMS} line")
             }
+            Self::LockDisagrees(what) => format!(
+                "release verify: {} disagrees with {SUMS}: {what}",
+                crate::install::LOCK_FILE
+            ),
         }
     }
 }
@@ -200,6 +211,114 @@ pub fn judge(
     }
 }
 
+/// The lock check (CLOUD-2287): a present `install.lock` must name release
+/// `tag` and carry, for each archive it lists, exactly the line `sums`
+/// publishes. An absent lock has nothing to check, so nothing is refused.
+//MUTANT baked-lock-unchecked|s@^    refused.extend(disagreeing.into_iter().map(Refusal::LockDisagrees));$@@|a_lock_disagreeing_with_sha256sums_is_refused
+#[must_use]
+pub fn judge_lock(lock: Option<&str>, tag: &str, sums: &str) -> Vec<Refusal> {
+    let Some(text) = lock else {
+        return Vec::new();
+    };
+    let lock = match crate::install::Lock::parse(text) {
+        Ok(lock) => lock,
+        Err(why) => return vec![Refusal::LockDisagrees(why.to_string())],
+    };
+    let mut refused = Vec::new();
+    if lock.tag != tag {
+        refused.push(Refusal::LockDisagrees(format!(
+            "it names {}, not {tag}",
+            lock.tag
+        )));
+    }
+    if lock.sums.is_empty() {
+        refused.push(Refusal::LockDisagrees(String::from("it lists no archive")));
+    }
+    let disagreeing = lock.disagreements(sums);
+    refused.extend(disagreeing.into_iter().map(Refusal::LockDisagrees));
+    refused
+}
+
+/// `verdict` with the lock check's `refused` folded in: a pass with a lock
+/// refusal is refused, and could-not-look stays could-not-look.
+#[must_use]
+pub fn with_lock(verdict: Verdict, refused: Vec<Refusal>) -> Verdict {
+    match verdict {
+        Verdict::Verified if refused.is_empty() => Verdict::Verified,
+        Verdict::Verified => Verdict::Refused(refused),
+        Verdict::Refused(mut before) => {
+            before.extend(refused);
+            Verdict::Refused(before)
+        }
+        Verdict::CouldNotLook(why) => Verdict::CouldNotLook(why),
+    }
+}
+
+/// The `install.lock` committed at `reference`, through the forge contents API,
+/// `Ok(None)` where the commit carries none.
+///
+/// # Errors
+///
+/// The could-not-look pointer: an answer but `200` or `404`, or a body that is
+/// not a file's.
+pub fn committed_lock(slug: &str, reference: &str, get: Get<'_>) -> Result<Option<String>, String> {
+    let path = format!(
+        "repos/{slug}/contents/{}?ref={reference}",
+        crate::install::LOCK_FILE
+    );
+    let answer = get(&path).ok_or_else(|| format!("{path} did not answer"))?;
+    if answer.status == 404 {
+        return Ok(None);
+    }
+    if !answer.is_reading() {
+        return Err(format!("{path} answered {}", answer.status));
+    }
+    let value: serde_json::Value =
+        serde_json::from_str(&answer.body).map_err(|_| format!("{path} is not JSON"))?;
+    let content = value
+        .get("content")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| format!("{path} carries no content"))?;
+    let bytes = base64_decode(content).ok_or_else(|| format!("{path}'s content is not base64"))?;
+    String::from_utf8(bytes)
+        .map(Some)
+        .map_err(|_| format!("{path} is not UTF-8"))
+}
+
+/// Standard base64, ignoring the line breaks the contents API wraps it in.
+fn base64_decode(text: &str) -> Option<Vec<u8>> {
+    let value = |byte: u8| -> Option<u32> {
+        Some(u32::from(match byte {
+            b'A'..=b'Z' => byte - b'A',
+            b'a'..=b'z' => byte - b'a' + 26,
+            b'0'..=b'9' => byte - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            _ => return None,
+        }))
+    };
+    let clean: Vec<u8> = text
+        .bytes()
+        .filter(|byte| !byte.is_ascii_whitespace() && *byte != b'=')
+        .collect();
+    let mut out = Vec::with_capacity(clean.len() * 3 / 4);
+    for chunk in clean.chunks(4) {
+        let mut word = 0u32;
+        for (at, byte) in chunk.iter().enumerate() {
+            word |= value(*byte)? << (18 - 6 * at);
+        }
+        let bytes = word.to_be_bytes();
+        let take = match chunk.len() {
+            4 => 3,
+            3 => 2,
+            2 => 1,
+            _ => return None,
+        };
+        out.extend_from_slice(&bytes[1..=take]);
+    }
+    Some(out)
+}
+
 /// Read release `tag` and its tag's commit from the forge.
 ///
 /// # Errors
@@ -291,5 +410,19 @@ pub fn fetch(
         Some((200, bytes)) => Ok(bytes),
         Some((status, _)) => Err(format!("{} answered {status}", asset.name)),
         None => Err(format!("{} could not be downloaded", asset.name)),
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn base64_decodes_every_padding_and_ignores_line_breaks() {
+        assert_eq!(base64_decode("Zm9v\nYmFy").unwrap(), b"foobar");
+        assert_eq!(base64_decode("Zm9vYg==").unwrap(), b"foob");
+        assert_eq!(base64_decode("Zm9vYmE=").unwrap(), b"fooba");
+        assert!(base64_decode("Z").is_none());
     }
 }

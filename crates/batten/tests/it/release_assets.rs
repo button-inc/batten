@@ -391,16 +391,16 @@ fn every_non_target_asset_is_demanded_from_both_sources() {
 fn a_sh_operand_is_demanded_and_satisfied_like_a_json_one() {
     let workflow = WORKFLOW.replace(
         "schema/batten.local.schema.json",
-        "schema/batten.local.schema.json install.sh",
+        "schema/batten.local.schema.json setup.sh",
     );
     let demanded = repo("sh-demanded", Some(&workflow));
     let assets = complete(&[]);
     let forge_demanded = forge("sh-demanded", &assets, Some(&manifest_over(&assets, None)));
     let (code, text) = decide(&demanded, &forge_demanded);
     assert_eq!(code, Some(2), "{text}");
-    assert!(text.contains("install.sh"), "{text}");
+    assert!(text.contains("setup.sh"), "{text}");
     let satisfied = repo("sh-satisfied", Some(&workflow));
-    let assets = complete(&["install.sh"]);
+    let assets = complete(&["setup.sh"]);
     let forge_satisfied = forge("sh-satisfied", &assets, Some(&manifest_over(&assets, None)));
     let (code, text) = decide(&satisfied, &forge_satisfied);
     assert_eq!(code, Some(0), "{text}");

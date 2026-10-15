@@ -24,7 +24,7 @@ Work down this list; never stop at "blocked" and never hand it over.
    (`recoverable_without_rules`, `crates/batten/src/lib.rs`) always admits a
    `Read`, an inert search (`Grep`/`Glob`), and an `Edit`/`Write` of
    `batten.toml` or `batten.local.toml`.
-2. **A pin newer than the binary: run `batten engine update`, spelled whole.**
+2. **A pin the binary is not: run `batten engine install`, spelled whole.**
    Since CLOUD-2116 the floor admits exactly that command, and the skew refusal
    names it.
 3. **Before that fix is installed, the pin line itself is the exit.** Edit the

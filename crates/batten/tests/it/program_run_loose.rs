@@ -41,11 +41,11 @@ fn a_task_calling_the_installer_is_refused_and_prose_is_not() {
         "program-run-loose-committed",
         "# Prose naming `./install.sh` in backticks is not a call.\n\
          [tasks.a]\n\
-         run = [\"./install.sh\", \"batten engine update\"]\n\
+         run = [\"./install.sh\", \"batten engine install\"]\n\
          [tasks.b]\n\
          run = \"./install.sh\"\n\
          [tasks.c]\n\
-         run = [\"batten engine update\", \"batten wiring reclaim -y\"]\n",
+         run = [\"batten engine install\", \"batten wiring reclaim -y\"]\n",
     );
     assert_eq!(code, Some(2), "{out}");
     assert!(

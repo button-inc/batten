@@ -1573,7 +1573,7 @@ expression: stdout_of(&output)
         {
           "path": "engine install",
           "id": "engine.install",
-          "about": "Place this binary in a directory on PATH: the generated install.sh's last step",
+          "about": "Install the engine the batten.toml pin names, from its release or from this tree",
           "effect": "write",
           "data_channel": false,
           "flags": [],
@@ -1617,7 +1617,7 @@ expression: stdout_of(&output)
         {
           "path": "engine update",
           "id": "engine.update",
-          "about": "Install the engine this config pins over the running binary, from its release or from this tree",
+          "about": "Move this config's release pin forward to the latest release, then install it",
           "effect": "write",
           "data_channel": false,
           "flags": [],
@@ -4033,6 +4033,48 @@ expression: stdout_of(&output)
           "subcommands": []
         },
         {
+          "path": "release bake",
+          "id": "release.bake",
+          "about": "Bake a release's tag and archive digests into install.lock and install.sh, as one commit on its release head",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "branch",
+              "short": null,
+              "long": "branch",
+              "takes_value": true,
+              "positional": false,
+              "help": "The release branch moved to the bake commit; required unless --write-only"
+            },
+            {
+              "name": "sha",
+              "short": null,
+              "long": "sha",
+              "takes_value": true,
+              "positional": false,
+              "help": "The release head the bake is committed onto; required unless --write-only"
+            },
+            {
+              "name": "tag",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The release's tag"
+            },
+            {
+              "name": "write_only",
+              "short": null,
+              "long": "write-only",
+              "takes_value": false,
+              "positional": false,
+              "help": "Write install.lock and install.sh to the working tree and commit nothing"
+            }
+          ],
+          "subcommands": []
+        },
+        {
           "path": "release bump-unusable",
           "id": "release.bump_unusable",
           "about": "Move a burned or stray-tagged version to the next one in all four release paths, as one commit on the release branch",
@@ -4080,6 +4122,14 @@ expression: stdout_of(&output)
               "takes_value": true,
               "positional": false,
               "help": "The changelog carrying the release's `## [X]` section"
+            },
+            {
+              "name": "land_workflow",
+              "short": null,
+              "long": "land-workflow",
+              "takes_value": true,
+              "positional": false,
+              "help": "The land workflow a baked head of the open draft's target is dispatched to, instead of a new cut"
             },
             {
               "name": "sha",
@@ -4165,7 +4215,7 @@ expression: stdout_of(&output)
               "long": "workflow",
               "takes_value": true,
               "positional": false,
-              "help": "The workflow's file name, as the forge's workflow API names it"
+              "help": "A release workflow's file name, as the forge's workflow API names it (repeatable)"
             }
           ],
           "subcommands": []

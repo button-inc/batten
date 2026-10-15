@@ -123,7 +123,15 @@ fn the_action_installs_its_refs_pin() {
 #[test]
 fn install_sh_is_the_generated_bootstrap() {
     let path = common::at_root("install.sh");
-    let generated = batten::install::render_bootstrap("batten", env!("CARGO_PKG_REPOSITORY"));
+    // FROM THE COMMITTED LOCK (CLOUD-2287): the release bakes `install.lock` and
+    // regenerates this file in one commit, so the two can never disagree.
+    let lock = batten::install::Lock::parse(
+        &std::fs::read_to_string(common::at_root(batten::install::LOCK_FILE))
+            .expect("read install.lock"),
+    )
+    .expect("install.lock parses");
+    let generated =
+        batten::install::render_bootstrap("batten", env!("CARGO_PKG_REPOSITORY"), &lock);
     let committed = std::fs::read_to_string(&path).unwrap_or_default();
     if committed != generated {
         std::fs::write(&path, &generated).expect("rewrite install.sh");

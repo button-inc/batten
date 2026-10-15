@@ -519,7 +519,8 @@ pub enum EngineCommand {
     Digest,
     /// Record this tree's source digest beside the running binary.
     Stamp,
-    /// Install the engine the config pins over the running binary (CLOUD-2062).
+    /// Move the config's release pin forward to the latest release, then
+    /// install it (CLOUD-2287).
     Update,
     /// Set or refresh the config's pin (CLOUD-2063).
     Pin {
@@ -533,8 +534,8 @@ pub enum EngineCommand {
         /// Workflows whose command lines run the released binary.
         lanes: Vec<String>,
     },
-    /// Place this binary where `PATH` finds it: the generated bootstrap's last
-    /// step (CLOUD-2203).
+    /// Install the engine the pin names: the generated bootstrap's last step,
+    /// and an installed engine's repair (CLOUD-2203, CLOUD-2287).
     Install,
 }
 
@@ -2201,8 +2202,9 @@ pub enum ReleaseCommand {
     },
     /// Whether a release is in flight, the landers' freeze (CLOUD-2033).
     InFlight {
-        /// The build workflow's file, whose runs are titled by their tag.
-        workflow: String,
+        /// The build and land workflows' files, whose runs are titled by their
+        /// tag (CLOUD-2287: the land moved into its own workflow).
+        workflows: Vec<String>,
     },
     /// `land`'s branch for a release, as one line (CLOUD-2033).
     LandState {
@@ -2237,6 +2239,8 @@ pub enum ReleaseCommand {
         changelog: String,
         /// The build workflow's file.
         workflow: String,
+        /// The land workflow a baked head is dispatched to (CLOUD-2287).
+        land_workflow: Option<String>,
     },
     /// The release a `batten.toml` pins (CLOUD-2033).
     Pin {
@@ -2249,6 +2253,19 @@ pub enum ReleaseCommand {
         probe: bool,
         /// Answer instead from the last completed run of this guard workflow.
         last_run: Option<String>,
+    },
+    /// Bake a release into `install.lock` and `install.sh` (CLOUD-2287).
+    ///
+    /// APPENDED LAST, for the reason every enum here records.
+    Bake {
+        /// The release's tag.
+        tag: String,
+        /// The release head the bake is committed onto.
+        sha: Option<String>,
+        /// The release branch moved to the bake commit.
+        branch: Option<String>,
+        /// Write the two files and commit nothing.
+        write_only: bool,
     },
 }
 
@@ -2860,7 +2877,10 @@ fn release_of(matches: &ArgMatches) -> Option<ReleaseCommand> {
             tag: matches.get_one::<String>("tag")?.clone(),
         }),
         ("in-flight", matches) => Some(ReleaseCommand::InFlight {
-            workflow: matches.get_one::<String>("workflow")?.clone(),
+            workflows: matches
+                .get_many::<String>("workflow")
+                .map(|values| values.cloned().collect())
+                .unwrap_or_default(),
         }),
         ("land-state", matches) => Some(ReleaseCommand::LandState {
             tag: matches.get_one::<String>("tag")?.clone(),
@@ -2880,6 +2900,7 @@ fn release_of(matches: &ArgMatches) -> Option<ReleaseCommand> {
             sha: matches.get_one::<String>("sha")?.clone(),
             changelog: matches.get_one::<String>("changelog")?.clone(),
             workflow: matches.get_one::<String>("workflow")?.clone(),
+            land_workflow: matches.get_one::<String>("land_workflow").cloned(),
         }),
         ("pin", matches) => Some(ReleaseCommand::Pin {
             at: matches.get_one::<String>("at").cloned(),
@@ -2887,6 +2908,12 @@ fn release_of(matches: &ArgMatches) -> Option<ReleaseCommand> {
         ("settings", matches) => Some(ReleaseCommand::Settings {
             probe: flag(matches, "probe"),
             last_run: matches.get_one::<String>("last_run").cloned(),
+        }),
+        ("bake", matches) => Some(ReleaseCommand::Bake {
+            tag: matches.get_one::<String>("tag")?.clone(),
+            sha: matches.get_one::<String>("sha").cloned(),
+            branch: matches.get_one::<String>("branch").cloned(),
+            write_only: flag(matches, "write_only"),
         }),
         _ => None,
     }

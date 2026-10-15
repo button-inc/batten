@@ -4,7 +4,7 @@
 .SH NAME
 batten\-release\-cut \- Discard any draft of the version, draft it at the release head and dispatch its build
 .SH SYNOPSIS
-\fBbatten release cut\fR [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-sha\fR> <\fB\-\-changelog\fR> <\fB\-\-workflow\fR> <\fItag\fR> 
+\fBbatten release cut\fR [\fB\-\-land\-workflow\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-sha\fR> <\fB\-\-changelog\fR> <\fB\-\-workflow\fR> <\fItag\fR> 
 .SH DESCRIPTION
 Discard any draft of the version, draft it at the release head and dispatch its build
 .SH OPTIONS
@@ -17,6 +17,9 @@ The changelog carrying the release\*(Aqs `## [X]` section
 .TP
 \fB\-\-workflow\fR \fI<workflow>\fR
 The workflow\*(Aqs file name, as the forge\*(Aqs workflow API names it
+.TP
+\fB\-\-land\-workflow\fR \fI<land_workflow>\fR
+The land workflow a baked head of the open draft\*(Aqs target is dispatched to, instead of a new cut
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help

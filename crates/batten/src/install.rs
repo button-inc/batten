@@ -356,41 +356,157 @@ pub fn bootstrap_asset(name: &str) -> String {
     )
 }
 
-/// The committed `install.sh`, rendered (CLOUD-2203).
+/// The file a release bakes the bootstrap's data into (CLOUD-2287).
+pub const LOCK_FILE: &str = "install.lock";
+
+/// `install.lock`: the release `install.sh` installs, and the line each target
+/// archive the bootstrap fetches has in that release's `SHA256SUMS`.
 ///
-/// **THE BARE MINIMUM TO INSTALL AND EXECUTE RELEASED RUST, and nothing else.**
-/// Detect the target, take the tag a `batten.toml` PINS — `BATTEN_VERSION`
-/// when named, else `BATTEN_VERSION_FROM_REF`'s pin, else the pin of the
-/// nearest `batten.toml` above the working directory, else `main`'s, read off
-/// the raw-file host — and never the latest release (CLOUD-2033): `main` only
-/// ever pins a release that is published, immutable, complete and verified,
-/// where "latest" is a moving answer no gate stands behind. Fetch `SHA256SUMS`
-/// and the archive from `releases/download` — never the API, whose anonymous
-/// budget a shared egress address spends — check the digest, and hand over to
-/// `engine install`, which places the binary and owns everything after. A
-/// refusal names the status and the URL that answered. Exit 1 is the release's
-/// fault: a fetched `batten.toml` that pins no release; once a tag resolved, a
-/// download it does not serve, a missing digest, a digest that disagrees; or a
-/// platform no release builds. Exit 2 is could-not-look: a `batten.toml` that
-/// does not answer — a private repository answers `404` to everything. Every
-/// request is bounded — a connect timeout, a total timeout, and three retries of
-/// a transient answer — so a stalled host fails the install rather than hanging
-/// it. TLS trust is curl's own reading of `CURL_CA_BUNDLE`, then `SSL_CERT_FILE`. `BATTEN_RELEASES` exists so a suite can serve the
-/// release from a fixture; nothing else is configurable here.
+/// **A ROOT FILE, NOT A `batten.toml` TABLE.** `Config` denies unknown fields,
+/// so an older pinned engine would refuse the key; and outside `crates/` it is
+/// no engine input, so baking it never moves a source pin. The renderer takes
+/// it as input and `install_script.rs` is its one writer's gate.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Lock {
+    /// The release tag, `v`-prefixed.
+    pub tag: String,
+    /// `(sha256, asset)` for each target archive the bootstrap fetches, in
+    /// [`TARGETS`] order.
+    pub sums: Vec<(String, String)>,
+}
+
+impl Lock {
+    /// The lock for release `tag` out of its `SHA256SUMS` body: the line of each
+    /// [`TARGETS`] archive, and nothing else.
+    ///
+    /// # Errors
+    ///
+    /// A [`UsageError`] naming a bootstrap target whose archive `sums` carries
+    /// no line for: a bootstrap baked without it would refuse that platform.
+    pub fn from_sums(name: &str, tag: &str, sums: &str) -> Result<Self> {
+        let mut lines = Vec::new();
+        for target in TARGETS {
+            let asset = format!(
+                "{}{}",
+                crate::dist::archive_stem(name, tag.trim_start_matches('v'), target),
+                crate::dist::archive_ext(target)
+            );
+            let digest = crate::engine::published_digest(sums, &asset).ok_or_else(|| {
+                UsageError::raise(format!(
+                    "release bake: {tag}'s SHA256SUMS carries no line for {asset}, so the \
+                     bootstrap cannot be baked"
+                ))
+            })?;
+            lines.push((digest, asset));
+        }
+        Ok(Self {
+            tag: tag.to_owned(),
+            sums: lines,
+        })
+    }
+
+    /// Read a committed `install.lock`.
+    ///
+    /// # Errors
+    ///
+    /// A [`UsageError`] for a file with no `tag` line or a line of neither shape.
+    pub fn parse(text: &str) -> Result<Self> {
+        let mut tag = None;
+        let mut sums = Vec::new();
+        for line in text.lines().map(str::trim) {
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            if let Some(rest) = line.strip_prefix("tag ") {
+                tag = Some(rest.trim().to_owned());
+                continue;
+            }
+            let mut fields = line.split_whitespace();
+            match (fields.next(), fields.next(), fields.next()) {
+                (Some(digest), Some(asset), None) => {
+                    sums.push((digest.to_ascii_lowercase(), asset.to_owned()));
+                }
+                _ => {
+                    return Err(UsageError::raise(format!(
+                        "{LOCK_FILE}: `{line}` is neither `tag <tag>` nor `<sha256>  <asset>`"
+                    )));
+                }
+            }
+        }
+        let tag = tag.ok_or_else(|| UsageError::raise(format!("{LOCK_FILE}: no `tag` line")))?;
+        Ok(Self { tag, sums })
+    }
+
+    /// The file's bytes.
+    #[must_use]
+    pub fn render(&self) -> String {
+        let mut out = String::from(
+            "# GENERATED by `batten release bake` (CLOUD-2287). Do not edit: each release\n\
+             # bakes the tag install.sh installs, and each archive's SHA256SUMS line.\n",
+        );
+        out.push_str(&format!("tag {}\n", self.tag));
+        for (digest, asset) in &self.sums {
+            out.push_str(&format!("{digest}  {asset}\n"));
+        }
+        out
+    }
+
+    /// Each line this lock carries that `sums` (the release's own
+    /// `SHA256SUMS`) does not publish identically: empty when they agree.
+    #[must_use]
+    pub fn disagreements(&self, sums: &str) -> Vec<String> {
+        self.sums
+            .iter()
+            .filter(|(digest, asset)| {
+                crate::engine::published_digest(sums, asset).as_deref() != Some(digest.as_str())
+            })
+            .map(|(_, asset)| asset.clone())
+            .collect()
+    }
+}
+
+/// The committed `install.sh`, rendered from `lock` (CLOUD-2203, CLOUD-2287).
+///
+/// **THE BARE MINIMUM TO INSTALL AND EXECUTE RELEASED RUST, AND NO VERSION
+/// CHOICE.** Detect the target, download the baked tag's archive, compare it
+/// with the baked sha256, extract it, and hand over to `engine install`, which
+/// follows the `batten.toml` pin from there — so a stale cached copy of this
+/// script still lands on the pin. The script is cached and baked into images,
+/// so any choice it made would be frozen at that copy's version; only the
+/// binary can follow the pin. `BATTEN_VERSION` is the escape hatch: that tag is
+/// fetched and checked against its own release's `SHA256SUMS`. Never the API,
+/// whose anonymous budget a shared egress address spends. A refusal names the
+/// status and the URL that answered. Exit 1 is the release's fault: a named
+/// tag's missing download or digest, a digest that disagrees, or a platform no
+/// release builds. Exit 2 is could-not-look: a host that does not answer, or
+/// answers `404` for the baked tag, which a release published — a private
+/// repository answers `404` to everything. Every request is bounded — a connect
+/// timeout, a total timeout, and three retries of a transient answer — so a
+/// stalled host fails the install rather than hanging it. TLS trust is curl's
+/// own reading of `CURL_CA_BUNDLE`, then `SSL_CERT_FILE`. `BATTEN_RELEASES`
+/// exists so a suite can serve the release from a fixture; nothing else is
+/// configurable here.
 //MUTANT-SUITE crates/batten/tests/it/install_web.rs
-//MUTANT install-falls-back-to-latest|s@^\tpin_of "$tmp/main.toml" \x7c\x7c$@\ttrue \x7c\x7c@|a_main_pinning_no_release_is_refused_never_latest
-//MUTANT consumer-pin-ignored|s@^\t\tif \[ -f "$dir/batten.toml" \]; then$@\t\tif false; then@|install_installs_the_consumers_pin
+//MUTANT bootstrap-skips-its-baked-hash|s@^\[ "${{sum%% \*}}" = "$want" \] \x7c\x7c fail@true \x7c\x7c fail@|a_served_archive_disagreeing_with_the_lock_installs_nothing
 #[must_use]
-pub fn render_bootstrap(name: &str, repository: &str) -> String {
+pub fn render_bootstrap(name: &str, repository: &str, lock: &Lock) -> String {
     let asset = bootstrap_asset(name);
     let repository = repository.trim_end_matches('/');
+    let tag = &lock.tag;
+    let arms: String = lock
+        .sums
+        .iter()
+        .map(|(digest, asset)| format!("\t{asset}) want={digest} ;;\n"))
+        .collect();
     format!(
         r#"#!/bin/sh
-# GENERATED by `install::render_bootstrap` (CLOUD-2203). Do not edit: a test
-# rewrites this file from the generator and fails when any byte differed.
+# GENERATED by `install::render_bootstrap` from install.lock (CLOUD-2203,
+# CLOUD-2287). Do not edit: a test rewrites this file from the generator and
+# fails when any byte differed.
 #
-# The whole job: fetch the release binary for this platform, check it against
-# the release's SHA256SUMS, and run it. `{name} engine install` does the rest.
+# The whole job: fetch the baked release binary for this platform, check it
+# against the baked sha256, and run it. `{name} engine install` follows the
+# pin from there.
 set -eu
 base="${{BATTEN_RELEASES:-{repository}}}"
 fail() {{
@@ -426,55 +542,22 @@ get() {{
 	*) fail "could not download $1: ${{got:-000}}" ;;
 	esac
 }}
-case "$base" in
-https://github.com/*) raw="https://raw.githubusercontent.com/${{base#https://github.com/}}" ;;
-*) raw="$base" ;;
-esac
-pin_of() {{
-	pin=
-	while IFS= read -r line || [ -n "$line" ]; do
-		case "$line" in
-		engine*release*\"*\"*)
-			line=${{line#*release}}
-			line=${{line#*\"}}
-			pin=${{line%%\"*}}
-			return 0
-			;;
-		esac
-	done <"$1"
-	return 1
-}}
-tag="${{BATTEN_VERSION:-}}"
-if [ -z "$tag" ] && [ -n "${{BATTEN_VERSION_FROM_REF:-}}" ]; then
-	get "$raw/$BATTEN_VERSION_FROM_REF/batten.toml" "$tmp/ref.toml"
-	pin_of "$tmp/ref.toml" ||
-		fail "batten.toml at $BATTEN_VERSION_FROM_REF pins no release, and this script never installs the latest one; set BATTEN_VERSION" 1
-	tag=$pin
-fi
-if [ -z "$tag" ]; then
-	dir=$PWD
-	while [ -n "$dir" ]; do
-		if [ -f "$dir/batten.toml" ]; then
-			pin_of "$dir/batten.toml" && tag=$pin
-			break
-		fi
-		dir=${{dir%/*}}
-	done
-fi
-if [ -z "$tag" ]; then
-	get "$raw/main/batten.toml" "$tmp/main.toml"
-	pin_of "$tmp/main.toml" ||
-		fail "$raw/main/batten.toml pins no release, and this script never installs the latest one; set BATTEN_VERSION" 1
-	tag=$pin
-fi
+tag="${{BATTEN_VERSION:-{tag}}}"
 asset="{asset}"
-get "$base/releases/download/$tag/SHA256SUMS" "$tmp/SHA256SUMS" 1
-get "$base/releases/download/$tag/$asset" "$tmp/$asset" 1
 want=
-while read -r sum file; do
-	[ "${{file#\*}}" = "$asset" ] && want=$sum
-done <"$tmp/SHA256SUMS"
+if [ -n "${{BATTEN_VERSION:-}}" ]; then
+	get "$base/releases/download/$tag/SHA256SUMS" "$tmp/SHA256SUMS" 1
+	while read -r sum file; do
+		[ "${{file#\*}}" = "$asset" ] && want=$sum
+	done <"$tmp/SHA256SUMS"
+	missing=1
+else
+	case "$asset" in
+{arms}	esac
+	missing=2
+fi
 [ -n "$want" ] || fail "$tag publishes no sha256 for $asset" 1
+get "$base/releases/download/$tag/$asset" "$tmp/$asset" "$missing"
 if command -v sha256sum >/dev/null 2>&1; then
 	sum=$(sha256sum "$tmp/$asset")
 else
@@ -530,8 +613,8 @@ pub fn destination(
 pub fn programs_in(script: &str) -> BTreeSet<String> {
     const SHELL: &[&str] = &[
         "set", "case", "esac", "if", "then", "else", "fi", "for", "do", "done", "in", "while",
-        "read", "trap", "echo", "exit", "fail", "get", "pin_of", "break", "return", "command",
-        "true", "[", "]", ";;", "}", "{",
+        "read", "trap", "echo", "exit", "fail", "get", "break", "return", "command", "true", "[",
+        "]", ";;", "}", "{",
     ];
     let mut programs = BTreeSet::new();
     for line in script.lines() {
@@ -580,6 +663,66 @@ pub fn programs_in(script: &str) -> BTreeSet<String> {
 mod tests {
     use super::*;
 
+    /// A lock naming every bootstrap target, as a bake writes one.
+    fn fixture_lock() -> Lock {
+        let sums: String = TARGETS
+            .iter()
+            .map(|target| format!("{}  batten-v1.2.3-{target}.tar.gz\n", "a".repeat(64)))
+            .collect();
+        Lock::from_sums("batten", "v1.2.3", &sums).expect("every target has a line")
+    }
+
+    #[test]
+    fn a_lock_round_trips_and_keeps_only_the_bootstrap_targets() {
+        let mut sums: String = TARGETS
+            .iter()
+            .map(|target| format!("{}  batten-v1.2.3-{target}.tar.gz\n", "b".repeat(64)))
+            .collect();
+        sums.push_str(&format!(
+            "{}  batten-v1.2.3-x86_64-pc-windows-msvc.zip\n",
+            "c".repeat(64)
+        ));
+        let lock = Lock::from_sums("batten", "v1.2.3", &sums).expect("every target has a line");
+        assert_eq!(
+            lock.sums.len(),
+            TARGETS.len(),
+            "the zip target is not the bootstrap's"
+        );
+        assert_eq!(
+            Lock::parse(&lock.render()).expect("a rendered lock parses"),
+            lock
+        );
+        assert!(lock.disagreements(&sums).is_empty());
+        let other = sums.replacen(&"b".repeat(64), &"d".repeat(64), 1);
+        assert_eq!(lock.disagreements(&other).len(), 1);
+    }
+
+    #[test]
+    fn a_release_missing_a_bootstrap_target_cannot_be_baked() {
+        assert!(Lock::from_sums("batten", "v1.2.3", "").is_err());
+    }
+
+    #[test]
+    fn the_bootstrap_makes_no_version_choice() {
+        let script = render_bootstrap("batten", "https://example.invalid/o/r", &fixture_lock());
+        for selection in [
+            "pin_of",
+            "batten.toml",
+            "$PWD",
+            "BATTEN_VERSION_FROM_REF",
+            "/main/",
+        ] {
+            assert!(
+                !script.contains(selection),
+                "the script selects by {selection}"
+            );
+        }
+        assert!(
+            script.contains("tag=\"${BATTEN_VERSION:-v1.2.3}\""),
+            "{script}"
+        );
+    }
+
     #[test]
     fn a_writable_system_directory_on_path_is_chosen() {
         let user = std::path::PathBuf::from("/home/u/.local/bin");
@@ -609,7 +752,7 @@ mod tests {
 
     #[test]
     fn the_bootstrap_runs_only_the_allowlisted_programs() {
-        let script = render_bootstrap("batten", "https://example.invalid/o/r");
+        let script = render_bootstrap("batten", "https://example.invalid/o/r", &fixture_lock());
         let found = programs_in(&script);
         let allowed: BTreeSet<String> =
             BOOTSTRAP_PROGRAMS.iter().map(|p| (*p).to_owned()).collect();
@@ -634,7 +777,7 @@ mod tests {
 
     #[test]
     fn the_bootstrap_ends_by_running_the_binary_it_verified() {
-        let script = render_bootstrap("batten", "https://example.invalid/o/r");
+        let script = render_bootstrap("batten", "https://example.invalid/o/r", &fixture_lock());
         assert!(
             script
                 .trim_end()

@@ -362,7 +362,10 @@ fn the_engine_repair_verb_reaches_a_skewed_pin() {
     let dir = fixture("adjudicate-floor-engine-repair", PINS_ANOTHER_RELEASE);
     // AND UNDER THE PINNED TOOLCHAIN (CLOUD-2172): a source pin is repaired by a
     // build, and the bare spelling builds on whatever toolchain is ambient.
-    for repair in ["batten engine update", "mise exec -- batten engine update"] {
+    for repair in [
+        "batten engine install",
+        "mise exec -- batten engine install",
+    ] {
         assert_eq!(
             code_for(&dir, &command_envelope(repair)),
             Some(0),
@@ -384,7 +387,7 @@ fn a_repair_rooted_at_the_authority_reaches_a_shell_standing_outside_it() {
     // path splits at its spaces, so a hand-built string matched nothing on
     // #1132's `windows` job (`git::canonical`'s CLOUD-2059 class).
     let root = batten::git::canonical(&dir);
-    let rooted = batten::engine::repair_at(&root, "batten engine update");
+    let rooted = batten::engine::repair_at(&root, "batten engine install");
     let refused = run_with_stdin(
         &dir,
         &["adjudicate", "--harness", "exit-code"],
@@ -397,7 +400,7 @@ fn a_repair_rooted_at_the_authority_reaches_a_shell_standing_outside_it() {
     );
     for repair in [
         rooted.clone(),
-        batten::engine::repair_at(&root, "mise exec -- batten engine update"),
+        batten::engine::repair_at(&root, "mise exec -- batten engine install"),
     ] {
         assert_eq!(
             code_for(&dir, &command_envelope(&repair)),
@@ -406,7 +409,7 @@ fn a_repair_rooted_at_the_authority_reaches_a_shell_standing_outside_it() {
         );
     }
     assert_eq!(
-        code_for(&dir, &command_envelope("cd /tmp && batten engine update")),
+        code_for(&dir, &command_envelope("cd /tmp && batten engine install")),
         Some(2),
         "a repair rooted anywhere but the authority is a composition, refused"
     );
@@ -418,10 +421,13 @@ fn a_command_carrying_the_repair_verb_is_still_refused() {
     // repair's spelling past a build that judges nothing.
     let dir = fixture("adjudicate-floor-engine-carried", PINS_ANOTHER_RELEASE);
     for command in [
-        "batten engine update && rm -rf notes.md",
-        "echo x; batten engine update",
-        "mise exec -- batten engine update && git push",
-        "mise exec -- bash -c 'batten engine update'",
+        "batten engine install && rm -rf notes.md",
+        "echo x; batten engine install",
+        "mise exec -- batten engine install && git push",
+        "mise exec -- bash -c 'batten engine install'",
+        // THE OLD SPELLING IS NO REPAIR (CLOUD-2287): `engine update` now moves
+        // the pin, which a floor over a skewed pin must not do unasked.
+        "batten engine update",
         "git push",
     ] {
         assert_eq!(

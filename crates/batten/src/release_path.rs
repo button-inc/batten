@@ -19,8 +19,15 @@
 use std::collections::BTreeSet;
 
 /// The paths a release head may change, and nothing else (P1), beside any
-/// `CHANGELOG.md`: the manifest, its lockfile and the config carrying the pin.
-pub const RELEASE_PATHS: [&str; 3] = ["Cargo.toml", "Cargo.lock", "batten.toml"];
+/// `CHANGELOG.md`: the manifest, its lockfile, the config carrying the pin, and
+/// the bootstrap the release bakes with its lock (CLOUD-2287).
+pub const RELEASE_PATHS: [&str; 5] = [
+    "Cargo.toml",
+    "Cargo.lock",
+    "batten.toml",
+    "install.sh",
+    "install.lock",
+];
 
 /// Whether `path` is one a release head may change: a [`RELEASE_PATHS`] entry,
 /// or a changelog — wherever the consumer keeps it, which is its own fact.
@@ -211,7 +218,16 @@ pub fn version_of(manifest: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{config_changed_beyond_engine, version_of};
+    use super::{config_changed_beyond_engine, is_release_path, version_of};
+
+    #[test]
+    fn the_baked_bootstrap_is_a_release_path_and_nothing_else_new_is() {
+        assert!(is_release_path("install.sh"));
+        assert!(is_release_path("install.lock"));
+        assert!(!is_release_path("install.lock.bak"));
+        assert!(!is_release_path("scripts/install.sh"));
+        assert!(!is_release_path("crates/batten/src/install.rs"));
+    }
 
     /// Only the `engine` line may move in a release head's config.
     #[test]

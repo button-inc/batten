@@ -322,7 +322,7 @@ fn a_config_change_beyond_the_engine_line_is_failure() {
 fn release_path_posts_success_for_an_inherited_pin_on_the_graded_head() {
     // THE RUNNING VERSION, because every load checks the pin against the
     // binary's own version first, and a pin naming another release is an
-    // engine update this case is not about.
+    // engine install this case is not about.
     let version = env!("CARGO_PKG_VERSION");
     let repo = common::Fixture::new("release-path-inherited")
         .config(&format!(
@@ -614,6 +614,8 @@ fn facts(read: Read) -> LandFacts {
         tag_ref: None,
         pin_at_target: Some(String::from("v1.0.1")),
         version_at_target: Some(String::from("1.0.1")),
+        head: None,
+        draft_sums: None,
     }
 }
 
@@ -686,6 +688,124 @@ fn land_state_refuses_a_draft_an_assertion_fails_for() {
             "{bad:?} gave {state:?}"
         );
     }
+}
+
+// ---- The bake (CLOUD-2287) ---------------------------------------------------
+
+/// The baked commit B, a child of the draft target [`COMMIT`].
+const BAKED: &str = "4444444444444444444444444444444444444444";
+
+/// The draft's `SHA256SUMS` for v1.0.1: every bootstrap archive, one digest.
+fn draft_sums() -> String {
+    batten::install::TARGETS
+        .iter()
+        .map(|target| format!("{}  batten-v1.0.1-{target}.tar.gz\n", "a".repeat(64)))
+        .collect()
+}
+
+/// B as the bake writes it: a child of [`COMMIT`] changing only the two files,
+/// its lock baked from [`draft_sums`].
+fn baked_head() -> release_state::Head {
+    let lock = batten::install::Lock::from_sums("batten", "v1.0.1", &draft_sums())
+        .expect("every target has a line");
+    release_state::Head {
+        parent: Some(COMMIT.to_owned()),
+        changed: ["install.lock", "install.sh"]
+            .into_iter()
+            .map(String::from)
+            .collect(),
+        lock: Some(lock.render()),
+    }
+}
+
+/// THE BAKED HEAD LANDS (CLOUD-2287): a draft targeting A, dispatched with B,
+/// is `draft-ok` when B is A's bake, so the tag lands on B and `main`
+/// fast-forwards to the commit carrying its own lock.
+#[test]
+fn a_baked_head_of_the_drafts_target_is_draft_ok() {
+    let baked = LandFacts {
+        sha: BAKED.to_owned(),
+        head: Some(baked_head()),
+        draft_sums: Some(draft_sums()),
+        ..facts(Read::Draft {
+            target: COMMIT.to_owned(),
+        })
+    };
+    assert_eq!(release_state::land_state(&baked), LandState::DraftOk);
+}
+
+/// Any other child of A stays `draft-bad`: one changing another path, one whose
+/// lock disagrees with the draft's sums, and one that is not A's child at all.
+#[test]
+fn a_child_of_the_target_that_is_not_its_bake_stays_draft_bad() {
+    let mut wider = baked_head();
+    wider.changed.insert(String::from("Cargo.toml"));
+    let mut wrong_lock = baked_head();
+    wrong_lock.lock = Some(wrong_lock.lock.unwrap_or_default().replacen(
+        &"a".repeat(64),
+        &"b".repeat(64),
+        1,
+    ));
+    let mut orphan = baked_head();
+    orphan.parent = Some(String::from("5555555555555555555555555555555555555555"));
+    for head in [wider, wrong_lock, orphan] {
+        let bad = LandFacts {
+            sha: BAKED.to_owned(),
+            head: Some(head.clone()),
+            draft_sums: Some(draft_sums()),
+            ..facts(Read::Draft {
+                target: COMMIT.to_owned(),
+            })
+        };
+        let state = release_state::land_state(&bad);
+        assert!(
+            state.line().starts_with("draft-bad "),
+            "{head:?} gave {state:?}"
+        );
+    }
+}
+
+/// THE CUT NEVER LOOPS ON ITS OWN BAKE (CLOUD-2287): B is landed; any other
+/// head, or no open draft, is cut as before.
+#[test]
+fn cut_or_land_lands_a_baked_head_and_cuts_any_other() {
+    use release_state::CutOrLand;
+    let sums = draft_sums();
+    assert_eq!(
+        release_state::cut_or_land(Some(COMMIT), &baked_head(), "v1.0.1", &sums),
+        CutOrLand::Land
+    );
+    let mut moved = baked_head();
+    moved
+        .changed
+        .insert(String::from("crates/batten/src/lib.rs"));
+    assert_eq!(
+        release_state::cut_or_land(Some(COMMIT), &moved, "v1.0.1", &sums),
+        CutOrLand::Cut
+    );
+    assert_eq!(
+        release_state::cut_or_land(None, &baked_head(), "v1.0.1", &sums),
+        CutOrLand::Cut
+    );
+}
+
+/// A present `install.lock` naming a sha256 `SHA256SUMS` does not carry is
+/// refused; an absent one — every release before the bake — passes.
+#[test]
+fn a_lock_disagreeing_with_sha256sums_is_refused() {
+    let sums = draft_sums();
+    let lock = baked_head().lock.unwrap_or_default();
+    assert!(batten::release_verify::judge_lock(Some(&lock), "v1.0.1", &sums).is_empty());
+    assert!(batten::release_verify::judge_lock(None, "v1.0.1", &sums).is_empty());
+    let wrong = lock.replacen(&"a".repeat(64), &"c".repeat(64), 1);
+    assert_eq!(
+        batten::release_verify::judge_lock(Some(&wrong), "v1.0.1", &sums).len(),
+        1
+    );
+    assert!(
+        !batten::release_verify::judge_lock(Some(&lock), "v1.0.2", &sums).is_empty(),
+        "a lock naming another release is refused"
+    );
 }
 
 #[test]

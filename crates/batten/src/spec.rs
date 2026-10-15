@@ -1277,6 +1277,9 @@ mod tests {
             // makes the probe commit, `verify` writes the release's record.
             // `guard`, `in-flight`, `land-state` and `pin` only read, and are on
             // the read-only allowlist above.
+            // `bake` commits onto the release head, or writes two files
+            // (CLOUD-2287).
+            "release bake".to_owned(),
             "release bump-unusable".to_owned(),
             "release cut".to_owned(),
             "release discard".to_owned(),

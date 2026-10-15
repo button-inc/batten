@@ -3440,11 +3440,51 @@ const RELEASE_WORKFLOW: FlagDecl = required(
     "The workflow's file name, as the forge's workflow API names it",
 );
 
+/// `--workflow <file>` on `release in-flight`, repeatable (CLOUD-2287): the
+/// build workflow and the land workflow, each a run of which holds the freeze.
+const IN_FLIGHT_WORKFLOW: FlagDecl = FlagDecl {
+    required: true,
+    value: ValueDecl::StrMany,
+    ..FlagDecl::valued(
+        "workflow",
+        "workflow",
+        "A release workflow's file name, as the forge's workflow API names it (repeatable)",
+    )
+};
+
 /// `--branch <branch>` on `release bump-unusable`.
 const RELEASE_BRANCH: FlagDecl = required(
     "branch",
     "branch",
     "The release branch the bump is committed onto",
+);
+
+/// `--land-workflow <file>` on `release cut`: where a baked head is landed.
+const CUT_LAND_WORKFLOW: FlagDecl = FlagDecl::valued(
+    "land_workflow",
+    "land-workflow",
+    "The land workflow a baked head of the open draft's target is dispatched to, instead of a new cut",
+);
+
+/// `--sha <sha>` on `release bake`: the release head the bake commits onto.
+const BAKE_SHA: FlagDecl = FlagDecl::valued(
+    "sha",
+    "sha",
+    "The release head the bake is committed onto; required unless --write-only",
+);
+
+/// `--branch <branch>` on `release bake`: the release branch moved to the bake.
+const BAKE_BRANCH: FlagDecl = FlagDecl::valued(
+    "branch",
+    "branch",
+    "The release branch moved to the bake commit; required unless --write-only",
+);
+
+/// `--write-only` on `release bake`: write the two files, commit nothing.
+const BAKE_WRITE_ONLY: FlagDecl = FlagDecl::switch(
+    "write_only",
+    "write-only",
+    "Write install.lock and install.sh to the working tree and commit nothing",
 );
 
 /// `--changelog <path>` on `release bump-unusable` and `release cut`.
@@ -4395,7 +4435,7 @@ pub const SURFACE: &[CommandDecl] = &[
         data_channel: false,
         exits: EXITS_STANDARD,
         effect: Effect::Read,
-        flags: &[RELEASE_WORKFLOW],
+        flags: &[IN_FLIGHT_WORKFLOW],
     },
     CommandDecl {
         path: "release land-state",
@@ -4436,7 +4476,20 @@ pub const SURFACE: &[CommandDecl] = &[
             LAND_STATE_SHA,
             RELEASE_CHANGELOG,
             RELEASE_WORKFLOW,
+            CUT_LAND_WORKFLOW,
         ],
+    },
+    // `write` (CLOUD-2287): `install.lock` and the `install.sh` rendered from
+    // it, committed onto the release head through the forge so the branch move
+    // fires CI — or, with `--write-only`, written to the working tree.
+    CommandDecl {
+        path: "release bake",
+        id: "release.bake",
+        about: "Bake a release's tag and archive digests into install.lock and install.sh, as one commit on its release head",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Write,
+        flags: &[RELEASE_STATE_TAG, BAKE_SHA, BAKE_BRANCH, BAKE_WRITE_ONLY],
     },
     CommandDecl {
         path: "release pin",
@@ -7905,15 +7958,14 @@ pub const SURFACE: &[CommandDecl] = &[
         effect: Effect::Write,
         flags: &[],
     },
-    // `write`, and the write is the running binary itself (CLOUD-2062): a
-    // release is fetched, verified against its SHA256SUMS and swapped in by
-    // rename; a source pin is built from this tree and stamped. A satisfied or
-    // absent pin is a no-op. Not `destructive`: the swap is atomic, and the
-    // binary it replaces is the one the pin says is wrong.
+    // `write`, twice (CLOUD-2287): the config's one `engine` line, moved forward
+    // to the release `main` pins and never backward, then `engine install`'s
+    // write. Not `destructive`: the pin only advances, and the install swaps
+    // atomically.
     CommandDecl {
         path: "engine update",
         id: "engine.update",
-        about: "Install the engine this config pins over the running binary, from its release or from this tree",
+        about: "Move this config's release pin forward to the latest release, then install it",
         data_channel: false,
         exits: EXITS_STANDARD,
         effect: Effect::Write,
@@ -7935,14 +7987,16 @@ pub const SURFACE: &[CommandDecl] = &[
     // kept under git's common directory, then run over this tree (CLOUD-2063).
     // The verdict is the gate's: a source pin never lands, and a release pin
     // must load this config and carry every verb the released lanes invoke.
-    // `write`: the one binary it places, in the first directory `PATH` finds
-    // (CLOUD-2203). The generated bootstrap's last step, so it runs outside any
-    // repository and reads no config.
+    // `write`: the engine the pin names (CLOUD-2203, CLOUD-2287). The bootstrap's
+    // download is placed in the first directory `PATH` finds; an installed
+    // engine is swapped atomically over each copy whose bytes or stamp differ,
+    // and a satisfied or absent pin writes nothing. It reads only the `engine`
+    // line, never the config, so it runs outside any repository too.
     // unreached: "engine install" CLOUD-2203 the generated install.sh runs it; the committed script is swapped once a release carries this verb
     CommandDecl {
         path: "engine install",
         id: "engine.install",
-        about: "Place this binary in a directory on PATH: the generated install.sh's last step",
+        about: "Install the engine the batten.toml pin names, from its release or from this tree",
         data_channel: false,
         exits: EXITS_STANDARD,
         effect: Effect::Write,

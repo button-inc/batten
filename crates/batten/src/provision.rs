@@ -634,7 +634,7 @@ pub fn status(entries: &[Provision], cache_root: &Path) -> Result<Report> {
 /// (CLOUD-2124).
 ///
 /// **A build of the checkout it provisions never does.** Such a binary is
-/// `cargo`'s output, not an installed engine — the line `engine update` already
+/// `cargo`'s output, not an installed engine — the line `engine install` already
 /// draws for the same reason (CLOUD-2063). A launcher names its interpreter by
 /// absolute path, so a gate running `provision apply` through `cargo run`
 /// rewrote `~/.local/bin/mise` to run a debug build: measured 2026-10-07, a
