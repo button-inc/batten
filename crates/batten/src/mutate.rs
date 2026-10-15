@@ -270,7 +270,6 @@ fn task_names(lines: &[String]) -> Vec<String> {
 /// reach another task's rows (CLOUD-1909).
 //MUTANT-SUITE crates/batten/tests/it/mutate.rs
 //MUTANT task-block-unscoped|s@        Some(task) if task_manifest().as_deref() == Some(source) => task_block(&lines, task),@        Some(_) if task_manifest().as_deref() == Some(source) => Some(lines),@|a_task_gate_sweeps_only_its_own_block
-//MUTANT suite-first-only|s@own_suites.get(&row.source)@own_suites.get(\&row.slug)@|each_preset_module_row_runs_under_its_own_declared_suite
 //MUTANT registered-rows-swept-by-hand|s@^                if !gate.rows.is_empty() \&\& !gate.rows.iter().any(|row| registry.declares(row)) {$@                if false {@|a_change_to_a_rust_gate_is_judged_by_its_registered_runner
 //MUTANT registered-row-judged-twice|s@^        for row in gate.rows.iter().filter(|row| registry.declares(row)) {$@        for row in \&gate.rows {@|a_registered_runners_rows_are_never_swept_by_the_declared_runner
 //MUTANT shard-slices-unsorted|s@^    sorted.sort();$@@|shards_partition_the_sorted_gates_and_refuse_a_malformed_value
@@ -324,6 +323,10 @@ pub struct Row {
     /// The source file this row was read from, repo-relative. A gate may have
     /// several (a preset is a directory), and each row mutates its own file.
     pub source: String,
+    /// The `MUTANT-SUITE` this row is judged under, as declared: the nearest
+    /// one above it in its source, else that source's first; `None` where the
+    /// source declares none (CLOUD-2193). [`Gate::suite_for`] resolves it.
+    pub suite: Option<String>,
 }
 
 /// How a gate's suite is run.
@@ -440,15 +443,17 @@ pub struct Gate {
     /// The first declared suite path no runner here recognizes, reported as
     /// `no-suite (<path>)` rather than guessed at.
     pub unrunnable: Option<String>,
-    /// Each source's OWN `#MUTANT-SUITE`, keyed by that source.
+    /// Every `#MUTANT-SUITE` each source declares, in order, keyed by that
+    /// source.
     ///
-    /// **ONE DECLARATION PER SOURCE, NOT ONE PER GATE.** A preset gate is a
-    /// directory of modules, and each module declares the suite its own cases
-    /// live in. Keeping only the first declaration found made every later
-    /// module's line decide nothing: every row was judged under the first
-    /// module's suite, so the census counted the wrong file and a declaration
-    /// naming a missing file was never checked. [`Gate::suite_for`] reads this.
-    pub own_suites: BTreeMap<String, Suite>,
+    /// **EVERY DECLARATION, NOT ONE PER GATE OR PER SOURCE.** A preset gate is
+    /// a directory of modules, and each module declares the suite its own cases
+    /// live in; a module may declare several, each over the rows below it
+    /// (CLOUD-2193). Keeping only the first found made every later line decide
+    /// nothing: the census counted the wrong file, a declaration naming a
+    /// missing file was never checked, and a change to it selected no sweep.
+    /// [`Gate::suites`] reads this; a row's own is on the row.
+    pub own_suites: BTreeMap<String, Vec<Suite>>,
     /// The declared mutations, in file then declaration order.
     pub rows: Vec<Row>,
     /// The owning row a known-dead predicate declares, echoed on a survivor and
@@ -457,18 +462,23 @@ pub struct Gate {
 }
 
 impl Gate {
-    /// The suite a row is judged under: its own source's declaration, else
-    /// the gate's, else none.
+    /// The suite a row is judged under: the declaration above it in its own
+    /// source (CLOUD-2193), else, where its source declares none, the gate's.
+    /// `None` where neither resolves, including a declaration no runner here
+    /// recognizes, which costs that row alone ([`Row::suite`] names it).
     #[must_use]
-    pub fn suite_for(&self, row: &Row) -> Option<&Suite> {
-        self.own_suites.get(&row.source).or(self.suite.as_ref())
+    pub fn suite_for(&self, row: &Row) -> Option<Suite> {
+        match &row.suite {
+            Some(declared) => Suite::declared(declared),
+            None => self.suite.clone(),
+        }
     }
 
     /// Every suite this gate's rows run under, the gate's own first, each once.
     #[must_use]
     pub fn suites(&self) -> Vec<&Suite> {
         let mut all: Vec<&Suite> = self.suite.iter().collect();
-        for suite in self.own_suites.values() {
+        for suite in self.own_suites.values().flatten() {
             if !all.contains(&suite) {
                 all.push(suite);
             }
@@ -738,24 +748,40 @@ pub fn rows_of(root: &Path, source: &str) -> Vec<Row> {
 ///
 /// The count precedes the split because after the split the evidence is gone: a
 /// case filter holding a `|` is indistinguishable from one that meant to.
+///
+/// EACH ROW CARRIES THE SUITE ABOVE IT (CLOUD-2193). A source may declare
+/// several (`land.rs` declares four, `lib.rs` fifteen), and every author of a
+/// later one wrote its rows under it; reading only the first judged them all
+/// under the first, so a change to a later suite selected no sweep and the
+/// every-case check counted the wrong file. A row above every declaration
+/// keeps the first, which is all a single-declaration source ever had.
 fn rows_in(lines: &[String], source: &str) -> Vec<std::result::Result<Row, (String, usize)>> {
-    lines
-        .iter()
-        .filter_map(|line| strip_marker(line, ROW))
-        .map(|body| {
-            let fields: Vec<&str> = body.split('|').collect();
-            let [slug, script, want] = fields.as_slice() else {
-                let head = body.split('|').next().unwrap_or_default().to_owned();
-                return Err((head, fields.len()));
-            };
-            Ok(Row {
-                slug: (*slug).to_owned(),
-                script: (*script).to_owned(),
-                want: (*want).to_owned(),
-                source: source.to_owned(),
-            })
-        })
-        .collect()
+    let first = declared(lines, SUITE);
+    let mut above = first.clone();
+    let mut rows = Vec::new();
+    for line in lines {
+        if let Some(suite) = strip_marker(line, SUITE) {
+            above = Some(suite);
+            continue;
+        }
+        let Some(body) = strip_marker(line, ROW) else {
+            continue;
+        };
+        let fields: Vec<&str> = body.split('|').collect();
+        let [slug, script, want] = fields.as_slice() else {
+            let head = body.split('|').next().unwrap_or_default().to_owned();
+            rows.push(Err((head, fields.len())));
+            continue;
+        };
+        rows.push(Ok(Row {
+            slug: (*slug).to_owned(),
+            script: (*script).to_owned(),
+            want: (*want).to_owned(),
+            source: source.to_owned(),
+            suite: above.clone(),
+        }));
+    }
+    rows
 }
 
 /// The sources a gate name resolves to, in the order the predecessor resolved
@@ -864,17 +890,28 @@ pub fn resolve(root: &Path, name: &str) -> Option<Gate> {
         let Some(lines) = declaring_lines(root, name, source) else {
             continue;
         };
-        if let Some(own) = declared(&lines, SUITE) {
-            // A source naming a path no runner here recognizes is reported as
-            // `no-suite` under that path, never judged under another source's
-            // suite and never handed to a runner chosen by guesswork.
-            match Suite::declared(&own) {
+        // EVERY DECLARATION IN THE SOURCE, NOT ITS FIRST (CLOUD-2193): each
+        // is a suite some of its rows run under, so each is one a change can
+        // weaken. A source's FIRST naming a path no runner here recognizes is
+        // reported as `no-suite` under that path for the gate, as before; a
+        // later one costs only the rows under it ([`Gate::suite_for`]).
+        let mut own = Vec::new();
+        for (index, raw) in lines
+            .iter()
+            .filter_map(|line| strip_marker(line, SUITE))
+            .enumerate()
+        {
+            match Suite::declared(&raw) {
                 Some(resolved) => {
-                    own_suites.insert(source.clone(), resolved.clone());
-                    suite = suite.or(Some(resolved));
+                    suite = suite.or(Some(resolved.clone()));
+                    own.push(resolved);
                 }
-                None => unrunnable = unrunnable.or(Some(own)),
+                None if index == 0 => unrunnable = unrunnable.or(Some(raw)),
+                None => {}
             }
+        }
+        if !own.is_empty() {
+            own_suites.insert(source.clone(), own);
         }
         owner = owner.or_else(|| declared(&lines, OWNER));
         for row in rows_in(&lines, source) {
@@ -894,6 +931,7 @@ pub fn resolve(root: &Path, name: &str) -> Option<Gate> {
             script: String::new(),
             want: format!("\u{0}malformed:{fields}"),
             source: sources[0].clone(),
+            suite: None,
         });
     }
     Some(Gate {
@@ -1182,7 +1220,10 @@ impl RunnerKind {
 //MUTANT declared-suites-unscoped|s@^        if has_extension(suite, "rs")$@        if false@|a_sources_scope_is_its_own_tests_and_every_suite_it_declares
 //MUTANT missed-unread|s@^    let missed: Vec<String> = lines("missed.txt")@    let missed: Vec<String> = lines("absent.txt")@|a_missed_mutant_is_a_survivor_named_by_pointer_alone
 //MUTANT failed-run-reads-caught|s@^        } else if !ran.passed() \&\& found.is_empty() {$@        } else if false {@|a_failed_run_with_nothing_missed_is_never_every_mutant_caught
+//MUTANT row-judged-under-first-suite|s@^            above = Some(suite);$@            above = first.clone().or(Some(suite));@|a_row_is_judged_under_the_suite_above_it
+//MUTANT suite-first-only|s@^            Some(declared) => Suite::declared(declared),$@            Some(_) => self.suite.clone(),@|each_preset_module_row_runs_under_its_own_declared_suite
 //MUTANT-SUITE crates/batten/tests/it/mutate.rs
+//MUTANT later-suites-unread|s@^                    own.push(resolved);$@                    if own.is_empty() { own.push(resolved); }@|a_change_to_a_sources_second_suite_sweeps_its_gate
 /// Which registered runner owns which sources.
 ///
 /// Every source has exactly one owner: the first registered runner whose glob
@@ -3432,13 +3473,18 @@ fn judge_row(root: &Path, staged: &mut Staged, gate: &Gate, row: &Row) -> Result
     {
         return Ok(verdict);
     }
-    // The row's OWN source's suite, never merely the gate's first: a preset
-    // gate is several modules, each naming where its cases live.
+    // The suite declared above the row in its OWN source, never merely the
+    // gate's first: a preset gate is several modules, and a module may name
+    // several suites (CLOUD-2193). A declaration no runner recognizes is named.
     let Some(suite) = gate.suite_for(row) else {
         return Ok(Verdict::NoSuite {
-            suite: String::from(UNDECLARED),
+            suite: row
+                .suite
+                .clone()
+                .unwrap_or_else(|| String::from(UNDECLARED)),
         });
     };
+    let suite = &suite;
 
     // THE CASE MUST BE GREEN BEFORE IT IS MUTATED. "Red under mutation" is only
     // evidence if the row was green without it: a case that CANNOT pass — an
@@ -4182,12 +4228,37 @@ mod tests {
         );
     }
 
+    /// Fails by: a row judged under its source's first declaration rather than
+    /// the nearest one above it (CLOUD-2193); a row above every declaration
+    /// keeps the first, which is what a single-declaration source always had.
+    #[test]
+    fn a_row_is_judged_under_the_suite_above_it() {
+        let lines = vec![
+            format!("//{ROW}above|s@a@b@|w"),
+            format!("//{SUITE}tests/first.rs"),
+            format!("//{ROW}under-first|s@a@b@|w"),
+            format!("//{SUITE}tests/second.rs"),
+            format!("//{ROW}under-second|s@a@b@|w"),
+        ];
+        let rows: Vec<Row> = rows_in(&lines, "src/x.rs").into_iter().flatten().collect();
+        let suites: Vec<Option<&str>> = rows.iter().map(|row| row.suite.as_deref()).collect();
+        assert_eq!(
+            suites,
+            [
+                Some("tests/first.rs"),
+                Some("tests/first.rs"),
+                Some("tests/second.rs")
+            ]
+        );
+    }
+
     fn row_from(source: &str) -> Row {
         Row {
             slug: String::from("s"),
             script: String::from("s@a@b@"),
             want: String::from("w"),
             source: source.to_owned(),
+            suite: None,
         }
     }
 
@@ -4652,9 +4723,8 @@ mod tests {
                 panic!("row {slug} is declared");
             };
             gate.suite_for(row)
-                .map(Suite::path)
+                .map(|suite| suite.path().to_owned())
                 .unwrap_or_default()
-                .to_owned()
         };
         assert_eq!(suite_of("one"), "tests/it/a.rs");
         assert_eq!(suite_of("two"), "tests/it/b.rs");

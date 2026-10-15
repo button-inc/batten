@@ -712,9 +712,9 @@ pub struct Reading {
 // mutations moved with it into the preset's modules; what stays here is the
 // reading, and a mutation of the reading is caught by the same compiled tier —
 // a fact the preset never sees is a verdict it never reaches. One suite serves
-// every row in this file, because `batten mutate` reads the FIRST `MUTANT-SUITE`
-// line of a source. No pattern or case here carries a `|`: the row is split on
-// it.
+// every row in this file: `batten mutate` judges a row under the `MUTANT-SUITE`
+// line above it (CLOUD-2193), and this is the file's only one. No pattern or
+// case here carries a `|`: the row is split on it.
 //MUTANT-SUITE crates/batten/tests/it/board_check.rs
 //MUTANT blocker-edges-unread|s@^            lines.push(format!("edge\\t{}\\t{}\\t{}", from, field(to), by_num(to).0));$@            let _ = to;@|a_blocked_by_cycle_is_reported_with_its_members
 //MUTANT claim-scan-unread|s@^                        "claim\\t{}\\t{}\\t{}",$@                        "unread\\t{}\\t{}\\t{}",@|a_body_claiming_a_column_the_board_contradicts_is_reported

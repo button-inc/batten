@@ -33,7 +33,8 @@
 //! [`classify`], [`previous`] and [`tally`] are pure functions of the folded
 //! lines; everything that touches a file or the clock is in the `run_*` arms.
 
-// ONE SUITE PER GATE: `mutate::resolve` reads the first `MUTANT-SUITE` only, so
+// ONE SUITE FOR THESE ROWS: each row is judged under the `MUTANT-SUITE` above
+// it (CLOUD-2193), and a Rust suite selects the runner rather than a target, so
 // the rows whose case lives in `tests/it/reclaim_census.rs` or
 // `tests/it/reclaim_report_once.rs` select it by libtest substring under this one.
 //MUTANT-SUITE crates/batten/src/reclaim.rs

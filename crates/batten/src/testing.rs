@@ -33,9 +33,10 @@ pub fn contain_state(data_dir: &Path) {
 
 /// The contained data directory, if a test set one.
 ///
-/// ONE SUITE FOR EVERY ROW IN THIS FILE: `mutate` reads a source's first
-/// `MUTANT-SUITE` only, and a Rust suite selects the runner, not a target — each
-/// row's case filter runs over the whole `it` binary, wherever the case lives.
+/// ONE SUITE FOR EVERY ROW IN THIS FILE: `mutate` judges a row under the
+/// `MUTANT-SUITE` above it (CLOUD-2193), and a Rust suite selects the runner, not
+/// a target — each row's case filter runs over the whole `it` binary, wherever
+/// the case lives.
 //MUTANT-SUITE crates/batten/tests/it/harness_isolation.rs
 //MUTANT in-process-uncontained|s@^    CONTAINED.get().map(PathBuf::as_path)$@    None@|in_process_state_resolves_to_the_cases_own_root
 pub(crate) fn contained_data_dir() -> Option<&'static Path> {

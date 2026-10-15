@@ -1424,6 +1424,34 @@ fn a_change_to_a_suite_sweeps_its_gate() {
     assert!(out.contains("other/pipefail-dropped SURVIVED"), "{out}");
 }
 
+/// Fails by: only a source's FIRST `MUTANT-SUITE` counting as its suite, so a
+/// change touching a later one selects no sweep (CLOUD-2193: `land.rs`
+/// declares four, and a weakened `tests/it/land.rs` re-proved none of them).
+#[cfg(unix)]
+#[test]
+fn a_change_to_a_sources_second_suite_sweeps_its_gate() {
+    let root = two_gate_repo("since-second-suite");
+    let other = std::fs::read_to_string(root.join("mise-tasks/other.sh")).expect("other.sh");
+    write_program(
+        &root,
+        "mise-tasks/other.sh",
+        &format!("{other}#MUTANT-SUITE tests/extra.rs\n"),
+    );
+    // Its own case name: `cargo test -- <want>` runs every target, and a
+    // second `other_refuses_*` would make the row name every case.
+    write(&root, "tests/extra.rs", "#[test]\nfn extra_holds() {}\n");
+    track(&root);
+    common::git_in(&root, &["commit", "-m", "second suite"]);
+    write(
+        &root,
+        "tests/extra.rs",
+        "#[test]\nfn extra_holds() {}\n// edited\n",
+    );
+    let (code, out, err) = sweep_since(&root, "toy,other", "HEAD");
+    assert_ne!(code, 0, "{out}{err}");
+    assert!(out.contains("other/pipefail-dropped SURVIVED"), "{out}");
+}
+
 /// `sweep_since` with a runner registry declared, and optionally the registered
 /// runner to run instead of the declared one.
 fn sweep_registered(
