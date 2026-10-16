@@ -133,19 +133,21 @@ fn amends(version: &str) -> String {
     amends_halves(version, version)
 }
 
-/// A fetch URL with each half named separately — the release tag and the `hk@`
-/// fragment — `amends_halves`'s twin for the other surface.
-fn package_halves(tag: &str, fragment: &str) -> String {
-    format!("package://github.com/jdx/hk/releases/download/v{tag}/hk@{fragment}")
+/// The `pkl-package` task with each half of its URL named separately — the
+/// release tag and the `hk@` fragment. Which half drifts is then the only thing
+/// a case states, which is `amends_halves`'s reason on the other surface.
+///
+/// Carries the whole task table, not just the URL, so every package case is one
+/// `format!` over `[tools]` plus this.
+fn package_task_halves(tag: &str, fragment: &str) -> String {
+    format!(
+        "[tasks.pkl-package]\nrun = \"pkl download-package package://github.com/jdx/hk/releases/download/v{tag}/hk@{fragment}\"\n"
+    )
 }
 
-/// The `pkl-package` task as `mise.toml` really spells it, with both halves of
-/// the URL naming one version.
+/// The `pkl-package` task as `mise.toml` really spells it: both halves agree.
 fn package_task(version: &str) -> String {
-    format!(
-        "[tasks.pkl-package]\nrun = \"pkl download-package {}\"\n",
-        package_halves(version, version)
-    )
+    package_task_halves(version, version)
 }
 
 /// A committed fixture repository carrying the three committed modules, the
@@ -304,8 +306,8 @@ fn an_amends_fragment_floating_over_an_agreeing_tag_is_refused() {
 #[test]
 fn a_package_fragment_floating_over_an_agreeing_tag_is_refused() {
     let manifest = format!(
-        "[tools]\nhk = \"1.56.1\"\n\n[tasks.pkl-package]\nrun = \"pkl download-package {}\"\n",
-        package_halves("1.56.1", "latest")
+        "[tools]\nhk = \"1.56.1\"\n\n{}",
+        package_task_halves("1.56.1", "latest")
     );
     let root = fixture("hk-package-floats", &[("mise.toml", &manifest)], &[]);
     denied(&root, "tool pin other", "mise.toml");

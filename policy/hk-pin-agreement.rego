@@ -29,11 +29,10 @@
 # `amends_line`/`amends()` writes one version into BOTH halves of the URL, so
 # arm A2 emits a byte-identical finding and neutering arm A changes no count —
 # measured, by applying this mutant: before the case below existed, `policy
-# test` passed every case with the arm `false`. A2 masks A on every such input.
+# test` passed every case with the arm `false`. A2 masks A on every such input,
+# and only a URL whose FRAGMENT alone drifts leaves A the one arm that can fire.
 # (`policy test`, not `opa test` — regorus is the shipped evaluator and opa only
 # type-checks here, which `opa-tracks-regorus-compliance` exists to keep apart.)
-# Only a
-# URL whose FRAGMENT alone drifts leaves A the one arm that can fire.
 #MUTANT hk-pin-disagreement-passes|s@^\tamended.version != pin$@\tfalse@|an_amends_fragment_naming_another_version_is_refused
 #MUTANT hk-amends-unnamed-passes|s@^\tcount(amends) == 0$@\tfalse@|an_hk_pkl_naming_no_version_is_refused
 #MUTANT hk-package-disagreement-passes|s@^\tpackaged.version != pin$@\tfalse@|a_package_task_naming_another_version_is_refused
@@ -124,7 +123,8 @@ amends contains {"line": i + 1, "version": match[1]} if {
 # union. Two arms here because the tag reading's mutant can then anchor on a
 # short comparison rather than on a ~97-character
 # `regex.find_all_string_submatch_n` line; one arm there because arm D's
-# subjects carry no line, so two arms would emit the same object anyway.
+# subjects carry no line, so two arms could never emit distinct objects on a
+# single task — as they can here, where two amends lines can drift separately.
 amend_tags contains {"line": i + 1, "version": match[1]} if {
 	some i, line in lines
 	some match in regex.find_all_string_submatch_n(data.batten.patterns["hk-download-tag"], line, -1)
@@ -158,9 +158,9 @@ violation contains {
 # a floating `hk@latest` is refused here even when its tag segment agrees.
 #
 # THE MIRROR IS NOT GOVERNED, and that is a decision rather than an oversight.
-# Nothing counts `amend_tags`, so a floating or templated TAG over an agreeing
-# fragment (`…/download/latest/hk@1.56.1`) is refused by no arm, here or on the
-# fetch URL. A `count(amend_tags) == 0` arm would close it and would also refuse
+# Nothing counts `amend_tags` — nor `package_tags` on the fetch URL — so a
+# floating or templated TAG over an agreeing fragment
+# (`…/download/latest/hk@1.56.1`) is refused by no arm on either surface. A `count(amend_tags) == 0` arm would close it and would also refuse
 # every URL that has no `/v<semver>/` segment at all — a package on a non-GitHub
 # mirror, say — because this module cannot tell a missing tag from a floating
 # one. The fragment is the spelling every `package://` URI must carry; the tag
@@ -217,8 +217,9 @@ violation contains {
 # binding let a `run` of any shape reach arm E, where the result depended on
 # truthiness rather than on anything this module decides — `false` fell through
 # silently while a number or a table fired the arm. Neither is this module's
-# question; a `run` mise cannot execute fails the manifest parse long before a
-# gate sees it. mise accepts a string or an array of them, so those are the two
+# question: a `run` mise cannot execute is a manifest defect, and reporting it
+# is not this module's job. mise accepts a string or an array of them, so those
+# are the two
 # shapes read, and every other leaves D and E undefined together, exactly as an
 # absent task does.
 package_run := r if {
@@ -477,7 +478,8 @@ test_an_amends_url_whose_tag_segment_drifts_is_refused if {
 
 # ARM B KEEPS ITS REACH, and this is the case that says so: a `latest` fragment
 # over an AGREEING tag names nothing where arm B looks, so arm B still refuses
-# it. If the two sets are ever merged, this is what reddens — see `amend_tags`.
+# it. `#MUTANT hk-amends-merge-narrows-arm-b` is that merge declared, and its
+# Rust twin is what reddens — see `amend_tags` for why the sets stay apart.
 test_an_amends_fragment_naming_no_version_is_still_refused if {
 	found := violation with input as tree(
 		{"hk": "1.56.1"},
