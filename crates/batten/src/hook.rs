@@ -6326,7 +6326,8 @@ fn followed_cd(
 /// them that begins with `-`, `(` or `!` opens the expression and ends the
 /// list.
 // `Policy::is_empty`'s redirect conjunct (CLOUD-2362), declared here because a
-// row inside an `impl` block is indented by rustfmt and then read by nothing.
+// row inside an `impl` block is indented by rustfmt and then read by nothing;
+// it moves back beside the conjunct once mutate reads indented rows (CLOUD-1964).
 //MUTANT read-route-only-policy-empty|s@^            && !self.redirects.iter().any(\x7crow\x7c row.read.is_some())$@@|a_generic_read_of_a_memory_is_refused_and_names_the_tool_that_answers
 //MUTANT find-expression-read-as-target|s@^    &rest\[\.\.end\]$@    rest@|a_find_expression_operand_is_never_a_target
 fn find_start_points<'a>(operands: &'a [&'a str]) -> &'a [&'a str] {
