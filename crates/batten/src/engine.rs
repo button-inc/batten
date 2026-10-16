@@ -62,13 +62,65 @@ pub fn release() -> String {
     format!("v{}", crate::config::VERSION)
 }
 
+/// The suffix of the release stamp a verified install writes beside a binary.
+pub const RELEASE_SUFFIX: &str = "release";
+
 /// The stamp file beside `binary`.
 #[must_use]
 pub fn stamp_path(binary: &Path) -> PathBuf {
+    sidecar(binary, STAMP_SUFFIX)
+}
+
+/// The release stamp beside `binary`.
+#[must_use]
+pub fn release_stamp_path(binary: &Path) -> PathBuf {
+    sidecar(binary, RELEASE_SUFFIX)
+}
+
+fn sidecar(binary: &Path, suffix: &str) -> PathBuf {
     let mut name = binary.file_name().unwrap_or_default().to_os_string();
     name.push(".");
-    name.push(STAMP_SUFFIX);
+    name.push(suffix);
     binary.with_file_name(name)
+}
+
+/// Record that `binary` IS release `tag`: written only where its bytes were
+/// verified against the release's `SHA256SUMS` (or are a copy of a binary that
+/// already carried this stamp), never by a build.
+///
+/// THE VERSION STRING IS NOT AN IDENTITY. A tree build reports the workspace
+/// version, which equals the last release's tag until the next bump, so a
+/// release pin matched by version was satisfied by a binary it does not name —
+/// measured on #1193: `install:local` put the tree's build at 0.0.216 where the
+/// hook runs, and every check of `release = "v0.0.216"` passed it. The stamp
+/// carries the byte length too, so a binary replaced beside a stale stamp no
+/// longer reads as the release it replaced.
+///
+/// # Errors
+///
+/// `binary` will not stat, or the stamp will not write.
+pub fn stamp_release(binary: &Path, tag: &str) -> Result<()> {
+    let size = std::fs::metadata(binary)?.len();
+    crate::durable::replace(release_stamp_path(binary), format!("{tag} {size}\n"))?;
+    Ok(())
+}
+
+/// The release `binary` is, by its stamp: `None` for a binary no verified
+/// install placed, or one whose length has changed since its stamp was written.
+//MUTANT-SUITE crates/batten/tests/it/engine_pin.rs
+//MUTANT release-stamp-unbound|s@^    (len == size.parse::<u64>().ok()?).then(\x7c\x7c tag.to_owned())$@    Some(tag.to_owned())@|a_binary_replaced_beside_a_release_stamp_is_not_the_release
+#[must_use]
+pub fn release_of(binary: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(release_stamp_path(binary)).ok()?;
+    let (tag, size) = text.trim().split_once(' ')?;
+    let len = std::fs::metadata(binary).ok()?.len();
+    (len == size.parse::<u64>().ok()?).then(|| tag.to_owned())
+}
+
+/// The release this running binary is, by its stamp.
+#[must_use]
+pub fn running_release() -> Option<String> {
+    release_of(&std::env::current_exe().ok()?)
 }
 
 /// Whether a tracked path is an engine input.
@@ -203,7 +255,12 @@ pub fn is_newer(latest: &str, current: &str) -> Result<bool> {
 /// The stamp will not write.
 pub fn stamp(binary: &Path, digest: &str) -> Result<()> {
     crate::durable::replace(stamp_path(binary), format!("{digest}\n"))?;
-    Ok(())
+    // A BUILD IS NEVER A RELEASE: a release stamp left beside the binary this
+    // build replaced would name it as one.
+    match std::fs::remove_file(release_stamp_path(binary)) {
+        Err(why) if why.kind() != std::io::ErrorKind::NotFound => Err(why.into()),
+        _ => Ok(()),
+    }
 }
 
 /// The pin a config declares, read from its raw text without parsing the rest.
@@ -308,6 +365,19 @@ fn built_in(source: &str) -> bool {
         .is_some_and(|root| exe.starts_with(root))
 }
 
+/// Whether the running binary lies inside the worktree the shell stands in: the
+/// checkout's own build, for a load that names its source by label rather than
+/// by a path [`built_in`] could judge (`config lint`'s base revision).
+fn built_here() -> bool {
+    let (Ok(exe), Ok(root)) = (
+        std::env::current_exe().and_then(std::fs::canonicalize),
+        crate::git::worktree_root(Path::new(".")),
+    ) else {
+        return false;
+    };
+    exe.starts_with(crate::git::canonical(&root))
+}
+
 /// The variable that runs this binary as it is under a SOURCE pin.
 pub const LOCAL_ENV: &str = "BATTEN_ENGINE";
 
@@ -342,8 +412,9 @@ pub fn checkout_build(root: &Path) -> Option<PathBuf> {
 /// Refuse a config whose pin this engine does not satisfy.
 ///
 /// `stamp` yields this binary's recorded source digest, or `None` when it has
-/// none. It is asked only for a source pin, so a config pinning a release — or
-/// nothing — never touches the disk for it.
+/// none, and `release_stamp` the release its release stamp names
+/// ([`running_release`]). Each is asked only for its own kind of pin, so a
+/// config pinning nothing never touches the disk for either.
 ///
 /// # Errors
 ///
@@ -352,14 +423,31 @@ pub fn checkout_build(root: &Path) -> Option<PathBuf> {
 /// this binary carries no stamp for.
 //MUTANT-SUITE crates/batten/tests/it/engine_install.rs
 //MUTANT in-tree-build-unaccepted|s@^            if built_in(source) \x7c\x7c runs_local() {$@            if runs_local() {@|the_checkouts_own_build_satisfies_its_source_pin
-pub fn check(text: &str, source: &str, stamp: impl FnOnce() -> Option<String>) -> Result<()> {
+//MUTANT-SUITE crates/batten/tests/it/engine_pin.rs
+//MUTANT release-pin-by-version|s@^            let stamped = release_stamp().as_deref() == Some(tag);$@            let stamped = tag == running;@|an_installed_build_reporting_the_pins_version_is_not_the_release
+pub fn check(
+    text: &str,
+    source: &str,
+    stamp: impl FnOnce() -> Option<String>,
+    release_stamp: impl FnOnce() -> Option<String>,
+) -> Result<()> {
     let Some(pin) = declared(text) else {
         return Ok(());
     };
     match (pin.release.as_deref(), pin.source.as_deref()) {
         (Some(tag), None) => {
             let running = release();
-            if tag != running {
+            // THE BINARY MUST BE THE RELEASE, by the stamp only a verified install
+            // writes: the version string a tree build also reports is not an
+            // identity (CLOUD-2398).
+            let stamped = release_stamp().as_deref() == Some(tag);
+            // EXCEPT THE CHECKOUT'S OWN BUILD, judged by version as before: every
+            // gate's `cargo run -p batten` is that build, testing the branch is
+            // what verify is for, and no build carries a release stamp. Asked
+            // only of an unstamped binary, by the config's path or, for a load
+            // that names its source by label, by the shell's own worktree.
+            let in_tree = !stamped && (built_in(source) || built_here());
+            if !stamped && !(in_tree && tag == running) {
                 // A RELEASE PIN IS REPAIRED BY THE RELEASE, NEVER BY A BUILD.
                 // CLOUD-2220 named `cargo build` here for a stale in-tree binary,
                 // and that build reports the tag's version without being the
@@ -369,13 +457,14 @@ pub fn check(text: &str, source: &str, stamp: impl FnOnce() -> Option<String>) -
                 // (then spelled `engine update`, CLOUD-2287) replaced
                 // `target/release` at 0.0.215 with the published 0.0.216. In-tree, the pinned spelling, so
                 // it runs as the binary `_.path` resolves.
-                let repair = if built_in(source) {
-                    REPAIR_PINNED
+                let repair = if in_tree { REPAIR_PINNED } else { REPAIR };
+                let identity = if in_tree || tag != running {
+                    running
                 } else {
-                    REPAIR
+                    format!("a build reporting {running}, not that release")
                 };
                 return Err(UsageError::raise(format!(
-                    "{source} pins batten {tag} and this engine is {running}: install the pin \
+                    "{source} pins batten {tag} and this engine is {identity}: install the pin \
                      with `{repair}`"
                 )));
             }
@@ -436,16 +525,31 @@ pub fn stamp_of(binary: &Path) -> Option<String> {
 /// update than refuse (CLOUD-2062). `None` covers both "no pin" and "satisfied";
 /// a malformed pin is left to [`check`] to name.
 #[must_use]
-pub fn stale(text: &str, stamp: impl FnOnce() -> Option<String>) -> Option<Pin> {
-    stale_as(text, stamp, runs_local())
+pub fn stale(
+    text: &str,
+    stamp: impl FnOnce() -> Option<String>,
+    release_stamp: impl FnOnce() -> Option<String>,
+) -> Option<Pin> {
+    stale_as(text, stamp, release_stamp, runs_local())
 }
 
 /// [`stale`], with `BATTEN_ENGINE=local`'s answer passed in rather than read,
 /// so the decision is a function of its arguments.
-fn stale_as(text: &str, stamp: impl FnOnce() -> Option<String>, local: bool) -> Option<Pin> {
+///
+/// A release pin is satisfied by the release STAMP, never the version
+/// (CLOUD-2398): a build reporting the pin's version is stale, so the one
+/// caller, `follow_pin`, hands it to the verified release it names.
+//MUTANT-SUITE crates/batten/src/engine.rs
+//MUTANT stale-release-by-version|s@^        (Some(tag), None) => release_stamp().as_deref() == Some(tag),$@        (Some(tag), None) => tag == release(),@|a_build_reporting_the_pinned_version_is_stale
+fn stale_as(
+    text: &str,
+    stamp: impl FnOnce() -> Option<String>,
+    release_stamp: impl FnOnce() -> Option<String>,
+    local: bool,
+) -> Option<Pin> {
     let pin = declared(text)?;
     let satisfied = match (pin.release.as_deref(), pin.source.as_deref()) {
-        (Some(tag), None) => tag == release(),
+        (Some(tag), None) => release_stamp().as_deref() == Some(tag),
         // `BATTEN_ENGINE=local` satisfies a source pin here exactly as it does
         // in [`check`]: one answer to "is this the engine", or a test run of
         // the branch would try to BUILD the pin it was told to run without.
@@ -768,6 +872,11 @@ pub fn cached_release(state_dir: &Path, tag: &str) -> PathBuf {
 pub fn pinned_release(state_dir: &Path, repository: &str, tag: &str) -> Result<PathBuf> {
     let path = cached_release(state_dir, tag);
     if path.is_file() {
+        // Only verified bytes are ever written here, so a copy cached before
+        // release stamps existed is stamped where it lies.
+        if release_of(&path).as_deref() != Some(tag) {
+            stamp_release(&path, tag)?;
+        }
         return Ok(path);
     }
     let bytes = fetch_release(repository, tag)?;
@@ -776,6 +885,7 @@ pub fn pinned_release(state_dir: &Path, repository: &str, tag: &str) -> Result<P
     }
     crate::durable::replace(&path, bytes)?;
     make_executable(&path)?;
+    stamp_release(&path, tag)?;
     Ok(path)
 }
 
@@ -884,20 +994,43 @@ mod tests {
     #[test]
     fn a_satisfied_or_absent_pin_is_not_stale() {
         let tag = release();
-        let stale =
-            |text: &str, stamp: Option<&str>| stale_as(text, || stamp.map(str::to_owned), false);
-        assert!(stale("version = 1\n", None).is_none());
-        assert!(stale(&format!("engine = {{ release = \"{tag}\" }}\n"), None).is_none());
-        assert!(stale("engine = { release = \"v0.0.1\" }\n", None).is_some());
-        assert!(stale("engine = { source = \"ab\" }\n", Some("ab")).is_none());
-        assert!(stale("engine = { source = \"ab\" }\n", None).is_some());
+        let stale = |text: &str, stamp: Option<&str>, released: Option<&str>| {
+            stale_as(
+                text,
+                || stamp.map(str::to_owned),
+                || released.map(str::to_owned),
+                false,
+            )
+        };
+        let pinned = format!("engine = {{ release = \"{tag}\" }}\n");
+        assert!(stale("version = 1\n", None, None).is_none());
+        assert!(stale(&pinned, None, Some(&tag)).is_none());
+        assert!(stale("engine = { release = \"v0.0.1\" }\n", None, Some(&tag)).is_some());
+        assert!(stale("engine = { source = \"ab\" }\n", Some("ab"), None).is_none());
+        assert!(stale("engine = { source = \"ab\" }\n", None, None).is_some());
+    }
+
+    /// `#MUTANT stale-release-by-version`: a build reporting the pinned
+    /// version, with no release stamp, is NOT the release (CLOUD-2398).
+    #[test]
+    fn a_build_reporting_the_pinned_version_is_stale() {
+        let pinned = format!("engine = {{ release = \"{}\" }}\n", release());
+        assert!(stale_as(&pinned, || None, || None, false).is_some());
     }
 
     /// `BATTEN_ENGINE=local` (CLOUD-2232) answers a source pin and never a
     /// release pin.
     #[test]
     fn the_local_engine_answers_a_source_pin_only() {
-        assert!(stale_as("engine = { source = \"ab\" }\n", || None, true).is_none());
-        assert!(stale_as("engine = { release = \"v0.0.1\" }\n", || None, true).is_some());
+        assert!(stale_as("engine = { source = \"ab\" }\n", || None, || None, true).is_none());
+        assert!(
+            stale_as(
+                "engine = { release = \"v0.0.1\" }\n",
+                || None,
+                || None,
+                true
+            )
+            .is_some()
+        );
     }
 }

@@ -246,10 +246,16 @@ runs:
     # later step in the job resolves a command. This action does not need it — it
     # invokes the binary by absolute path — so the affordance is the `binary`
     # output instead, which a later step reads explicitly rather than inheriting.
+    #
+    # THE RELEASE STAMP (CLOUD-2398): a release pin is satisfied by the stamp a
+    # verified install writes, never by the version a build also reports. The
+    # tag is the one this action resolved and fetched by; `<tag> <length>` is
+    # `engine::stamp_release`'s format.
     - name: Check the binary is executable
       shell: bash
       env:
         BINARY: ${{ steps.resolve.outputs.binary }}
+        VERSION: ${{ steps.resolve.outputs.version }}
       run: |
         set -euo pipefail
         [ -f "$BINARY" ] || {
@@ -257,6 +263,7 @@ runs:
           exit 1
         }
         chmod +x "$BINARY"
+        printf 'v%s %s\n' "$VERSION" "$(wc -c <"$BINARY" | tr -d ' ')" >"$BINARY.release"
 
     - name: Run Batten
       id: run

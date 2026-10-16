@@ -1254,7 +1254,12 @@ pub fn parse(text: &str, source: &str) -> Result<Config> {
     // THE PIN BEFORE THE PARSE (CLOUD-2061): a stale engine is named before a key
     // it cannot read gets the chance to fail the parse, so the refusal says which
     // engine to install rather than which field was unknown.
-    crate::engine::check(text, source, crate::engine::running_stamp)?;
+    crate::engine::check(
+        text,
+        source,
+        crate::engine::running_stamp,
+        crate::engine::running_release,
+    )?;
     let config = parse_remembered(text, source)?;
     check_min_version(&config, source)?;
     // A WRITER of the forge declaration (CLOUD-1622). Every config LOAD funnels

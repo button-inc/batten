@@ -674,7 +674,7 @@ fn follow_pin(may_build: bool) -> Result<Option<ExitCode>> {
     let Ok(text) = config::read_text(&root.join(config::CONFIG_FILE)) else {
         return Ok(None);
     };
-    let Some(pin) = engine::stale(&text, engine::running_stamp) else {
+    let Some(pin) = engine::stale(&text, engine::running_stamp, engine::running_release) else {
         return Ok(None);
     };
     // READ BEFORE THE SWAP. After the rename Linux reports the running image as
@@ -901,8 +901,14 @@ fn pinned_by(pin: Option<engine::Pin>) -> Result<Option<Want>> {
 /// release, else fetched from `repository` and checked against its
 /// `SHA256SUMS`. A tag the host does not publish is refused (CLOUD-2033), never
 /// answered with whatever binary is running.
+///
+/// "IS THAT RELEASE" BY ITS STAMP, NEVER ITS VERSION (CLOUD-2398): a tree build
+/// reports the last release's version, and copying it here installed the build
+/// where the hook runs under the release's name.
+//MUTANT-SUITE crates/batten/tests/it/engine_install.rs
+//MUTANT release-bytes-copies-unstamped|s@^    if engine::running_release().as_deref() == Some(tag) {$@    if tag == engine::release() {@|an_install_from_an_unstamped_build_fetches_the_release
 fn release_bytes(tag: &str, exe: &Path, repository: &str) -> Result<Vec<u8>> {
-    if tag == engine::release() {
+    if engine::running_release().as_deref() == Some(tag) {
         return Ok(std::fs::read(exe)?);
     }
     match engine::fetch_published(repository, tag)? {
@@ -967,10 +973,14 @@ fn engine_install(out: &mut dyn Write) -> Result<ExitCode> {
             let fence = root.unwrap_or_else(|| exe.with_file_name(""));
             for target in engine::install_targets(&exe, path.as_deref(), &fence) {
                 if std::fs::read(&target).ok().as_deref() == Some(bytes.as_slice()) {
+                    if engine::release_of(&target).as_deref() != Some(tag.as_str()) {
+                        engine::stamp_release(&target, &tag)?;
+                    }
                     continue;
                 }
                 durable::replace(&target, &bytes)?;
                 engine::make_executable(&target)?;
+                engine::stamp_release(&target, &tag)?;
                 writeln!(out, "{}", target.display())?;
             }
             Ok(ExitCode::Success)
@@ -1009,11 +1019,18 @@ fn place_download(
         &on_path,
         writable_dir,
     );
-    let (tag, bytes) = match want {
-        Want::Running | Want::Source(_) => (engine::release(), std::fs::read(exe)?),
+    // VERIFIED is whether the bytes placed ARE a release: fetched against its
+    // `SHA256SUMS`, or a copy of a binary already stamped as one (`install.sh`'s
+    // download is). Only those get a release stamp (CLOUD-2398).
+    let (tag, bytes, verified) = match want {
+        Want::Running | Want::Source(_) => {
+            let running = engine::running_release();
+            let tag = running.clone().unwrap_or_else(engine::release);
+            (tag, std::fs::read(exe)?, running.is_some())
+        }
         Want::Release(tag) => {
             let bytes = release_bytes(&tag, exe, repository)?;
-            (tag, bytes)
+            (tag, bytes, true)
         }
     };
     std::fs::create_dir_all(&dest).map_err(|why| {
@@ -1028,6 +1045,9 @@ fn place_download(
     ));
     durable::replace(&binary, &bytes)?;
     engine::make_executable(&binary)?;
+    if verified {
+        engine::stamp_release(&binary, &tag)?;
+    }
     writeln!(out, "installed={}", binary.display())?;
     writeln!(out, "version={tag}")?;
     writeln!(out, "target={}", engine::running_target())?;
