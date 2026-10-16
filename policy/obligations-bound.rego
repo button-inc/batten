@@ -66,6 +66,7 @@
 #MUTANT superseded-line-judged|s@^\trow\.stamp == latest\[row\.id\]$@\ttrue@|a_superseded_obligation_is_not_judged
 #MUTANT runner-ownership-unchecked|s@^\tregex.match(glob_pattern(trim_space(path_glob)), entry.file)$@\ttrue@|a_runner_token_on_a_file_it_does_not_own_is_refused
 #MUTANT unlanded-row-judged|s@^\tobligation_row\.id in closes$@\ttrue@|an_obligation_from_a_row_the_pr_does_not_close_is_not_judged
+#MUTANT newest-line-ignored|s@^\traw := closes_lines\[count(closes_lines) - 1\]$@\tsome raw in closes_lines@|a_key_dropped_from_the_latest_body_is_not_judged
 
 # METADATA
 # description: |
@@ -97,12 +98,18 @@ lines := input.tree.records["board-writes"]
 # whoever eventually builds it. The `filed-unrefined` half of the pair is what
 # keeps a filed row from being free, and it fires on the tracker's own verdict
 # rather than on anything here.
+#
+# ONLY THE NEWEST FETCH (CLOUD-2282). The recorder appends one `closes` line per
+# body fetch, in fetch order, so the last line is the body as it stands; a key
+# only an older body named is a row this PR no longer lands. The union judged
+# such a row anyway (#1132: CLOUD-2258, dropped from the body, still refused).
 closes contains key if {
-	some raw in input.tree.records["pr-closes"]
+	raw := closes_lines[count(closes_lines) - 1]
 	columns := split(raw, " ")
-	columns[0] == "closes"
 	some key in split(substring(columns[1], indexof(columns[1], ":") + 1, -1), ",")
 }
+
+closes_lines := [raw | some raw in input.tree.records["pr-closes"]; startswith(raw, "closes ")]
 
 column(columns, at) := value if {
 	value := columns[at]
@@ -421,6 +428,43 @@ test_an_obligation_from_a_row_the_pr_does_not_close_is_not_judged if {
 		"records": {
 			"board-writes": [bound],
 			"pr-closes": ["closes 1:CLOUD-9"],
+		},
+		"tracked": [],
+		"lines": {},
+	}}
+}
+
+# ONLY THE NEWEST FETCH CLOSES (CLOUD-2282): a key an older body named and the
+# latest dropped is a row this PR no longer lands, so it is not judged.
+test_a_key_dropped_from_the_latest_body_is_not_judged if {
+	count(violation) == 0 with input as {"tree": {
+		"records": {
+			"board-writes": [bound],
+			"pr-closes": ["closes 1:CLOUD-1", "closes 1:CLOUD-9"],
+		},
+		"tracked": [],
+		"lines": {},
+	}}
+}
+
+# ANTI-VACUITY: the same two fetches in the other order judge the row.
+test_a_key_in_the_latest_body_is_judged if {
+	count(violation) > 0 with input as {"tree": {
+		"records": {
+			"board-writes": [bound],
+			"pr-closes": ["closes 1:CLOUD-9", "closes 1:CLOUD-1"],
+		},
+		"tracked": [],
+		"lines": {},
+	}}
+}
+
+# A NEWEST `closes 0` CLOSES NOTHING, whatever an older body said.
+test_a_latest_body_closing_nothing_judges_no_row if {
+	count(violation) == 0 with input as {"tree": {
+		"records": {
+			"board-writes": [bound],
+			"pr-closes": ["closes 1:CLOUD-1", "closes 0"],
 		},
 		"tracked": [],
 		"lines": {},

@@ -362,6 +362,40 @@ fn an_obligation_from_a_row_the_pr_does_not_close_is_not_judged() {
     );
 }
 
+/// ONLY THE NEWEST BODY FETCH CLOSES (CLOUD-2282). The recorder appends a line
+/// per fetch, and a key only an older body named is a row this PR no longer
+/// lands: on #1132, CLOUD-2258 was dropped from the body and still refused.
+#[test]
+fn a_key_dropped_from_the_latest_body_is_not_judged() {
+    let root = repo_closing(
+        "obligations-dropped-from-body",
+        &[&line("1:crates/batten/tests/it/missing.rs:slug-one")],
+        None,
+        &["closes 1:CLOUD-1", "closes 1:CLOUD-9"],
+    );
+    assert!(
+        verdicts(&root).is_empty(),
+        "the latest body no longer closes CLOUD-1: {:?}",
+        verdicts(&root)
+    );
+}
+
+/// ANTI-VACUITY: the same two fetches in the other order leave CLOUD-1 in the
+/// newest body, so its unbound obligation is refused.
+#[test]
+fn a_key_in_the_latest_body_is_judged() {
+    let root = repo_closing(
+        "obligations-kept-in-body",
+        &[&line("1:crates/batten/tests/it/missing.rs:slug-one")],
+        None,
+        &["closes 1:CLOUD-9", "closes 1:CLOUD-1"],
+    );
+    assert!(
+        !verdicts(&root).is_empty(),
+        "the latest body closes CLOUD-1, so its obligation is judged"
+    );
+}
+
 /// AND AN ABSENT `pr-closes` RECORD JUDGES NOTHING. The same reading, reached the
 /// other way: no pull request yet, or a key reader that could not run, is
 /// could-not-look about whether the row is landing — and this module is already
