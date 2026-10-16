@@ -2892,7 +2892,7 @@ fn transcript_evidence(
 /// and a link that will not read is no pointer at all, which is not the same
 /// fact as a pointer at nothing.
 //MUTANT-SUITE crates/batten/tests/it/session_drain.rs
-//MUTANT transcript-arm-dropped|s@^        TaskEvidence::NoTaskCall => true,$@        TaskEvidence::NoTaskCall => store_is_merely_unwritten(\&resolved),@|a_transcript_with_no_task_call_is_zero_without_a_store_root
+//MUTANT transcript-arm-dropped|s@^        TaskEvidence::NoTaskCall => !resolved.try_exists().unwrap_or(true),$@        TaskEvidence::NoTaskCall => store_is_merely_unwritten(\&resolved),@|a_transcript_with_no_task_call_is_zero_without_a_store_root
 //MUTANT transcript-zero-without-a-transcript|s@^        TaskEvidence::Unknown => store_is_merely_unwritten(&resolved),$@        TaskEvidence::Unknown => true,@|a_pointer_whose_parent_is_absent_too_stays_could_not_look
 //MUTANT transcript-zero-over-a-present-store|s@^    if resolved.try_exists().unwrap_or(true) {$@    if false {@|an_unreadable_store_is_never_zero
 fn absent_store_is_zero(
@@ -2912,7 +2912,11 @@ fn absent_store_is_zero(
         return false;
     }
     match transcript_evidence(dir, transcript, &target) {
-        TaskEvidence::NoTaskCall => true,
+        // RE-CHECKED AFTER THE READ: a task call racing this verb can create the
+        // store before its line reaches the transcript, so a store present now
+        // was written while we looked. Timing the suite cannot pin; the arm stays
+        // `false`-safe either way.
+        TaskEvidence::NoTaskCall => !resolved.try_exists().unwrap_or(true),
         TaskEvidence::TaskCalled => false,
         TaskEvidence::Unknown => store_is_merely_unwritten(&resolved),
     }

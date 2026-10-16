@@ -325,11 +325,18 @@ fn another_sessions_transcript_is_not_evidence() {
 /// A store that EXISTS and will not list is could-not-look, whatever the
 /// transcript says: only an absent store is the transcript's to answer.
 ///
+/// The transcript is another session's, so the evidence is unknown and the
+/// present parent alone would read the file-shaped store as zero.
+///
 /// Fails by: dropping the target test (`transcript-zero-over-a-present-store`).
 #[cfg(unix)]
 #[test]
 fn an_unreadable_store_is_never_zero() {
-    let dir = rootless("transcript-unreadable", &transcript(&["Bash"]), true);
+    let dir = rootless(
+        "transcript-unreadable",
+        &transcript_of("s-2", &["Bash"]),
+        true,
+    );
     common::write(
         &dir,
         "store-root/s-1",
