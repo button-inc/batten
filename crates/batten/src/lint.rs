@@ -372,7 +372,7 @@ fn waiver_smells(
 }
 
 /// Convert a byte offset into a 1-based line number.
-fn line_of(text: &str, offset: usize) -> usize {
+pub(crate) fn line_of(text: &str, offset: usize) -> usize {
     text.get(..offset)
         .map_or(1, |prefix| prefix.matches('\n').count() + 1)
 }

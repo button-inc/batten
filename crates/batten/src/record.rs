@@ -1998,42 +1998,27 @@ pub(crate) fn clear_named(verb: &str, family: &str) -> Result<()> {
     remove_stale(&named_path(verb, family)?)
 }
 
-/// Remove every record of this branch whose line is of `kind`, whatever family
-/// the consumer filed it under (CLOUD-2418).
+/// Remove this branch's record in each of `families` whose line is of `kind`
+/// (CLOUD-2418).
 ///
 /// **FOR A PRODUCER THAT MADE ITS OWN READING FALSE.** `engine update` moves the
 /// pin an `engine-fresh` line judged, and the family that line lives in is the
-/// consumer's name, declared nowhere the verb reads. A record is
-/// `<family>.<branch>[.<claim>]` ([`crate::recorder::record_path`]), so this
-/// branch's records are the ones sharing [`named_path`]'s suffix, and the kind is
-/// the line's first column.
+/// consumer's name: the caller passes the families its config declares, and the
+/// line's first column says which of them hold this kind. Each is cleared at its
+/// own [`named_path`], so no other branch's or family's record can match.
 ///
 /// # Errors
 ///
-/// As [`named_path`], and an internal error when a matching record cannot be
-/// removed. A store that does not exist yet holds nothing to clear.
-pub(crate) fn clear_kind(verb: &str, kind: &str) -> Result<()> {
-    const PROBE: &str = "x";
-    let probe = named_path(verb, PROBE)?;
-    let Some(name) = probe.file_name().and_then(|name| name.to_str()) else {
-        return Ok(());
-    };
-    let suffix = &name[PROBE.len()..];
-    let Some(store) = probe.parent() else {
-        return Ok(());
-    };
-    let Ok(entries) = std::fs::read_dir(store) else {
-        return Ok(());
-    };
+/// As [`load_named`] and [`clear_named`].
+pub(crate) fn clear_kind<'a>(
+    verb: &str,
+    kind: &str,
+    families: impl IntoIterator<Item = &'a str>,
+) -> Result<()> {
     let line = format!("{kind}\t");
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let ours = path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(|name| name.len() > suffix.len() && name.ends_with(suffix));
-        if ours && std::fs::read_to_string(&path).is_ok_and(|body| body.starts_with(&line)) {
-            remove_stale(&path)?;
+    for family in families {
+        if load_named(verb, family)?.is_some_and(|body| body.starts_with(&line)) {
+            clear_named(verb, family)?;
         }
     }
     Ok(())

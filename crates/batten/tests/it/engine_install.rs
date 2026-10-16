@@ -296,10 +296,7 @@ fn the_version_comes_from_the_refs_manifest() {
     let named = home.join("bin");
     let (_host, served) = ref_release_host(&home);
     let named_str = named.display().to_string();
-    let mut env: Vec<(&str, &str)> = served
-        .iter()
-        .map(|(k, v)| (k.as_str(), v.as_str()))
-        .collect();
+    let mut env = served_env(&served);
     env.push(("BATTEN_INSTALL_DIR", &named_str));
     env.push(("BATTEN_VERSION_FROM_REF", "main"));
 
@@ -336,10 +333,7 @@ fn a_named_version_disagreeing_with_the_ref_is_refused() {
     let (_host, served) = ref_release_host(&home);
     let named_str = named.display().to_string();
     let running = format!("v{}", env!("CARGO_PKG_VERSION"));
-    let mut env: Vec<(&str, &str)> = served
-        .iter()
-        .map(|(k, v)| (k.as_str(), v.as_str()))
-        .collect();
+    let mut env = served_env(&served);
     env.push(("BATTEN_INSTALL_DIR", &named_str));
     env.push(("BATTEN_VERSION_FROM_REF", "main"));
     env.push(("BATTEN_VERSION", &running));
@@ -367,10 +361,7 @@ fn a_ref_naming_no_version_installs_nothing() {
     let named = home.join("bin");
     let (_host, served) = ref_release_host(&home);
     let named_str = named.display().to_string();
-    let mut env: Vec<(&str, &str)> = served
-        .iter()
-        .map(|(k, v)| (k.as_str(), v.as_str()))
-        .collect();
+    let mut env = served_env(&served);
     env.push(("BATTEN_INSTALL_DIR", &named_str));
     // `s_server -WWW` answers 200 with an error body for a path it cannot
     // open, so this ref reads as a `batten.toml` that pins no release.
@@ -395,12 +386,17 @@ fn pin_worktree(home: &Path, tag: &str) {
     );
 }
 
-/// `served`'s environment as `install` takes it, plus `BATTEN_INSTALL_DIR`.
-fn with_named<'a>(served: &'a [(String, String)], named: &'a str) -> Vec<(&'a str, &'a str)> {
-    let mut env: Vec<(&str, &str)> = served
+/// `served`'s environment as a case passes it.
+fn served_env(served: &[(String, String)]) -> Vec<(&str, &str)> {
+    served
         .iter()
         .map(|(k, v)| (k.as_str(), v.as_str()))
-        .collect();
+        .collect()
+}
+
+/// `served`'s environment as `install` takes it, plus `BATTEN_INSTALL_DIR`.
+fn with_named<'a>(served: &'a [(String, String)], named: &'a str) -> Vec<(&'a str, &'a str)> {
+    let mut env = served_env(served);
     env.push(("BATTEN_INSTALL_DIR", named));
     env
 }
@@ -952,10 +948,7 @@ fn outdated_exits_by_the_pins_distance_from_main() {
     }
     let home = common::scratch_repo("engine-outdated");
     let (_host, served) = release_host(&home, WANTED, WANTED);
-    let env: Vec<(&str, &str)> = served
-        .iter()
-        .map(|(k, v)| (k.as_str(), v.as_str()))
-        .collect();
+    let env = served_env(&served);
 
     pin_worktree(&home, WANTED);
     let current = batten_in(&home, &["engine", "outdated"], &env);
@@ -1035,10 +1028,7 @@ fn outdated_clears_its_record_without_a_pin_and_when_blind() {
     common::git_in(&home, &["add", "batten.toml"]);
     common::git_in(&home, &["commit", "-qm", "pin"]);
     let (_host, served) = release_host(&home, WANTED, WANTED);
-    let env: Vec<(&str, &str)> = served
-        .iter()
-        .map(|(k, v)| (k.as_str(), v.as_str()))
-        .collect();
+    let env = served_env(&served);
     let mut blind = env.clone();
     blind.retain(|(name, _)| *name != "BATTEN_RELEASES");
     blind.push(("BATTEN_RELEASES", "https://localhost:1/example/pkg"));
@@ -1102,10 +1092,7 @@ fn a_lagging_changelog_dates_main_from_its_own_tag() {
         WANTED,
         &format!("# Changelog\n\n## [9.9.9](https://example.invalid) - {MAIN_DATE}\n"),
     );
-    let env: Vec<(&str, &str)> = served
-        .iter()
-        .map(|(k, v)| (k.as_str(), v.as_str()))
-        .collect();
+    let env = served_env(&served);
     pin_worktree(&home, "v8.8.8");
     let behind = batten_in(&home, &["engine", "outdated"], &env);
     assert_eq!(behind.status.code(), Some(2), "{}", common::stderr(&behind));
@@ -1148,10 +1135,7 @@ fn the_notice_speaks_once_per_ttl_and_never_in_ci() {
     let home = common::scratch_repo("engine-outdated-notice");
     pin_worktree(&home, "v8.8.8");
     let (_host, served) = release_host(&home, WANTED, WANTED);
-    let env: Vec<(&str, &str)> = served
-        .iter()
-        .map(|(k, v)| (k.as_str(), v.as_str()))
-        .collect();
+    let env = served_env(&served);
     let notice = ["engine", "outdated", "--notice"];
 
     let mut in_ci = env.clone();
@@ -1199,10 +1183,7 @@ fn a_stale_engine_fresh_record_fails_check() {
     common::git_in(&home, &["add", "batten.toml"]);
     common::git_in(&home, &["commit", "-qm", "enable the preset"]);
     let (_host, served) = release_host(&home, WANTED, WANTED);
-    let env: Vec<(&str, &str)> = served
-        .iter()
-        .map(|(k, v)| (k.as_str(), v.as_str()))
-        .collect();
+    let env = served_env(&served);
     let check = ["check", "--rule", "release pin stale"];
 
     let silent = batten_in(&home, &check, &[]);
@@ -1260,14 +1241,19 @@ fn an_update_clears_the_engine_fresh_record() {
     }
     let home = common::scratch("engine-fresh-update");
     common::init_repo(&home);
-    pin_worktree(&home, &format!("v{}", env!("CARGO_PKG_VERSION")));
+    common::write(
+        &home,
+        "batten.toml",
+        &format!(
+            "version = 1\nengine = {{ release = \"v{}\" }}\n\n[[record]]\nrecord = \"engine-fresh\"\n\
+             writer = \"batten engine outdated --record engine-fresh --max-releases 0 --max-days 0\"\n",
+            env!("CARGO_PKG_VERSION")
+        ),
+    );
     common::git_in(&home, &["add", "batten.toml"]);
     common::git_in(&home, &["commit", "-qm", "pin"]);
     let (_host, served) = release_host(&home, WANTED, WANTED);
-    let env: Vec<(&str, &str)> = served
-        .iter()
-        .map(|(k, v)| (k.as_str(), v.as_str()))
-        .collect();
+    let env = served_env(&served);
     let recorded = batten_in(&home, &recorded_args(), &env);
     assert_eq!(
         recorded.status.code(),

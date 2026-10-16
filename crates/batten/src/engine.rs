@@ -868,6 +868,13 @@ pub fn rewrite(text: &str, pin: &Pin) -> String {
     out
 }
 
+/// The 1-based line `item` starts on in `text`, the document it was parsed
+/// from; 0 for an item that carries no span.
+fn item_line(text: &str, item: &toml_edit::Item) -> usize {
+    item.span()
+        .map_or(0, |span| crate::lint::line_of(text, span.start))
+}
+
 /// The batten declarations in `text` that disagree with release pin `tag`
 /// (CLOUD-2279): a `[[provision]] name = "batten"` row whose `version` is not
 /// the pin, and a `min_batten_version` above it. Each is its 1-based line, what
@@ -883,15 +890,7 @@ pub fn disagreements(text: &str, tag: &str) -> Vec<(usize, String, &'static str)
     let (Ok(pin), Ok(doc)) = (release_version(tag), toml_edit::Document::parse(text)) else {
         return Vec::new();
     };
-    let line = |item: &toml_edit::Item| {
-        item.span().map_or(0, |span| {
-            text.get(..span.start)
-                .unwrap_or_default()
-                .matches('\n')
-                .count()
-                + 1
-        })
-    };
+    let line = |item: &toml_edit::Item| item_line(text, item);
     let mut found = Vec::new();
     if let Some(item) = doc.get("min_batten_version")
         && let Some(floor) = item.as_str()
@@ -967,15 +966,9 @@ pub fn stale_artifacts(
         return Ok(Vec::new());
     };
     let bare = pin.to_string();
-    let line = |item: &toml_edit::Item| {
-        item.span().map_or(0, |span| {
-            text.get(..span.start)
-                .unwrap_or_default()
-                .matches('\n')
-                .count()
-                + 1
-        })
-    };
+    let line = |item: &toml_edit::Item| item_line(text, item);
+    // THE MANIFEST IS READ ONCE, at the first artifact that needs it.
+    let manifest = std::cell::OnceCell::new();
     let mut found = Vec::new();
     let mut judge = |artifact: &toml_edit::Table| -> Result<()> {
         let Some(item) = artifact.get("url") else {
@@ -990,8 +983,13 @@ pub fn stale_artifacts(
         }
         let asset = url.rsplit('/').next().unwrap_or_default();
         let digest = artifact.get("sha256");
-        if digest.and_then(toml_edit::Item::as_str) != published_digest(&sums()?, asset).as_deref()
-        {
+        let body = if let Some(body) = manifest.get() {
+            body
+        } else {
+            let fetched = sums()?;
+            manifest.get_or_init(|| fetched)
+        };
+        if digest.and_then(toml_edit::Item::as_str) != published_digest(body, asset).as_deref() {
             found.push((
                 digest.map_or_else(|| line(item), line),
                 format!("provision batten sha256 for {asset}"),
@@ -1029,7 +1027,7 @@ pub fn stale_artifacts(
 ///
 /// As [`release_sums`], and an internal error when the cache cannot be written.
 pub fn pinned_sums(state_dir: &Path, repository: &str, tag: &str) -> Result<String> {
-    let path = state_dir.join("engine").join(tag).join("SHA256SUMS");
+    let path = release_dir(state_dir, tag).join("SHA256SUMS");
     if let Ok(body) = std::fs::read_to_string(&path) {
         return Ok(body);
     }
@@ -1197,35 +1195,32 @@ pub fn workflow_literals(
             *top = Frame::Key;
         }
     };
+    // A node where a mapping expects its key IS that key: the mapping now
+    // expects the value. Answers whether the node was a key.
+    let enter = |stack: &mut Vec<Frame>| {
+        let keyed = stack.last() == Some(&Frame::Key);
+        if keyed && let Some(top) = stack.last_mut() {
+            *top = Frame::Value;
+        }
+        keyed
+    };
     for (event, line) in events {
         match event {
-            yaml_rust2::Event::MappingStart(..) => {
-                if let Some(top) = stack.last_mut()
-                    && *top == Frame::Key
-                {
-                    *top = Frame::Value;
-                }
+            yaml_rust2::Event::MappingStart(..) | yaml_rust2::Event::SequenceStart(..) => {
+                enter(&mut stack);
                 pending = None;
-                stack.push(Frame::Key);
-            }
-            yaml_rust2::Event::SequenceStart(..) => {
-                if let Some(top) = stack.last_mut()
-                    && *top == Frame::Key
-                {
-                    *top = Frame::Value;
-                }
-                pending = None;
-                stack.push(Frame::Item);
+                stack.push(if matches!(event, yaml_rust2::Event::MappingStart(..)) {
+                    Frame::Key
+                } else {
+                    Frame::Item
+                });
             }
             yaml_rust2::Event::MappingEnd | yaml_rust2::Event::SequenceEnd => {
                 stack.pop();
                 settle(&mut stack);
             }
             yaml_rust2::Event::Scalar(value, ..) => {
-                if stack.last() == Some(&Frame::Key) {
-                    if let Some(top) = stack.last_mut() {
-                        *top = Frame::Value;
-                    }
+                if enter(&mut stack) {
                     pending = LITERAL_KEYS
                         .into_iter()
                         .find(|key| *key == value)
@@ -1309,6 +1304,12 @@ pub fn invoked_verbs(text: &str) -> std::collections::BTreeSet<String> {
     verbs
 }
 
+/// The directory release `tag` is cached in: its binary ([`cached_release`]) and
+/// its manifest ([`pinned_sums`]).
+fn release_dir(state_dir: &Path, tag: &str) -> PathBuf {
+    state_dir.join("engine").join(tag)
+}
+
 /// Where the pinned release's binary is kept once fetched: under the
 /// repository's STATE directory, never inside the checkout.
 ///
@@ -1318,10 +1319,7 @@ pub fn invoked_verbs(text: &str) -> std::collections::BTreeSet<String> {
 /// A cache is the engine's state, and state lives outside the tree it judges.
 #[must_use]
 pub fn cached_release(state_dir: &Path, tag: &str) -> PathBuf {
-    state_dir
-        .join("engine")
-        .join(tag)
-        .join(crate::dist::binary_file("batten", &running_target()))
+    release_dir(state_dir, tag).join(crate::dist::binary_file("batten", &running_target()))
 }
 
 /// The pinned release's binary, fetched and verified once and cached after.

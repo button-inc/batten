@@ -176,8 +176,12 @@ git_reads_as("branch", rest) if {
 
 # GIT'S GLOBAL OPTIONS COME BEFORE THE SUBCOMMAND, so the subcommand is the first
 # word after them, never `arguments[0]` (CLOUD-2418): `git -C /x status` read
-# `-C` as its verb and was refused in plan mode. `-C` and `-c` take their value
-# as the next word; every other word before the subcommand starts with `-`.
+# `-C` as its verb and was refused in plan mode.
+#
+# ONLY OPTIONS THAT CANNOT RUN A PROGRAM ARE SKIPPED, by name. `-c core.pager=…`,
+# `-c core.fsmonitor=…`, `--config-env` and `--exec-path` each hand git a program
+# to run, so a call carrying one is never a read: its option is not skipped, and
+# the word after it is no read verb.
 git_verb(arguments) := {"name": word, "rest": array.slice(arguments, i + 1, count(arguments))} if {
 	some i, word in arguments
 	not startswith(word, "-")
@@ -191,15 +195,23 @@ some_word_before_is_not_global(arguments, i) if {
 	not git_global_word(arguments, j)
 }
 
-# Word `j` is a global option, or the value of the one before it.
-git_global_word(arguments, j) if startswith(arguments[j], "-")
+# Word `j` is a global option that runs nothing, or the value of `-C`.
+git_global_word(arguments, j) if arguments[j] in {
+	"-C", "--no-pager", "-P", "--no-optional-locks", "--literal-pathspecs",
+	"--no-replace-objects", "--bare",
+}
+
+git_global_word(arguments, j) if {
+	some prefix in {"--git-dir=", "--work-tree=", "--namespace="}
+	startswith(arguments[j], prefix)
+}
 
 git_global_word(arguments, j) if git_option_value(arguments, j)
 
-# Word `i` is the separate value of `-C` or `-c`.
+# Word `i` is the separate value of `-C`.
 git_option_value(arguments, i) if {
 	i > 0
-	arguments[i - 1] in {"-C", "-c"}
+	arguments[i - 1] == "-C"
 }
 
 # `--output` writes a file; `-O` hands matches to a pager program.
@@ -321,7 +333,7 @@ git_call(arguments) := {"call": {
 test_git_global_options_come_before_the_verb if {
 	every arguments in [
 		["-C", "/x", "status", "--short"],
-		["-c", "core.pager=cat", "log", "-1"],
+		["--git-dir=/x/.git", "log", "-1"],
 		["--no-pager", "-C", "/x", "diff"],
 		["stash", "list"],
 		["branch", "--show-current"],
@@ -337,6 +349,10 @@ test_git_global_options_never_hide_a_writer if {
 	every arguments in [
 		["-C", "/x", "commit", "-m", "x"],
 		["-C", "status", "commit"],
+		["-c", "core.pager=sh -c x", "log"],
+		["-c", "core.fsmonitor=x", "status"],
+		["--exec-path=/x", "status"],
+		["--config-env=core.pager=X", "log"],
 		["stash"],
 		["stash", "pop"],
 		["branch", "new-branch"],

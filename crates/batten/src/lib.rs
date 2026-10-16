@@ -770,7 +770,7 @@ fn follow_pin(may_build: bool) -> Result<Option<ExitCode>> {
 //MUTANT update-moves-the-pin-backward|s@^    let target = if engine::is_newer(&latest, &current)? {$@    let target = if latest != current {@|an_update_never_moves_a_pin_backward
 //MUTANT update-ignores-workflow-literal|s@^    if !stale.is_empty() {$@    if false {@|a_workflow_literal_the_update_cannot_rewrite_refuses_and_writes_nothing
 //MUTANT update-installs-what-the-ref-pins|s@^    let installed = install_wanted(want, Some(root), &repository, out)?;$@    let installed = engine_install(out)?;@|an_update_installs_its_target_whatever_the_ref_pins
-//MUTANT update-keeps-the-fresh-record|s@^    record::clear_kind("engine update", "engine-fresh")?;$@@|an_update_clears_the_engine_fresh_record
+//MUTANT update-keeps-the-fresh-record|s@^    record::clear_kind("engine update", "engine-fresh", families)?;$@@|an_update_clears_the_engine_fresh_record
 fn engine_update(out: &mut dyn Write) -> Result<ExitCode> {
     let root = git::worktree_root(Path::new("."))?;
     let path = root.join(config::CONFIG_FILE);
@@ -867,7 +867,14 @@ fn engine_update(out: &mut dyn Write) -> Result<ExitCode> {
     let installed = install_wanted(want, Some(root), &repository, out)?;
     // AN `engine-fresh` READING JUDGED THE PIN THIS JUST MOVED, so it stops
     // standing for it: absent until its writer reads the new pin (CLOUD-2418).
-    record::clear_kind("engine update", "engine-fresh")?;
+    // Its family is the consumer's name, read off the config's `[[record]]` rows.
+    let declared = toml_edit::Document::parse(synced.as_str()).ok();
+    let families = declared
+        .iter()
+        .filter_map(|doc| doc.get("record")?.as_array_of_tables())
+        .flat_map(toml_edit::ArrayOfTables::iter)
+        .filter_map(|row| row.get("record")?.as_str());
+    record::clear_kind("engine update", "engine-fresh", families)?;
     Ok(installed)
 }
 
@@ -939,7 +946,7 @@ struct Distance {
 /// The releases between `tag` and `main`'s pin. The changelog is read only
 /// when the pin is behind.
 //MUTANT-SUITE crates/batten/tests/it/engine_install.rs
-//MUTANT lagging-release-undated|s@^    if let Some(last) = undated {$@    if let Some(last) = undated.filter(\x7c_\x7c false) {@|a_lagging_changelog_dates_main_from_its_own_tag
+//MUTANT lagging-release-undated|s@^    let own = engine::ref_changelog(repository, &latest)$@    let own = engine::ref_changelog(repository, "main")@|a_lagging_changelog_dates_main_from_its_own_tag
 fn distance(repository: &str, tag: &str) -> Result<Distance> {
     let latest = engine::ref_release(repository, "main")?;
     if !engine::is_newer(&latest, tag)? {
@@ -948,21 +955,19 @@ fn distance(repository: &str, tag: &str) -> Result<Distance> {
             newer: Vec::new(),
         });
     }
-    let headings = engine::ref_changelog(repository, "main")?;
-    let mut newer = engine::releases_between(&headings, tag, &latest)?;
-    // A CHANGELOG THAT LAGS ITS OWN PIN DATES NOTHING (CLOUD-2418): `latest` is
-    // then counted with no date, and days behind read as zero. The release's own
-    // tag carries its heading, so its date is read there.
-    let undated = newer.last_mut().filter(|last| last.date.is_none());
-    if let Some(last) = undated {
-        last.date = engine::ref_changelog(repository, &latest)
-            .ok()
-            .and_then(|own| {
-                own.into_iter()
-                    .find(|heading| heading.version == last.version)
-            })
-            .and_then(|heading| heading.date);
-    }
+    // THE CHANGELOG AT `latest`'S OWN TAG (CLOUD-2418): it carries every release
+    // up to `latest`, dated, where `main`'s can lag its own pin and then counts
+    // and dates nothing past where it stopped. It answers only when it carries
+    // `latest`'s own heading; otherwise `main`'s does.
+    let version = engine::release_version(&latest)?;
+    let own = engine::ref_changelog(repository, &latest)
+        .ok()
+        .filter(|headings| headings.iter().any(|heading| heading.version == version));
+    let headings = match own {
+        Some(headings) => headings,
+        None => engine::ref_changelog(repository, "main")?,
+    };
+    let newer = engine::releases_between(&headings, tag, &latest)?;
     Ok(Distance { latest, newer })
 }
 
@@ -1156,7 +1161,7 @@ fn notice_once(ask: &Outdated, out: &mut dyn Write) -> Result<()> {
 /// no branch), which cannot name the record it would clear.
 //MUTANT-SUITE crates/batten/tests/it/engine_install.rs
 //MUTANT outdated-silent-without-pin|s@^            writeln!(out, "{} {what}", path.display())?;$@            return Ok(ExitCode::Success);@|outdated_exits_by_the_pins_distance_from_main
-//MUTANT malformed-pin-read-as-absent|s@^            let what = if malformed {$@            let what = if false {@|outdated_names_a_malformed_pin
+//MUTANT malformed-pin-read-as-absent|s@^            let what = if unpinned.is_some() {$@            let what = if false {@|outdated_names_a_malformed_pin
 //MUTANT outdated-keeps-record-without-pin|s@^            clear_outdated(ask)?;$@@|outdated_clears_its_record_without_a_pin_and_when_blind
 //MUTANT outdated-keeps-record-when-blind|s@^            return clear_outdated(ask).and(Err(blind));$@            return Err(blind);@|outdated_clears_its_record_without_a_pin_and_when_blind
 fn engine_outdated(ask: &Outdated, out: &mut dyn Write) -> Result<ExitCode> {
@@ -1169,7 +1174,6 @@ fn engine_outdated(ask: &Outdated, out: &mut dyn Write) -> Result<ExitCode> {
     }
     let (root, _, pin) = declared_release()?;
     let kind = pin.map(engine::Pin::kind);
-    let malformed = kind == Some(engine::PinKind::Malformed);
     let tag = match kind {
         Some(engine::PinKind::Release(tag)) => tag,
         // A SOURCE PIN names a build, not a release: no release distance to
@@ -1179,10 +1183,10 @@ fn engine_outdated(ask: &Outdated, out: &mut dyn Write) -> Result<ExitCode> {
         }
         // No release pin is nothing to be fresh against, and a finding about
         // the config: absent, or naming both or neither.
-        Some(engine::PinKind::Malformed) | None => {
+        unpinned @ (Some(engine::PinKind::Malformed) | None) => {
             clear_outdated(ask)?;
             let path = root.join(config::CONFIG_FILE);
-            let what = if malformed {
+            let what = if unpinned.is_some() {
                 engine::MALFORMED_PIN
             } else {
                 "no engine pin"

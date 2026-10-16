@@ -698,7 +698,7 @@ fn a_plan_mode_ps_is_allowed() {
 fn a_plan_mode_git_with_global_options_is_allowed() {
     for line in [
         "git -C /home/user/batten status --short --branch",
-        "git --no-pager -c core.pager=cat log --oneline -1",
+        "git --no-pager --git-dir=/home/user/batten/.git log --oneline -1",
         "git stash list",
         "git branch --show-current",
         "echo landed",
@@ -709,6 +709,8 @@ fn a_plan_mode_git_with_global_options_is_allowed() {
     }
     assert_plan_refused(&shell("plan", "git -C /home/user/batten commit -m x"));
     assert_plan_refused(&shell("plan", "git branch new-branch"));
+    // A global option that hands git a program to run is never a read.
+    assert_plan_refused(&shell("plan", "git -c core.pager=sh log"));
 }
 
 #[test]
