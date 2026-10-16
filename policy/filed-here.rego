@@ -169,9 +169,11 @@ changed contains path if {
 # longer lands it, and the exemption is the fail-open direction.
 closes contains key if {
 	raw := measured_closes[count(measured_closes) - 1]
+
 	# THE SAME TRIMMED SPLIT `measured_closes` decided on, so a line it counts
 	# as measured is never parsed into different columns here.
 	columns := split(trim_space(raw), " ")
+
 	# A MEASURED NOTHING (`closes 0`) carries no `:` and so no keys; without
 	# this the whole column `0` would be read as one key (CLOUD-2444).
 	contains(columns[1], ":")
