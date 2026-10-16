@@ -44,6 +44,10 @@ const AUTHORITY: &str = r#"version = 1
 id = "hk-amends-version"
 regex = 'hk@([0-9]+\.[0-9]+\.[0-9]+)'
 
+[[pattern]]
+id = "hk-download-tag"
+regex = '/v([0-9]+\.[0-9]+\.[0-9]+)/hk@'
+
 [[rule]]
 id = "tool pin other"
 kind = "policy"
