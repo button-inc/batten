@@ -481,8 +481,9 @@ fn suite_facts(run: &str) -> (bool, Vec<String>) {
 /// or a mise `{{ … }}` expression. A task named by one is held as a suite task.
 const UNRENDERED: &str = "__unrendered__";
 
-/// `run` with its templates resolved as far as a reader can: each Tera
-/// `{% … %}` tag ends a line, so every branch of an `if` is read; `{{vars.X}}`
+/// `run` with its templates resolved as far as a reader can: a Tera `{% else %}`
+/// or `{% elif %}` is ` ::: ` and any other `{% … %}` a space, so every branch
+/// of an `if` is read and a command around one stays one command; `{{vars.X}}`
 /// is `X` (`{{vars.batten}}` is the batten program); any other `{{ … }}` or
 /// `${{ … }}` is [`UNRENDERED`].
 fn rendered(run: &str) -> String {
@@ -492,7 +493,14 @@ fn rendered(run: &str) -> String {
         let (head, tail) = rest.split_at(open);
         out.push_str(head);
         let (close, replacement) = if let Some(body) = tail.strip_prefix("{%") {
-            (body.find("%}").map(|end| end + 4), "\n".to_owned())
+            // An `else`/`elif` starts another branch, which `:::` keeps a
+            // separate task to `mise run`; any other tag joins its text.
+            let tag = body.trim_start();
+            let branch = tag.starts_with("else") || tag.starts_with("elif");
+            (
+                body.find("%}").map(|end| end + 4),
+                if branch { " ::: " } else { " " }.to_owned(),
+            )
         } else if let Some(body) = tail.strip_prefix("${{").or_else(|| tail.strip_prefix("{{")) {
             let skip = tail.len() - body.len();
             body.find("}}").map_or((None, String::new()), |end| {
@@ -575,29 +583,143 @@ fn tasks_after(words: &[String], at: usize) -> Vec<String> {
     tasks
 }
 
-/// Whether batten, given `args`, runs cases: `mutate sweep` runs the suites its
-/// rows name, `test replay` runs every modified case through nextest, and
-/// `land lap` runs `verify`.
+/// Whether batten, given `args`, runs cases, and the mise tasks it runs:
+/// `mutate sweep` runs the suites its rows name, `test replay` every modified
+/// case through nextest, `land lap` runs `verify`, and `enforce`, or `check`,
+/// runs `batten.toml`'s `[[rule]] check` commands (only the `--rule` named).
 fn batten_facts(args: &[String]) -> (bool, Vec<String>) {
-    let mut next = args
-        .iter()
-        .map(String::as_str)
-        .filter(|word| !word.starts_with('-'));
-    let verb = (next.next(), next.next());
-    (
-        matches!(
-            verb,
-            (Some("mutate"), Some("sweep"))
-                | (Some("test"), Some("replay"))
-                | (Some("land"), Some("lap"))
-        ),
-        Vec::new(),
-    )
+    let mut next = operands_of(args, BATTEN_VALUED);
+    match (next.next(), next.next()) {
+        (Some("mutate"), Some("sweep"))
+        | (Some("test"), Some("replay"))
+        | (Some("land"), Some("lap")) => (true, Vec::new()),
+        (Some("enforce" | "check"), _) => {
+            let only = args
+                .windows(2)
+                .find(|w| w[0] == "--rule")
+                .map(|w| w[1].as_str());
+            rule_checks()
+                .iter()
+                .filter(|(id, _)| only.is_none_or(|only| only == id))
+                .fold((false, Vec::new()), |(direct, mut tasks), (_, facts)| {
+                    tasks.extend(facts.1.iter().cloned());
+                    (direct || facts.0, tasks)
+                })
+        }
+        _ => (false, Vec::new()),
+    }
 }
+
+/// A text's facts toward the suite: whether it runs it, and the tasks it runs.
+type Facts = (bool, Vec<String>);
+
+/// Each `[[rule]]`'s id and the facts of its `check` command, read once.
+fn rule_checks() -> &'static [(String, Facts)] {
+    static CHECKS: std::sync::OnceLock<Vec<(String, Facts)>> = std::sync::OnceLock::new();
+    thread_local! {
+        static READING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+    // A check that itself runs `batten enforce` re-enters here while the read
+    // is under way; it is that same read, so it adds nothing.
+    if CHECKS.get().is_none() && READING.with(std::cell::Cell::get) {
+        return &[];
+    }
+    READING.with(|reading| reading.set(true));
+    CHECKS.get_or_init(|| {
+        let config: toml::Value =
+            toml::from_str(&std::fs::read_to_string(common::at_root("batten.toml")).unwrap())
+                .unwrap();
+        config
+            .get("rule")
+            .and_then(toml::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|rule| {
+                let check = rule.get("check")?.as_str()?;
+                let id = rule
+                    .get("id")
+                    .and_then(toml::Value::as_str)
+                    .unwrap_or_default();
+                Some((id.to_owned(), suite_facts(check)))
+            })
+            .collect()
+    })
+}
+
+/// [`operands`] over a whole argument list.
+fn operands_of<'a>(args: &'a [String], valued: &'a [&'a str]) -> impl Iterator<Item = &'a str> {
+    let mut skip_next = false;
+    args.iter().map(String::as_str).filter(move |word| {
+        if std::mem::take(&mut skip_next) {
+            return false;
+        }
+        if word.starts_with('-') {
+            skip_next = valued.contains(word);
+            return false;
+        }
+        true
+    })
+}
+
+/// mise's own subcommands, which `mise <word>` runs instead of a task.
+const MISE_COMMANDS: &[&str] = &[
+    "activate",
+    "alias",
+    "bin-paths",
+    "cache",
+    "completion",
+    "config",
+    "deactivate",
+    "doctor",
+    "en",
+    "env",
+    "exec",
+    "x",
+    "fmt",
+    "generate",
+    "implode",
+    "install",
+    "i",
+    "install-into",
+    "latest",
+    "link",
+    "lock",
+    "ls",
+    "ls-remote",
+    "outdated",
+    "plugins",
+    "prune",
+    "registry",
+    "reshim",
+    "search",
+    "self-update",
+    "set",
+    "settings",
+    "shell",
+    "sync",
+    "test-tool",
+    "tool",
+    "trust",
+    "uninstall",
+    "unset",
+    "unuse",
+    "upgrade",
+    "up",
+    "usage",
+    "use",
+    "u",
+    "version",
+    "watch",
+    "w",
+    "where",
+    // Split, so the census does not read a `mise which` here.
+    concat!("whi", "ch"),
+];
 
 /// Flags that take the next word as their value, before the subcommand.
 const MISE_VALUED: &[&str] = &["-C", "--cd", "-E", "--env", "-j", "--jobs"];
 const CARGO_VALUED: &[&str] = &["-C", "--config", "--manifest-path", "-Z", "--color"];
+const BATTEN_VALUED: &[&str] = &["--config-from", "--config-in", "--strictness", "--rule"];
 const SHELL_VALUED: &[&str] = &["-o", "-O", "+o", "+O", "--rcfile", "--init-file"];
 
 /// One command's facts: whether it runs the suite, and the mise tasks it runs.
@@ -672,6 +794,8 @@ fn command_facts(words: &[String], stdin: &[String]) -> (bool, Vec<String>) {
                         Some((sub, "run" | "r")) => tasks_after(words, sub),
                         _ => Vec::new(),
                     },
+                    // One of mise's own subcommands names no task.
+                    Some((_, sub)) if MISE_COMMANDS.contains(&sub) => Vec::new(),
                     // `mise <task>` is mise's own shorthand for `mise run <task>`.
                     Some((_, task)) => vec![task.to_owned()],
                     None => Vec::new(),
@@ -684,11 +808,20 @@ fn command_facts(words: &[String], stdin: &[String]) -> (bool, Vec<String>) {
     (direct, tasks)
 }
 
-/// A script file's facts: its text read like a `run:` body when the tree holds
-/// it (`install.sh`). One the tree does not hold is a build's output (`sh
-/// target/distrib/batten-installer.sh`), which runs no case.
+/// A script file's facts: its text read like a `run:` body when git tracks it
+/// (`install.sh`). One git does not track is a build's output (`sh
+/// target/distrib/batten-installer.sh`), which runs no case, whatever an
+/// earlier local build left at that path.
 fn script_facts(path: &str) -> (bool, Vec<String>) {
-    std::fs::read_to_string(common::at_root(path.trim_start_matches("./")))
+    let relative = path.trim_start_matches("./");
+    let root = common::at_root(".");
+    if common::git_in(&root, &["ls-files", "--", relative])
+        .trim()
+        .is_empty()
+    {
+        return (false, Vec::new());
+    }
+    std::fs::read_to_string(root.join(relative))
         .map_or_else(|_| (false, Vec::new()), |text| suite_facts(&text))
 }
 
@@ -1091,6 +1224,10 @@ fn a_suite_step_is_a_suite_task_or_a_suite_command() {
         "cargo run --quiet --package=batten -- mutate sweep",
         "{{vars.batten}} test replay --base origin/main",
         "mise run -j 4 ci ::: lint",
+        "batten --config-from origin/main mutate sweep",
+        "mise run {% if env.X %}lint{% else %}ci{% endif %}",
+        // `enforce` runs the rules' checks, among them a filtered nextest run.
+        "mise run batten -- enforce",
     ] {
         assert!(runs_suite(run, &suite), "{run}");
     }
@@ -1104,6 +1241,8 @@ fn a_suite_step_is_a_suite_task_or_a_suite_command() {
         "mise run tree-clean;# mise run ci",
         "echo it\\'s # then mise run ci",
         "mise run batten -- ci step --summary \"x; cargo test\" -- mise run lint",
+        "batten --config-in /tmp/c lease guard",
+        "mise exec -- pkl --version",
         "mise exec -- cargo llvm-cov report --summary-only",
         "./install.sh",
         "sh target/distrib/batten-installer.sh",

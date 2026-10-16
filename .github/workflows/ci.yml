@@ -774,8 +774,10 @@ jobs:
           # it parses these as a scalar and several names begin with `aqua:`.
           # `aqua:cli/cli` too: `release check unread` now runs on every change to
           # `mise.toml`, where its subject moved (CLOUD-1717), and its
-          # precondition is that the pinned verifier resolves.
-          install_args: rust hk aqua:cli/cli github:nextest-rs/nextest aqua:EmbarkStudios/cargo-deny aqua:koalaman/shellcheck aqua:mvdan/sh aqua:tamasfe/taplo aqua:rhysd/actionlint aqua:jqlang/jq aqua:anchore/syft aqua:open-policy-agent/opa aqua:open-policy-agent/regal pkl deno node npm:prettier npm:renovate uv pipx:ntia-conformance-checker
+          # precondition is that the pinned verifier resolves. cargo-dist because
+          # rules run nextest over cases, which `ci_tools.rs` holds to every
+          # tool a case requires (CLOUD-2388).
+          install_args: rust hk aqua:cli/cli github:nextest-rs/nextest aqua:EmbarkStudios/cargo-deny aqua:koalaman/shellcheck aqua:mvdan/sh aqua:tamasfe/taplo aqua:rhysd/actionlint aqua:jqlang/jq aqua:anchore/syft aqua:open-policy-agent/opa aqua:open-policy-agent/regal pkl deno node npm:prettier npm:renovate uv pipx:ntia-conformance-checker aqua:axodotdev/cargo-dist
       # `no-conflict-markers` delegates to `hk`, which resolves the pkl package
       # uri, so this job reaches it for the same reason the `ci` job does.
       # Keyed on `hk.pkl`, no `restore-keys`, for the reasons recorded there.
