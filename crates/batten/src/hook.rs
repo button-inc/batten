@@ -1338,6 +1338,24 @@ impl WiringFile {
             Self::Whole(path) | Self::Root(path) | Self::Key { path, .. } => path,
         }
     }
+
+    /// Which key the file's events live under, `None` where the document IS the
+    /// event map.
+    ///
+    /// One answer for every reader — the emitter's shape, `wiring`'s mutable and
+    /// immutable walks, and `perf`'s wired-pair read — so no two of them can
+    /// silently stop describing the same document.
+    #[must_use]
+    pub const fn event_key(self) -> Option<&'static str> {
+        match self {
+            Self::Key { key, .. } => Some(key),
+            // A hooks-only file is what `render_wiring` emits whole, and what it
+            // emits is `{"hooks": {…}}`.
+            Self::Whole(_) => Some("hooks"),
+            // Keyed directly by event name: the document is the map.
+            Self::Root(_) => None,
+        }
+    }
 }
 
 /// One host's hook wiring: where it lives, and what it calls each event.
@@ -1973,8 +1991,8 @@ impl Harness {
             // measurement of that code rather than of a host's documentation.
             Harness::OpenCode => Capabilities {
                 plan_tools: PlanTools::Unsurveyed("CLOUD-1781"),
-                // The generated plugin implements `tool.execute.before` and no
-                // other hook, so pre-tool is the only event it can deliver.
+                // What the generated plugin delivers: `tool.execute.before` as
+                // pre-tool, and the `event` hook's `session.idle` as Stop.
                 events: OPENCODE_EVENTS,
                 // The hook's vocabulary is throw or return: there is no third
                 // value to carry an escalation. A documented absence, so `No`.
@@ -3561,7 +3579,7 @@ pub fn decode_value(harness: Harness, value: &Value) -> Option<Envelope> {
     let writes = harness
         .write_tools()
         .contains(&tool.as_str())
-        .then(|| target_path(&input))
+        .then(|| target_path(&input).or_else(|| patch_targets(&input).into_iter().next()))
         .flatten();
 
     // The neutral vocabulary, resolved here beside `writes` for the same reason
@@ -5445,15 +5463,21 @@ pub fn edit_spans_of(input: &Value) -> Option<Vec<(String, String, bool)>> {
 }
 
 fn edit_spans(input: &Value) -> Option<Vec<(String, String, bool)>> {
+    // Each field under both spellings a host uses: snake case, and `OpenCode`'s
+    // camel case (`oldString`, `newString`, `replaceAll`) — the same split
+    // `target_path` reads `filePath` for, so an edit whose target is judged is
+    // never one whose text cannot be looked at.
+    fn field<'a>(value: &'a Value, snake: &str, camel: &str) -> Option<&'a Value> {
+        value.get(snake).or_else(|| value.get(camel))
+    }
     let replace_all = |value: &Value| {
-        value
-            .pointer("/replace_all")
+        field(value, "replace_all", "replaceAll")
             .and_then(Value::as_bool)
             .unwrap_or(false)
     };
     let span = |value: &Value| {
-        let old = value.pointer("/old_string").and_then(Value::as_str)?;
-        let new = value.pointer("/new_string").and_then(Value::as_str)?;
+        let old = field(value, "old_string", "oldString").and_then(Value::as_str)?;
+        let new = field(value, "new_string", "newString").and_then(Value::as_str)?;
         Some((old.to_owned(), new.to_owned(), replace_all(value)))
     };
     if let Some(one) = span(input) {
@@ -9054,8 +9078,19 @@ fn redirected_read(policy: &Policy, envelope: &Envelope) -> Decision {
 /// fact the old `verbs::classify(raw_tool)` was failing to reconstruct from a
 /// consumer's config. The `[[verb]]` row is consulted only for its remedy text,
 /// and its absence costs a more specific sentence rather than the whole gate.
-//MUTANT patch-targets-unread|s@^        .chain(patch_targets(&envelope.input))$@        .chain(Vec::<String>::new())@|a_patch_naming_a_protected_file_is_refused_on_every_patch_tool
+//MUTANT patch-targets-unread|s@^    let patched = if names_no_path {$@    let patched = if false {@|a_patch_naming_a_protected_file_is_refused_on_every_patch_tool
 fn protected_tool_write(policy: &Policy, envelope: &Envelope) -> Decision {
+    // A patch tool names its files in its body, never under a path key, so the
+    // body is read for a call that could be a write and named no path. A write
+    // that DID name one is never re-read for header-shaped content: the file it
+    // carries is content, and a fixture holding a patch is not a patch.
+    let names_no_path = matches!(envelope.operation, Operation::Write | Operation::Other(_))
+        && target_path(&envelope.input).is_none();
+    let patched = if names_no_path {
+        patch_targets(&envelope.input)
+    } else {
+        Vec::new()
+    };
     // Through `protects` like every other reader (CLOUD-1236). The envelope's
     // target is already relativised upstream by `relativise_writes`, so this
     // changes no verdict here — which is the point: the two readers can no longer
@@ -9066,7 +9101,7 @@ fn protected_tool_write(policy: &Policy, envelope: &Envelope) -> Decision {
         .writes
         .iter()
         .cloned()
-        .chain(patch_targets(&envelope.input))
+        .chain(patched)
         .find(|target| protects(policy, target))
     else {
         return Decision::Allow;
@@ -9097,8 +9132,12 @@ fn protected_tool_write(policy: &Policy, envelope: &Envelope) -> Decision {
 /// `apply_patch` — carries no path key: its targets are lines inside the patch
 /// text, so [`target_path`] finds nothing and a protected-path write would pass
 /// unjudged under the one tool whose whole job is writing. Every top-level
-/// string that opens a patch is read, whatever the host keys it, because the
-/// key is per host and the format is not.
+/// string that is a patch is read, whatever the host keys it, because the key is
+/// per host and the format is not. Two formats: the `*** Begin Patch` envelope,
+/// and a unified diff's `---`/`+++` headers.
+///
+/// A header counts only at column 0, which is where both formats put it: a
+/// context line quoting one starts with a space, and is the file's content.
 fn patch_targets(input: &Value) -> Vec<String> {
     const HEADERS: &[&str] = &[
         "*** Add File: ",
@@ -9109,20 +9148,39 @@ fn patch_targets(input: &Value) -> Vec<String> {
     let Some(fields) = input.as_object() else {
         return Vec::new();
     };
-    fields
-        .values()
-        .filter_map(Value::as_str)
-        .filter(|text| text.contains("*** Begin Patch"))
-        .flat_map(str::lines)
-        .filter_map(|line| {
-            HEADERS
-                .iter()
-                .find_map(|header| line.trim_start().strip_prefix(header))
-        })
-        .map(str::trim)
-        .filter(|path| !path.is_empty())
-        .map(ToOwned::to_owned)
-        .collect()
+    let mut targets = Vec::new();
+    for text in fields.values().filter_map(Value::as_str) {
+        if text.contains("*** Begin Patch") {
+            targets.extend(
+                text.lines()
+                    .filter_map(|line| HEADERS.iter().find_map(|header| line.strip_prefix(header)))
+                    .map(str::trim)
+                    .filter(|path| !path.is_empty())
+                    .map(ToOwned::to_owned),
+            );
+        } else if text.lines().any(|line| line.starts_with("--- "))
+            && text.lines().any(|line| line.starts_with("+++ "))
+        {
+            targets.extend(
+                text.lines()
+                    .filter_map(|line| {
+                        line.strip_prefix("--- ")
+                            .or_else(|| line.strip_prefix("+++ "))
+                    })
+                    // A header may carry a tab and a timestamp after the path.
+                    .filter_map(|rest| rest.split('\t').next())
+                    .map(str::trim)
+                    .filter(|path| !path.is_empty() && *path != "/dev/null")
+                    .map(|path| {
+                        path.strip_prefix("a/")
+                            .or_else(|| path.strip_prefix("b/"))
+                            .unwrap_or(path)
+                            .to_owned()
+                    }),
+            );
+        }
+    }
+    targets
 }
 
 fn protected_mutation(policy: &Policy, command: &str) -> Decision {
@@ -17780,6 +17838,16 @@ deny contains "refused by themodule" if {
                 harness.as_str()
             );
         }
+        // A unified diff names its files in `---`/`+++` headers.
+        assert!(matches!(
+            judge(
+                Harness::Factory,
+                "ApplyPatch",
+                "patch",
+                "--- a/batten.toml\n+++ b/batten.toml\n@@ -1 +1 @@\n-a\n+b\n".to_owned()
+            ),
+            Decision::Deny(_)
+        ));
         // Header-shaped text that opens no patch is content, not a target.
         assert_eq!(
             judge(
@@ -17789,6 +17857,66 @@ deny contains "refused by themodule" if {
                 "*** Update File: batten.toml".to_owned()
             ),
             Decision::Allow,
+        );
+        // A context line quoting a header starts with a space: it is the
+        // patched file's content, and only column-0 headers are targets.
+        assert_eq!(
+            judge(
+                Harness::OpenCode,
+                "apply_patch",
+                "patchText",
+                "*** Begin Patch\n*** Update File: src/ok.rs\n@@\n *** Update File: batten.toml\n-a\n+b\n*** End Patch".to_owned()
+            ),
+            Decision::Allow,
+        );
+    }
+
+    /// A write that names its path is never re-read for patch-shaped content.
+    ///
+    /// The file a `write` carries is content: a fixture holding a whole patch of
+    /// a protected file, written somewhere unprotected, is that somewhere.
+    #[test]
+    fn a_write_carrying_a_patch_as_content_is_judged_by_its_own_path() {
+        let policy = protected_policy(vec![verb(
+            "Write",
+            Some("use the surface that owns the file"),
+        )]);
+        let envelope = decode_value(
+            Harness::OpenCode,
+            &serde_json::json!({
+                "hook_event_name": "PreToolUse",
+                "tool_name": "write",
+                "tool_input": {
+                    "filePath": "tests/fixtures/a.patch",
+                    "content": "*** Begin Patch\n*** Update File: batten.toml\n*** End Patch",
+                },
+            }),
+        )
+        .expect("decodes");
+        assert_eq!(
+            adjudicate(
+                &policy,
+                &envelope,
+                &crate::facts::Look::CouldNotLook,
+                &crate::facts::Look::CouldNotLook,
+                &crate::stop::StopFacts::default(),
+            ),
+            Decision::Allow
+        );
+    }
+
+    #[test]
+    fn an_opencode_edit_s_camel_case_spans_are_read() {
+        // OpenCode's `edit` spells its spans `oldString`/`newString`/
+        // `replaceAll`, beside the `filePath` its target is read from.
+        assert_eq!(
+            edit_spans_of(&serde_json::json!({
+                "filePath": "src/a.rs",
+                "oldString": "a",
+                "newString": "b",
+                "replaceAll": true,
+            })),
+            Some(vec![("a".to_owned(), "b".to_owned(), true)])
         );
     }
 
