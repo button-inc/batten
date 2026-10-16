@@ -918,7 +918,7 @@ fn lock_tree(tree: &Path, wait: bool) -> Option<std::fs::File> {
 /// plain `File::open` read every tree as held and re-armed no survivor (the
 /// rule `perf.rs`'s sibling stamp records). Elsewhere a read-only handle does
 /// both, and is the only handle a directory takes.
-fn open_handle(path: &Path) -> std::io::Result<std::fs::File> {
+pub(crate) fn open_handle(path: &Path) -> std::io::Result<std::fs::File> {
     #[cfg(windows)]
     {
         use std::os::windows::fs::OpenOptionsExt as _;

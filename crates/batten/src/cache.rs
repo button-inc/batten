@@ -56,10 +56,11 @@ const KEPT_PARTITIONS: usize = 8;
 /// The zero-byte file whose time records a partition's last use (CLOUD-2361).
 ///
 /// A FILE, not the partition directory's own time: a directory's time moves
-/// only when an entry is made or removed straight inside it, and Windows will
-/// not open a directory to set its time at all — so a binary that only reads,
-/// the installed hook warm, was never marked used there and ranked by its
-/// partition's creation. Every platform sets a file's time.
+/// only when an entry is made or removed straight inside it, and on Windows a
+/// plain open of a directory — what the refresh used — is refused, so a binary
+/// that only reads, the installed hook warm, was never marked used there and
+/// ranked by its partition's creation. A file's time is set by any handle that
+/// may write it, on every platform.
 const USE_MARK: &str = "used";
 
 /// The running binary's cache directory under `parent`, or `None` when it
@@ -84,6 +85,7 @@ const USE_MARK: &str = "used";
 /// failed, or the mark was lost — takes that path too, and gains one.
 //MUTANT partitions-never-pruned|s@^    prune(\&root, name);$@@|a_new_partition_keeps_its_neighbours_up_to_the_bound
 //MUTANT partition-mark-never-made|s@^    if std::fs::File::create_new(\&mark).is_err() {$@    if true {@|a_partition_without_a_mark_gains_one
+//MUTANT unmarkable-partition-prunes|s@^    if std::fs::File::create_new(\&mark).is_err() {$@    if std::fs::File::create_new(\&mark).is_err() \&\& false {@|a_partition_that_cannot_be_marked_does_not_prune
 #[must_use]
 pub fn root_under(parent: &Path) -> Option<PathBuf> {
     // A binary that cannot name itself has no partition, so it caches nothing
@@ -95,7 +97,7 @@ pub fn root_under(parent: &Path) -> Option<PathBuf> {
     if let Ok(meta) = std::fs::metadata(&mark)
         && meta.is_file()
     {
-        refresh_use(&mark, &meta);
+        refresh_use(&own, &meta);
         return Some(own);
     }
     std::fs::create_dir_all(&own).ok()?;
@@ -121,18 +123,18 @@ pub fn root_under(parent: &Path) -> Option<PathBuf> {
 /// cost is two timestamp writes a minute, the mark's and its directory's.
 const USE_REFRESH: std::time::Duration = std::time::Duration::from_mins(1);
 
-/// Mark the partition used through its `mark`, at most once a minute, so
-/// [`prune`] ranks partitions by LAST USE (code review of CLOUD-2315): a binary
-/// that only reads — the installed hook, warm — otherwise ranked as the oldest
-/// and was the one pruned.
+/// Mark the partition `own` used through its [`USE_MARK`], whose time `meta`
+/// holds, at most once a minute, so [`prune`] ranks partitions by LAST USE (code
+/// review of CLOUD-2315): a binary that only reads — the installed hook, warm —
+/// otherwise ranked as the oldest and was the one pruned.
 ///
 /// The partition DIRECTORY's time moves too, best-effort: a release before
 /// CLOUD-2361 ranks by it, and sharing a cache with one, a partition marked
-/// only through its file would read to that release as never used. Windows
-/// refuses to open a directory, and that failure is ignored. It can go once no
-/// supported release ranks by the directory.
+/// only through its file would read to that release as never used. It can go
+/// once no supported release ranks by the directory.
 //MUTANT partition-use-never-refreshed|s@^    if stale {$@    if false {@|a_partition_in_use_is_refreshed_and_survives_the_prune
-fn refresh_use(mark: &Path, meta: &std::fs::Metadata) {
+//MUTANT partition-directory-never-refreshed|s@^        let _ = touch(own, now);$@@|a_refresh_moves_the_partition_directory_too
+fn refresh_use(own: &Path, meta: &std::fs::Metadata) {
     let stale = meta
         .modified()
         .ok()
@@ -140,25 +142,15 @@ fn refresh_use(mark: &Path, meta: &std::fs::Metadata) {
         .is_some_and(|age| age > USE_REFRESH);
     if stale {
         let now = std::time::SystemTime::now();
-        let _ = touch(mark, now);
-        if let Some(partition) = mark.parent() {
-            let _ = touch(partition, now);
-        }
+        let _ = touch(&own.join(USE_MARK), now);
+        let _ = touch(own, now);
     }
 }
 
-/// Set `path`'s modification time. Read-only first — enough for the owner on
-/// unix, and the only open a read-only mark allows — then for writing, which
-/// Windows needs to set a file's times.
+/// Set `path`'s modification time, file or directory, through the handle
+/// [`crate::collect::open_handle`] opens for exactly that on every platform.
 fn touch(path: &Path, at: std::time::SystemTime) -> std::io::Result<()> {
-    std::fs::File::open(path)
-        .and_then(|file| file.set_modified(at))
-        .or_else(|_| {
-            std::fs::File::options()
-                .write(true)
-                .open(path)
-                .and_then(|file| file.set_modified(at))
-        })
+    crate::collect::open_handle(path).and_then(|file| file.set_modified(at))
 }
 
 /// The running binary's partition name: a short digest of its identity, which
@@ -734,6 +726,42 @@ mod tests {
         assert!(own.join(USE_MARK).is_file(), "the partition gains its mark");
     }
 
+    /// A partition whose mark cannot be made is served, and does not prune: a
+    /// scan per call is the cost the warm path exists to avoid (CLOUD-2361).
+    #[test]
+    fn a_partition_that_cannot_be_marked_does_not_prune() {
+        let dir = scratch("partition-unmarkable");
+        let root = dir.join("cache");
+        let own = root.join(partition().expect("this binary names itself"));
+        // A directory where the mark belongs: no file can be made there.
+        std::fs::create_dir_all(own.join(USE_MARK)).expect("an unmarkable partition");
+        let others = partition_names(KEPT_PARTITIONS);
+        for (step, name) in (1..).zip(&others) {
+            marked(&root.join(name), step);
+        }
+        assert_eq!(root_under(&dir).as_deref(), Some(own.as_path()));
+        assert!(
+            others.iter().all(|name| root.join(name).is_dir()),
+            "nothing is pruned past the bound"
+        );
+    }
+
+    /// A stale hit moves the partition DIRECTORY's time as well as the mark's,
+    /// so a release before CLOUD-2361, which ranks by the directory, still reads
+    /// the partition as in use.
+    #[test]
+    fn a_refresh_moves_the_partition_directory_too() {
+        let dir = scratch("partition-directory");
+        let own = root_under(&dir).expect("own partition");
+        marked(&own, 1);
+        touch(&own, stepped(1)).expect("age the directory");
+        let _ = root_under(&dir).expect("a hit");
+        let moved = std::fs::metadata(&own)
+            .and_then(|meta| meta.modified())
+            .expect("the directory's time");
+        assert!(moved > stepped(1), "the directory reads as just used");
+    }
+
     /// `count` partition names, none of them this binary's.
     fn partition_names(count: usize) -> Vec<String> {
         (1..=count).map(|n| format!("{n:016x}")).collect()
@@ -772,13 +800,10 @@ mod tests {
     /// The marks are aged in the REVERSE of the order the partitions are made
     /// (CLOUD-2361), so ranking by directory and ranking by mark would evict
     /// different partitions: the one that goes is the oldest MARK, the last made.
-    /// On unix the directories' times are SET in creation order too: made
-    /// microseconds apart they would tie on a coarse clock, and a tie leaves
-    /// ranking by directory to `read_dir`'s order, which could evict the same
-    /// partition as ranking by mark. Off unix `std` opens no directory to set its
-    /// time, so there each directory keeps the time its mark's creation gave it:
-    /// in creation order on a fine clock, which still tells the two rankings
-    /// apart, and tied on a coarse one, which may not.
+    /// The directories' times are SET in creation order too: made microseconds
+    /// apart they would tie on a coarse clock, and a tie leaves ranking by
+    /// directory to `read_dir`'s order, which could evict the same partition as
+    /// ranking by mark.
     #[test]
     fn a_new_partition_keeps_its_neighbours_up_to_the_bound() {
         let dir = scratch("partitions");
@@ -788,9 +813,7 @@ mod tests {
         for (made, name) in (1..).zip(&others) {
             let partition = root.join(name);
             marked(&partition, others.len() as u64 + 1 - made);
-            if cfg!(unix) {
-                touch(&partition, stepped(made)).expect("age the directory");
-            }
+            touch(&partition, stepped(made)).expect("age the directory");
         }
         std::fs::create_dir_all(root.join("policy")).expect("flat layout");
         std::fs::write(root.join("epoch"), "flat").expect("flat layout");
