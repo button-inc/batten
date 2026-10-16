@@ -450,14 +450,7 @@ fn a_conflict_with_no_path_still_refuses() {
 /// a bare `true` would resolve against whatever the runner's `PATH` happens to
 /// carry — which is the harness answering a question about the engine.
 fn gate(repo: &Path, name: &str, code: i32) -> String {
-    let path = repo.join(name);
-    std::fs::write(&path, format!("#!/bin/sh\nexit {code}\n")).expect("write the gate");
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
-            .expect("make the gate executable");
-    }
-    path.display().to_string()
+    script(repo, name, &format!("exit {code}\n"))
 }
 
 /// The lap record this branch has accumulated, or an empty string where the

@@ -2047,11 +2047,7 @@ pub fn verify_raced(
             stop,
         };
         if let Some(stall) = stall {
-            let stalls = Arms {
-                raced: arms.raced.clone(),
-                cancelled: arms.cancelled.clone(),
-                stop,
-            };
+            let stalls = arms.clone();
             drop(scope.spawn(move || stall_arm(root, stall, &stalls)));
         }
         drop(scope.spawn(move || watch_arm(root, watched.as_ref(), started, &arms)));
@@ -2284,6 +2280,7 @@ enum Raced {
 }
 
 /// Where the watcher arm reports, bundled so its signature stays readable.
+#[derive(Clone)]
 struct Arms<'a> {
     /// Who won the race.
     raced: std::sync::mpsc::Sender<Raced>,
@@ -2314,8 +2311,6 @@ fn watch_arm(
                 let answer = crate::main_watch::read(trunk, poll.etag());
                 let interval = poll.absorb(answer.as_ref(), trunk.interval);
                 if let Some(base) = poll.moved(replayed_onto) {
-                    let base = base.to_owned();
-                    arms.stop.store(true, std::sync::atomic::Ordering::Relaxed);
                     // THE KILL IS THE POINT. Without it this arm wins the race
                     // and the gate keeps running to completion anyway, which is
                     // the state `stale` already reaches more cheaply.
@@ -2327,14 +2322,7 @@ fn watch_arm(
                     // finish into a channel nobody reads. That is exactly the
                     // pre-CLOUD-423 behaviour, and a lap that silently fell back
                     // to it would report this half as working.
-                    let reclaimed = crate::exec::cancel_owned_group(root);
-                    // `let _` rather than `drop`: the send's own result is a
-                    // `Result<(), SendError<bool>>`, which is `Copy`, so dropping
-                    // it does nothing and clippy is right to say so. A receiver
-                    // gone before this lands is the race resolving without this
-                    // arm, which the verdict below already handles.
-                    let _ = arms.cancelled.send(reclaimed);
-                    drop(arms.raced.send(Raced::Moved(base)));
+                    win(root, arms, Raced::Moved(base.to_owned()));
                     return;
                 }
                 let interval = if interval.is_finite() {
@@ -2351,6 +2339,19 @@ fn watch_arm(
         }
         crate::pr_watch::pause_until(pause, arms.stop);
     }
+}
+
+/// An arm winning the race: stop its sibling, cancel the gate's group, and
+/// report whether the cancel reclaimed it before naming the winner.
+///
+/// `let _` on the cancel's send rather than `drop`: its result is `Copy`, so
+/// dropping it does nothing. A receiver gone before either send lands is the
+/// race resolving without this arm, which the verdict already handles.
+fn win(root: &Path, arms: &Arms<'_>, raced: Raced) {
+    arms.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    let reclaimed = crate::exec::cancel_owned_group(root);
+    let _ = arms.cancelled.send(reclaimed);
+    drop(arms.raced.send(raced));
 }
 
 /// The self-stall arm of [`verify_raced`] (CLOUD-2369): the task's registry
@@ -2375,10 +2376,7 @@ fn stall_arm(root: &Path, stall: &Stall, arms: &Arms<'_>) {
             advances.remove(0);
         }
         if stalled(&advances, stall.beats) {
-            arms.stop.store(true, std::sync::atomic::Ordering::Relaxed);
-            let reclaimed = crate::exec::cancel_owned_group(root);
-            let _ = arms.cancelled.send(reclaimed);
-            drop(arms.raced.send(Raced::Stalled(stall.beats)));
+            win(root, arms, Raced::Stalled(stall.beats));
             return;
         }
         crate::pr_watch::pause_until(stall.beat.as_secs_f64(), arms.stop);
@@ -2659,8 +2657,40 @@ pub const fn poisons_this_clone(
     )
 }
 
+/// Whether a step's answer is a verify whose gate was cancelled for stalling,
+/// which stops the landing (CLOUD-2369).
+///
+/// Its own signal rather than a [`TapVerdict`]: `seen` is the CI checks reading,
+/// latched across steps and read by the tap and the undo, and a local gate that
+/// stalled is not a fact about any check. The same exit 3 without it is a
+/// reclaimed gate, which laps.
 //MUTANT-SUITE crates/batten/src/land.rs
-//MUTANT stall-laps|s@^        Step::Wait \x7c Step::Verify,$@        Step::Wait,@|a_stalled_verify_stops_the_landing
+//MUTANT stall-laps|s@(Step::Verify, crate::exit::ExitCode::Internal, true)@(Step::Verify, crate::exit::ExitCode::Internal, false)@|a_stalled_verify_stops_the_landing
+#[must_use]
+pub const fn stopped_by_stall(step: Step, code: crate::exit::ExitCode, stalled: bool) -> bool {
+    matches!(
+        (step, code, stalled),
+        (Step::Verify, crate::exit::ExitCode::Internal, true)
+    )
+}
+
+/// [`progress_of`], with a stalled verify ([`stopped_by_stall`]) stopping
+/// first: what the lap does next with one step's whole answer.
+#[must_use]
+pub const fn lap_progress(
+    step: Step,
+    code: crate::exit::ExitCode,
+    stalled: bool,
+    seen: Option<TapVerdict>,
+    basis: Basis,
+) -> Progress {
+    if stopped_by_stall(step, code, stalled) {
+        Progress::Stop
+    } else {
+        progress_of(step, code, seen, basis)
+    }
+}
+
 #[must_use]
 pub const fn progress_of(
     step: Step,
@@ -2692,10 +2722,7 @@ pub const fn progress_of(
     // lease's rolling TTL renews from a live process rather than from progress —
     // so the stop IS the release, and inventing a variant that did not unwind
     // would have fixed the poll and kept the fleet-scale half of the defect.
-    // A STALLED VERIFY IS THE SAME CELL FOR THE SAME REASON (CLOUD-2369): its
-    // gate was cancelled because nothing advanced, and a lap would re-run the
-    // same wedge. Exit 3 from `Verify` otherwise laps, as a reclaimed gate.
-    if let (Step::Wait | Step::Verify, crate::exit::ExitCode::Internal, Some(TapVerdict::DeadEnd)) =
+    if let (Step::Wait, crate::exit::ExitCode::Internal, Some(TapVerdict::DeadEnd)) =
         (step, code, seen)
     {
         return Progress::Stop;
@@ -3951,7 +3978,7 @@ mod mutate_tests {
 
 #[cfg(test)]
 mod lap_tests {
-    use super::{Basis, Progress, Step, TapVerdict, progress, progress_of, stalled};
+    use super::{Basis, Progress, Step, progress, progress_of, stalled, stopped_by_stall};
     use crate::exit::ExitCode::{Internal, Success, Usage, Violation};
 
     /// CLOUD-2371: only this branch's own superseded ready head is cancelled
@@ -4000,23 +4027,17 @@ mod lap_tests {
     }
 
     /// CLOUD-2369: a verify whose gate was cancelled for stalling ends the
-    /// landing; the same exit 3 without the dead end is a reclaimed gate, which
-    /// laps.
+    /// landing; the same exit 3 without the stall is a reclaimed gate, which
+    /// laps, and no other step's answer is a stall.
     #[test]
     fn a_stalled_verify_stops_the_landing() {
-        assert_eq!(
-            progress_of(
-                Step::Verify,
-                Internal,
-                Some(TapVerdict::DeadEnd),
-                Basis::Own
-            ),
-            Progress::Stop
-        );
+        assert!(stopped_by_stall(Step::Verify, Internal, true));
+        assert!(!stopped_by_stall(Step::Verify, Internal, false));
         assert_eq!(
             progress_of(Step::Verify, Internal, None, Basis::Own),
             Progress::Lap
         );
+        assert!(!stopped_by_stall(Step::Wait, Internal, true));
     }
 
     /// **The discriminating claim: a refusal a rebase would clear laps, and one

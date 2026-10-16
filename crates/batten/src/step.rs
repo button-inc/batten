@@ -114,7 +114,7 @@ pub const PENDING: &str = "step-pending";
 pub const BYPASS: &str = "BATTEN_STEP_RECEIPT_BYPASS";
 
 /// The variable a supervising task exports its registry pid in (CLOUD-425).
-const TASK_PID: &str = "BATTEN_TASK_PID";
+pub(crate) const TASK_PID: &str = "BATTEN_TASK_PID";
 
 /// How much of the key a line shows. A pointer, never the whole digest.
 const SHOWN: usize = 12;

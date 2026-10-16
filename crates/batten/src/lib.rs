@@ -11673,6 +11673,9 @@ fn run_land_lap(
     let Some(guard) = run_land_singleton(root, out, err)? else {
         return Ok(ExitCode::Violation);
     };
+    // WHAT A LAP THAT NEVER RETURNED LEFT SPENDING, reconciled once after the
+    // lock (CLOUD-2371): `unwind_lap` is the fast path on a normal return.
+    reconcile_at_entry(root, branch, out)?;
 
     // THE RECLAIM CENSUS'S WINDOW, opened and closed HERE and nowhere inside the
     // laps (CLOUD-843, round-2 review). See `land_census_window`. After the
@@ -11766,12 +11769,55 @@ struct Laps<'run> {
     guard: &'run LandSingleton,
 }
 
-/// The lap loop, split from [`run_land_lap`] so the census window can close
-/// around every way it returns (see [`land_census_window`]).
-///
-/// # Errors
-///
-/// Only for a stream that will not accept output.
+/// Cancel `sha`'s runs, sparing the fan-in, and say how many in one line;
+/// `what` names the occasion. `unwind_lap`'s undo and the entry reconcile
+/// (CLOUD-2371) share it, so the fan-in guard has one home.
+fn abandon_runs(repo: &str, sha: &str, what: &str, out: &mut dyn Write) -> Result<()> {
+    // THE WORKFLOW, NEVER THE CHECK, and the two are distinct
+    // consumer values: `CI_FANIN_CHECK` names a CHECK and
+    // `CI_FANIN_WORKFLOW` names a workflow PATH. What either one
+    // holds is that consumer's own config and is deliberately not
+    // written down here (non-negotiable rule 1). `land::worthless`
+    // compares against a run's `path`, so reading the check name
+    // here made the comparison unsatisfiable — `spared` was always
+    // 0 and the fan-in's own run was cancelled with the rest, which
+    // is exactly the wedge this whole arm exists to prevent: the
+    // fan-in is the one context branch protection requires, so
+    // cancelling it leaves it ungraded and the pull request stuck.
+    //
+    // Found by reading `tests/abandon-matrix.bats`'s own titles while
+    // retiring it (CLOUD-1148) — *"THE ROW THAT MATTERS: the run
+    // carrying the fan-in is never cancelled"* — and by nothing else.
+    // Every suite in this crate was green over it.
+    //
+    // An unset one cancels NOTHING rather than guessing;
+    // `land::abandon` holds that guard.
+    // THE CONSTRUCTOR AND THE DECLARATION ARE ONE EXPRESSION, and
+    // that adjacency is what `ci-parity` binds on. `job wire missing`
+    // used to ask two independent questions of this file — does
+    // something read the declaration, does something call
+    // `land::abandon` — which an unrelated read plus a wrong argument
+    // satisfies (review of #848). `land::FanIn` refuses the check
+    // name at the type, and the module now requires the read to sit
+    // at the constructor rather than anywhere in 6,000 lines.
+    // COUNTS AND AN ABBREVIATED SHA, never a line from a cancelled
+    // run (non-negotiable rule 4). The predecessor carried the
+    // pointer too — `abandon-matrix.bats` pins it — because three
+    // counts with no subject cannot be told from another head's.
+    let fanin =
+        land::FanIn::from_workflow_path(std::env::var("CI_FANIN_WORKFLOW").unwrap_or_default());
+    let report = land::abandon(repo, sha, &fanin);
+    writeln!(
+        out,
+        "land: {what} on {} — {} run(s) cancelled, {} spared, {} refused",
+        short(sha),
+        report.cancelled,
+        report.spared,
+        report.refused
+    )?;
+    Ok(())
+}
+
 /// Undo, at entry, what a lap that never returned left spending (CLOUD-2371).
 ///
 /// Crash-only: a SIGKILL, a background `deadline` stop or a reclaimed container
@@ -11780,6 +11826,11 @@ struct Laps<'run> {
 /// [`land::entry_reconcile`]'s, over forge and git facts that survive any
 /// container; the writes are `unwind_lap`'s own `land::abandon` and
 /// `land::redraft`. Every read that does not answer leaves things as they are.
+///
+/// NOT `unwind_lap`'s tap, whose ownership proof is the lease this run does not
+/// hold yet (`Step::Lease` takes it later). The proof here is narrower and its
+/// own: the pull request is this branch's, and the stale head is a strict
+/// ancestor of this clone's HEAD, so it is this branch's own superseded push.
 fn reconcile_at_entry(root: &Path, branch: &str, out: &mut dyn Write) -> Result<()> {
     let Some(repo) = repo_slug(root) else {
         return Ok(());
@@ -11800,18 +11851,16 @@ fn reconcile_at_entry(root: &Path, branch: &str, out: &mut dyn Write) -> Result<
     else {
         return Ok(());
     };
-    // The workflow, never the check: `unwind_lap`'s Abandon arm says why.
-    let fanin =
-        land::FanIn::from_workflow_path(std::env::var("CI_FANIN_WORKFLOW").unwrap_or_default());
-    let report = land::abandon(&repo, &stale, &fanin);
+    abandon_runs(
+        &repo,
+        &stale,
+        "entry: a lap that did not return left it ready",
+        out,
+    )?;
     let redrafted = land::redraft(&repo, &pr, &read.node);
     writeln!(
         out,
-        "land: entry — {} was left ready by a lap that did not return; {} run(s) cancelled, {} spared, {} refused; {}",
-        short(&stale),
-        report.cancelled,
-        report.spared,
-        report.refused,
+        "land: entry — {}",
         if redrafted {
             "the pull request is a draft again"
         } else {
@@ -11821,6 +11870,12 @@ fn reconcile_at_entry(root: &Path, branch: &str, out: &mut dyn Write) -> Result<
     Ok(())
 }
 
+/// The lap loop, split from [`run_land_lap`] so the census window can close
+/// around every way it returns (see [`land_census_window`]).
+///
+/// # Errors
+///
+/// Only for a stream that will not accept output.
 fn run_land_laps(run: Laps<'_>, out: &mut dyn Write, err: &mut dyn Write) -> Result<ExitCode> {
     let Laps {
         root,
@@ -11895,9 +11950,6 @@ fn run_land_laps(run: Laps<'_>, out: &mut dyn Write, err: &mut dyn Write) -> Res
     let mut stood_down: Option<String> = None;
     // Passes opened, refunded or not: what the log numbers, never what bounds.
     let mut lap: u32 = 0;
-    // WHAT A LAP THAT NEVER RETURNED LEFT SPENDING, reconciled before the first
-    // lap (CLOUD-2371): `unwind_lap` below is the fast path on a normal return.
-    reconcile_at_entry(root, branch, out)?;
     'laps: while ledger.may_open_a_lap(laps) {
         lap = lap.saturating_add(1);
         // Checked BEFORE `attempt`, so a lap that will not run is not charged.
@@ -11942,7 +11994,8 @@ fn run_land_laps(run: Laps<'_>, out: &mut dyn Write, err: &mut dyn Write) -> Res
             // minutes — so announcing it on completion would name every phase
             // exactly when it stopped being true.
             guard.phase(step.as_str(), lap);
-            let (code, verdict, asked) = run_the_step(step, this_lap, &bet, &mut ledger, out, err)?;
+            let (code, verdict, asked, stalled) =
+                run_the_step(step, this_lap, &bet, &mut ledger, out, err)?;
             // The wait is the only step with readings to carry, and both are
             // latched rather than acted on here — see `honour_the_notice`.
             seen = verdict.or(seen);
@@ -11969,7 +12022,7 @@ fn run_land_laps(run: Laps<'_>, out: &mut dyn Write, err: &mut dyn Write) -> Res
             if land::poisons_this_clone(step, code, seen, basis) {
                 note_the_cooldown(root, reference, out, err)?;
             }
-            match land::progress_of(step, code, seen, basis) {
+            match land::lap_progress(step, code, stalled, seen, basis) {
                 land::Progress::Proceed => {}
                 // `None` is not merged, or nobody could say. Either way this is
                 // a lap rather than a retirement — see `landed_for_real`.
@@ -12187,49 +12240,7 @@ fn unwind_lap(
                     )?;
                     continue;
                 };
-                // THE WORKFLOW, NEVER THE CHECK, and the two are distinct
-                // consumer values: `CI_FANIN_CHECK` names a CHECK and
-                // `CI_FANIN_WORKFLOW` names a workflow PATH. What either one
-                // holds is that consumer's own config and is deliberately not
-                // written down here (non-negotiable rule 1). `land::worthless`
-                // compares against a run's `path`, so reading the check name
-                // here made the comparison unsatisfiable — `spared` was always
-                // 0 and the fan-in's own run was cancelled with the rest, which
-                // is exactly the wedge this whole arm exists to prevent: the
-                // fan-in is the one context branch protection requires, so
-                // cancelling it leaves it ungraded and the pull request stuck.
-                //
-                // Found by reading `tests/abandon-matrix.bats`'s own titles while
-                // retiring it (CLOUD-1148) — *"THE ROW THAT MATTERS: the run
-                // carrying the fan-in is never cancelled"* — and by nothing else.
-                // Every suite in this crate was green over it.
-                //
-                // An unset one cancels NOTHING rather than guessing;
-                // `land::abandon` holds that guard.
-                // THE CONSTRUCTOR AND THE DECLARATION ARE ONE EXPRESSION, and
-                // that adjacency is what `ci-parity` binds on. `job wire missing`
-                // used to ask two independent questions of this file — does
-                // something read the declaration, does something call
-                // `land::abandon` — which an unrelated read plus a wrong argument
-                // satisfies (review of #848). `land::FanIn` refuses the check
-                // name at the type, and the module now requires the read to sit
-                // at the constructor rather than anywhere in 6,000 lines.
-                let fanin = land::FanIn::from_workflow_path(
-                    std::env::var("CI_FANIN_WORKFLOW").unwrap_or_default(),
-                );
-                let report = land::abandon(&repo, &sha, &fanin);
-                // COUNTS AND AN ABBREVIATED SHA, never a line from a cancelled
-                // run (non-negotiable rule 4). The predecessor carried the
-                // pointer too — `abandon-matrix.bats` pins it — because three
-                // counts with no subject cannot be told from another head's.
-                writeln!(
-                    out,
-                    "land: undo on {} — {} run(s) cancelled, {} spared, {} refused",
-                    sha.get(..7).unwrap_or(&sha),
-                    report.cancelled,
-                    report.spared,
-                    report.refused
-                )?;
+                abandon_runs(&repo, &sha, "undo", out)?;
             }
             pipeline::Compensation::ReleaseLease => match (&holder, lease::terms(root)) {
                 (Some(holder), Ok(terms)) => {
@@ -12533,7 +12544,7 @@ fn run_the_step(
     ledger: &mut land::Ledger,
     out: &mut dyn Write,
     err: &mut dyn Write,
-) -> Result<(ExitCode, Option<land::TapVerdict>, Option<String>)> {
+) -> Result<(ExitCode, Option<land::TapVerdict>, Option<String>, bool)> {
     let Asked {
         root,
         url,
@@ -12559,23 +12570,24 @@ fn run_the_step(
             out,
             err,
         )?,
-        // A STALLED GATE CARRIES ITS DEAD END (CLOUD-2369), the wait's reading
-        // reused: `progress_of` stops on it where a bare exit 3 would lap.
+        // A STALLED GATE SAYS SO BESIDE ITS CODE (CLOUD-2369): exit 3 alone is a
+        // reclaimed gate, which laps.
         land::Step::Verify => {
             let (code, stalled) =
                 run_land_verify_seen(root, bet, branch, Some(reference), out, err)?;
-            return Ok((code, stalled.then_some(land::TapVerdict::DeadEnd), None));
+            return Ok((code, None, None, stalled));
         }
         land::Step::Lease => run_land_lease(root, branch, out, err)?,
         land::Step::Ready => run_land_ready(root, branch, bet, ledger, out, err)?,
         land::Step::Push => run_land_push(root, url, branch, out)?,
         land::Step::Wait => {
             let fresh_ready = ledger.take_fresh_ready();
-            return run_land_wait(root, reference, branch, fresh_ready, out, err);
+            return run_land_wait(root, reference, branch, fresh_ready, out, err)
+                .map(|(code, seen, asked)| (code, seen, asked, false));
         }
         land::Step::FastForward => run_land_fast_forward(root, branch, out, err)?,
     };
-    Ok((code, None, None))
+    Ok((code, None, None, false))
 }
 
 /// Release the lease because a peer asked, and say who asked (CLOUD-1778).
@@ -13824,7 +13836,7 @@ fn run_land_verify(
 /// The task whose stamps are read is the one the gate's steps announce under:
 /// `$BATTEN_TASK_PID` where a supervising task already exported it, otherwise
 /// this process, which is the pid `land` registered. The beat is the lease's.
-fn verify_stall(root: &Path) -> Option<(land::Stall, String)> {
+fn verify_stall(root: &Path) -> Option<land::Stall> {
     let beats = std::env::var("LAND_SELF_STALL_BEATS")
         .ok()
         .and_then(|raw| raw.trim().parse::<u32>().ok())
@@ -13832,7 +13844,7 @@ fn verify_stall(root: &Path) -> Option<(land::Stall, String)> {
     if beats == 0 {
         return None;
     }
-    let pid = std::env::var("BATTEN_TASK_PID")
+    let pid = std::env::var(step::TASK_PID)
         .ok()
         .and_then(|raw| raw.trim().parse::<u32>().ok())
         .unwrap_or_else(std::process::id);
@@ -13840,19 +13852,15 @@ fn verify_stall(root: &Path) -> Option<(land::Stall, String)> {
         .ok()
         .map(|terms| terms.beat)
         .or_else(|| lease::env_secs("LAND_LOCK_HEARTBEAT"))
-        .and_then(|secs| u64::try_from(secs).ok())
         .filter(|secs| *secs > 0)
-        .unwrap_or(30);
+        .unwrap_or_else(|| lease::Terms::default().beat);
     let git_dir = crate::git::git_dir(root).ok()?;
-    Some((
-        land::Stall {
-            git_dir,
-            pid,
-            beat: std::time::Duration::from_secs(beat),
-            beats,
-        },
-        pid.to_string(),
-    ))
+    Some(land::Stall {
+        git_dir,
+        pid,
+        beat: std::time::Duration::from_secs(u64::try_from(beat).unwrap_or(30)),
+        beats,
+    })
 }
 
 /// [`run_land_verify`], and whether the gate was cancelled for stalling: the
@@ -13901,8 +13909,8 @@ fn run_land_verify_seen(
     // reads `$BATTEN_TASK_PID`, which nothing set, so a verify's steps never
     // moved the registry the stall arm reads.
     let stall = verify_stall(root);
-    if let Some((_, pid)) = &stall {
-        published.push((String::from("BATTEN_TASK_PID"), pid.clone()));
+    if let Some(stall) = &stall {
+        published.push((step::TASK_PID.to_owned(), stall.pid.to_string()));
     }
     let environment = verify_environment(root);
     // RACED AGAINST THE BASE, which is CLOUD-423's other half (CLOUD-1586).
@@ -13926,7 +13934,7 @@ fn run_land_verify_seen(
         &published,
         &environment,
         trunk,
-        stall.as_ref().map(|(stall, _)| stall),
+        stall.as_ref(),
     )?;
     // THE GATE'S LOG AS A POINTER (CLOUD-2223): its bytes are stored, never
     // streamed, and this is the one line that names where.
