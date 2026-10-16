@@ -324,7 +324,7 @@ pub struct Handler {
     /// been launched. The slow half of provisioning — installs, a toolchain, a
     /// build — then runs where the agent sees its output and its failure, and
     /// the operator is not held behind a hook for its whole duration. Measured
-    /// before this column: a cold SessionStart held three operator prompts for
+    /// before this column: a cold `SessionStart` held three operator prompts for
     /// 5m50s and then denied.
     ///
     /// `timeout_ms` still bounds a row the hook does run; a background row's

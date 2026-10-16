@@ -17743,17 +17743,11 @@ fn run_hook(
     // [`recoverable_without_rules`] carries the argument for which two shapes
     // pass and why every other one still refuses.
     let (policy, waivers, pruning) = if adjudicable {
-        match hook_config_or_floor(
-            overrides,
-            harness,
-            &envelope,
-            &raw,
-            mode,
-            out,
-            err,
-            &mut advice,
-        )? {
-            Ok(loaded) => loaded,
+        match hook_config_or_floor(overrides, harness, &envelope, &raw, mode, out, err)? {
+            Ok((loaded, floored)) => {
+                floor_session_advice(&envelope, floored, &mut advice);
+                loaded
+            }
             Err(code) => return Ok(code),
         }
     } else {
@@ -17916,9 +17910,7 @@ fn run_hook(
     // background rows; on a mutating call before they are all launched it
     // refuses, and the handlers that would run under the missing toolchain
     // are not reached.
-    let handled = session_setup_gate(&envelope, overrides, &mut advice)
-        .or_else(|| mcp_health_gate(&envelope, overrides))
-        .or_else(|| dispatch_handlers(&envelope, &raw, overrides, &mut advice));
+    let handled = gate_then_dispatch(&envelope, &raw, overrides, &mut advice);
     // THE END-OF-TURN NUDGE (CLOUD-1051), and it is a SEPARATE call from
     // `adjudicate` rather than a widening of it. `adjudicate` returns `Allow` at
     // `Stop` before any rule is read — CLOUD-889's runaway removed by
@@ -18450,22 +18442,33 @@ fn unadjudicable_remedy() -> Fix {
 /// on it.
 ///
 /// THE HOOK NEVER RUNS IT. A source pin is repaired by a build, and a build in
-/// the SessionStart hook is the six minutes the operator waited behind before
+/// the `SessionStart` hook is the six minutes the operator waited behind before
 /// this; backgrounded, the agent sees the build and its failure. Rooted at the
 /// authority for [`unadjudicable_remedy`]'s reason, and the bare verb, never
 /// the `mise exec` spelling: on a cold container batten is the only program
-/// `install.sh` placed.
-fn floor_session_advice() -> advisory::Advice {
+/// `install.sh` placed. A `setup launch missing` finding, because that is what
+/// it is: a background setup step this session has not launched.
+fn floor_session_advice(
+    envelope: &hook::Envelope,
+    floored: bool,
+    advice: &mut Vec<advisory::Advice>,
+) {
+    if !floored || envelope.event != hook::Event::SessionStart {
+        return;
+    }
     let root = git::canonical(hook_authority_root());
-    advisory::Advice::new(
+    push_finding(
+        advice,
         severity::AdvisoryTier::Warning,
-        format!(
-            "batten cannot load this repository's config, so it judges nothing until \
-             the engine matches its pin: launch `{}` with run_in_background, and only \
-             reads and the host's session tools pass until it exits 0",
-            engine::repair_at(&root, engine::REPAIR),
+        refusal::Refusal::engine(
+            verdict::Native::SetupLaunchMissing,
+            &[verdict::artifact(&engine::repair_at(&root, engine::REPAIR))],
+            refusal::Fix::Run(String::from(
+                "launch it with run_in_background; only reads and the host's session tools \
+                 pass until it exits 0",
+            )),
         ),
-    )
+    );
 }
 
 /// What a hook call judges with: its policy, its waivers and its disk collector.
@@ -18485,10 +18488,9 @@ fn hook_config_or_floor(
     mode: Mode,
     out: &mut dyn Write,
     err: &mut dyn Write,
-    advice: &mut Vec<advisory::Advice>,
-) -> Result<Result<HookConfig, ExitCode>> {
+) -> Result<Result<(HookConfig, bool), ExitCode>> {
     match load_hook_config(overrides, harness) {
-        Ok(loaded) => Ok(Ok(loaded)),
+        Ok(loaded) => Ok(Ok((loaded, false))),
         // EVERY LOAD FAULT, NOT ONLY A PARSE FAILURE (CLOUD-1917). This arm
         // was guarded to a parse failure alone, and every other fault — a
         // validator refusing a row, a skewed version — fell to
@@ -18503,19 +18505,17 @@ fn hook_config_or_floor(
                 return Ok(Err(code));
             }
             if recoverable_without_rules(envelope) {
-                if envelope.event == hook::Event::SessionStart {
-                    advice.push(floor_session_advice());
-                }
                 // THE SAME EMPTY POLICY THE HATCH HANDS BACK, and for the
                 // same reason: there is no rule to apply, so there is
                 // nothing for a gate to do. `declaring_nothing` carries
                 // `protected: PathSet::empty()`, which is what lets the
                 // repair write reach the file that is faulting — the
                 // protected gate is not SUPPRESSED here, it has no table.
+                // `true`: floored, which is what makes a session start carry the
+                // repair as advice (`floor_session_advice`).
                 Ok(Ok((
-                    hook::Policy::declaring_nothing(harness),
-                    Vec::new(),
-                    None,
+                    (hook::Policy::declaring_nothing(harness), Vec::new(), None),
+                    true,
                 )))
             } else {
                 deny_unadjudicable(harness, envelope, &unreadable, mode, out, err).map(Err)
@@ -19953,27 +19953,27 @@ fn session_setup_gate(
         return None;
     }
     let root = git::canonical(hook_authority_root());
+    let session = envelope.session.as_deref()?;
+    let ledger = git::git_dir(&root).ok()?.join(SETUP_LEDGER);
     if envelope.event == hook::Event::SessionStart {
-        let named = owed
-            .iter()
-            .map(|line| format!("`{}`", engine::repair_at(&root, line)))
-            .collect::<Vec<_>>()
-            .join(", ");
-        advice.push(advisory::Advice::new(
-            severity::AdvisoryTier::Warning,
-            format!(
-                "session setup is yours to run: launch each of these with run_in_background, \
-                 exactly as written and never redirected — {named}. Only reads and the host's \
-                 session tools pass until every one has been launched; act on each exit."
-            ),
+        // ARMED BY THE SESSION START THAT NAMED THE ROWS, and only by it. A
+        // session never told what to launch — a host that sent no session
+        // start, a fixture replaying one envelope — cannot be asked to launch
+        // it, so it is not gated; the arming line is the gate's precondition.
+        drop(crate::durable::append(
+            &ledger,
+            &format!("{session}\t{SETUP_ARMED}"),
         ));
+        push_finding(
+            advice,
+            severity::AdvisoryTier::Warning,
+            setup_refusal(&root, &owed.iter().collect::<Vec<_>>()),
+        );
         return None;
     }
     if envelope.event != hook::Event::PreTool {
         return None;
     }
-    let session = envelope.session.as_deref()?;
-    let ledger = git::git_dir(&root).ok()?.join(SETUP_LEDGER);
     let recorded = std::fs::read_to_string(&ledger).unwrap_or_default();
     let launched: std::collections::BTreeSet<&str> = recorded
         .lines()
@@ -19981,6 +19981,9 @@ fn session_setup_gate(
         .filter(|(owner, _)| *owner == session)
         .map(|(_, line)| line)
         .collect();
+    if !launched.contains(SETUP_ARMED) {
+        return None;
+    }
     let outstanding: Vec<&String> = owed
         .iter()
         .filter(|line| !launched.contains(line.as_str()))
@@ -20009,17 +20012,42 @@ fn session_setup_gate(
     if hook::non_mutating(envelope) {
         return None;
     }
-    let subjects: Vec<verdict::Subject> = outstanding
+    Some(hook::Decision::Deny(setup_refusal(&root, &outstanding)))
+}
+
+/// The ledger line a session start writes to arm the setup gate for its
+/// session. Never a launch line: a launch line is an argv joined by spaces,
+/// and this carries none.
+const SETUP_ARMED: &str = "#armed";
+
+/// `setup launch missing` over `lines`, each rooted at the authority.
+fn setup_refusal(root: &Path, lines: &[&String]) -> refusal::Refusal {
+    let subjects: Vec<verdict::Subject> = lines
         .iter()
-        .map(|line| verdict::artifact(&engine::repair_at(&root, line)))
+        .map(|line| verdict::artifact(&engine::repair_at(root, line)))
         .collect();
-    Some(hook::Decision::Deny(refusal::Refusal::engine(
+    refusal::Refusal::engine(
         verdict::Native::SetupLaunchMissing,
         &subjects,
         refusal::Fix::Run(String::from(
-            "launch each named command with run_in_background, exactly as named",
+            "launch each named command with run_in_background, exactly as named, never \
+             redirected; only reads and the host's session tools pass until every one has \
+             been launched",
         )),
-    )))
+    )
+}
+
+/// The gates that may refuse a call before any declared handler runs, in order
+/// (CLOUD-2398), then the handlers themselves.
+fn gate_then_dispatch(
+    envelope: &hook::Envelope,
+    raw: &str,
+    overrides: &Overrides,
+    advice: &mut Vec<advisory::Advice>,
+) -> Option<hook::Decision> {
+    session_setup_gate(envelope, overrides, advice)
+        .or_else(|| mcp_health_gate(envelope, overrides))
+        .or_else(|| dispatch_handlers(envelope, raw, overrides, advice))
 }
 
 /// The per-clone record of which `[[mcp.local]]` servers answered `initialize`
@@ -20062,16 +20090,19 @@ fn mcp_health_gate(envelope: &hook::Envelope, overrides: &Overrides) -> Option<h
     let ledger = git::git_dir(&root).ok()?.join(HEALTH_LEDGER);
     let recorded = std::fs::read_to_string(&ledger).unwrap_or_default();
     if envelope.event == hook::Event::UserPromptSubmit {
-        let kept: String = recorded
+        let kept = recorded
             .lines()
             .filter(|line| {
                 line.split_once('\t')
                     .is_none_or(|(owner, _)| owner != session)
             })
-            .map(|line| format!("{line}\n"))
-            .collect();
+            .fold(String::new(), |mut kept, line| {
+                kept.push_str(line);
+                kept.push('\n');
+                kept
+            });
         if kept != recorded {
-            drop(std::fs::write(&ledger, kept));
+            drop(crate::durable::replace(&ledger, kept));
         }
         return None;
     }

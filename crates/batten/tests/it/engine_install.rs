@@ -905,7 +905,7 @@ mod repair {
         let binary = private_binary(&installed);
         pin_source(&dir, &digest);
         checkout_build(&dir, &"2".repeat(64));
-        let envelope = r#"{"hook_event_name":"PreToolUse","permission_mode":"default","tool_name":"Bash","tool_input":{"command":"ls"}}"#;
+        let envelope = r#"{"hook_event_name":"PreToolUse","permission_mode":"default","tool_name":"Bash","tool_input":{"command":"touch x"}}"#;
         let output = run(
             &binary,
             &dir,
@@ -974,7 +974,7 @@ mod repair {
         // the working directory resolves THIS repository and its real build.
         let installed = common::scratch_outside_tree("engine-update", "handoff-installed");
         let binary = private_binary(&installed);
-        let envelope = r#"{"hook_event_name":"PreToolUse","session_id":"cloud-2232-handoff","permission_mode":"default","tool_name":"Bash","tool_input":{"command":"ls"}}"#;
+        let envelope = r#"{"hook_event_name":"PreToolUse","session_id":"cloud-2232-handoff","permission_mode":"default","tool_name":"Bash","tool_input":{"command":"touch x"}}"#;
         let args = ["adjudicate", "--harness", "claude-code"];
         // The session first stands in the repository, unpinned, and records it.
         let first = run(&binary, &dir, &args, envelope);
@@ -1056,7 +1056,7 @@ mod repair {
             "version = 1\nengine = { release = \"v9.9.9\" }\n",
         );
         seed_release(&dir, "v9.9.9");
-        let envelope = r#"{"hook_event_name":"PreToolUse","permission_mode":"default","tool_name":"Bash","tool_input":{"command":"ls"}}"#;
+        let envelope = r#"{"hook_event_name":"PreToolUse","permission_mode":"default","tool_name":"Bash","tool_input":{"command":"touch x"}}"#;
         let output = run(
             &binary,
             &dir,
@@ -1085,7 +1085,7 @@ mod repair {
         let installed = common::scratch("engine-update-hook-installed");
         let binary = private_binary(&installed);
         pin_source(&dir, &"0".repeat(64));
-        let envelope = r#"{"hook_event_name":"PreToolUse","permission_mode":"default","tool_name":"Bash","tool_input":{"command":"ls"}}"#;
+        let envelope = r#"{"hook_event_name":"PreToolUse","permission_mode":"default","tool_name":"Bash","tool_input":{"command":"touch x"}}"#;
         let output = run(
             &binary,
             &dir,

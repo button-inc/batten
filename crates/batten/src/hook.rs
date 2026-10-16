@@ -11078,7 +11078,7 @@ fn mcp_read_verb(tool: &str) -> bool {
 //MUTANT admission-session-is-a-read|s@        return Some(Admission::Session);@        return Some(Admission::Reads);@|exit_plan_mode_is_admitted_in_plan_mode_and_never_preapproved
 //MUTANT redirect-unread|s@^        if redirects_to_a_file(\&words) {$@        if false {@|a_reader_redirected_into_a_file_is_not_preapproved
 //MUTANT mcp-verb-unread|s@^    if READ_TOOLS.contains(\&tool) \x7c\x7c mcp_read_verb(tool) {$@    if READ_TOOLS.contains(\&tool) \x7c\x7c tool.starts_with("mcp__") {@|an_mcp_write_is_not_preapproved
-//MUTANT mcp-call-unread|s@^    if name.strip_suffix(".exe").unwrap_or(name) == "batten" {$@    if false {@|a_plan_mode_batten_mcp_read_is_allowed_and_a_write_is_not
+//MUTANT mcp-call-unread|s@^    if name.strip_suffix(".exe").unwrap_or(name) == "batten"$@    if false@|a_plan_mode_batten_mcp_read_is_allowed_and_a_write_is_not
 #[must_use]
 pub fn admission(envelope: &Envelope) -> Option<Admission> {
     let tool = envelope.raw_tool.as_str();
@@ -11154,10 +11154,10 @@ fn program_reads(name: &str, arguments: &[&str]) -> bool {
     // `batten mcp call <server> <method>` is the Bash form of
     // `mcp__<server>__<method>`, and reads exactly when the tool form does
     // (CLOUD-2289): one pattern decides both, so they cannot drift.
-    if name.strip_suffix(".exe").unwrap_or(name) == "batten" {
-        if let ["mcp", "call", server, method, ..] = arguments {
-            return mcp_read_verb(&format!("mcp__{server}__{method}"));
-        }
+    if name.strip_suffix(".exe").unwrap_or(name) == "batten"
+        && let ["mcp", "call", server, method, ..] = arguments
+    {
+        return mcp_read_verb(&format!("mcp__{server}__{method}"));
     }
     if name == "git" {
         return arguments
