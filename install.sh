@@ -4,8 +4,8 @@
 # fails when any byte differed.
 #
 # The whole job: fetch the baked release binary for this platform, check it
-# against the baked sha256, and run it. `batten engine install` follows the
-# pin from there.
+# against the baked sha256, and run it, naming the release it verified.
+# `batten engine install` follows the pin from there.
 set -eu
 base="${BATTEN_RELEASES:-https://github.com/button-inc/batten}"
 fail() {
@@ -70,4 +70,4 @@ else
 fi
 [ "${sum%% *}" = "$want" ] || fail "$asset does not match the sha256 $tag published" 1
 tar -xzf "$tmp/$asset" -C "$tmp" batten
-"$tmp/batten" engine install "$@"
+BATTEN_VERIFIED_RELEASE="$tag" "$tmp/batten" engine install "$@"
