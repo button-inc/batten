@@ -3441,8 +3441,9 @@ run = "batten wiring register"
 
 # CLOUD-2279. Tell the session when the engine pin is behind `main`'s, once a
 # day, and write the `engine-fresh` record on the same lookup — more than three
-# releases or fourteen days behind is stale. Its stdout IS the notice, so it is not silenced; `quiet`
-# drops only mise's own echo. Never installs, never blocks, always exits 0.
+# releases or fourteen days behind is stale. Its stdout IS the notice, so it is
+# not silenced; `quiet` drops only mise's own echo. Never installs, never
+# blocks, always exits 0.
 [tasks."session:engine-notice"]
 description = "Session start: say when the engine pin is behind the latest release, and record how far"
 quiet = true

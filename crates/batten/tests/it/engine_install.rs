@@ -784,8 +784,8 @@ fn a_workflow_literal_the_update_cannot_rewrite_refuses_and_writes_nothing() {
 }
 
 /// `engine outdated` EXITS BY THE PIN'S DISTANCE FROM `main`: 0 current, 2
-/// behind (naming each release between), 2 with no pin, 3 when it could not
-/// look.
+/// behind (naming each release between), 2 with no pin, 0 for a source pin,
+/// and 3 when it could not look.
 #[test]
 fn outdated_exits_by_the_pins_distance_from_main() {
     if !cfg!(target_os = "linux") {
@@ -825,6 +825,18 @@ fn outdated_exits_by_the_pins_distance_from_main() {
         common::stderr(&unpinned)
     );
     assert!(stdout(&unpinned).ends_with("batten.toml no engine pin\n"));
+
+    common::write(
+        &home,
+        "batten.toml",
+        &format!(
+            "version = 1\nengine = {{ source = \"{}\" }}\n",
+            "a".repeat(64)
+        ),
+    );
+    let source = batten_in(&home, &["engine", "outdated"], &env);
+    assert_eq!(source.status.code(), Some(0), "{}", common::stderr(&source));
+    assert_eq!(stdout(&source), "", "a source pin is nothing to be behind");
 
     pin_worktree(&home, "v8.8.8");
     let mut unreachable = env.clone();

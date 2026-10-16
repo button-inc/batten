@@ -760,10 +760,12 @@ fn follow_pin(may_build: bool) -> Result<Option<ExitCode>> {
 /// that disagrees is named by `path:line` and NOTHING is written, because a
 /// stale copy left silently is the defect this verb exists to close.
 ///
-/// The config is written before the install, which reads its pin from it, and
-/// put back when the install fails: the update is all of it or none.
+/// The config is written before the install, so an install that fails leaves
+/// the right pin and a re-runnable `engine install`. It is never put back: an
+/// install can fail after it has replaced a binary, and a restored pin would
+/// then disagree with the engine on disk.
 //MUTANT-SUITE crates/batten/tests/it/engine_install.rs
-//MUTANT update-skips-the-bump|s@^    durable::replace(&path, &synced)?;$@@|an_update_moves_an_older_pin_forward_and_installs_it
+//MUTANT update-skips-the-bump|s@^        durable::replace(&path, &synced)?;$@@|an_update_moves_an_older_pin_forward_and_installs_it
 //MUTANT update-moves-the-pin-backward|s@^    let target = if engine::is_newer(&latest, &current)? {$@    let target = if latest != current {@|an_update_never_moves_a_pin_backward
 //MUTANT update-ignores-workflow-literal|s@^    if !stale.is_empty() {$@    if false {@|a_workflow_literal_the_update_cannot_rewrite_refuses_and_writes_nothing
 fn engine_update(out: &mut dyn Write) -> Result<ExitCode> {
@@ -843,22 +845,11 @@ fn engine_update(out: &mut dyn Write) -> Result<ExitCode> {
         }
         return Ok(ExitCode::Violation);
     }
-    if synced == text {
-        return engine_install(out);
+    if synced != text {
+        durable::replace(&path, &synced)?;
+        writeln!(out, "{}", path.display())?;
     }
-    durable::replace(&path, &synced)?;
-    writeln!(out, "{}", path.display())?;
-    // AN INSTALL THAT FAILS PUTS THE CONFIG BACK: a raised floor over a binary
-    // that never arrived would leave every gate in the session refusing this
-    // build as too old, so the update is all of it or none — and a restore that
-    // fails too is said, never left for the next gate to discover.
-    engine_install(out).map_err(|why| match durable::replace(&path, &text) {
-        Ok(()) => why,
-        Err(restore) => why.context(format!(
-            "engine update: {} still names {target}; restoring it failed: {restore}",
-            path.display()
-        )),
-    })
+    engine_install(out)
 }
 
 /// Every tracked YAML file under `root`, repository-relative and sorted.
@@ -1123,7 +1114,10 @@ fn notice_once(ask: &Outdated, out: &mut dyn Write) -> Result<()> {
 ///
 /// - Current: exit 0, silent.
 /// - Behind: exit 2, `pin → latest` and the changelog's releases between.
-/// - No release pin: exit 2, `no engine pin` — a finding about the config.
+/// - Source pin: exit 0, silent — this tree's own build, which no release is
+///   ahead of.
+/// - No pin, or a malformed one: exit 2, `no engine pin` — a finding about the
+///   config.
 /// - Could not look: exit 3.
 ///
 /// `--notice` is [`notice_once`], and ALWAYS exits 0. `--record` writes the

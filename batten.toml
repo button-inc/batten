@@ -2519,8 +2519,8 @@ writer = "batten record attestation --binary batten"
 
 # CLOUD-2279: how far this repository's engine pin is behind the release `main`
 # pins, judged by the thresholds the producer is given — stale past three
-# releases or fourteen days. The session-start handler `session-engine-notice` writes it on
-# the same lookup that feeds the notice; CI keeps none, so the
+# releases or fourteen days. The session-start handler `session-engine-notice`
+# writes it on the same lookup that feeds the notice; CI keeps none, so the
 # `engine-hygiene` row below is silent there.
 [[record]]
 record = "engine-fresh"
