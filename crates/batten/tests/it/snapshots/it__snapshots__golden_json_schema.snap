@@ -1393,7 +1393,7 @@ expression: stdout_of(&output)
         {
           "path": "doctor gaps",
           "id": "doctor.gaps",
-          "about": "Count what plan mode refused, by program, most-refused first",
+          "about": "Count the refusals a rule marks counted, by rule and subject, most-refused first",
           "effect": "read",
           "data_channel": false,
           "flags": [],

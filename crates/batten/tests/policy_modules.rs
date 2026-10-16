@@ -67,6 +67,7 @@ fn unattributed(verdict: &str) -> Violation {
         rule: None,
         verdict: verdict.to_owned(),
         subjects: Vec::new(),
+        counted: false,
     }
 }
 
@@ -76,6 +77,7 @@ fn attributed(rule: &str, verdict: &str) -> Violation {
         rule: Some(rule.to_owned()),
         verdict: verdict.to_owned(),
         subjects: Vec::new(),
+        counted: false,
     }
 }
 

@@ -310,6 +310,12 @@ pub struct Refusal {
     /// its own key.
     #[serde(skip_serializing)]
     bindings: Vec<String>,
+    /// The raising rule asked for each firing to be counted (CLOUD-2292): a
+    /// module violation's `counted`. The engine names no rule it counts; the
+    /// boundary records whichever refusal carries this. Skipped for `routes`'
+    /// reason, so `-J` is unmoved.
+    #[serde(skip)]
+    counted: bool,
 }
 
 /// Every spelling a mediated refusal of `token` naming `subjects` binds, in
@@ -1114,6 +1120,7 @@ impl Refusal {
             // nothing a request could name — and a binding with no class behind
             // it would read as admissible.
             bindings: Vec::new(),
+            counted: false,
         }
     }
 
@@ -1300,6 +1307,7 @@ impl Refusal {
             reason: crate::verdict::render_line(registry, token, subjects),
             fix,
             bindings: admission_bindings(token, subjects),
+            counted: false,
         }
     }
 
@@ -1307,6 +1315,19 @@ impl Refusal {
     #[must_use]
     pub fn subjects_text(&self) -> &str {
         &self.subjects
+    }
+
+    /// This refusal, marked as one its rule asked to be counted (CLOUD-2292).
+    #[must_use]
+    pub fn counted(mut self, counted: bool) -> Refusal {
+        self.counted = counted;
+        self
+    }
+
+    /// Whether the raising rule asked for this refusal to be counted.
+    #[must_use]
+    pub fn is_counted(&self) -> bool {
+        self.counted
     }
 
     /// Fold `other` into this refusal when the two differ only in their subjects
@@ -1354,13 +1375,6 @@ impl Refusal {
     #[must_use]
     pub fn rule(&self) -> &str {
         &self.rule
-    }
-
-    /// The rendered pointers, as the ` at <subjects>` clause spells them; empty
-    /// for a refusal naming none (CLOUD-2292's gap record reads it).
-    #[must_use]
-    pub fn subjects(&self) -> &str {
-        &self.subjects
     }
 
     /// Why it refused.

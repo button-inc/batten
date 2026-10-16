@@ -23412,8 +23412,8 @@ fn render(
         // and the stderr line cannot disagree about what the refusal said or
         // whether it named a fix.
         hook::Decision::Deny(refusal) => {
-            // What plan mode refused, by program (CLOUD-2292). A write at the
-            // boundary like the one below, and it records only that one rule.
+            // A refusal its rule asked to be counted (CLOUD-2292). A write at
+            // the boundary like the one below; the rule decides, not the engine.
             doctor::record_gap(hook_authority_root(), &refusal);
             // THE EFFECT IS HERE AND THE RENDERING IS NOT (CLOUD-1386).
             // `render_finding` projects and stays pure; consulting-and-marking

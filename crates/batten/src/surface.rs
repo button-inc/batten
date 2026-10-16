@@ -4740,7 +4740,7 @@ pub const SURFACE: &[CommandDecl] = &[
     CommandDecl {
         path: "doctor gaps",
         id: "doctor.gaps",
-        about: "Count what plan mode refused, by program, most-refused first",
+        about: "Count the refusals a rule marks counted, by rule and subject, most-refused first",
         data_channel: false,
         exits: EXITS_STANDARD,
         effect: Effect::Read,

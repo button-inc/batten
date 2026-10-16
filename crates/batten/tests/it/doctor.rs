@@ -1380,7 +1380,10 @@ fn the_gap_record_holds_no_argument_text() {
     let said = adjudicate_shell(&dir, "plan", &format!("python3 tools/x.py {secret}"));
     assert!(said.contains("plan write refused"), "the premise: {said}");
     let mut stored = String::new();
-    read_all(&dir.join(".git/batten-journals/plan-refusal"), &mut stored);
+    read_all(
+        &dir.join(".git/batten-journals/counted-refusal"),
+        &mut stored,
+    );
     assert!(
         stored.contains("python3"),
         "the program is recorded: {stored}"

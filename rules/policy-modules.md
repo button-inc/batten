@@ -147,6 +147,10 @@ is a statement about which one a reader should follow first; a class with nothin
 to point at omits the key rather than inventing one. The bare-string `deny`
 channel carries a token too, and is held to the same registry.
 
+`"counted": true` is the one other key: every blocking firing is then journaled by
+rule and subject for `batten doctor gaps` (CLOUD-2292). The rule asks, so the engine
+never names a class it counts; a non-boolean value is could-not-look.
+
 ## Patterns come from `[[pattern]]`, never inline
 
 An inline regex is **refused at load**. A pattern is a `[[pattern]]` row read as

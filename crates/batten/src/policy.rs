@@ -244,6 +244,9 @@ pub struct Violation {
     pub verdict: String,
     /// What it points at, in the order the module gave them.
     pub subjects: Vec<crate::verdict::Subject>,
+    /// The module asked for each firing to be counted (`"counted": true`,
+    /// CLOUD-2292), so the engine names no rule `batten doctor gaps` counts.
+    pub counted: bool,
 }
 
 // `PRESETS` moved to `crate::preset::MANIFESTS` (CLOUD-1181). It was one of
@@ -1646,10 +1649,17 @@ fn collect_violations(answer: &Answer, packages: &BTreeSet<Vec<String>>) -> Opti
                 None | Some(regorus::Value::Undefined) => Vec::new(),
                 Some(raw) => read_subjects(raw)?,
             };
+            // Optional like `subjects`; present and not a boolean is a dialect
+            // this decoder does not have, so could-not-look.
+            let counted = match object.get(&"counted".into()) {
+                None | Some(regorus::Value::Undefined) => false,
+                Some(raw) => raw.as_bool().ok().copied()?,
+            };
             violations.push(Violation {
                 rule,
                 verdict: verdict.to_string(),
                 subjects,
+                counted,
             });
         }
     }
@@ -2405,6 +2415,7 @@ pub fn deny(bundle: &Bundle, input: &str) -> Look<Vec<Violation>> {
             rule: None,
             verdict,
             subjects: Vec::new(),
+            counted: false,
         })),
         None => return Look::CouldNotLook,
     }

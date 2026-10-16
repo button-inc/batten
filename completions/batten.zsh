@@ -11613,7 +11613,7 @@ _batten__subcmd__doctor_commands() {
 'target:Make one rustup target installed, purging a half-installed one first, behind the toolchain'\''s own lock' \
 'mediator:Diagnose whether the engine the registrations reach was built from this tree' \
 'egress:Diagnose whether the agent proxy would carry this container'\''s requests' \
-'gaps:Count what plan mode refused, by program, most-refused first' \
+'gaps:Count the refusals a rule marks counted, by rule and subject, most-refused first' \
 'forge:Diagnose whether the forge credential carries the claims this repository'\''s tasks declare' \
 'config:Diagnose whether this build resolves every row of the config' \
 'gate:Diagnose whether this checkout'\''s commit path runs the gate' \
@@ -11655,7 +11655,7 @@ _batten__subcmd__doctor__subcmd__help_commands() {
 'target:Make one rustup target installed, purging a half-installed one first, behind the toolchain'\''s own lock' \
 'mediator:Diagnose whether the engine the registrations reach was built from this tree' \
 'egress:Diagnose whether the agent proxy would carry this container'\''s requests' \
-'gaps:Count what plan mode refused, by program, most-refused first' \
+'gaps:Count the refusals a rule marks counted, by rule and subject, most-refused first' \
 'forge:Diagnose whether the forge credential carries the claims this repository'\''s tasks declare' \
 'config:Diagnose whether this build resolves every row of the config' \
 'gate:Diagnose whether this checkout'\''s commit path runs the gate' \
@@ -12278,7 +12278,7 @@ _batten__subcmd__help__subcmd__doctor_commands() {
 'target:Make one rustup target installed, purging a half-installed one first, behind the toolchain'\''s own lock' \
 'mediator:Diagnose whether the engine the registrations reach was built from this tree' \
 'egress:Diagnose whether the agent proxy would carry this container'\''s requests' \
-'gaps:Count what plan mode refused, by program, most-refused first' \
+'gaps:Count the refusals a rule marks counted, by rule and subject, most-refused first' \
 'forge:Diagnose whether the forge credential carries the claims this repository'\''s tasks declare' \
 'config:Diagnose whether this build resolves every row of the config' \
 'gate:Diagnose whether this checkout'\''s commit path runs the gate' \

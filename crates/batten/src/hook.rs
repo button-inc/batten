@@ -7094,7 +7094,8 @@ fn policy_refusal(
                         &violation.verdict,
                         &violation.subjects,
                         Fix::None,
-                    ),
+                    )
+                    .counted(violation.counted),
                 ));
             }
             // Nothing outranks `Deny`, so the remaining bundles cannot change the

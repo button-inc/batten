@@ -744,43 +744,29 @@ fn purge(rustlib: &Path, target: &str) {
     }
 }
 
-/// `batten doctor target <triple>`: make one rustup target installed, or say why
-/// it is not (CLOUD-1753).
-///
-/// Retires `mise-tasks/target-ensure.sh`, `doctor-check.sh` and `with-lock.sh`
-/// together, because the three were one capability split across three files by
-/// the shell's own limits rather than by the problem.
-///
-/// # The lock is the point, not a precaution
-///
-/// rustup has no cross-process lock. Two concurrent `target add` calls each see
-/// the other's half-written component tree, both report `detected conflict`, and
-/// both roll back — the target ends up NOT installed and a gate goes red on a
-/// clean tree (CLOUD-220). Serialising here, in the one effect every call site
-/// The journal family a plan-mode refusal is recorded under (CLOUD-2292).
-pub const GAP_FAMILY: &str = "plan-refusal";
+/// The journal family a counted refusal is recorded under (CLOUD-2292).
+pub const GAP_FAMILY: &str = "counted-refusal";
 
-/// The rule whose refusals are recorded: the one that refuses whatever plan
-/// mode cannot prove a read, so a read nobody classified lands here too.
-pub const GAP_RULE: &str = "plan write refused";
-
-/// Record one plan-mode refusal: its rule, the subject it names and the day.
+/// Record one refusal its rule asked to be counted: the rule, the subject it
+/// names and the day.
 ///
-/// POINTER-ONLY (rule 4): the subject is the refusal's own rendered pointer —
-/// the program that did not read, or the tool — and never the call's argv,
-/// which the refusal does not carry. Any other rule records nothing. Silent on
-/// every failure, as every recorder on the hook boundary is: a record that
-/// cannot be written must not become the reason a call is decided differently.
+/// **The rule opts in, never the engine** — a module violation's `counted`
+/// ([`crate::policy::Violation::counted`]) — so core names no preset's class
+/// and an ejected or renamed rule keeps its count. POINTER-ONLY (rule 4): the
+/// subject is the refusal's own rendered pointer, never the call's argv, which
+/// the refusal does not carry. Silent on every failure, as every recorder on
+/// the hook boundary is: a record that cannot be written must not become the
+/// reason a call is decided differently.
 pub fn record_gap(root: &Path, refusal: &crate::refusal::Refusal) {
-    if refusal.rule() != GAP_RULE {
+    if !refusal.is_counted() {
         return;
     }
     let (Ok(git_dir), Ok(today)) = (git::git_dir(root), crate::waiver::today()) else {
         return;
     };
     let line = serde_json::json!({
-        "rule": GAP_RULE,
-        "subject": refusal.subjects(),
+        "rule": refusal.rule(),
+        "subject": refusal.subjects_text(),
         "date": today.text(),
     })
     .to_string();
@@ -788,13 +774,27 @@ pub fn record_gap(root: &Path, refusal: &crate::refusal::Refusal) {
     let _ = crate::journal::append_line(&store, &crate::journal::shard_id(root), &line);
 }
 
-/// `batten doctor gaps`: one line per (rule, subject) plan mode refused, with
-/// its count and the last day it happened, most-refused first (CLOUD-2292).
+/// One counted record, as [`record_gap`] writes it. `Cow`, because a string
+/// holding an escape cannot borrow from the line.
+#[derive(serde::Deserialize)]
+struct GapRecord<'a> {
+    #[serde(borrow)]
+    rule: std::borrow::Cow<'a, str>,
+    #[serde(borrow)]
+    subject: std::borrow::Cow<'a, str>,
+    #[serde(borrow)]
+    date: std::borrow::Cow<'a, str>,
+}
+
+/// `batten doctor gaps`: one line per (rule, subject) a counting rule refused,
+/// with its count and the last day it happened, most-refused first
+/// (CLOUD-2292).
 ///
-/// A program that is really a read and keeps appearing here is a reader the
-/// preset lacks, which `batten preset eject` lets a consumer add. The list
-/// cannot tell a gap from a real write — `read_only` proves reads and nothing
-/// else — so it counts what was refused and leaves that reading to its reader.
+/// Plan mode's refusal counts, so a program that is really a read and keeps
+/// appearing here is a reader the preset lacks, which `batten preset eject`
+/// lets a consumer add. The list cannot tell a gap from a real write, so it
+/// counts what was refused and leaves that reading to its reader. Nor does an
+/// empty list prove nothing was refused: [`record_gap`] is silent on failure.
 ///
 /// # Errors
 ///
@@ -810,24 +810,16 @@ pub fn run_gaps(root: &Path, out: &mut dyn Write) -> Result<ExitCode> {
             anyhow::bail!("doctor gaps: the store {} cannot be read", path.display())
         }
     };
-    let mut tally: std::collections::BTreeMap<(String, String), (usize, String)> =
+    let mut tally: std::collections::BTreeMap<_, (usize, std::borrow::Cow<'_, str>)> =
         std::collections::BTreeMap::new();
     for record in &records {
-        let Ok(value) = serde_json::from_str::<serde_json::Value>(record) else {
+        let Ok(gap) = serde_json::from_str::<GapRecord<'_>>(record) else {
             continue;
         };
-        let field = |key: &str| value.get(key).and_then(serde_json::Value::as_str);
-        let (Some(rule), Some(subject), Some(date)) =
-            (field("rule"), field("subject"), field("date"))
-        else {
-            continue;
-        };
-        let entry = tally
-            .entry((rule.to_owned(), subject.to_owned()))
-            .or_insert((0, String::new()));
+        let entry = tally.entry((gap.rule, gap.subject)).or_default();
         entry.0 += 1;
-        if date > entry.1.as_str() {
-            date.clone_into(&mut entry.1);
+        if gap.date > entry.1 {
+            entry.1 = gap.date;
         }
     }
     let mut lines: Vec<_> = tally.into_iter().collect();
@@ -841,6 +833,19 @@ pub fn run_gaps(root: &Path, out: &mut dyn Write) -> Result<ExitCode> {
     Ok(ExitCode::Success)
 }
 
+/// `batten doctor target <triple>`: make one rustup target installed, or say why
+/// it is not (CLOUD-1753).
+///
+/// Retires `mise-tasks/target-ensure.sh`, `doctor-check.sh` and `with-lock.sh`
+/// together, because the three were one capability split across three files by
+/// the shell's own limits rather than by the problem.
+///
+/// # The lock is the point, not a precaution
+///
+/// rustup has no cross-process lock. Two concurrent `target add` calls each see
+/// the other's half-written component tree, both report `detected conflict`, and
+/// both roll back — the target ends up NOT installed and a gate goes red on a
+/// clean tree (CLOUD-220). Serialising here, in the one effect every call site
 /// routes through, is what makes target installation behave like the idempotent
 /// operation rustup documents.
 ///

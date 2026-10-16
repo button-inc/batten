@@ -30,6 +30,8 @@ violation contains {
 	# boundary counts refusals by this pointer, so a read this preset does not
 	# yet classify shows up as a program refused again and again.
 	"subjects": [{"artifact": refused_subject(input.call)}],
+	# Counted by `batten doctor gaps`: the rule asks, so the engine names no class.
+	"counted": true,
 } if {
 	input.call.event == "pre-tool"
 	input.call["permission-mode"] == "plan"
@@ -47,22 +49,13 @@ violation contains {
 # read, or the tool itself for any other call. A function, for the reason
 # `read-only-is-preapproved.rego` records: a helper rule keeps a value between
 # inputs, and a function has none to keep.
-refused_subject(call) := name if {
-	call.tool == "Bash"
-	names := not_reads(call.programs)
-	count(names) > 0
-	name := names[0]
-}
-
-refused_subject(call) := call.tool if {
-	call.tool == "Bash"
-	count(not_reads(call.programs)) == 0
-}
+#
+# One clause, so the list is built once and a call with no `programs` still
+# names its tool rather than leaving the refusal with no subject at all.
+refused_subject(call) := array.concat(not_reads(object.get(call, "programs", [])), [call.tool])[0]
 
 # The names of the programs that do not read, in order.
 not_reads(programs) := [programs[i].name | programs[i]; not reads(programs[i])]
-
-refused_subject(call) := call.tool if call.tool != "Bash"
 
 # The host's own plan-mode surface: leaving it, asking, and its task list, which
 # is session state rather than the tree.
