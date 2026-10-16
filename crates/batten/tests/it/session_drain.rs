@@ -355,19 +355,18 @@ fn a_half_written_task_call_is_not_zero() {
     assert_eq!(output.status.code(), Some(3), "got: {}", stdout(&output));
 }
 
-/// A task call a hook denied never ran, so it declared no task.
-///
-/// Fails by: counting a refused call (`transcript-refused-call-counts`).
+/// A hook's refusal does not prove the call wrote nothing: a post-call block
+/// records the same refusal after the tool ran, so the call still counts.
 #[cfg(unix)]
 #[test]
-fn a_refused_task_call_declared_nothing() {
+fn a_refused_task_call_still_counts() {
     let body = transcript(&["TaskCreate"])
-        + r#"{"type":"user","sessionId":"s-1","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t0","is_error":true,"content":"PreToolUse:TaskCreate hook error: denied"}]}}"#
+        + r#"{"type":"user","sessionId":"s-1","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t0","is_error":true,"content":"PostToolUse:TaskCreate hook error: blocked"}]}}"#
         + "\n";
     let dir = rootless("transcript-refused", &body, false);
 
     let output = session(&dir, &[]);
-    assert_eq!(output.status.code(), Some(0), "got: {}", stdout(&output));
+    assert_eq!(output.status.code(), Some(3), "got: {}", stdout(&output));
 }
 
 /// `TodoWrite` keeps its checklist outside the task store, so a session that

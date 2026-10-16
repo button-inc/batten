@@ -2809,10 +2809,10 @@ enum TaskEvidence {
 /// Dropping it would read a declared task as zero; it answers
 /// [`TaskEvidence::Unknown`] instead.
 ///
-/// **A CALL A HOOK DENIED WROTE NOTHING.** A pre-call denial
-/// ([`crate::transcript::Event::Refused`]) stops the tool before it runs, so it
-/// declared no task. Any other error flag can follow a write, and a call with no
-/// result yet may have written, so both still count.
+/// **EVERY TASK CALL COUNTS, REFUSED OR NOT.** Neither an error flag nor a
+/// [`crate::transcript::Event::Refused`] proves nothing was written: a post-call
+/// hook's block records the same refusal after the tool ran. A denied call costs
+/// a could-not-look; exempting it would cost a false zero.
 ///
 /// **A TEMPLATE WITHOUT `{session}` CANNOT BE MATCHED** to a session, so it
 /// answers [`TaskEvidence::Unknown`].
@@ -2821,7 +2821,6 @@ enum TaskEvidence {
 //MUTANT transcript-zero-on-empty-stream|s@^    if stream.records.is_empty() {$@    if false {@|an_empty_transcript_is_not_evidence
 //MUTANT transcript-zero-any-session|s@^    if expected != target.to_string_lossy() {$@    if false {@|another_sessions_transcript_is_not_evidence
 //MUTANT transcript-partial-line-dropped|s@^    if !partial.trim().is_empty() {$@    if false {@|a_half_written_task_call_is_not_zero
-//MUTANT transcript-refused-call-counts|s@^            && !refused.contains(id.as_str())$@            \&\& true@|a_refused_task_call_declared_nothing
 //MUTANT transcript-sessionless-template-matches|s@ || !template.contains("{session}") {$@ {@|a_sessionless_template_is_not_evidence
 fn transcript_evidence(
     dir: &Path,
@@ -2867,19 +2866,9 @@ fn transcript_evidence(
     if expected != target.to_string_lossy() {
         return TaskEvidence::Unknown;
     }
-    let refused: std::collections::HashSet<&str> = stream
-        .records
-        .iter()
-        .filter_map(|record| match &record.event {
-            crate::transcript::Event::Refused { call, .. } => Some(call.as_str()),
-            _ => None,
-        })
-        .collect();
     let called = stream.records.iter().any(|record| {
-        matches!(&record.event, crate::transcript::Event::ToolCall { id, name, .. }
-            if tools.contains(&name.as_str())
-            && !refused.contains(id.as_str())
-        )
+        matches!(&record.event, crate::transcript::Event::ToolCall { name, .. }
+            if tools.contains(&name.as_str()))
     });
     if called {
         return TaskEvidence::TaskCalled;
@@ -2903,9 +2892,9 @@ fn transcript_evidence(
 /// and a link that will not read is no pointer at all, which is not the same
 /// fact as a pointer at nothing.
 //MUTANT-SUITE crates/batten/tests/it/session_drain.rs
-//MUTANT transcript-arm-dropped|s@^        TaskEvidence::NoTaskCall => true,$@        TaskEvidence::NoTaskCall => store_is_merely_unwritten(\&target),@|a_transcript_with_no_task_call_is_zero_without_a_store_root
-//MUTANT transcript-zero-without-a-transcript|s@^        TaskEvidence::Unknown => store_is_merely_unwritten(&target),$@        TaskEvidence::Unknown => true,@|a_pointer_whose_parent_is_absent_too_stays_could_not_look
-//MUTANT transcript-zero-over-a-present-store|s@^    if target.try_exists().unwrap_or(true) {$@    if false {@|an_unreadable_store_is_never_zero
+//MUTANT transcript-arm-dropped|s@^        TaskEvidence::NoTaskCall => true,$@        TaskEvidence::NoTaskCall => store_is_merely_unwritten(\&resolved),@|a_transcript_with_no_task_call_is_zero_without_a_store_root
+//MUTANT transcript-zero-without-a-transcript|s@^        TaskEvidence::Unknown => store_is_merely_unwritten(&resolved),$@        TaskEvidence::Unknown => true,@|a_pointer_whose_parent_is_absent_too_stays_could_not_look
+//MUTANT transcript-zero-over-a-present-store|s@^    if resolved.try_exists().unwrap_or(true) {$@    if false {@|an_unreadable_store_is_never_zero
 fn absent_store_is_zero(
     dir: &Path,
     transcript: &crate::transcript::TranscriptConfig,
@@ -2914,15 +2903,18 @@ fn absent_store_is_zero(
     let Ok(target) = std::fs::read_link(link) else {
         return false;
     };
+    // A relative target is relative to the LINK, as `read_dir(link)` follows it,
+    // never to this process's cwd. The transcript compares the target as parked.
+    let resolved = link.parent().unwrap_or(Path::new("")).join(&target);
     // `try_exists`, not `exists`: a target whose existence cannot be checked is
     // not known to be absent.
-    if target.try_exists().unwrap_or(true) {
+    if resolved.try_exists().unwrap_or(true) {
         return false;
     }
     match transcript_evidence(dir, transcript, &target) {
         TaskEvidence::NoTaskCall => true,
         TaskEvidence::TaskCalled => false,
-        TaskEvidence::Unknown => store_is_merely_unwritten(&target),
+        TaskEvidence::Unknown => store_is_merely_unwritten(&resolved),
     }
 }
 
