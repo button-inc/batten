@@ -74,7 +74,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context as _, Result, bail};
 
 use crate::error::UsageError;
-use crate::hook::{Event, Harness, WiringFile};
+use crate::hook::{Event, Harness};
 
 /// The base a comparison is taken against, and the run counts.
 ///
@@ -263,10 +263,15 @@ pub fn registered_paths(rules: &[crate::rules::Rule]) -> Vec<String> {
 pub fn wiring_paths() -> Vec<String> {
     let mut paths: BTreeSet<String> = BTreeSet::new();
     for harness in Harness::ALL {
-        let Some(wiring) = harness.wiring() else {
+        // Either install route is a hook surface: a plugin host's adapter file
+        // is as much the gate's input as a settings file (CLOUD-1942).
+        let Some(path) = harness
+            .wiring()
+            .map(|wiring| wiring.file.path())
+            .or_else(|| harness.plugin().map(|plugin| plugin.path))
+        else {
             continue;
         };
-        let path = wiring.file.path();
         paths.insert(path.to_owned());
         // The directory beside the settings file: a host that routes through a
         // launcher script keeps it there, and CLOUD-697 is the measured instance
@@ -1077,11 +1082,8 @@ fn wired_command(tree: &Path, bin: &Path) -> Result<Vec<String>> {
             "perf-pair: this harness registers no wiring file, so the wired pair cannot be measured. No measurement."
         );
     };
-    let (path, key) = match wiring.file {
-        WiringFile::Key { path, key } => (path, Some(key)),
-        WiringFile::Whole(path) | WiringFile::Root(path) => (path, None),
-    };
-    let settings = tree.join(path);
+    let key = wiring.file.event_key();
+    let settings = tree.join(wiring.file.path());
     let text = std::fs::read_to_string(&settings).with_context(|| {
         format!(
             "perf-pair: {} wires no settings the wired pair can read. No measurement.",

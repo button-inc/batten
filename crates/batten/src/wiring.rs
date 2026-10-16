@@ -71,7 +71,7 @@ pub(crate) fn committed_events(
     document: &serde_json::Value,
     file: hook::WiringFile,
 ) -> Option<Cow<'_, serde_json::Map<String, serde_json::Value>>> {
-    let Some(key) = event_key(file) else {
+    let Some(key) = file.event_key() else {
         // A root-keyed file IS the event map, so only a non-object is
         // unreadable.
         return document.as_object().map(Cow::Borrowed);
@@ -90,22 +90,6 @@ pub(crate) fn committed_events(
             .is_object()
             .then(|| Cow::Owned(serde_json::Map::new())),
         Some(value) => value.as_object().map(Cow::Borrowed),
-    }
-}
-
-/// Which key a wiring file's events live under.
-///
-/// Extracted so the mutable walk in [`prune_siblings`] and the immutable read in
-/// [`committed_events`] cannot pick different keys — the one way those two could
-/// silently stop describing the same document.
-const fn event_key(file: hook::WiringFile) -> Option<&'static str> {
-    match file {
-        hook::WiringFile::Key { key, .. } => Some(key),
-        // A hooks-only file is what `render_wiring` emits whole, and what it
-        // emits is `{"hooks": {…}}`.
-        hook::WiringFile::Whole(_) => Some("hooks"),
-        // Keyed directly by event name: the document is the map.
-        hook::WiringFile::Root(_) => None,
     }
 }
 
@@ -437,7 +421,7 @@ fn prune_siblings(
     file: hook::WiringFile,
     command: &str,
 ) -> Vec<(String, usize)> {
-    let events = match event_key(file) {
+    let events = match file.event_key() {
         Some(key) => document
             .get_mut(key)
             .and_then(serde_json::Value::as_object_mut),
@@ -603,7 +587,7 @@ fn add_missing(
     };
     // A root-keyed file IS the event map, so the registrations go at its top
     // level rather than under a key.
-    let events = match event_key(file) {
+    let events = match file.event_key() {
         Some(key) => root
             .entry(key)
             .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()))
