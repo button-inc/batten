@@ -133,8 +133,10 @@ const SHIPPED: &[u8] = b"#!/bin/sh\necho the fixture release\n";
 /// The date `main`'s changelog gives `main`'s own release.
 const MAIN_DATE: &str = "2020-02-01";
 
-/// The platforms a fixture provision row names, beside this build's own.
-const PROVISION_TARGETS: &[&str] = &["x86_64-unknown-linux-musl", "aarch64-apple-darwin"];
+/// The platforms a fixture provision row names, beside this build's own. NEVER
+/// A LINUX TRIPLE: the cases run only on linux, and a target equal to this
+/// build's would publish its archive twice in `SHA256SUMS` under two digests.
+const PROVISION_TARGETS: &[&str] = &["x86_64-pc-windows-msvc", "aarch64-apple-darwin"];
 
 /// The digest the fixture release publishes for `target`'s archive.
 fn platform_digest(target: &str) -> String {
