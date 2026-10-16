@@ -479,7 +479,7 @@ jobs:
       # again. Exit 3, could-not-look, fails the run.
       - name: Hold while a release is in flight
         id: freeze
-        run: mise run batten -- ci step --verdict clear --on 0=yes --on 1=no -- mise run batten -- release in-flight --workflow release-artifacts.yml --workflow release-land.yml
+        run: mise run batten -- ci step --verdict clear --on 0=yes --on 2=no -- mise run batten -- release in-flight --workflow release-artifacts.yml --workflow release-land.yml
       - name: Which version does the release head carry?
         if: steps.freeze.outputs.clear == 'yes'
         id: version

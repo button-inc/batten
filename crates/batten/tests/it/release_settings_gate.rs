@@ -1,63 +1,75 @@
-//! The release gate's `--on` table maps the verb's own not-green exit
-//! (CLOUD-2392).
+//! Every `ci step --on` table over a `batten release` verb maps the verb's own
+//! refusal (CLOUD-2392).
 //!
-//! `release settings --last-run` answers not-green with `Violation`, which is 2.
-//! Both callers wrapped it in `ci step --on 0=true --on 1=false`, copied from a
-//! doc comment that said 1, so the answer was unmapped: `ci step` failed the job
-//! instead of writing `green=false`, and the `if:` written to skip the release PR
-//! never ran. Every `release-plz` run on `main` went red on a guard that was
-//! working as designed, and the engine-pin steps after it never ran.
+//! The release verbs answer a refusal with `Violation`, which is exit 2.
+//! `release settings --last-run`, `release in-flight` and `release verify` were
+//! each wrapped in `ci step --on 0=… --on 1=…`, copied from doc comments that
+//! said 1, so the refusal was unmapped: `ci step` failed the job instead of
+//! writing the captured answer. The `if:` written to skip the release PR, hold
+//! the ready, or discard a refused draft never ran.
 //!
-//! Exit 3 stays unmapped on purpose: could-not-look must still fail the job.
+//! Exit 1 is `Usage`, a malformed call, and exit 3 is could-not-look: both must
+//! stay unmapped so they still fail the job.
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
 
-/// The two workflows that gate on the release guard's last `settings` run.
-const CALLERS: [&str; 2] = [
-    ".github/workflows/release-plz.yml",
-    ".github/workflows/auto-release-land.yml",
-];
-
-/// Every `--on` pair on the `ci step` lines that wrap `release settings --last-run`.
-fn tables(path: &str) -> Vec<Vec<String>> {
-    let text = std::fs::read_to_string(common::at_root(path)).expect("the workflow is readable");
-    text.lines()
-        .filter(|line| line.contains("ci step") && line.contains("release settings --last-run"))
-        .map(|line| {
+/// Every `(workflow, verb, --on pairs)` for a `ci step` wrapping `batten release`.
+fn tables() -> Vec<(String, String, Vec<String>)> {
+    let dir = common::at_root(".github/workflows");
+    let mut found = Vec::new();
+    for entry in std::fs::read_dir(&dir).expect("the workflows directory is readable") {
+        let path = entry.expect("a workflow entry is readable").path();
+        let text = std::fs::read_to_string(&path).expect("the workflow is readable");
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        for line in text.lines().filter(|line| line.contains("ci step")) {
             let words: Vec<&str> = line.split_whitespace().collect();
-            words
+            // `batten -- release <verb>` through mise, or `batten release <verb>`.
+            let Some(at) = words.iter().enumerate().position(|(i, word)| {
+                *word == "release"
+                    && (words.get(i.wrapping_sub(1)) == Some(&"batten")
+                        || (words.get(i.wrapping_sub(1)) == Some(&"--")
+                            && words.get(i.wrapping_sub(2)) == Some(&"batten")))
+            }) else {
+                continue;
+            };
+            let verb = words.get(at + 1).copied().unwrap_or_default().to_owned();
+            let pairs = words
                 .windows(2)
                 .filter(|pair| pair[0] == "--on")
                 .map(|pair| pair[1].to_owned())
-                .collect()
-        })
-        .collect()
+                .collect::<Vec<_>>();
+            if !pairs.is_empty() {
+                found.push((name.clone(), verb, pairs));
+            }
+        }
+    }
+    found
 }
 
 #[test]
 fn the_release_settings_gate_maps_its_violation_exit() {
-    for path in CALLERS {
-        let found = tables(path);
+    let found = tables();
+    for verb in ["settings", "in-flight", "verify"] {
         assert!(
-            !found.is_empty(),
-            "{path} no longer wraps `release settings --last-run` in `ci step`; this case reads nothing"
+            found.iter().any(|(_, seen, _)| seen == verb),
+            "no workflow wraps `release {verb}` in `ci step --on` any more; this case reads nothing for it"
         );
-        for table in found {
-            assert!(
-                table.iter().any(|pair| pair == "2=false"),
-                "{path}: not-green is exit 2 (`Violation`) and must map to `green=false`: {table:?}"
-            );
-            assert!(
-                !table.iter().any(|pair| pair.starts_with("1=")),
-                "{path}: exit 1 is `Usage`, a malformed call, and must fail the job: {table:?}"
-            );
-            assert!(
-                !table.iter().any(|pair| pair.starts_with("3=")),
-                "{path}: exit 3 is could-not-look and must fail the job: {table:?}"
-            );
-        }
+    }
+    for (workflow, verb, table) in found {
+        assert!(
+            table.iter().any(|pair| pair.starts_with("2=")),
+            "{workflow}: `release {verb}` refuses with exit 2 (`Violation`), which must be mapped: {table:?}"
+        );
+        assert!(
+            !table.iter().any(|pair| pair.starts_with("1=")),
+            "{workflow}: `release {verb}` exit 1 is `Usage`, a malformed call, and must fail the job: {table:?}"
+        );
+        assert!(
+            !table.iter().any(|pair| pair.starts_with("3=")),
+            "{workflow}: `release {verb}` exit 3 is could-not-look and must fail the job: {table:?}"
+        );
     }
 }
