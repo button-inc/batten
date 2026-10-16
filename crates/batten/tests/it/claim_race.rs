@@ -428,11 +428,11 @@ fn competitor_logs_are_fetched_concurrently_once_each_and_returned_in_listing_or
 
     let race::Filled {
         pulls: filled,
-        complete,
+        unanswered,
     } = race::with_logs(pulls.clone(), "1", &[], &Fake, fetch);
 
     assert!(
-        complete,
+        unanswered.is_empty(),
         "every eligible competitor answered, so this fill is a reading"
     );
     assert_eq!(
@@ -481,7 +481,7 @@ fn competitor_logs_are_fetched_concurrently_once_each_and_returned_in_listing_or
     );
 }
 
-/// A fill that lost a worker is `complete: false`, so the verb reads it as
+/// A fill that lost a worker names it in `unanswered`, so the verb reads it as
 /// could-not-look instead of taking a verdict over it (CLOUD-2382).
 ///
 /// # Why this case exists at all
@@ -494,9 +494,11 @@ fn competitor_logs_are_fetched_concurrently_once_each_and_returned_in_listing_or
 /// exact conflation `race.rs` exists to correct, so the flag that prevents it
 /// owes a case.
 ///
-/// It discriminates by construction: a `complete` hardcoded to `true`, or
-/// counted against the listing rather than the eligible set, passes every other
-/// assertion in this file and fails only here.
+/// It discriminates by construction: an `unanswered` hardcoded empty, or taken
+/// against the listing rather than the eligible set, passes every other
+/// assertion in this file and fails only here. Asserting the NUMBER rather than
+/// emptiness is what pins the second half of the field's job — the caller asks
+/// which competitor went unread, not merely whether one did.
 #[test]
 fn a_fill_that_lost_a_worker_is_not_complete_and_keeps_the_answers_it_got() {
     let pulls = vec![
@@ -508,15 +510,16 @@ fn a_fill_that_lost_a_worker_is_not_complete_and_keeps_the_answers_it_got() {
     // that does not, which is what pins "keeps the answers it got".
     let race::Filled {
         pulls: filled,
-        complete,
+        unanswered,
     } = race::with_logs(pulls, "1", &[], &Fake, |number| {
         assert!(number != "2", "a deliberate panic inside one worker");
         Some(format!("Refs: CLOUD-{number}"))
     });
 
-    assert!(
-        !complete,
-        "a competitor that was never answered makes the fill a could-not-look"
+    assert_eq!(
+        unanswered,
+        ["2".to_owned()],
+        "the competitor that was never answered is named, not just counted"
     );
     assert_eq!(
         filled
@@ -554,8 +557,9 @@ fn a_read_that_failed_is_not_a_competitor_that_claims_nothing() {
     ];
 
     let refused = race::with_logs(pulls.clone(), "1", &[], &Fake, |_| None);
-    assert!(
-        !refused.complete,
+    assert_eq!(
+        refused.unanswered,
+        ["2".to_owned()],
         "a read that failed leaves the fill a could-not-look, never a verdict"
     );
     assert!(
@@ -565,7 +569,7 @@ fn a_read_that_failed_is_not_a_competitor_that_claims_nothing() {
 
     let answered = race::with_logs(pulls, "1", &[], &Fake, |_| Some(String::new()));
     assert!(
-        answered.complete,
+        answered.unanswered.is_empty(),
         "an empty log is an ANSWER — a competitor whose commits name no key reads \
          exactly that way, and conflating the two is the defect this fixes"
     );
@@ -614,7 +618,7 @@ fn a_competitor_whose_cheap_key_collides_is_fetched_and_one_that_collides_with_n
         "only the competitor whose cheap key this branch also claims is worth a round trip"
     );
     assert!(
-        filled.complete,
+        filled.unanswered.is_empty(),
         "the one eligible competitor answered, so this fill is a reading"
     );
     // AND THE FALSE REFUSAL IS GONE, which is the whole point and the only
@@ -644,14 +648,26 @@ fn answer(status: u16, body: &str) -> String {
 ///
 /// **The listing is the collision in miniature.** #7's body closes CLOUD-1 while
 /// its COMMITS close CLOUD-2, and #8 names CLOUD-2 in its title. So whether this
-/// branch races turns entirely on whether its own log was read. #8 resolves from
-/// the cheap sources and is therefore never fetched, which keeps the fan-out
-/// `complete` and makes this pair a statement about the self side alone.
+/// branch races turns entirely on whether its own log was read.
+///
+/// #8 IS ROUTED TOO, and the case that forgot it was wrong about itself. Once
+/// the self log resolves CLOUD-2 into `mine`, #8's cheap key collides with it,
+/// so `with_logs` asks for #8's commits to confirm — the widening working as
+/// designed. Without that route the request fell through to the call-order
+/// protocol, answered nothing, and left #8 unanswered: the case passed only
+/// because `races` is computed first, over a doc claiming the opposite. #8's
+/// commits close CLOUD-2 as its title says, so the confirmation agrees and the
+/// race is real.
 ///
 /// The REAL grammar rather than [`Fake`], because the subject here is the verb:
 /// the compiled binary resolves `[[pattern]]` rows out of the config it finds,
 /// and a fixture spelling its own would assert about a grammar nothing uses.
-fn self_log(name: &str, commits: u16) -> (std::path::PathBuf, std::path::PathBuf) {
+fn self_log(
+    name: &str,
+    commits: u16,
+    body: &str,
+    rival: u16,
+) -> (std::path::PathBuf, std::path::PathBuf) {
     let root = scratch(name);
     let repo = Fixture::at(root.join("repo"))
         .config("version = 1\n")
@@ -673,7 +689,15 @@ fn self_log(name: &str, commits: u16) -> (std::path::PathBuf, std::path::PathBuf
     write(
         &forge,
         "routes",
-        "pulls/7/commits\tcommits.json\npulls?\tpulls.json\n",
+        "pulls/7/commits\tcommits.json\npulls/8/commits\trival.json\npulls?\tpulls.json\n",
+    );
+    write(
+        &forge,
+        "rival.json",
+        &answer(
+            rival,
+            r#"[{"commit":{"message":"feat: the rival's work\n\nCloses CLOUD-2"}}]"#,
+        ),
     );
     write(
         &forge,
@@ -681,7 +705,7 @@ fn self_log(name: &str, commits: u16) -> (std::path::PathBuf, std::path::PathBuf
         &answer(
             200,
             &format!(
-                r#"[{{"number":7,"title":"fix: the work","body":"Closes CLOUD-1.",
+                r#"[{{"number":7,"title":"fix: the work","body":"{body}",
                    "head":{{"ref":"user/topic","sha":"{head}"}}}},
                   {{"number":8,"title":"feat: somebody else on CLOUD-2","body":"",
                    "head":{{"ref":"user/rival","sha":"beef"}}}}]"#
@@ -713,7 +737,7 @@ fn raced(repo: &std::path::Path, forge: &std::path::Path) -> std::process::Outpu
 /// gives the next case something to lose.
 #[test]
 fn a_key_closed_by_this_branch_s_commits_alone_still_races() {
-    let (repo, forge) = self_log("claim-race-self-log-read", 200);
+    let (repo, forge) = self_log("claim-race-self-log-read", 200, "Closes CLOUD-1.", 200);
     let output = raced(&repo, &forge);
 
     assert_eq!(
@@ -748,7 +772,7 @@ fn a_key_closed_by_this_branch_s_commits_alone_still_races() {
 /// allowed while saying nothing would pass the first two.
 #[test]
 fn a_self_log_that_could_not_be_read_is_not_a_clean_board() {
-    let (repo, forge) = self_log("claim-race-self-log-refused", 403);
+    let (repo, forge) = self_log("claim-race-self-log-refused", 403, "Closes CLOUD-1.", 200);
     let output = raced(&repo, &forge);
 
     assert!(
@@ -765,5 +789,78 @@ fn a_self_log_that_could_not_be_read_is_not_a_clean_board() {
         !stdout(&output).contains("no open pull request races"),
         "a claim set short of the keys its own commits close cannot report a clean board: {}",
         stdout(&output)
+    );
+}
+
+/// A self log that could not be read AND a body that closes nothing takes the
+/// other self arm — the one that declines before judging anything.
+///
+/// # Why it is a separate arm, and why it owed a case
+///
+/// With a closing body the degraded claim set is a SUBSET of the true one, so
+/// judging it can only under-report and the verb judges. With a silent body the
+/// set is not a subset at all: `claimed_from` falls through to the branch and
+/// title, so a branch whose log closes one key and whose name carries another
+/// resolves to the WRONG key and could refuse over a claim it does not make.
+/// That arm therefore returns before `races`, and its message says which of the
+/// two reasons it took.
+///
+/// Until this case, deleting the guard — or inverting it — left the whole suite
+/// green, because every other fixture-driven run either exits before the log
+/// read or has a body that closes a key. The branch name here resolves no key
+/// either, which is what makes the arm reachable rather than hypothetical.
+#[test]
+fn a_silent_body_behind_an_unreadable_self_log_judges_nothing() {
+    let (repo, forge) = self_log("claim-race-self-log-silent", 403, "no key here at all", 200);
+    let output = raced(&repo, &forge);
+
+    assert!(
+        output.status.success(),
+        "could-not-look allows, on this arm as on the others: {}",
+        stderr(&output)
+    );
+    assert!(
+        stdout(&output).contains("body closes no key"),
+        "and it names THIS arm rather than the subset one: {}",
+        stdout(&output)
+    );
+}
+
+/// A race that rests on a competitor whose confirming read FAILED is not a
+/// refusal (CLOUD-2382).
+///
+/// # The one false refusal the widening could not remove by itself
+///
+/// #8 is fetched only because its cheap key collides with this branch's — that
+/// is, precisely because the branch-derived key might be wrong. When that
+/// confirming read answers 403, reporting the race anyway refuses on the very
+/// evidence the run went out to distrust, and it is unreachable by the
+/// incomplete-fill arm, because `races` is not empty.
+///
+/// The fixture differs from the refusing case in one byte, the status of
+/// `pulls/8/commits`: at 200 the confirmation agrees and the verb refuses at 2
+/// over a real collision; at 403 the same listing must decline instead. So the
+/// listing cannot account for the difference, and an arm that allowed without
+/// saying why would pass the first assertion alone.
+#[test]
+fn a_race_resting_on_a_competitor_nobody_could_read_is_not_a_refusal() {
+    let (repo, forge) = self_log("claim-race-rival-unread", 200, "Closes CLOUD-1.", 403);
+    let output = raced(&repo, &forge);
+
+    assert!(
+        output.status.success(),
+        "an unconfirmed collision must not fail `verify`: {}",
+        stderr(&output)
+    );
+    assert!(
+        stdout(&output).contains("unconfirmed"),
+        "and it says the collision was never confirmed: {}",
+        stdout(&output)
+    );
+    assert!(
+        !stderr(&output).contains("already claimed"),
+        "the refusal the cheap key alone would have produced is exactly what this arm \
+         withholds: {}",
+        stderr(&output)
     );
 }

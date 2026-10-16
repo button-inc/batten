@@ -7280,7 +7280,7 @@ fn run_claim_race(
     // indistinguishable from a competitor whose commits name no key, and the
     // `Refs:` trailer that actually resolves a claim lives in the log that read
     // did not return. `None` is carried out as an incomplete fill instead.
-    let race::Filled { pulls, complete } =
+    let race::Filled { pulls, unanswered } =
         race::with_logs(pulls, &mine_number, &mine, &grammar, |number| {
             bot::forge::commit_messages(&slug, number).ok()
         });
@@ -7305,6 +7305,17 @@ fn run_claim_race(
     // read, over a key it was contributing to nothing before. Whoever widens
     // the fetch set that far moves this arm above `races` in the same change.
     let races = race::races(&mine, &pulls, Some(&mine_number), &grammar);
+    // **AND A RACE RESTING ON A COMPETITOR NOBODY READ IS NOT ONE EITHER.** A
+    // collider is fetched precisely because its cheap key might be wrong — the
+    // branch names one key while the commits close another — so reporting it
+    // on that same cheap key when the confirming read FAILED is refusing on the
+    // evidence this run went out of its way to distrust. It would also be the
+    // one false refusal the widening cannot remove: `races` is non-empty, so
+    // the arm below never runs. Could-not-look, like every other arm here, and
+    // the branch is not blocked by a forge nobody could reach.
+    if races.iter().any(|race| unanswered.contains(&race.number)) {
+        return clean(out, UNCONFIRMED_RACE);
+    }
     // AND AN INCOMPLETE FILL ALLOWS, exactly like the four arms above it. Once
     // `fetch` answers an `Option`, this arm's common cause is a forge that
     // refused one read — a 403, a 502, a timeout — and "a forge this cannot
@@ -7330,12 +7341,12 @@ fn run_claim_race(
     //
     // THE SELF SIDE'S DEGRADED READ JOINS IT HERE, for the reason its own match
     // arm states; [`unread_log`] owns which sentence that earns.
-    if races.is_empty() && !(complete && log.is_some()) {
+    if races.is_empty() && !(unanswered.is_empty() && log.is_some()) {
         return clean(
             out,
             &format!(
                 "claim race: {} — could not look, which is not a verdict",
-                unread_log(complete, log.as_deref())
+                unread_log(unanswered.is_empty(), log.as_deref())
             ),
         );
     }
@@ -7366,6 +7377,15 @@ fn run_claim_race(
 /// WHICH log went unread, for [`run_claim_race`]'s one arm that declines to call
 /// an incomplete reading clean.
 ///
+/// What `claim race` says when a competitor it would REFUSE on went unread.
+///
+/// Its own arm rather than a fifth sentence in [`unread_log`]: the others all
+/// answer "no race found over a partial reading", and this one is a race found
+/// over a competitor the run deliberately distrusted and then could not check.
+const UNCONFIRMED_RACE: &str = "claim race: a competitor whose claim this branch would race could \
+                                not be read, so the collision is unconfirmed — could not look, \
+                                which is not a verdict";
+
 /// Called only where at least one side failed. Both causes share one arm
 /// because they share one remedy — look again — and the third sentence exists
 /// because one refused token refuses this branch's read AND every competitor's

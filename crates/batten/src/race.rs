@@ -353,11 +353,11 @@ pub const FETCH_WIDTH: usize = 8;
 pub struct Filled {
     /// The listing in input order, each eligible competitor carrying its log.
     pub pulls: Vec<Pull>,
-    /// Every eligible competitor answered, so this is a reading.
+    /// The competitors this asked for and did not get, by pull request number.
     ///
-    /// `false` has two causes and they are the same fact: some eligible
-    /// competitor was never read. Either its `fetch` answered `None`, or the
-    /// worker carrying it unwound before it could send.
+    /// Empty is the whole-reading case. A number lands here for either of two
+    /// causes, which are the same fact — it was never read: its `fetch`
+    /// answered `None`, or the worker carrying it unwound before it could send.
     ///
     /// **An empty log is NOT one of them.** `Some("")` is an answer — a
     /// competitor whose commits genuinely name no key reads exactly that way,
@@ -365,8 +365,13 @@ pub struct Filled {
     /// present as "claims nothing". That conflation is why `fetch` answers an
     /// `Option` at all.
     ///
-    /// What to exit on `false` is the caller's, and stated there.
-    pub complete: bool,
+    /// **Numbers rather than a count**, because the caller has two different
+    /// questions and only one of them is "was this a whole reading". The other
+    /// is whether a race it is about to REPORT rests on a competitor nobody
+    /// read, which a bool cannot answer and which decides between refusing and
+    /// declining to. What to do in either case is the caller's, and stated
+    /// there.
+    pub unanswered: Vec<String>,
 }
 
 /// Fill in each competitor's `log`, fetching the eligible ones concurrently.
@@ -423,8 +428,10 @@ pub struct Filled {
 /// but it also appends every request to one shared `args` file and replaces one
 /// `<file>.request` per route, so what a suite READS BACK afterwards is in
 /// scheduler order, and a last writer wins where two requests route to one
-/// file. No suite drives `claim race` through the fixture today; one with
-/// several competitors must route by URL *and* assert over `args` as a set
+/// file. `claim_race.rs`'s verb-tier cases now DO drive this seam, and they
+/// stay safe by staying narrow: one competitor is ever eligible in them, so no
+/// two requests race for `args` and none asserts over it. A case with several
+/// eligible competitors must route by URL *and* assert over `args` as a set
 /// rather than a sequence.
 ///
 /// # What is decided where
@@ -533,10 +540,6 @@ pub fn with_logs(
         })
         .map(|(slot, pull)| (slot, pull.number.as_str()))
         .collect();
-    // Taken before the fan-out because `eligible` borrows `pulls`, and the
-    // write-back below needs it mutably: reading the length afterwards would
-    // hold the immutable borrow across the loop.
-    let wanted = eligible.len();
     // ONE SHARED INDEX TAKEN BY AT MOST `FETCH_WIDTH` WORKERS, never a thread
     // per pull: the width is the whole of the bound, and spawning per item
     // would make the peak the listing's length. An empty `eligible` spawns
@@ -553,8 +556,8 @@ pub fn with_logs(
     // right — the alternative is one through `verify`'s whole pre-flight — but
     // absorbing it SILENTLY would leave competitors carrying empty logs for no
     // reason the forge gave, and the caller would read that as "no races" at
-    // exit 0. So the answers are counted against the eligible set and
-    // [`Filled::complete`] carries the difference out.
+    // exit 0. So the answers are taken against the eligible set and
+    // [`Filled::unanswered`] carries the difference out, by number.
     //
     // A CHANNEL RATHER THAN A `Mutex<Vec<_>>`, which is how this crate already
     // spells "workers publish answers to the calling thread" — `land::wait`'s
@@ -604,21 +607,29 @@ pub fn with_logs(
     // `rx` runs dry exactly when the last answer has been taken. Holding `tx`
     // across the loop would hang here forever.
     drop(tx);
-    let mut answered = 0_usize;
-    for (slot, log) in rx {
-        answered += 1;
+    let answers: Vec<(usize, String)> = rx.into_iter().collect();
+    // TAKEN AGAINST THE ELIGIBLE SET, never against the listing: `mine_number`
+    // and every competitor a cheap source already answered were deliberately
+    // not asked, so reading this off `pulls` would report every ordinary fill
+    // incomplete.
+    //
+    // Drained into `answers` first because `eligible` borrows `pulls` and the
+    // write-back below needs it mutably — the difference has to be taken while
+    // the immutable borrow is still alive.
+    let answered: std::collections::BTreeSet<usize> =
+        answers.iter().map(|(slot, _)| *slot).collect();
+    let unanswered: Vec<String> = eligible
+        .iter()
+        .filter(|(slot, _)| !answered.contains(slot))
+        .map(|(_, number)| (*number).to_owned())
+        .collect();
+    drop(eligible);
+    for (slot, log) in answers {
         if let Some(pull) = pulls.get_mut(slot) {
             pull.log = log;
         }
     }
-    // COUNTED AGAINST THE ELIGIBLE SET, never against the listing: `mine` and
-    // every competitor a cheap source already answered were deliberately not
-    // asked, so comparing against `pulls.len()` would report every ordinary
-    // fill incomplete.
-    Filled {
-        complete: answered == wanted,
-        pulls,
-    }
+    Filled { pulls, unanswered }
 }
 
 /// Every key this branch claims that a DIFFERENT open pull request claims too.
