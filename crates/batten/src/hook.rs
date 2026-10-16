@@ -2803,32 +2803,36 @@ fn relative_to(root: &Path, path: &str) -> Option<String> {
     }
     let root = root.canonicalize().ok()?;
     let resolved = candidate.canonicalize().ok().or_else(|| {
-        // `.` AND `..` RESOLVED LEXICALLY FIRST (CLOUD-2390's security pass). A
-        // path through a directory that does not exist yet cannot canonicalize,
-        // and a `..` component has no `file_name`, so `/repo/new/../src/x.rs`
+        // Find the DEEPEST prefix that canonicalizes — the one whose canonical
+        // form resolves the most symlinks, which is the reading the prefix test
+        // below needs — then replay the remaining components onto it.
+        //
+        // `.` AND `..` IN THE TAIL ARE REPLAYED, NOT ABANDONED (CLOUD-2390's
+        // security pass). A `..` has no `file_name`, so `/repo/new/../src/x.rs`
         // used to abandon the walk and keep its absolute spelling — read as
         // outside the tree by `protected` and by a `tree_only` handler alike,
-        // though the host writes it inside. The lexical form is the path the
-        // host writes to.
-        let candidate = lexically_normal(candidate);
-        let candidate = candidate.as_path();
-        // Peel components off the tail until something canonicalizes, then put
-        // them back in the order they came off. `ancestors` walks parent-first,
-        // so the first hit is the DEEPEST existing directory — the one whose
-        // canonical form resolves the most symlinks, which is the reading the
-        // prefix test below needs.
-        let mut trailing: Vec<&std::ffi::OsStr> = vec![candidate.file_name()?];
-        for ancestor in candidate.ancestors().skip(1) {
-            if let Ok(base) = ancestor.canonicalize() {
-                let mut resolved = base;
-                for name in trailing.iter().rev() {
-                    resolved.push(name);
+        // though the host writes it inside. The `..` is resolved only AFTER the
+        // canonical base, never lexically over the whole path: a `..` after a
+        // symlink climbs the link's TARGET, so `/tmp/link/../mise-tasks/x.sh`
+        // with `link` pointing into the repository is a write inside it, which a
+        // lexical pass would spell `/tmp/mise-tasks/x.sh` and wave through. The
+        // component right past the base does not exist, so it is no symlink and
+        // a `..` popping it lexically is the reading the host gets.
+        let components: Vec<std::path::Component<'_>> = candidate.components().collect();
+        (1..components.len()).rev().find_map(|split| {
+            let prefix: PathBuf = components[..split].iter().collect();
+            let mut resolved = prefix.canonicalize().ok()?;
+            for component in &components[split..] {
+                match component {
+                    std::path::Component::CurDir => {}
+                    std::path::Component::ParentDir => {
+                        resolved.pop();
+                    }
+                    other => resolved.push(other),
                 }
-                return Some(resolved);
             }
-            trailing.push(ancestor.file_name()?);
-        }
-        None
+            Some(resolved)
+        })
     })?;
     let relative = resolved.strip_prefix(&root).ok()?;
     // FORWARD SLASHES, NOT THE PLATFORM SEPARATOR (CLOUD-1141). Every reader of
@@ -2845,22 +2849,6 @@ fn relative_to(root: &Path, path: &str) -> Option<String> {
     // asymmetry a path rendered with `MAIN_SEPARATOR` produces.
     let rendered = relative.to_str()?.replace('\\', "/");
     (!rendered.is_empty()).then_some(rendered)
-}
-
-/// `path` with `.` dropped and each `..` taking back the component before it,
-/// without touching the filesystem.
-fn lexically_normal(path: &Path) -> PathBuf {
-    let mut normal = PathBuf::new();
-    for component in path.components() {
-        match component {
-            std::path::Component::CurDir => {}
-            std::path::Component::ParentDir => {
-                normal.pop();
-            }
-            other => normal.push(other),
-        }
-    }
-    normal
 }
 
 /// **Serialized in `clap`'s spelling, not serde's default** (CLOUD-925). A

@@ -160,8 +160,9 @@ fn the_absolute_spelling_the_host_sends_signals_too() {
 }
 
 /// And spelled with `..` through a directory that does not exist (CLOUD-2390's
-/// security pass): it cannot canonicalize, so before `lexically_normal` it kept
-/// its absolute spelling and read as outside the tree.
+/// security pass): it cannot canonicalize, and a `..` has no file name, so the
+/// ancestor walk used to give up and it kept its absolute spelling, read as
+/// outside the tree.
 #[test]
 fn a_dot_dot_spelling_through_a_missing_directory_signals_too() {
     let dir = bench("swa-a_dot_dot_spelling_through_a_missi");
@@ -169,6 +170,25 @@ fn a_dot_dot_spelling_through_a_missing_directory_signals_too() {
         .canonicalize()
         .expect("the bench root resolves")
         .join("mise-tasks/not-yet/../ready-lint.sh")
+        .display()
+        .to_string();
+    let payload = write_payload("Write", &absolute);
+    assert!(signals(&dir, &payload), "{}", reported(&dir, &payload));
+}
+
+/// And a `..` AFTER a symlink climbs the link's target, not its spelling. `hop`
+/// points at `a/b`, so `hop/../../mise-tasks/` is the bench's own `mise-tasks/`
+/// — where the host writes — while a lexical pass over the whole path would
+/// climb out of the bench and read the write as outside the tree.
+#[cfg(unix)]
+#[test]
+fn a_dot_dot_after_a_symlink_climbs_the_target() {
+    let dir = bench("swa-a_dot_dot_after_a_symlink_climbs_t");
+    let root = dir.canonicalize().expect("the bench root resolves");
+    std::fs::create_dir_all(root.join("a/b")).expect("the link target is made");
+    std::os::unix::fs::symlink(root.join("a/b"), root.join("hop")).expect("the link is made");
+    let absolute = root
+        .join("hop/../../mise-tasks/ready-lint.sh")
         .display()
         .to_string();
     let payload = write_payload("Write", &absolute);
