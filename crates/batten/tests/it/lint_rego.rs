@@ -91,31 +91,7 @@ fn tracked_modules() -> Vec<String> {
 /// The `opa` this clone pins. A host without it fails the case rather than
 /// passing it unjudged.
 fn opa_binary() -> PathBuf {
-    #[expect(
-        clippy::disallowed_types,
-        reason = "stays — CLOUD-843: resolving the pinned tool is what the retired `tests/lint-rego.bats` did through `mise run`, and the formatter is opa's"
-    )]
-    let output = std::process::Command::new("mise")
-        .args(["which", "opa"])
-        .current_dir(common::at_root("."))
-        .output()
-        .expect("run `mise which opa` — the pinned opa is this tier's instrument");
-    assert!(
-        output.status.success(),
-        "`mise which opa` found no pinned opa, so no corpus can be judged: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let path = PathBuf::from(
-        String::from_utf8(output.stdout)
-            .expect("`mise which` prints a UTF-8 path")
-            .trim(),
-    );
-    assert!(
-        path.is_file(),
-        "the pinned opa is not a file: {}",
-        path.display()
-    );
-    path
+    common::require_tool("opa")
 }
 
 /// `opa fmt -l` over git's index at the repository root: its status and listing.

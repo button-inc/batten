@@ -442,31 +442,63 @@ fn the_committed_workflows_and_manifest_agree() {
     );
 }
 
+/// The shell commands in a `run` text: each line's code up to a `#` that opens a
+/// comment (at a word start, outside quotes), split on `&&`, `||`, `;` and `|`.
+fn commands(run: &str) -> Vec<&str> {
+    let mut found = Vec::new();
+    for line in run.lines() {
+        let mut quote = None;
+        let mut end = line.len();
+        let mut previous = ' ';
+        for (at, c) in line.char_indices() {
+            match (quote, c) {
+                (None, '"' | '\'') => quote = Some(c),
+                (Some(open), _) if c == open => quote = None,
+                (None, '#') if previous.is_whitespace() => {
+                    end = at;
+                    break;
+                }
+                _ => {}
+            }
+            previous = c;
+        }
+        found.extend(
+            line[..end]
+                .split(['&', '|', ';'])
+                .map(str::trim)
+                .filter(|command| !command.is_empty()),
+        );
+    }
+    found
+}
+
 /// Whether a `run` text runs the suite (CLOUD-2381, CLOUD-2388), given the mise
-/// tasks known to. Per line, a leading-`#` line skipped and a trailing ` #`
-/// comment cut: `nextest run`, `cargo test` or `llvm-cov` over `--workspace`
-/// (not `--no-run`; a filtered run is not the suite), `hk check --all` with the
-/// slow tier (hk's `test` step is `mise run test:cargo`), `mutate sweep`, or
-/// `mise run` of a task in `suite`, its leading flags skipped.
-//MUTANT suite-via-hk-unseen|s@ (line.contains("hk check --all")@ (false@|every_suite_job_installs_the_pinned_tools_its_cases_require
+/// tasks known to. A command does when it runs `nextest run`, `cargo test` or
+/// `llvm-cov` unfiltered (no `--no-run`, no `-E`, no `path::` filter, not
+/// `llvm-cov report`), `hk check --all` with the slow tier (hk's `test` step is
+/// `mise run test:cargo`), `mutate sweep`, or `mise run` naming a task in `suite`
+/// before its first `--`, whatever flags and values come before it.
+//MUTANT suite-via-hk-unseen|s@ (command.contains("hk check --all")@ (false@|every_suite_job_installs_the_pinned_tools_its_cases_require
 fn runs_suite(run: &str, suite: &BTreeSet<String>) -> bool {
-    run.lines()
-        .map(|line| line.split(" #").next().unwrap_or(line).trim())
-        .filter(|line| !line.starts_with('#'))
-        .any(|line| {
-            (["nextest run", "cargo test", "llvm-cov"]
+    commands(run).into_iter().any(|command| {
+        let words: Vec<&str> = command.split_whitespace().collect();
+        let filtered = command.contains("--no-run")
+            || command.contains("llvm-cov report")
+            || words
                 .iter()
-                .any(|runner| line.contains(runner))
-                && line.contains("--workspace")
-                && !line.contains("--no-run"))
-                || (line.contains("hk check --all") && !line.contains("!slow"))
-                || line.contains("mutate sweep")
-                || line.split("mise run ").skip(1).any(|rest| {
-                    rest.split_whitespace()
-                        .find(|word| !word.starts_with('-'))
-                        .is_some_and(|task| suite.contains(task))
-                })
-        })
+                .any(|word| *word == "-E" || word.contains("::"));
+        (["nextest run", "cargo test", "llvm-cov"]
+            .iter()
+            .any(|runner| command.contains(runner))
+            && !filtered)
+            || (command.contains("hk check --all") && !command.contains("!slow"))
+            || command.contains("mutate sweep")
+            || command.split("mise run ").skip(1).any(|rest| {
+                rest.split_whitespace()
+                    .take_while(|word| *word != "--")
+                    .any(|word| suite.contains(word))
+            })
+    })
 }
 
 /// The mise tasks that run the suite: closed over `mise run` and `depends`, so
@@ -519,32 +551,43 @@ fn tool_name(key: &str) -> String {
     key.rsplit(['/', ':']).next().unwrap_or(key).to_owned()
 }
 
-/// Every tool a `require_tool` or `require_bin` call names across the crate's
-/// sources: the call's first argument, which is the `[tools]` entry's last
-/// segment (CLOUD-2388).
-//MUTANT require-call-unread|s@^                required.insert(tool.to_owned());$@@|every_suite_job_installs_the_pinned_tools_its_cases_require
+/// Every tool a `common::require_tool` or `common::require_bin` call names
+/// across the crate's sources: the call's first argument, a string literal
+/// naming the `[tools]` entry's last segment (CLOUD-2388). A call whose first
+/// argument is not a literal, and a `mise which` spawned anywhere but `common`,
+/// are refused: either would be a requirement this scan cannot read.
+//MUTANT require-call-unread|s@^            required.insert(tool.to_owned());$@@|every_suite_job_installs_the_pinned_tools_its_cases_require
 fn required_tools() -> BTreeSet<String> {
-    // Split, so this file's own text is not read as a requirement.
+    // Split, so this file's own text is not read as a call.
     let calls = [
-        concat!("require_", "tool(\""),
-        concat!("require_", "bin(\""),
+        concat!("common::require_", "tool("),
+        concat!("common::require_", "bin("),
     ];
+    let private_lookup = concat!(".args([\"", "which\"");
+    let resolver = common::at_root("crates/batten/tests/it/common/mod.rs");
     let mut required = BTreeSet::new();
     for path in common::rust_sources() {
         let text = std::fs::read_to_string(&path).unwrap();
-        for call in calls {
-            for (at, _) in text.match_indices(call) {
-                let tool = text[at + call.len()..]
-                    .split('"')
-                    .next()
-                    .unwrap_or_default();
-                assert!(
-                    !tool.is_empty() && tool.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'),
-                    "{}: a requirement names no tool",
-                    path.display()
-                );
-                required.insert(tool.to_owned());
-            }
+        assert!(
+            path == resolver || !text.contains(private_lookup),
+            "{}: resolves a pinned tool with its own `mise which`; call `common::require_tool`",
+            path.display()
+        );
+        for (at, call) in calls
+            .iter()
+            .flat_map(|call| text.match_indices(call).map(move |(at, _)| (at, *call)))
+        {
+            let tool = text[at + call.len()..]
+                .trim_start()
+                .strip_prefix('"')
+                .and_then(|rest| rest.split('"').next())
+                .unwrap_or_default();
+            assert!(
+                !tool.is_empty() && tool.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'),
+                "{}: a `{call}` call names no tool as a string literal",
+                path.display()
+            );
+            required.insert(tool.to_owned());
         }
     }
     required
@@ -625,6 +668,7 @@ fn every_suite_job_installs_the_pinned_tools_its_cases_require() {
                     .as_str()
                     .is_some_and(|uses| uses.starts_with("jdx/mise-action@"))
                     && step["with"]["install_args"].is_badvalue()
+                    && step["with"]["install"].as_bool() != Some(false)
             });
             if installs_all {
                 continue;
@@ -687,6 +731,9 @@ fn a_suite_step_is_a_suite_task_or_a_suite_command() {
         "mise run batten -- ci step --summary x -- mise run coverage",
         "mise exec -- cargo nextest run --workspace",
         "mise exec -- cargo test --workspace",
+        "mise exec -- cargo nextest run -p batten --no-fail-fast",
+        "mise run -j 4 ci",
+        "mise run batten -- ci step --summary \"Suite, see #2388\" -- mise run ci",
     ] {
         assert!(runs_suite(run, &suite), "{run}");
     }
@@ -698,6 +745,8 @@ fn a_suite_step_is_a_suite_task_or_a_suite_command() {
         "mise exec -- cargo nextest run -p batten --test it hook_profile::",
         "# then mise run ci",
         "mise run tree-clean # runs after mise run ci",
+        "cargo nextest run -p batten --test it hook_profile:: && cargo clippy --workspace",
+        "mise exec -- cargo llvm-cov report --summary-only",
     ] {
         assert!(!runs_suite(run, &suite), "{run}");
     }

@@ -77,31 +77,7 @@ const SLOW_TIER: &[&str] = &[
 /// was a red case there, and a case that returned green here would be a vacuous
 /// pass wearing a `ported:` arm that claims the same assertion.
 fn hk_binary() -> PathBuf {
-    #[expect(
-        clippy::disallowed_types,
-        reason = "stays — CLOUD-843: resolving the pinned tool is what the retired `tests/hk-selection.bats` did through its runner's PATH, and the plan is hk's to print"
-    )]
-    let output = std::process::Command::new("mise")
-        .args(["which", "hk"])
-        .current_dir(common::at_root("."))
-        .output()
-        .expect("run `mise which hk` — the pinned hk is this tier's instrument");
-    assert!(
-        output.status.success(),
-        "`mise which hk` found no pinned hk, so the plan cannot be read: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let path = PathBuf::from(
-        String::from_utf8(output.stdout)
-            .expect("`mise which` prints a UTF-8 path")
-            .trim(),
-    );
-    assert!(
-        path.is_file(),
-        "the pinned hk is not a file: {}",
-        path.display()
-    );
-    path
+    common::require_tool("hk")
 }
 
 /// `hk check --plan --json <args>` at the repository root, parsed.

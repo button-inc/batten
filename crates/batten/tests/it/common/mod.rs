@@ -1239,20 +1239,19 @@ pub(crate) fn require_tool(name: &str) -> PathBuf {
 /// When `mise` cannot run, or `bin` does not resolve to a file.
 #[must_use]
 pub(crate) fn require_bin(tool: &str, bin: &str) -> PathBuf {
-    let name = bin;
     #[expect(
         clippy::disallowed_types,
         reason = "stays: resolving a pinned tool is what `mise exec` does in the task, and a fixture repo carries no mise config for `mise exec` to read (CLOUD-843, CLOUD-1268, CLOUD-1991)"
     )]
     let output = std::process::Command::new("mise")
-        .args(["which", name])
+        .args(["which", bin])
         .current_dir(at_root("."))
         .output()
         .expect("run `mise which`");
     let path = PathBuf::from(String::from_utf8_lossy(&output.stdout).trim());
     assert!(
         output.status.success() && path.is_file(),
-        "`{name}` (`{tool}`) is provisioned by mise.toml on every leg that runs this suite: {}",
+        "`{bin}` (`{tool}`) is provisioned by mise.toml on every leg that runs this suite: {}",
         String::from_utf8_lossy(&output.stderr)
     );
     path
