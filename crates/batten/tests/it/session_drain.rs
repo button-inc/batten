@@ -278,10 +278,7 @@ fn rootless(name: &str, body: &str, parent_present: bool) -> PathBuf {
 
 /// Park the tasks link at `target`, as the hook does.
 fn park(target: &Path, link: &Path) {
-    #[cfg(unix)]
-    std::os::unix::fs::symlink(target, link).unwrap();
-    #[cfg(windows)]
-    std::os::windows::fs::symlink_dir(target, link).unwrap();
+    common::link_dir(target, link);
 }
 
 /// **A SESSION THAT CALLED NO TASK TOOL READS ZERO, WITH NO STORE ROOT AT ALL.**
