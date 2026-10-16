@@ -1238,6 +1238,41 @@ pub fn live_tokens(verdicts: &[DeclaredVerdict]) -> BTreeSet<&str> {
 
 // ─── The native half of the registry ─────────────────────────────────────────
 
+/// Declare the native classes ONCE (CLOUD-2442): each `Variant => "token",`
+/// line yields the enum variant, its place in [`Native::ALL`] and its arm in
+/// [`Native::id`]. Three hand-kept lists — plus a test restating a fourth —
+/// were the same fact typed four times, and adding a class meant editing all of
+/// them; now completeness holds by construction. Declaration order is kept, so
+/// discriminants (which `semver` reads as API) do not move.
+macro_rules! natives {
+    (
+        $(#[$enum_meta:meta])*
+        $vis:vis enum $name:ident {
+            $( $(#[$meta:meta])* $variant:ident => $token:literal, )*
+        }
+    ) => {
+        $(#[$enum_meta])*
+        $vis enum $name {
+            $( $(#[$meta])* $variant, )*
+        }
+
+        impl $name {
+            /// Every native class, in declaration order — derived from the one
+            /// declaration, so no class can exist without being listed.
+            pub const ALL: &'static [$name] = &[ $( $name::$variant, )* ];
+
+            /// The token this class is declared and rendered under.
+            #[must_use]
+            pub fn id(self) -> &'static str {
+                match self {
+                    $( $name::$variant => $token, )*
+                }
+            }
+        }
+    };
+}
+
+natives! {
 /// A refusal class the CRATE owns, as opposed to one a consumer declares.
 ///
 /// # Why this is an enum and not a table of strings
@@ -1246,9 +1281,9 @@ pub fn live_tokens(verdicts: &[DeclaredVerdict]) -> BTreeSet<&str> {
 /// declared. On the policy side that is enforced by reading the module's AST at
 /// load; on the native side there is no AST to read, so the coupling has to be
 /// in the type system or it is a convention. An enum gives it for free: a native
-/// site names a variant, [`Native::ALL`] is asserted exhaustive by a
-/// wildcard-free match, and a class that exists but is unreachable — or a site
-/// raising a class nobody declared — is a compile error rather than a finding.
+/// site names a variant, [`Native::ALL`] and each token are generated from the
+/// one declaration (`natives!`), and a site raising a class nobody declared is a
+/// compile error rather than a finding.
 ///
 /// The same discipline `crate::facts::Fact` carries, and for the same reason.
 ///
@@ -1263,23 +1298,23 @@ pub fn live_tokens(verdicts: &[DeclaredVerdict]) -> BTreeSet<&str> {
 #[non_exhaustive]
 pub enum Native {
     /// A mutating verb was aimed at a path the config protects.
-    ProtectedMutation,
+    ProtectedMutation => "path write refused",
     /// `batten init` would overwrite the committed authority.
-    InitWouldOverwrite,
+    InitWouldOverwrite => "config write refused",
     /// A configured hook handler denied the call.
-    HandlerDenied,
+    HandlerDenied => "handler answer denied",
     /// A `secrets` rule needs a scanner and the config pins none.
-    ScannerUnpinned,
+    ScannerUnpinned => "scanner pin missing",
     /// The pinned scanner is not in the provision cache.
-    ScannerUnprovisioned,
+    ScannerUnprovisioned => "scanner install missing",
     /// A rule kind that spawns was reached through a read-effect verb.
-    SpawningRuleOnReadVerb,
+    SpawningRuleOnReadVerb => "spawn run refused",
     /// The end-of-turn facts do not permit stopping.
-    StopConditionUnmet,
+    StopConditionUnmet => "turn finish unmet",
     /// A `git reset --hard` would leave commits reachable from no remote.
-    HistoryDropUnpushed,
+    HistoryDropUnpushed => "history drop unpushed",
     /// A task a live process already holds the singleton lock for.
-    SingletonHeld,
+    SingletonHeld => "task run twice",
     // ─── the mediated composers' own classes (CLOUD-1285) ────────────────────
     //
     // These are Batten's OWN words about generic concepts, which is what puts
@@ -1293,42 +1328,42 @@ pub enum Native {
     // takes it as a parameter and a narrower one wins -- so this does not move
     // the remedy into the crate. It moves the CAUSE, which was already here.
     /// No receipt at all for what the row keys on.
-    ReceiptUnusable,
+    ReceiptUnusable => "receipt read missing",
     /// The receipt exists and is older than the row allows.
-    ReceiptExpired,
+    ReceiptExpired => "receipt read late",
     /// The receipt records something the row does not accept.
-    ReceiptRefuted,
+    ReceiptRefuted => "receipt carry other",
     /// An amend or a rebase replaced the bytes the receipt validated.
-    ReceiptSuperseded,
+    ReceiptSuperseded => "receipt read other",
     /// The receipt was taken against a trunk this branch has moved off.
-    ReceiptOffTrunk,
+    ReceiptOffTrunk => "receipt read stale",
     /// A shell text utility stood in for the structured file surface.
-    ToolSubstituted,
+    ToolSubstituted => "tool run loose",
     /// A verdict-bearing command was piped into a pager or filter.
-    VerdictPiped,
+    VerdictPiped => "verdict read dropped",
     /// A verdict-bearing command was followed by `;`, `||` or a newline.
-    VerdictTrailing,
+    VerdictTrailing => "verdict carry other",
     /// A verdict-bearing command was detached from its tool call.
-    RunOrphaned,
+    RunOrphaned => "turn watch dropped",
     /// The call measures over a declared ceiling.
-    CeilingExceeded,
+    CeilingExceeded => "call count over",
     /// The call matches a refused command shape.
-    ShapeRefused,
+    ShapeRefused => "call name refused",
     /// The boundary repaired what it refused; re-issue the identical call.
     ///
     /// Raised in place of the original class when a row's `fix` ran and the
     /// class declares [`Applicability::Retry`] (CLOUD-1639). Still a refusal:
     /// the call as made did not happen.
-    CallRetryNow,
+    CallRetryNow => "call retry now",
     /// The boundary repaired it and let the call through, owing a record.
     ///
     /// The `silent` posture's class. It rides `additionalContext` rather than a
     /// refusal, because the call was allowed — the record is the point.
-    CallFixSilent,
+    CallFixSilent => "call fix silent",
     /// The content this call would write matches a refused shape.
-    ContentRefused,
+    ContentRefused => "input write refused",
     /// The work this call publishes names no tracker key.
-    KeyMissing,
+    KeyMissing => "issue name missing",
     // ─── the config loader's own classes (CLOUD-1313) ────────────────────────
     //
     // A load-time refusal was a bare `UsageError(String)` across ~172 sites, so
@@ -1349,52 +1384,52 @@ pub enum Native {
     // no config load, which is what keeps `policy explain` usable over a config
     // that will not parse.
     /// The `[[verb]]` table would not load.
-    VerbTableRefused,
+    VerbTableRefused => "verb declare refused",
     /// The `[[pattern]]` table would not load.
-    PatternTableRefused,
+    PatternTableRefused => "pattern declare refused",
     /// The `[[traversal]]` table would not load.
-    TraversalTableRefused,
+    TraversalTableRefused => "traversal declare refused",
     /// The `[[verdict]]` table would not load.
-    VerdictTableRefused,
+    VerdictTableRefused => "verdict declare refused",
     /// The `[[redirect]]` table would not load.
-    RedirectTableRefused,
+    RedirectTableRefused => "redirect declare refused",
     /// The `[[deferral]]` table would not load.
-    DeferralTableRefused,
+    DeferralTableRefused => "deferral declare refused",
     /// A declared remedy names no command that exists (CLOUD-1189's class).
-    RemedyUnresolved,
+    RemedyUnresolved => "remedy resolve missing",
     /// The `[[marker]]` table would not load.
-    MarkerTableRefused,
+    MarkerTableRefused => "marker declare refused",
     /// The `[[rule]]` table would not load.
-    RuleTableRefused,
+    RuleTableRefused => "rule declare refused",
     /// The `[[exec_pattern]]` table would not load.
-    OutputTableRefused,
+    OutputTableRefused => "output declare refused",
     /// The `[[verify_environment_pattern]]` table would not load.
     ///
     /// A SECOND CLASS OVER THE SAME TYPE, and the census refuses sharing one:
     /// both tables are `OutputPattern`, but a refusal has to name which table to
     /// edit, and one class over two tables sends a reader to the wrong one.
-    VerifyEnvironmentTableRefused,
+    VerifyEnvironmentTableRefused => "environment declare refused",
     /// The `[[waiver]]` table would not load.
-    WaiverTableRefused,
+    WaiverTableRefused => "waiver declare refused",
     /// The `[[fact]]` table would not load.
-    FactTableRefused,
+    FactTableRefused => "fact declare refused",
     /// The `[[mint]]` table would not load.
-    MintTableRefused,
+    MintTableRefused => "mint declare refused",
     /// The `[[recorder]]` table would not load.
-    RecorderTableRefused,
+    RecorderTableRefused => "recorder declare refused",
     /// The `[[provision]]` table would not load.
-    ProvisionTableRefused,
+    ProvisionTableRefused => "provision declare refused",
     /// The `[[startup]]` table would not load.
-    StartupTableRefused,
+    StartupTableRefused => "startup declare refused",
     /// The `[[outcome]]` table would not load.
-    OutcomeTableRefused,
+    OutcomeTableRefused => "outcome table refused",
     /// The committed plan projection no longer matches the pinned runner.
     ///
     /// Batten's OWN word about a generic concept — an adopted tool's contract
     /// and the artifact that records it — which is what puts it here rather
     /// than in a consumer `[[verdict]]` row. No consumer can name the class,
     /// because the engine is what takes the plan and what compares it.
-    PlanReadStale,
+    PlanReadStale => "plan read stale",
     /// The declaration could not be READ AT ALL — not valid TOML.
     ///
     /// **APPENDED, NEVER INSERTED.** This enum carries no `repr`, so a variant
@@ -1427,7 +1462,7 @@ pub enum Native {
     /// preserve: zero rows are readable, so refusing the call is the only signal
     /// left, and the declared hatch is the recovery path. That asymmetry is why
     /// this class exists and why it is exactly one class wide.
-    ConfigUnreadable,
+    ConfigUnreadable => "config read refused",
     /// The boundary cannot classify the program, so it will not guess.
     ///
     /// **APPENDED, NEVER INSERTED**, per [`Native::ConfigUnreadable`]'s note: this
@@ -1452,7 +1487,7 @@ pub enum Native {
     /// carried its own fix — declare the program a reader if it only reads — and
     /// `batten policy explain` could not reach it, because the class it resolved
     /// belonged to the other arm.
-    ProgramUnknown,
+    ProgramUnknown => "program name unknown",
     /// The `[[record]]` table would not load (CLOUD-1810).
     ///
     /// Its own class rather than the recorder's, on the reason the environment
@@ -1467,217 +1502,124 @@ pub enum Native {
     /// whole tail `enum_no_repr_variant_discriminant_changed` reads as broken.
     /// Position is API; the reading order is not, and `Native::ALL` below is where
     /// the grouping belongs.
-    RecordTableRefused,
+    RecordTableRefused => "record declare refused",
     /// The `[[step]]` table would not load (CLOUD-843).
     ///
     /// **APPENDED LAST**, for [`Native::RecordTableRefused`]'s reason: position is
     /// API, and `Native::ALL` is where the grouping belongs.
-    StepTableRefused,
+    StepTableRefused => "step declare refused",
     /// A structured READ of a path whose `[[redirect]]` row declares its own
     /// read route (CLOUD-1929). Not [`Native::ToolSubstituted`]: no shell
     /// utility was involved, and that class's route pointed a memory reader at
     /// `rules/scanning.md` instead of the tool the row names.
-    ReadRedirected,
+    ReadRedirected => "path read routed",
     /// A commit subject does not match `[commit] subject_pattern` (CLOUD-1960).
     ///
     /// **APPENDED LAST**, with the nine below, for [`Native::RecordTableRefused`]'s
     /// reason. These ten are the commit-msg channel's classes: `[commit]` and
     /// `[attribution]` are the engine's own tables, so a consumer that declares
     /// either and no `[[verdict]]` row still gets a token `explain` resolves.
-    SubjectUnconventional,
+    SubjectUnconventional => "commit spelling wrong",
     /// A commit in a judged range names no tracker row and no exemption covers it.
-    CommitUnclaimed,
+    CommitUnclaimed => "commit name missing",
     /// A commit wrote a protected path and carries no articulation block for it.
-    ArticulationMissing,
+    ArticulationMissing => "commit admit missing",
     /// An articulation block claims a path and does not hash to its address.
-    ArticulationTampered,
+    ArticulationTampered => "commit admit other",
     /// A commit introduces a conserves-ledger arm and spends it at once.
-    ArmSelfAuthorized,
+    ArmSelfAuthorized => "commit admit same",
     /// A commit's author or committer matches `[attribution] identity_deny`.
-    IdentityDenied,
+    IdentityDenied => "commit own refused",
     /// A commit carries a trailer `[attribution] trailer_deny` refuses.
-    TrailerDenied,
+    TrailerDenied => "commit carry refused",
     /// A commit message body matches `[attribution] body_deny`.
-    BodyDenied,
+    BodyDenied => "commit state refused",
     /// A tag was cut by an identity `tag_identity_allow` does not permit.
-    TaggerUnaccountable,
+    TaggerUnaccountable => "tag own refused",
     /// A tag carries no tagger identity at all.
-    TaggerUnannotated,
+    TaggerUnannotated => "tag own unnamed",
     /// A config string is longer than the cap its column declares (CLOUD-1642).
     ///
     /// **APPENDED LAST**, for [`Native::RecordTableRefused`]'s reason. A config
     /// fault, raised by the loader after every table validator, so it is in
     /// [`Native::CONFIG_FAULTS`].
-    ProseColumnRefused,
+    ProseColumnRefused => "prose declare refused",
     /// The `[[register]]` table would not load (CLOUD-2005).
     ///
     /// **APPENDED LAST**, for [`Native::ProseColumnRefused`]'s reason: a
     /// variant inserted mid-enum moves every later discriminant, which
     /// `semver` refuses. A config fault, so it is in [`Native::CONFIG_FAULTS`].
-    RegisterTableRefused,
+    RegisterTableRefused => "register declare refused",
     /// A config row was changed by a context that has not read its history
     /// (CLOUD-2144).
     ///
     /// **APPENDED LAST**, for [`Native::ProseColumnRefused`]'s reason.
-    RuleReadMissing,
+    RuleReadMissing => "rule read missing",
     // ── the unclassed emitters' classes (CLOUD-2078) ───────────────────────
     // One class per emitter FAMILY, never one per site (CLOUD-1313's rule):
     // the site's own message travels as a subject. APPENDED LAST, for
     // [`Native::ProseColumnRefused`]'s reason.
     /// A CLI invocation refused before it ran: a classless `UsageError` or a
     /// clap usage error.
-    UsageRefused,
+    UsageRefused => "input parse refused",
     /// Any other CLI failure: a diagnosis of Batten, not a verdict on the work.
-    RunBroken,
+    RunBroken => "verb run broken",
     /// `pr derive` cannot derive the row a bot PR implies.
-    IssueFileRefused,
+    IssueFileRefused => "issue file refused",
     /// An ingested layer would replace a committed value it may only tighten.
-    LayerCarryRefused,
+    LayerCarryRefused => "layer carry refused",
     /// A fetched provision does not match its pin.
-    ProvisionPinOther,
+    ProvisionPinOther => "provision pin other",
     /// The Stop ladder's unlanded rung.
-    CommitShipMissing,
+    CommitShipMissing => "commit ship missing",
     /// The Stop ladder's filed-set rung.
-    IssueListUnclear,
+    IssueListUnclear => "issue list unclear",
     /// A `[[hook.handler]]` reported on this call.
-    HookReportNow,
+    HookReportNow => "hook report now",
     /// A `[[hook.handler]]` broke its contract.
-    HookAnswerBroken,
+    HookAnswerBroken => "hook answer broken",
     /// A response this call should have captured was not.
-    OutputWriteMissing,
+    OutputWriteMissing => "output write missing",
     /// A failing doctor check or startup row.
-    WorkspaceStateBroken,
+    WorkspaceStateBroken => "workspace state broken",
     /// A call a declared rule or handler pre-approved.
-    CallGrantNow,
+    CallGrantNow => "call grant now",
     /// A land replay conflicted and stopped.
-    CommitPortBlocked,
+    CommitPortBlocked => "commit port blocked",
     /// The configured gate refused the head `land` verified.
-    CheckRunRed,
+    CheckRunRed => "check run red",
     /// A required CI check failed on the head `land` waited on.
-    JobRunRed,
+    JobRunRed => "job run red",
     /// `land` spent every lap without landing.
-    LaneCountSpent,
+    LaneCountSpent => "lane run spent",
     /// A declared contract file moved under a running session.
-    ContractReadStale,
+    ContractReadStale => "contract read stale",
     /// The engine did not run at this session's start.
-    HookRunMissing,
+    HookRunMissing => "hook run missing",
     /// A drain's delta did not fit its token budget, so the relief valve cut
     /// it (CLOUD-2175).
-    DrainFitBroken,
+    DrainFitBroken => "drain fit broken",
     /// An issue fails a checkable Ready clause (`ready lint`).
-    IssueGradeRefused,
+    IssueGradeRefused => "issue grade refused",
     /// `ready lint` could not judge an issue's relations: the fetch lacked them.
-    IssueGradePartial,
+    IssueGradePartial => "issue grade partial",
     /// `claim check` refused to mint the claim: someone holds it, or the
     /// refinement sequence was not followed.
-    ClaimMintRefused,
+    ClaimMintRefused => "claim mint refused",
     /// A reduced read stored the whole response and points at a view of it,
     /// field by field (CLOUD-2207).
-    OutputPointNow,
+    OutputPointNow => "output point now",
     /// Free space fell below `[prune] min_free_mb`, so the disk collector
     /// removed cargo units before the call ran (CLOUD-2197).
-    CargoRetireNow,
+    CargoRetireNow => "cargo retire now",
     /// A script interpreter ran a script file outside the repository (CLOUD-2304).
     ///
     /// **APPENDED LAST**, for [`Native::ProseColumnRefused`]'s reason.
-    ScriptRunLoose,
+    ScriptRunLoose => "script run loose",
+}
 }
 
 impl Native {
-    /// Every native class, in declaration order.
-    ///
-    /// Held exhaustive by `every_native_class_is_listed`, which matches over a
-    /// variant with no wildcard — so a new class that is not added here fails to
-    /// compile rather than going undeclared.
-    pub const ALL: &'static [Native] = &[
-        Native::ProtectedMutation,
-        Native::InitWouldOverwrite,
-        Native::HandlerDenied,
-        Native::ScannerUnpinned,
-        Native::ScannerUnprovisioned,
-        Native::SpawningRuleOnReadVerb,
-        Native::StopConditionUnmet,
-        Native::HistoryDropUnpushed,
-        Native::SingletonHeld,
-        Native::ReceiptUnusable,
-        Native::ReceiptExpired,
-        Native::ReceiptRefuted,
-        Native::ReceiptSuperseded,
-        Native::ReceiptOffTrunk,
-        Native::ToolSubstituted,
-        Native::VerdictPiped,
-        Native::VerdictTrailing,
-        Native::RunOrphaned,
-        Native::CeilingExceeded,
-        Native::ShapeRefused,
-        Native::CallRetryNow,
-        Native::CallFixSilent,
-        Native::ContentRefused,
-        Native::KeyMissing,
-        Native::ConfigUnreadable,
-        Native::VerbTableRefused,
-        Native::PatternTableRefused,
-        Native::TraversalTableRefused,
-        Native::VerdictTableRefused,
-        Native::RedirectTableRefused,
-        Native::DeferralTableRefused,
-        Native::RemedyUnresolved,
-        Native::MarkerTableRefused,
-        Native::RuleTableRefused,
-        Native::OutputTableRefused,
-        Native::VerifyEnvironmentTableRefused,
-        Native::WaiverTableRefused,
-        Native::FactTableRefused,
-        Native::MintTableRefused,
-        Native::RecorderTableRefused,
-        Native::RecordTableRefused,
-        Native::ProvisionTableRefused,
-        Native::StartupTableRefused,
-        Native::StepTableRefused,
-        Native::PlanReadStale,
-        Native::OutcomeTableRefused,
-        Native::ProgramUnknown,
-        Native::ReadRedirected,
-        Native::SubjectUnconventional,
-        Native::CommitUnclaimed,
-        Native::ArticulationMissing,
-        Native::ArticulationTampered,
-        Native::ArmSelfAuthorized,
-        Native::IdentityDenied,
-        Native::TrailerDenied,
-        Native::BodyDenied,
-        Native::TaggerUnaccountable,
-        Native::TaggerUnannotated,
-        Native::ProseColumnRefused,
-        Native::RegisterTableRefused,
-        Native::RuleReadMissing,
-        Native::UsageRefused,
-        Native::RunBroken,
-        Native::IssueFileRefused,
-        Native::LayerCarryRefused,
-        Native::ProvisionPinOther,
-        Native::CommitShipMissing,
-        Native::IssueListUnclear,
-        Native::HookReportNow,
-        Native::HookAnswerBroken,
-        Native::OutputWriteMissing,
-        Native::WorkspaceStateBroken,
-        Native::CallGrantNow,
-        Native::CommitPortBlocked,
-        Native::CheckRunRed,
-        Native::JobRunRed,
-        Native::LaneCountSpent,
-        Native::ContractReadStale,
-        Native::HookRunMissing,
-        Native::DrainFitBroken,
-        Native::IssueGradeRefused,
-        Native::IssueGradePartial,
-        Native::ClaimMintRefused,
-        Native::OutputPointNow,
-        Native::CargoRetireNow,
-        Native::ScriptRunLoose,
-    ];
-
     /// The classes the CONFIG LOADER raises, in `parse_ungated` order.
     ///
     /// One authority with three readers, which is what stops the set drifting
@@ -1714,99 +1656,6 @@ impl Native {
         Native::ProseColumnRefused,
         Native::RegisterTableRefused,
     ];
-
-    /// The token this class is declared and rendered under.
-    #[must_use]
-    pub fn id(self) -> &'static str {
-        match self {
-            Native::ProtectedMutation => "path write refused",
-            Native::ProgramUnknown => "program name unknown",
-            Native::InitWouldOverwrite => "config write refused",
-            Native::PlanReadStale => "plan read stale",
-            Native::OutcomeTableRefused => "outcome table refused",
-            Native::HandlerDenied => "handler answer denied",
-            Native::ScannerUnpinned => "scanner pin missing",
-            Native::ScannerUnprovisioned => "scanner install missing",
-            Native::SpawningRuleOnReadVerb => "spawn run refused",
-            Native::HistoryDropUnpushed => "history drop unpushed",
-            Native::SingletonHeld => "task run twice",
-            Native::StopConditionUnmet => "turn finish unmet",
-            Native::ReceiptUnusable => "receipt read missing",
-            Native::ReceiptExpired => "receipt read late",
-            Native::ReceiptRefuted => "receipt carry other",
-            Native::ReceiptSuperseded => "receipt read other",
-            Native::ReceiptOffTrunk => "receipt read stale",
-            Native::ToolSubstituted => "tool run loose",
-            Native::ReadRedirected => "path read routed",
-            Native::VerdictPiped => "verdict read dropped",
-            Native::VerdictTrailing => "verdict carry other",
-            Native::RunOrphaned => "turn watch dropped",
-            Native::CeilingExceeded => "call count over",
-            Native::ShapeRefused => "call name refused",
-            Native::CallRetryNow => "call retry now",
-            Native::CallFixSilent => "call fix silent",
-            Native::ContentRefused => "input write refused",
-            Native::KeyMissing => "issue name missing",
-            Native::ConfigUnreadable => "config read refused",
-            Native::VerbTableRefused => "verb declare refused",
-            Native::PatternTableRefused => "pattern declare refused",
-            Native::TraversalTableRefused => "traversal declare refused",
-            Native::RegisterTableRefused => "register declare refused",
-            Native::RuleReadMissing => "rule read missing",
-            Native::VerdictTableRefused => "verdict declare refused",
-            Native::RedirectTableRefused => "redirect declare refused",
-            Native::DeferralTableRefused => "deferral declare refused",
-            Native::RemedyUnresolved => "remedy resolve missing",
-            Native::MarkerTableRefused => "marker declare refused",
-            Native::RuleTableRefused => "rule declare refused",
-            Native::OutputTableRefused => "output declare refused",
-            Native::VerifyEnvironmentTableRefused => "environment declare refused",
-            Native::WaiverTableRefused => "waiver declare refused",
-            Native::FactTableRefused => "fact declare refused",
-            Native::MintTableRefused => "mint declare refused",
-            Native::RecorderTableRefused => "recorder declare refused",
-            Native::RecordTableRefused => "record declare refused",
-            Native::ProvisionTableRefused => "provision declare refused",
-            Native::StartupTableRefused => "startup declare refused",
-            Native::StepTableRefused => "step declare refused",
-            Native::SubjectUnconventional => "commit spelling wrong",
-            Native::CommitUnclaimed => "commit name missing",
-            Native::ArticulationMissing => "commit admit missing",
-            Native::ArticulationTampered => "commit admit other",
-            Native::ArmSelfAuthorized => "commit admit same",
-            Native::IdentityDenied => "commit own refused",
-            Native::TrailerDenied => "commit carry refused",
-            Native::BodyDenied => "commit state refused",
-            Native::TaggerUnaccountable => "tag own refused",
-            Native::TaggerUnannotated => "tag own unnamed",
-            Native::ProseColumnRefused => "prose declare refused",
-            Native::UsageRefused => "input parse refused",
-            Native::RunBroken => "verb run broken",
-            Native::IssueFileRefused => "issue file refused",
-            Native::LayerCarryRefused => "layer carry refused",
-            Native::ProvisionPinOther => "provision pin other",
-            Native::CommitShipMissing => "commit ship missing",
-            Native::IssueListUnclear => "issue list unclear",
-            Native::HookReportNow => "hook report now",
-            Native::HookAnswerBroken => "hook answer broken",
-            Native::OutputWriteMissing => "output write missing",
-            Native::WorkspaceStateBroken => "workspace state broken",
-            Native::CallGrantNow => "call grant now",
-            Native::CommitPortBlocked => "commit port blocked",
-            Native::CheckRunRed => "check run red",
-            Native::JobRunRed => "job run red",
-            Native::LaneCountSpent => "lane run spent",
-            Native::ContractReadStale => "contract read stale",
-            Native::HookRunMissing => "hook run missing",
-            Native::DrainFitBroken => "drain fit broken",
-            Native::IssueGradeRefused => "issue grade refused",
-            Native::IssueGradePartial => "issue grade partial",
-            Native::ClaimMintRefused => "claim mint refused",
-            Native::OutputPointNow => "output point now",
-            Native::CargoRetireNow => "cargo retire now",
-            Native::ScriptRunLoose => "script run loose",
-        }
-    }
 }
 
 /// Every token the crate's own refusal sites may raise.
@@ -3576,104 +3425,16 @@ mod tests {
         assert_eq!(Subject::from_json(&value), None);
     }
 
-    /// The exhaustiveness assertion `Native::ALL` rests on.
+    /// Every native class is a well-formed, unique token.
     ///
-    /// The match below carries **no wildcard**, so a new variant fails to
-    /// compile here; the loop then asserts the listed set is the same one. Two
-    /// halves, because either alone is satisfiable by the defect: a wildcard
-    /// match would compile past a new class, and a list with no match beside it
-    /// would go stale silently.
+    /// Completeness needs no test: `Native::ALL` and the enum are generated
+    /// from one declaration (`natives!`, CLOUD-2442), so a class cannot exist
+    /// unlisted. What a declaration CAN get wrong is its token, and that is
+    /// what this asserts — so adding a class changes no line here.
     #[test]
     fn every_native_class_is_listed() {
         for native in Native::ALL {
-            let named = match native {
-                Native::ProtectedMutation
-                | Native::InitWouldOverwrite
-                | Native::HandlerDenied
-                | Native::ScannerUnpinned
-                | Native::ScannerUnprovisioned
-                | Native::SpawningRuleOnReadVerb
-                | Native::StopConditionUnmet
-                | Native::HistoryDropUnpushed
-                | Native::SingletonHeld
-                | Native::ReceiptUnusable
-                | Native::ReceiptExpired
-                | Native::ReceiptRefuted
-                | Native::ReceiptSuperseded
-                | Native::ReceiptOffTrunk
-                | Native::ToolSubstituted
-                | Native::ReadRedirected
-                | Native::VerdictPiped
-                | Native::VerdictTrailing
-                | Native::RunOrphaned
-                | Native::CeilingExceeded
-                | Native::ConfigUnreadable
-                | Native::ShapeRefused
-                | Native::CallRetryNow
-                | Native::CallFixSilent
-                | Native::ContentRefused
-                | Native::PlanReadStale
-                | Native::OutcomeTableRefused
-                | Native::KeyMissing
-                | Native::VerbTableRefused
-                | Native::PatternTableRefused
-                | Native::TraversalTableRefused
-                | Native::RegisterTableRefused
-                | Native::RuleReadMissing
-                | Native::UsageRefused
-                | Native::RunBroken
-                | Native::IssueFileRefused
-                | Native::LayerCarryRefused
-                | Native::ProvisionPinOther
-                | Native::CommitShipMissing
-                | Native::IssueListUnclear
-                | Native::HookReportNow
-                | Native::HookAnswerBroken
-                | Native::OutputWriteMissing
-                | Native::WorkspaceStateBroken
-                | Native::CallGrantNow
-                | Native::CommitPortBlocked
-                | Native::CheckRunRed
-                | Native::JobRunRed
-                | Native::LaneCountSpent
-                | Native::ContractReadStale
-                | Native::HookRunMissing
-                | Native::DrainFitBroken
-                | Native::IssueGradeRefused
-                | Native::IssueGradePartial
-                | Native::ClaimMintRefused
-                | Native::OutputPointNow
-                | Native::CargoRetireNow
-                | Native::ScriptRunLoose
-                | Native::VerdictTableRefused
-                | Native::RedirectTableRefused
-                | Native::DeferralTableRefused
-                | Native::RemedyUnresolved
-                | Native::MarkerTableRefused
-                | Native::RuleTableRefused
-                | Native::OutputTableRefused
-                | Native::VerifyEnvironmentTableRefused
-                | Native::WaiverTableRefused
-                | Native::FactTableRefused
-                | Native::MintTableRefused
-                | Native::RecorderTableRefused
-                | Native::RecordTableRefused
-                | Native::ProvisionTableRefused
-                | Native::StartupTableRefused
-                | Native::StepTableRefused
-                | Native::ProgramUnknown
-                | Native::SubjectUnconventional
-                | Native::CommitUnclaimed
-                | Native::ArticulationMissing
-                | Native::ArticulationTampered
-                | Native::ArmSelfAuthorized
-                | Native::IdentityDenied
-                | Native::TrailerDenied
-                | Native::BodyDenied
-                | Native::TaggerUnaccountable
-                | Native::TaggerUnannotated
-                | Native::ProseColumnRefused => native.id(),
-            };
+            let named = native.id();
             // The prefix is gone (CLOUD-1284), so what makes this a token is the
             // ARITY: exactly three words. Asserting that here rather than a
             // prefix keeps the native half held to the same shape the consumer
