@@ -313,3 +313,107 @@ fn a_host_that_cannot_rewrite_still_gets_the_pointer() {
         "the pointer still arrives: {said}"
     );
 }
+
+/// Every digest a row in the call log names.
+fn recorded_digests(dir: &Path) -> Vec<String> {
+    let calls = common::run(dir, &["capture", "list", "--calls", "-J"]);
+    let rows: serde_json::Value = serde_json::from_slice(&calls.stdout).expect("JSON rows");
+    rows.as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|row| row["digest"].as_str().map(str::to_owned))
+        .collect()
+}
+
+/// A SPILLED RESULT IS RECORDED (CLOUD-2397): the leaf stored from its spill
+/// file is named by a call row, so eviction ranks it rather than keeping it past
+/// every tracker read. `#MUTANT spill-unrecorded`.
+#[test]
+fn a_spilled_result_is_recorded() {
+    let dir = repo("result-bound-spill-recorded");
+    let posted = post_tool(&dir, &read_result(&payload(2000)));
+    assert_eq!(posted.status.code(), Some(0), "{}", common::stderr(&posted));
+    let said = String::from_utf8_lossy(&posted.stdout);
+    let digest: String = said.split("response:").nth(1).map_or_else(
+        || panic!("the pointer names the stored leaf: {said}"),
+        |rest| rest.chars().take_while(char::is_ascii_hexdigit).collect(),
+    );
+    let recorded = recorded_digests(&dir);
+    assert!(
+        recorded.contains(&digest),
+        "a row names the spill {digest}: {recorded:?}"
+    );
+}
+
+/// A BOUNDED RESULT IS RECORDED (CLOUD-2397): a result held whole but over a
+/// lowered token bound is stored as its JSON, and a row names that capture.
+/// Under the 2000-token spill floor, so it is held rather than spilled, and a
+/// string, so the stored JSON is not the bytes `capture_response` keeps.
+/// `#MUTANT bound-unrecorded`.
+#[test]
+fn a_bounded_result_is_recorded() {
+    let dir = common::Fixture::at(common::scratch("result-bound-bound-recorded").join("repo"))
+        .config("version = 1\n\n[capture]\nresult_max_tokens = 500\n")
+        .git()
+        .base_commit()
+        .build();
+    let posted = post_tool(&dir, &serde_json::Value::String(payload(150)));
+    assert_eq!(posted.status.code(), Some(0), "{}", common::stderr(&posted));
+    let view = PathBuf::from(view_named(&posted.stdout));
+    let digest = view
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or_else(|| panic!("the view is named by its digest: {}", view.display()))
+        .to_owned();
+    let recorded = recorded_digests(&dir);
+    assert!(
+        recorded.contains(&digest),
+        "a row names the bounded result {digest}: {recorded:?}"
+    );
+}
+
+/// A CAPTURE NO ROW NAMES IS EVICTED FIRST (CLOUD-2397): nothing can select it,
+/// so it must not outlive a tracker read a gate resolves. Measured: 76 row-less
+/// records held the 8 MiB budget, and every tracker read stored after them was
+/// evicted at once. `#MUTANT unrecorded-evicted-last`.
+#[test]
+fn an_unrecorded_capture_is_evicted_before_a_tracker_read() {
+    use batten::capture::{CallRow, CaptureConfig, Stream};
+    let store = common::scratch("result-bound-unrecorded");
+    let orphan = batten::capture::store_in(&store, Stream::Response, b"a capture no row names")
+        .expect("store the orphan");
+    let read = batten::capture::store_in(&store, Stream::Response, b"{\"id\":\"CLOUD-9\"}")
+        .expect("store the read");
+    batten::capture::record_call_in(
+        &store,
+        &CallRow {
+            order: 0,
+            session: "fixture".to_owned(),
+            source: batten::capture::POST_TOOL_MEMBER.to_owned(),
+            host: "claude-code".to_owned(),
+            tool: "mcp__tracker__get_issue".to_owned(),
+            event: "PostToolUse".to_owned(),
+            fidelity: batten::capture::Fidelity::LexicalBytes.as_str().to_owned(),
+            seen_at: None,
+            class: None,
+            digest: Some(read.digest.clone()),
+            absent: None,
+        },
+    )
+    .expect("record the read");
+    let one = CaptureConfig {
+        max_bytes: None,
+        max_records: Some(1),
+        inline_max_bytes: None,
+        result_max_tokens: None,
+    };
+    batten::capture::evict_to_budget_in(&store, Some(&one)).expect("evict");
+    assert!(
+        !store.join(format!("response-{}", orphan.digest)).exists(),
+        "the orphan goes"
+    );
+    assert!(
+        store.join(format!("response-{}", read.digest)).exists(),
+        "the tracker read stays"
+    );
+}

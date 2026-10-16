@@ -18123,7 +18123,7 @@ fn preapproval_context(
     let taken = std::mem::take(advice);
     let mut sighter = HookSighter::new(harness, envelope);
     let emission = advisory::admit(taken, ceiling, &mut sighter);
-    let text = closed_emission(emission, ceiling);
+    let text = closed_emission(harness, envelope, emission, ceiling);
     Some(if sighter.sighted {
         legend_for(envelope, text)
     } else {
@@ -19147,21 +19147,29 @@ impl advisory::Sighter for HookSighter<'_> {
 /// An emission's text, closed with where its overflow went when the ceiling
 /// cut it (CLOUD-2175): the overflow is stored whole in the capture store and
 /// the closing line names the handle that returns exactly it.
-fn closed_emission(emission: advisory::Emission, ceiling: Option<&advisory::Channel>) -> String {
+fn closed_emission(
+    harness: hook::Harness,
+    envelope: &hook::Envelope,
+    emission: advisory::Emission,
+    ceiling: Option<&advisory::Channel>,
+) -> String {
     let Some(ceiling) = ceiling.filter(|_| emission.suppressed > 0) else {
         return emission.text;
     };
-    let handle = git::repo_root(hook_authority_root())
-        .ok()
-        .and_then(|root| {
-            capture::store(
-                &root,
-                capture::Stream::Advisory,
-                emission.overflow.as_bytes(),
-            )
-            .ok()
-        })
-        .map(|stored| format!("{}:{}", capture::Stream::Advisory.as_str(), stored.digest));
+    let handle = git::repo_root(hook_authority_root()).ok().and_then(|root| {
+        let stored = capture::store(
+            &root,
+            capture::Stream::Advisory,
+            emission.overflow.as_bytes(),
+        )
+        .ok()?;
+        record_stored(&root, envelope, harness, Stored::Overflow, &stored.digest);
+        Some(format!(
+            "{}:{}",
+            capture::Stream::Advisory.as_str(),
+            stored.digest
+        ))
+    });
     format!(
         "{}\n\n{}",
         emission.text,
@@ -19587,10 +19595,10 @@ fn rewrite_post_tool(
         if spills_within_bound(current, spilled) {
             None
         } else {
-            point_at_spills(current, spilled)
+            point_at_spills(harness, envelope, current, spilled)
         }
     } else {
-        bound_result(current)
+        bound_result(harness, envelope, current)
     };
     let rewritten = bounded
         .as_ref()
@@ -19642,7 +19650,10 @@ fn post_tool(
 /// leaves the marker as `bound_result` leaves an over-bound leaf: unrewritten.
 //MUTANT-SUITE crates/batten/tests/it/result_bound.rs
 //MUTANT spilled-leaf-unpointed|s@^    } else if !spilled.is_empty() {$@    } else if false {@|a_result_too_large_to_hold_reaches_the_model_as_a_pointer
+//MUTANT spill-unrecorded|s@^        record_stored(\&root, envelope, harness, Stored::Spill, \&capture.digest);$@@|a_spilled_result_is_recorded
 fn point_at_spills(
+    harness: hook::Harness,
+    envelope: &hook::Envelope,
     result: &serde_json::Value,
     spilled: &[stream_input::Spilled],
 ) -> Option<(serde_json::Value, refusal::Refusal)> {
@@ -19664,6 +19675,7 @@ fn point_at_spills(
     let mut stored = Vec::new();
     for spill in spilled {
         let capture = capture::store_file(&root, capture::Stream::Response, &spill.path).ok()?;
+        record_stored(&root, envelope, harness, Stored::Spill, &capture.digest);
         stored.push((spill, capture));
     }
     // THE VIEW, AS THE IN-MEMORY BOUND WRITES IT: the text leaves on their own
@@ -19834,7 +19846,12 @@ fn collapse_seen_output(envelope: &hook::Envelope) -> Option<serde_json::Value> 
 //MUTANT-SUITE crates/batten/tests/it/result_bound.rs
 //MUTANT result-bound-ignored|s@^    if !capture::exceeds_o200k(\&leaves, bound) {$@    if true {@|an_oversized_result_becomes_a_pointer_to_a_view_of_its_text
 //MUTANT small-result-rewritten|s@^    if !capture::exceeds_o200k(\&leaves, bound) {$@    if false {@|a_result_within_the_bound_is_left_alone
-fn bound_result(result: &serde_json::Value) -> Option<(serde_json::Value, refusal::Refusal)> {
+//MUTANT bound-unrecorded|s@^    record_stored(\&root, envelope, harness, Stored::Bound, \&stored.digest);$@@|a_bounded_result_is_recorded
+fn bound_result(
+    harness: hook::Harness,
+    envelope: &hook::Envelope,
+    result: &serde_json::Value,
+) -> Option<(serde_json::Value, refusal::Refusal)> {
     fn texts<'a>(value: &'a serde_json::Value, into: &mut Vec<&'a str>) {
         match value {
             serde_json::Value::String(text) => into.push(text),
@@ -19891,6 +19908,7 @@ fn bound_result(result: &serde_json::Value) -> Option<(serde_json::Value, refusa
     let root = git::repo_root(hook_authority_root()).ok()?;
     let bytes = serde_json::to_vec(result).ok()?;
     let stored = capture::store(&root, capture::Stream::Response, &bytes).ok()?;
+    record_stored(&root, envelope, harness, Stored::Bound, &stored.digest);
     let (path, index) = capture::result_view(&root, &stored, result).ok()?;
     let pointer = view_refusal(&path, &index);
     let line = pointer.render_finding(refusal::Arm::Pointer);
@@ -20280,7 +20298,7 @@ fn emit_channel(
     // beside a verdict is never recorded as seen (CLOUD-2075).
     let mut sighter = HookSighter::new(harness, envelope);
     let emission = advisory::admit(advice, ceiling, &mut sighter);
-    let text = closed_emission(emission, ceiling);
+    let text = closed_emission(harness, envelope, emission, ceiling);
     let text = if sighter.sighted {
         legend_for(envelope, text)
     } else {
@@ -22597,32 +22615,13 @@ fn capture_response(
         record_absence(&root, envelope, harness, capture::STORE_UNWRITABLE, advice);
         return;
     };
-    let row = capture::CallRow {
-        order: 0,
-        // A host that names no session still gets a row, under a token that says
-        // so: dropping the row would make an unnamed session look like no calls,
-        // and inventing an id would make two of them look like one.
-        session: envelope
-            .session
-            .clone()
-            .unwrap_or_else(|| "unnamed".to_owned()),
-        source: capture::POST_TOOL_MEMBER.to_owned(),
-        host: harness.as_str().to_owned(),
-        tool: envelope.raw_tool.clone(),
-        event: hook::Event::PostTool.as_str().to_owned(),
-        fidelity: decoded.fidelity.as_str().to_owned(),
-        // The clock is read at the boundary, as `record_agent_fact` reads it and
-        // for the same reason. It is a fact about the CALL, which is why it may
-        // live on this row while the content-addressed blob still refuses one.
-        seen_at: Some(receipt::rfc3339_utc(
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0, |since_epoch| since_epoch.as_secs()),
-        )),
-        class: None,
-        digest: Some(stored.digest),
-        absent: None,
-    };
+    let row = stored_row(
+        envelope,
+        harness,
+        capture::POST_TOOL_MEMBER,
+        decoded.fidelity,
+        stored.digest,
+    );
     if capture::record_call_as(&root, &row, durable::Persist::Atomic).is_err() {
         // THE ONE UNRECORDABLE FAILURE (CLOUD-917 clause 4): the provenance write
         // itself. The advisory is the only channel left, which is why it is not
@@ -22638,6 +22637,91 @@ fn capture_response(
     if capture::evict_to_budget(&root, capture_budget().as_ref()).is_err() {
         note(capture::STORE_UNWRITABLE);
     }
+}
+
+/// The call row naming a capture the hook stored, so eviction can order it
+/// (CLOUD-2397): a capture no row names cannot be selected, and goes first.
+fn stored_row(
+    envelope: &hook::Envelope,
+    harness: hook::Harness,
+    source: &str,
+    fidelity: capture::Fidelity,
+    digest: String,
+) -> capture::CallRow {
+    capture::CallRow {
+        order: 0,
+        // A host that names no session still gets a row, under a token that says
+        // so: dropping the row would make an unnamed session look like no calls,
+        // and inventing an id would make two of them look like one.
+        session: envelope
+            .session
+            .clone()
+            .unwrap_or_else(|| "unnamed".to_owned()),
+        source: source.to_owned(),
+        host: harness.as_str().to_owned(),
+        tool: envelope.raw_tool.clone(),
+        event: envelope.event.as_str().to_owned(),
+        fidelity: fidelity.as_str().to_owned(),
+        // The clock is read at the boundary, as `record_agent_fact` reads it and
+        // for the same reason. It is a fact about the CALL, which is why it may
+        // live on this row while the content-addressed blob still refuses one.
+        seen_at: Some(receipt::rfc3339_utc(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |since_epoch| since_epoch.as_secs()),
+        )),
+        class: None,
+        digest: Some(digest),
+        absent: None,
+    }
+}
+
+/// Which hook site stored a capture beside a result, and so its row's source
+/// and fidelity (CLOUD-2397).
+#[derive(Clone, Copy)]
+enum Stored {
+    /// A result too large to hold, stored whole from its spill file.
+    Spill,
+    /// A result over the token bound, stored as its decoded JSON.
+    Bound,
+    /// An advisory channel's overflow, stored as the bytes emitted.
+    Overflow,
+}
+
+impl Stored {
+    fn source(self) -> &'static str {
+        match self {
+            Self::Spill | Self::Bound => capture::POST_TOOL_MEMBER,
+            Self::Overflow => capture::ADVISORY_OVERFLOW,
+        }
+    }
+
+    fn fidelity(self) -> capture::Fidelity {
+        match self {
+            Self::Spill => capture::Fidelity::SpillFile,
+            Self::Bound => capture::Fidelity::DecodedContent,
+            Self::Overflow => capture::Fidelity::LexicalBytes,
+        }
+    }
+}
+
+/// Record [`stored_row`] for a capture stored beside the result, best-effort:
+/// the capture is already published, and a missing row costs only its rank.
+fn record_stored(
+    root: &Path,
+    envelope: &hook::Envelope,
+    harness: hook::Harness,
+    kind: Stored,
+    digest: &str,
+) {
+    let row = stored_row(
+        envelope,
+        harness,
+        kind.source(),
+        kind.fidelity(),
+        digest.to_owned(),
+    );
+    let _ = capture::record_call_as(root, &row, durable::Persist::Atomic);
 }
 
 /// A post-tool call whose host sent no response member.

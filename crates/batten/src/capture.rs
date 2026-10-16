@@ -2213,8 +2213,13 @@ pub const DEFAULT_RESPONSE_MAX_RECORDS: u64 = 1024;
 ///
 /// Only [`Stream::Response`] and [`Stream::Advisory`] records are candidates.
 /// A `stdout` or `stderr` capture is `exec`'s and is never evicted here, which
-/// is what keeps today's behaviour byte-identical for that consumer. An
-/// advisory overflow names no call row, so it falls after the ordered ones.
+/// is what keeps today's behaviour byte-identical for that consumer.
+///
+/// **A record no call row names goes FIRST** (CLOUD-2397). Every store the hook
+/// makes records its row, so such a record predates that or lost its row, and
+/// [`find`], which selects through rows, can never return it. Evicted last, as
+/// it once was, a few large spills held the whole budget and every tracker read
+/// stored after them was evicted the moment it landed.
 ///
 /// # Errors
 ///
@@ -2229,6 +2234,7 @@ pub fn evict_to_budget(repo_root: &Path, config: Option<&CaptureConfig>) -> Resu
 /// # Errors
 ///
 /// As [`evict_to_budget`].
+//MUTANT unrecorded-evicted-last|s@^    let candidates = \[unrecorded, recorded\].concat();$@    let candidates = [recorded, unrecorded].concat();@|an_unrecorded_capture_is_evicted_before_a_tracker_read
 //MUTANT reread-ranked-by-first-row|s@^            latest.insert(found.digest.as_str(), (at, is_builtin_result(row)));$@            latest.entry(found.digest.as_str()).or_insert((at, is_builtin_result(row)));@|a_response_read_again_is_as_new_as_its_latest_call
 pub fn evict_to_budget_in(dir: &Path, config: Option<&CaptureConfig>) -> Result<usize> {
     let max_bytes = config
@@ -2258,9 +2264,8 @@ pub fn evict_to_budget_in(dir: &Path, config: Option<&CaptureConfig>) -> Result<
     // alphabetically-first session before any row of a later-sorting one. A
     // store holding an older `zzz` and a newer `aaa` would then evict its newest
     // responses first. Append order is the only cross-session order the log
-    // actually carries. A digest named by no row cannot be ordered at all, so it
-    // is evicted last rather than first — guessing an order for it would be
-    // inventing provenance.
+    // actually carries. A digest named by no row cannot be ordered at all, and
+    // nothing can select it, so it goes before every ordered one (CLOUD-2397).
     let ordered = read_calls(&dir.join("calls"));
     // A digest-keyed lookup and a taken-set, rather than a scan inside a scan.
     // The row count is not bounded by the record count — one row per call, many
@@ -2298,15 +2303,16 @@ pub fn evict_to_budget_in(dir: &Path, config: Option<&CaptureConfig>) -> Result<
     ranked.sort_by_key(|&(_, at, builtin)| (!builtin, at));
     let taken: std::collections::HashSet<&str> =
         ranked.iter().map(|&(digest, _, _)| digest).collect();
-    let mut candidates: Vec<Capture> = ranked
+    let recorded: Vec<Capture> = ranked
         .iter()
         .filter_map(|&(digest, _, _)| by_digest.get(digest).map(|found| (*found).clone()))
         .collect();
-    for record in &held {
-        if !taken.contains(record.digest.as_str()) {
-            candidates.push(record.clone());
-        }
-    }
+    let unrecorded: Vec<Capture> = held
+        .iter()
+        .filter(|record| !taken.contains(record.digest.as_str()))
+        .cloned()
+        .collect();
+    let candidates = [unrecorded, recorded].concat();
     let mut removed = 0;
     for record in candidates {
         if total <= max_bytes && count <= max_records {
@@ -2335,6 +2341,12 @@ fn is_builtin_result(row: &CallRow) -> bool {
 
 /// The `source` a result taken from the `PostToolUse` envelope is filed under.
 pub const POST_TOOL_MEMBER: &str = "post-tool-member";
+
+/// The `source` the hook files an advisory channel's overflow under (CLOUD-2397).
+///
+/// Not [`POST_TOOL_MEMBER`]: an overflow is the hook's own words, not a built-in
+/// tool's result, so it ranks by recency with tracker reads rather than first.
+pub const ADVISORY_OVERFLOW: &str = "advisory-overflow";
 
 /// The `source` a recorded `--raw` retrieval is filed under.
 ///
