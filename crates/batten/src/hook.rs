@@ -6322,6 +6322,16 @@ impl Grammar {
         }
         (self.bundles || rest.chars().count() == 1).then_some(rest)
     }
+
+    /// The option that DECIDES a short bundle, read left to right: the first
+    /// inline one (the program follows), or the first valued one (the rest of
+    /// the bundle, or the next word, is its value). The one reading both
+    /// [`script_operand`] and [`inline_values`] take.
+    fn decisive(&self, bundle: &str) -> Option<(usize, char)> {
+        bundle
+            .char_indices()
+            .find(|(_, flag)| self.inline.contains(*flag) || self.valued.contains(*flag))
+    }
 }
 
 /// The grammar `program` is read through: its family's, or a conservative one
@@ -6386,7 +6396,7 @@ fn grammar(program: &str) -> Grammar {
 /// that text. An operand naming a variable or `~`, or a relative one with no
 /// known directory, cannot be placed and is left alone, as is every operand
 /// when the root is unknown or does not resolve.
-//MUTANT script-outside-admitted|s@^        if outside_repository(&resolved, root)$@        if false@|an_interpreter_running_an_inline_or_untracked_script_is_refused
+//MUTANT script-outside-admitted|s@^            \&\& outside_repository(\&resolved, root)$@            \&\& false@|an_interpreter_running_an_inline_or_untracked_script_is_refused
 fn interpreter_decision(
     rule: &Rule,
     interprets: &[String],
@@ -6394,9 +6404,7 @@ fn interpreter_decision(
     root: Option<&Path>,
     cwd: Option<&Path>,
 ) -> Option<Refusal> {
-    // A root that is not a directory cannot answer containment, and
-    // `relative_to`'s `None` would then read as "outside" for every operand.
-    let root = root.filter(|root| root.is_dir())?;
+    let root = root?;
     for stage in first_stages(parsed, cwd) {
         let program = program_name(stage.program());
         if !interprets.iter().any(|entry| entry == program) {
@@ -6408,19 +6416,23 @@ fn interpreter_decision(
         let Some(resolved) = shell_resolved(operand, stage.cwd.as_deref()) else {
             continue;
         };
+        // A root that is not a directory cannot answer containment, and
+        // `relative_to`'s `None` would then read as "outside" for every
+        // operand. Asked only once a declared interpreter has a placeable
+        // script, so a call naming none touches no filesystem here.
+        //
         // A CHECKOUT THE STAGE STANDS IN holds its script too: a linked
         // worktree (whose policy root is the main checkout) and a sibling
         // repository in one session both run reviewed code from their own
         // tree. Asked only on the refusal path, so the ordinary call never
         // opens a repository here.
-        let own_tree = || {
-            stage
+        if root.is_dir()
+            && outside_repository(&resolved, root)
+            && stage
                 .cwd
                 .as_deref()
                 .and_then(|here| crate::git::worktree_root(here).ok())
-        };
-        if outside_repository(&resolved, root)
-            && own_tree().is_none_or(|tree| outside_repository(&resolved, &tree))
+                .is_none_or(|tree| outside_repository(&resolved, &tree))
         {
             return Some(operand_refusal(
                 rule,
@@ -6450,9 +6462,8 @@ fn inline_values(grammar: &Grammar, arguments: &[&str]) -> Vec<String> {
         };
         // The first inline option, unless a valued one comes first and takes
         // the rest of the bundle as its own value (`-MFile::Temp`).
-        let Some((at, flag)) = bundle
-            .char_indices()
-            .find(|(_, flag)| grammar.inline.contains(*flag) || grammar.valued.contains(*flag))
+        let Some((at, flag)) = grammar
+            .decisive(bundle)
             .filter(|(_, flag)| grammar.inline.contains(*flag))
         else {
             continue;
@@ -6496,19 +6507,14 @@ fn script_operand<'a>(grammar: &Grammar, arguments: &[&'a str]) -> Option<&'a st
         let Some(bundle) = grammar.shorts(word) else {
             continue;
         };
-        // A short bundle, read left to right: an inline option ends the search,
-        // and a valued one takes the rest of the bundle or, at its end, the next
-        // word.
-        for (at, flag) in bundle.char_indices() {
-            if grammar.inline.contains(flag) {
-                return None;
+        // An inline option ends the search; a valued one at the bundle's end
+        // takes the next word.
+        match grammar.decisive(bundle) {
+            Some((_, flag)) if grammar.inline.contains(flag) => return None,
+            Some((at, flag)) if at + flag.len_utf8() == bundle.len() => {
+                words.next();
             }
-            if grammar.valued.contains(flag) {
-                if at + flag.len_utf8() == bundle.len() {
-                    words.next();
-                }
-                break;
-            }
+            _ => {}
         }
     }
     None
