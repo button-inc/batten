@@ -556,23 +556,43 @@ fn operand_at<'a>(
 /// The tasks `mise run` names after `words[at]`: the first word that is not a
 /// flag, and the first after each `:::`. The rest are those tasks' arguments.
 fn tasks_after(words: &[String], at: usize) -> Vec<String> {
+    let end = words[at + 1..]
+        .iter()
+        .position(|word| word == "--")
+        .map_or(words.len(), |offset| at + 1 + offset);
     let mut tasks = Vec::new();
     let mut expecting = true;
-    let mut skip_next = false;
-    for word in &words[at + 1..] {
-        if std::mem::take(&mut skip_next) {
-            continue;
+    for (index, word) in operand_at(words, at, MISE_VALUED) {
+        if index >= end {
+            break;
         }
         if word == ":::" {
             expecting = true;
-        } else if word.starts_with('-') {
-            skip_next = expecting && MISE_VALUED.contains(&word.as_str());
-        } else if expecting {
-            tasks.push(word.clone());
-            expecting = false;
+        } else if std::mem::take(&mut expecting) {
+            tasks.push(word.to_owned());
         }
     }
     tasks
+}
+
+/// Whether batten, given `args`, runs cases: `mutate sweep` runs the suites its
+/// rows name, `test replay` runs every modified case through nextest, and
+/// `land lap` runs `verify`.
+fn batten_facts(args: &[String]) -> (bool, Vec<String>) {
+    let mut next = args
+        .iter()
+        .map(String::as_str)
+        .filter(|word| !word.starts_with('-'));
+    let verb = (next.next(), next.next());
+    (
+        matches!(
+            verb,
+            (Some("mutate"), Some("sweep"))
+                | (Some("test"), Some("replay"))
+                | (Some("land"), Some("lap"))
+        ),
+        Vec::new(),
+    )
 }
 
 /// Flags that take the next word as their value, before the subcommand.
@@ -604,19 +624,23 @@ fn command_facts(words: &[String], stdin: &[String]) -> (bool, Vec<String>) {
                     _ => false,
                 };
                 take((runner && !words.iter().any(|w| w == "--no-run"), Vec::new()));
+                // `cargo run --package=batten -- <verb>` is batten itself.
+                let names_batten = words
+                    .iter()
+                    .any(|w| matches!(w.as_str(), "--package=batten" | "--bin=batten"))
+                    || words.windows(2).any(|w| {
+                        matches!(w[0].as_str(), "-p" | "--package" | "--bin") && w[1] == "batten"
+                    });
+                if names_batten && let Some(split) = words.iter().position(|w| w == "--") {
+                    take(batten_facts(&words[split + 1..]));
+                }
             }
             "hk" => take((
                 matches!(operands(words, at, &[]).next(), Some("check" | "run"))
                     && !words.iter().any(|w| w.contains("!slow")),
                 Vec::new(),
             )),
-            "batten" => {
-                let mut next = operands(words, at, &[]);
-                take((
-                    matches!((next.next(), next.next()), (Some("mutate"), Some("sweep"))),
-                    Vec::new(),
-                ));
-            }
+            "batten" => take(batten_facts(&words[at + 1..])),
             "bash" | "sh" => {
                 // `-c`, alone or in a cluster (`-ec`), takes the next word as
                 // the script; with neither a script nor a file, stdin is it.
@@ -852,19 +876,9 @@ fn required_tools() -> BTreeSet<String> {
 
 /// The required tools a job's steps do not install. A mise-action step with no
 /// `install_args` installs every `[tools]` entry, unless it says `install: false`.
-//MUTANT install-all-unread|s@^            && step\["with"\]\["install"\]\.as_bool() != Some(false)$@            \&\& true@|a_job_installs_what_its_mise_steps_say
+//MUTANT install-all-unread|s@^                && step\["with"\]\["install"\]\.as_bool() != Some(false)$@                \&\& true@|a_job_installs_what_its_mise_steps_say
 fn job_missing(steps: &[yaml_rust2::Yaml], required: &BTreeSet<String>) -> Vec<String> {
-    let installs_all = steps.iter().any(|step| {
-        step["uses"]
-            .as_str()
-            .is_some_and(|uses| uses.starts_with("jdx/mise-action@"))
-            && step["with"]["install_args"].is_badvalue()
-            && step["with"]["install"].as_bool() != Some(false)
-    });
-    if installs_all {
-        return Vec::new();
-    }
-    let installed: BTreeSet<String> = steps
+    let installing: Vec<&yaml_rust2::Yaml> = steps
         .iter()
         .filter(|step| {
             step["uses"]
@@ -872,6 +886,15 @@ fn job_missing(steps: &[yaml_rust2::Yaml], required: &BTreeSet<String>) -> Vec<S
                 .is_some_and(|uses| uses.starts_with("jdx/mise-action@"))
                 && step["with"]["install"].as_bool() != Some(false)
         })
+        .collect();
+    if installing
+        .iter()
+        .any(|step| step["with"]["install_args"].is_badvalue())
+    {
+        return Vec::new();
+    }
+    let installed: BTreeSet<String> = installing
+        .iter()
         .filter_map(|step| step["with"]["install_args"].as_str())
         .flat_map(str::split_whitespace)
         .map(tool_name)
@@ -1023,6 +1046,7 @@ fn a_suite_step_is_a_suite_task_or_a_suite_command() {
         "coverage",
         "hooks",
         "mutant",
+        "verify:test-replay",
     ] {
         assert!(suite.contains(task), "{task} runs the suite: {suite:?}");
     }
@@ -1064,6 +1088,9 @@ fn a_suite_step_is_a_suite_task_or_a_suite_command() {
         "{% if usage.f %}cargo fuzz run x{% else %}mise run test:cargo{% endif %}",
         "{{vars.batten}} mutate sweep",
         "mise run ${{ matrix.task }}",
+        "cargo run --quiet --package=batten -- mutate sweep",
+        "{{vars.batten}} test replay --base origin/main",
+        "mise run -j 4 ci ::: lint",
     ] {
         assert!(runs_suite(run, &suite), "{run}");
     }
