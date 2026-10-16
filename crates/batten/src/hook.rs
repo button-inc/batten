@@ -2839,9 +2839,8 @@ fn relative_to(root: &Path, path: &str) -> Option<String> {
             walked.push(&component);
             if let Ok(real) = walked.canonicalize() {
                 walked = real;
-            } else if let Some(target) = (hops < MAX_HOPS)
-                .then(|| std::fs::read_link(&walked).ok())
-                .flatten()
+            } else if hops < MAX_HOPS
+                && let Ok(target) = std::fs::read_link(&walked)
             {
                 hops += 1;
                 walked.pop();

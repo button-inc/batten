@@ -221,6 +221,34 @@ fn a_write_through_a_dangling_link_lands_at_its_target() {
     assert_signals_at(&dir, "dangling");
 }
 
+/// And an ABSOLUTE dangling target is followed the same way: the link's
+/// reading replaces the whole walked path rather than joining onto it.
+#[cfg(unix)]
+#[test]
+fn an_absolute_dangling_link_lands_at_its_target() {
+    let dir = bench("swa-an_absolute_dangling_link_lands_at");
+    let target = dir
+        .canonicalize()
+        .expect("the bench root resolves")
+        .join("mise-tasks/new.sh");
+    std::os::unix::fs::symlink(&target, dir.join("dangling")).expect("the link is made");
+    assert_signals_at(&dir, "dangling");
+}
+
+/// And a dangling LOOP ends at `MAX_HOPS` rather than spinning: `loop-a` and
+/// `loop-b` read each other, so following links alone never terminates, and the
+/// answer that comes back is still a spelling inside the governed directory.
+#[cfg(unix)]
+#[test]
+fn a_dangling_link_loop_ends_at_the_hop_bound() {
+    let dir = bench("swa-a_dangling_link_loop_ends_at_the_h");
+    let tasks = dir.join("mise-tasks");
+    std::fs::create_dir_all(&tasks).expect("the governed directory is made");
+    std::os::unix::fs::symlink("loop-b", tasks.join("loop-a")).expect("the link is made");
+    std::os::unix::fs::symlink("loop-a", tasks.join("loop-b")).expect("the link is made");
+    assert_signals_at(&dir, "mise-tasks/loop-a");
+}
+
 /// A bats suite is governed too.
 #[test]
 fn a_write_to_a_bats_suite_signals() {
