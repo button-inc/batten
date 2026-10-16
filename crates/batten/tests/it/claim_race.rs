@@ -681,8 +681,7 @@ fn a_key_closed_by_this_branch_s_commits_alone_still_races() {
 /// key, on the sound ground that `closed(body)` is a SUBSET of
 /// `closed(body + log)` — so a race found over the short set is a true refusal.
 /// What it did not carry is the other half of a subset: a race NOT found over it
-/// is unproven. Here the body closes CLOUD-1, the commits close CLOUD-2, and
-/// #8 holds CLOUD-2 — so with the log unread the collision is compared against
+/// is unproven. Over [`self_log`]'s listing that is a collision compared against
 /// nothing, and the verb printed *"no open pull request races this branch's
 /// claim"* at exit 0 over the pull request it exists to refuse.
 ///

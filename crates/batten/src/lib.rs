@@ -7201,8 +7201,12 @@ fn run_claim_race(
     // risks a false REFUSAL on a key this branch does not claim. The competitor
     // arm's subset property, which is what lets it judge first, simply does not
     // hold on this side. Could-not-look, and nothing judged.
-    let (log, self_read) = match bot::forge::commit_messages(&slug, &mine_number) {
-        Ok(log) => (log, true),
+    // `Option` RATHER THAN A PARALLEL FLAG, for the vocabulary `with_logs`
+    // already argues forty lines down: a read that failed is not a log that is
+    // empty, and `Some("")` is an answer. Two values could disagree — nothing
+    // would object to an `Ok` arm returning `false` — where one cannot.
+    let log = match bot::forge::commit_messages(&slug, &mine_number) {
+        Ok(log) => Some(log),
         // A BODY THAT CLOSES A KEY ANSWERS WITHOUT THE LOG, so a failed read is
         // not always fatal and refusing to judge on all of them discards sound
         // refusals. More text only adds matches, so `closed(body)` is a SUBSET
@@ -7239,12 +7243,18 @@ fn run_claim_race(
         // in a commit message — is missing from `mine`, so a competitor holding
         // that key is compared against nothing and the run would print "no open
         // pull request races this branch's claim" over the collision this verb
-        // exists to refuse. `false` joins the fan-out's `complete` at the clean
+        // exists to refuse. `None` joins the fan-out's `complete` at the clean
         // exit below, so a refusal still refuses at 2 and only the clean answer
         // declines.
-        Err(_) => (String::new(), false),
+        Err(_) => None,
     };
-    let mine = race::claimed(&me.head_ref, &me.title, &log, &me.body, &grammar);
+    let mine = race::claimed(
+        &me.head_ref,
+        &me.title,
+        log.as_deref().unwrap_or_default(),
+        &me.body,
+        &grammar,
+    );
     if mine.is_empty() {
         return clean(
             out,
@@ -7316,21 +7326,18 @@ fn run_claim_race(
     // the accepted cost of not failing a pre-flight on a forge hiccup; the
     // undiscriminated surface is `rules::run_once`'s to fix, not this arm's.
     //
-    // THE SELF SIDE'S DEGRADED READ JOINS IT HERE, for the same reason and with
-    // the same shape: `self_read` is `false` where this branch's own log went
-    // unread behind a closing body, which leaves `mine` possibly short and "no
-    // race" therefore unproven. One arm, because the remedy is one — look
-    // again — and the message says which log it was.
-    if races.is_empty() && !(complete && self_read) {
-        let unread = if self_read {
-            "a competitor's commit log could not be read, so not every open pull request was judged"
-        } else {
-            "this branch's own commit log could not be read, so its claim is only what the body \
-             closes"
-        };
+    // THE SELF SIDE'S DEGRADED READ JOINS IT HERE — one arm, because the remedy
+    // is one: look again. The arm the match above states is why; what is left to
+    // say here is that the message must then name WHICH log went unread, and a
+    // refused token refuses both reads in the same run, so all three failing
+    // states are spelled rather than two.
+    if races.is_empty() && !(complete && log.is_some()) {
         return clean(
             out,
-            &format!("claim race: {unread} — could not look, which is not a verdict"),
+            &format!(
+                "claim race: {} — could not look, which is not a verdict",
+                unread_log(complete, log.is_some())
+            ),
         );
     }
     if races.is_empty() {
@@ -7355,6 +7362,29 @@ fn run_claim_race(
         races.len()
     )?;
     Ok(ExitCode::Violation)
+}
+
+/// WHICH log went unread, for [`run_claim_race`]'s one arm that declines to call
+/// an incomplete reading clean.
+///
+/// Called only where at least one of the two is false, which is why there is no
+/// fourth sentence: `complete` true means `own` is the one that failed. Both
+/// causes share an arm because they share a remedy — look again — and all three
+/// failing states are spelled rather than two because one refused token refuses
+/// this branch's read and every competitor's in the same run, which is the
+/// LIKELIEST joint state rather than an exotic one.
+///
+/// The competitor sentence is byte-for-byte the one this arm has printed since
+/// it was the only cause (§6: a verdict's bytes are stable).
+fn unread_log(complete: bool, own: bool) -> &'static str {
+    if complete {
+        "this branch's own commit log could not be read, so its claim is only what the body closes"
+    } else if own {
+        "a competitor's commit log could not be read, so not every open pull request was judged"
+    } else {
+        "neither this branch's own commit log nor every competitor's could be read, so its claim \
+         is only what the body closes and not every open pull request was judged"
+    }
 }
 
 /// Render findings as the pointer coordinate the predecessor emitted.
