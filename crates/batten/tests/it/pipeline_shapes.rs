@@ -653,14 +653,18 @@ fn a_redirection_is_not_an_operand_and_never_the_named_target() {
     let dir = substitution_repo("a-redirection-is-not-an-operand-and-never-the-na");
     // Observed: refused naming `2>/dev/null` "a path in this repository".
     assert!(cause_in(&dir, "tail -40 batten.toml 2>/dev/null").contains("batten.toml"));
-    // And the scan STOPS there, so a stdin-fed call writing into the tree is not
-    // a substitution — nothing was read instead of reaching for a tool.
+    // And a redirection is never an operand, so a stdin-fed call writing into
+    // the tree is not a substitution — nothing was read instead of a tool.
     allow_in(&dir, "grep -c CLOUD > counts.txt");
     allow_in(&dir, "sort < input.txt");
-    // Dropped where it stands, never a cut: a pattern carrying `>` is a word,
-    // and the file after it is still read.
-    deny_in(&dir, "grep '-> Result' crates/batten/src/lib.rs");
+    allow_in(&dir, "grep pat >| out.txt");
+    allow_in(&dir, "grep pat > \"build out/x.txt\"");
     allow_in(&dir, "find 2>/dev/null /tmp -name '*.log'");
+    // The boundary is the parse's, never a `>` in the text: a pattern carrying
+    // one is a word, and the file after it is still read.
+    deny_in(&dir, "grep '-> Result' crates/batten/src/lib.rs");
+    deny_in(&dir, "grep 'Vec<String>' crates/batten/src/lib.rs");
+    deny_in(&dir, "grep -c '=>' crates/batten/src/lib.rs");
 }
 
 #[test]

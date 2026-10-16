@@ -6234,22 +6234,23 @@ fn substitution_decision(
     for stage in first_stages(parsed, cwd) {
         let cwd = stage.cwd.as_deref();
         let program = stage.program();
-        let operands = stage.operands();
+        // Arguments only: a redirection and the word it writes name a
+        // destination, never a target read instead of reaching for a tool, so
+        // `grep pat > out.txt` is stdin-fed and must allow.
+        let operands = stage.arguments();
         if !substitutes
             .iter()
             .any(|entry| substitute_matches(entry, program, operands))
         {
             continue;
         }
-        // Operands only, redirections dropped (`without_redirections`). Only the
-        // path test sees `program_token`'s normalised form: that is where a
-        // trailing `)` would otherwise stop `(grep needle crates/batten/src/lib.rs)`
-        // from matching the path the row selected on.
-        let words = without_redirections(operands);
+        // Only the path test sees `program_token`'s normalised form: that is
+        // where a trailing `)` would otherwise stop `(grep needle
+        // crates/batten/src/lib.rs)` from matching the path the row selected on.
         let candidates = if program == "find" {
-            find_start_points(&words)
+            find_start_points(operands)
         } else {
-            words.as_slice()
+            operands
         };
         let Some(target) = candidates
             .iter()
@@ -6273,6 +6274,8 @@ fn substitution_decision(
 struct FirstStage<'a> {
     tokens: Vec<&'a str>,
     program: usize,
+    /// Where the arguments end and the line's redirection tokens begin.
+    arguments: usize,
     cwd: Option<std::path::PathBuf>,
 }
 
@@ -6286,6 +6289,15 @@ impl<'a> FirstStage<'a> {
     /// Every word after the program, raw.
     fn operands(&self) -> &[&'a str] {
         &self.tokens[self.program + 1..]
+    }
+
+    /// The words after the program that are ARGUMENTS, its redirections cut at
+    /// the parse's own boundary ([`SegmentLine::redirections`]), never at a `>`
+    /// in a token's text: `grep 'Vec<String>' <path>` is a pattern and a path.
+    fn arguments(&self) -> &[&'a str] {
+        self.tokens
+            .get(self.program + 1..self.arguments)
+            .unwrap_or_default()
     }
 }
 
@@ -6334,9 +6346,11 @@ fn first_stages<'a>(parsed: &'a [Segment], cwd: Option<&Path>) -> Vec<FirstStage
         let Some(program) = effective_program(&tokens) else {
             continue;
         };
+        let arguments = tokens.len() - line.redirections;
         stages.push(FirstStage {
             tokens,
             program,
+            arguments,
             cwd: effective.clone(),
         });
     }
@@ -6738,7 +6752,8 @@ const IMPLICIT_FIND_START: &[&str] = &["./"];
 /// them that begins with `-`, `(` or `!` opens the expression and ends the
 /// list. With no start point at all, `find` searches `.`, so the answer is
 /// [`IMPLICIT_FIND_START`] rather than nothing. `operands` carry no redirection
-/// ([`without_redirections`]).
+/// ([`Segment::redirections`]).
+//MUTANT redirection-read-as-operand|s@^        let arguments = tokens.len\(\) - line.redirections;$@        let arguments = tokens.len();@|the_three_allow_clauses_survive_the_per_line_walk
 //MUTANT find-expression-read-as-target|s@^    &rest\[\.\.end\]$@    rest@|a_find_expression_operand_is_never_a_target
 //MUTANT find-implicit-start-unread|s@^        return IMPLICIT_FIND_START;$@        return \&rest[..0];@|a_find_expression_operand_is_never_a_target
 //MUTANT find-informational-run-searched|s@^    if end == 0 && searches_cwd .$@    if end == 0 {@|a_find_expression_operand_is_never_a_target
@@ -6770,31 +6785,6 @@ fn find_start_points<'a>(operands: &'a [&'a str]) -> &'a [&'a str] {
         return IMPLICIT_FIND_START;
     }
     &rest[..end]
-}
-
-/// `operands` with every redirection dropped, and with it the word a bare
-/// operator (`>`, `2>`, `<`, `&>`) takes as its target (CLOUD-2362). A token
-/// carrying its own target (`>out.txt`, `2>&1`) is dropped alone.
-///
-/// `command_words` appends a line's redirections after its words, so a cut at
-/// the first `>` or `<` would do — but an unquoted pattern carries those
-/// characters too, and `grep '-> Result' <path>` was cut before its path. Each
-/// token is judged where it stands instead. The test reads the RAW token:
-/// `program_token` may strip `>` and `<`, which would keep a destination the
-/// call writes. The parse knows the boundary and a string test re-derives it;
-/// carrying it on the line is the deeper fix, tracked on CLOUD-2362.
-//MUTANT redirection-target-kept|s@^            tokens.next\(\);$@@|the_three_allow_clauses_survive_the_per_line_walk
-fn without_redirections<'a>(operands: &[&'a str]) -> Vec<&'a str> {
-    let mut words = Vec::with_capacity(operands.len());
-    let mut tokens = operands.iter();
-    while let Some(token) = tokens.next() {
-        if !token.contains(['>', '<']) {
-            words.push(*token);
-        } else if token.ends_with(['>', '<']) {
-            tokens.next();
-        }
-    }
-    words
 }
 
 /// Does this `substitutes` entry select this invocation?
@@ -9642,6 +9632,10 @@ fn unkeyed_refusal(rule: &Rule) -> Refusal {
 struct Segment {
     /// The span's arguments, quotes resolved and escapes applied.
     words: Vec<String>,
+    /// How many of `words`, counted from the END, are redirection tokens
+    /// (`command_words` appends them after the arguments). The parse knows the
+    /// boundary, so no reader re-derives it from a token's text (CLOUD-2362).
+    redirections: usize,
     /// The span exactly as written, quotes and all.
     raw: String,
     /// The operator that FOLLOWED this span, or `None` where the command ended.
@@ -9750,6 +9744,8 @@ struct Segment {
 struct SegmentLine {
     /// This command's arguments, quotes resolved and escapes applied.
     words: Vec<String>,
+    /// [`Segment::redirections`], for this line's own words.
+    redirections: usize,
     /// This command's own span, exactly as written.
     raw: String,
 }
@@ -9951,6 +9947,7 @@ fn segments(command: &str) -> crate::facts::Look<Vec<Segment>> {
                 if !segment.nested {
                     line_readings.push(SegmentLine {
                         words: segment.words,
+                        redirections: segment.redirections,
                         raw: segment.raw,
                     });
                 }
@@ -10179,22 +10176,29 @@ fn flatten(node: &rable::Node, source: &str, after: Option<Separator>, out: &mut
 /// program at all, so `rm > guarded.md` is judged on the target. The parser moves
 /// those tokens out of `words` and into `redirects`, which is again right for a
 /// grammar and wrong here — dropping them was an under-deny on a WRITE, measured
-/// by `a_redirect_target_is_a_mutation_even_with_no_program`.
+/// by `a_redirect_target_is_a_mutation_even_with_no_program`. They go LAST, and
+/// their count is returned beside the words, so a reader that wants arguments
+/// only slices them off rather than guessing from `>` in a token's text.
 fn command_words(
     assignments: &[rable::Node],
     words: &[rable::Node],
     redirects: &[rable::Node],
     source: &str,
-) -> Vec<String> {
+) -> (Vec<String>, usize) {
     let mut spelled: Vec<String> = assignments
         .iter()
         .map(|word| unquote(&word_text(word)))
         .chain(words.iter().map(|word| unquote(&word_text(word))))
         .collect();
+    let arguments = spelled.len();
     for redirect in redirects {
         spelled.extend(redirect_words(redirect, source));
     }
-    spelled
+    // A redirection's tokens are never empty (`split_whitespace`), so the
+    // empty-word `retain` after this shrinks only the arguments and the count
+    // from the end stays exact.
+    let redirections = spelled.len() - arguments;
+    (spelled, redirections)
 }
 
 /// The commands nested INSIDE this one's words and redirect targets.
@@ -10237,9 +10241,11 @@ fn flatten_command(
     // before the retain put one in `lines` that `words` no longer matched, so the
     // two readings of one command disagreed on token indices — and
     // `protected_mutation` reads `lines` while everything else reads `words`.
+    let (spelled, redirections) = command_words(assignments, words, redirects, source);
     let mut segment = Segment {
         lines: Vec::new(),
-        words: command_words(assignments, words, redirects, source),
+        words: spelled,
+        redirections,
         raw: node.source_text(source).to_owned(),
         terminator: after,
         input_redirect: redirects.iter().any(binds_stdin),
@@ -10254,6 +10260,7 @@ fn flatten_command(
     }
     segment.lines = vec![SegmentLine {
         words: segment.words.clone(),
+        redirections: segment.redirections,
         raw: segment.raw.clone(),
     }];
     // Everything the descent produced is nested, however deep: an inner `$(…)`
