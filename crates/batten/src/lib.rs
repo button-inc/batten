@@ -7235,7 +7235,13 @@ fn run_claim_race(
     // is handed that row's board-resolution remedy for a collision that did not
     // happen. The defect is legible only on a direct `batten claim race`. Fixing
     // the undiscriminated surface belongs to `rules::run_once`, not here.
-    if !complete {
+    // JUDGED FIRST, AND THE INCOMPLETE ARM ONLY REPLACES THE CLEAN ONE. An
+    // unanswered competitor can only make this list too SHORT, never too long,
+    // so a race found among the ones that did answer is a true refusal and
+    // returning before `races` would throw away refusing information the run
+    // already holds.
+    let races = race::races(&mine, &pulls, Some(&mine_number), &grammar);
+    if races.is_empty() && !complete {
         writeln!(
             err,
             "claim race: a competitor's commit log was never read — a fetch worker did not \
@@ -7243,7 +7249,6 @@ fn run_claim_race(
         )?;
         return Ok(ExitCode::Internal);
     }
-    let races = race::races(&mine, &pulls, Some(&mine_number), &grammar);
     if races.is_empty() {
         return clean(
             out,

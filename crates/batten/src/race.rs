@@ -370,13 +370,21 @@ pub struct Filled {
 ///
 /// # Why this is concurrent, and what the number was
 ///
-/// The fill is the largest single cost `enforce` pays. Measured 2026-10-15 on a
-/// head carrying an open pull request, the rule running `claim race` read
-/// **15.8 s** — the largest in the run; on a head with no open pull request the
-/// same rule reads 1.1 s, because [`identify`] finds nothing and the verb never
-/// reaches here. The difference is one `GET pulls/<n>/commits` per eligible
-/// competitor, each waiting on the last, so the cost scaled with the number of
-/// OPEN PULL REQUESTS rather than with anything about this branch.
+/// The fill is the largest single cost `enforce` pays. CLOUD-2382 measured the
+/// rule running `claim race` at **15.8 s** on 2026-10-15 on a head carrying an
+/// open pull request — the largest in that run — against 1.1 s on a head with
+/// none, where [`identify`] finds nothing and the verb never reaches here. The
+/// difference is one `GET pulls/<n>/commits` per eligible competitor, each
+/// waiting on the last.
+///
+/// **IT SCALES WITH THE ELIGIBLE COUNT, WHICH IS NARROWER THAN THE LISTING, and
+/// that distinction is worth a number rather than an adjective.** Counted on
+/// this repository 2026-10-16: 25 open pull requests, 17 of them naming a key in
+/// a branch or title and therefore skipped by the cheap sources below, leaving
+/// **8** to fetch. So the saving here is eight round trips collapsing into one
+/// wave rather than twenty-five — the skip is doing most of the work, and this
+/// fan-out covers what it leaves. A consumer whose branches carry no key in
+/// their names has the whole listing eligible and gains proportionally more.
 ///
 /// Every request builds its own current-thread runtime inside `rest::get`, and
 /// `fetch` holds no statics, so concurrent live calls are sound. The
