@@ -161,7 +161,11 @@ fn with_memory_read_route(config: &str) -> String {
             })
         })
         .expect("the committed config carries the memories redirect row");
-    row.insert("read", toml_edit::value("read_memory"));
+    let replaced = row.insert("read", toml_edit::value("read_memory"));
+    assert!(
+        replaced.is_none(),
+        "the committed memories row declares no read route; this restores the one CLOUD-2362 removed"
+    );
     config.to_string()
 }
 
