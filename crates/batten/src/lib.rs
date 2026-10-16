@@ -19163,7 +19163,13 @@ fn closed_emission(
             emission.overflow.as_bytes(),
         )
         .ok()?;
-        record_stored(&root, envelope, harness, Stored::Overflow, &stored.digest);
+        record_stored(
+            &root,
+            envelope,
+            harness,
+            capture::ADVISORY_OVERFLOW,
+            &stored,
+        );
         Some(format!(
             "{}:{}",
             capture::Stream::Advisory.as_str(),
@@ -19650,7 +19656,7 @@ fn post_tool(
 /// leaves the marker as `bound_result` leaves an over-bound leaf: unrewritten.
 //MUTANT-SUITE crates/batten/tests/it/result_bound.rs
 //MUTANT spilled-leaf-unpointed|s@^    } else if !spilled.is_empty() {$@    } else if false {@|a_result_too_large_to_hold_reaches_the_model_as_a_pointer
-//MUTANT spill-unrecorded|s@^        record_stored(\&root, envelope, harness, Stored::Spill, \&capture.digest);$@@|a_spilled_result_is_recorded
+//MUTANT spill-unrecorded|s@^        record_stored(\&root, envelope, harness, capture::POST_TOOL_MEMBER, \&leaf);$@@|a_spilled_result_is_recorded
 fn point_at_spills(
     harness: hook::Harness,
     envelope: &hook::Envelope,
@@ -19674,9 +19680,9 @@ fn point_at_spills(
     let root = git::repo_root(hook_authority_root()).ok()?;
     let mut stored = Vec::new();
     for spill in spilled {
-        let capture = capture::store_file(&root, capture::Stream::Response, &spill.path).ok()?;
-        record_stored(&root, envelope, harness, Stored::Spill, &capture.digest);
-        stored.push((spill, capture));
+        let leaf = capture::store_file(&root, capture::Stream::Response, &spill.path).ok()?;
+        record_stored(&root, envelope, harness, capture::POST_TOOL_MEMBER, &leaf);
+        stored.push((spill, leaf));
     }
     // THE VIEW, AS THE IN-MEMORY BOUND WRITES IT: the text leaves on their own
     // lines, each spilled section copied from its file, so the pointer names
@@ -19846,7 +19852,7 @@ fn collapse_seen_output(envelope: &hook::Envelope) -> Option<serde_json::Value> 
 //MUTANT-SUITE crates/batten/tests/it/result_bound.rs
 //MUTANT result-bound-ignored|s@^    if !capture::exceeds_o200k(\&leaves, bound) {$@    if true {@|an_oversized_result_becomes_a_pointer_to_a_view_of_its_text
 //MUTANT small-result-rewritten|s@^    if !capture::exceeds_o200k(\&leaves, bound) {$@    if false {@|a_result_within_the_bound_is_left_alone
-//MUTANT bound-unrecorded|s@^    record_stored(\&root, envelope, harness, Stored::Bound, \&stored.digest);$@@|a_bounded_result_is_recorded
+//MUTANT bound-unrecorded|s@^    record_stored(\&root, envelope, harness, capture::POST_TOOL_MEMBER, \&stored);$@@|a_bounded_result_is_recorded
 fn bound_result(
     harness: hook::Harness,
     envelope: &hook::Envelope,
@@ -19908,7 +19914,7 @@ fn bound_result(
     let root = git::repo_root(hook_authority_root()).ok()?;
     let bytes = serde_json::to_vec(result).ok()?;
     let stored = capture::store(&root, capture::Stream::Response, &bytes).ok()?;
-    record_stored(&root, envelope, harness, Stored::Bound, &stored.digest);
+    record_stored(&root, envelope, harness, capture::POST_TOOL_MEMBER, &stored);
     let (path, index) = capture::result_view(&root, &stored, result).ok()?;
     let pointer = view_refusal(&path, &index);
     let line = pointer.render_finding(refusal::Arm::Pointer);
@@ -22676,51 +22682,27 @@ fn stored_row(
     }
 }
 
-/// Which hook site stored a capture beside a result, and so its row's source
-/// and fidelity (CLOUD-2397).
-#[derive(Clone, Copy)]
-enum Stored {
-    /// A result too large to hold, stored whole from its spill file.
-    Spill,
-    /// A result over the token bound, stored as its decoded JSON.
-    Bound,
-    /// An advisory channel's overflow, stored as the bytes emitted.
-    Overflow,
-}
-
-impl Stored {
-    fn source(self) -> &'static str {
-        match self {
-            Self::Spill | Self::Bound => capture::POST_TOOL_MEMBER,
-            Self::Overflow => capture::ADVISORY_OVERFLOW,
-        }
-    }
-
-    fn fidelity(self) -> capture::Fidelity {
-        match self {
-            Self::Spill => capture::Fidelity::SpillFile,
-            Self::Bound => capture::Fidelity::DecodedContent,
-            Self::Overflow => capture::Fidelity::LexicalBytes,
-        }
-    }
-}
-
-/// Record [`stored_row`] for a capture stored beside the result, best-effort:
-/// the capture is already published, and a missing row costs only its rank.
+/// Record [`stored_row`] for a capture stored BESIDE the result — a spilled
+/// leaf, the bound's JSON, an advisory overflow — best-effort: the capture is
+/// already published, and a missing row costs only its rank.
+///
+/// **Ranked, never selected.** None of these is the whole of what the host
+/// handed over — a leaf is a part, the bound's JSON may be the collapsed
+/// rewrite, an overflow is the hook's own words — so the row says
+/// [`capture::Fidelity::Prefix`], and [`capture::find`], which selects only
+/// complete rows, never answers a lookup with one.
 fn record_stored(
     root: &Path,
     envelope: &hook::Envelope,
     harness: hook::Harness,
-    kind: Stored,
-    digest: &str,
+    source: &str,
+    stored: &capture::Capture,
 ) {
-    let row = stored_row(
-        envelope,
-        harness,
-        kind.source(),
-        kind.fidelity(),
-        digest.to_owned(),
-    );
+    let part = capture::Fidelity::Prefix {
+        captured: stored.bytes,
+        declared: None,
+    };
+    let row = stored_row(envelope, harness, source, part, stored.digest.clone());
     let _ = capture::record_call_as(root, &row, durable::Persist::Atomic);
 }
 

@@ -338,10 +338,19 @@ fn a_spilled_result_is_recorded() {
         || panic!("the pointer names the stored leaf: {said}"),
         |rest| rest.chars().take_while(char::is_ascii_hexdigit).collect(),
     );
-    let recorded = recorded_digests(&dir);
+    let calls = common::run(&dir, &["capture", "list", "--calls", "-J"]);
+    let rows: serde_json::Value = serde_json::from_slice(&calls.stdout).expect("JSON rows");
+    let named: Vec<&serde_json::Value> = rows
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|row| row["digest"] == digest.as_str())
+        .collect();
+    assert!(!named.is_empty(), "a row names the spill {digest}: {rows}");
+    // A LEAF IS PART OF THE RESULT, so its row is ranked and never selected.
     assert!(
-        recorded.contains(&digest),
-        "a row names the spill {digest}: {recorded:?}"
+        named.iter().any(|row| row["fidelity"] == "prefix"),
+        "the spill's own row does not claim the whole response: {rows}"
     );
 }
 
@@ -372,16 +381,20 @@ fn a_bounded_result_is_recorded() {
     );
 }
 
-/// A CAPTURE NO ROW NAMES IS EVICTED FIRST (CLOUD-2397): nothing can select it,
-/// so it must not outlive a tracker read a gate resolves. Measured: 76 row-less
-/// records held the 8 MiB budget, and every tracker read stored after them was
-/// evicted at once. `#MUTANT unrecorded-evicted-last`.
-#[test]
-fn an_unrecorded_capture_is_evicted_before_a_tracker_read() {
+/// A store over a one-record budget holding a recorded tracker read and one
+/// record no row names, made `age` ago; evicts, and says whether each survived
+/// as `(row_less, read)`.
+fn evict_beside_a_read(name: &str, age: std::time::Duration) -> (bool, bool) {
     use batten::capture::{CallRow, CaptureConfig, Stream};
-    let store = common::scratch("result-bound-unrecorded");
-    let orphan = batten::capture::store_in(&store, Stream::Response, b"a capture no row names")
-        .expect("store the orphan");
+    let store = common::scratch(name);
+    let row_less = batten::capture::store_in(&store, Stream::Response, b"a capture no row names")
+        .expect("store the row-less record");
+    let row_less_path = store.join(format!("response-{}", row_less.digest));
+    std::fs::File::options()
+        .write(true)
+        .open(&row_less_path)
+        .and_then(|file| file.set_modified(std::time::SystemTime::now() - age))
+        .expect("age the row-less record");
     let read = batten::capture::store_in(&store, Stream::Response, b"{\"id\":\"CLOUD-9\"}")
         .expect("store the read");
     batten::capture::record_call_in(
@@ -408,12 +421,31 @@ fn an_unrecorded_capture_is_evicted_before_a_tracker_read() {
         result_max_tokens: None,
     };
     batten::capture::evict_to_budget_in(&store, Some(&one)).expect("evict");
-    assert!(
-        !store.join(format!("response-{}", orphan.digest)).exists(),
-        "the orphan goes"
-    );
-    assert!(
+    (
+        row_less_path.exists(),
         store.join(format!("response-{}", read.digest)).exists(),
-        "the tracker read stays"
-    );
+    )
+}
+
+/// A CAPTURE NO ROW NAMES IS EVICTED FIRST (CLOUD-2397): nothing can select it,
+/// so it must not outlive a tracker read a gate resolves. Measured: 76 row-less
+/// records held the 8 MiB budget, and every tracker read stored after them was
+/// evicted at once. `#MUTANT unrecorded-evicted-last`.
+#[test]
+fn an_unrecorded_capture_is_evicted_before_a_tracker_read() {
+    let past_grace = batten::capture::UNRECORDED_GRACE * 2;
+    let (row_less, read) = evict_beside_a_read("result-bound-unrecorded", past_grace);
+    assert!(!row_less, "the orphan goes");
+    assert!(read, "the tracker read stays");
+}
+
+/// A CAPTURE STILL BEING RECORDED IS NOT AN ORPHAN (CLOUD-2397): a writer stores
+/// the blob before it appends the row, so a concurrent eviction sees a fresh
+/// record no row names yet, and must not take it first.
+/// `#MUTANT in-flight-evicted-first`.
+#[test]
+fn a_capture_still_being_recorded_is_not_evicted_as_an_orphan() {
+    let (row_less, read) = evict_beside_a_read("result-bound-in-flight", std::time::Duration::ZERO);
+    assert!(row_less, "the capture mid-write stays");
+    assert!(!read, "the ranked record goes first");
 }

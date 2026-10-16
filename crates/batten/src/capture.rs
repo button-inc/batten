@@ -2215,11 +2215,13 @@ pub const DEFAULT_RESPONSE_MAX_RECORDS: u64 = 1024;
 /// A `stdout` or `stderr` capture is `exec`'s and is never evicted here, which
 /// is what keeps today's behaviour byte-identical for that consumer.
 ///
-/// **A record no call row names goes FIRST** (CLOUD-2397). Every store the hook
-/// makes records its row, so such a record predates that or lost its row, and
-/// [`find`], which selects through rows, can never return it. Evicted last, as
-/// it once was, a few large spills held the whole budget and every tracker read
-/// stored after them was evicted the moment it landed.
+/// **A record no call row names goes FIRST once it is older than
+/// [`UNRECORDED_GRACE`]** (CLOUD-2397). Every store the hook makes records its
+/// row, so such a record predates that or lost its row, and [`find`], which
+/// selects through rows, can never return it. Evicted last, as it once was, a
+/// few large spills held the whole budget and every tracker read stored after
+/// them was evicted the moment it landed. A younger one may be mid-write, and
+/// still goes last.
 ///
 /// # Errors
 ///
@@ -2234,7 +2236,8 @@ pub fn evict_to_budget(repo_root: &Path, config: Option<&CaptureConfig>) -> Resu
 /// # Errors
 ///
 /// As [`evict_to_budget`].
-//MUTANT unrecorded-evicted-last|s@^    let candidates = \[unrecorded, recorded\].concat();$@    let candidates = [recorded, unrecorded].concat();@|an_unrecorded_capture_is_evicted_before_a_tracker_read
+//MUTANT unrecorded-evicted-last|s@^    let candidates = unrecorded.into_iter().chain(recorded).chain(in_flight);$@    let candidates = recorded.into_iter().chain(unrecorded).chain(in_flight);@|an_unrecorded_capture_is_evicted_before_a_tracker_read
+//MUTANT in-flight-evicted-first|s@^    let candidates = unrecorded.into_iter().chain(recorded).chain(in_flight);$@    let candidates = unrecorded.into_iter().chain(in_flight).chain(recorded);@|a_capture_still_being_recorded_is_not_evicted_as_an_orphan
 //MUTANT reread-ranked-by-first-row|s@^            latest.insert(found.digest.as_str(), (at, is_builtin_result(row)));$@            latest.entry(found.digest.as_str()).or_insert((at, is_builtin_result(row)));@|a_response_read_again_is_as_new_as_its_latest_call
 pub fn evict_to_budget_in(dir: &Path, config: Option<&CaptureConfig>) -> Result<usize> {
     let max_bytes = config
@@ -2307,12 +2310,21 @@ pub fn evict_to_budget_in(dir: &Path, config: Option<&CaptureConfig>) -> Result<
         .iter()
         .filter_map(|&(digest, _, _)| by_digest.get(digest).map(|found| (*found).clone()))
         .collect();
-    let unrecorded: Vec<Capture> = held
+    // A ROW-LESS RECORD IS AN ORPHAN ONLY ONCE IT IS OLD: a writer stores the
+    // blob and then appends its row, so a concurrent call's eviction between the
+    // two sees a record no row names yet. Taking that first deleted another
+    // hook's capture mid-write; a young one keeps the old place, last.
+    let (unrecorded, in_flight): (Vec<Capture>, Vec<Capture>) = held
         .iter()
         .filter(|record| !taken.contains(record.digest.as_str()))
         .cloned()
-        .collect();
-    let candidates = [unrecorded, recorded].concat();
+        .partition(|record| {
+            older_than(
+                &dir.join(format!("{}-{}", record.stream, record.digest)),
+                UNRECORDED_GRACE,
+            )
+        });
+    let candidates = unrecorded.into_iter().chain(recorded).chain(in_flight);
     let mut removed = 0;
     for record in candidates {
         if total <= max_bytes && count <= max_records {
@@ -2337,6 +2349,22 @@ pub fn evict_to_budget_in(dir: &Path, config: Option<&CaptureConfig>) -> Result<
 //MUTANT builtin-results-not-first|s@^    row.source == POST_TOOL_MEMBER \&\& !row.tool.starts_with("mcp__")$@    false@|a_built_in_result_is_evicted_before_a_tracker_read
 fn is_builtin_result(row: &CallRow) -> bool {
     row.source == POST_TOOL_MEMBER && !row.tool.starts_with("mcp__")
+}
+
+/// How old a record no call row names must be before eviction treats it as an
+/// orphan (CLOUD-2397). Younger, it may be another call's capture between its
+/// store and its row; ten minutes is far past any write and far short of the
+/// orphans that measured as filling the budget.
+pub const UNRECORDED_GRACE: std::time::Duration = std::time::Duration::from_mins(10);
+
+/// Whether `path` was last modified more than `age` ago. A file whose time
+/// cannot be read is not old: the caller's default is to keep it.
+fn older_than(path: &Path, age: std::time::Duration) -> bool {
+    std::fs::metadata(path)
+        .and_then(|meta| meta.modified())
+        .ok()
+        .and_then(|modified| modified.elapsed().ok())
+        .is_some_and(|elapsed| elapsed > age)
 }
 
 /// The `source` a result taken from the `PostToolUse` envelope is filed under.
