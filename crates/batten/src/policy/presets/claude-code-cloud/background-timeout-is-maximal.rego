@@ -12,8 +12,11 @@
 # forced the slow path and said nothing about the one key that bounds it.
 #
 # A REWRITE, NOT A REFUSAL: the call is right and its input is incomplete, so
-# refusing it would cost a turn to add a number the preset already knows. Both
-# numbers are this host's, which is why they live here and never in the core.
+# refusing it would cost a turn to add a number the preset already knows. The
+# numbers are this host's, so none lives in the harness-blind core: the ceiling
+# arrives as `background-max`, computed by Claude Code's own decode adapter
+# (`hook::background_max`), and the two-hour floor below is the host's documented
+# maximum for an input that carries none.
 #
 # RIDES THE GRANT. The engine reads `rewrite` only for a call some module
 # pre-approved, because the host applies a rewritten input only beside a

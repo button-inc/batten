@@ -10856,9 +10856,10 @@ const LAND_TASK: &str = "land";
 /// so one the reaper may signal (CLOUD-2366).
 ///
 /// The record's pgid was taken when the task registered, and once that group
-/// emptied its number could be reused by an unrelated group;
-/// [`collect::group_predates`] carries why a member that began before the
-/// registrant's last stamp can only be the orphan's. The caller's OWN group is
+/// emptied its number could be reused by an unrelated group, or the group can
+/// still hold its live launching shell; [`collect::group_orphaned`] carries why
+/// a member that began before the registrant's last stamp, with the leader and
+/// the registrant gone, can only be the orphan's. The caller's OWN group is
 /// never the orphan however old: a second run in the shell that ran the first
 /// shares its group, and signalling it would end the reaper. Compared as the
 /// number the guard signals, so `+42` or `042` is the caller's `42`.
@@ -10866,7 +10867,7 @@ fn reapable(entry: &task::Entry, own_group: &str) -> bool {
     entry.pgid.parse::<i32>().ok() != own_group.parse::<i32>().ok()
         && entry
             .last_alive()
-            .is_some_and(|alive_at| collect::group_predates(&entry.pgid, alive_at))
+            .is_some_and(|alive_at| collect::group_orphaned(&entry.pgid, &entry.pid, alive_at))
 }
 
 /// Reap what a dead lap left running, then take the lock, then register.
@@ -27899,14 +27900,16 @@ pub fn land_ready_owes(
 mod tests {
     use super::*;
 
-    /// CLOUD-2366: this process's own group predates any later second wherever
-    /// `/proc` dates it, so it is the reapable case under another caller and
-    /// never under itself; a record with no stamp proves nothing.
+    /// CLOUD-2366: the caller's own group is never reapable however its record
+    /// spells the number, a group its registrant still runs in is not either,
+    /// and a record with no stamp proves nothing.
     #[test]
     fn the_reapers_own_group_is_never_reapable() {
-        let own = task::process_group(&std::process::id().to_string());
+        let me = std::process::id().to_string();
+        let own = task::process_group(&me);
         let entry = task::Entry {
             pgid: own.clone(),
+            pid: me,
             started_at: u64::MAX.to_string(),
             ..task::Entry::default()
         };
@@ -27916,8 +27919,7 @@ mod tests {
             ..entry.clone()
         };
         assert!(!reapable(&spelled, &own), "however the record spells it");
-        let linux = cfg!(any(target_os = "linux", target_os = "android"));
-        assert_eq!(reapable(&entry, "0"), linux);
+        assert!(!reapable(&entry, "0"), "its registrant still runs in it");
         let stampless = task::Entry {
             pgid: own,
             ..task::Entry::default()
@@ -27925,10 +27927,6 @@ mod tests {
         assert!(!reapable(&stampless, "0"), "no stamp, no proof");
     }
 
-    /// CLOUD-2207: the line a reduced read leaves names every indexed field
-    /// with its view lines and size, then the routes to read one.
-    /// CLOUD-2215: the collapse rewrites what the engine printed, never a
-    /// document another program printed that happens to quote a finding.
     #[test]
     fn only_a_call_that_runs_the_engine_has_its_output_collapsed() {
         for command in [

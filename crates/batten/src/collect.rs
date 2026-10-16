@@ -243,11 +243,13 @@ fn proc_table() -> Option<(u64, u64, impl Iterator<Item = PathBuf>)> {
     Some((boot, ticks, pids))
 }
 
-/// The `/proc` layouts [`processes`] and [`group_predates`] read, as pure
+/// The `/proc` layouts [`processes`] and [`group_orphaned`] read, as pure
 /// functions so every platform's suite checks them.
 //MUTANT-SUITE crates/batten/src/collect.rs
 //MUTANT stat-start-misread|s@^        rest.split_whitespace().nth(19)?.parse().ok()$@        rest.split_whitespace().nth(18)?.parse().ok()@|a_stat_line_yields_its_start_ticks
 //MUTANT member-predates-tie|s@ 1 < alive_at@ 1 <= alive_at@|a_group_member_predates_only_strictly_before
+//MUTANT orphan-leader-ignored|s@if pid == Some(group) \x7c\x7c pid == Some(registrant) {@if pid == Some(registrant) {@|an_orphan_needs_its_leader_and_registrant_gone
+//MUTANT orphan-registrant-ignored|s@if pid == Some(group) \x7c\x7c pid == Some(registrant) {@if pid == Some(group) {@|an_orphan_needs_its_leader_and_registrant_gone
 #[cfg(any(target_os = "linux", target_os = "android", test))]
 mod proc_stat {
     /// Field 22 of a `/proc/<pid>/stat` line, `starttime`: read after the LAST
@@ -255,6 +257,12 @@ mod proc_stat {
     pub(super) fn start_ticks(stat: &str) -> Option<u64> {
         let (_, rest) = stat.rsplit_once(')')?;
         rest.split_whitespace().nth(19)?.parse().ok()
+    }
+
+    /// Field 1 of a `/proc/<pid>/stat` line, the pid, which precedes the
+    /// command name and so is read before it.
+    pub(super) fn process_id(stat: &str) -> Option<i64> {
+        stat.split_once(' ')?.0.parse().ok()
     }
 
     /// Field 5 of a `/proc/<pid>/stat` line, `pgrp`, read after the last `)`
@@ -279,6 +287,32 @@ mod proc_stat {
             && start_ticks(stat).is_some_and(|since| boot + since / ticks + 1 < alive_at)
     }
 
+    /// Whether the members of `group` among `stats` are an orphan's: neither the
+    /// group's leader nor its `registrant` is still one of them, and some member
+    /// began before second `alive_at` ([`member_predates`]).
+    pub(super) fn orphaned<S: AsRef<str>>(
+        stats: impl IntoIterator<Item = S>,
+        group: i64,
+        registrant: i64,
+        boot: u64,
+        ticks: u64,
+        alive_at: u64,
+    ) -> bool {
+        let mut predates = false;
+        for stat in stats {
+            let stat = stat.as_ref();
+            if process_group(stat) != Some(group) {
+                continue;
+            }
+            let pid = process_id(stat);
+            if pid == Some(group) || pid == Some(registrant) {
+                return false;
+            }
+            predates |= member_predates(stat, group, boot, ticks, alive_at);
+        }
+        predates
+    }
+
     /// `/proc/stat`'s `btime`: the boot instant, in seconds since the epoch.
     pub(super) fn boot_seconds(stat: &str) -> Option<u64> {
         stat.lines()
@@ -289,46 +323,57 @@ mod proc_stat {
     }
 }
 
-/// Whether a recorded group still holds a process that began before second
-/// `alive_at`, which is what makes it the orphan rather than somebody's live
-/// group under a reused number.
+/// Whether a recorded group is the orphan its registrant left: the group the
+/// record names, with its leader and its registrant both gone from it, and a
+/// member left that began before second `alive_at`.
 ///
-/// **AGE IS THE DISCRIMINATOR** (CLOUD-2366). Linux keeps a pid number reserved
-/// while any live process still uses it as a process-group id, so the number is
-/// reusable only once the group is EMPTY. The registrant was a member and was
-/// alive at `alive_at`, its latest stamp, so the original group was not empty
-/// then: every member of a reused group began after that second. A member that
-/// began before it can only be the original's. A leader test cannot say this —
-/// a reused group loses its leader as easily as an orphan does
-/// (`setsid sh -c 'server &'`), and a zombie leader still answers a probe.
+/// **AGE PROVES IT IS THE SAME GROUP** (CLOUD-2366). Linux keeps a pid number
+/// reserved while any live process still uses it as a process-group id, so the
+/// number is reusable only once the group is EMPTY. The registrant was a member
+/// and was alive at `alive_at`, its latest stamp, so the original group was not
+/// empty then: every member of a reused group began after that second. A member
+/// that began before it can only be the original's. Across a reboot every
+/// process began after `btime`, so a stale record never qualifies.
 ///
-/// Across a reboot every process began after `btime`, so a stale record never
-/// qualifies.
+/// **ABSENCE PROVES NOBODY STILL OWNS IT.** The same group can hold a live
+/// launching shell (its leader) or a registrant whose cmdline merely failed to
+/// corroborate; signalling either would end work somebody is running. A leader
+/// test alone cannot stand in for the age test — a reused group loses its
+/// leader as easily as an orphan does (`setsid sh -c 'server &'`) — so it takes
+/// both. A zombie leader still has its `/proc` entry and reads as present.
 ///
 /// It does not know who is asking: excluding the caller's own group is the
 /// reaper's half (`reapable`). What it misses is safe: an orphan whose every
 /// survivor was spawned after the last stamp is not signalled. `false` for a
-/// pgid `exec` could not signal (unparseable, or not a positive `i32`) and
-/// wherever `/proc` cannot be read: a reap may only proceed on proof.
+/// pgid `exec` could not signal (unparseable, or not a positive `i32`), an
+/// unparseable registrant, and wherever `/proc` cannot be read: a reap may only
+/// proceed on proof.
 #[cfg(any(target_os = "linux", target_os = "android"))]
-pub(crate) fn group_predates(pgid: &str, alive_at: u64) -> bool {
+pub(crate) fn group_orphaned(pgid: &str, registrant: &str, alive_at: u64) -> bool {
     let Some(group) = pgid.parse::<i32>().ok().filter(|group| *group > 0) else {
         return false;
     };
-    let Some((boot, ticks, mut pids)) = proc_table() else {
+    let Ok(registrant) = registrant.parse::<i32>() else {
         return false;
     };
-    pids.any(|dir| {
-        std::fs::read_to_string(dir.join("stat")).is_ok_and(|stat| {
-            proc_stat::member_predates(&stat, i64::from(group), boot, ticks, alive_at)
-        })
-    })
+    let Some((boot, ticks, pids)) = proc_table() else {
+        return false;
+    };
+    let stats = pids.filter_map(|dir| std::fs::read_to_string(dir.join("stat")).ok());
+    proc_stat::orphaned(
+        stats,
+        i64::from(group),
+        i64::from(registrant),
+        boot,
+        ticks,
+        alive_at,
+    )
 }
 
-/// No `/proc` to date a member by, so none is ever proven the orphan's and
-/// nothing is reaped.
+/// No `/proc` to read a group's members from, so none is ever proven the
+/// orphan's and nothing is reaped.
 #[cfg(not(any(target_os = "linux", target_os = "android")))]
-pub(crate) fn group_predates(_pgid: &str, _alive_at: u64) -> bool {
+pub(crate) fn group_orphaned(_pgid: &str, _registrant: &str, _alive_at: u64) -> bool {
     false
 }
 
@@ -1411,21 +1456,50 @@ mod tests {
         assert!(!predates(4243, 1_700_009_999));
     }
 
-    /// CLOUD-2366: this process's own group holds this process, which began
-    /// before any later second wherever `/proc` dates it and nowhere else; and
-    /// nothing began before the epoch.
+    /// CLOUD-2366: a group its registrant still runs in is never the orphan,
+    /// on any platform; nor is a pgid or registrant `exec` could not signal.
     #[test]
-    fn a_group_predates_only_a_second_after_its_member_began() {
-        let own = crate::task::process_group(&std::process::id().to_string());
-        let linux = cfg!(any(target_os = "linux", target_os = "android"));
-        assert_eq!(super::group_predates(&own, u64::MAX), linux);
-        assert!(
-            !super::group_predates(&own, 0),
-            "nothing began before the epoch"
-        );
+    fn a_group_its_registrant_runs_in_is_never_orphaned() {
+        let me = std::process::id().to_string();
+        let own = crate::task::process_group(&me);
+        assert!(!super::group_orphaned(&own, &me, u64::MAX));
         for nonsense in ["0", "-1", "not-a-number"] {
-            assert!(!super::group_predates(nonsense, u64::MAX), "{nonsense}");
+            assert!(
+                !super::group_orphaned(nonsense, "0", u64::MAX),
+                "{nonsense}"
+            );
         }
+        assert!(!super::group_orphaned(&own, "not-a-number", u64::MAX));
+    }
+
+    /// CLOUD-2366: at 100 Hz from boot `1_700_000_000`, a member at 100 ticks
+    /// began at second `1_700_000_001`, before a stamp at `1_700_000_100`. The
+    /// group (42) is the orphan only with its leader and registrant (43) gone.
+    #[test]
+    fn an_orphan_needs_its_leader_and_registrant_gone() {
+        let line = |pid: u32, group: u32, ticks: u64| {
+            format!(
+                "{pid} (x) S 1 {group} {group} 0 -1 4194560 100 0 0 0 5 3 0 0 20 0 1 0 {ticks} 1000 100"
+            )
+        };
+        let orphaned = |stats: &[String]| {
+            proc_stat::orphaned(stats, 42, 43, 1_700_000_000, 100, 1_700_000_100)
+        };
+        let survivor = line(44, 42, 100);
+        assert!(orphaned(std::slice::from_ref(&survivor)));
+        assert!(
+            !orphaned(&[survivor.clone(), line(42, 42, 50)]),
+            "its leader lives"
+        );
+        assert!(
+            !orphaned(&[survivor, line(43, 42, 50)]),
+            "its registrant lives"
+        );
+        assert!(
+            !orphaned(&[line(44, 42, 10_000)]),
+            "every member began after the stamp"
+        );
+        assert!(!orphaned(&[line(44, 41, 100)]), "another group's member");
     }
 
     #[test]
