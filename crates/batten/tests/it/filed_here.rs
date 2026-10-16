@@ -578,10 +578,13 @@ fn a_measured_nothing_exempts_no_row_named_zero() {
     );
 }
 
-/// A BLOCKED FETCH NEVER OUTRANKS A NEWER MEASURED ONE (review of #1206): the
-/// could-not-look channel withholds the refusal only while nothing was measured.
+/// A MEASURED BODY OUTRANKS A BLOCKED FETCH (review of #1206): the blocked
+/// store carries no order, so the could-not-look channel withholds the refusal
+/// only while nothing was ever measured. A block after a measurement therefore
+/// judges the measured body, and fails closed with a remedy (fetch the body
+/// again) where the union failed open for the rest of the branch.
 #[test]
-fn a_measured_body_outranks_an_earlier_blocked_fetch() {
+fn a_measured_body_outranks_a_blocked_fetch() {
     let root = repo(
         "blocked-then-measured",
         "work",

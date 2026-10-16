@@ -66,7 +66,7 @@
 #MUTANT older-body-still-exempts|s@^\traw := measured_closes\[count(measured_closes) - 1\]$@\tsome raw in measured_closes@|a_key_dropped_from_the_latest_body_exempts_nothing
 #MUTANT unread-fetch-measured|s@^\tcolumns\[1\] != "-"$@\ttrue@|a_newest_unread_fetch_keeps_the_earlier_exemption
 #MUTANT nothing-read-as-zero|s@^\tcontains(columns\[1\], ":")$@\ttrue@|a_measured_nothing_exempts_no_row_named_zero
-#MUTANT blocked-outranks-measured|s@^\tcount(measured_closes) == 0$@\ttrue@|a_measured_body_outranks_an_earlier_blocked_fetch
+#MUTANT blocked-outranks-measured|s@^\tcount(measured_closes) == 0$@\ttrue@|a_measured_body_outranks_a_blocked_fetch
 
 # METADATA
 # description: |
@@ -169,7 +169,9 @@ changed contains path if {
 # longer lands it, and the exemption is the fail-open direction.
 closes contains key if {
 	raw := measured_closes[count(measured_closes) - 1]
-	columns := split(raw, " ")
+	# THE SAME TRIMMED SPLIT `measured_closes` decided on, so a line it counts
+	# as measured is never parsed into different columns here.
+	columns := split(trim_space(raw), " ")
 	# A MEASURED NOTHING (`closes 0`) carries no `:` and so no keys; without
 	# this the whole column `0` would be read as one key (CLOUD-2444).
 	contains(columns[1], ":")
@@ -481,20 +483,55 @@ test_a_newest_unread_fetch_keeps_the_earlier_exemption if {
 # A NEWEST `closes 0` IS A MEASURED NOTHING: no key, and the older body's
 # exemption is gone.
 test_a_latest_body_closing_nothing_exempts_nothing if {
-	count(closes) == 0 with input as with_diff(
+	doc := with_diff(
 		["issue CLOUD-1 2026-02-01T00:00:00Z ready 1,src/a.rs - 1,src/a.rs"],
 		["closes 1:CLOUD-1", "closes 0"],
 		["src/a.rs"],
 		"2026-01-01T00:00:00Z",
 	)
+	count(closes) == 0 with input as doc
+	some v in violation with input as doc
+	v.verdict == "issue file same"
+}
+
+# A MEASURED NOTHING CARRIES NO KEY: a row named `0` is not exempt by it.
+test_a_measured_nothing_exempts_no_row_named_zero if {
 	some v in violation with input as with_diff(
-		["issue CLOUD-1 2026-02-01T00:00:00Z ready 1,src/a.rs - 1,src/a.rs"],
-		["closes 1:CLOUD-1", "closes 0"],
+		["issue 0 2026-02-01T00:00:00Z ready 1,src/a.rs - 1,src/a.rs"],
+		["closes 0"],
 		["src/a.rs"],
 		"2026-01-01T00:00:00Z",
 	)
 	v.verdict == "issue file same"
 }
+
+# A LINE COUNTED AS MEASURED IS PARSED THE SAME WAY: leading space still closes.
+test_a_padded_line_still_closes_its_key if {
+	count(violation) == 0 with input as with_diff(
+		["issue CLOUD-1 2026-02-01T00:00:00Z ready 1,src/a.rs - 1,src/a.rs"],
+		[" closes 1:CLOUD-1"],
+		["src/a.rs"],
+		"2026-01-01T00:00:00Z",
+	)
+}
+
+# A MEASURED BODY OUTRANKS A BLOCKED FETCH; with nothing measured, the block
+# still withholds the proximity refusal (CLOUD-1126).
+test_a_measured_body_outranks_a_blocked_fetch if {
+	some v in violation with input as blocked_with(["closes 1:CLOUD-9"])
+	v.verdict == "issue file same"
+	count([w | some w in violation; w.verdict == "issue file same"]) == 0 with input as blocked_with([])
+}
+
+# `with_diff`, plus a blocked `pr-body-closes` recorder.
+blocked_with(closes_record) := {"tree": {
+	"records": {
+		"board-writes": ["issue CLOUD-1 2026-02-01T00:00:00Z ready 1,src/a.rs - 1,src/a.rs"],
+		"pr-closes": closes_record,
+	},
+	"records-blocked": {"pr-body-closes": "required-absent"},
+	"base-delta": {"added": ["src/a.rs"], "edited": [], "deleted": [], "code-changed": [], "base-date": "2026-01-01T00:00:00Z"},
+}}
 
 test_a_row_written_before_the_branch_cannot_be_its_punt if {
 	count(violation) == 0 with input as with_diff(
