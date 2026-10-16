@@ -108,7 +108,7 @@ pub struct Smell {
     /// Where the smell sits — a line in the working file, or the key path.
     pub at: Where,
     /// The stable, lowercase smell identifier.
-    pub id: &'static str,
+    pub id: SmellId,
 }
 
 impl Smell {
@@ -137,61 +137,271 @@ impl crate::output::Line for Smell {
     }
 }
 
-/// A set declared in the config but covering nothing.
-const EMPTY_PROTECTED_SET: &str = "empty-protected-set";
-/// As above, for `unlanded`.
-const EMPTY_UNLANDED_SET: &str = "empty-unlanded-set";
-/// As above, for `scope`.
-const EMPTY_SCOPE_SET: &str = "empty-scope-set";
-/// A rule that is present but switched off.
-const RULE_DISABLED: &str = "rule-disabled";
-/// A waiver whose `rule` no `[[rule]]` declares: it suppresses nothing, and reads
-/// in the file as an exemption someone is relying on (CLOUD-208).
-const WAIVER_NAMES_NO_RULE: &str = "waiver-names-no-rule";
-/// A waiver whose expiry has passed. It has already stopped suppressing — this is
-/// the alarm that says so, rather than leaving a dead row in the file forever.
-const WAIVER_EXPIRED: &str = "waiver-expired";
-/// A policy bundle whose composed rule set will not resolve: two complete rules
-/// conflicting, or a cycle (CLOUD-647).
+/// The one vocabulary of [`Smell::id`] (CLOUD-2379).
 ///
-/// **Refused HERE rather than at the gate**, which is the whole reason this
-/// smell exists. Regorus reports a conflict and a recursion at *evaluation*,
-/// never at `add_policy`, so left alone the first thing to discover a cyclic
-/// bundle is a denied tool call — the worst possible moment and the wrong exit
-/// class, where house style §8 wants a config fault refused by `config lint`.
-const POLICY_SET_UNRESOLVABLE: &str = "policy-set-unresolvable";
-/// A module inside an enabled bundle that the whole-set sweep never entered
-/// (CLOUD-647).
+/// **A TYPE RATHER THAN FOUR PRODUCERS' STRING LITERALS, so an id that cannot be
+/// explained cannot be emitted.** Every finding line hops to `batten policy
+/// explain '<id>'`, and `explain_name` consulted no smell vocabulary at all — so
+/// `test-expectation-changed`, `test-removed` and `deferral-reversible` named a
+/// finding nothing could explain. Enumerating the vocabulary is what lets
+/// `policy explain` answer it and a census assert that it does; [`SmellId::all`]
+/// is that enumeration and [`SmellId::definition`] is exhaustive, so a variant
+/// added without a definition fails to compile.
 ///
-/// **The anti-vacuity term.** A module the sweep did not reach contributes
-/// nothing to the analysis, so every conflict and cycle inside it goes
-/// unreported and the run is green — a policy set that loads clean, passes every
-/// per-row check, and contains a rule that can never fire. That false green is
-/// what this row was opened about, and without this smell the two above pass on
-/// a gate that analysed nothing.
-const POLICY_MODULE_UNSWEPT: &str = "policy-module-unswept";
-/// A waiver over a rule whose `kind` mints no [`crate::rules::Finding`], so
-/// [`crate::waiver::apply`] never sees one to suppress (CLOUD-293). The third
-/// dead-suppression shape, and the one that survives both the others: the rule
-/// exists, so `waiver-names-no-rule` is satisfied, and the expiry is in the
-/// future, so `waiver-expired` is too.
-const WAIVER_UNREACHABLE_KIND: &str = "waiver-unreachable-kind";
-/// A row the loader could not resolve and dropped (CLOUD-1428).
+/// The two producers that already own an enum delegate to it rather than
+/// restating it: [`trust::WeakeningKind`] and [`crate::ci::DriftId`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SmellId {
+    /// A `protected` set declared in the config but covering nothing.
+    EmptyProtectedSet,
+    /// As above, for `unlanded`.
+    EmptyUnlandedSet,
+    /// As above, for `scope`.
+    EmptyScopeSet,
+    /// A rule that is present but switched off.
+    RuleDisabled,
+    /// A waiver whose `rule` no `[[rule]]` declares: it suppresses nothing, and
+    /// reads in the file as an exemption someone is relying on (CLOUD-208).
+    WaiverNamesNoRule,
+    /// A waiver whose expiry has passed. It has already stopped suppressing —
+    /// this is the alarm that says so, rather than leaving a dead row in the
+    /// file forever.
+    WaiverExpired,
+    /// A policy bundle whose composed rule set will not resolve: two complete
+    /// rules conflicting, or a cycle (CLOUD-647).
+    ///
+    /// **Refused HERE rather than at the gate**, which is the whole reason this
+    /// smell exists. Regorus reports a conflict and a recursion at *evaluation*,
+    /// never at `add_policy`, so left alone the first thing to discover a cyclic
+    /// bundle is a denied tool call — the worst possible moment and the wrong
+    /// exit class, where house style §8 wants a config fault refused by `config
+    /// lint`.
+    PolicySetUnresolvable,
+    /// A module inside an enabled bundle that the whole-set sweep never entered
+    /// (CLOUD-647).
+    ///
+    /// **The anti-vacuity term.** A module the sweep did not reach contributes
+    /// nothing to the analysis, so every conflict and cycle inside it goes
+    /// unreported and the run is green — a policy set that loads clean, passes
+    /// every per-row check, and contains a rule that can never fire. That false
+    /// green is what this row was opened about, and without this smell the two
+    /// above pass on a gate that analysed nothing.
+    PolicyModuleUnswept,
+    /// A waiver over a rule whose `kind` mints no [`crate::rules::Finding`], so
+    /// [`crate::waiver::apply`] never sees one to suppress (CLOUD-293). The
+    /// third dead-suppression shape, and the one that survives both the others:
+    /// the rule exists, so `waiver-names-no-rule` is satisfied, and the expiry
+    /// is in the future, so `waiver-expired` is too.
+    WaiverUnreachableKind,
+    /// A row the loader could not resolve and dropped (CLOUD-1428).
+    ///
+    /// **This is the verb CI runs seeing the drop at all.** The file loading
+    /// around an unresolvable row is the repair — the alternative was every gate
+    /// off at once — but the row itself still enforces nothing, and `config
+    /// show` naming it reaches nobody in a pipeline. It is the same class as
+    /// `rule-disabled` one step along: a gate that reads as present in the file
+    /// and is not one, except that here the author did not choose it.
+    RowUnresolved,
+    /// A rule that declares neither `fix` nor `no_fix_reason` (CLOUD-1576): a
+    /// condemnation shipped without saying whether its repair exists. A load
+    /// error would refuse every config predating the column, so it is named here
+    /// instead.
+    RemedyUndeclared,
+    /// A `no_fix_reason` that does not name its remedy class and the missing
+    /// substrate, `class N (<substrate>): <why>`
+    /// ([`crate::remedy::classified`]).
+    ReasonUnclassed,
+    /// A deferral whose reversal condition the tree can now show holds
+    /// (CLOUD-759).
+    DeferralReversed,
+    /// A base test that HEAD's code no longer satisfies, or that will not build
+    /// there (`batten test replay`).
+    TestExpectationChanged,
+    /// A base test that HEAD deleted (`batten test replay`).
+    TestRemoved,
+    /// A base-ref comparison smell, delegating to the kind [`trust`] already
+    /// enumerates.
+    Weakening(trust::WeakeningKind),
+    /// A host-contract comparison smell, delegating to the id [`crate::ci`]
+    /// already enumerates.
+    Drift(crate::ci::DriftId),
+}
+
+/// Every unit variant of [`SmellId`], and the prefix of [`SmellId::all`].
 ///
-/// **This is the verb CI runs seeing the drop at all.** The file loading around
-/// an unresolvable row is the repair — the alternative was every gate off at
-/// once — but the row itself still enforces nothing, and `config show` naming it
-/// reaches nobody in a pipeline. It is the same class as `rule-disabled` one
-/// step along: a gate that reads as present in the file and is not one, except
-/// that here the author did not choose it.
-const ROW_UNRESOLVED: &str = "config-row-unresolved";
-/// A rule that declares neither `fix` nor `no_fix_reason` (CLOUD-1576): a
-/// condemnation shipped without saying whether its repair exists. A load error
-/// would refuse every config predating the column, so it is named here instead.
-const REMEDY_UNDECLARED: &str = "remedy-undeclared";
-/// A `no_fix_reason` that does not name its remedy class and the missing
-/// substrate, `class N (<substrate>): <why>` ([`crate::remedy::classified`]).
-const REASON_UNCLASSED: &str = "fix-reason-unclassed";
+/// Held whole by `every_smell_id_round_trips_and_all_is_whole`, which counts the
+/// enum's own unit-variant lines — so a variant added without a row here fails
+/// the suite rather than going unenumerated.
+const UNITS: &[SmellId] = &[
+    SmellId::EmptyProtectedSet,
+    SmellId::EmptyUnlandedSet,
+    SmellId::EmptyScopeSet,
+    SmellId::RuleDisabled,
+    SmellId::WaiverNamesNoRule,
+    SmellId::WaiverExpired,
+    SmellId::PolicySetUnresolvable,
+    SmellId::PolicyModuleUnswept,
+    SmellId::WaiverUnreachableKind,
+    SmellId::RowUnresolved,
+    SmellId::RemedyUndeclared,
+    SmellId::ReasonUnclassed,
+    SmellId::DeferralReversed,
+    SmellId::TestExpectationChanged,
+    SmellId::TestRemoved,
+];
+
+impl SmellId {
+    /// The stable, lowercase identifier a report prints (§6).
+    ///
+    /// **These are the strings the literals carried**, byte for byte: the
+    /// admissions ledger keys on `<id> <at>` and the pointer line renders the
+    /// same pair, so a changed spelling would retire an answered admission.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            SmellId::EmptyProtectedSet => "empty-protected-set",
+            SmellId::EmptyUnlandedSet => "empty-unlanded-set",
+            SmellId::EmptyScopeSet => "empty-scope-set",
+            SmellId::RuleDisabled => "rule-disabled",
+            SmellId::WaiverNamesNoRule => "waiver-names-no-rule",
+            SmellId::WaiverExpired => "waiver-expired",
+            SmellId::PolicySetUnresolvable => "policy-set-unresolvable",
+            SmellId::PolicyModuleUnswept => "policy-module-unswept",
+            SmellId::WaiverUnreachableKind => "waiver-unreachable-kind",
+            SmellId::RowUnresolved => "config-row-unresolved",
+            SmellId::RemedyUndeclared => "remedy-undeclared",
+            SmellId::ReasonUnclassed => "fix-reason-unclassed",
+            SmellId::DeferralReversed => "deferral-reversible",
+            SmellId::TestExpectationChanged => "test-expectation-changed",
+            SmellId::TestRemoved => "test-removed",
+            SmellId::Weakening(kind) => kind.as_str(),
+            SmellId::Drift(drift) => drift.as_str(),
+        }
+    }
+
+    /// The one-sentence meaning `policy explain` prints (CLOUD-2379).
+    ///
+    /// **Exhaustive, so a variant added without a definition fails to
+    /// compile** — which is the mechanism this type exists to be: an id nothing
+    /// explains can no longer reach a report.
+    #[must_use]
+    pub const fn definition(self) -> &'static str {
+        match self {
+            SmellId::EmptyProtectedSet => {
+                "A `protected` set is declared in the config and covers nothing."
+            }
+            SmellId::EmptyUnlandedSet => {
+                "An `unlanded` set is declared in the config and covers nothing."
+            }
+            SmellId::EmptyScopeSet => "A `scope` set is declared in the config and covers nothing.",
+            SmellId::RuleDisabled => "A rule is present in the config but switched off.",
+            SmellId::WaiverNamesNoRule => {
+                "A waiver names a rule no `[[rule]]` declares, so it suppresses nothing while \
+                 reading as an exemption."
+            }
+            SmellId::WaiverExpired => {
+                "A waiver's expiry has passed, so it has already stopped suppressing."
+            }
+            SmellId::PolicySetUnresolvable => {
+                "A policy bundle's composed rule set will not resolve: two complete rules \
+                 conflict, or there is a cycle."
+            }
+            SmellId::PolicyModuleUnswept => {
+                "A module inside an enabled bundle was never entered by the whole-set sweep, so \
+                 nothing in it was analysed."
+            }
+            SmellId::WaiverUnreachableKind => {
+                "A waiver covers a rule whose `kind` mints no finding, so there is never one to \
+                 suppress."
+            }
+            SmellId::RowUnresolved => {
+                "The loader could not resolve a row and dropped it, so the gate it declares is off."
+            }
+            SmellId::RemedyUndeclared => {
+                "A rule declares neither `fix` nor `no_fix_reason`, so it condemns without saying \
+                 whether its repair exists."
+            }
+            SmellId::ReasonUnclassed => {
+                "A `no_fix_reason` does not name its remedy class and the missing substrate, \
+                 `class N (<substrate>): <why>`."
+            }
+            SmellId::DeferralReversed => {
+                "A `[[deferral]]`'s reversal condition is one the tree can now show holds, so the \
+                 decision it recorded is due to be revisited."
+            }
+            SmellId::TestExpectationChanged => {
+                "A base test that HEAD's code no longer satisfies, or that will not build there."
+            }
+            SmellId::TestRemoved => "A base test that HEAD deleted.",
+            SmellId::Weakening(kind) => kind.definition(),
+            SmellId::Drift(drift) => drift.definition(),
+        }
+    }
+
+    /// Every id this engine can emit, units first and then each delegated
+    /// vocabulary whole.
+    ///
+    /// Derived rather than re-typed, so a kind added to either delegate is
+    /// reachable here without an edit — the property
+    /// `every_smell_id_resolves_through_policy_explain` leans on.
+    ///
+    /// No `#[must_use]`: an `Iterator` already carries one, and a second says
+    /// nothing a caller does not already get.
+    pub fn all() -> impl Iterator<Item = SmellId> {
+        UNITS
+            .iter()
+            .copied()
+            .chain(
+                trust::WeakeningKind::ALL
+                    .iter()
+                    .copied()
+                    .map(SmellId::Weakening),
+            )
+            .chain(crate::ci::DriftId::ALL.iter().copied().map(SmellId::Drift))
+    }
+
+    /// The inverse of [`SmellId::as_str`], over [`SmellId::all`].
+    ///
+    /// Resolved through `all` rather than through a second `match`, which is
+    /// what keeps the two directions from disagreeing.
+    #[must_use]
+    pub fn parse(name: &str) -> Option<SmellId> {
+        Self::all().find(|id| id.as_str() == name)
+    }
+}
+
+/// Sorted by [`SmellId::as_str`], never by declaration order.
+///
+/// [`Smell`] derives `Ord` and `config lint` sorts its findings, so the id's
+/// order is part of byte-stable output (§6). A derived order would differ —
+/// [`trust::WeakeningKind`]'s declaration order is deliberately not alphabetical
+/// — and would silently reorder two smells at one location.
+impl Ord for SmellId {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.as_str().cmp(other.as_str())
+    }
+}
+
+impl PartialOrd for SmellId {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl fmt::Display for SmellId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Writes [`SmellId::as_str`], so `-J` carries the same token the pointer line
+/// does.
+impl serde::Serialize for SmellId {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
 /// Drop the rows at the indices the loader could not resolve.
 ///
 /// The located view and the parsed config must describe the same rows in the
@@ -336,7 +546,7 @@ fn waiver_smells(
                     .any(|rule| rule.kind == crate::rules::RuleKind::Policy) => {}
             None => found.push(Smell {
                 at: at.clone(),
-                id: WAIVER_NAMES_NO_RULE,
+                id: SmellId::WaiverNamesNoRule,
             }),
             // The rule exists and still cannot be waived: `apply` filters
             // findings, and this kind mints none (`waiver::reaches` says which,
@@ -350,7 +560,7 @@ fn waiver_smells(
             // (CLOUD-233).
             Some(rule) if !crate::waiver::reaches(rule.kind) => found.push(Smell {
                 at: Where::Key(format!("{} {}", parsed.key(), rule.kind.as_str())),
-                id: WAIVER_UNREACHABLE_KIND,
+                id: SmellId::WaiverUnreachableKind,
             }),
             Some(_) => {}
         }
@@ -360,7 +570,7 @@ fn waiver_smells(
         if crate::waiver::Date::parse(&waiver.expires).is_ok_and(|expiry| expiry < today) {
             found.push(Smell {
                 at,
-                id: WAIVER_EXPIRED,
+                id: SmellId::WaiverExpired,
             });
         }
         // `path` is read but not linted: whether a glob matches anything is a
@@ -432,16 +642,16 @@ pub fn smells(
     for row in &config.unresolvable {
         found.push(Smell {
             at: Where::Key(row.line()),
-            id: ROW_UNRESOLVED,
+            id: SmellId::RowUnresolved,
         });
     }
 
     // A set declared and empty: the config uses the feature and the feature
     // covers nothing. Absence is not flagged — see the module docs.
     for (declared, id) in [
-        (located.protected.as_ref(), EMPTY_PROTECTED_SET),
-        (located.unlanded.as_ref(), EMPTY_UNLANDED_SET),
-        (located.scope.as_ref(), EMPTY_SCOPE_SET),
+        (located.protected.as_ref(), SmellId::EmptyProtectedSet),
+        (located.unlanded.as_ref(), SmellId::EmptyUnlandedSet),
+        (located.scope.as_ref(), SmellId::EmptyScopeSet),
     ] {
         if let Some(spanned) = declared
             && spanned.get_ref().is_empty()
@@ -464,7 +674,7 @@ pub fn smells(
         if rule.severity == Some(RuleSeverity::Allow) {
             found.push(Smell {
                 at: Where::Line(line_of(text, rule.id.span().start)),
-                id: RULE_DISABLED,
+                id: SmellId::RuleDisabled,
             });
         }
         // THE REMEDY HALF OF §9 (CLOUD-1576). Both-keys and blank are load errors
@@ -477,8 +687,10 @@ pub fn smells(
         // column is the remedy a refusal prints.
         let declarable = parsed.kind.permits().contains(&"no_fix_reason");
         let remedy = match (&rule.fix, &rule.no_fix_reason) {
-            (None, None) if declarable => Some(REMEDY_UNDECLARED),
-            (_, Some(reason)) if !crate::remedy::classified(reason) => Some(REASON_UNCLASSED),
+            (None, None) if declarable => Some(SmellId::RemedyUndeclared),
+            (_, Some(reason)) if !crate::remedy::classified(reason) => {
+                Some(SmellId::ReasonUnclassed)
+            }
             _ => None,
         };
         if let Some(id) = remedy {
@@ -519,7 +731,7 @@ pub fn smells(
             // detail from `check`'s own refusal.
             Err(_) => found.push(Smell {
                 at,
-                id: POLICY_SET_UNRESOLVABLE,
+                id: SmellId::PolicySetUnresolvable,
             }),
             Ok(crate::facts::Look::Is(analysis)) => {
                 // One smell per unswept module rather than one per bundle: a
@@ -528,7 +740,7 @@ pub fn smells(
                 for _ in &analysis.unswept {
                     found.push(Smell {
                         at: at.clone(),
-                        id: POLICY_MODULE_UNSWEPT,
+                        id: SmellId::PolicyModuleUnswept,
                     });
                 }
             }
@@ -576,7 +788,7 @@ pub fn smells(
     if let Some(base) = base {
         found.extend(trust::weakenings(base, &config).into_iter().map(|w| Smell {
             at: Where::Key(w.key),
-            id: w.kind.as_str(),
+            id: SmellId::Weakening(w.kind),
         }));
     }
 
@@ -632,7 +844,7 @@ pub fn run(dir: &Path, base_ref: Option<&str>, today: crate::waiver::Date) -> Re
                     .into_iter()
                     .map(|w| Smell {
                         at: Where::Key(w.key),
-                        id: w.kind.as_str(),
+                        id: SmellId::Weakening(w.kind),
                     })
                     .collect();
             found.sort();
@@ -735,7 +947,7 @@ pub fn host_drift(
             .into_iter()
             .map(|drift| Smell {
                 at: Where::Key(format!("{} {}", drift.key, drift.rendered())),
-                id: drift.id,
+                id: SmellId::Drift(drift.id),
             })
             .collect());
     }
@@ -756,13 +968,10 @@ pub fn host_drift(
             // what tells an author exactly what to write. `trust`'s weakenings
             // use the same location shape for the same reason.
             at: Where::Key(format!("{} {}", drift.key, drift.rendered())),
-            id: drift.id,
+            id: SmellId::Drift(drift.id),
         })
         .collect())
 }
-
-/// The smell id a reversed deferral raises.
-pub const DEFERRAL_REVERSED: &str = "deferral-reversible";
 
 /// Deferrals whose reversal condition the tree can now show holds (CLOUD-759).
 ///
@@ -799,7 +1008,7 @@ fn deferral_smells(config: &Config, source: &str) -> Vec<Smell> {
             // POINTER, NEVER THE PROSE (rule 4): the row that owns the decision
             // and the fact that moved, never a line of the issue's reasoning.
             at: Where::Key(format!("deferral[{}].reaches", deferral.issue)),
-            id: DEFERRAL_REVERSED,
+            id: SmellId::DeferralReversed,
         })
         .collect()
 }
@@ -885,16 +1094,40 @@ mod tests {
         smells(text, "test", None, today(), &[])
             .unwrap()
             .into_iter()
-            .map(|smell| smell.id)
+            .map(|smell| smell.id.as_str())
             .collect()
     }
 
-    fn smell(id: &'static str, key: &str) -> Smell {
+    fn smell(id: SmellId, key: &str) -> Smell {
         Smell {
             at: Where::Key(key.to_owned()),
             id,
         }
     }
+
+    /// The two weakening ids these cases key on, spelled once.
+    const WAIVER_ADDED: SmellId = SmellId::Weakening(trust::WeakeningKind::WaiverAdded);
+    const PREDICATE_CHANGED: SmellId =
+        SmellId::Weakening(trust::WeakeningKind::RulePredicateChanged);
+
+    // THE TOKENS THESE CASES ASSERT, TAKEN FROM THE TYPE rather than re-typed
+    // as literals.
+    //
+    // `ids` could return `Vec<SmellId>` and these call sites could name the
+    // variant directly, which reads better. It would also rewrite the body of
+    // every case that calls `ids` — cases whose assertion this change does not
+    // touch — and `batten test replay` prices a rewritten body as a changed
+    // expectation owing a recorded human admission. Spending ~8 of those to
+    // delete one `as_str` is not a trade this change should make; the consts
+    // keep those bodies byte-identical while still taking their value from the
+    // type.
+    const EMPTY_PROTECTED_SET: &str = SmellId::EmptyProtectedSet.as_str();
+    const EMPTY_UNLANDED_SET: &str = SmellId::EmptyUnlandedSet.as_str();
+    const EMPTY_SCOPE_SET: &str = SmellId::EmptyScopeSet.as_str();
+    const RULE_DISABLED: &str = SmellId::RuleDisabled.as_str();
+    const WAIVER_NAMES_NO_RULE: &str = SmellId::WaiverNamesNoRule.as_str();
+    const WAIVER_EXPIRED: &str = SmellId::WaiverExpired.as_str();
+    const WAIVER_UNREACHABLE_KIND: &str = SmellId::WaiverUnreachableKind.as_str();
 
     /// A ledger holding one answer to a question naming `pair`.
     fn answered(pair: &str, answer: &str) -> crate::asked::Ledger {
@@ -916,25 +1149,91 @@ mod tests {
         }])
     }
 
+    /// The vocabulary is whole, invertible, and sorted by its token
+    /// (CLOUD-2379).
+    #[test]
+    fn every_smell_id_round_trips_and_all_is_whole() {
+        for id in SmellId::all() {
+            assert_eq!(SmellId::parse(id.as_str()), Some(id), "{id} round-trips");
+        }
+
+        // THE UNIT HALF IS DERIVED FROM THE DECLARATION rather than re-typed:
+        // a variant added without a `UNITS` row is unreachable from `all`, and
+        // nothing else would say so. Tuple variants are counted separately —
+        // their vocabularies are held whole by their own enums' censuses
+        // (`the_kind_vocabulary_is_derived_rather_than_re_typed`,
+        // `every_drift_id_is_in_all`), so counting them here would compare a
+        // count of 2 against two whole enums.
+        let declared =
+            crate::testing::declared_variants(include_str!("lint.rs"), "pub enum SmellId {")
+                .expect("the smell id enum is declared here and closes");
+        assert_eq!(
+            declared.unit,
+            UNITS.len(),
+            "every unit variant must be in `UNITS`"
+        );
+
+        // AND EVERY DELEGATED VARIANT OWES A `chain`, which no compiler error
+        // forces. `definition()`'s exhaustiveness makes a new variant name an
+        // arm, but `all()` is a hand-written chain — so a third delegate added
+        // without its row would compile, leave the unit count matching, and
+        // mint ids `all()` never reports. `policy explain` could not resolve
+        // them and the census that asserts it can would pass over a list that
+        // never held them: the emitted-but-unexplainable id this type exists to
+        // make impossible, returning through the type's own extension point.
+        assert_eq!(
+            declared.delegated, 2,
+            "`Weakening` and `Drift` are the delegates; a third owes `all` a `chain`"
+        );
+        assert_eq!(
+            SmellId::all().count(),
+            UNITS.len() + trust::WeakeningKind::ALL.len() + crate::ci::DriftId::ALL.len(),
+            "`all` reports every unit variant and each delegate's whole vocabulary"
+        );
+
+        // §6: THE SORT ORDER IS `as_str` ORDER, never the declaration order a
+        // derive would give. `Smell` derives `Ord` and `config lint` sorts its
+        // findings, so a derived order would reorder two smells at one location.
+        //
+        // ASSERTED ON A PAIR THAT DISAGREES, never by sorting `all` two ways:
+        // `Ord::cmp` IS `as_str().cmp(…)`, so sorting by the one and by the
+        // other is the same comparator over the same input and proves nothing
+        // whatever the implementation does. `StrictnessLowered` is declared
+        // before `PromotionDisabled` and its token sorts after, so this
+        // comparison inverts the moment the hand-written `Ord` is replaced by a
+        // derive — which is the only way the property can be lost.
+        assert!(
+            SmellId::Weakening(trust::WeakeningKind::StrictnessLowered)
+                > SmellId::Weakening(trust::WeakeningKind::PromotionDisabled),
+            "`Ord` is `as_str` order, not declaration order"
+        );
+
+        let mut tokens: Vec<&str> = SmellId::all().map(SmellId::as_str).collect();
+        let count = tokens.len();
+        tokens.sort_unstable();
+        tokens.dedup();
+        assert_eq!(tokens.len(), count, "two ids share one token");
+    }
+
     #[test]
     fn nothing_asked_refuses_whatever_a_commit_says() {
         // THE #962 SHAPE. A trailer is no longer an input at all, so the only
         // way to state this case is a branch that asked nothing.
-        let found = [smell("waiver-added", "waiver[x]")];
+        let found = [smell(WAIVER_ADDED, "waiver[x]")];
         let admitted = admissions(&found, &crate::asked::Ledger::Added(Vec::new()));
         assert_eq!(admitted[0].1, Admission::Refused);
     }
 
     #[test]
     fn an_admitting_answer_naming_the_pair_admits_it() {
-        let found = [smell("waiver-added", "waiver[x]")];
+        let found = [smell(WAIVER_ADDED, "waiver[x]")];
         let admitted = admissions(&found, &answered("waiver-added waiver[x]", "Admit"));
         assert_eq!(admitted[0].1, Admission::Asked);
     }
 
     #[test]
     fn a_refusing_answer_admits_nothing() {
-        let found = [smell("waiver-added", "waiver[x]")];
+        let found = [smell(WAIVER_ADDED, "waiver[x]")];
         let admitted = admissions(&found, &answered("waiver-added waiver[x]", "Refuse"));
         assert_eq!(admitted[0].1, Admission::Refused);
     }
@@ -942,14 +1241,14 @@ mod tests {
     #[test]
     fn an_answer_is_keyed_to_the_smell_and_the_key_together() {
         // Answering one weakening must not licence another of its kind.
-        let found = [smell("waiver-added", "waiver[x]")];
+        let found = [smell(WAIVER_ADDED, "waiver[x]")];
         let admitted = admissions(&found, &answered("waiver-added waiver[y]", "Admit"));
         assert_eq!(admitted[0].1, Admission::Refused);
     }
 
     #[test]
     fn a_rewritten_ledger_admits_nothing() {
-        let found = [smell("waiver-added", "waiver[x]")];
+        let found = [smell(WAIVER_ADDED, "waiver[x]")];
         let admitted = admissions(&found, &crate::asked::Ledger::Rewritten);
         assert_eq!(admitted[0].1, Admission::Refused);
     }
@@ -960,8 +1259,8 @@ mod tests {
         // verdict over the set. Collapsing them here would make one unasked
         // weakening hide which of the others were answered.
         let found = [
-            smell("waiver-added", "waiver[x]"),
-            smell("rule-predicate-changed", "rule[r].tools"),
+            smell(WAIVER_ADDED, "waiver[x]"),
+            smell(PREDICATE_CHANGED, "rule[r].tools"),
         ];
         let admitted = admissions(&found, &answered("waiver-added waiver[x]", "Admit"));
         assert_eq!(admitted[0].1, Admission::Asked);
@@ -1026,7 +1325,7 @@ mod tests {
         )
         .unwrap();
         let found = smells("version = 1\n", "test", Some(&base), today(), &[]).unwrap();
-        let ids: Vec<&str> = found.iter().map(|smell| smell.id).collect();
+        let ids: Vec<&str> = found.iter().map(|smell| smell.id.as_str()).collect();
         assert!(ids.contains(&"protected-removed"), "got: {ids:?}");
         assert!(ids.contains(&"strictness-lowered"), "got: {ids:?}");
     }
@@ -1075,7 +1374,7 @@ mod tests {
         let found = smells(&working, "test", Some(&base), today(), &[]).unwrap();
         let lowered: Vec<&Smell> = found
             .iter()
-            .filter(|smell| smell.id == "severity-lowered")
+            .filter(|smell| smell.id == SmellId::Weakening(trust::WeakeningKind::SeverityLowered))
             .collect();
         assert_eq!(lowered.len(), 2, "both lowerings survive: {found:?}");
         assert_eq!(
@@ -1291,7 +1590,7 @@ mod tests {
         let base = config::parse(&with_waivers(""), "base").unwrap();
         let working = with_waivers(&waiver_row("r", "2099-01-01"));
         let found = smells(&working, "test", Some(&base), today(), &[]).unwrap();
-        let ids: Vec<&str> = found.iter().map(|smell| smell.id).collect();
+        let ids: Vec<&str> = found.iter().map(|smell| smell.id.as_str()).collect();
         assert!(ids.contains(&"waiver-added"), "got: {ids:?}");
     }
 
