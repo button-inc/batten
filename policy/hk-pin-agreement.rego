@@ -271,13 +271,19 @@ test_a_version_the_amends_url_names_differently_is_refused if {
 	finding.subjects[0] == {"path": "hk.pkl", "line": 2}
 }
 
-# TWO DISTINCT MEMBERS, ONE FINDING — the case that actually measures the
+# TWO DISTINCT BOUND VERSIONS, ONE FINDING — the case that measures the
 # invariant the arms rest on. The halves name two different versions and neither
-# is the pin, so arm A binds 1.58.0, arm A2 binds 1.57.0, and the two `amends`
-# members genuinely differ. They still collapse, because the subjects carry
-# `{path, line}` and nothing that says WHICH spelling fired. An arm that added
-# such a field — the version among them — would make this 2 while leaving the
-# case above it at 1, which is why that case cannot stand in for this one.
+# is the pin, so arm A fires on the `amends` member (1.58.0) and arm A2 on the
+# `amend_tags` member (1.57.0). The two bound versions genuinely differ, and the
+# findings still collapse, because both arms emit the same `subjects[0]` —
+# `{path, line}`, carrying nothing that says which spelling fired.
+#
+# WHAT ONLY THIS CASE CATCHES, said precisely because the loose version of this
+# sentence has been wrong twice: a distinguishing field placed OUTSIDE
+# `subjects[0]` — on the violation object, or on the `mise.toml` subject — makes
+# this 2 while the case above stays green at 1. A field INSIDE `subjects[0]`
+# breaks that case's own subject assertion, and one naming the spelling rather
+# than the version splits it too, so neither needs this case to be caught.
 test_two_drifting_halves_on_one_line_are_one_finding if {
 	found := violation with input as tree(
 		{"hk": "1.56.1"},
