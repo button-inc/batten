@@ -137,8 +137,10 @@ fn amends(version: &str) -> String {
 /// release tag and the `hk@` fragment. Which half drifts is then the only thing
 /// a case states, which is `amends_halves`'s reason on the other surface.
 ///
-/// Carries the whole task table, not just the URL, so every package case is one
-/// `format!` over `[tools]` plus this.
+/// Carries the whole task table, not just the URL, so a package case naming
+/// drifting halves is one `format!` over `[tools]` plus this. The case that
+/// names no version at all spells its task inline, since this always writes a
+/// `/v<semver>/` segment.
 fn package_task_halves(tag: &str, fragment: &str) -> String {
     format!(
         "[tasks.pkl-package]\nrun = \"pkl download-package package://github.com/jdx/hk/releases/download/v{tag}/hk@{fragment}\"\n"
