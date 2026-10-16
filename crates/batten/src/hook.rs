@@ -6362,14 +6362,11 @@ fn find_start_points<'a>(operands: &'a [&'a str]) -> &'a [&'a str] {
         .iter()
         .position(|token| token.starts_with(['-', '(', '!']))
         .unwrap_or(rest.len());
-    // An informational run reads no tree, and `-files0-from` takes its start
-    // points from a file, so neither searches `.` for want of a start point.
-    let searches_cwd = !rest.iter().any(|token| {
-        matches!(
-            *token,
-            "--help" | "--version" | "-help" | "-version" | "-files0-from"
-        )
-    });
+    // An informational run reads no tree, but only when the flag IS the whole
+    // command: the same word inside an expression (`-exec tool --version \;`)
+    // is a value, and that `find` still searches `.`. Anything else with no
+    // start point, `-files0-from` included, is judged as searching `.`.
+    let searches_cwd = !matches!(rest, ["--help" | "--version" | "-help" | "-version"]);
     if end == 0 && searches_cwd {
         return IMPLICIT_FIND_START;
     }

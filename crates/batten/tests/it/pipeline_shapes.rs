@@ -457,9 +457,20 @@ fn a_find_expression_operand_is_never_a_target() {
     // point after them is still the one judged: outside the repository here.
     allow_in(&dir, "find -D tree /tmp -name x.md");
     allow_in(&dir, "find -O3 /tmp -name x.md");
-    // An informational run reads no tree, so it has no implicit start point.
-    allow_in(&dir, "find --version");
-    allow_in(&dir, "find --help");
+    // An informational run reads no tree, so it has no implicit start point —
+    // but only when the flag is the whole command.
+    for informational in [
+        "find --version",
+        "find --help",
+        "find -version",
+        "find -help",
+    ] {
+        allow_in(&dir, informational);
+    }
+    // The same word inside an expression is a value, and the search of `.`
+    // still stands; start points read from a file are judged as `.` too.
+    deny_in(&dir, "find -name '*.rs' -exec rustfmt --version ;");
+    deny_in(&dir, "find -files0-from paths.txt -name '*.rs'");
 }
 
 #[test]
