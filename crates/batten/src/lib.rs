@@ -275,12 +275,6 @@ pub use severity::{AdvisoryTier, Mapping, ReportLevel, RuleSeverity};
 // self-cleaning in both directions, so if the table ever shrinks back under the
 // ceiling this annotation goes red rather than quietly outliving its cause.
 //
-// The hook path's one exclusion (CLOUD-2062, narrowed under CLOUD-2059): it
-// follows a release pin but never BUILDS a source pin inline. Dropping the
-// `hook_path` term lets a hook run a cargo build, which the hook-path case
-// catches.
-//MUTANT-SUITE crates/batten/tests/it/engine_install.rs
-//MUTANT hook-path-builds|s@^    let may_build = !hook_path;$@    let may_build = true;@|the_hook_path_never_builds_a_source_pin
 #[expect(
     clippy::too_many_lines,
     reason = "a dispatch table's length is its verb count; splitting it scatters the surface"
@@ -667,15 +661,21 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
 const ENGINE_UPDATED: &str = "BATTEN_ENGINE_UPDATED";
 
 /// When this checkout pins an engine this binary is not, re-run this invocation
-/// under the pinned one; `None` when nothing was stale.
+/// under the pinned one; [`Followed::Nothing`] when nothing was stale.
 ///
 /// **A RELEASE PIN IS FOLLOWED, NEVER INSTALLED OVER THIS BINARY.** The pinned
 /// release is fetched and verified once into the per-tag cache
 /// ([`engine::pinned_release`]) and exec'd from there, so two checkouts pinning
 /// two releases each run their own and neither rewrites the other's — the
 /// installed binary flipping between branches was this function's old shape.
-/// A source pin is built over the running binary as before, and only where
-/// `may_build`: never on the hook path.
+/// A source pin is built over the running binary as before, and never on the
+/// hook path.
+///
+/// `out` and `err` serve the HOOK BRANCH ONLY, which holds the child's streams
+/// to judge its code before writing either. Every other verb is a transparent
+/// passthrough: its child inherits this process's own descriptors, so its bytes
+/// never travel through these writers and nothing a caller injects here will
+/// catch them.
 ///
 /// Best-effort on the READ: outside a repository, or with no readable
 /// `batten.toml`, there is no pin to honour and the verb runs as it is. The
@@ -684,13 +684,15 @@ const ENGINE_UPDATED: &str = "BATTEN_ENGINE_UPDATED";
 //MUTANT-SUITE crates/batten/tests/it/engine_install.rs
 //MUTANT checkout-build-replaced|s@^    if exe.starts_with(\&root) {$@    if false {@|a_build_inside_the_checkout_is_never_replaced
 //MUTANT follow-pin-source-unfollowed|s@^            Some(build) => build,$@            Some(_) => return Ok(Followed::Nothing),@|a_verb_is_followed_to_the_checkouts_build
+//MUTANT hook-path-builds|s@^    let may_build = !hook_path;$@    let may_build = true;@|the_hook_path_never_builds_a_source_pin
 //MUTANT-SUITE crates/batten/tests/it/engine_update.rs
 //MUTANT follow-pin-passes-a-crash-through|s@^    if hook_path {$@    if false {@|a_crashing_checkout_build_never_fails_the_hook_open
 fn follow_pin(hook_path: bool, out: &mut dyn Write, err: &mut dyn Write) -> Result<Followed> {
-    // THE HOOK NEVER BUILDS, and that is the same bit rather than a second one
-    // (CLOUD-2061). Two parameters that are provably each other's negation can
-    // be passed inconsistently, and `(hook_path: true, may_build: true)` is
-    // exactly the state this guard exists to forbid.
+    // THE HOOK FOLLOWS A RELEASE PIN BUT NEVER BUILDS A SOURCE ONE (CLOUD-2062,
+    // narrowed under CLOUD-2059), and that is the same bit rather than a second
+    // one. Two parameters that are provably each other's negation can be passed
+    // inconsistently, and `(hook_path: true, may_build: true)` — a hook running
+    // a cargo build — is exactly the state this derivation forbids.
     let may_build = !hook_path;
     let Ok(root) = git::worktree_root(Path::new(".")) else {
         return Ok(Followed::Nothing);
