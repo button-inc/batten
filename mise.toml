@@ -2857,7 +2857,7 @@ env = { BENCH_METRIC = "refusal-render-characters" }
 run = "cargo run --quiet -p batten --example refusal-render-bench"
 
 [tasks."doctor:mediator"]
-description = "Report whether the engine adjudicating this tree was built from it"
+description = "Report whether the engine the hook runs is the pinned release, or under tree mode the checkout's current build"
 # CLOUD-1650's handler spawns this rather than the verb directly. `doctor`'s own
 # `hook-handlers` check resolves every declared handler program, and `batten` is
 # absent from a CI runner's `PATH` — it is built there, not installed — so a row
@@ -2877,45 +2877,24 @@ description = "Report whether this container can reach what the work needs, befo
 run = "batten doctor egress"
 
 [tasks."install:local"]
-description = "Put the built binary where the hook registrations resolve it — `install.sh`'s own destination"
+description = "Build this tree's engine and hand this worktree's invocations to it (`batten engine use tree`)"
 depends = ["build:release"]
-# CLOUD-824. This is the half of `.claude/hooks/batten-hook.sh` that was never a
-# hook concern: the launcher carried a four-candidate search (`BATTEN_BIN`,
-# `target/release`, `target/debug`, PATH) because "there is no `batten` on PATH
-# here and nothing puts `target/release` on it." That is an INSTALL concern
-# wearing a hook's clothes, and the other four harnesses never had it — they
-# invoke `batten hook --harness <h>` directly and always did.
+# THE EXPLICIT SWITCH TO THE TREE'S ENGINE (CLOUD-2398), and nothing else.
 #
-# So the launcher's search is replaced by putting the binary where a search would
-# have ended. The destination is `install.sh:224`'s, character for character, so
-# a developer clone and a released install resolve the same name from the same
-# place rather than through two different rules.
+# This task used to COPY the build to `install.sh`'s destination and stamp the
+# copy (CLOUD-824, CLOUD-2232), which made the hook's engine the tree's build:
+# a build that reports the last release's version, so `release = "v0.0.216"`
+# was satisfied by a binary it does not name. The hook now runs the pinned
+# release — `engine install` places it, stamped as that release — and a binary
+# that is not the release is handed to the verified per-tag cache.
 #
-# THE NO-BINARY CASE STILL REACHES A HUMAN, and through a louder channel than the
-# one it replaces. The launcher failed open with a stderr line and a
-# once-per-session `$TMPDIR` marker, which is the quietest report this repository
-# produces; this step runs inside `session-start.sh`'s `step`, which emits
-# `::error::`, a log pointer, and a non-zero exit. At hook time, a `batten` that
-# is not there is a command the host cannot run, which every supported host
-# reports through its own channel.
-# AN ARGV SEQUENCE, NOT A SHELL BODY (CLOUD-1991). The `set -eu` the body opted
-# into is what mise does to an array — the install does not run when the
-# directory could not be made — and the destination's fallback chain, which was
-# `${BATTEN_INSTALL_DIR:-${XDG_BIN_HOME:-$HOME/.local/bin}}`, is the template's
-# `if`/`elif`, where an empty variable is as unset as it was to `:-`.
-# CLOUD-2061: the last step stamps the installed binary with the source digest it
-# was built from, so a config's source pin can be checked against it.
-#
-# THE INSTALLED BINARY BY ITS PATH, NEVER `batten` ON PATH (CLOUD-2232). `stamp`
-# stamps the binary that runs it, and `_.path` puts `target/release` first on
-# every task's PATH, so a bare `batten engine stamp` re-stamped the build and left
-# the installed copy unstamped. Measured on #1132: the copy the hook ran carried
-# a stale stamp, and every call was refused until it was replaced.
-run = [
-  "mkdir -p {% if env.BATTEN_INSTALL_DIR %}{{env.BATTEN_INSTALL_DIR}}{% elif env.XDG_BIN_HOME %}{{env.XDG_BIN_HOME}}{% else %}{{env.HOME}}/.local/bin{% endif %}",
-  "install -m 0755 target/release/batten {% if env.BATTEN_INSTALL_DIR %}{{env.BATTEN_INSTALL_DIR}}{% elif env.XDG_BIN_HOME %}{{env.XDG_BIN_HOME}}{% else %}{{env.HOME}}/.local/bin{% endif %}/batten",
-  "{% if env.BATTEN_INSTALL_DIR %}{{env.BATTEN_INSTALL_DIR}}{% elif env.XDG_BIN_HOME %}{{env.XDG_BIN_HOME}}{% else %}{{env.HOME}}/.local/bin{% endif %}/batten engine stamp",
-]
+# So the build stays in `target/release` (stamped there by `build:release`),
+# and `batten engine use tree` records, in this worktree's STATE directory and
+# never in the tree, that every invocation outside the checkout is handed to
+# it. Session start announces it every session; `batten engine use release`
+# ends it; a reclaimed container starts on the release. By its PATH, for
+# CLOUD-2232's reason: `_.path` already puts this build first.
+run = ["target/release/batten engine use tree"]
 
 # The provisioning seam the environment's setup script ALREADY CALLS, and which
 # this repository never defined (CLOUD-1085).
@@ -3822,11 +3801,11 @@ run = 'cargo run --quiet -p batten -- ci slow-needed --base "{{usage.base}}"{% i
 # spelling; this one carries no `cargo` at all since the guarded fallback retired
 # with its shell line.
 #
-# STALENESS IS NOT WAVED THROUGH by preferring the release. A release older than
-# the tree's config is `batten doctor mediator`'s to detect, and
-# `mediator-matches-the-tree` is a declared `[[startup]]` row this very task
-# evaluates — so the skew is reported by the run rather than pre-empted by
-# compiling on every session start.
+# STALENESS IS NOT WAVED THROUGH by preferring the release. An engine on PATH
+# that is not the pinned release is `batten doctor mediator`'s to detect, and
+# `mediator-matches-the-pin` is a declared `[[startup]]` row this very task
+# evaluates — so the skew is reported, and repaired by a verified download,
+# rather than pre-empted by compiling on every session start (CLOUD-2398).
 [tasks."provision:startup"]
 description = "Check every declared [[startup]] row and repair what it can — the provisioning mise does not own"
 # THE FALLBACK IS RETIRED WITH THE SHELL LINE (CLOUD-1991): this runs from a

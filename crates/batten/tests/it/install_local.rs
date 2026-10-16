@@ -1,22 +1,17 @@
-//! The provisioning script supersedes the downloaded consumer artifact with this
-//! clone's own build (CLOUD-1859).
+//! Provisioning leaves the hook on the pinned release (CLOUD-2398), retiring
+//! CLOUD-1859's supersession.
 //!
-//! `deps-install` runs `install.sh`, which resolves `-musl` for every Linux host
-//! deliberately — the static binary runs on any Linux whatever its glibc version.
-//! That is right for a consumer and wrong for a dev container, because the binary
-//! it leaves on PATH is the one every harness hook spawns on every tool call.
+//! `setup.sh` used to run `install:local` after `deps-install`, putting this
+//! clone's own build where every harness hook resolves `batten`. The reason was
+//! measured — `install.sh` then resolved `-musl` on every Linux host, and musl
+//! adjudicated 15.0x slower (1444ms against 96ms) — and the cost was not: the
+//! build reported the release's version, so a release pin could not tell the
+//! hook's engine from the release it names. The bootstrap now resolves `-gnu`
+//! on a glibc host, which keeps the measured speed without the build.
 //!
-//! Measured 2026-09-19, same version, same tree, same box, warm and repeated:
-//! `adjudicate` 1444ms against 96ms, `check` over 143 rules 15501ms against
-//! 1791ms. `strace -c` on one adjudication: 5779 syscalls against 362, of which
-//! 2728 `mmap` and 2718 `munmap` — mallocng returning freed memory to the OS on
-//! every free where glibc retains its arenas.
-//!
-//! THE SUBJECT IS THE CALL, NOT THE BINARY. A test asserting that the installed
-//! `batten` is dynamically linked would pass or fail on whatever the machine
-//! running the suite happens to have provisioned, which is a property of the host
-//! rather than of this repository. What this tree decides is whether its own
-//! provisioning script asks for the supersession, and that is what is asserted.
+//! THE SUBJECT IS THE SCRIPT, NOT THE BINARY, for CLOUD-1859's reason: what a
+//! machine happens to have installed is a property of the host. What this tree
+//! decides is what its provisioning asks for and what its bootstrap resolves.
 
 use crate::common;
 
@@ -30,53 +25,48 @@ fn supersession_call() -> String {
 /// The predicate, factored out so the anti-vacuity case below drives the same
 /// reading the real one does rather than a paraphrase of it.
 fn supersedes(script: &str) -> bool {
-    script.contains(&supersession_call())
+    script
+        .lines()
+        .filter(|line| !line.trim_start().starts_with('#'))
+        .any(|line| line.contains(&supersession_call()))
 }
 
-fn committed_setup() -> String {
-    let path = common::at_root("setup.sh");
+fn committed(name: &str) -> String {
+    let path = common::at_root(name);
     std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("setup.sh should be readable at {}: {e}", path.display()))
+        .unwrap_or_else(|e| panic!("{name} should be readable at {}: {e}", path.display()))
 }
 
 #[test]
-fn setup_supersedes_the_consumer_artifact_with_the_local_build() {
+fn setup_never_switches_the_hook_to_the_trees_build() {
     assert!(
-        supersedes(&committed_setup()),
-        "setup.sh should invoke the supersession task after deps-install, or every \
-         harness hook in a provisioned container spawns the musl consumer artifact"
+        !supersedes(&committed("setup.sh")),
+        "setup.sh must not run the local install: it switches the worktree to the tree's \
+         build, and the hook would then mediate with an engine no pin names"
     );
 }
 
 #[test]
-fn a_setup_that_never_supersedes_is_refused() {
-    // ANTI-VACUITY. Without this, the case above passes over any file that happens
-    // to contain the string, and would keep passing if the predicate were widened
-    // to something that cannot fail.
-    let without = "mise run deps-install || echo 'incomplete' >&2\n";
+fn a_setup_that_supersedes_is_refused() {
+    // ANTI-VACUITY. Without this, the case above passes over a predicate that
+    // can never fire.
+    let with = format!("mise run deps-install\n{} || true\n", supersession_call());
     assert!(
-        !supersedes(without),
-        "a provisioning script that never supersedes must be refused by the same \
-         reading that accepts the committed one"
+        supersedes(&with),
+        "a provisioning script that supersedes must be refused by the same reading"
     );
 }
 
 #[test]
-fn the_supersession_runs_after_the_install_it_supersedes() {
-    // ORDER IS THE WHOLE OF IT. `install:local` writes to `install.sh`'s own
-    // destination, so running it BEFORE `deps-install` would have the download
-    // overwrite the local build and leave the slow binary on PATH — green by this
-    // file's first case and wrong in the container.
-    let script = committed_setup();
-    let install = script
-        .find(&["mise run ", "deps-install"].concat())
-        .expect("setup.sh should run the provisioning install");
-    let supersede = script
-        .find(&supersession_call())
-        .expect("setup.sh should run the supersession");
-    assert!(
-        supersede > install,
-        "the supersession must follow the install it supersedes, or the download \
-         overwrites the local build"
-    );
+fn the_bootstrap_resolves_gnu_unless_a_musl_loader_is_present() {
+    // CLOUD-1859's MEASURED SPEED, KEPT BY THE BOOTSTRAP: glibc is the default
+    // and musl is chosen only on the evidence of its loader.
+    let script = committed("install.sh");
+    let default = script
+        .find("libc=gnu")
+        .expect("install.sh defaults to the gnu artifact");
+    let probe = script
+        .find("/lib/ld-musl-*")
+        .expect("install.sh switches to musl only on a musl loader");
+    assert!(default < probe, "gnu first, musl on evidence: {script}");
 }

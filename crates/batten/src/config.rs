@@ -3126,9 +3126,10 @@ pub(crate) fn config_error(source: &str, text: &str, err: &toml::de::Error) -> a
     UsageError::raise(format!(
         "invalid config {source}: {err}\n\
          This build is batten {VERSION}, and an unknown key has two readings it \
-         cannot tell apart: the config declares a key this build predates — \
-         rebuild with `mise run install:local` — or the key is a typo. The error \
-         above names the line for either.",
+         cannot tell apart: the config declares a key this build predates — the \
+         pin must move to a release that has it, or test the tree's engine with \
+         `mise run install:local` — or the key is a typo. The error above names \
+         the line for either.",
     ))
 }
 

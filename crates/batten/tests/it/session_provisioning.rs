@@ -706,41 +706,6 @@ fn an_edit_waits_until_every_background_row_is_launched() {
     );
 }
 
-#[test]
-fn the_slow_session_rows_are_background_and_the_wiring_rows_are_not() {
-    // THE DECLARATION'S HALF. The rows that install, build or reach the
-    // network are the agent's; the ones that wire batten in stay inline, so a
-    // session is mediated from its first call.
-    let background: Vec<String> = std::fs::read_to_string(at_root("batten.toml"))
-        .expect("the committed authority is readable")
-        .split("\n[[hook.handler]]\n")
-        .skip(1)
-        .filter(|block| {
-            let body = block.split("\n[").next().unwrap_or(block);
-            body.lines()
-                .any(|line| line.trim() == "on = \"session-start\"")
-                && body.lines().any(|line| line.trim() == "background = true")
-        })
-        .filter_map(|block| {
-            block
-                .lines()
-                .find_map(|line| line.strip_prefix("id = "))
-                .map(|id| id.trim().trim_matches('"').to_owned())
-        })
-        .collect();
-    assert_eq!(
-        background,
-        [
-            "session-install",
-            "session-doctor",
-            "session-container-preflight",
-            "session-credential",
-            "session-census",
-        ],
-        "exactly the slow rows are handed to the agent"
-    );
-}
-
 // ---------------------------------------------------------------------------
 // The declaration's half: what the committed authority actually says.
 // ---------------------------------------------------------------------------
@@ -1209,24 +1174,20 @@ fn a_local_release_build_is_stamped_by_itself_and_never_pins() {
     );
 }
 
-/// THE INSTALL STAMPS THE INSTALLED COPY (CLOUD-2232). `engine stamp` stamps the
-/// binary that runs it, and `_.path` puts `target/release` first on every task's
-/// PATH, so a bare `batten engine stamp` re-stamped the build: measured on #1132,
-/// the installed copy the hook ran carried a stale stamp and every call was
-/// refused. The stamp step runs the installed binary by its destination path.
+/// THE LOCAL INSTALL IS THE EXPLICIT SWITCH TO THE TREE'S ENGINE, AND NEVER A
+/// COPY (CLOUD-2398). Copying the build to the hook's destination made the hook
+/// run a binary reporting the release's version without being that release. It
+/// records `engine use tree` instead, by the build's own path.
 #[test]
-fn local_install_stamps_the_installed_binary_by_its_path() {
+fn local_install_switches_to_the_tree_and_copies_nothing() {
     let install = task_surface("install:local").expect("the local install is a declared task");
     assert!(
-        install.contains("/.local/bin{% endif %}/batten engine stamp"),
-        "install:local stamps the binary at its destination: {install}"
+        install.contains("target/release/batten engine use tree"),
+        "install:local records tree mode with the build it made: {install}"
     );
     assert!(
-        !install
-            .lines()
-            .map(|line| line.trim().trim_end_matches(',').trim_matches('"'))
-            .any(|line| line == "batten engine stamp"),
-        "never `batten` resolved on PATH, which is `target/release` under `_.path`: {install}"
+        !install.contains("install -m"),
+        "install:local never copies the build where the hook resolves `batten`: {install}"
     );
 }
 

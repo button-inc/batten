@@ -1109,12 +1109,29 @@ pub fn diagnose_toolchain(manifest: &Path, probe: &str) -> Toolchain {
     }
 }
 
-/// Compare the mediator on `PATH` against the artifact `dir` builds.
+/// Judge the engine the hook reaches against the one this worktree mediates
+/// with (CLOUD-2398).
 ///
-/// Reads both files and hashes them; spawns nothing. Length is compared first
-/// only as a short-circuit — two files of different lengths cannot be identical.
+/// THE PINNED RELEASE BY DEFAULT, NEVER THE TREE'S BUILD. This compared the
+/// installed binary with `target/release/batten` byte for byte, which made the
+/// hook's engine the tree's build by construction — its repair was a release
+/// build at every cold session start, and the version string that build reports
+/// then satisfied the release pin. Now:
+///
+/// * By default, the first `batten` on `PATH` outside this checkout — what a
+///   hook registered as bare `batten` runs — must carry the pin's release stamp
+///   (`engine::release_of`). Anything else is [`Mediator::Stale`], repaired by
+///   `batten engine install`, a verified download.
+/// * Under `batten engine use tree`, the hook is handed to `target/release`,
+///   so that build must exist ([`Mediator::Unbuilt`]) and not be behind its
+///   source ([`Mediator::BuildBehindSource`]).
+///
+/// Reads two small files and a few `stat`s; spawns nothing.
+//MUTANT-SUITE crates/batten/tests/it/doctor.rs
+//MUTANT mediator-trusts-the-version|s@^    if engine::release_of(\&resolved).as_deref() == Some(tag.as_str()) {$@    if true {@|an_installed_build_is_not_the_pinned_release
 #[must_use]
 pub fn diagnose_mediator(dir: &Path) -> Mediator {
+    use crate::engine;
     // The tree builds a mediator iff it carries the crate that produces one.
     // Asking the manifest rather than looking for the artifact keeps "a consumer
     // checkout" and "batten's own checkout before its first build" distinct: the
@@ -1122,27 +1139,47 @@ pub fn diagnose_mediator(dir: &Path) -> Mediator {
     if !dir.join("crates/batten/Cargo.toml").is_file() {
         return Mediator::NotApplicable;
     }
-    let Some(resolved) = crate::rules::on_path_verbatim("batten") else {
+    let tree = crate::state::repo_state_dir(dir)
+        .is_ok_and(|state| engine::recorded_use(&state) == engine::Use::Tree);
+    if tree {
+        let built = dir.join("target/release/batten");
+        if !built.is_file() {
+            return Mediator::Unbuilt;
+        }
+        if build_is_behind_source(dir, &built) {
+            return Mediator::BuildBehindSource;
+        }
+        return Mediator::Current;
+    }
+    let Some(tag) = std::fs::read_to_string(dir.join(config::CONFIG_FILE))
+        .ok()
+        .and_then(|text| engine::declared(&text))
+        .and_then(|pin| pin.release)
+    else {
+        // No release to be: a source pin never lands, and no pin names nothing.
+        return Mediator::NotApplicable;
+    };
+    let Some(resolved) = hook_engine(dir) else {
         return Mediator::Unresolvable;
     };
-    let built = dir.join("target/release/batten");
-    let (Ok(left), Ok(right)) = (std::fs::read(&resolved), std::fs::read(&built)) else {
-        return Mediator::Unbuilt;
-    };
-    if left.len() != right.len() {
-        return Mediator::Stale;
+    if engine::release_of(&resolved).as_deref() == Some(tag.as_str()) {
+        Mediator::Current
+    } else {
+        Mediator::Stale
     }
-    if crate::receipt::hex_sha256(&left) != crate::receipt::hex_sha256(&right) {
-        return Mediator::Stale;
-    }
-    // THE INSTALL MATCHES THE BUILD — WHICH SAYS NOTHING ABOUT THE SOURCE
-    // (CLOUD-1630). Asked only here, on the arm where the two copies agree,
-    // because that is the only arm where this question is still open: where they
-    // differ, `Stale` already names a repair that subsumes a rebuild.
-    if build_is_behind_source(dir, &built) {
-        return Mediator::BuildBehindSource;
-    }
-    Mediator::Current
+}
+
+/// The first `batten` on `PATH` outside the checkout at `dir`: the engine a hook
+/// registered as bare `batten` runs. Under `mise`, `target/release` is first on
+/// `PATH`, and that is the tree's build, not the hook's.
+fn hook_engine(dir: &Path) -> Option<std::path::PathBuf> {
+    let fence = crate::git::canonical(dir);
+    std::env::var_os("PATH")
+        .map(|path| std::env::split_paths(&path).collect::<Vec<_>>())
+        .unwrap_or_default()
+        .into_iter()
+        .map(|entry| crate::git::canonical(&entry.join("batten")))
+        .find(|candidate| candidate.is_file() && !candidate.starts_with(&fence))
 }
 
 /// Whether the built artifact predates a source that feeds it (CLOUD-1630).
@@ -1307,40 +1344,6 @@ fn is_runnable_hook(at: &Path) -> bool {
     }
 }
 
-/// The local (`command`-launched) servers `.mcp.json` names that no
-/// `[[mcp.local]]` row declares (CLOUD-2398). Empty where there is no
-/// `.mcp.json`, or it does not parse: nothing to compare, never a finding.
-#[must_use]
-pub fn undeclared_local_servers(dir: &Path, mcp: Option<&crate::mcp::McpConfig>) -> Vec<String> {
-    let Ok(text) = std::fs::read_to_string(dir.join(crate::mcp::LOCAL_WIRING)) else {
-        return Vec::new();
-    };
-    let Ok(wiring) = serde_json::from_str::<serde_json::Value>(&text) else {
-        return Vec::new();
-    };
-    let Some(servers) = wiring
-        .get("mcpServers")
-        .and_then(serde_json::Value::as_object)
-    else {
-        return Vec::new();
-    };
-    let declared: Vec<&str> = mcp
-        .map(|table| {
-            table
-                .locals
-                .iter()
-                .map(|local| local.server.as_str())
-                .collect()
-        })
-        .unwrap_or_default();
-    servers
-        .iter()
-        .filter(|(_, entry)| entry.get("command").is_some())
-        .map(|(name, _)| name.clone())
-        .filter(|name| !declared.contains(&name.as_str()))
-        .collect()
-}
-
 /// The bare report's `config` check (CLOUD-1428), and `doctor config`'s whole
 /// answer.
 ///
@@ -1363,15 +1366,6 @@ pub fn diagnose_config(dir: &Path) -> Check {
         // message: `config show` names the rows, and nothing else was reading.
         Ok(config) if !config.unresolvable.is_empty() => {
             Check::failed(CONFIG, "config-rows-dropped")
-        }
-        // A LOCAL SERVER NO `[[mcp.local]]` ROW DECLARES (CLOUD-2398). Nothing
-        // probes it, so a cold install loses the host's one handshake and every
-        // call to it reaches nothing for the session — the defect the row
-        // exists to gate. A finding here and never a load refusal: an adopter's
-        // `.mcp.json` predates the table, and refusing the config would turn
-        // every gate off to report one missing row.
-        Ok(config) if !undeclared_local_servers(dir, config.mcp.as_ref()).is_empty() => {
-            Check::failed(CONFIG, "mcp-local-undeclared")
         }
         Ok(_) => match resolve::resolve(dir, &crate::Overrides::default()) {
             Ok(_) => Check::passed(CONFIG),

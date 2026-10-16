@@ -11,7 +11,12 @@
 //!
 //! # The two identities
 //!
-//! - **A release** is `v{VERSION}`, which the binary already carries.
+//! - **A release** is `v{VERSION}` as recorded by a VERIFIED install:
+//!   `<binary>.release` holds the tag and the binary's length, written only where
+//!   the bytes were checked against the release's `SHA256SUMS` (CLOUD-2398). The
+//!   version a binary reports is not the identity, because a tree build reports
+//!   the last release's version too; only the checkout's own build is judged by
+//!   it, since every gate's `cargo run` is that build.
 //! - **A source** is the SHA-256 of every tracked engine input — each path under
 //!   `crates/`, plus the root `Cargo.toml` and `Cargo.lock` — as path, NUL, bytes,
 //!   NUL, in sorted order. Tracked, so `target/` and scratch never enter; the
@@ -390,6 +395,60 @@ pub const LOCAL_ENV: &str = "BATTEN_ENGINE";
 //MUTANT local-engine-ignored|s@^    std::env::var_os(LOCAL_ENV).is_some_and(\x7cvalue\x7c value == "local")$@    false@|the_local_engine_runs_under_a_source_pin
 pub(crate) fn runs_local() -> bool {
     std::env::var_os(LOCAL_ENV).is_some_and(|value| value == "local")
+}
+
+/// The engine a worktree's invocations mediate with (CLOUD-2398): the release
+/// its pin names, or — only when someone asked, with `batten engine use tree` —
+/// the checkout's own release build.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Use {
+    /// The pinned release, the default: hooks run the engine that shipped.
+    Release,
+    /// The checkout's `target/release` build, for testing the tree's engine.
+    Tree,
+}
+
+impl Use {
+    /// The word `batten engine use` takes and the record holds.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Release => "release",
+            Self::Tree => "tree",
+        }
+    }
+
+    /// The mode a word names, or `None` for anything else.
+    #[must_use]
+    pub fn parse(word: &str) -> Option<Self> {
+        match word {
+            "release" => Some(Self::Release),
+            "tree" => Some(Self::Tree),
+            _ => None,
+        }
+    }
+}
+
+/// Where a worktree's [`Use`] is recorded: its STATE directory, never the tree.
+///
+/// MACHINE-LOCAL BY CONSTRUCTION. The choice to test the tree's engine is one
+/// person's on one host, so it is never committed, and a reclaimed container —
+/// a fresh state directory — starts back on the release. Recording it in
+/// `batten.toml`, as `engine pin source` did, was the inversion the owner
+/// named: a branch had to remember to pin, and could forget to unpin.
+#[must_use]
+pub fn use_path(state_dir: &Path) -> PathBuf {
+    state_dir.join("engine").join("use")
+}
+
+/// The [`Use`] recorded for the worktree whose state is `state_dir`: the
+/// release unless `tree` was asked for.
+#[must_use]
+pub fn recorded_use(state_dir: &Path) -> Use {
+    std::fs::read_to_string(use_path(state_dir))
+        .ok()
+        .and_then(|text| Use::parse(text.trim()))
+        .unwrap_or(Use::Release)
 }
 
 /// The checkout's own release build: the engine a source pin is followed to

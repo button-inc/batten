@@ -674,6 +674,9 @@ fn follow_pin(may_build: bool) -> Result<Option<ExitCode>> {
     let Ok(text) = config::read_text(&root.join(config::CONFIG_FILE)) else {
         return Ok(None);
     };
+    if let Some(build) = tree_engine(&root) {
+        return hand_to_engine(&root, &build).map(Some);
+    }
     let Some(pin) = engine::stale(&text, engine::running_stamp, engine::running_release) else {
         return Ok(None);
     };
@@ -721,6 +724,31 @@ fn follow_pin(may_build: bool) -> Result<Option<ExitCode>> {
         // refusal names it.
         _ => return Ok(None),
     };
+    hand_to_engine(&root, &engine).map(Some)
+}
+
+/// The checkout's own build, when this worktree recorded `batten engine use
+/// tree` and this invocation is not already that build (CLOUD-2398).
+///
+/// TREE MODE OUTRANKS THE PIN, because it is the one explicit ask for the
+/// tree's engine: whatever the config pins, every invocation outside the
+/// checkout — the hook's included, which never builds — is handed to
+/// `target/release/batten`. A missing build falls back to the pin, and the
+/// session-start advice names the build.
+//MUTANT-SUITE crates/batten/tests/it/engine_install.rs
+//MUTANT tree-mode-ignored|s@^    if engine::recorded_use(\&state) != engine::Use::Tree {$@    if true {@|tree_mode_hands_an_installed_engine_to_the_checkouts_build
+fn tree_engine(root: &Path) -> Option<PathBuf> {
+    let state = state::repo_state_dir(root).ok()?;
+    if engine::recorded_use(&state) != engine::Use::Tree {
+        return None;
+    }
+    let build = engine::checkout_build(root)?;
+    let exe = std::env::current_exe().ok()?;
+    (!exe.starts_with(root) && git::canonical(&exe) != git::canonical(&build)).then_some(build)
+}
+
+/// Re-run this invocation under `engine`, once.
+fn hand_to_engine(root: &Path, engine: &Path) -> Result<ExitCode> {
     let mut argv: Vec<String> = vec![engine.to_string_lossy().into_owned()];
     argv.extend(std::env::args().skip(1));
     let published = [(String::from(ENGINE_UPDATED), String::from("1"))];
@@ -732,14 +760,13 @@ fn follow_pin(may_build: bool) -> Result<Option<ExitCode>> {
         ..exec::ExecConfig::DEFAULT
     };
     exec::run_in_with_env(
-        &root,
+        root,
         &argv,
         &[],
         &passthrough,
         &published,
         &mut std::io::sink(),
     )
-    .map(Some)
 }
 
 /// `batten engine update` (CLOUD-2287): move this worktree's release pin to the
@@ -1162,8 +1189,13 @@ fn run_engine(command: cli::EngineCommand, out: &mut dyn Write) -> Result<ExitCo
         _ => {}
     }
     let root = git::worktree_root(Path::new("."))?;
+    // Before the digest: a consumer's tree carries no engine input to hash.
+    if let cli::EngineCommand::Use { engine } = &command {
+        return engine_use(&root, engine, out);
+    }
     let digest = engine::digest(&root)?;
     match command {
+        cli::EngineCommand::Use { engine } => return engine_use(&root, &engine, out),
         cli::EngineCommand::Digest => writeln!(out, "{digest}")?,
         cli::EngineCommand::Stamp => {
             let binary = std::env::current_exe()?;
@@ -1176,6 +1208,35 @@ fn run_engine(command: cli::EngineCommand, out: &mut dyn Write) -> Result<ExitCo
         }
         cli::EngineCommand::Gate { lanes } => return engine_gate(&root, &lanes, out),
         cli::EngineCommand::Install => return engine_install(out),
+    }
+    Ok(ExitCode::Success)
+}
+
+/// `batten engine use release|tree` (CLOUD-2398): record which engine this
+/// worktree's invocations mediate with, in its state directory.
+///
+/// `release` removes the record, so the default is the absence of one. `tree`
+/// writes it and prints where; the hand-off itself is `tree_engine`'s, and the
+/// session-start advice says so every session it holds.
+fn engine_use(root: &Path, engine: &str, out: &mut dyn Write) -> Result<ExitCode> {
+    let Some(mode) = engine::Use::parse(engine) else {
+        return Err(UsageError::raise(format!(
+            "engine use: {engine} is neither `release` nor `tree`"
+        )));
+    };
+    let path = engine::use_path(&state::repo_state_dir(root)?);
+    match mode {
+        engine::Use::Release => match std::fs::remove_file(&path) {
+            Err(why) if why.kind() != std::io::ErrorKind::NotFound => return Err(why.into()),
+            _ => {}
+        },
+        engine::Use::Tree => {
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            durable::replace(&path, format!("{}\n", mode.as_str()))?;
+            writeln!(out, "{}", path.display())?;
+        }
     }
     Ok(ExitCode::Success)
 }
@@ -20137,6 +20198,47 @@ fn setup_refusal(root: &Path, lines: &[&String]) -> refusal::Refusal {
     )
 }
 
+/// At session start, say so when this worktree mediates with the checkout's own
+/// build rather than the pinned release (CLOUD-2398).
+///
+/// EVERY SESSION, because the choice lives outside the tree: nothing committed
+/// shows it, so the one place it can be seen is the start of each session it
+/// governs. The subjects are the build and its source stamp — `unbuilt` when
+/// there is no build, which is also when the hand-off falls back to the pin.
+//MUTANT-SUITE crates/batten/tests/it/engine_install.rs
+//MUTANT engine-use-unannounced|s@^    let engine::Use::Tree = engine::recorded_use(\&state) else {$@    let engine::Use::Tree = engine::Use::Release else {@|session_start_announces_tree_mode
+fn engine_use_advice(envelope: &hook::Envelope, advice: &mut Vec<advisory::Advice>) {
+    if envelope.event != hook::Event::SessionStart {
+        return;
+    }
+    let root = git::canonical(hook_authority_root());
+    let Ok(state) = state::repo_state_dir(&root) else {
+        return;
+    };
+    let engine::Use::Tree = engine::recorded_use(&state) else {
+        return;
+    };
+    let (stamp, fix) = match engine::checkout_build(&root) {
+        Some(build) => (
+            engine::stamp_of(&build).unwrap_or_else(|| String::from("unstamped")),
+            "batten engine use release",
+        ),
+        None => (String::from("unbuilt"), "mise run build:release"),
+    };
+    push_finding(
+        advice,
+        severity::AdvisoryTier::Warning,
+        refusal::Refusal::engine(
+            verdict::Native::EngineUseTree,
+            &[
+                verdict::artifact("target/release/batten"),
+                verdict::artifact(&stamp),
+            ],
+            refusal::Fix::Run(String::from(fix)),
+        ),
+    );
+}
+
 /// The gates that may refuse a call before any declared handler runs, in order
 /// (CLOUD-2398), then the handlers themselves.
 fn gate_then_dispatch(
@@ -20145,6 +20247,7 @@ fn gate_then_dispatch(
     overrides: &Overrides,
     advice: &mut Vec<advisory::Advice>,
 ) -> Option<hook::Decision> {
+    engine_use_advice(envelope, advice);
     session_setup_gate(envelope, overrides, advice)
         .or_else(|| mcp_health_gate(envelope, overrides))
         .or_else(|| dispatch_handlers(envelope, raw, overrides, advice))

@@ -109,17 +109,27 @@ fn doctor(dir: &Path, extra: &[&str]) -> Output {
         .expect("run batten doctor")
 }
 
-// --- doctor mediator: WHICH engine the registrations reach (CLOUD-1349) -------
+// --- doctor mediator: WHICH engine the hook reaches (CLOUD-1349, CLOUD-2398) --
 
-/// A checkout that builds a mediator, with `batten` on `PATH` resolving to
-/// `planted`.
+/// The release every mediator fixture pins.
+const PIN: &str = "v1.2.3";
+
+/// A checkout that builds a mediator and pins release [`PIN`], with `batten` on
+/// `PATH` resolving to `planted` in a directory OUTSIDE the checkout — where a
+/// hook resolves an installed engine — and `built` at `target/release/batten`.
+/// Returns the checkout and the planted directory.
 ///
-/// The whole fixture is two files plus a `PATH` reaching one of them: the
-/// comparison is over CONTENT, so a case only has to control what those files
-/// hold. Nothing is executed, so neither needs to be a real program — which is
-/// also what keeps these cases fast and portable.
-fn mediator_fixture(name: &str, planted: &[u8], built: &[u8]) -> PathBuf {
-    let dir = scratch(name, true, Some("version = 1\n"));
+/// Nothing is executed, so neither file needs to be a real program: the
+/// verdict is over the planted copy's release stamp, or under tree mode over
+/// the build's age against its source.
+fn mediator_fixture(name: &str, planted: &[u8], built: &[u8]) -> (PathBuf, PathBuf) {
+    let dir = scratch(
+        name,
+        true,
+        Some(&format!(
+            "version = 1\nengine = {{ release = \"{PIN}\" }}\n"
+        )),
+    );
     // The manifest is what says "this tree builds a mediator". Its contents are
     // never parsed — only its existence decides the question is askable — so the
     // marker is deliberately minimal.
@@ -127,10 +137,27 @@ fn mediator_fixture(name: &str, planted: &[u8], built: &[u8]) -> PathBuf {
     fs::write(dir.join("crates/batten/Cargo.toml"), "# marker\n").unwrap();
     fs::create_dir_all(dir.join("target/release")).unwrap();
     fs::write(dir.join("target/release/batten"), built).unwrap();
-    let bin = dir.join("planted-bin");
+    let mut outside = dir.file_name().unwrap().to_os_string();
+    outside.push(".planted-bin");
+    let bin = dir.with_file_name(outside);
     fs::create_dir_all(&bin).unwrap();
     fs::write(bin.join("batten"), planted).unwrap();
-    dir
+    (dir, bin)
+}
+
+/// Stamp the planted copy as release `tag`, as a verified install does.
+fn stamp_planted(bin: &Path, tag: &str) {
+    batten::engine::stamp_release(&bin.join("batten"), tag).unwrap();
+}
+
+/// Record `batten engine use tree` for the checkout at `dir`.
+fn tree_mode(dir: &Path) {
+    let output = batten()
+        .args(["engine", "use", "tree"])
+        .current_dir(dir)
+        .output()
+        .expect("run batten engine use");
+    assert!(output.status.success(), "{}", stdout(&output));
 }
 
 fn mediator(dir: &Path, bin: Option<&Path>, extra: &[&str]) -> Output {
@@ -142,6 +169,9 @@ fn mediator(dir: &Path, bin: Option<&Path>, extra: &[&str]) -> Output {
     }
     command
         .current_dir(dir)
+        // THE DIAGNOSIS IS THE SUBJECT, never the follow: this binary is not
+        // the fixture's pinned release, and following it would fetch.
+        .env("BATTEN_ENGINE_UPDATED", "1")
         .env_remove("BATTEN_STRICTNESS")
         .env_remove("BATTEN_FAIL_ON_WARNING")
         .env_remove("BATTEN_CONFIG_FROM")
@@ -149,50 +179,59 @@ fn mediator(dir: &Path, bin: Option<&Path>, extra: &[&str]) -> Output {
         .expect("run batten doctor mediator")
 }
 
+/// AN INSTALLED BUILD IS NOT THE PINNED RELEASE (CLOUD-2398),
+/// `#MUTANT mediator-trusts-the-version`. The engine the hook reaches carries
+/// no release stamp, so whatever version it would report, it is not the
+/// release the pin names. This row used to pass exactly this binary when it
+/// matched the tree's build byte for byte.
 #[test]
-fn a_mediator_that_is_not_this_trees_build_is_refused() {
-    // The measured failure reduced to its decidable core: the binary answering
-    // calls is not the one this source produces. No version appears in the
-    // fixture at all, because the version is exactly what could NOT tell these
-    // two apart in the field — both sides read 0.0.137 while one of them refused
-    // the tree's own config.
-    let dir = mediator_fixture("mediator-stale", b"an older build", b"this tree's build");
-    let output = mediator(&dir, Some(&dir.join("planted-bin")), &[]);
+fn an_installed_build_is_not_the_pinned_release() {
+    let (dir, bin) = mediator_fixture("mediator-unstamped", b"a build", b"a build");
+    let output = mediator(&dir, Some(&bin), &[]);
     assert_eq!(output.status.code(), Some(1));
     assert_eq!(stdout(&output), "mediator failed mediator-stale\n");
 }
 
 #[test]
-fn a_mediator_built_from_this_tree_passes() {
-    // THE ANTI-VACUITY MIRROR, and it is what makes the case above mean
-    // anything: a check that refused unconditionally would satisfy that one
-    // exactly as well. Same fixture shape, same PATH, identical bytes.
-    let dir = mediator_fixture("mediator-current", b"same bytes", b"same bytes");
-    let output = mediator(&dir, Some(&dir.join("planted-bin")), &[]);
+fn the_pinned_release_on_path_passes() {
+    // THE ANTI-VACUITY MIRROR: the same fixture, the planted copy stamped as
+    // the release the pin names.
+    let (dir, bin) = mediator_fixture("mediator-current", b"the release", b"a build");
+    stamp_planted(&bin, PIN);
+    let output = mediator(&dir, Some(&bin), &[]);
     assert_eq!(output.status.code(), Some(0));
     assert_eq!(stdout(&output), "mediator ok\n");
 }
 
 #[test]
-fn equal_length_binaries_that_differ_are_still_refused() {
-    // The length compare is a short-circuit, never the predicate. Two builds of
-    // the same source at the same length is the ordinary case for a change to a
-    // constant, so a check that stopped at the length would pass over precisely
-    // the drift hardest to notice by eye.
-    let dir = mediator_fixture("mediator-same-length", b"aaaaaaaaaa", b"bbbbbbbbbb");
-    let output = mediator(&dir, Some(&dir.join("planted-bin")), &[]);
+fn another_releases_stamp_is_still_stale() {
+    // The stamp names a release, and it must be THIS pin's: an older release
+    // left on PATH after the pin moved is the skew CLOUD-2061 measured.
+    let (dir, bin) = mediator_fixture("mediator-other-release", b"the release", b"a build");
+    stamp_planted(&bin, "v1.2.2");
+    let output = mediator(&dir, Some(&bin), &[]);
     assert_eq!(output.status.code(), Some(1));
     assert_eq!(stdout(&output), "mediator failed mediator-stale\n");
 }
 
-// --- doctor mediator: the build against the SOURCE (CLOUD-1630) --------------
+#[test]
+fn the_trees_own_build_on_path_is_never_the_hooks_engine() {
+    // Under `mise`, `target/release` is first on PATH. That is the tree's build,
+    // not what a hook resolves, so it is skipped: with nothing outside the
+    // checkout, there is no hook engine to judge.
+    let (dir, _bin) = mediator_fixture("mediator-in-tree-only", b"x", b"a build");
+    let output = mediator(&dir, Some(&dir.join("target/release")), &[]);
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(stdout(&output), "mediator failed mediator-unresolvable\n");
+}
+
+// --- doctor mediator under tree mode: the build against the SOURCE (CLOUD-1630) --
 //
-// The arm above answers "does the install match the build". These answer the
-// question it cannot: whether that build is itself behind the tree. Measured in
-// the field, `session:batten` builds and installs once at session start and a
+// `batten engine use tree` hands the hook to `target/release/batten`, so that
+// build is what must be current. Measured in the field before tree mode: a
 // later rebase, `reset` or `land` speculative linearization moves the checkout
-// underneath BOTH copies — they agree, and the check read `ok` over an engine
-// old enough to leave three mediated gates permitting for a whole session.
+// underneath the build, and the check read `ok` over an engine old enough to
+// leave three mediated gates permitting for a whole session.
 
 /// Write `path` with an mtime strictly after `after`, so a case decides on
 /// ordering rather than on whichever write happened to land in the same
@@ -217,32 +256,32 @@ fn write_stamped(path: &Path, body: &[u8], stamp: std::time::SystemTime) {
 }
 
 #[test]
-fn a_build_behind_its_own_source_is_refused_even_when_the_install_matches() {
-    // THE CASE THE CHECK MISSED, and the one this row exists for. Both copies
-    // are byte-identical, so every comparison the original made agrees — and the
-    // source is newer than the artifact they both came from.
-    let dir = mediator_fixture("mediator-behind-source", b"same bytes", b"same bytes");
+fn under_tree_mode_a_build_behind_its_own_source_is_refused() {
+    let (dir, bin) = mediator_fixture("mediator-behind-source", b"x", b"a build");
+    tree_mode(&dir);
     write_newer_than(
         &dir.join("crates/batten/src/lib.rs"),
         b"fn changed() {}\n",
         &dir.join("target/release/batten"),
     );
-    let output = mediator(&dir, Some(&dir.join("planted-bin")), &[]);
+    let output = mediator(&dir, Some(&bin), &[]);
     assert_eq!(output.status.code(), Some(1));
     assert_eq!(
         stdout(&output),
         "mediator failed mediator-build-behind-source\n",
-        "its own verdict rather than `mediator-stale`: that one says reinstall \
-         what is built, this one says rebuild first"
+        "its own verdict rather than `mediator-stale`: that one says install the \
+         release, this one says rebuild"
     );
 }
 
 #[test]
-fn a_build_newer_than_its_source_passes() {
+fn under_tree_mode_a_build_newer_than_its_source_passes() {
     // THE ANTI-VACUITY MIRROR. Same fixture, same file, written BEFORE the
     // artifact — so a predicate that refused on the mere existence of a source
-    // tree, or that compared the wrong direction, fails here.
-    let dir = mediator_fixture("mediator-source-older", b"same bytes", b"same bytes");
+    // tree, or that compared the wrong direction, fails here. The planted copy
+    // is unstamped, so a pass also shows tree mode does not ask for the release.
+    let (dir, bin) = mediator_fixture("mediator-source-older", b"x", b"a build");
+    tree_mode(&dir);
     let stamp = dir
         .join("target/release/batten")
         .metadata()
@@ -256,47 +295,62 @@ fn a_build_newer_than_its_source_passes() {
         stamp,
     );
 
-    let output = mediator(&dir, Some(&dir.join("planted-bin")), &[]);
+    let output = mediator(&dir, Some(&bin), &[]);
     assert_eq!(output.status.code(), Some(0));
     assert_eq!(stdout(&output), "mediator ok\n");
 }
 
 #[test]
-fn a_newer_test_file_does_not_make_the_build_stale() {
+fn under_tree_mode_a_newer_test_file_does_not_make_the_build_stale() {
     // THE SCOPING, AND IT IS THE WHOLE REASON THIS PREDICATE IS SOUND. The
     // release binary contains no tests, so a newer test file says nothing about
     // it. Measured 2026-09-07 on a real checkout one branch switch old: five
     // source files were newer than the artifact and THREE were under `tests/` —
     // an unscoped predicate would have called a current binary stale, which is
     // the false positive `Mediator`'s own doc predicted and refused to accept.
-    let dir = mediator_fixture("mediator-tests-excluded", b"same bytes", b"same bytes");
+    let (dir, bin) = mediator_fixture("mediator-tests-excluded", b"x", b"a build");
+    tree_mode(&dir);
     write_newer_than(
         &dir.join("crates/batten/tests/it/whatever.rs"),
         b"fn a_new_case() {}\n",
         &dir.join("target/release/batten"),
     );
-    let output = mediator(&dir, Some(&dir.join("planted-bin")), &[]);
+    let output = mediator(&dir, Some(&bin), &[]);
     assert_eq!(output.status.code(), Some(0));
     assert_eq!(stdout(&output), "mediator ok\n");
 }
 
 #[test]
-fn a_newer_manifest_makes_the_build_stale() {
+fn under_tree_mode_a_newer_manifest_makes_the_build_stale() {
     // A manifest is a source too: a dependency bump or a version change rebuilds
     // the binary without touching one `.rs`, and the version bump is exactly the
     // shape that produced the measured 0.0.148-against-0.0.149 skew.
-    let dir = mediator_fixture("mediator-manifest-newer", b"same bytes", b"same bytes");
+    let (dir, bin) = mediator_fixture("mediator-manifest-newer", b"x", b"a build");
+    tree_mode(&dir);
     write_newer_than(
         &dir.join("Cargo.toml"),
         b"[workspace.package]\nversion = \"9.9.9\"\n",
         &dir.join("target/release/batten"),
     );
-    let output = mediator(&dir, Some(&dir.join("planted-bin")), &[]);
+    let output = mediator(&dir, Some(&bin), &[]);
     assert_eq!(output.status.code(), Some(1));
     assert_eq!(
         stdout(&output),
         "mediator failed mediator-build-behind-source\n"
     );
+}
+
+#[test]
+fn under_tree_mode_a_missing_build_is_could_not_look_never_clean() {
+    // Tree mode hands the hook to a build that is not there: reading that as
+    // clean is the exact shape — an unanswerable question passing — this verb is
+    // against.
+    let (dir, bin) = mediator_fixture("mediator-unbuilt", b"x", b"a build");
+    tree_mode(&dir);
+    fs::remove_file(dir.join("target/release/batten")).unwrap();
+    let output = mediator(&dir, Some(&bin), &[]);
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(stdout(&output), "mediator failed mediator-unbuilt\n");
 }
 
 #[test]
@@ -313,30 +367,13 @@ fn a_tree_that_builds_no_mediator_abstains_rather_than_refusing() {
 }
 
 #[test]
-fn a_tree_that_builds_one_but_has_not_is_could_not_look_never_clean() {
-    // The distinction the two named variants exist to keep: this tree SHOULD
-    // have an artifact to compare and does not, which is a different claim from
-    // a consumer checkout that never had one. Reading it as clean is the exact
-    // shape — an unanswerable question passing — this verb is against.
-    let dir = scratch("mediator-unbuilt", true, Some("version = 1\n"));
-    fs::create_dir_all(dir.join("crates/batten")).unwrap();
-    fs::write(dir.join("crates/batten/Cargo.toml"), "# marker\n").unwrap();
-    let bin = dir.join("planted-bin");
-    fs::create_dir_all(&bin).unwrap();
-    fs::write(bin.join("batten"), b"whatever").unwrap();
-    let output = mediator(&dir, Some(&bin), &[]);
-    assert_eq!(output.status.code(), Some(1));
-    assert_eq!(stdout(&output), "mediator failed mediator-unbuilt\n");
-}
-
-#[test]
 fn a_tree_that_builds_one_with_no_mediator_on_path_is_could_not_look() {
     // Distinct from unbuilt for the same reason `NotAcquired` keeps `Absent` and
     // `Unparsed` apart: nothing to compare AGAINST and nothing to compare WITH
     // have different remedies, so one reason id for both sends the reader to the
     // wrong place.
-    let dir = mediator_fixture("mediator-unresolvable", b"planted", b"built");
-    let empty = dir.join("empty-bin");
+    let (dir, _bin) = mediator_fixture("mediator-unresolvable", b"planted", b"built");
+    let empty = dir.with_file_name("mediator-unresolvable.empty-bin");
     fs::create_dir_all(&empty).unwrap();
     let output = mediator(&dir, Some(&empty), &[]);
     assert_eq!(output.status.code(), Some(1));
@@ -368,13 +405,17 @@ fn two_equally_stale_binaries_no_longer_agree_into_a_clean_verdict() {
     // artifact is a matter of microseconds. It read as a Linux-versus-Windows
     // difference and was nothing of the kind. A predicate over an ordering must
     // be given an ordering.
-    let dir = mediator_fixture("mediator-both-stale", b"old build", b"old build");
+    //
+    // UNDER TREE MODE since CLOUD-2398: that is the one mode in which the
+    // tree's build is what the hook runs, so the one mode this question asks.
+    let (dir, bin) = mediator_fixture("mediator-both-stale", b"old build", b"old build");
+    tree_mode(&dir);
     write_newer_than(
         &dir.join("crates/batten/Cargo.toml"),
         b"# moved on\n",
         &dir.join("target/release/batten"),
     );
-    let output = mediator(&dir, Some(&dir.join("planted-bin")), &[]);
+    let output = mediator(&dir, Some(&bin), &[]);
     assert_eq!(output.status.code(), Some(1));
     assert_eq!(
         stdout(&output),
@@ -386,12 +427,12 @@ fn two_equally_stale_binaries_no_longer_agree_into_a_clean_verdict() {
 
 #[test]
 fn the_verdict_carries_no_path_and_no_digest() {
-    // §6 and rule 4 over this verb specifically: it is about two absolute paths
-    // and two hashes, which is the shape most likely to leak one into output.
-    // A digest is stable per content but varies per machine, so emitting one
-    // would defeat byte-stability while telling the reader nothing actionable.
-    let dir = mediator_fixture("mediator-no-path", b"older", b"newer");
-    let text = stdout(&mediator(&dir, Some(&dir.join("planted-bin")), &[]));
+    // §6 and rule 4 over this verb specifically: it is about absolute paths and
+    // stamps, which is the shape most likely to leak one into output. A digest
+    // is stable per content but varies per machine, so emitting one would
+    // defeat byte-stability while telling the reader nothing actionable.
+    let (dir, bin) = mediator_fixture("mediator-no-path", b"older", b"newer");
+    let text = stdout(&mediator(&dir, Some(&bin), &[]));
     assert!(!text.contains('/'), "the verdict carried a path: {text}");
     assert!(
         !text
@@ -406,8 +447,9 @@ fn the_data_channel_emits_a_document_even_when_current() {
     // A data channel emits unconditionally: JSON that is sometimes absent is
     // unparseable. Asserted on the passing arm because that is the one a caller
     // is tempted to make silent.
-    let dir = mediator_fixture("mediator-json", b"same", b"same");
-    let output = mediator(&dir, Some(&dir.join("planted-bin")), &["--json"]);
+    let (dir, bin) = mediator_fixture("mediator-json", b"same", b"same");
+    stamp_planted(&bin, PIN);
+    let output = mediator(&dir, Some(&bin), &["--json"]);
     assert_eq!(output.status.code(), Some(0));
     let report: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("the verdict is JSON");
@@ -419,8 +461,8 @@ fn the_sub_verb_never_renders_a_policy_verdict() {
     // A sub-verb inherits the promise the parent makes: a mediating harness
     // reads `2` as a deny, and "your install is out of date" is not "policy says
     // no". Every failing arm above asserts 1; this pins that 2 is unreachable.
-    let dir = mediator_fixture("mediator-never-two", b"older", b"newer");
-    let output = mediator(&dir, Some(&dir.join("planted-bin")), &[]);
+    let (dir, bin) = mediator_fixture("mediator-never-two", b"older", b"newer");
+    let output = mediator(&dir, Some(&bin), &[]);
     assert_ne!(output.status.code(), Some(2));
 }
 
@@ -431,7 +473,10 @@ fn the_bare_report_is_unchanged_by_this_sub_verb() {
     // went red whenever a rebuild had outpaced the install — a world-property
     // deciding a commit gate (`rules/toolchain.md`, from `lock-check`).
     // Bare `doctor` must not mention the mediator at all.
-    let dir = mediator_fixture("mediator-bare-unchanged", b"older", b"newer");
+    let (dir, _bin) = mediator_fixture("mediator-bare-unchanged", b"older", b"newer");
+    // Unpinned, so the bare report judges this binary's config load and nothing
+    // about which release is installed.
+    fs::write(dir.join("batten.toml"), "version = 1\n").unwrap();
     let output = doctor(&dir, &[]);
     let text = stdout(&output);
     assert!(

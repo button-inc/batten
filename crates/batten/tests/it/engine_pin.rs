@@ -78,14 +78,66 @@ fn shared() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_batten"))
 }
 
+/// The release a verified install placed loads under its own pin: the stamp is
+/// the identity (CLOUD-2398).
 #[test]
 fn a_release_pin_naming_this_build_loads() {
     let dir = repo(
         "engine-pin-release-same",
         &format!("version = 1\nengine = {{ release = \"{RELEASE}\" }}\n"),
     );
-    let output = run(&shared(), &dir, &["config", "show"]);
+    let installed = common::scratch("engine-pin-release-same-installed");
+    let binary = private_binary(&installed);
+    batten::engine::stamp_release(&binary, RELEASE).unwrap();
+    let output = run(&binary, &dir, &["config", "show"]);
     assert!(output.status.success(), "{}", text(&output));
+}
+
+/// A BUILD REPORTING THE PIN'S VERSION IS NOT THE RELEASE (CLOUD-2398),
+/// `#MUTANT release-pin-by-version`. Installed outside the checkout with no
+/// release stamp, the same binary that loads above is refused, by name.
+#[test]
+fn an_installed_build_reporting_the_pins_version_is_not_the_release() {
+    let dir = repo(
+        "engine-pin-release-unstamped",
+        &format!("version = 1\nengine = {{ release = \"{RELEASE}\" }}\n"),
+    );
+    let installed = common::scratch("engine-pin-release-unstamped-installed");
+    let binary = private_binary(&installed);
+    let output = run(&binary, &dir, &["config", "show"]);
+    let said = text(&output);
+    assert!(
+        !output.status.success(),
+        "a build is not the release: {said}"
+    );
+    assert!(
+        said.contains("not that release") && said.contains("`batten engine install`"),
+        "the refusal says why and names the install: {said}"
+    );
+}
+
+/// A BINARY REPLACED BESIDE A RELEASE STAMP IS NOT THE RELEASE (CLOUD-2398),
+/// `#MUTANT release-stamp-unbound`: the stamp carries the length it was
+/// written for, so a copy that changed under it no longer reads as stamped.
+#[test]
+fn a_binary_replaced_beside_a_release_stamp_is_not_the_release() {
+    let dir = repo(
+        "engine-pin-release-replaced",
+        &format!("version = 1\nengine = {{ release = \"{RELEASE}\" }}\n"),
+    );
+    let installed = common::scratch("engine-pin-release-replaced-installed");
+    let binary = private_binary(&installed);
+    batten::engine::stamp_release(&binary, RELEASE).unwrap();
+    // Trailing bytes leave an executable runnable and change its length.
+    let mut bytes = std::fs::read(&binary).unwrap();
+    bytes.extend_from_slice(b"\0replaced");
+    std::fs::write(&binary, bytes).unwrap();
+    let output = run(&binary, &dir, &["config", "show"]);
+    assert!(
+        !output.status.success(),
+        "a replaced binary is not the release its stamp named: {}",
+        text(&output)
+    );
 }
 
 #[test]

@@ -28,6 +28,20 @@ provisioning step by adding a task and a row — never by putting a second step
 inside an existing task's body, which is the shape that made the script
 unreadable from the committed authority.
 
+**Which engine runs where (CLOUD-2398).** Source and release builds are never
+conflated, and nothing has to be remembered:
+
+| Surface                                                                     | Engine                     | Why                                                                                                       |
+| --------------------------------------------------------------------------- | -------------------------- | --------------------------------------------------------------------------------------------------------- |
+| Gates and tasks (`cargo run -p batten`, `target/release` first on `_.path`) | the tree's build           | verify tests the branch with the engine it ships                                                          |
+| Hooks (bare `batten` on `PATH`)                                             | the pinned release         | proven by the `.release` stamp a verified install writes; any other binary is handed to the per-tag cache |
+| Hooks, while testing the tree's engine                                      | the tree's build           | `mise run install:local` (`batten engine use tree`), recorded in the state dir and announced each session |
+| `batten.toml`                                                               | only what the pin can read | `engine gate` refuses a key the pinned release lacks: land the engine, release, then adopt the key        |
+
+`batten engine use release` ends tree mode, and a reclaimed container starts on
+the release. `mediator-matches-the-pin` checks the hook's engine at session start,
+and its repair is a verified download, never a build.
+
 **AND NO NEW MECHANISM GOES BACK INTO A HARNESS'S OWN DIRECTORY.** That retirement
 was a direction, not a one-off: `batten.toml` is the authority and `batten hook`
 is the one entry, so a capability declared under `.claude/` — a hook, an agent

@@ -537,6 +537,12 @@ pub enum EngineCommand {
     /// Install the engine the pin names: the generated bootstrap's last step,
     /// and an installed engine's repair (CLOUD-2203, CLOUD-2287).
     Install,
+    /// Record which engine this worktree's invocations mediate with: the
+    /// pinned `release`, or the checkout's own `tree` build (CLOUD-2398).
+    Use {
+        /// `release` or `tree`.
+        engine: String,
+    },
 }
 
 /// Subcommands of `artifacts` (CLOUD-1991).
@@ -3666,6 +3672,9 @@ fn engine_of(matches: &ArgMatches) -> Option<EngineCommand> {
         ("stamp", _) => Some(EngineCommand::Stamp),
         ("update", _) => Some(EngineCommand::Update),
         ("install", _) => Some(EngineCommand::Install),
+        ("use", matches) => Some(EngineCommand::Use {
+            engine: matches.get_one::<String>("engine").cloned()?,
+        }),
         ("pin", matches) => Some(EngineCommand::Pin {
             value: matches.get_one::<String>("value").cloned(),
             check: flag(matches, "check"),

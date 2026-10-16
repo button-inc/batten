@@ -931,6 +931,12 @@ const ENGINE_PIN_VALUE: FlagDecl = FlagDecl::positional_optional(
     "The pin to write: a release tag (v0.0.201), `source` for this tree's digest, or `version` for this engine's own release; omitted, refresh a declared source pin",
 );
 
+/// `engine use`'s value (CLOUD-2398): `release` or `tree`.
+const ENGINE_USE_VALUE: FlagDecl = FlagDecl::positional(
+    "engine",
+    "The engine this worktree's invocations mediate with: `release`, the pinned release, or `tree`, the checkout's own target/release build",
+);
+
 /// `engine pin --check`: say whether the file would change, and change nothing.
 const ENGINE_PIN_CHECK: FlagDecl = FlagDecl {
     id: "check",
@@ -8001,6 +8007,19 @@ pub const SURFACE: &[CommandDecl] = &[
         exits: EXITS_STANDARD,
         effect: Effect::Write,
         flags: &[],
+    },
+    // `write`: one record under the worktree's STATE directory, never the tree
+    // (CLOUD-2398). Which engine mediates is one operator's choice on one host,
+    // so nothing committed changes and a reclaimed container starts on the
+    // release.
+    CommandDecl {
+        path: "engine use",
+        id: "engine.use",
+        about: "Record whether this worktree's invocations run the pinned release or the checkout's own build",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Write,
+        flags: &[ENGINE_USE_VALUE],
     },
     CommandDecl {
         path: "engine gate",

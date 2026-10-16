@@ -23,10 +23,21 @@ use std::path::{Path, PathBuf};
 /// (so `cargo`-built binaries still resolve their own tools), `HOME` in the
 /// case's scratch tree, and `env` on top.
 fn install(home: &Path, path: &[PathBuf], env: &[(&str, &str)]) -> std::process::Output {
+    install_as(Path::new(env!("CARGO_BIN_EXE_batten")), home, path, env)
+}
+
+/// [`install`], running `program`: a private copy, stamped or not as the case
+/// needs (CLOUD-2398).
+fn install_as(
+    program: &Path,
+    home: &Path,
+    path: &[PathBuf],
+    env: &[(&str, &str)],
+) -> std::process::Output {
     // EXACTLY these directories: a root host's ambient PATH carries a writable
     // `/usr/local/bin`, which `engine install` would rightly choose.
     let joined = std::env::join_paths(path).expect("a PATH entry carries no separator");
-    let mut command = common::batten();
+    let mut command = common::batten_at(program);
     command
         .args(["engine", "install"])
         .current_dir(home)
@@ -42,7 +53,23 @@ fn install(home: &Path, path: &[PathBuf], env: &[(&str, &str)]) -> std::process:
     for (name, value) in env {
         command.env(name, value);
     }
-    command.output().expect("run batten engine install")
+    command
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    common::spawn_copy(&mut command)
+        .wait_with_output()
+        .expect("run batten engine install")
+}
+
+/// A private copy of the binary in `dir`, stamped as release `tag` the way
+/// `install.sh` stamps its verified download before running it.
+fn stamped_copy(dir: &Path, tag: &str) -> PathBuf {
+    let copy = dir.join("download").join(binary());
+    std::fs::create_dir_all(copy.parent().unwrap()).unwrap();
+    std::fs::copy(env!("CARGO_BIN_EXE_batten"), &copy).unwrap();
+    batten::engine::stamp_release(&copy, tag).unwrap();
+    copy
 }
 
 /// The file `engine install` places: `batten.exe` on Windows.
@@ -448,15 +475,18 @@ fn the_ref_outranks_the_worktree_pin() {
 
 /// The bootstrap's download is placed even when the worktree pins exactly the
 /// running release: a download is never "already installed" just because it is
-/// current, and it runs off `PATH`.
+/// current, and it runs off `PATH`. The download is the one `install.sh`
+/// stamped as the release (CLOUD-2398), and the placed copy carries the stamp.
 #[test]
 fn the_bootstrap_places_a_running_pin() {
     let home = common::scratch_repo("engine-install-running-pin");
     let running = format!("v{}", env!("CARGO_PKG_VERSION"));
     pin_worktree(&home, &running);
+    let download = stamped_copy(&home, &running);
     let named = home.join("bin");
     let named_str = named.display().to_string();
-    let output = install(
+    let output = install_as(
+        &download,
         &home,
         std::slice::from_ref(&named),
         &[("BATTEN_INSTALL_DIR", &named_str)],
@@ -476,6 +506,50 @@ fn the_bootstrap_places_a_running_pin() {
         std::fs::read(named.join(binary())).unwrap(),
         std::fs::read(env!("CARGO_BIN_EXE_batten")).unwrap(),
         "the running binary, which is the pin, was placed"
+    );
+    assert_eq!(
+        batten::engine::release_of(&named.join(binary())).as_deref(),
+        Some(running.as_str()),
+        "and it is stamped as the release it is"
+    );
+}
+
+/// A RUNNING BUILD THAT REPORTS THE PIN'S VERSION IS NOT THE RELEASE
+/// (CLOUD-2398), `#MUTANT release-bytes-copies-unstamped`. Unstamped, its bytes
+/// are never placed under the release's name: the release is fetched and
+/// verified, and the copy placed carries the release stamp.
+#[test]
+fn an_install_from_an_unstamped_build_fetches_the_release() {
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let home = common::scratch_repo("engine-install-unstamped-running");
+    let running = format!("v{}", env!("CARGO_PKG_VERSION"));
+    pin_worktree(&home, &running);
+    let named = home.join("bin");
+    let named_str = named.display().to_string();
+    let (_host, served) = release_host(&home, &running, &running);
+    let output = install(
+        &home,
+        std::slice::from_ref(&named),
+        &with_named(&served, &named_str),
+    );
+    assert!(
+        output.status.success(),
+        "{}{}",
+        stdout(&output),
+        common::stderr(&output)
+    );
+    let placed = named.join(binary());
+    assert_eq!(
+        std::fs::read(&placed).unwrap(),
+        SHIPPED,
+        "the published release was placed, not the running build"
+    );
+    assert_eq!(
+        batten::engine::release_of(&placed).as_deref(),
+        Some(running.as_str()),
+        "stamped as the release it is"
     );
 }
 
@@ -1074,6 +1148,76 @@ mod repair {
             "following a pin never rewrites the installed binary"
         );
         assert!(!dir.join("cargo-ran").exists(), "nothing built");
+    }
+
+    /// TREE MODE OUTRANKS THE PIN (CLOUD-2398), `#MUTANT tree-mode-ignored`.
+    /// `batten engine use tree` hands an installed engine's invocations — the
+    /// hook's included — to the checkout's own build whatever the pin names, and
+    /// `engine use release` hands them back to the pinned release.
+    #[test]
+    fn tree_mode_hands_an_installed_engine_to_the_checkouts_build() {
+        let dir = repo("engine-use-tree");
+        let installed = common::scratch("engine-use-tree-installed");
+        let binary = private_binary(&installed);
+        common::write(
+            &dir,
+            "batten.toml",
+            "version = 1\nengine = { release = \"v9.9.9\" }\n",
+        );
+        seed_release(&dir, "v9.9.9");
+        checkout_build(&dir, &"2".repeat(64));
+        let envelope = r#"{"hook_event_name":"PreToolUse","permission_mode":"default","tool_name":"Bash","tool_input":{"command":"touch x"}}"#;
+        let args = ["adjudicate", "--harness", "claude-code"];
+
+        let chose = run(&binary, &dir, &["engine", "use", "tree"], "");
+        assert!(chose.status.success(), "{}", text(&chose));
+        let tree = run(&binary, &dir, &args, envelope);
+        assert!(
+            text(&tree).contains("checkout build ran adjudicate --harness claude-code"),
+            "tree mode hands the hook to the checkout's build: {}",
+            text(&tree)
+        );
+
+        let back = run(&binary, &dir, &["engine", "use", "release"], "");
+        assert!(back.status.success(), "{}", text(&back));
+        let release = run(&binary, &dir, &args, envelope);
+        assert!(
+            text(&release).contains("pinned v9.9.9 ran adjudicate --harness claude-code"),
+            "and `engine use release` hands it back to the pin: {}",
+            text(&release)
+        );
+    }
+
+    /// SESSION START SAYS SO (CLOUD-2398), `#MUTANT engine-use-unannounced`: the
+    /// choice lives outside the tree, so the start of each session it governs is
+    /// the one place it can be seen.
+    #[test]
+    fn session_start_announces_tree_mode() {
+        let dir = repo("engine-use-announced");
+        // INSIDE the checkout, so no hand-off applies and this binary answers.
+        let binary = private_binary(&dir);
+        let envelope = r#"{"hook_event_name":"SessionStart","session_id":"cloud-2398-tree","source":"startup"}"#;
+        let args = ["adjudicate", "--harness", "claude-code"];
+
+        let before = run(&binary, &dir, &args, envelope);
+        assert!(
+            !text(&before).contains("engine use tree"),
+            "the release is the silent default: {}",
+            text(&before)
+        );
+        let chose = run(&binary, &dir, &["engine", "use", "tree"], "");
+        assert!(chose.status.success(), "{}", text(&chose));
+        let after = run(&binary, &dir, &args, envelope);
+        assert!(
+            text(&after).contains("engine use tree"),
+            "session start names tree mode: {}",
+            text(&after)
+        );
+        assert!(
+            text(&after).contains("mise run build:release"),
+            "and, with no build yet, the build: {}",
+            text(&after)
+        );
     }
 
     #[test]

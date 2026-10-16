@@ -952,6 +952,8 @@ mod tests {
             "engine pin".to_owned(),
             "engine stamp".to_owned(),
             "engine update".to_owned(),
+            // Which engine a worktree mediates with (CLOUD-2398).
+            "engine use".to_owned(),
             "exec".to_owned(),
             // The schema is emitted by `generate`, not `config`: it is a
             // derivation of the config types, and §11 gives every

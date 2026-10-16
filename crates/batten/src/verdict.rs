@@ -1581,6 +1581,9 @@ pub enum Native {
     SetupLaunchMissing,
     /// A declared local MCP server failed its `initialize` probe (CLOUD-2398).
     ServerProbeFailed,
+    /// This worktree mediates with the checkout's own build, not the pinned
+    /// release, because `batten engine use tree` asked for it (CLOUD-2398).
+    EngineUseTree,
 }
 
 impl Native {
@@ -1677,6 +1680,7 @@ impl Native {
         Native::CargoRetireNow,
         Native::SetupLaunchMissing,
         Native::ServerProbeFailed,
+        Native::EngineUseTree,
     ];
 
     /// The classes the CONFIG LOADER raises, in `parse_ungated` order.
@@ -1728,6 +1732,7 @@ impl Native {
             Native::HandlerDenied => "handler answer denied",
             Native::SetupLaunchMissing => "setup launch missing",
             Native::ServerProbeFailed => "server probe failed",
+            Native::EngineUseTree => "engine use tree",
             Native::ScannerUnpinned => "scanner pin missing",
             Native::ScannerUnprovisioned => "scanner install missing",
             Native::SpawningRuleOnReadVerb => "spawn run refused",
@@ -2157,6 +2162,18 @@ and while that fails, a call to the server's tools or to a routed path is refuse
 it would reach nothing. A reclaimed container fails the probe again, so the refusal \
 re-arms. It names the install commands to launch in the background; launching one exactly \
 as named is admitted.",
+        routes: &[read("config read first", "batten.toml")],
+        applicability: Applicability::Advice,
+    },
+    VendoredVerdict {
+        id: "engine use tree",
+        gloss: "this worktree mediates with the checkout's own build, not the pinned release",
+        class: "Hooks run the release the `engine` pin names, proven by the release stamp a \
+verified install writes. `batten engine use tree` records, in this worktree's state directory \
+and never in the tree, that every invocation outside the checkout is handed to its own \
+`target/release` build instead — the explicit way to test the tree's engine. Session start \
+says so every time, naming the build's source stamp, so the choice cannot be forgotten; \
+`batten engine use release` ends it, and a reclaimed container starts on the release.",
         routes: &[read("config read first", "batten.toml")],
         applicability: Applicability::Advice,
     },
@@ -3624,6 +3641,7 @@ mod tests {
             | Native::HandlerDenied
             | Native::SetupLaunchMissing
             | Native::ServerProbeFailed
+            | Native::EngineUseTree
             | Native::ScannerUnpinned
             | Native::ScannerUnprovisioned
             | Native::SpawningRuleOnReadVerb

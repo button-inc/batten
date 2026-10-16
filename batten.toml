@@ -5201,21 +5201,6 @@ continue_on_error = false
 [mcp]
 permission_aliases = ["Claude_Code_Remote"]
 
-# SERENA IS A LOCAL SERVER LIKE ANY OTHER, AND IS GATED UNTIL IT ANSWERS
-# (CLOUD-2398). It used to justify holding every session start behind the whole
-# toolchain install, because its `mise exec` launch lost the host's one
-# handshake to a cold install. Now batten probes it with `initialize` before any
-# call reaches it — its tools, or a memory path — and refuses those calls, naming
-# the install, until it answers. `batten provision apply` first: it is what puts
-# `mise` on PATH, and nothing before it may assume one.
-[[mcp.local]]
-server = "serena"
-install = [
-  ["batten", "provision", "apply"],
-  ["mise", "install", "uv", "pipx:serena-agent@1.7.0"],
-]
-routes = [".serena/memories/**"]
-
 # Claude Code's own local wiring.
 [[mcp.source]]
 id = "claude-code-local"
@@ -12404,7 +12389,7 @@ expires = "2027-02-28"
 # tree move mid-session left the engine adjudicating from source it was not built
 # from until somebody ran `doctor` by hand.
 #
-# THE SESSION-START HALF IS A DIFFERENT ROW, and `mediator-matches-the-tree` says
+# THE SESSION-START HALF IS A DIFFERENT ROW, and `mediator-matches-the-pin` says
 # so itself: it covers the container that comes up already stale. This covers the
 # container that GOES stale, which is the case a session-start check structurally
 # cannot see — it has already run.
@@ -12432,7 +12417,7 @@ expires = "2027-02-28"
 # installing it — so the direct spelling made `batten doctor` exit 1 on every
 # checkout that had not installed it, and `this_repository_is_healthy` went red
 # while passing locally. Every other handler row names `mise` or a repo-relative
-# script for the same reason. `mediator-matches-the-tree` may spawn `batten`
+# script for the same reason. `mediator-matches-the-pin` may spawn `batten`
 # because a `[[startup]]` row is not resolved by that check.
 #
 # The task is the engine verb and nothing else — no new `mise-tasks/*.sh`
@@ -12444,7 +12429,7 @@ on = "post-tool"
 run = ["mise", "run", "doctor:mediator"]
 matcher = "^Bash$"
 command_matcher = '\bgit\b.*\b(checkout|switch|rebase|merge|reset|pull|cherry-pick|revert|am|worktree)\b'
-# A stat of two paths and a hash comparison; `mediator-matches-the-tree` runs the
+# Two small reads and a few stats; `mediator-matches-the-pin` runs the
 # same verb at session start. Same bound as the other tool-event rows.
 timeout_ms = 2000
 owner = "CLOUD-1650"
@@ -12513,11 +12498,6 @@ expires = "2027-02-28"
 id = "session-install"
 on = "session-start"
 run = ["mise", "run", "session:install"]
-# THE AGENT'S, IN THE BACKGROUND (CLOUD-2398). The hook names this row and the
-# `setup launch missing` gate holds mutation until it is launched; run inline it
-# held the operator for the whole install. `timeout_ms` below bounds nothing
-# while this is set, and stays as the measured figure for the inline fallback.
-background = true
 # Ten minutes. The measured cold figure for ONE tool was 24s (`pipx:serena-agent`,
 # CLOUD-196); this installs the whole `[tools]` table on a container with no
 # cache, and it is the step every other one depends on.
@@ -12528,9 +12508,6 @@ expires = "2027-02-28"
 id = "session-doctor"
 on = "session-start"
 run = ["mise", "run", "session:doctor"]
-# Background for `session-install`'s reason (CLOUD-2398): its `startup --repair`
-# is where the 2026-10-16 cold session's six-minute release build ran inline.
-background = true
 # Fifteen minutes, the longest bound here and the one with the least measurement
 # behind it: doctor's rustup half installs cross targets over the network, and
 # the failure this step exists to prevent (CLOUD-218's `detected conflict`) is
@@ -12645,9 +12622,6 @@ expires = "2027-02-28"
 [[hook.handler]]
 id = "session-container-preflight"
 on = "session-start"
-# Background (CLOUD-2398): network probes are slow to fail, and a failure is
-# read from the task's own output rather than held behind the hook.
-background = true
 # THROUGH `mise`, NOT `batten` BY NAME, for `doctor:mediator`'s reason
 # (bc420eb1): `doctor`'s `hook-handlers` check resolves every handler program,
 # and a CI runner builds `batten` rather than installing it, so naming it here
@@ -12702,8 +12676,6 @@ expires = "2027-02-28"
 id = "session-credential"
 on = "session-start"
 run = ["mise", "run", "gh-preflight"]
-# Background for `session-container-preflight`'s reason (CLOUD-2398).
-background = true
 # THE SECOND ROW. `gh-preflight` walks the read endpoints the lifecycle tasks call
 # and reports the claim GitHub itself names in each 403; it is the diagnosis and
 # it already exits non-zero. Since CLOUD-843 its body is `batten doctor forge`
@@ -12750,9 +12722,6 @@ expires = "2027-02-28"
 id = "session-census"
 on = "session-start"
 run = ["batten", "record", "census", "report", "--once"]
-# Background (CLOUD-2398): its report reaches the agent as the task's output,
-# the channel a backgrounded row speaks on.
-background = true
 # LAST, AND ONE OF THE TWO ROWS THAT MAY SPEAK ON THE NORMAL PATH. Its report is
 # something this hook has to say to a reader with an action to take — what was
 # running when the container we replaced went down (CLOUD-451) — so its stdout is
@@ -18224,7 +18193,22 @@ gloss = "this clone's commit path runs the gate, so a commit made here cannot by
 check = ["batten", "doctor", "gate"]
 repair = ["mise", "run", "session:git-hooks"]
 
-# THE ENGINE THAT ADJUDICATES THIS TREE MUST HAVE BEEN BUILT FROM IT (CLOUD-1620).
+# THE ENGINE THE HOOK RUNS MUST BE THE PINNED RELEASE (CLOUD-2398), or, under
+# `batten engine use tree`, the checkout's current build.
+#
+# THIS ROW USED TO SAY THE OPPOSITE, and the history below is why it changed.
+# It required the installed engine to be byte-identical to `target/release`,
+# so the hook ran the tree's build by construction and its repair was a
+# release build: the six minutes a cold session start held the operator on
+# 2026-10-16. That build reports the last release's version, which then
+# satisfied `release = "v0.0.216"` without being that release. `engine gate`
+# (CLOUD-2063) has since made the config unable to outrun the pin, so the
+# release always loads it and the reason below for judging with the tree's
+# build no longer holds on `main`; testing the tree's engine is an explicit
+# `batten engine use tree`, recorded outside the tree and announced every
+# session. The repair is a verified download, seconds rather than a build.
+#
+# The original reasoning, kept for the failure it records:
 #
 # `mise.toml`'s env puts `target/release` ahead of `~/.local/bin`, deliberately:
 # consumer #1 judges with the engine it ships rather than with the last release.
@@ -18256,29 +18240,29 @@ repair = ["mise", "run", "session:git-hooks"]
 # session-start half, needs no new mechanism, and covers the moment a container
 # comes up already stale — which is how this one came up.
 [[startup]]
-id = "mediator-matches-the-tree"
-gloss = "the engine adjudicating this tree was built from it, so a declared gate is not silently dropped"
+id = "mediator-matches-the-pin"
+gloss = "the engine the hook runs is the pinned release, or the checkout's current build when tree mode is on"
 check = ["batten", "doctor", "mediator"]
-repair = ["mise", "run", "install:local"]
+repair = ["batten", "engine", "install"]
 
 # AND THE ENGINE ON `PATH` MUST RESOLVE EVERY ROW OF THIS CONFIG.
 #
-# `mediator-matches-the-tree` compares the planted binary with the tree's build by
-# content and time, so it passes whenever the two agree — including when BOTH
-# predate the config, which is how a rebase that brings a new key under a live
-# branch leaves a session: the engine loads `batten.toml`, drops each row naming a
-# key it does not know, and every dropped row decides nothing. Both binaries can
-# report one version over that, so no version comparison can see it either.
-# `engine-reads-the-authority` asks `config show`, which exits `0` over a drop by
-# design. Only the bare report's `config` check answered `config-rows-dropped`,
-# and no row asked it; `doctor config` is that check alone. An installed engine
-# too old to know the sub-verb fails it as a usage error, and the same repair —
-# the tree's build — is the right one there too.
+# `mediator-matches-the-pin` asks WHICH engine the hook reaches, never whether
+# that engine can read this config — a rebase that brings a new key under a live
+# branch leaves a session whose engine loads `batten.toml`, drops each row naming
+# a key it does not know, and lets every dropped row decide nothing. Both
+# binaries can report one version over that, so no version comparison can see
+# it either. `engine-reads-the-authority` asks `config show`, which exits `0`
+# over a drop by design. Only the bare report's `config` check answered
+# `config-rows-dropped`, and no row asked it; `doctor config` is that check
+# alone. The repair is the pinned release (CLOUD-2398): `engine gate` refuses a
+# config the pin cannot load, so the release reads every row `main` carries,
+# and a branch testing a newer key does so under `batten engine use tree`.
 [[startup]]
 id = "engine-resolves-every-row"
 gloss = "the engine on PATH resolves every row of this config, so none is dropped undecided"
 check = ["batten", "doctor", "config"]
-repair = ["mise", "run", "install:local"]
+repair = ["batten", "engine", "install"]
 
 # THE STEP CACHE'S TABLE (CLOUD-424), retiring `[tasks.step-receipt]`'s hard-coded
 # `case` under CLOUD-843. Each row is a step a task brackets with `batten step`:

@@ -496,7 +496,15 @@ pub(crate) fn bypass_env_vars_in(path: &Path) -> Vec<String> {
     reason = "stays, and test-only: the subject of an end-to-end test is the compiled binary, so there is nothing to move in-process without testing something else"
 )]
 pub(crate) fn batten() -> Batten {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_batten"));
+    batten_at(Path::new(env!("CARGO_BIN_EXE_batten")))
+}
+
+/// [`batten`], spawning `program` instead: a private copy of the binary, for a
+/// case whose subject is a sidecar beside it — a release stamp a verified
+/// install wrote (CLOUD-2398) — which a stamp beside the shared binary would
+/// hand to every case running in parallel.
+pub(crate) fn batten_at(program: &Path) -> Batten {
+    let mut command = Command::new(program);
     for name in declared_env_vars() {
         command.env_remove(name);
     }

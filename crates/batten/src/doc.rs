@@ -204,6 +204,15 @@ pub const VENDORED_DOCS: &[VendoredDoc] = &[
         dont: &["read the routed path another way while the server is down"],
     },
     VendoredDoc {
+        id: "engine use tree",
+        why: Some("Someone ran `batten engine use tree` to test the checkout's own engine"),
+        act: &[
+            "keep it while testing the tree's engine, rebuilding with `mise run build:release` after each change",
+            "run `batten engine use release` to mediate with the pinned release again",
+        ],
+        dont: &["leave it on once the testing is done"],
+    },
+    VendoredDoc {
         id: "handler answer denied",
         why: Some("A program the config registers as a hook handler answered deny for this call"),
         act: &["read that `[hook.handler]` row in `batten.toml` for what it guards, and meet it"],
