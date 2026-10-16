@@ -8227,17 +8227,6 @@ fn program_name(token: &str) -> &str {
     token.rsplit('/').next().unwrap_or(token)
 }
 
-/// Each segment's effective program, and whether the pin selected it
-/// (CLOUD-1028).
-///
-/// A segment with no program at all — a bare redirection, an empty span — yields
-/// nothing rather than a null entry: the list is the programs this call runs,
-/// and a caller iterating it should not have to skip holes.
-///
-/// `RequireVia::Mise` is named because it is the only variant the model carries.
-/// The day a second mediator exists this becomes a set and the key becomes a
-/// name rather than a boolean; spelling it now would be a vocabulary with one
-/// member and no consumer.
 /// Every command a shell text runs, each as its words with quotes resolved and
 /// comments dropped, through the parse every hook judges by (CLOUD-2388); `None`
 /// when that parse could not read all of it.
@@ -8329,6 +8318,17 @@ pub(crate) fn background_max(max: Option<&str>, default: Option<&str>) -> u64 {
     maximum.clamp(7_200_000, 2_147_483_647)
 }
 
+/// Each segment's effective program, and whether the pin selected it
+/// (CLOUD-1028).
+///
+/// A segment with no program at all — a bare redirection, an empty span — yields
+/// nothing rather than a null entry: the list is the programs this call runs,
+/// and a caller iterating it should not have to skip holes.
+///
+/// `RequireVia::Mise` is named because it is the only variant the model carries.
+/// The day a second mediator exists this becomes a set and the key becomes a
+/// name rather than a boolean; spelling it now would be a vocabulary with one
+/// member and no consumer.
 fn program_reach(command: &str) -> Vec<serde_json::Value> {
     let crate::facts::Look::Is(parsed) = segments(command) else {
         return Vec::new();

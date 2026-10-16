@@ -399,6 +399,89 @@ impl<'ast> Visit<'ast> for Exits {
     fn visit_item(&mut self, _: &'ast syn::Item) {}
 }
 
+/// Every shell command a `run:` text runs, each as its words, through the
+/// hooks' own parse (CLOUD-2388); `None` when that parse could not read it.
+#[doc(hidden)]
+#[must_use]
+pub fn shell_commands(text: &str) -> Option<Vec<Vec<String>>> {
+    crate::hook::shell_commands(text)
+}
+
+/// What a source's `require_tool`/`require_bin` calls declare (CLOUD-2388).
+#[doc(hidden)]
+#[derive(Debug, Default)]
+pub struct RequireCensus {
+    /// Each call's first argument, when it is a string literal.
+    pub tools: Vec<String>,
+    /// Calls whose first argument is not a string literal, and the resolver
+    /// named as a value (`.map(require_tool)`): requirements no reader can name.
+    pub unnamed: usize,
+    /// String literals spelling `which`: a `mise which` the resolver does not make.
+    pub which_literals: usize,
+}
+
+/// Whether `path` names the resolver: its last segment is `require_tool` or
+/// `require_bin`, whatever path reaches it.
+fn names_resolver(path: &syn::Path) -> bool {
+    path.segments
+        .last()
+        .is_some_and(|last| last.ident == "require_tool" || last.ident == "require_bin")
+}
+
+/// The `require_tool`/`require_bin` calls in `file`, by any path that ends in
+/// one, inside a macro whose body is comma-separated expressions (`assert!`,
+/// `vec!`, `format!`) as well as outside.
+#[doc(hidden)]
+#[must_use]
+pub fn require_census(file: &syn::File) -> RequireCensus {
+    struct Walk(RequireCensus);
+    impl<'a> Visit<'a> for Walk {
+        fn visit_expr_call(&mut self, call: &'a syn::ExprCall) {
+            if let syn::Expr::Path(path) = &*call.func
+                && names_resolver(&path.path)
+            {
+                match call.args.first() {
+                    Some(syn::Expr::Lit(syn::ExprLit {
+                        lit: syn::Lit::Str(tool),
+                        ..
+                    })) => self.0.tools.push(tool.value()),
+                    _ => self.0.unnamed += 1,
+                }
+                // The callee is this call's, not a bare path's: walk the
+                // arguments only, or the path would count again below.
+                for arg in &call.args {
+                    self.visit_expr(arg);
+                }
+                return;
+            }
+            syn::visit::visit_expr_call(self, call);
+        }
+        fn visit_expr_path(&mut self, path: &'a syn::ExprPath) {
+            if names_resolver(&path.path) {
+                self.0.unnamed += 1;
+            }
+        }
+        fn visit_macro(&mut self, mac: &'a syn::Macro) {
+            if let Ok(args) = mac.parse_body_with(
+                syn::punctuated::Punctuated::<syn::Expr, syn::Token![,]>::parse_terminated,
+            ) {
+                for arg in &args {
+                    self.visit_expr(arg);
+                }
+            }
+        }
+        fn visit_lit_str(&mut self, lit: &'a syn::LitStr) {
+            // Split, so the census does not count its own needle.
+            if lit.value() == concat!("whi", "ch") {
+                self.0.which_literals += 1;
+            }
+        }
+    }
+    let mut walk = Walk(RequireCensus::default());
+    walk.visit_file(file);
+    walk.0
+}
+
 #[cfg(test)]
 #[allow(clippy::expect_used)]
 mod tests {
@@ -454,63 +537,4 @@ mod tests {
         let dir = checkout("outside");
         assert!(!falls_through(&dir, &dir.join("tmp")));
     }
-}
-
-/// Every shell command a `run:` text runs, each as its words, through the
-/// hooks' own parse (CLOUD-2388); `None` when that parse could not read it.
-#[doc(hidden)]
-#[must_use]
-pub fn shell_commands(text: &str) -> Option<Vec<Vec<String>>> {
-    crate::hook::shell_commands(text)
-}
-
-/// What a source's `require_tool`/`require_bin` calls declare (CLOUD-2388).
-#[doc(hidden)]
-#[derive(Debug, Default)]
-pub struct RequireCensus {
-    /// Each call's first argument, when it is a string literal.
-    pub tools: Vec<String>,
-    /// Calls whose first argument is not a string literal: a requirement no
-    /// reader of the source can name.
-    pub unnamed: usize,
-    /// String literals spelling `which`: a `mise which` the call does not make.
-    pub which_literals: usize,
-}
-
-/// The `require_tool`/`require_bin` calls in `file`, by any path that ends in
-/// one (`common::`, `crate::common::`, an import), outside macros.
-#[doc(hidden)]
-#[must_use]
-pub fn require_census(file: &syn::File) -> RequireCensus {
-    struct Walk(RequireCensus);
-    impl<'a> Visit<'a> for Walk {
-        fn visit_expr_call(&mut self, call: &'a syn::ExprCall) {
-            if let syn::Expr::Path(path) = &*call.func
-                && path
-                    .path
-                    .segments
-                    .last()
-                    .is_some_and(|last| last.ident == "require_tool" || last.ident == "require_bin")
-            {
-                match call.args.first() {
-                    Some(syn::Expr::Lit(syn::ExprLit {
-                        lit: syn::Lit::Str(tool),
-                        ..
-                    })) => self.0.tools.push(tool.value()),
-                    _ => self.0.unnamed += 1,
-                }
-            }
-            syn::visit::visit_expr_call(self, call);
-        }
-        fn visit_lit_str(&mut self, lit: &'a syn::LitStr) {
-            // Spelled inside a macro, which this walk does not enter, so the
-            // census does not count its own needle.
-            if lit.value() == concat!("whi", "ch") {
-                self.0.which_literals += 1;
-            }
-        }
-    }
-    let mut walk = Walk(RequireCensus::default());
-    walk.visit_file(file);
-    walk.0
 }
