@@ -423,12 +423,9 @@ fn sync_directory(directory: &Path) {
 mod tests {
     use super::*;
 
+    /// The crate's reaped scratch root, so no case leaves a directory in `/tmp`.
     fn scratch(name: &str) -> PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("batten-durable-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("scratch");
-        dir
+        crate::scratch::scratch(&format!("durable-{name}"))
     }
 
     /// THE GLUE CASE (CLOUD-843, round-2 review): a fragment a killed writer left
