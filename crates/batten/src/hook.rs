@@ -6173,10 +6173,8 @@ fn substitution_decision(
 ) -> Option<Refusal> {
     for stage in first_stages(parsed, cwd) {
         let cwd = stage.cwd.as_deref();
-        let tokens = &stage.tokens;
-        let program_index = stage.program;
-        let program = program_token(tokens[program_index]);
-        let operands = &tokens[program_index + 1..];
+        let program = stage.program();
+        let operands = stage.operands();
         if !substitutes
             .iter()
             .any(|entry| substitute_matches(entry, program, operands))
@@ -6196,7 +6194,7 @@ fn substitution_decision(
         // where a trailing `)` would otherwise stop
         // `(grep needle crates/batten/src/lib.rs)` from matching the path the row
         // selected on.
-        let Some(target) = tokens[program_index + 1..]
+        let Some(target) = operands
             .iter()
             .take_while(|token| !token.contains('>') && !token.contains('<'))
             .map(|token| program_token(token))
@@ -6204,7 +6202,12 @@ fn substitution_decision(
         else {
             continue;
         };
-        return Some(substitution_refusal(rule, program, target));
+        return Some(operand_refusal(
+            rule,
+            crate::verdict::Native::ToolSubstituted,
+            program,
+            target,
+        ));
     }
     None
 }
@@ -6215,6 +6218,19 @@ struct FirstStage<'a> {
     tokens: Vec<&'a str>,
     program: usize,
     cwd: Option<std::path::PathBuf>,
+}
+
+impl<'a> FirstStage<'a> {
+    /// The program, NORMALISED: a grouped command carries its opening paren on
+    /// the token, so `(grep …` is not `grep` until [`program_token`] has read it.
+    fn program(&self) -> &'a str {
+        program_token(self.tokens[self.program])
+    }
+
+    /// Every word after the program, raw.
+    fn operands(&self) -> &[&'a str] {
+        &self.tokens[self.program + 1..]
+    }
 }
 
 /// Every stage of `parsed` that is NOT fed by a pipe and resolves a program,
@@ -6244,8 +6260,7 @@ struct FirstStage<'a> {
 /// Measured: `FOO=1 && grep needle crates/batten/src/lib.rs` was ALLOWED while
 /// the bare `grep` was refused, because an early return on the assignment left
 /// every later element unjudged — the permissive direction, which nothing
-/// reports. The program index is NORMALISED by the caller through
-/// [`program_token`]: a grouped command carries its opening paren on the token.
+/// reports.
 //MUTANT-SUITE crates/batten/src/hook.rs
 //MUTANT script-pipe-refused|s@^            continue; // fed by a pipe$@            {}@|a_tracked_script_or_a_downstream_interpreter_is_allowed
 fn first_stages<'a>(parsed: &'a [Segment], cwd: Option<&Path>) -> Vec<FirstStage<'a>> {
@@ -6291,6 +6306,22 @@ struct Grammar {
     valued: &'static str,
     /// Long options whose value is the next word.
     valued_long: &'static [&'static str],
+    /// Whether short options BUNDLE (`-ne`). Only a known family's do: the
+    /// fallback also reads every program no table classifies, where `-verbose`
+    /// is one word and reading its `e` as inline would refuse a mention.
+    bundles: bool,
+}
+
+impl Grammar {
+    /// The short options one argv word carries: every letter of a bundle, or
+    /// the one letter of a lone `-x`, or none for a long option or an operand.
+    fn shorts<'w>(&self, word: &'w str) -> Option<&'w str> {
+        let rest = word.strip_prefix('-')?;
+        if rest.is_empty() || rest.starts_with('-') {
+            return None;
+        }
+        (self.bundles || rest.chars().count() == 1).then_some(rest)
+    }
 }
 
 /// The grammar `program` is read through: its family's, or a conservative one
@@ -6302,6 +6333,7 @@ fn grammar(program: &str) -> Grammar {
             inline_long: &[],
             valued: "WX",
             valued_long: &["--check-hash-based-pycs"],
+            bundles: true,
         },
         "node" | "nodejs" => Grammar {
             inline: "ep",
@@ -6314,24 +6346,30 @@ fn grammar(program: &str) -> Grammar {
                 "--conditions",
                 "--input-type",
             ],
+            bundles: true,
         },
         "perl" => Grammar {
             inline: "eE",
             inline_long: &[],
-            valued: "",
+            valued: "I",
             valued_long: &[],
+            bundles: true,
         },
         "ruby" => Grammar {
             inline: "e",
             inline_long: &[],
             valued: "rIEC",
             valued_long: &["--encoding"],
+            bundles: true,
         },
+        // The fallback keeps CLOUD-2231's original reading: exact `-c`, `-e`,
+        // `-E`, `--command`, `--eval`, never a bundle.
         _ => Grammar {
-            inline: "ce",
+            inline: "ceE",
             inline_long: &["--command", "--eval"],
             valued: "",
             valued_long: &[],
+            bundles: false,
         },
     }
 }
@@ -6348,7 +6386,7 @@ fn grammar(program: &str) -> Grammar {
 /// that text. An operand naming a variable or `~`, or a relative one with no
 /// known directory, cannot be placed and is left alone, as is every operand
 /// when the root is unknown or does not resolve.
-//MUTANT script-outside-admitted|s@^        if outside_repository(&resolved, root) {$@        if false {@|an_interpreter_running_an_inline_or_untracked_script_is_refused
+//MUTANT script-outside-admitted|s@^        if outside_repository(&resolved, root)$@        if false@|an_interpreter_running_an_inline_or_untracked_script_is_refused
 fn interpreter_decision(
     rule: &Rule,
     interprets: &[String],
@@ -6360,34 +6398,69 @@ fn interpreter_decision(
     // `relative_to`'s `None` would then read as "outside" for every operand.
     let root = root.filter(|root| root.is_dir())?;
     for stage in first_stages(parsed, cwd) {
-        let program = program_name(program_token(stage.tokens[stage.program]));
+        let program = program_name(stage.program());
         if !interprets.iter().any(|entry| entry == program) {
             continue;
         }
-        let Some(operand) = script_operand(&grammar(program), &stage.tokens[stage.program + 1..])
-        else {
+        let Some(operand) = script_operand(&grammar(program), stage.operands()) else {
             continue;
         };
         let Some(resolved) = shell_resolved(operand, stage.cwd.as_deref()) else {
             continue;
         };
-        if outside_repository(&resolved, root) {
-            return Some(Refusal::declared(
-                &rule.id,
+        // A CHECKOUT THE STAGE STANDS IN holds its script too: a linked
+        // worktree (whose policy root is the main checkout) and a sibling
+        // repository in one session both run reviewed code from their own
+        // tree. Asked only on the refusal path, so the ordinary call never
+        // opens a repository here.
+        let own_tree = || {
+            stage
+                .cwd
+                .as_deref()
+                .and_then(|here| crate::git::worktree_root(here).ok())
+        };
+        if outside_repository(&resolved, root)
+            && own_tree().is_none_or(|tree| outside_repository(&resolved, &tree))
+        {
+            return Some(operand_refusal(
+                rule,
                 crate::verdict::Native::ScriptRunLoose,
-                &[
-                    crate::verdict::Subject::Path {
-                        path: operand.to_owned(),
-                    },
-                    crate::verdict::Subject::Artifact {
-                        artifact: program.to_owned(),
-                    },
-                ],
-                Fix::declared(rule.reason.as_deref()),
+                program,
+                operand,
             ));
         }
     }
     None
+}
+
+/// The values of every INLINE option in an interpreter's argv: the program
+/// text it runs, read through the same [`grammar`] [`script_operand`] stops at,
+/// so the protected-path scan reads exactly what the operand gate leaves to it
+/// (CLOUD-2304). A value is the rest of the bundle (`-e'…'`) or the next word.
+fn inline_values(grammar: &Grammar, arguments: &[&str]) -> Vec<String> {
+    let mut values = Vec::new();
+    let mut words = arguments.iter().copied();
+    while let Some(word) = words.next() {
+        if grammar.inline_long.contains(&word) {
+            values.extend(words.next().map(str::to_owned));
+            continue;
+        }
+        let Some(bundle) = grammar.shorts(word) else {
+            continue;
+        };
+        if let Some((at, flag)) = bundle
+            .char_indices()
+            .find(|(_, flag)| grammar.inline.contains(*flag))
+        {
+            let rest = &bundle[at + flag.len_utf8()..];
+            if rest.is_empty() {
+                values.extend(words.next().map(str::to_owned));
+            } else {
+                values.push(rest.to_owned());
+            }
+        }
+    }
+    values
 }
 
 /// The script file an interpreter's argv names, read through its `grammar`, or
@@ -6410,8 +6483,12 @@ fn script_operand<'a>(grammar: &Grammar, arguments: &[&'a str]) -> Option<&'a st
         if word.starts_with("--") {
             continue;
         }
-        let Some(bundle) = word.strip_prefix('-') else {
+        if !word.starts_with('-') {
             return placeable(word).then_some(word);
+        }
+        // An option word that is not a bundle this grammar reads skips alone.
+        let Some(bundle) = grammar.shorts(word) else {
+            continue;
         };
         // A short bundle, read left to right: an inline option ends the search,
         // and a valued one takes the rest of the bundle or, at its end, the next
@@ -6491,11 +6568,7 @@ fn followed_cd(
     let [_, target] = tokens.as_slice() else {
         return None;
     };
-    if target.is_empty()
-        || target.starts_with('-')
-        || target.starts_with('~')
-        || target.contains('$')
-    {
+    if !placeable(target) || target.starts_with('-') {
         return None;
     }
     shell_resolved(target, current)
@@ -6678,7 +6751,15 @@ fn names_a_repository_path(token: &str, root: Option<&Path>, cwd: Option<&Path>)
 /// instruments a session carries varies; the four questions do not. So the cause
 /// names the questions and lets the caller map them onto what it has, which is
 /// the one part of this it can do and the engine cannot.
-fn substitution_refusal(rule: &Rule, program: &str, target: &str) -> Refusal {
+///
+/// Shared by the `interprets` predicate (CLOUD-2304), whose two pointers are the
+/// same pair under its own class: the script path and the interpreter.
+fn operand_refusal(
+    rule: &Rule,
+    class: crate::verdict::Native,
+    program: &str,
+    target: &str,
+) -> Refusal {
     // THE TWO POINTERS STAY INLINE and the paragraph does not (CLOUD-1285). Which
     // program was aimed at which path is what the caller acts on; the four
     // question classes and the downstream-of-a-pipe bound are the CLASS, and
@@ -6686,7 +6767,7 @@ fn substitution_refusal(rule: &Rule, program: &str, target: &str) -> Refusal {
     // `Refusal::declared` binds an admission to the first path-bearing subject.
     Refusal::declared(
         &rule.id,
-        crate::verdict::Native::ToolSubstituted,
+        class,
         &[
             crate::verdict::Subject::Path {
                 path: target.to_owned(),
@@ -8871,7 +8952,7 @@ fn protected_mutation(policy: &Policy, command: &str) -> Decision {
                     // mentions freely — the false positive that reverted the wide
                     // scan cannot recur here.
                     if own.is_none()
-                        && let Some(path) = script_texts(&arguments, &segment.stdin_text)
+                        && let Some(path) = script_texts(program, &arguments, &segment.stdin_text)
                             .into_iter()
                             .find_map(|text| protected_in_text(policy, &text))
                     {
@@ -8884,14 +8965,12 @@ fn protected_mutation(policy: &Policy, command: &str) -> Decision {
     Decision::Allow
 }
 
-/// The script an interpreter runs from its argv or its stdin: the value after
-/// `-c`, `-e`, `--command` or `--eval`, and every stdin text its segment binds.
-fn script_texts(arguments: &[&str], stdin: &[String]) -> Vec<String> {
-    let mut texts: Vec<String> = arguments
-        .windows(2)
-        .filter(|pair| matches!(pair[0], "-c" | "-e" | "-E" | "--command" | "--eval"))
-        .map(|pair| pair[1].to_owned())
-        .collect();
+/// The script an interpreter runs from its argv or its stdin: the value of every
+/// inline option its [`grammar`] declares, and every stdin text its segment
+/// binds. ONE grammar with the operand gate (CLOUD-2304), so a form that gate
+/// leaves to this scan as inline is a form this scan reads.
+fn script_texts(program: &str, arguments: &[&str], stdin: &[String]) -> Vec<String> {
+    let mut texts = inline_values(&grammar(program_name(program)), arguments);
     texts.extend(stdin.iter().cloned());
     texts
 }
@@ -14531,6 +14610,10 @@ deny contains "refused by themodule" if {
             "python3 - <<'EOF'\nopen('.serena/memories/core.md', 'a').close()\nEOF\n",
             "node -e 'require(\"fs\").writeFileSync(\".serena/memories/core.md\", \"\")'",
             "ruby <<< 'File.write(\".serena/memories/core.md\", \"\")'",
+            // CLOUD-2304: the forms the operand gate leaves here as inline are
+            // forms this scan reads, through the same grammar.
+            "node -p 'require(\"fs\").writeFileSync(\".serena/memories/core.md\", \"\")'",
+            "perl -ne 'open(F, \">>.serena/memories/core.md\")'",
         ] {
             let decision = guarded(command);
             assert!(
@@ -14653,6 +14736,7 @@ deny contains "refused by themodule" if {
             // A bundled inline program whose text starts like an absolute path.
             "perl -ne '/TODO/ and print' tools/x.py",
             "ruby -ne 'print' tools/x.py",
+            "perl -I /usr/share/perl5 tools/x.pl",
             // The root itself: the package's own entry.
             "node .",
             "python3 \"$SCRIPT\"",

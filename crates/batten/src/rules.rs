@@ -5284,6 +5284,12 @@ impl Rule {
                 self.id
             )));
         }
+        if self.interprets.as_ref().is_some_and(Vec::is_empty) {
+            return Err(UsageError::raise(format!(
+                "rule {}: kind \"pipeline\" requires at least one `interprets` entry; with none it recognises no interpreter",
+                self.id
+            )));
+        }
         // ONE of the two families, whole (CLOUD-864). The per-kind required
         // table cannot express this — it is a disjunction over sibling columns,
         // and that table is a flat list — so the obligation lands here, which is
@@ -5294,12 +5300,6 @@ impl Rule {
         // verdict-bearing command and nothing that could discard it, which
         // matches and decides nothing. Half a family is the inert row, not a
         // narrower gate.
-        if self.interprets.as_ref().is_some_and(Vec::is_empty) {
-            return Err(UsageError::raise(format!(
-                "rule {}: kind \"pipeline\" requires at least one `interprets` entry; with none it recognises no interpreter",
-                self.id
-            )));
-        }
         let discard_family = self.verdict.is_some() && self.filters.is_some();
         let substitution_family = self.substitutes.is_some() || self.interprets.is_some();
         if !discard_family && !substitution_family {
