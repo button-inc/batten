@@ -875,15 +875,16 @@ fn read_by_open(git_dir: &Path) -> Vec<Option<Vec<u8>>> {
     let common = gix::discover::path::from_plain_file(&git_dir.join("commondir"))
         .and_then(Result::ok)
         .map_or_else(|| git_dir.to_path_buf(), |common| git_dir.join(common));
-    [
+    let mut read = vec![
         git_dir.join("commondir"),
         git_dir.join("config"),
         git_dir.join("config.worktree"),
-        common.join("config"),
-    ]
-    .iter()
-    .map(|path| std::fs::read(path).ok())
-    .collect()
+    ];
+    // Without a `commondir` the common config IS `<git_dir>/config`, already read.
+    if common != git_dir {
+        read.push(common.join("config"));
+    }
+    read.iter().map(|path| std::fs::read(path).ok()).collect()
 }
 
 //MUTANT repository-memo-never-hits|s@^        (opened.read == now).then@        false.then@|a_repository_opened_twice_is_opened_once
