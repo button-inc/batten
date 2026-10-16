@@ -469,7 +469,11 @@ fn a_find_expression_operand_is_never_a_target() {
     }
     // The same word inside an expression is a value, and the search of `.`
     // still stands; start points read from a file are judged as `.` too.
-    deny_in(&dir, "find -name '*.rs' -exec rustfmt --version ;");
+    deny_in(&dir, "find -name '*.rs' -exec rustfmt --version \\;");
+    // A redirection is not one of find's words, so it neither spoils an
+    // informational run nor turns a search of `.` into one.
+    allow_in(&dir, "find --version 2>&1");
+    deny_in(&dir, "find -type f > files.txt");
     deny_in(&dir, "find -files0-from paths.txt -name '*.rs'");
 }
 
