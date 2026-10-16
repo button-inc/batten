@@ -617,19 +617,14 @@ fn a_competitor_whose_cheap_key_collides_is_fetched_and_one_that_collides_with_n
         filled.complete,
         "the one eligible competitor answered, so this fill is a reading"
     );
-    // AND THE ANSWER IS USED, which is the whole point: #2 read as claiming
-    // PROJ-7 from its title, and its log closes PROJ-20 — so the race the cheap
-    // sources would have reported against PROJ-7 is gone.
-    assert_eq!(
-        race::claimed(
-            &filled.pulls[1].head_ref,
-            &filled.pulls[1].title,
-            &filled.pulls[1].log,
-            &filled.pulls[1].body,
-            &Fake
-        ),
-        vec!["PROJ-20".to_owned()],
-        "the fetched log outranks the title it was fetched to check"
+    // AND THE FALSE REFUSAL IS GONE, which is the whole point and the only
+    // assertion here that is `with_logs`'s rather than `claimed`'s: #2 read as
+    // claiming PROJ-7 from its title, its commits close PROJ-20, and the race
+    // the cheap sources would have reported against PROJ-7 does not survive the
+    // answer the widening went and got.
+    assert!(
+        race::races(&["PROJ-7".to_owned()], &filled.pulls, Some("1"), &Fake).is_empty(),
+        "a competitor the cheap sources misread must not refuse this branch once its log is in"
     );
 }
 

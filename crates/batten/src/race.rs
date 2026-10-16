@@ -439,11 +439,18 @@ pub struct Filled {
 /// before any worker starts is what lets the slot write-back below be a plain
 /// index rather than a synchronised one.
 ///
-/// `mine` is this branch's own pull request number. It is never fetched — the
-/// caller has already read its log, and a branch cannot race itself. `claims`
-/// is the key set this branch claims, and it only ever WIDENS the fetch set:
-/// passing `&[]` fetches the key-less competitors and nothing more, which is
-/// the bound below without its one soundness clause.
+/// # Which competitors are asked
+///
+/// `mine_number` is this branch's own pull request number. It is never fetched
+/// — the caller has already read its log, and a branch cannot race itself.
+///
+/// `claims` is the key set this branch claims, and it only ever WIDENS the
+/// fetch set. **Pass the same set you will hand [`races`]**: the widening is
+/// sound against that set and no other, since its whole purpose is to confirm
+/// the competitors that set can collide with. `&[]` is accepted and asks only
+/// the key-less competitors, which is the bound below without its soundness
+/// clause — correct for a caller that is not about to refuse anyone, and what
+/// the cases exercising the bound itself pass.
 ///
 /// # Order is the input's, whatever the scheduler does
 ///
@@ -468,49 +475,48 @@ pub struct Filled {
 #[must_use]
 pub fn with_logs(
     pulls: Vec<Pull>,
-    mine: &str,
+    mine_number: &str,
     claims: &[String],
     keys: &dyn Keys,
     fetch: impl Fn(&str) -> Option<String> + Sync,
 ) -> Filled {
     let mut pulls = pulls;
-    // ONLY WHERE THE CHEAP SOURCES FOUND NOTHING — the bound that keeps this
-    // from being a round trip per open pull request however wide the fan-out is
-    // allowed to be.
+    // FETCH A COMPETITOR WHOSE CHEAP READING IS LOAD-BEARING FOR THIS VERDICT,
+    // and no others. That one sentence is the predicate; the two disjuncts below
+    // are its two cases, and the known miss is the case it does not reach.
     //
-    // **IT IS SOUND FOR SOURCE 3 AND NOT FOR SOURCE 1, AND THAT IS A KNOWN
-    // MISS.** A `Refs:` trailer can only agree with a branch or title that
-    // already named a key, which is what makes skipping the fetch safe for it.
-    // A CLOSING KEYWORD IN A LOG OUTRANKS BOTH, though — [`claimed_from`]
-    // returns the closing set before it looks at the branch — so a competitor
-    // whose commits close a different key than its branch names is judged under
-    // its branch's.
+    // **CHEAP-EMPTY: the log could ADD a key.** Nothing else can speak for such a
+    // competitor, which is the bound that keeps this from being a round trip per
+    // open pull request however wide the fan-out is allowed to be.
     //
-    // **THAT MISJUDGEMENT RUNS BOTH WAYS, AND ONE WAY IS FREE TO CLOSE.** A race
-    // on the key the commits close reads as no race; and a branch claiming the
-    // key the COMPETITOR'S NAME carries is refused at `Violation` inside
-    // `verify` over a collision that does not exist. `complete` is `true` for
-    // both, because an unfetched competitor is not an unanswered one — which is
-    // why `run_claim_race`'s judge-first arm, sound over UNANSWERED competitors,
-    // never reaches this.
+    // **CHEAP-COLLIDES: the log could REMOVE one, and only here can that refuse
+    // anybody.** [`claimed_from`] returns a log's closing set before it looks at
+    // the branch, so a competitor whose commits close a different key than its
+    // branch names is judged under its branch's — which hides a real race AND
+    // refuses a branch claiming the branch-named key at `Violation` inside
+    // `verify`, over a collision that does not exist. `complete` stays `true`
+    // through both, because an unfetched competitor is not an unanswered one, so
+    // `run_claim_race`'s judge-first arm never sees it. A false refusal needs the
+    // cheap key to collide with the set this branch claims, so `claims` is
+    // exactly the pulls that can produce one — and a run that answers clean has
+    // none of them. The widening therefore costs ZERO round trips whenever this
+    // verb prints "no open pull request races this branch's claim".
     //
-    // THE REFUSING HALF IS CLOSED HERE, BY `claims`. A false refusal needs the
-    // competitor's cheap key to collide with the set this branch claims, so
-    // those are the only pulls whose misjudgement can refuse anything — and they
-    // are exactly the ones a run that answers clean does not have. The widening
-    // therefore costs ZERO round trips on every run that prints "no open pull
-    // request races this branch's claim", and one per reported race on a run
-    // already about to block someone. A fetch that FAILS on such a pull leaves
-    // its log empty and its cheap key standing, so the race is still reported:
-    // the widening cannot lose a refusal it would otherwise have made.
+    // IT CANNOT LOSE A REFUSAL, in either of the two ways that would matter. A
+    // fetch that FAILS on a collider leaves its log empty and its cheap key
+    // standing, so [`races`] reports it exactly as before. And the `complete`
+    // this newly turns `false` cannot downgrade anything, because the arm that
+    // reads it is guarded by an EMPTY race list, which that same standing key
+    // makes impossible.
     //
-    // THE MISSING HALF IS NOT CLOSED, and it is the one that costs. A competitor
-    // whose branch names a key nobody here claims, and whose commits close one
-    // this branch does, is invisible to the collision test above and stays
-    // unfetched. Reaching it means deciding eligibility on `closed(body)` alone,
-    // which spares only the pulls whose BODY closes a key — a latency decision
-    // for the row that owns latency, since what it costs depends on how many
-    // open pull requests are spared by their branch rather than their body.
+    // **THE CASE THE PREDICATE DOES NOT REACH** is the remaining load-bearing
+    // one: a competitor whose branch names a key nobody here claims, while its
+    // commits close one this branch does. Its cheap reading collides with
+    // nothing, so nothing above asks for its log. Reaching it means dropping to
+    // `closed(body)` alone, which spares only the pulls whose BODY closes a key —
+    // a latency decision for the row that owns latency, since what it costs
+    // depends on how many open pull requests are spared by their branch rather
+    // than their body.
     //
     // EACH ENTRY CARRIES ITS DESTINATION, not its queue position. Two parallel
     // vectors — slots here, numbers there — would have to stay in step for the
@@ -520,9 +526,10 @@ pub fn with_logs(
         .iter()
         .enumerate()
         .filter(|(_, pull)| {
-            let cheap = claimed(&pull.head_ref, &pull.title, "", &pull.body, keys);
-            pull.number != mine
-                && (cheap.is_empty() || cheap.iter().any(|key| claims.contains(key)))
+            pull.number != mine_number && {
+                let cheap = claimed(&pull.head_ref, &pull.title, "", &pull.body, keys);
+                cheap.is_empty() || cheap.iter().any(|key| claims.contains(key))
+            }
         })
         .map(|(slot, pull)| (slot, pull.number.as_str()))
         .collect();

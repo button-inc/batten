@@ -7366,30 +7366,28 @@ fn run_claim_race(
 /// WHICH log went unread, for [`run_claim_race`]'s one arm that declines to call
 /// an incomplete reading clean.
 ///
-/// Called only where at least one side failed, which is why three sentences
-/// cover it: `complete` and a `Some` log together is the state the caller does
-/// not ask about. Both causes share one arm because they share one remedy —
-/// look again — and the third sentence exists because one refused token refuses
-/// this branch's read AND every competitor's in the same run, which is the
-/// likeliest joint state rather than an exotic one.
+/// Called only where at least one side failed. Both causes share one arm
+/// because they share one remedy — look again — and the third sentence exists
+/// because one refused token refuses this branch's read AND every competitor's
+/// in the same run, which is the likeliest joint state rather than an exotic
+/// one.
 ///
 /// `own` is the log itself rather than a second `bool`, so the two parameters
-/// cannot be swapped at the call site and the `Option` the read produces stays
-/// the vocabulary all the way to the bytes. The competitor sentence is
-/// byte-for-byte the one this arm printed when it was the only cause (§6).
+/// cannot be swapped at the call site. The competitor sentence is byte-for-byte
+/// the one this arm printed when it was the only cause (§6).
 fn unread_log(complete: bool, own: Option<&str>) -> &'static str {
-    match (own.is_some(), complete) {
-        (false, true) => {
+    match (complete, own.is_some()) {
+        (true, false) => {
             "this branch's own commit log could not be read, so its claim is only what the body \
              closes"
         }
-        (true, false) => {
+        (false, true) => {
             "a competitor's commit log could not be read, so not every open pull request was judged"
         }
-        // `(true, true)` is not a failing state and the caller never asks it.
-        // It falls here with `(false, false)` rather than into an arm of its
-        // own, because naming both halves over-reports where the first two
-        // arms would each name the wrong one.
+        // `(true, true)` is not a failing state and the caller never asks it:
+        // the guard is `!(complete && log.is_some())`. It falls here with
+        // `(false, false)` rather than into an arm of its own, because naming
+        // both halves over-reports where the first two would name the wrong one.
         _ => {
             "neither this branch's own commit log nor every competitor's could be read, so its \
              claim is only what the body closes and not every open pull request was judged"
