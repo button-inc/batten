@@ -763,7 +763,7 @@ fn follow_pin(may_build: bool) -> Result<Option<ExitCode>> {
 /// The config is written before the install, so an install that fails leaves
 /// the right pin and a re-runnable `engine install`.
 //MUTANT-SUITE crates/batten/tests/it/engine_install.rs
-//MUTANT update-skips-the-bump|s@^        durable::replace(&path, &synced)?;$@@|an_update_moves_an_older_pin_forward_and_installs_it
+//MUTANT update-skips-the-bump|s@^    durable::replace(&path, &synced)?;$@@|an_update_moves_an_older_pin_forward_and_installs_it
 //MUTANT update-moves-the-pin-backward|s@^    let target = if engine::is_newer(&latest, &current)? {$@    let target = if latest != current {@|an_update_never_moves_a_pin_backward
 //MUTANT update-ignores-workflow-literal|s@^    if !stale.is_empty() {$@    if false {@|a_workflow_literal_the_update_cannot_rewrite_refuses_and_writes_nothing
 fn engine_update(out: &mut dyn Write) -> Result<ExitCode> {
@@ -843,11 +843,17 @@ fn engine_update(out: &mut dyn Write) -> Result<ExitCode> {
         }
         return Ok(ExitCode::Violation);
     }
-    if synced != text {
-        durable::replace(&path, &synced)?;
-        writeln!(out, "{}", path.display())?;
+    if synced == text {
+        return engine_install(out);
     }
-    engine_install(out)
+    durable::replace(&path, &synced)?;
+    writeln!(out, "{}", path.display())?;
+    // AN INSTALL THAT FAILS PUTS THE CONFIG BACK: a raised floor over a binary
+    // that never arrived would leave every gate in the session refusing this
+    // build as too old, so the update is all of it or none.
+    engine_install(out).inspect_err(|_| {
+        let _ = durable::replace(&path, &text);
+    })
 }
 
 /// Every tracked YAML file under `root`, repository-relative and sorted.
@@ -1041,13 +1047,13 @@ fn clear_outdated(ask: &Outdated) -> Result<()> {
     }
 }
 
-/// The worktree's root, its config's text and its release pin, for both halves
+/// The worktree's root, its config's text and its engine pin, for both halves
 /// of `engine outdated`; it only reads.
-fn declared_release() -> Result<(std::path::PathBuf, String, Option<String>)> {
+fn declared_release() -> Result<(std::path::PathBuf, String, Option<engine::Pin>)> {
     let root = git::worktree_root(Path::new("."))?;
     let text = std::fs::read_to_string(root.join(config::CONFIG_FILE)).unwrap_or_default();
-    let tag = engine::declared(&text).and_then(|pin| pin.release.filter(|_| pin.source.is_none()));
-    Ok((root, text, tag))
+    let pin = engine::declared(&text);
+    Ok((root, text, pin))
 }
 
 /// `engine outdated --notice`, the session's half: ONE LOOKUP PER BRANCH AND
@@ -1056,7 +1062,15 @@ fn declared_release() -> Result<(std::path::PathBuf, String, Option<String>)> {
 /// it last spoke is not repeated. A suppressed notice with no record to write
 /// looks at nothing. Fallible here; its caller makes it best-effort.
 fn notice_once(ask: &Outdated, out: &mut dyn Write) -> Result<()> {
-    let (root, text, Some(tag)) = declared_release()? else {
+    let (
+        root,
+        text,
+        Some(engine::Pin {
+            release: Some(tag),
+            source: None,
+        }),
+    ) = declared_release()?
+    else {
         return clear_outdated(ask);
     };
     let now = now_unix();
@@ -1070,17 +1084,24 @@ fn notice_once(ask: &Outdated, out: &mut dyn Write) -> Result<()> {
         return Ok(());
     }
     let found = distance_bounded(&releases_repository(), &tag);
+    // THE RECORD FIRST, THEN THE STAMP: a stamp written over a record that did
+    // not land would hide the gap for the whole window.
+    match &found {
+        Some(found) => {
+            if let Some(record) = &ask.record {
+                record_freshness(record, &tag, found, now)?;
+            }
+        }
+        None => clear_outdated(ask)?,
+    }
     let outcome = if found.is_some() { "ok" } else { "failed" };
     if let Some(parent) = stamp.parent() {
         std::fs::create_dir_all(parent)?;
     }
     durable::replace(&stamp, format!("{now}\t{tag}\t{outcome}\n"))?;
     let Some(found) = found else {
-        return clear_outdated(ask);
+        return Ok(());
     };
-    if let Some(record) = &ask.record {
-        record_freshness(record, &tag, &found, now)?;
-    }
     if speak && !found.newer.is_empty() {
         writeln!(
             out,
@@ -1104,7 +1125,7 @@ fn notice_once(ask: &Outdated, out: &mut dyn Write) -> Result<()> {
 /// `engine-fresh` line the `engine-hygiene` preset reads, with the consumer's
 /// thresholds, and clears it on a run that could not look.
 //MUTANT-SUITE crates/batten/tests/it/engine_install.rs
-//MUTANT outdated-silent-without-pin|s@^        writeln!(out, "{} no engine pin", path.display())?;$@        return Ok(ExitCode::Success);@|outdated_exits_by_the_pins_distance_from_main
+//MUTANT outdated-silent-without-pin|s@^            writeln!(out, "{} no engine pin", path.display())?;$@            return Ok(ExitCode::Success);@|outdated_exits_by_the_pins_distance_from_main
 fn engine_outdated(ask: &Outdated, out: &mut dyn Write) -> Result<ExitCode> {
     if ask.notice {
         // BEST-EFFORT, AND SO DISCARDED: a store it cannot write, a worktree it
@@ -1113,13 +1134,28 @@ fn engine_outdated(ask: &Outdated, out: &mut dyn Write) -> Result<ExitCode> {
         let _ = notice_once(ask, out);
         return Ok(ExitCode::Success);
     }
-    let (root, _, tag) = declared_release()?;
-    let Some(tag) = tag else {
-        // No release pin is nothing to be fresh against.
-        clear_outdated(ask)?;
-        let path = root.join(config::CONFIG_FILE);
-        writeln!(out, "{} no engine pin", path.display())?;
-        return Ok(ExitCode::Violation);
+    let (root, _, pin) = declared_release()?;
+    let tag = match pin {
+        Some(engine::Pin {
+            release: Some(tag),
+            source: None,
+        }) => tag,
+        // A SOURCE PIN names this tree's own build, which no release is ahead
+        // of: nothing to be fresh against, and nothing wrong with the config.
+        Some(engine::Pin {
+            release: None,
+            source: Some(_),
+        }) => {
+            clear_outdated(ask)?;
+            return Ok(ExitCode::Success);
+        }
+        _ => {
+            // No release pin is nothing to be fresh against.
+            clear_outdated(ask)?;
+            let path = root.join(config::CONFIG_FILE);
+            writeln!(out, "{} no engine pin", path.display())?;
+            return Ok(ExitCode::Violation);
+        }
     };
     let found = match distance(&releases_repository(), &tag) {
         Ok(found) => found,
