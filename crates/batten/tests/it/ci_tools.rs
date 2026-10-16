@@ -474,31 +474,43 @@ fn every_suite_job_installs_the_pinned_tools_its_cases_require() {
     use yaml_rust2::YamlLoader;
     // Split, so this file's own text is not read as a requirement.
     let mark = concat!(" must be ", "installed: it is a pinned [tools] entry");
+    let tests = common::at_root("crates/batten/tests");
     let mut required = std::collections::BTreeSet::new();
-    let mut pending = vec![common::at_root("crates/batten/tests")];
-    while let Some(dir) = pending.pop() {
-        for entry in std::fs::read_dir(&dir).unwrap().flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                pending.push(path);
-            } else if path.extension().is_some_and(|ext| ext == "rs") {
-                let text = std::fs::read_to_string(&path).unwrap();
-                for (at, _) in text.match_indices(mark) {
-                    let tool = text[..at].rsplit('"').next().unwrap_or_default();
-                    assert!(
-                        !tool.is_empty()
-                            && tool.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'),
-                        "{}: a requirement names no tool",
-                        path.display()
-                    );
-                    required.insert(tool.to_owned());
-                }
-            }
+    for path in common::rust_sources()
+        .into_iter()
+        .filter(|path| path.starts_with(&tests))
+    {
+        let text = std::fs::read_to_string(&path).unwrap();
+        for (at, _) in text.match_indices(mark) {
+            let tool = text[..at].rsplit('"').next().unwrap_or_default();
+            assert!(
+                !tool.is_empty() && tool.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'),
+                "{}: a requirement names no tool",
+                path.display()
+            );
+            required.insert(tool.to_owned());
         }
     }
     assert!(
         required.contains("cargo-dist"),
         "the dist tamper case's requirement went unread: {required:?}"
+    );
+    // The mark says "a pinned [tools] entry"; hold it to that.
+    let manifest: toml::Value =
+        toml::from_str(&std::fs::read_to_string(common::at_root("mise.toml")).unwrap()).unwrap();
+    let pinned: std::collections::BTreeSet<&str> = manifest["tools"]
+        .as_table()
+        .expect("[tools]")
+        .keys()
+        .map(|key| key.rsplit(['/', ':']).next().unwrap_or(key))
+        .collect();
+    let unpinned: Vec<&String> = required
+        .iter()
+        .filter(|tool| !pinned.contains(tool.as_str()))
+        .collect();
+    assert!(
+        unpinned.is_empty(),
+        "a case requires a tool mise.toml does not pin: {unpinned:?}"
     );
 
     let mut suite_jobs = Vec::new();
