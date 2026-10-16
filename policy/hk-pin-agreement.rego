@@ -94,7 +94,7 @@ amends contains {"line": i + 1, "version": match[1]} if {
 # would restore the symmetry with `packages` below, which does take two
 # generators into one set — but `packages` is counted by nothing, and `amends`
 # is. The cost of the union is that the tag reading's mutant must then anchor on
-# a 90-character `regex.find_all_string_submatch_n` line rather than on a short
+# a ~97-character `regex.find_all_string_submatch_n` line rather than on a short
 # comparison; both forms are correct, and this one is cheaper to keep honest.
 amend_tags contains {"line": i + 1, "version": match[1]} if {
 	some i, line in lines
@@ -255,17 +255,38 @@ test_agreeing_versions_are_clean if {
 		with data.batten.patterns as pattern
 }
 
-# THIS IS WHERE THE COLLAPSE IS MEASURED. `amends_line` writes the version into
-# both halves, so at pin 1.57.0 both halves drift: arms A and A2 each fire on
-# line 2 with byte-identical subjects, and `count == 1` is what pins that they
-# collapse into one finding. An arm that put `version` into a subject would make
-# this 2, which is why no arm does.
+# BOTH ARMS FIRE HERE. `amends_line` writes the version into both halves, so at
+# pin 1.57.0 the fragment and the tag each disagree: arms A and A2 fire on line 2
+# with byte-identical subjects, and `count == 1` is what pins that they collapse.
+# If A2's object ever stopped matching A's, this reads 2 and the case reddens.
+#
+# It collapses two IDENTICAL members, though, because `amends_line` spells one
+# version twice — so it cannot tell that apart from a collapse of two DISTINCT
+# members. The case below it is the one that can.
 test_a_version_the_amends_url_names_differently_is_refused if {
 	found := violation with input as tree({"hk": "1.57.0"}, ["// header", amends_line("1.56.1")])
 		with data.batten.patterns as pattern
 	count(found) == 1
 	some finding in found
 	finding.subjects[0] == {"path": "hk.pkl", "line": 2}
+}
+
+# TWO DISTINCT MEMBERS, ONE FINDING — the case that actually measures the
+# invariant the arms rest on. The halves name two different versions and neither
+# is the pin, so arm A binds 1.58.0, arm A2 binds 1.57.0, and the two `amends`
+# members genuinely differ. They still collapse, because the subjects carry
+# `{path, line}` and nothing that says WHICH spelling fired. An arm that added
+# such a field — the version among them — would make this 2 while leaving the
+# case above it at 1, which is why that case cannot stand in for this one.
+test_two_drifting_halves_on_one_line_are_one_finding if {
+	found := violation with input as tree(
+		{"hk": "1.56.1"},
+		["amends \"package://github.com/jdx/hk/releases/download/v1.57.0/hk@1.58.0#/Config.pkl\""],
+	)
+		with data.batten.patterns as pattern
+	count(found) == 1
+	some finding in found
+	finding.subjects[0] == {"path": "hk.pkl", "line": 1}
 }
 
 test_an_hk_pkl_naming_no_version_is_refused if {
