@@ -2081,8 +2081,10 @@ const SPAWN_LEDGER: &str = "batten-mcp-spawns";
 // (`mise-tasks/serena-mcp.sh`, CLOUD-843) onto the Rust that now makes them. The
 // third, exec-rather-than-fork, is `exec::become_argv`'s and sits there. The
 // cases are `mcp spawn`'s compiled-binary tier, which `cargo test` selects by
-// name wherever the file's suite line points.
-//MUTANT spawn-record-never-written|s@    drop(crate::durable::append(&ledger, &line));@    drop((\&ledger, \&line));@|a_launch_appends_one_record_naming_the_server_and_becomes_the_launch_line
+// name. Their suite is that tier, declared here, so a change to it re-sweeps
+// these rows (CLOUD-2347); no row after this line is judged by another file.
+//MUTANT-SUITE crates/batten/tests/it/mcp_spawn.rs
+//MUTANT spawn-record-never-written|s@^    drop(crate::durable::append(&ledger, &line));$@    drop((\&ledger, \&line));@|a_launch_appends_one_record_naming_the_server_and_becomes_the_launch_line
 //MUTANT spawn-siblings-always-zero|s@now - \*stamp <= SPAWN_WINDOW@false@|a_launch_inside_the_window_counts_the_earlier_one_as_a_sibling
 
 /// Where the checkout at `root` keeps its spawn ledger, or `None` outside one.
@@ -2193,6 +2195,9 @@ pub const EXEC_FAILED: &str = "exec-failed";
 /// Read from the LAST field, where [`SpawnRecord::exec_failed`] appends the
 /// marker to its launch line, so a field added to the launch record later
 /// cannot move the marker out from under this reader.
+//MUTANT-SUITE crates/batten/src/mcp.rs
+//MUTANT exec-failure-read-by-position|s@^    line.rsplit('\\t').next() == Some(EXEC_FAILED)$@    line.split('\\t').nth(5) == Some(EXEC_FAILED)@|a_failure_record_is_named_by_its_last_field_wherever_that_falls
+//MUTANT exec-failure-read-unbounded|s@^    line.rsplit('\\t').next() == Some(EXEC_FAILED)$@    line.ends_with(EXEC_FAILED)@|a_failure_record_is_named_by_its_last_field_wherever_that_falls
 #[must_use]
 pub fn is_exec_failure(line: &str) -> bool {
     line.rsplit('\t').next() == Some(EXEC_FAILED)
@@ -2205,6 +2210,7 @@ pub struct SpawnRecord {
     line: String,
 }
 
+//MUTANT-SUITE crates/batten/tests/it/mcp_spawn.rs
 //MUTANT exec-failure-unrecorded|s@^        drop(crate::durable::append(\&self.ledger, \&failed));$@        drop((self.ledger, failed));@|a_launch_that_cannot_exec_is_recorded_as_failed
 impl SpawnRecord {
     /// Append that the launch line could not be exec'd (CLOUD-2327): this
@@ -2529,9 +2535,10 @@ fn frame(text: &str) -> String {
 mod tests {
     use super::*;
 
-    /// Fails by: the failure marker read from a fixed position. A launch record
-    /// that gains a field moves the marker one place right, and a positional
-    /// reader then misses every failure, or takes the new field for one.
+    /// Fails by: the failure marker read from a fixed position, or matched as a
+    /// bare suffix. A launch record that gains a field moves the marker one place
+    /// right, and a positional reader then misses every failure, or takes the new
+    /// field for one; a suffix match takes any last field ENDING in the marker.
     #[test]
     fn a_failure_record_is_named_by_its_last_field_wherever_that_falls() {
         assert!(is_exec_failure("1\tserena\t2\t0.1\t0\texec-failed"));
@@ -2542,6 +2549,7 @@ mod tests {
         assert!(!is_exec_failure(
             "1\tserena\t2\t0.1\t0\texec-failed\tnew-field"
         ));
+        assert!(!is_exec_failure("1\tserena\t2\t0.1\t0\tnot-exec-failed"));
     }
 
     fn row(reduce: Reduce, fields: &[&str]) -> ResultRow {
