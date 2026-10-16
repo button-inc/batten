@@ -81,7 +81,12 @@ fn parsed(outcome: &std::process::Output) -> Vec<serde_json::Value> {
 
 /// The one verdict document, or `None` when the hook said nothing verdict-shaped.
 fn verdict(payload: &str) -> Option<(String, String)> {
-    documents(payload).iter().find_map(|document| {
+    verdict_in(&documents(payload))
+}
+
+/// [`verdict`], over documents the caller already has.
+fn verdict_in(documents: &[serde_json::Value]) -> Option<(String, String)> {
+    documents.iter().find_map(|document| {
         let inner = document.get("hookSpecificOutput")?;
         Some((
             inner.get("permissionDecision")?.as_str()?.to_owned(),
@@ -715,12 +720,45 @@ fn outside_plan_mode_a_write_is_not_the_presets_to_refuse() {
     assert_not_plan_refused(&unmoded);
 }
 
+/// The preset that grants a read, beside a substitution row that refuses `grep`
+/// over a repository path.
+///
+/// A fixture rather than this repository's config, because this repository
+/// retired its own substitution row (CLOUD-2362) and the case is about the
+/// engine's ordering, not that row.
+const REFUSING_CONFIG: &str = r#"version = 1
+
+[[rule]]
+id = "plan write refused"
+kind = "policy"
+scope = "mediated_call"
+preset = "claude-code-cloud"
+severity = "deny"
+
+[[rule]]
+id = "fixture grep refused"
+kind = "pipeline"
+scope = "mediated_call"
+severity = "deny"
+substitutes = ["grep"]
+reason = "a fixture substitution row"
+"#;
+
 /// DENY FIRST. `grep` is on the engine's read-only floor, so the preset would
-/// grant it — and this repository's `tool run loose` refuses it through Bash.
-/// The refusal must stand.
+/// grant it — and the fixture's substitution row refuses it through Bash. The
+/// refusal must stand.
 #[test]
 fn a_refused_call_is_never_preapproved() {
-    let (decision, reason) = verdict(&shell("default", "grep foo README.md")).unwrap_or_default();
+    let dir = common::scratch("preapprove-refused");
+    common::write(&dir, "batten.toml", REFUSING_CONFIG);
+    common::init_repo(&dir);
+    let outcome = common::stdin_run(
+        &mut common::batten(),
+        &dir,
+        &["adjudicate", "--harness", "claude-code"],
+        &shell("default", "grep foo README.md"),
+    );
+    let (decision, reason) = verdict_in(&parsed(&outcome)).unwrap_or_default();
     assert_eq!(
         decision, "deny",
         "the refusal must outrank the grant: {reason}"

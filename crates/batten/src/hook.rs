@@ -4373,9 +4373,11 @@ impl Policy {
 
     /// Whether this policy can deny anything at all.
     ///
-    /// Both halves must be empty. The protected gate needs *both* its tables to
-    /// bite, so a repository declaring verbs but no protected paths (or the
-    /// reverse) can deny nothing through it — but a shape row alone still can.
+    /// Every table a gate denies through must be empty: the shape rows, the
+    /// registered bundles, the protected gate, and any `[[redirect]]` declaring
+    /// a `read` route. The protected gate needs *both* its tables to bite, so a
+    /// repository declaring verbs but no protected paths (or the reverse) can
+    /// deny nothing through it — but a shape row alone still can.
     ///
     /// This holds for the write gate too, and deliberately: a write tool is
     /// classified through the same `[[verb]]` table a shell program is, so
@@ -4391,6 +4393,12 @@ impl Policy {
             // is the case the unit tests over `policy::deny` cannot make.
             && self.bundles.is_empty()
             && (self.verbs.is_empty() || self.protected.is_empty())
+            // The same class once more (CLOUD-2362): a `[[redirect]]` row that
+            // declares a `read` route refuses a generic read through
+            // `redirected_read`, which runs only past this short-circuit. A
+            // repository whose only policy is such a row was read as empty and
+            // its read gate silently refused nothing.
+            && !self.redirects.iter().any(|row| row.read.is_some())
     }
 
     /// This policy with every row whose declared hatch is in `set` removed
@@ -6206,29 +6214,29 @@ fn substitution_decision(
         // command carries its opening paren on the token, so `(grep …` is not
         // `grep` until `program_token` has read it.
         let program = program_token(tokens[program_index]);
-        let operands = &tokens[program_index + 1..];
+        // Arguments only: a redirection and the word it writes name a
+        // destination, never a target read instead of reaching for a tool, so
+        // `grep pat > out.txt` is stdin-fed and must allow. The parse's own
+        // boundary, never a `>` in the text: `grep 'Vec<String>' <path>` is a
+        // pattern and a path.
+        let arguments = tokens.len() - line.redirections;
+        let operands = tokens.get(program_index + 1..arguments).unwrap_or_default();
         if !substitutes
             .iter()
             .any(|entry| substitute_matches(entry, program, operands))
         {
             continue;
         }
-        // Operands only, and the scan STOPS at the first redirection: everything
-        // past a `>` is a destination this call writes, never a target it read
-        // instead of reaching for a tool. `grep pat > out.txt` is stdin-fed and
-        // must allow, which a scan that merely skipped the `>` would not do.
-        //
-        // THE ORDER IS LOAD-BEARING. `take_while` reads the RAW token
-        // deliberately, because `>` and `<` are syntax `program_token` may strip —
-        // normalising first could walk the scan PAST a redirect and refuse a
-        // destination the call writes. Only the `find` side, which asks whether
-        // the token names a repository path, sees the normalised form: that is
-        // where a trailing `)` would otherwise stop
-        // `(grep needle crates/batten/src/lib.rs)` from matching the path the row
-        // selected on.
-        let Some(target) = tokens[program_index + 1..]
+        // Only the path test sees `program_token`'s normalised form: that is
+        // where a trailing `)` would otherwise stop `(grep needle
+        // crates/batten/src/lib.rs)` from matching the path the row selected on.
+        let candidates = if program == "find" {
+            find_start_points(operands)
+        } else {
+            operands
+        };
+        let Some(target) = candidates
             .iter()
-            .take_while(|token| !token.contains('>') && !token.contains('<'))
             .map(|token| program_token(token))
             .find(|token| !token.starts_with('-') && names_a_repository_path(token, root, cwd))
         else {
@@ -6299,6 +6307,67 @@ fn followed_cd(
         return Some(target.to_path_buf());
     }
     current.map(|here| here.join(target))
+}
+
+// `Policy::is_empty`'s redirect conjunct (CLOUD-2362), declared here because a
+// row inside an `impl` block is indented by rustfmt and then read by nothing;
+// it moves back beside the conjunct once mutate reads indented rows (CLOUD-1964).
+// Its case lives in `mediated_verbs.rs`, so it carries that suite, and the
+// suite this section's own rows are judged under is declared again after it.
+//MUTANT-SUITE crates/batten/tests/it/mediated_verbs.rs
+//MUTANT read-route-only-policy-empty|s@^            && !self.redirects.iter().any(\x7crow\x7c row.read.is_some())$@@|a_generic_read_of_a_memory_is_refused_and_names_the_tool_that_answers
+//MUTANT-SUITE crates/batten/tests/it/pipeline_shapes.rs
+
+/// Where a `find` with no start point searches: the directory it runs in.
+const IMPLICIT_FIND_START: &[&str] = &["./"];
+
+/// The operands of a `find` that name where it searches, and nothing after them
+/// (CLOUD-2362).
+///
+/// `find`'s grammar puts its start points BEFORE its expression, and every token
+/// of the expression is a test, an action or the value one of those takes. So
+/// `-name '*.jsonl'` is a pattern, never a path. Read as one, `find / -name
+/// '*.jsonl'` searched from outside the repository and was refused on its
+/// pattern, which has an extension and so looked like a repository file.
+///
+/// The leading global options (`-H`, `-L`, `-P`, `-O<n>`, and `-D` with its
+/// value) come before the start points and are skipped. The first token after
+/// them that begins with `-`, `(` or `!` opens the expression and ends the
+/// list. With no start point at all, `find` searches `.`, so the answer is
+/// [`IMPLICIT_FIND_START`] rather than nothing. `operands` carry no redirection
+/// ([`SegmentLine::redirections`]).
+//MUTANT redirection-read-as-operand|s@^        let arguments = tokens.len\(\) - line.redirections;$@        let arguments = tokens.len();@|the_three_allow_clauses_survive_the_per_line_walk
+//MUTANT find-expression-read-as-target|s@^    &rest\[\.\.end\]$@    rest@|a_find_expression_operand_is_never_a_target
+//MUTANT find-implicit-start-unread|s@^        return IMPLICIT_FIND_START;$@        return \&rest[..0];@|a_find_expression_operand_is_never_a_target
+//MUTANT find-informational-run-searched|s@^    if end == 0 && searches_cwd .$@    if end == 0 {@|a_find_expression_operand_is_never_a_target
+//MUTANT find-debug-option-unskipped|s@^            \["-D", _, tail . \.\.\] => tail,$@@|a_find_expression_operand_is_never_a_target
+//MUTANT find-optimisation-option-unskipped|s@ [[:punct:]][[:punct:]] option.starts_with."-O".@@|a_find_expression_operand_is_never_a_target
+fn find_start_points<'a>(operands: &'a [&'a str]) -> &'a [&'a str] {
+    let mut rest = operands;
+    loop {
+        rest = match rest {
+            ["-D", _, tail @ ..] => tail,
+            [option, tail @ ..]
+                if matches!(*option, "-H" | "-L" | "-P") || option.starts_with("-O") =>
+            {
+                tail
+            }
+            _ => break,
+        };
+    }
+    let end = rest
+        .iter()
+        .position(|token| token.starts_with(['-', '(', '!']))
+        .unwrap_or(rest.len());
+    // An informational run reads no tree, but only when the flag IS the whole
+    // command: the same word inside an expression (`-exec tool --version \;`)
+    // is a value, and that `find` still searches `.`. Anything else with no
+    // start point, `-files0-from` included, is judged as searching `.`.
+    let searches_cwd = !matches!(rest, ["--help" | "--version" | "-help" | "-version"]);
+    if end == 0 && searches_cwd {
+        return IMPLICIT_FIND_START;
+    }
+    &rest[..end]
 }
 
 /// Does this `substitutes` entry select this invocation?
@@ -9128,6 +9197,10 @@ fn unkeyed_refusal(rule: &Rule) -> Refusal {
 struct Segment {
     /// The span's arguments, quotes resolved and escapes applied.
     words: Vec<String>,
+    /// How many of `words`, counted from the END, are redirection tokens
+    /// (`command_words` appends them after the arguments). The parse knows the
+    /// boundary, so no reader re-derives it from a token's text (CLOUD-2362).
+    redirections: usize,
     /// The span exactly as written, quotes and all.
     raw: String,
     /// The operator that FOLLOWED this span, or `None` where the command ended.
@@ -9236,6 +9309,8 @@ struct Segment {
 struct SegmentLine {
     /// This command's arguments, quotes resolved and escapes applied.
     words: Vec<String>,
+    /// [`Segment::redirections`], for this line's own words.
+    redirections: usize,
     /// This command's own span, exactly as written.
     raw: String,
 }
@@ -9437,6 +9512,7 @@ fn segments(command: &str) -> crate::facts::Look<Vec<Segment>> {
                 if !segment.nested {
                     line_readings.push(SegmentLine {
                         words: segment.words,
+                        redirections: segment.redirections,
                         raw: segment.raw,
                     });
                 }
@@ -9657,22 +9733,29 @@ fn flatten(node: &rable::Node, source: &str, after: Option<Separator>, out: &mut
 /// program at all, so `rm > guarded.md` is judged on the target. The parser moves
 /// those tokens out of `words` and into `redirects`, which is again right for a
 /// grammar and wrong here — dropping them was an under-deny on a WRITE, measured
-/// by `a_redirect_target_is_a_mutation_even_with_no_program`.
+/// by `a_redirect_target_is_a_mutation_even_with_no_program`. They go LAST, and
+/// their count is returned beside the words, so a reader that wants arguments
+/// only slices them off rather than guessing from `>` in a token's text.
 fn command_words(
     assignments: &[rable::Node],
     words: &[rable::Node],
     redirects: &[rable::Node],
     source: &str,
-) -> Vec<String> {
+) -> (Vec<String>, usize) {
     let mut spelled: Vec<String> = assignments
         .iter()
         .map(|word| unquote(&word_text(word)))
         .chain(words.iter().map(|word| unquote(&word_text(word))))
         .collect();
+    let arguments = spelled.len();
     for redirect in redirects {
         spelled.extend(redirect_words(redirect, source));
     }
-    spelled
+    // A redirection's tokens are never empty (`split_whitespace`), so the
+    // empty-word `retain` after this shrinks only the arguments and the count
+    // from the end stays exact.
+    let redirections = spelled.len() - arguments;
+    (spelled, redirections)
 }
 
 /// The commands nested INSIDE this one's words and redirect targets.
@@ -9715,9 +9798,11 @@ fn flatten_command(
     // before the retain put one in `lines` that `words` no longer matched, so the
     // two readings of one command disagreed on token indices — and
     // `protected_mutation` reads `lines` while everything else reads `words`.
+    let (spelled, redirections) = command_words(assignments, words, redirects, source);
     let mut segment = Segment {
         lines: Vec::new(),
-        words: command_words(assignments, words, redirects, source),
+        words: spelled,
+        redirections,
         raw: node.source_text(source).to_owned(),
         terminator: after,
         input_redirect: redirects.iter().any(binds_stdin),
@@ -9732,6 +9817,7 @@ fn flatten_command(
     }
     segment.lines = vec![SegmentLine {
         words: segment.words.clone(),
+        redirections: segment.redirections,
         raw: segment.raw.clone(),
     }];
     // Everything the descent produced is nested, however deep: an inner `$(…)`

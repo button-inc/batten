@@ -86,8 +86,9 @@ mcp-timeout-budget`, which carries the floor, the measurement behind it, and the
    The cost is silent and lands on a person rather than on a gate: the owner had
    been approving `find_symbol` and `get_symbols_overview` by hand, and the agent's
    first instinct was to stop using Serena and reach for the shell utilities
-   instead — the substitution `.claude/rules/scanning.md` and `no-tool-substitution`
-   exist to refuse, arrived at as a workaround for a one-line config bug.
+   instead — the substitution `rules/scanning.md` warns against (its gate,
+   `no-tool-substitution`, retired under CLOUD-2362), arrived at as a workaround
+   for a one-line config bug.
 
    **AND THE SERVER-LEVEL GRANT IS NOT ENOUGH FOR THE WRITE TOOLS.** Measured the
    same day, immediately after: with `mcp__serena` alone in `permissions.allow`,
@@ -159,8 +160,8 @@ mcp-timeout-budget`, which carries the floor, the measurement behind it, and the
    **This is the third distinct route to the same outcome, and the outcome is the
    one that matters most:** an agent that reads a prompt as "Serena is not
    available", stops reaching for it, and substitutes the shell utilities —
-   exactly what `.claude/rules/scanning.md` and `no-tool-substitution` exist to
-   refuse. That substitution has now been arrived at as a workaround for a
+   exactly what `rules/scanning.md` warns against for a name question, where
+   no text search substitutes for name resolution. That substitution has now been arrived at as a workaround for a
    wildcard spelling, for a late attach, and for an ungranted `ToolSearch`.
    **Serena is critical path**: `mem:core` routes every on-demand memory through
    it, `rust.md` routes the spawn census to name resolution, and `scanning.md`'s
