@@ -10947,14 +10947,10 @@ fn run_land_singleton(
         if reapable(entry, &own_group) && exec::escalate_group(&entry.pgid) {
             escalated += 1;
         }
-        // Unregistered only now, so a record survives long enough for both
-        // passes to read its group. ONE LOOK, BY DESIGN: keeping a declined
-        // record until its group empties was tried and costs more than it buys —
-        // a group just KILLed still reads live (zombies count), a pgid reused by
-        // an unrelated long-lived group never empties, and `alive` deletes the
-        // record anyway. What one look misses is an orphan whose leader or
-        // registrant was still present at it: not signalled, which is the safe
-        // direction.
+        // Unregistered only now, so both passes read its group. ONE LOOK: waiting
+        // for the group to empty never ends for a group just KILLed (zombies
+        // count) or a reused pgid. A record outliving that look is CLOUD-2371 and
+        // CLOUD-2372's.
         task::unregister(&git_dir, &entry.pid);
     }
     if reaped > 0 {
