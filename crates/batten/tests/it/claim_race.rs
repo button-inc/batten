@@ -373,7 +373,10 @@ fn listing() -> (Vec<Pull>, Vec<String>) {
 ///
 /// **Nothing here asserts on the clock.** The ten-second deadline is an input:
 /// it turns a serial implementation's hang into a failure instead of a hung
-/// suite, and it is paid once, because whoever gives up opens the barrier.
+/// suite. A passing run never reaches it. A regression pays it TWICE — once at
+/// the barrier, which the first waiter then opens for everyone, and once at
+/// `"2"`'s order wait, whose condition a sequential fill never satisfies either
+/// — so expect roughly twenty seconds, not ten, when this case is failing.
 #[test]
 fn competitor_logs_are_fetched_concurrently_once_each_and_returned_in_listing_order() {
     let (pulls, eligible) = listing();

@@ -7200,12 +7200,37 @@ fn run_claim_race(
     // risks a false REFUSAL on a key this branch does not claim. The competitor
     // arm's subset property, which is what lets it judge first, simply does not
     // hold on this side. Could-not-look, and nothing judged.
-    let Ok(log) = bot::forge::commit_messages(&slug, &mine_number) else {
-        return clean(
-            out,
-            "claim race: this branch's own commit log could not be read — could not look, which \
-             is not a verdict",
-        );
+    let log = match bot::forge::commit_messages(&slug, &mine_number) {
+        Ok(log) => log,
+        // A BODY THAT CLOSES A KEY ANSWERS WITHOUT THE LOG, so a failed read is
+        // not always fatal and refusing to judge on all of them discards sound
+        // refusals. More text only adds matches, so `closed(body)` is a SUBSET
+        // of `closed(body + log)`, and `claimed_from` returns that set before it
+        // consults branch and title — with a closing body the empty-log answer
+        // can only under-report, never invert. Judging it keeps the refusal
+        // `unwrap_or_default` also kept.
+        //
+        // Only a body that closes NOTHING falls through to branch and title,
+        // and that is the inverting case the block above describes. It alone is
+        // could-not-look.
+        Err(_)
+            if race::claimed_from(
+                &me.head_ref,
+                &me.title,
+                "",
+                &me.body,
+                &grammar,
+                race::Source::ClosingOnly,
+            )
+            .is_empty() =>
+        {
+            return clean(
+                out,
+                "claim race: this branch's own commit log could not be read and its body closes \
+                 no key — could not look, which is not a verdict",
+            );
+        }
+        Err(_) => String::new(),
     };
     let mine = race::claimed(&me.head_ref, &me.title, &log, &me.body, &grammar);
     if mine.is_empty() {
@@ -7245,6 +7270,16 @@ fn run_claim_race(
     // its slot keeps the empty log the listing was built with — so a race found
     // among the ones that DID answer is a true refusal, and returning before
     // `races` would throw away refusing information the run already holds.
+    //
+    // **THAT PROPERTY IS THE ELIGIBILITY FILTER'S, NOT THE EMPTY LOG'S**, and
+    // the coupling is worth naming because `with_logs`'s own doc prescribes
+    // dropping that filter as the fix for the miss it records. A competitor is
+    // fetched only when its branch, title and body resolve to NOTHING, so an
+    // unanswered one contributes no key at all. Fetch every competitor instead
+    // and that stops holding: `user/cloud-100-x` whose commits close CLOUD-200
+    // would read as claiming CLOUD-100 on a failed read, and judging first would
+    // then risk the false refusal this side is arranged to avoid. Whoever widens
+    // the fetch set moves this arm above `races` in the same change.
     let races = race::races(&mine, &pulls, Some(&mine_number), &grammar);
     // AND AN INCOMPLETE FILL ALLOWS, exactly like the four arms above it. Once
     // `fetch` answers an `Option`, this arm's common cause is a forge that
