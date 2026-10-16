@@ -22,8 +22,9 @@
 //! the ceiling is reported; the allow half — anti-vacuity, and the load-bearing
 //! one (CLOUD-418) — is that every refusal this repository can actually emit
 //! passes. A ceiling that refuses correct output is a gate somebody switches
-//! off. The row named the converted `tool select other` refusal, which
-//! CLOUD-2362 retired; the fixture cases below still measure its class.
+//! off, and the converted `tool select other` refusal is the specific line
+//! the row names. CLOUD-2362 retired that row from this repository, so the
+//! repeat cases judge in [`ceiling_root`], which declares it.
 //!
 //! **BOTH ARMS ARE MEASURED HERE NOW, EACH AGAINST ITS OWN CEILING**
 //! (CLOUD-1637). The paragraph above is right that the two are different
@@ -106,10 +107,14 @@ fn repeat_refusal(payload: &str) -> Option<String> {
 
 /// One firing, whatever the store says.
 fn refusal_once(payload: &str) -> Option<String> {
+    // A HOME THAT RESOLVES `serena` (CLOUD-2229): the memories row is refused
+    // only where its read route can be taken, and this suite measures that
+    // refusal. Every other row reads nothing from the home.
     let mut command = common::batten();
+    command.env("HOME", common::serena_home());
     let run = common::stdin_run(
         &mut command,
-        &root(),
+        &ceiling_root(),
         &["adjudicate", "--harness", "exit-code"],
         payload,
     );
@@ -118,6 +123,52 @@ fn refusal_once(payload: &str) -> Option<String> {
     } else {
         None
     }
+}
+
+/// The repository the repeat-arm cases judge in: this one's committed config,
+/// plus the two refusals CLOUD-2362 retired from it (CLOUD-2362).
+///
+/// Every case here measures a line the engine EMITS, and the retired
+/// substitution row and memories read route are still the engine's to emit for
+/// any consumer that declares them. So rather than shrink the corpus to what
+/// this repository still declares, the cases run in a fixture that declares
+/// both: the corpus, its commands and its assertions are `main`'s, unchanged.
+///
+/// ONE PER PROCESS. Every firing measured is a repeat by construction (each is
+/// fired twice), so cases sharing the fixture's sightings store cannot change
+/// what any of them measures.
+fn ceiling_root() -> PathBuf {
+    static ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    ROOT.get_or_init(|| {
+        stage(
+            &format!("ceiling-root-{}", std::process::id()),
+            &with_memory_read_route(&common::without_session_handlers(COMMITTED)),
+        )
+    })
+    .clone()
+}
+
+/// `config` with `read = "read_memory"` restored on its memories `[[redirect]]`
+/// row, the line CLOUD-2362 removed from this repository's copy.
+fn with_memory_read_route(config: &str) -> String {
+    let mut out = Vec::new();
+    let mut in_memories = false;
+    let mut added = false;
+    for line in config.lines() {
+        out.push(line.to_owned());
+        if line.trim() == "glob = \".serena/memories/**\"" {
+            in_memories = true;
+        } else if in_memories && line.starts_with("mutation = ") {
+            out.push("read = \"read_memory\"".to_owned());
+            in_memories = false;
+            added = true;
+        }
+    }
+    assert!(
+        added,
+        "the committed config carries the memories redirect row"
+    );
+    out.join("\n") + "\n"
 }
 
 /// The declared ceiling, read from the committed config rather than re-typed.
@@ -177,8 +228,10 @@ fn estimated_tokens(line: &str) -> usize {
 /// Not every declared class — the ones reachable from a mediated command line,
 /// because those are what the ~300 firings a session are made of.
 const CORPUS: &[&str] = &[
-    // The row CLOUD-1286's acceptance named, `tool select other`, was retired
-    // under CLOUD-2362; the fixture cases below still measure its class.
+    // The row CLOUD-1286's acceptance names by name.
+    "sed -n '1,40p' AGENTS.md",
+    "head -40 batten.toml",
+    "cat .serena/project.yml",
     // The three discard shapes.
     "mise run verify | tail -1",
     "mise run verify >log 2>&1; ls",
@@ -208,13 +261,53 @@ fn every_mediated_refusal_this_tree_emits_is_within_the_declared_ceiling() {
 }
 
 #[test]
+fn a_routed_read_of_every_committed_memory_is_within_the_declared_ceiling() {
+    // THE CORPUS ABOVE IS BASH ONLY, and `path read routed` fires on a `Read`
+    // (CLOUD-1929): its line carries the path AND the row's `read` remedy, so its
+    // cost grows with the name. Every memory is enumerated rather than one named,
+    // because the longest name is the one that breaches — measured at 101 bytes
+    // against a 96-byte ceiling while the tool rode as a third subject.
+    let ceiling = declared_ceiling();
+    let memories = root().join(".serena/memories");
+    let mut measured = 0_usize;
+    let mut over: Vec<(usize, String)> = Vec::new();
+    for entry in std::fs::read_dir(&memories).expect("the committed memories are listable") {
+        let name = entry.expect("a memory entry").file_name();
+        let path = format!(".serena/memories/{}", name.to_string_lossy());
+        // IN THE SUITE'S SESSION, like every Bash payload here: sightings are kept
+        // per context, so a payload naming none is a first sighting every time and
+        // the "repeat" this measures would be the full arm.
+        let read = serde_json::json!({
+            "hook_event_name": "PreToolUse",
+            "session_id": SUITE_SESSION,
+            "tool_name": "Read",
+            "tool_input": {"file_path": path},
+        })
+        .to_string();
+        let Some(line) = repeat_refusal(&read) else {
+            panic!("a generic read of a memory must refuse, or this measures nothing: {path}");
+        };
+        measured += 1;
+        let cost = estimated_tokens(&line);
+        if cost > ceiling {
+            over.push((cost, line));
+        }
+    }
+    assert!(measured > 0, "the memory store is not empty");
+    assert!(
+        over.is_empty(),
+        "every routed-read line must be within the declared ceiling of {ceiling}: {over:?}"
+    );
+}
+
+#[test]
 fn a_declared_refusal_emits_its_class_and_its_pointers_and_stops() {
     // The acceptance, asserted on the shape rather than on the count: no
     // `Refused by` prefix, no parenthetical gloss, no `Fix:` clause, and no
     // hatch sentence. Each of the four was a copy of something declared once.
-    let line = refusal("cargo build").expect("the row refuses");
+    let line = refusal("sed -n '1,40p' AGENTS.md").expect("the row refuses");
     assert!(
-        line.starts_with("batten deny call name refused"),
+        line.starts_with("batten deny tool run loose"),
         "the violation's class leads the line: {line}"
     );
     for wrapper in ["Refused by", "Fix:", "Bypass with", " ("] {
@@ -230,10 +323,10 @@ fn no_refusal_lost_its_pointer() {
     // The acceptance clause that keeps this from being achieved by saying less
     // about WHICH file. The prose is what shortened; the pointer is what the
     // reader acts on, and it stayed inline for exactly that reason.
-    let line = refusal("cargo build").expect("the row refuses");
+    let line = refusal("head -40 batten.toml").expect("the row refuses");
     assert!(
-        line.contains("at cargo"),
-        "the subject a caller can act on stays inline: {line}"
+        line.contains("batten.toml"),
+        "the operand a caller can act on stays inline: {line}"
     );
 }
 
@@ -320,7 +413,7 @@ kind = "pipeline"
 scope = "mediated_call"
 severity = "deny"
 substitutes = ["cat", "head", "tail", "sed:-n", "grep", "rg", "find", "ls", "wc"]
-reason = "Use the structured surface this session offers: a range of one file, a pattern across the tree, paths by glob, or what a name resolves to, `rules/scanning.md` picks between them. After a pipe these utilities are allowed."
+reason = "Use the structured surface this session offers: a range of one file, a pattern across the tree, paths by glob, or what a name resolves to; `rules/scanning.md` picks between them. After a pipe these utilities are allowed."
 "#;
 
 /// Stage `config`, the fixture [`SUBSTITUTION_ROW`] and the committed policy
