@@ -764,16 +764,17 @@ fn ceiling_dirs() -> Vec<PathBuf> {
 /// Each ceiling is canonicalized as `start` is below: gix compares them without
 /// resolving symlinks, so a ceiling spelled through one (or, on Windows, without
 /// the `\\?\` prefix `canonicalize` adds to `start`) would never contain it.
-//MUTANT unrelated-ceiling-refuses|s@match_ceiling_dir_or_error: false@match_ceiling_dir_or_error: true@|an_unrelated_ceiling_does_not_refuse_a_valid_repository
+///
+/// **THE OPEN IS REMEMBERED, the discovery is not** (CLOUD-2433). One hook call
+/// read the same repository ten times, and each open re-parsed its config — 92%
+/// of a discovery's cost. Discovery still runs per call, so `dir` and the
+/// ceilings decide every answer; what it found is then opened once per thread
+/// while the files the open read are unchanged ([`Opens`]).
 fn open_upwards(dir: &Path, ceilings: Vec<PathBuf>) -> Result<gix::Repository> {
-    let discovery = gix::discover::upwards::Options {
-        ceiling_dirs: ceilings
-            .into_iter()
-            .map(|ceiling| ceiling.canonicalize().unwrap_or(ceiling))
-            .collect(),
-        match_ceiling_dir_or_error: false,
-        ..Default::default()
-    };
+    let ceilings: Vec<PathBuf> = ceilings
+        .into_iter()
+        .map(|ceiling| ceiling.canonicalize().unwrap_or(ceiling))
+        .collect();
     // ABSOLUTE before discovery, because callers pass a relative `"."`
     // (`receipt.rs` does, for every read) and a ceiling is an absolute path. An
     // upward walk over relative components can never match one, so a fence a
@@ -782,8 +783,149 @@ fn open_upwards(dir: &Path, ceilings: Vec<PathBuf>) -> Result<gix::Repository> {
     // directory before comparing; this is that step, made explicit.
     let start = dir.canonicalize();
     let start = start.as_deref().unwrap_or(dir);
-    gix::discover_opts(start, discovery, gix::open::Options::isolated())
-        .map_err(|_| UsageError::raise(format!("{} is not a git repository", dir.display())))
+    let refused = || UsageError::raise(format!("{} is not a git repository", dir.display()));
+    let (found, trust) =
+        gix::discover::upwards_opts(start, discovery(&ceilings)).map_err(|_| refused())?;
+    let (git_dir, worktree) = found.into_repository_and_work_tree_directories();
+    let key = OpenKey {
+        git_dir,
+        worktree,
+        trust,
+        cwd: std::env::current_dir().ok(),
+    };
+    if let Some(repo) = with_opens(|opens| opens.get(&key)).flatten() {
+        return Ok(repo);
+    }
+    let at = crate::cache::now();
+    // What `gix::discover_opts` does, short of making the handle thread-local:
+    // the same isolated options whatever the trust.
+    let isolated = gix::sec::trust::Mapping {
+        full: gix::open::Options::isolated(),
+        reduced: gix::open::Options::isolated(),
+    };
+    let repo = gix::ThreadSafeRepository::discover_opts(start, discovery(&ceilings), isolated)
+        .map_err(|_| refused())?;
+    let _ = with_opens(|opens| opens.remember(key, &repo, at));
+    Ok(repo.to_thread_local())
+}
+
+/// The discovery options [`open_upwards`] walks with: the ceilings, ignored
+/// where they fence nothing.
+//MUTANT unrelated-ceiling-refuses|s@match_ceiling_dir_or_error: false@match_ceiling_dir_or_error: true@|an_unrelated_ceiling_does_not_refuse_a_valid_repository
+fn discovery(ceilings: &[PathBuf]) -> gix::discover::upwards::Options<'static> {
+    gix::discover::upwards::Options {
+        ceiling_dirs: ceilings.to_vec(),
+        match_ceiling_dir_or_error: false,
+        ..Default::default()
+    }
+}
+
+/// What a discovery found, and so what an open of it depends on besides files:
+/// the process working directory, which gix resolves relative paths against.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct OpenKey {
+    git_dir: PathBuf,
+    worktree: Option<PathBuf>,
+    trust: gix::sec::Trust,
+    cwd: Option<PathBuf>,
+}
+
+/// This thread's opened repositories, one per [`OpenKey`] (CLOUD-2433).
+///
+/// An entry is believed only while every file the isolated open reads keeps the
+/// stat identity it had — absence included — and is made only when none of them
+/// is racily clean against the open (`crate::cache::Stamp`, git's rule), as
+/// `config::read_text` holds the authority's text. The config snapshot is the
+/// one thing an open freezes: refs, `HEAD`, the index and the object database
+/// are read per lookup or refreshed on a miss, remembered or not.
+#[derive(Default)]
+struct Opens(BTreeMap<OpenKey, Opened>);
+
+/// One remembered open: the repository, its common directory (which only a
+/// thread-local handle names), and the stamps of what the open read.
+struct Opened {
+    repo: gix::ThreadSafeRepository,
+    common_dir: PathBuf,
+    stamps: Vec<Option<String>>,
+}
+
+thread_local! {
+    /// PER THREAD, not per process: this build's gix handle is not `Send` (no
+    /// `parallel` feature), and the hook reads on one thread, so one open is
+    /// what it pays.
+    static OPENS: std::cell::RefCell<Opens> = std::cell::RefCell::default();
+}
+
+/// `with` over this thread's [`Opens`], or `None` where it cannot be reached —
+/// during thread teardown, or re-entered — which is a miss.
+fn with_opens<R>(with: impl FnOnce(&mut Opens) -> R) -> Option<R> {
+    OPENS
+        .try_with(|opens| {
+            opens
+                .try_borrow_mut()
+                .ok()
+                .map(|mut opens| with(&mut opens))
+        })
+        .ok()
+        .flatten()
+}
+
+/// The stamps of the files an isolated open of `git_dir` reads — no includes,
+/// no system, global or environment configuration
+/// (`gix::open::Options::isolated`) — with an absent file as `None`.
+fn read_by_open(git_dir: &Path, common_dir: &Path) -> Vec<Option<crate::cache::Stamp>> {
+    [
+        git_dir.join("commondir"),
+        git_dir.join("config"),
+        git_dir.join("config.worktree"),
+        common_dir.join("config"),
+    ]
+    .iter()
+    .map(|path| crate::cache::stamp(path))
+    .collect()
+}
+
+/// Each stamp's fields: what an entry compares.
+fn fields(stamps: Vec<Option<crate::cache::Stamp>>) -> Vec<Option<String>> {
+    stamps
+        .into_iter()
+        .map(|stamp| stamp.map(|stamp| stamp.fields))
+        .collect()
+}
+
+//MUTANT repository-memo-never-hits|s@^        (opened.stamps == now).then@        false.then@|a_repository_opened_twice_is_opened_once
+//MUTANT repository-memo-ignores-config|s@^        (opened.stamps == now).then@        true.then@|a_config_edited_after_open_is_read_again
+//MUTANT repository-memo-believes-racy|s@^        if held.iter().flatten().any(.*racily_clean(at)) {$@        if false {@|an_open_in_its_racy_window_is_not_remembered
+impl Opens {
+    /// The repository remembered for `key`, if every file its open read is
+    /// unchanged.
+    fn get(&self, key: &OpenKey) -> Option<gix::Repository> {
+        let opened = self.0.get(key)?;
+        let now = fields(read_by_open(opened.repo.git_dir(), &opened.common_dir));
+        (opened.stamps == now).then(|| opened.repo.to_thread_local())
+    }
+
+    /// Remember `repo` as `key`'s open, begun at `at` — unless a file it read
+    /// changed too close to `at` to tell a later change from this one.
+    fn remember(
+        &mut self,
+        key: OpenKey,
+        repo: &gix::ThreadSafeRepository,
+        at: std::time::Duration,
+    ) {
+        let common_dir = repo.to_thread_local().common_dir().to_path_buf();
+        let held = read_by_open(repo.git_dir(), &common_dir);
+        if held.iter().flatten().any(|stamp| stamp.racily_clean(at)) {
+            self.0.remove(&key);
+            return;
+        }
+        let opened = Opened {
+            repo: repo.clone(),
+            common_dir,
+            stamps: fields(held),
+        };
+        self.0.insert(key, opened);
+    }
 }
 
 /// Open the repository containing `dir` with git's **resolved** configuration —
@@ -5881,6 +6023,64 @@ mod tests {
             open_upwards(&repo, vec![elsewhere]).is_ok(),
             "a ceiling that does not contain the search directory fences nothing"
         );
+    }
+
+    /// A fresh repository at `name`, opened as [`open_upwards`] opens one, and the
+    /// key it would be remembered under.
+    fn opened(name: &str) -> (PathBuf, OpenKey, gix::ThreadSafeRepository) {
+        let dir = crate::scratch::scratch(name);
+        crate::gitwrite::init_on_main(&dir).expect("init");
+        let isolated = gix::sec::trust::Mapping {
+            full: gix::open::Options::isolated(),
+            reduced: gix::open::Options::isolated(),
+        };
+        let repo =
+            gix::ThreadSafeRepository::discover_opts(&dir, discovery(&[]), isolated).expect("open");
+        let key = OpenKey {
+            git_dir: repo.git_dir().to_path_buf(),
+            worktree: repo.work_dir().map(Path::to_path_buf),
+            trust: gix::sec::Trust::Full,
+            cwd: None,
+        };
+        (dir, key, repo)
+    }
+
+    /// Well past the racy window of anything a case just wrote.
+    fn later() -> std::time::Duration {
+        crate::cache::now() + std::time::Duration::from_hours(1)
+    }
+
+    /// An open whose files are unchanged is served again (CLOUD-2433).
+    #[test]
+    fn a_repository_opened_twice_is_opened_once() {
+        let (_, key, repo) = opened("git-memo-hit");
+        let mut opens = Opens::default();
+        opens.remember(key.clone(), &repo, later());
+        assert!(opens.get(&key).is_some(), "an unchanged open is remembered");
+    }
+
+    /// A config written after the open is read again, not served stale.
+    #[test]
+    fn a_config_edited_after_open_is_read_again() {
+        let (dir, key, repo) = opened("git-memo-edited");
+        let mut opens = Opens::default();
+        opens.remember(key.clone(), &repo, later());
+        assert!(opens.get(&key).is_some(), "the premise: it was remembered");
+        let config = dir.join(".git/config");
+        let mut text = fs::read_to_string(&config).expect("config");
+        text.push_str("[batten]\n\tedited = true\n");
+        fs::write(&config, text).expect("edit");
+        assert!(opens.get(&key).is_none(), "an edited config is a miss");
+    }
+
+    /// An open whose files changed within a timestamp tick of it is not
+    /// remembered: a second change in that tick would be invisible to a stamp.
+    #[test]
+    fn an_open_in_its_racy_window_is_not_remembered() {
+        let (_, key, repo) = opened("git-memo-racy");
+        let mut opens = Opens::default();
+        opens.remember(key.clone(), &repo, crate::cache::now());
+        assert!(opens.get(&key).is_none(), "a racily clean open is not kept");
     }
 
     /// The fence still holds where it applies: a directory below a ceiling, with no
