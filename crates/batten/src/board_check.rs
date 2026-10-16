@@ -21,7 +21,24 @@
 //! - **`--cites`**: a Ready block's citations name things the TREE carries — a
 //!   test obligation names a test that exists, a cited path exists or is marked
 //!   prospective (CLOUD-920), and a citation resolving only in an excluded path
-//!   (a fixture quoting the citation) is refused.
+//!   (a fixture quoting the citation) is refused. A cited test the clause marks
+//!   prospective beside its own token is a note, not a refusal (CLOUD-1110).
+//!
+//! # The test arm's marker is unrefutable, and that is decided
+//!
+//! A marked absent PATH is checked against history — an ancestor that deleted
+//! it refutes the marker. A marked absent TEST SYMBOL is not, and the omission
+//! is the decision of CLOUD-1110, not a gap left open. The path arm's term is a
+//! tree-ENTRY walk; a symbol has no such entry, and its only analogue is a
+//! pickaxe over blob CONTENT per commit. `gix` ships no `-S` equivalent, and
+//! `no_second_git_invoker_exists` forbids spawning `git` from `src/`, so the
+//! term would be a full-history content scan per marked symbol. What that
+//! costs: a `(new)` marker on a symbol that once existed and was deleted reads
+//! as a note rather than a refusal. It is accepted because the note is
+//! reported and counted, never a silent pass; because a test obligation is a
+//! forward promise, so "not yet written" is the measured direction (CLOUD-920)
+//! and "was deleted" the rare one; and because every shallow clone already
+//! leaves the marker unrefuted on BOTH arms.
 //! - **`--refs`**: every clause citation IN the tree names a clause its issue
 //!   actually carries (CLOUD-809) — the other direction of the same join.
 //!
@@ -1099,6 +1116,8 @@ struct CiteReading {
 //MUTANT fixtures-satisfy-a-citation|s@^        let drop = &self.exclude;$@        let drop: \&[crate::rules::Selector] = \&[];@|a_citation_that_resolves_only_in_a_fixture_and_nowhere_else_is_refused
 //MUTANT superseded-block-is-judged|s@^            start = Some(at);$@            start = start.or(Some(at));@|the_last_opener_is_the_live_block_and_an_earlier_one_is_history
 //MUTANT marker-never-read|s@^                Some(marker) => text.contains(.format!("`{path}` {marker}")),$@                Some(_) => false,@|a_citation_the_block_marks_new_is_prospective_not_fatal
+//MUTANT board-cites-test-marker-dropped|s@^                "test\\t{}\\t{}\\t{}\\t{}",$@                "test\\t{}\\t{}\\t{}{:.0}",@|a_test_symbol_the_block_marks_new_is_prospective_not_fatal
+//MUTANT board-cites-test-marker-is-spanwide|s@^                Some(marker) => span.contains(.format!("`{token}` {marker}")),$@                Some(marker) => span.contains(marker),@|a_new_marker_on_one_test_symbol_does_not_excuse_another
 
 impl Cites {
     fn resolve(declared: &Declared<'_>) -> Result<Self> {
@@ -1119,7 +1138,7 @@ impl Cites {
     /// Read every payload's LIVE Ready block against the tree.
     ///
     /// ```text
-    /// test  <key> <token> <found>
+    /// test  <key> <token> <found> <marked>
     /// path  <key> <path> <exists> <marked> <deleted: yes|no|unknown>
     /// ```
     ///
@@ -1188,7 +1207,12 @@ impl Cites {
 
     /// Cited test names, inside the obligations clause only — a greedier span
     /// would read an unrelated backticked symbol in a later clause as an
-    /// obligation — and whether any corpus file carries each.
+    /// obligation — whether any corpus file carries each, and whether the clause
+    /// marks it prospective (CLOUD-1110).
+    ///
+    /// The marker is read WITH its token, exactly as [`Self::paths_in`] reads it
+    /// with its path, so one marker in the clause cannot excuse every symbol in
+    /// it. History is never asked: see the module's note on the test arm.
     fn tests_in(
         &self,
         key: &str,
@@ -1216,11 +1240,16 @@ impl Cites {
             .collect();
         for token in tokens {
             let found = contents.iter().any(|text| text.contains(token));
+            let marked = match self.prospective.as_deref() {
+                Some(marker) => span.contains(&format!("`{token}` {marker}")),
+                None => false,
+            };
             lines.insert(format!(
-                "test\t{}\t{}\t{}",
+                "test\t{}\t{}\t{}\t{}",
                 field(key),
                 field(token),
-                yes(found)
+                yes(found),
+                yes(marked)
             ));
         }
     }
