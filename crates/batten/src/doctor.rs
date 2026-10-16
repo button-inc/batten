@@ -2820,13 +2820,10 @@ enum TaskEvidence {
 //MUTANT-SUITE crates/batten/tests/it/session_drain.rs
 //MUTANT transcript-zero-ignores-task-calls|s@^    if called {$@    if false {@|a_transcript_that_declared_a_task_never_reads_as_zero
 //MUTANT transcript-zero-on-empty-stream|s@^    if stream.records.is_empty() {$@    if false {@|an_empty_transcript_is_not_evidence
-fn transcript_evidence(dir: &Path) -> TaskEvidence {
-    let Ok(resolved) = resolve::resolve(dir, &crate::Overrides::default()) else {
-        return TaskEvidence::Unknown;
-    };
-    let Some(transcript) = resolved.transcript.as_ref() else {
-        return TaskEvidence::Unknown;
-    };
+fn transcript_evidence(
+    dir: &Path,
+    transcript: &crate::transcript::TranscriptConfig,
+) -> TaskEvidence {
     let Some(harness) = transcript.harness else {
         return TaskEvidence::Unknown;
     };
@@ -2870,11 +2867,15 @@ fn transcript_evidence(dir: &Path) -> TaskEvidence {
 //MUTANT-SUITE crates/batten/tests/it/session_drain.rs
 //MUTANT transcript-arm-dropped|s@^        TaskEvidence::NoTaskCall => true,$@        TaskEvidence::NoTaskCall => store_is_merely_unwritten(link),@|a_transcript_with_no_task_call_is_zero_without_a_store_root
 //MUTANT transcript-zero-without-a-transcript|s@^        TaskEvidence::Unknown => store_is_merely_unwritten(link),$@        TaskEvidence::Unknown => true,@|a_pointer_whose_parent_is_absent_too_stays_could_not_look
-fn absent_store_is_zero(dir: &Path, link: &Path) -> bool {
+fn absent_store_is_zero(
+    dir: &Path,
+    transcript: &crate::transcript::TranscriptConfig,
+    link: &Path,
+) -> bool {
     if std::fs::read_link(link).is_err() {
         return false;
     }
-    match transcript_evidence(dir) {
+    match transcript_evidence(dir, transcript) {
         TaskEvidence::NoTaskCall => true,
         TaskEvidence::TaskCalled => false,
         TaskEvidence::Unknown => store_is_merely_unwritten(link),
@@ -2906,17 +2907,16 @@ pub fn diagnose_session(dir: &Path) -> SessionReport {
         ok: false,
         unminted: unminted.clone(),
     };
-    let Some(link) = resolve::resolve(dir, &crate::Overrides::default())
-        .ok()
-        .and_then(|resolved| {
-            let transcript = resolved.transcript.as_ref()?;
-            // The template's ABSENCE is could-not-look rather than clean: a
-            // consumer that never declared a store has not told us it has no
-            // work.
-            transcript.tasks.as_ref()?;
-            crate::transcript::tasks_link(dir, transcript.path.as_deref()?)
-        })
-    else {
+    let resolved = resolve::resolve(dir, &crate::Overrides::default()).ok();
+    let Some((transcript, link)) = resolved.as_ref().and_then(|resolved| {
+        let transcript = resolved.transcript.as_ref()?;
+        // The template's ABSENCE is could-not-look rather than clean: a
+        // consumer that never declared a store has not told us it has no
+        // work.
+        transcript.tasks.as_ref()?;
+        let link = crate::transcript::tasks_link(dir, transcript.path.as_deref()?)?;
+        Some((transcript, link))
+    }) else {
         return unreadable;
     };
     // AN ABSENT STORE WITH A PRESENT PARENT IS ZERO, NOT COULD-NOT-LOOK
@@ -2940,7 +2940,7 @@ pub fn diagnose_session(dir: &Path) -> SessionReport {
     // the false clean CLOUD-1376 exists to refuse.
     let entries = match std::fs::read_dir(&link) {
         Ok(entries) => entries,
-        Err(_) if absent_store_is_zero(dir, &link) => {
+        Err(_) if absent_store_is_zero(dir, transcript, &link) => {
             return SessionReport {
                 version: config::VERSION,
                 open: Some(0),
