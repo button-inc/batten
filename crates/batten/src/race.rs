@@ -349,8 +349,26 @@ const FETCH_WIDTH: usize = 8;
 ///
 /// Every request builds its own current-thread runtime inside `rest::get`, and
 /// `fetch` holds no statics, so concurrent live calls are sound. The
-/// one-runtime-per-invocation bound in `rules/rust.md` is about `batten hook`'s
-/// mediated path and does not reach this verb.
+/// one-runtime-per-invocation bound `rules/rust.md` carries names `batten
+/// hook`'s mediated path rather than a `command`-kind verb; CLOUD-2410 moves
+/// that reading into the table along with the row this site owes it, so it is
+/// stated once there rather than re-derived here.
+///
+/// What this does NOT recover is the handshake: the client and the TLS config
+/// are rebuilt per call below here, so eight workers mean eight of each.
+/// CLOUD-2411 owns that — worth a few hundred milliseconds against the thirteen
+/// seconds above, and it needs an async seam this does not cut.
+///
+/// # A pool rather than a wave, and tail latency is what the choice buys
+///
+/// `exec::dispatch` solves a shape like this with `chunks(jobs)` and refuses a
+/// pool in as many words — *"a pool would buy throughput on a workload nobody
+/// has"* — so reaching for one here is owed a reason. A wave is only as fast as
+/// its slowest member, and these are network round trips whose spread belongs
+/// to the forge: one competitor with a long commit list would hold seven idle
+/// workers to the end of its wave. `exec`'s members are local processes in a
+/// short bundle, where that spread does not arise and the wave's free ordering
+/// is worth more than it is here.
 ///
 /// **The fixture seam is not concurrency-safe on its call-order path.**
 /// `rest::from_fixture` read-modify-writes a `calls` counter to answer by call
@@ -360,9 +378,15 @@ const FETCH_WIDTH: usize = 8;
 ///
 /// # What is decided where
 ///
-/// Eligibility is decided on the CALLING thread, and that is a requirement
-/// rather than a convenience: `keys` is a `&dyn Keys`, which is not `Sync`, so
-/// the predicate cannot cross a thread boundary. Only `fetch` runs on a worker.
+/// Eligibility is decided on the CALLING thread, and only `fetch` runs on a
+/// worker. **That is a choice, not a law** — `Grammar` is `Sync`, and a
+/// `Keys: Sync` bound or a `&(dyn Keys + Sync)` would compile, so a reader who
+/// wants the predicate on a worker is not stopped by the type system and
+/// should not be told they are. What makes it the right choice is cheapness
+/// and determinism: `claimed` is microseconds of regex over strings already in
+/// hand, so overlapping it buys nothing, and settling the whole fetch set
+/// before any worker starts is what lets the slot write-back below be a plain
+/// index rather than a synchronised one.
 ///
 /// `mine` is this branch's own pull request number. It is never fetched — the
 /// caller has already read its log, and a branch cannot race itself.
@@ -387,38 +411,36 @@ pub fn with_logs(
     // title or body already names a key has been answered, and the trailer can
     // only agree — the bound that keeps this from being a round trip per open
     // pull request however wide the fan-out is allowed to be.
-    let eligible: Vec<usize> = pulls
+    // EACH ENTRY CARRIES ITS DESTINATION, not its queue position. Two parallel
+    // vectors — slots here, numbers there — would have to stay in step for the
+    // write-back below to put an answer on the pull it was fetched for, and
+    // nothing would say so when they did not.
+    let eligible: Vec<(usize, &str)> = pulls
         .iter()
         .enumerate()
         .filter(|(_, pull)| {
             pull.number != mine
                 && claimed(&pull.head_ref, &pull.title, "", &pull.body, keys).is_empty()
         })
-        .map(|(slot, _)| slot)
+        .map(|(slot, pull)| (slot, pull.number.as_str()))
         .collect();
-    let numbers: Vec<String> = eligible
-        .iter()
-        .filter_map(|&slot| pulls.get(slot).map(|pull| pull.number.clone()))
-        .collect();
-    if numbers.is_empty() {
-        return pulls;
-    }
     // ONE SHARED INDEX TAKEN BY AT MOST `FETCH_WIDTH` WORKERS, never a thread
     // per pull: the width is the whole of the bound, and spawning per item
-    // would make the peak the listing's length.
+    // would make the peak the listing's length. An empty `eligible` spawns
+    // nothing and falls through both loops, so it needs no arm of its own.
     let next = std::sync::atomic::AtomicUsize::new(0);
     let fetched: Vec<(usize, String)> = std::thread::scope(|scope| {
-        let handles: Vec<_> = (0..FETCH_WIDTH.min(numbers.len()))
+        let handles: Vec<_> = (0..FETCH_WIDTH.min(eligible.len()))
             .map(|_| {
-                let (next, numbers, fetch) = (&next, &numbers, &fetch);
+                let (next, eligible, fetch) = (&next, &eligible, &fetch);
                 scope.spawn(move || {
                     let mut answers = Vec::new();
                     loop {
                         let at = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                        let Some(number) = numbers.get(at) else {
+                        let Some(&(slot, number)) = eligible.get(at) else {
                             return answers;
                         };
-                        answers.push((at, fetch(number)));
+                        answers.push((slot, fetch(number)));
                     }
                 })
             })
@@ -433,8 +455,8 @@ pub fn with_logs(
             .flatten()
             .collect()
     });
-    for (at, log) in fetched {
-        if let Some(pull) = eligible.get(at).and_then(|&slot| pulls.get_mut(slot)) {
+    for (slot, log) in fetched {
+        if let Some(pull) = pulls.get_mut(slot) {
             pull.log = log;
         }
     }

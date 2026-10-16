@@ -357,12 +357,12 @@ fn competitor_logs_are_fetched_concurrently_once_each_and_returned_in_listing_or
         bell.notify_all();
         if number == "2" {
             let waiting = seen.lock().expect("the fixture lock");
-            let (state, _) = bell
-                .wait_timeout_while(waiting, std::time::Duration::from_secs(10), |state| {
+            drop(
+                bell.wait_timeout_while(waiting, std::time::Duration::from_secs(10), |state| {
                     state.done == 0
                 })
-                .expect("the fixture lock");
-            drop(state);
+                .expect("the fixture lock"),
+            );
         }
         {
             let mut state = seen.lock().expect("the fixture lock");
