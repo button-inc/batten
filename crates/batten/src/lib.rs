@@ -10368,6 +10368,9 @@ fn run_land(
             run_land_wait(root, &reference, &branch, false, out, err).map(|(code, _, _)| code)
         }
         cli::LandCommand::Push => {
+            if let Some(refused) = refuse_unread_red_head(root, &branch, err)? {
+                return Ok(refused);
+            }
             let Some(url) = land_remote(root, err)? else {
                 return Ok(ExitCode::Internal);
             };
@@ -12842,6 +12845,30 @@ fn run_land_fast_forward(
 }
 
 /// `batten land push`: the branch to its own ref, under receive-pack's CAS.
+/// THE ENGINE'S OWN RED-HEAD GATE (CLOUD-2270): a red head whose failed checks
+/// were never read is not pushed over by `land` either, which is the push the
+/// mediated `red-head` gate cannot see. Asked at the lap's entry and by the
+/// hand-driven `land push`, the two engine routes to the branch ref.
+fn refuse_unread_red_head(
+    root: &Path,
+    branch: &str,
+    err: &mut dyn Write,
+) -> Result<Option<ExitCode>> {
+    let Some(owed) = land::red_head_owed(root, branch) else {
+        return Ok(None);
+    };
+    writeln!(
+        err,
+        "::error:: land: job read unread — {branch}'s last red head owes a read before a push replaces it: {}",
+        owed.join(", ")
+    )?;
+    writeln!(
+        err,
+        "::error:: nothing has been spent — `batten policy explain 'job read unread'` names each read that pays it; then run the landing again"
+    )?;
+    Ok(Some(ExitCode::Violation))
+}
+
 fn run_land_push(root: &Path, url: &str, branch: &str, out: &mut dyn Write) -> Result<ExitCode> {
     match land::push(root, url, branch)? {
         land::Pushed::Landed(head) => {
@@ -13981,20 +14008,8 @@ fn run_land_entry_gates(
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<Option<ExitCode>> {
-    // THE ENGINE'S OWN ENTRY GATE (CLOUD-2270): a red head whose failed checks
-    // were never read is not pushed over by the landing either, which is the
-    // push the mediated `red-head` gate cannot see.
-    if let Some(owed) = land::red_head_owed(root, branch) {
-        writeln!(
-            err,
-            "::error:: land: job read unread — {branch}'s last red head owes a read before a push replaces it: {}",
-            owed.join(", ")
-        )?;
-        writeln!(
-            err,
-            "::error:: nothing has been spent — `batten policy explain 'job read unread'` names each read that pays it; then run the landing again"
-        )?;
-        return Ok(Some(ExitCode::Violation));
+    if let Some(refused) = refuse_unread_red_head(root, branch, err)? {
+        return Ok(Some(refused));
     }
     let declared = std::env::var("LAND_ENTRY_GATES").unwrap_or_default();
     let gates = land::body_gates(&declared);
