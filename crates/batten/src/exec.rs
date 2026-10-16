@@ -504,6 +504,21 @@ fn group_is_empty(pgid: rustix::process::Pid) -> bool {
         .is_err_and(|errno| errno == rustix::io::Errno::SRCH)
 }
 
+/// Whether the group a record names is gone: no process holds it, or the number
+/// is one no signal could reach (unparseable, or not a positive `i32`). What
+/// `land` asks before it forgets a record (CLOUD-2366), so a group it declined to
+/// signal is looked at again rather than lost.
+#[cfg(unix)]
+pub(crate) fn recorded_group_gone(pgid: &str) -> bool {
+    resolve_group(pgid).is_none_or(group_is_empty)
+}
+
+/// No process groups, so there is nothing a record could still name.
+#[cfg(not(unix))]
+pub(crate) fn recorded_group_gone(_pgid: &str) -> bool {
+    true
+}
+
 /// Send `signal` to the process group led by `pgid`, best effort.
 ///
 /// Best effort is the honest contract: the group may already be gone, which is
@@ -3011,6 +3026,26 @@ fn report_bundle(
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// CLOUD-2366: a number no signal could reach is gone on every platform; a
+    /// live group (this process's own) is not, wherever groups exist.
+    #[test]
+    fn a_recorded_group_is_gone_only_when_nothing_holds_it() {
+        for nonsense in ["0", "-1", "not-a-number"] {
+            assert!(recorded_group_gone(nonsense), "{nonsense}");
+        }
+        #[cfg(unix)]
+        {
+            let own = rustix::process::getpgrp()
+                .as_raw_nonzero()
+                .get()
+                .to_string();
+            assert!(
+                !recorded_group_gone(&own),
+                "this process holds its own group"
+            );
+        }
+    }
 
     #[test]
     fn an_empty_command_is_a_usage_error_never_a_verdict() {

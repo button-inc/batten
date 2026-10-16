@@ -248,8 +248,9 @@ fn proc_table() -> Option<(u64, u64, impl Iterator<Item = PathBuf>)> {
 //MUTANT-SUITE crates/batten/src/collect.rs
 //MUTANT stat-start-misread|s@^        rest.split_whitespace().nth(19)?.parse().ok()$@        rest.split_whitespace().nth(18)?.parse().ok()@|a_stat_line_yields_its_start_ticks
 //MUTANT began-before-tie|s@ 1 < alive_at@ 1 <= alive_at@|a_stat_line_began_before_only_strictly_before
-//MUTANT orphan-leader-ignored|s@if pid == Some(group) \x7c\x7c pid == Some(registrant) {@if pid == Some(registrant) {@|an_orphan_needs_its_leader_and_registrant_gone
-//MUTANT orphan-registrant-ignored|s@if pid == Some(group) \x7c\x7c pid == Some(registrant) {@if pid == Some(group) {@|an_orphan_needs_its_leader_and_registrant_gone
+//MUTANT orphan-leader-ignored|s@if pid == group \x7c\x7c pid == registrant {@if pid == registrant {@|an_orphan_needs_its_leader_and_registrant_gone
+//MUTANT orphan-registrant-ignored|s@if pid == group \x7c\x7c pid == registrant {@if pid == group {@|an_orphan_needs_its_leader_and_registrant_gone
+//MUTANT orphan-unread-pid-absent|s@let Some(pid) = process_id(stat) else {@let Some(pid) = process_id(stat).or(Some(0)) else {@|an_orphan_needs_its_leader_and_registrant_gone
 #[cfg(any(target_os = "linux", target_os = "android", test))]
 mod proc_stat {
     /// Field 22 of a `/proc/<pid>/stat` line, `starttime`: read after the LAST
@@ -294,8 +295,11 @@ mod proc_stat {
             if process_group(stat) != Some(group) {
                 continue;
             }
-            let pid = process_id(stat);
-            if pid == Some(group) || pid == Some(registrant) {
+            // A member whose pid cannot be read might be either: no proof.
+            let Some(pid) = process_id(stat) else {
+                return false;
+            };
+            if pid == group || pid == registrant {
                 return false;
             }
             predates |= began_before(stat, boot, ticks, alive_at);
@@ -340,16 +344,30 @@ mod proc_stat {
 /// proceed on proof.
 #[cfg(any(target_os = "linux", target_os = "android"))]
 pub(crate) fn group_orphaned(pgid: &str, registrant: &str, alive_at: u64) -> bool {
+    let Some((boot, ticks, pids)) = proc_table() else {
+        return false;
+    };
+    let stats = pids.filter_map(|dir| std::fs::read_to_string(dir.join("stat")).ok());
+    orphaned_in(stats, pgid, registrant, boot, ticks, alive_at)
+}
+
+/// [`group_orphaned`] over a given process table: the record's strings parsed
+/// as `exec` would signal them, then [`proc_stat::orphaned`].
+#[cfg(any(target_os = "linux", target_os = "android", test))]
+fn orphaned_in<S: AsRef<str>>(
+    stats: impl IntoIterator<Item = S>,
+    pgid: &str,
+    registrant: &str,
+    boot: u64,
+    ticks: u64,
+    alive_at: u64,
+) -> bool {
     let Some(group) = pgid.parse::<i32>().ok().filter(|group| *group > 0) else {
         return false;
     };
     let Ok(registrant) = registrant.parse::<i32>() else {
         return false;
     };
-    let Some((boot, ticks, pids)) = proc_table() else {
-        return false;
-    };
-    let stats = pids.filter_map(|dir| std::fs::read_to_string(dir.join("stat")).ok());
     proc_stat::orphaned(
         stats,
         i64::from(group),
@@ -1446,20 +1464,39 @@ mod tests {
         assert!(!began_before(1_700_009_877));
     }
 
-    /// CLOUD-2366: a group its registrant still runs in is never the orphan,
-    /// on any platform; nor is a pgid or registrant `exec` could not signal.
+    /// CLOUD-2366: the record's strings reach the predicate as `exec` would
+    /// signal them. A synthetic orphan (group 42, registrant 43 gone, a member
+    /// at second `1_700_000_001` before a stamp at `1_700_000_100`) is proven
+    /// only through a positive group and a readable registrant.
+    #[test]
+    fn a_record_is_read_as_exec_would_signal_it() {
+        let survivor = ["44 (x) S 1 42 42 0 -1 4194560 100 0 0 0 5 3 0 0 20 0 1 0 100 1000 100"];
+        let orphaned = |pgid, registrant| {
+            super::orphaned_in(
+                survivor,
+                pgid,
+                registrant,
+                1_700_000_000,
+                100,
+                1_700_000_100,
+            )
+        };
+        assert!(orphaned("42", "43"));
+        assert!(orphaned("+42", "43"), "the number exec would signal");
+        assert!(!orphaned("42", "not-a-number"), "an unreadable registrant");
+        assert!(!orphaned("42", ""), "a record with no pid");
+        for nonsense in ["0", "-42", "not-a-number"] {
+            assert!(!orphaned(nonsense, "43"), "{nonsense}");
+        }
+    }
+
+    /// CLOUD-2366: wherever `/proc` is read live, a group its registrant still
+    /// runs in is never the orphan.
     #[test]
     fn a_group_its_registrant_runs_in_is_never_orphaned() {
         let me = std::process::id().to_string();
         let own = crate::task::process_group(&me);
         assert!(!super::group_orphaned(&own, &me, u64::MAX));
-        for nonsense in ["0", "-1", "not-a-number"] {
-            assert!(
-                !super::group_orphaned(nonsense, "0", u64::MAX),
-                "{nonsense}"
-            );
-        }
-        assert!(!super::group_orphaned(&own, "not-a-number", u64::MAX));
     }
 
     /// CLOUD-2366: at 100 Hz from boot `1_700_000_000`, a member at 100 ticks
@@ -1490,6 +1527,12 @@ mod tests {
             "every member began after the stamp"
         );
         assert!(!orphaned(&[line(44, 41, 100)]), "another group's member");
+        let unread =
+            String::from("x (x) S 1 42 42 0 -1 4194560 100 0 0 0 5 3 0 0 20 0 1 0 100 1000 100");
+        assert!(
+            !orphaned(&[line(44, 42, 100), unread]),
+            "a member whose pid cannot be read"
+        );
     }
 
     #[test]
