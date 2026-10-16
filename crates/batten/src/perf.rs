@@ -266,17 +266,13 @@ pub fn wiring_paths() -> Vec<String> {
         let Some(wiring) = harness.wiring() else {
             continue;
         };
-        match wiring.file {
-            WiringFile::Key { path, .. } | WiringFile::Whole(path) | WiringFile::Root(path) => {
-                paths.insert(path.to_owned());
-                // The directory beside the settings file: a host that routes
-                // through a launcher script keeps it there, and CLOUD-697 is the
-                // measured instance of a commit touching only that and skipping
-                // the gate it needed.
-                if let Some((dir, _)) = path.rsplit_once('/') {
-                    paths.insert(dir.to_owned());
-                }
-            }
+        let path = wiring.file.path();
+        paths.insert(path.to_owned());
+        // The directory beside the settings file: a host that routes through a
+        // launcher script keeps it there, and CLOUD-697 is the measured instance
+        // of a commit touching only that and skipping the gate it needed.
+        if let Some((dir, _)) = path.rsplit_once('/') {
+            paths.insert(dir.to_owned());
         }
     }
     paths.into_iter().collect()
