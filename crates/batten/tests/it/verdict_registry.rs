@@ -549,8 +549,7 @@ fn a_command_route_naming_a_defined_task_is_clean_over_the_engine() {
 /// `spawn_census`'s `Command::new` scan was not.
 #[test]
 fn every_native_class_is_raised_by_production_code() {
-    let verdict_rs = common::at_root("crates/batten/src/verdict.rs");
-    let declared = declared_native_variants(&verdict_rs);
+    let declared = declared_native_variants();
     assert!(
         declared.len() >= 20,
         "the scan found {} variants, too few to be the enum",
@@ -594,27 +593,17 @@ fn every_native_class_is_raised_by_production_code() {
     );
 }
 
-/// The variants `Native::ALL` lists, read off the const rather than re-typed.
+/// The variants `Native::ALL` lists, read off the COMPILED const rather than
+/// re-typed or re-parsed (CLOUD-2442).
 ///
 /// Re-typing the list here would be a second authority on it, and the two would
 /// drift in exactly the direction that makes the assertion above pass
 /// vacuously — a name missing from this copy is a class the gate stops checking.
-fn declared_native_variants(verdict_rs: &std::path::Path) -> Vec<String> {
-    let src = std::fs::read_to_string(verdict_rs).expect("verdict.rs is committed");
-    let at = src
-        .find("pub const ALL")
-        .expect("`Native::ALL` is declared");
-    let body = &src[at..src[at..].find("];").expect("the const terminates") + at];
-    let mut found = Vec::new();
-    for hit in body.match_indices("Native::") {
-        let rest = &body[hit.0 + "Native::".len()..];
-        let name: String = rest
-            .chars()
-            .take_while(|ch| ch.is_alphanumeric() || *ch == '_')
-            .collect();
-        if !name.is_empty() {
-            found.push(name);
-        }
-    }
-    found
+/// The `Debug` name is the variant's own identifier, the spelling a raising site
+/// writes after `Native::`.
+fn declared_native_variants() -> Vec<String> {
+    verdict::Native::ALL
+        .iter()
+        .map(|native| format!("{native:?}"))
+        .collect()
 }
