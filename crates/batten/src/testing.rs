@@ -419,6 +419,9 @@ pub struct RequireCensus {
     pub unnamed: usize,
     /// String literals spelling `which`: a `mise which` the resolver does not make.
     pub which_literals: usize,
+    /// Each `Command::new("<literal>")` program: a pinned tool among them is
+    /// reached around the resolver, so no reader sees it required.
+    pub spawned: Vec<String>,
 }
 
 /// Whether `path` names the resolver: its last segment is `require_tool` or
@@ -463,6 +466,17 @@ pub fn require_census(file: &syn::File) -> RequireCensus {
                     self.visit_expr(arg);
                 }
                 return;
+            }
+            if let syn::Expr::Path(path) = &*call.func
+                && let [.., ty, new] = path.path.segments.iter().collect::<Vec<_>>()[..]
+                && ty.ident == "Command"
+                && new.ident == "new"
+                && let Some(syn::Expr::Lit(syn::ExprLit {
+                    lit: syn::Lit::Str(program),
+                    ..
+                })) = call.args.first()
+            {
+                self.0.spawned.push(program.value());
             }
             syn::visit::visit_expr_call(self, call);
         }

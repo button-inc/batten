@@ -32,11 +32,12 @@ use std::path::{Path, PathBuf};
 
 /// A `deno` that fails on any argument naming a file that does not parse as
 /// JSON — the predicate the pathspec guards, without a formatter this job may
-/// not install.
+/// not install. `JQ` is the pinned jq's path, written in by `common::require_tool`
+/// so the suite-job gate sees the requirement (CLOUD-2388).
 const STUB: &str = r#"#!/usr/bin/env bash
 for f in "$@"; do
 	case "$f" in -*|fmt) continue ;; esac
-	jq -e . "$f" >/dev/null 2>&1 || { echo "deno-stub: $f is not JSON" >&2; exit 1; }
+	"JQ" -e . "$f" >/dev/null 2>&1 || { echo "deno-stub: $f is not JSON" >&2; exit 1; }
 done
 "#;
 
@@ -66,7 +67,8 @@ impl Repo {
         let dir = common::scratch(&format!("lint-deno-{name}"));
         std::fs::create_dir_all(dir.join("bin")).expect("bin");
         let deno = dir.join("bin/deno");
-        std::fs::write(&deno, STUB).expect("stub");
+        let jq = common::require_tool("jq");
+        std::fs::write(&deno, STUB.replace("JQ", &jq.to_string_lossy())).expect("stub");
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;

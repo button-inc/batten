@@ -780,9 +780,11 @@ fn command_facts(words: &[String], stdin: &[String]) -> (bool, Vec<String>) {
                     }
                 }
             }
+            // A shell's own script operand was read by its arm above.
             _ if Path::new(word)
                 .extension()
-                .is_some_and(|ext| ext.eq_ignore_ascii_case("sh")) =>
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("sh"))
+                && !(at > 0 && matches!(words[at - 1].rsplit('/').next(), Some("bash" | "sh"))) =>
             {
                 take(script_facts(word));
             }
@@ -978,8 +980,9 @@ fn tool_name(key: &str) -> String {
 /// literal, or a `"which"` literal (a `mise which` of a case's own), is refused:
 /// either is a requirement this census cannot read.
 //MUTANT require-call-unread|s@^        required.extend(found.tools);$@@|every_suite_job_installs_the_pinned_tools_its_cases_require
-fn required_tools() -> BTreeSet<String> {
+fn required_tools() -> (BTreeSet<String>, Vec<(String, PathBuf)>) {
     let mut required = BTreeSet::new();
+    let mut spawned = Vec::new();
     for path in common::rust_sources() {
         let source = std::fs::read_to_string(&path).unwrap();
         let found = batten::testing::require_census(
@@ -1003,8 +1006,14 @@ fn required_tools() -> BTreeSet<String> {
             );
         }
         required.extend(found.tools);
+        spawned.extend(
+            found
+                .spawned
+                .into_iter()
+                .map(|program| (program, path.clone())),
+        );
     }
-    required
+    (required, spawned)
 }
 
 /// The required tools a job's steps do not install. A mise-action step with no
@@ -1089,8 +1098,8 @@ fn a_job_installs_what_its_mise_steps_say() {
 #[test]
 fn every_suite_job_installs_the_pinned_tools_its_cases_require() {
     use yaml_rust2::YamlLoader;
-    let required = required_tools();
-    for floor in ["cargo-dist", "pkl"] {
+    let (required, spawned) = required_tools();
+    for floor in ["cargo-dist", "pkl", "node", "jq"] {
         assert!(
             required.contains(floor),
             "the {floor} requirement went unread: {required:?}"
@@ -1109,6 +1118,29 @@ fn every_suite_job_installs_the_pinned_tools_its_cases_require() {
     assert!(
         unpinned.is_empty(),
         "a case requires a tool mise.toml does not pin: {unpinned:?}"
+    );
+    // A pinned tool spawned by name is reached around the resolver: whatever
+    // `PATH` holds answers, and no job is held to installing it.
+    // The program each pinned tool provides, where it is not the tool's name:
+    // `aqua:mvdan/sh` is shfmt, never the shell; `rust` is every job's first
+    // install, so a bare `cargo` reaches the pin wherever the suite runs.
+    let programs: BTreeSet<&str> = pinned
+        .iter()
+        .filter_map(|tool| match tool.as_str() {
+            "sh" => Some("shfmt"),
+            "cargo-dist" => Some("dist"),
+            "rust" => None,
+            other => Some(other),
+        })
+        .collect();
+    let around: Vec<String> = spawned
+        .iter()
+        .filter(|(program, _)| programs.contains(program.as_str()))
+        .map(|(program, path)| format!("{}: Command::new(\"{program}\")", path.display()))
+        .collect();
+    assert!(
+        around.is_empty(),
+        "a case spawns a pinned tool by name; resolve it with common::require_tool: {around:?}"
     );
 
     let suite = suite_tasks(&manifest);
