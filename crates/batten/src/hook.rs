@@ -6351,7 +6351,7 @@ fn grammar(program: &str) -> Grammar {
         "perl" => Grammar {
             inline: "eE",
             inline_long: &[],
-            valued: "I",
+            valued: "IMm",
             valued_long: &[],
             bundles: true,
         },
@@ -6448,16 +6448,22 @@ fn inline_values(grammar: &Grammar, arguments: &[&str]) -> Vec<String> {
         let Some(bundle) = grammar.shorts(word) else {
             continue;
         };
-        if let Some((at, flag)) = bundle
+        // The first inline option, unless a valued one comes first and takes
+        // the rest of the bundle as its own value (`-MFile::Temp`).
+        let Some((at, flag)) = bundle
             .char_indices()
-            .find(|(_, flag)| grammar.inline.contains(*flag))
-        {
-            let rest = &bundle[at + flag.len_utf8()..];
-            if rest.is_empty() {
-                values.extend(words.next().map(str::to_owned));
-            } else {
-                values.push(rest.to_owned());
-            }
+            .find(|(_, flag)| grammar.inline.contains(*flag) || grammar.valued.contains(*flag))
+            .filter(|(_, flag)| grammar.inline.contains(*flag))
+        else {
+            continue;
+        };
+        let rest = &bundle[at + flag.len_utf8()..];
+        // Further inline options (`-pe`) leave the program to the next word;
+        // anything else attached is the program itself (`-e'…'`).
+        if rest.chars().all(|flag| grammar.inline.contains(flag)) {
+            values.extend(words.next().map(str::to_owned));
+        } else {
+            values.push(rest.to_owned());
         }
     }
     values
@@ -14613,6 +14619,7 @@ deny contains "refused by themodule" if {
             // CLOUD-2304: the forms the operand gate leaves here as inline are
             // forms this scan reads, through the same grammar.
             "node -p 'require(\"fs\").writeFileSync(\".serena/memories/core.md\", \"\")'",
+            "node -pe 'require(\"fs\").writeFileSync(\".serena/memories/core.md\", \"\")'",
             "perl -ne 'open(F, \">>.serena/memories/core.md\")'",
         ] {
             let decision = guarded(command);
@@ -14688,6 +14695,7 @@ deny contains "refused by themodule" if {
             "python3 -I /tmp/x.py",
             "python3 -W ignore /tmp/x.py",
             "perl -p /tmp/x.pl",
+            "perl -MFile::Temp /tmp/x.pl",
             "ruby -W /tmp/x.rb",
             "node /tmp/x.js",
             "node --require ./hook.js /tmp/x.js",
