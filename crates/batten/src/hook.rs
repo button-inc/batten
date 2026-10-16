@@ -515,9 +515,10 @@ pub struct Capabilities {
     /// keeping the human's native todo view in step with the store — and an
     /// honest report of hosts where that view does not exist.
     ///
-    /// **One verdict DOES read it:** `doctor session` treats a call to any tool
-    /// listed here as declared work (CLOUD-1820), so dropping a spelling turns
-    /// that session's absent store from could-not-look into a zero.
+    /// **One verdict DOES read it:** when the task store is absent, `doctor
+    /// session` treats a call to any tool listed here as declared work
+    /// (CLOUD-1820), so dropping a spelling turns that absent store from
+    /// could-not-look into a zero. A present store is counted, never this list.
     ///
     /// Every spelling here was FETCHED, per CLOUD-209's rule that anything
     /// re-derived without one should be assumed wrong.

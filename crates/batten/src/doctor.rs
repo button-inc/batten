@@ -2786,6 +2786,10 @@ enum TaskEvidence {
     NoTaskCall,
     /// The same parse holds such a call.
     TaskCalled,
+    /// The last line is half written, and it may be the very task call: never
+    /// zero, whatever the store's parent shows. Transient, since the next read
+    /// sees it whole.
+    Torn,
     /// Nothing that can answer: no transcript, unparseable, an unnamed or
     /// unsurveyed harness, a harness with no task tools, or an empty stream.
     Unknown,
@@ -2807,7 +2811,7 @@ enum TaskEvidence {
 /// session` runs while the host is appending, so the last line can be half
 /// written — and that line can be the very `TaskCreate` the answer turns on.
 /// Dropping it would read a declared task as zero; it answers
-/// [`TaskEvidence::Unknown`] instead.
+/// [`TaskEvidence::Torn`] instead, which no fallback turns into a zero.
 ///
 /// **EVERY TASK CALL COUNTS, REFUSED OR NOT.** Neither an error flag nor a
 /// [`crate::transcript::Event::Refused`] proves nothing was written: a post-call
@@ -2850,7 +2854,7 @@ fn transcript_evidence(
     };
     let (complete, partial) = body.split_at(body.rfind('\n').map_or(0, |at| at + 1));
     if !partial.trim().is_empty() {
-        return TaskEvidence::Unknown;
+        return TaskEvidence::Torn;
     }
     let Ok(stream) = crate::transcript::parse(complete, path, shape) else {
         return TaskEvidence::Unknown;
@@ -2895,6 +2899,7 @@ fn transcript_evidence(
 //MUTANT transcript-arm-dropped|s@^        TaskEvidence::NoTaskCall => !resolved.try_exists().unwrap_or(true),$@        TaskEvidence::NoTaskCall => store_is_merely_unwritten(\&resolved),@|a_transcript_with_no_task_call_is_zero_without_a_store_root
 //MUTANT transcript-zero-without-a-transcript|s@^        TaskEvidence::Unknown => store_is_merely_unwritten(&resolved),$@        TaskEvidence::Unknown => true,@|a_pointer_whose_parent_is_absent_too_stays_could_not_look
 //MUTANT transcript-zero-over-a-present-store|s@^    if resolved.try_exists().unwrap_or(true) {$@    if false {@|an_unreadable_store_is_never_zero
+//MUTANT torn-falls-back|s@^        TaskEvidence::TaskCalled \x7c TaskEvidence::Torn => false,$@        TaskEvidence::TaskCalled => false, TaskEvidence::Torn => store_is_merely_unwritten(\&resolved),@|a_half_written_task_call_is_not_zero
 fn absent_store_is_zero(
     dir: &Path,
     transcript: &crate::transcript::TranscriptConfig,
@@ -2917,7 +2922,7 @@ fn absent_store_is_zero(
         // was written while we looked. Timing the suite cannot pin; the arm stays
         // `false`-safe either way.
         TaskEvidence::NoTaskCall => !resolved.try_exists().unwrap_or(true),
-        TaskEvidence::TaskCalled => false,
+        TaskEvidence::TaskCalled | TaskEvidence::Torn => false,
         TaskEvidence::Unknown => store_is_merely_unwritten(&resolved),
     }
 }

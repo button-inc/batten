@@ -348,15 +348,17 @@ fn an_unreadable_store_is_never_zero() {
 }
 
 /// A half-written last line can be the very `TaskCreate` the answer turns on, so
-/// it is could-not-look, never dropped into a zero.
+/// it is could-not-look, never dropped into a zero — even with the store's
+/// parent present, which on its own reads as zero.
 ///
-/// Fails by: dropping the partial-line test (`transcript-partial-line-dropped`).
+/// Fails by: dropping the partial-line test (`transcript-partial-line-dropped`),
+/// or letting a torn tail fall back to the parent test (`torn-falls-back`).
 #[cfg(unix)]
 #[test]
 fn a_half_written_task_call_is_not_zero() {
     let body = transcript(&["Bash"])
         + r#"{"type":"assistant","sessionId":"s-1","message":{"role":"assistant","content":[{"type":"tool_use","id":"t9","name":"TaskCre"#;
-    let dir = rootless("transcript-partial", &body, false);
+    let dir = rootless("transcript-partial", &body, true);
 
     let output = session(&dir, &[]);
     assert_eq!(output.status.code(), Some(3), "got: {}", stdout(&output));
