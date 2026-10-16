@@ -305,35 +305,6 @@ struct Seen {
     opened: bool,
 }
 
-/// The competitor fill is concurrent, bounded at eight, once per eligible pull,
-/// and in listing order (CLOUD-2382).
-///
-/// # How each clause discriminates
-///
-/// The double imposes two conditions, neither of them a duration. Every call
-/// parks until `FETCH_WIDTH` of them are inside together, and `"2"` parks again
-/// until some other call has completed:
-///
-/// * today's sequential `.map` never gets a second call in flight, so the first
-///   gives up at the deadline and the peak reads 1;
-/// * a pool narrower than the bound it claims never fills the barrier either,
-///   and the peak comes out below `FETCH_WIDTH`;
-/// * a collect in COMPLETION order puts `"2"` after the pulls that finished
-///   while it waited, which breaks the returned order;
-/// * dropping the key predicate fetches the two pulls whose titles name one,
-///   and dropping the `mine` arm fetches `"1"`.
-///
-/// **What the peak equality does NOT discriminate is a spawn-per-item**, and
-/// saying so is the point: the implementation spawns `FETCH_WIDTH.min(len)`
-/// threads, so the upper bound is structural rather than behavioural, and a
-/// per-item spawn retires early threads before the late ones are created — the
-/// peak then reads a handful rather than the whole set. The equality is kept
-/// because it catches a future refactor that makes the width a soft target,
-/// but the bound itself is held by construction, not by this case.
-///
-/// **Nothing here asserts on the clock.** The ten-second deadline is an input:
-/// it turns a serial implementation's hang into a failure instead of a hung
-/// suite, and it is paid once, because whoever gives up opens the barrier.
 /// The listing the concurrency case drives, and the numbers it expects fetched.
 ///
 /// `"1"` is passed as `mine`, `FETCH_WIDTH + 2` competitors name no key, and two
@@ -374,6 +345,35 @@ fn listing() -> (Vec<Pull>, Vec<String>) {
     (pulls, eligible)
 }
 
+/// The competitor fill is concurrent, bounded at `FETCH_WIDTH`, once per
+/// eligible pull, and in listing order (CLOUD-2382).
+///
+/// # How each clause discriminates
+///
+/// The double imposes two conditions, neither of them a duration. Every call
+/// parks until `FETCH_WIDTH` of them are inside together, and `"2"` parks again
+/// until some other call has completed:
+///
+/// * today's sequential `.map` never gets a second call in flight, so the first
+///   gives up at the deadline and the peak reads 1;
+/// * a pool narrower than the bound it claims never fills the barrier either,
+///   and the peak comes out below `FETCH_WIDTH`;
+/// * a collect in COMPLETION order puts `"2"` after the pulls that finished
+///   while it waited, which breaks the returned order;
+/// * dropping the key predicate fetches the two pulls whose titles name one,
+///   and dropping the `mine` arm fetches `"1"`.
+///
+/// **What the peak equality does NOT discriminate is a spawn-per-item**, and
+/// saying so is the point: the implementation spawns `FETCH_WIDTH.min(len)`
+/// threads, so the upper bound is structural rather than behavioural, and a
+/// per-item spawn retires early threads before the late ones are created — the
+/// peak then reads a handful rather than the whole set. The equality is kept
+/// because it catches a future refactor that makes the width a soft target,
+/// but the bound itself is held by construction, not by this case.
+///
+/// **Nothing here asserts on the clock.** The ten-second deadline is an input:
+/// it turns a serial implementation's hang into a failure instead of a hung
+/// suite, and it is paid once, because whoever gives up opens the barrier.
 #[test]
 fn competitor_logs_are_fetched_concurrently_once_each_and_returned_in_listing_order() {
     let (pulls, eligible) = listing();
