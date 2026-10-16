@@ -685,18 +685,17 @@ mod tests {
         assert_eq!(build_id(&image), Some(vec![8, 7, 6, 5, 4, 3, 2, 1]));
     }
 
-    /// Make `partition` with its use mark, the mark's time `step` million
-    /// seconds past the epoch, so a higher step reads as more recently used. A
-    /// FILE's time, which every platform sets (CLOUD-2361).
+    /// Make `partition` with its use mark, the mark's time at [`stepped`]
+    /// `step`. A FILE's time, which every platform sets (CLOUD-2361).
     fn marked(partition: &Path, step: u64) {
         std::fs::create_dir_all(partition).expect("partition");
         std::fs::File::create(partition.join(USE_MARK))
-            .and_then(|file| file.set_modified(at(step)))
+            .and_then(|file| file.set_modified(stepped(step)))
             .expect("age the mark");
     }
 
     /// `step` million seconds past the epoch: a higher step is more recent.
-    fn at(step: u64) -> std::time::SystemTime {
+    fn stepped(step: u64) -> std::time::SystemTime {
         std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000 * step)
     }
 
@@ -788,7 +787,7 @@ mod tests {
             let partition = root.join(name);
             marked(&partition, step);
             if cfg!(unix) {
-                touch(&partition, at(made)).expect("age the directory");
+                touch(&partition, stepped(made)).expect("age the directory");
             }
         }
         std::fs::create_dir_all(root.join("policy")).expect("flat layout");
