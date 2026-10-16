@@ -5599,7 +5599,7 @@ fn marker_scope(rule: &Rule, envelope: &Envelope) -> Option<String> {
 ///
 /// No scope names everything. A body that will not read counts, for
 /// [`marker_scope`]'s reason.
-//MUTANT marker-scope-ignored|s@^        Some(scope) => std::fs::read_to_string(path).map_or(true, |body| body.contains(scope)),$@        Some(_) => true,@|a_marker_for_another_repository_admits_the_pr
+//MUTANT marker-scope-ignored|s@body\.contains(scope)),$@body.contains(scope) == body.contains(scope)),@|a_marker_for_another_repository_admits_the_pr
 fn marker_names(path: &std::path::Path, scope: Option<&str>) -> bool {
     match scope {
         None => true,
