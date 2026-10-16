@@ -86,7 +86,7 @@ const USE_MARK: &str = "used";
 /// can, it is served from the cold path and neither marked nor pruned.
 //MUTANT partitions-never-pruned|s@^    prune(\&root, name);$@@|a_new_partition_keeps_its_neighbours_up_to_the_bound
 //MUTANT partition-mark-never-made|s@^    if crate::durable::create_empty(\&mark).is_err() {$@    if true {@|a_partition_without_a_mark_gains_one
-//MUTANT unmarkable-partition-prunes|s@^    if crate::durable::create_empty(\&mark).is_err() {$@    if false {@|a_partition_that_cannot_be_marked_does_not_prune
+//MUTANT unmarkable-partition-prunes|s@^    if crate::durable::create_empty(\&mark).is_err() {$@    if crate::durable::create_empty(\&mark).is_err() \&\& false {@|a_partition_that_cannot_be_marked_does_not_prune
 #[must_use]
 pub fn root_under(parent: &Path) -> Option<PathBuf> {
     // A binary that cannot name itself has no partition, so it caches nothing
@@ -712,8 +712,8 @@ mod tests {
         );
     }
 
-    /// A partition whose mark is missing — its marking failed, or the mark was
-    /// lost — is answered through the cold path, which gives it one (CLOUD-2361).
+    /// A partition whose mark was lost is answered through the cold path, which
+    /// gives it one (CLOUD-2361).
     #[test]
     fn a_partition_without_a_mark_gains_one() {
         let dir = scratch("partition-unmarked");

@@ -28,8 +28,9 @@
 //! Both are synced before returning: persist-before-emit, so a caller that reports
 //! a record as written has it on disk rather than in a page cache a reboot drops.
 //!
-//! Beside them, the crate-private `open_handle` opens a file or directory for its
-//! lock or its times.
+//! Beside them, two crate-private, unsynced ones: `create_empty` makes a zero-byte
+//! mark whose time is its meaning, and `open_handle` opens a file or directory
+//! for its lock or its times.
 //!
 //! # Enforced, not remembered
 //!
@@ -318,6 +319,7 @@ pub fn create_exclusive_as(
 /// # Errors
 ///
 /// `AlreadyExists` when the name is taken, else any I/O error.
+//MUTANT empty-mark-overwrites|s@^    std::fs::File::create_new(path).map(drop)$@    std::fs::File::create(path).map(drop)@|an_empty_mark_is_made_once
 pub(crate) fn create_empty(path: &Path) -> std::io::Result<()> {
     std::fs::File::create_new(path).map(drop)
 }
@@ -449,6 +451,18 @@ mod tests {
         append_whole_lines(&path, "h 1").expect("append");
         append_whole_lines(&path, "h 2").expect("append");
         assert_eq!(std::fs::read_to_string(&path).expect("read"), "h 1\nh 2\n");
+    }
+
+    /// An empty mark is made once: a second creation is `AlreadyExists`, which a
+    /// caller reads as "someone else marked it" (CLOUD-2361).
+    #[test]
+    fn an_empty_mark_is_made_once() {
+        let dir = scratch("empty");
+        let path = dir.join("used");
+        create_empty(&path).expect("the first creation");
+        assert_eq!(std::fs::metadata(&path).expect("made").len(), 0);
+        let again = create_empty(&path).expect_err("the name is taken");
+        assert_eq!(again.kind(), std::io::ErrorKind::AlreadyExists);
     }
 
     /// `#MUTANT exclusive-create-overwrites` reddens here: of many threads racing
