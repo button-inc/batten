@@ -2220,6 +2220,47 @@ pub fn stalled(advances: &[i64], beats: u32) -> bool {
     beats > 0 && advances.len() >= needed && recent.all(|seen| seen == last)
 }
 
+/// What a landing does at entry with the forge state a lap that never returned
+/// may have left (CLOUD-2371).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Reconcile {
+    /// Nothing to undo, or nothing this clone can prove is its own to undo.
+    Leave,
+    /// This branch's own superseded push is ready with runs spending: cancel
+    /// that head's runs and re-draft the pull request.
+    AbandonAndRedraft {
+        /// The superseded head whose runs are cancelled.
+        stale: String,
+    },
+}
+
+/// Reconcile a ready pull request left by a killed lap, from observation alone
+/// (CLOUD-2371).
+///
+/// `pr` is this branch's open pull request as `(ready, head)`; `superseded` is
+/// whether that head is a strict ancestor of `local_head`. Crash-only puts this
+/// at the next run's entry: `unwind_lap` runs only where a lap RETURNS, and a
+/// SIGKILL, a background `deadline` stop or a reclaimed container never does.
+///
+/// - No pull request, or a draft: nothing is spending. `Leave`.
+/// - Ready on the head this run holds: the running matrix grades what this run
+///   pushes, so it is adopted. `Leave`.
+/// - Ready on a head that is not an ancestor: somebody else's push or a
+///   diverged branch, and could-not-tell is never a cancel. `Leave`.
+/// - Ready on a strict ancestor: this branch's own superseded push, whose runs
+///   grade a tree it will never land. `AbandonAndRedraft`.
+//MUTANT reconcile-ignores-a-stale-head|s@ \&\& superseded => {@ \&\& false => {@|entry_reconcile_cancels_only_a_superseded_ready_head
+//MUTANT reconcile-cancels-a-foreign-head|s@ \&\& superseded => {@ => {@|entry_reconcile_cancels_only_a_superseded_ready_head
+#[must_use]
+pub fn entry_reconcile(pr: Option<(bool, &str)>, local_head: &str, superseded: bool) -> Reconcile {
+    match pr {
+        Some((true, head)) if head != local_head && superseded => Reconcile::AbandonAndRedraft {
+            stale: head.to_owned(),
+        },
+        _ => Reconcile::Leave,
+    }
+}
+
 /// The self-stall arm's terms (CLOUD-2369): whose registry stamps to read, how
 /// often, and how many still beats end the gate.
 #[derive(Debug, Clone)]
@@ -3912,6 +3953,40 @@ mod mutate_tests {
 mod lap_tests {
     use super::{Basis, Progress, Step, TapVerdict, progress, progress_of, stalled};
     use crate::exit::ExitCode::{Internal, Success, Usage, Violation};
+
+    /// CLOUD-2371: only this branch's own superseded ready head is cancelled
+    /// and re-drafted; every other state is left as it was.
+    #[test]
+    fn entry_reconcile_cancels_only_a_superseded_ready_head() {
+        use super::{Reconcile, entry_reconcile};
+        assert_eq!(
+            entry_reconcile(None, "b", false),
+            Reconcile::Leave,
+            "no pull request"
+        );
+        assert_eq!(
+            entry_reconcile(Some((false, "a")), "b", true),
+            Reconcile::Leave,
+            "a draft"
+        );
+        assert_eq!(
+            entry_reconcile(Some((true, "b")), "b", false),
+            Reconcile::Leave,
+            "the head this run holds"
+        );
+        assert_eq!(
+            entry_reconcile(Some((true, "a")), "b", false),
+            Reconcile::Leave,
+            "a head that is not an ancestor"
+        );
+        assert_eq!(
+            entry_reconcile(Some((true, "a")), "b", true),
+            Reconcile::AbandonAndRedraft {
+                stale: String::from("a")
+            },
+            "a strict ancestor"
+        );
+    }
 
     /// CLOUD-2369: `beats` intervals of equal stamps stall; one advance among
     /// them, or too few observations, does not.

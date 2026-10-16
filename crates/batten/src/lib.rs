@@ -11772,6 +11772,55 @@ struct Laps<'run> {
 /// # Errors
 ///
 /// Only for a stream that will not accept output.
+/// Undo, at entry, what a lap that never returned left spending (CLOUD-2371).
+///
+/// Crash-only: a SIGKILL, a background `deadline` stop or a reclaimed container
+/// skips `unwind_lap`, so its readied pull request and running matrix have no
+/// owner unless the next run's entry is one. The decision is
+/// [`land::entry_reconcile`]'s, over forge and git facts that survive any
+/// container; the writes are `unwind_lap`'s own `land::abandon` and
+/// `land::redraft`. Every read that does not answer leaves things as they are.
+fn reconcile_at_entry(root: &Path, branch: &str, out: &mut dyn Write) -> Result<()> {
+    let Some(repo) = repo_slug(root) else {
+        return Ok(());
+    };
+    let Some(pr) = fast_forward::open_pull_request(&repo, branch) else {
+        return Ok(());
+    };
+    let Some(read) = land::draft_state(&repo, &pr) else {
+        return Ok(());
+    };
+    let Ok(local) = git::head_commit(root) else {
+        return Ok(());
+    };
+    let superseded = read.head != local
+        && git::is_ancestor(root, &read.head, &local).ok().flatten() == Some(true);
+    let land::Reconcile::AbandonAndRedraft { stale } =
+        land::entry_reconcile(Some((!read.draft, &read.head)), &local, superseded)
+    else {
+        return Ok(());
+    };
+    // The workflow, never the check: `unwind_lap`'s Abandon arm says why.
+    let fanin =
+        land::FanIn::from_workflow_path(std::env::var("CI_FANIN_WORKFLOW").unwrap_or_default());
+    let report = land::abandon(&repo, &stale, &fanin);
+    let redrafted = land::redraft(&repo, &pr, &read.node);
+    writeln!(
+        out,
+        "land: entry — {} was left ready by a lap that did not return; {} run(s) cancelled, {} spared, {} refused; {}",
+        short(&stale),
+        report.cancelled,
+        report.spared,
+        report.refused,
+        if redrafted {
+            "the pull request is a draft again"
+        } else {
+            "the pull request would not go back to draft"
+        }
+    )?;
+    Ok(())
+}
+
 fn run_land_laps(run: Laps<'_>, out: &mut dyn Write, err: &mut dyn Write) -> Result<ExitCode> {
     let Laps {
         root,
@@ -11846,6 +11895,9 @@ fn run_land_laps(run: Laps<'_>, out: &mut dyn Write, err: &mut dyn Write) -> Res
     let mut stood_down: Option<String> = None;
     // Passes opened, refunded or not: what the log numbers, never what bounds.
     let mut lap: u32 = 0;
+    // WHAT A LAP THAT NEVER RETURNED LEFT SPENDING, reconciled before the first
+    // lap (CLOUD-2371): `unwind_lap` below is the fast path on a normal return.
+    reconcile_at_entry(root, branch, out)?;
     'laps: while ledger.may_open_a_lap(laps) {
         lap = lap.saturating_add(1);
         // Checked BEFORE `attempt`, so a lap that will not run is not charged.
