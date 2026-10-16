@@ -517,8 +517,45 @@ fn a_key_dropped_from_the_latest_body_exempts_nothing() {
         &["closes 1:CLOUD-1", "closes 1:CLOUD-9"],
     );
     assert!(
-        !verdicts(&root).is_empty(),
-        "the latest body no longer closes CLOUD-1, so its proximity is priced"
+        verdicts(&root).iter().any(|rule| rule == "issue file same"),
+        "the latest body no longer closes CLOUD-1, so its proximity is priced: {:?}",
+        verdicts(&root)
+    );
+}
+
+/// A NEWEST `closes -` IS COULD-NOT-LOOK (review of #1206): a fetch whose key
+/// reader could not run never erases an earlier reading's exemption.
+#[test]
+fn a_newest_unread_fetch_keeps_the_earlier_exemption() {
+    let root = repo(
+        "closed-then-unread",
+        "work",
+        &["src/a.rs"],
+        &[&format!(
+            "issue CLOUD-1 {AFTER} ready 1,src/a.rs - 1,src/a.rs"
+        )],
+        &["closes 1:CLOUD-1", "closes -"],
+    );
+    assert!(verdicts(&root).is_empty(), "{:?}", verdicts(&root));
+}
+
+/// A NEWEST `closes 0` IS A MEASURED NOTHING: the body as it stands closes no
+/// row, so an older body's exemption is gone (review of #1206).
+#[test]
+fn a_latest_body_closing_nothing_exempts_nothing() {
+    let root = repo(
+        "closed-then-nothing",
+        "work",
+        &["src/a.rs"],
+        &[&format!(
+            "issue CLOUD-1 {AFTER} ready 1,src/a.rs - 1,src/a.rs"
+        )],
+        &["closes 1:CLOUD-1", "closes 0"],
+    );
+    assert!(
+        verdicts(&root).iter().any(|rule| rule == "issue file same"),
+        "{:?}",
+        verdicts(&root)
     );
 }
 

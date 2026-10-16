@@ -64,6 +64,7 @@
 #MUTANT left-open-arm-unpartitioned|s@^\tcites_only(id)$@\ttrue@|a_row_recorded_after_the_base_whose_sec1_names_the_diff_still_refuses
 #MUTANT left-open-judges-an-unread-body|s@^\tbody_read$@\ttrue@|an_unread_pr_body_leaves_the_set_unjudged
 #MUTANT older-body-still-exempts|s@^\traw := measured_closes\[count(measured_closes) - 1\]$@\tsome raw in measured_closes@|a_key_dropped_from_the_latest_body_exempts_nothing
+#MUTANT unread-fetch-measured|s@^\traw != "closes -"$@\ttrue@|a_newest_unread_fetch_keeps_the_earlier_exemption
 
 # METADATA
 # description: |
@@ -167,6 +168,9 @@ changed contains path if {
 closes contains key if {
 	raw := measured_closes[count(measured_closes) - 1]
 	columns := split(raw, " ")
+	# A MEASURED NOTHING (`closes 0`) carries no `:` and so no keys; without
+	# this the whole column `0` would be read as one key (CLOUD-2444).
+	contains(columns[1], ":")
 	some key in split(substring(columns[1], indexof(columns[1], ":") + 1, -1), ",")
 }
 
@@ -464,6 +468,24 @@ test_a_newest_unread_fetch_keeps_the_earlier_exemption if {
 		["src/a.rs"],
 		"2026-01-01T00:00:00Z",
 	)
+}
+
+# A NEWEST `closes 0` IS A MEASURED NOTHING: no key, and the older body's
+# exemption is gone.
+test_a_latest_body_closing_nothing_exempts_nothing if {
+	count(closes) == 0 with input as with_diff(
+		["issue CLOUD-1 2026-02-01T00:00:00Z ready 1,src/a.rs - 1,src/a.rs"],
+		["closes 1:CLOUD-1", "closes 0"],
+		["src/a.rs"],
+		"2026-01-01T00:00:00Z",
+	)
+	some v in violation with input as with_diff(
+		["issue CLOUD-1 2026-02-01T00:00:00Z ready 1,src/a.rs - 1,src/a.rs"],
+		["closes 1:CLOUD-1", "closes 0"],
+		["src/a.rs"],
+		"2026-01-01T00:00:00Z",
+	)
+	v.verdict == "issue file same"
 }
 
 test_a_row_written_before_the_branch_cannot_be_its_punt if {
