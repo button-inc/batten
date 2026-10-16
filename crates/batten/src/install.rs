@@ -508,8 +508,8 @@ pub fn render_bootstrap(name: &str, repository: &str, lock: &Lock) -> String {
 # fails when any byte differed.
 #
 # The whole job: fetch the baked release binary for this platform, check it
-# against the baked sha256, stamp it as that release, and run it. `{name}
-# engine install` follows the pin from there.
+# against the baked sha256, and run it, naming the release it verified.
+# `{name} engine install` follows the pin from there.
 set -eu
 base="${{BATTEN_RELEASES:-{repository}}}"
 fail() {{
@@ -568,8 +568,7 @@ else
 fi
 [ "${{sum%% *}}" = "$want" ] || fail "$asset does not match the sha256 $tag published" 1
 tar -xzf "$tmp/$asset" -C "$tmp" {name}
-printf '%s %s\n' "$tag" "$(wc -c <"$tmp/{name}" | tr -d ' ')" >"$tmp/{name}.release"
-"$tmp/{name}" engine install "$@"
+BATTEN_VERIFIED_RELEASE="$tag" "$tmp/{name}" engine install "$@"
 "#
     )
 }

@@ -239,6 +239,24 @@ fn the_local_engine_runs_under_a_source_pin() {
     );
 }
 
+/// UNDER `local`, A RELEASE PIN HOLDS THIS BUILD TO ITS VERSION (CLOUD-2398),
+/// `#MUTANT local-release-by-version-ignored`: the suite's own build carries no
+/// release stamp, so without this every fixture pinning the suite's version
+/// would follow the pin to the published release instead of testing the build.
+/// `an_installed_build_reporting_the_pins_version_is_not_the_release` is the
+/// same binary refused without the variable.
+#[test]
+fn the_local_engine_holds_a_release_pin_to_its_version() {
+    let dir = repo(
+        "engine-pin-release-local",
+        &format!("version = 1\nengine = {{ release = \"{RELEASE}\" }}\n"),
+    );
+    let installed = common::scratch("engine-pin-release-local-installed");
+    let binary = private_binary(&installed);
+    let output = run_engine(&binary, &dir, &["config", "show"], true);
+    assert!(output.status.success(), "{}", text(&output));
+}
+
 #[test]
 fn a_source_pin_without_a_stamp_is_refused() {
     let digest = "0".repeat(64);

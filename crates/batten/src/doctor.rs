@@ -1139,7 +1139,9 @@ pub fn diagnose_mediator(dir: &Path) -> Mediator {
     if !dir.join("crates/batten/Cargo.toml").is_file() {
         return Mediator::NotApplicable;
     }
-    let tree = crate::state::repo_state_dir(dir)
+    // CANONICAL, because the caller passes `.`, which has no final component to
+    // name a state directory by: tree mode read as absent there.
+    let tree = crate::state::repo_state_dir(&crate::git::canonical(dir))
         .is_ok_and(|state| engine::recorded_use(&state) == engine::Use::Tree);
     if tree {
         let built = dir.join("target/release/batten");

@@ -389,10 +389,12 @@ pub const LOCAL_ENV: &str = "BATTEN_ENGINE";
 /// Whether `BATTEN_ENGINE=local` asks for this binary as it is (CLOUD-2232),
 /// Go's `GOTOOLCHAIN=local`: a test run of a branch tests the engine it built,
 /// and an in-process load names its source by label rather than by a path the
-/// in-tree arm could judge. Source pins only — a release pin is a published
-/// engine's name, and running another under it is the skew this check refuses.
+/// in-tree arm could judge. A release pin it holds to the pin's VERSION, not
+/// the release stamp (CLOUD-2398): the suite's own build carries no stamp, and
+/// a pin naming another version is still the skew this check refuses.
 //MUTANT-SUITE crates/batten/tests/it/engine_pin.rs
 //MUTANT local-engine-ignored|s@^    std::env::var_os(LOCAL_ENV).is_some_and(\x7cvalue\x7c value == "local")$@    false@|the_local_engine_runs_under_a_source_pin
+//MUTANT local-release-by-version-ignored|s@^            let local = runs_local() \&\& tag == running;$@            let local = false;@|the_local_engine_holds_a_release_pin_to_its_version
 pub(crate) fn runs_local() -> bool {
     std::env::var_os(LOCAL_ENV).is_some_and(|value| value == "local")
 }
@@ -506,7 +508,13 @@ pub fn check(
             // only of an unstamped binary, by the config's path or, for a load
             // that names its source by label, by the shell's own worktree.
             let in_tree = !stamped && (built_in(source) || built_here());
-            if !stamped && !(in_tree && tag == running) {
+            // `BATTEN_ENGINE=local` RUNS THIS BINARY AS IT IS (CLOUD-2232): under
+            // it a release pin holds this build to the pin's VERSION, as every
+            // pin was before the stamp, so the suite tests the engine it built
+            // over fixtures pinning this version. A pin naming another version
+            // is still refused, so the variable is no general bypass.
+            let local = runs_local() && tag == running;
+            if !stamped && !local && !(in_tree && tag == running) {
                 // A RELEASE PIN IS REPAIRED BY THE RELEASE, NEVER BY A BUILD.
                 // CLOUD-2220 named `cargo build` here for a stale in-tree binary,
                 // and that build reports the tag's version without being the
@@ -599,7 +607,7 @@ pub fn stale(
 /// (CLOUD-2398): a build reporting the pin's version is stale, so the one
 /// caller, `follow_pin`, hands it to the verified release it names.
 //MUTANT-SUITE crates/batten/src/engine.rs
-//MUTANT stale-release-by-version|s@^        (Some(tag), None) => release_stamp().as_deref() == Some(tag),$@        (Some(tag), None) => tag == release(),@|a_build_reporting_the_pinned_version_is_stale
+//MUTANT stale-release-by-version|s@^        (Some(tag), None) => release_stamp().as_deref() == Some(tag) \x7c\x7c (local \&\& tag == release()),$@        (Some(tag), None) => tag == release(),@|a_build_reporting_the_pinned_version_is_stale
 fn stale_as(
     text: &str,
     stamp: impl FnOnce() -> Option<String>,
@@ -608,7 +616,7 @@ fn stale_as(
 ) -> Option<Pin> {
     let pin = declared(text)?;
     let satisfied = match (pin.release.as_deref(), pin.source.as_deref()) {
-        (Some(tag), None) => release_stamp().as_deref() == Some(tag),
+        (Some(tag), None) => release_stamp().as_deref() == Some(tag) || (local && tag == release()),
         // `BATTEN_ENGINE=local` satisfies a source pin here exactly as it does
         // in [`check`]: one answer to "is this the engine", or a test run of
         // the branch would try to BUILD the pin it was told to run without.
@@ -1077,10 +1085,12 @@ mod tests {
         assert!(stale_as(&pinned, || None, || None, false).is_some());
     }
 
-    /// `BATTEN_ENGINE=local` (CLOUD-2232) answers a source pin and never a
-    /// release pin.
+    /// `BATTEN_ENGINE=local` (CLOUD-2232) answers a source pin, and a release pin
+    /// only when it names this build's own version (CLOUD-2398).
     #[test]
     fn the_local_engine_answers_a_source_pin_only() {
+        let pinned = format!("engine = {{ release = \"{}\" }}\n", release());
+        assert!(stale_as(&pinned, || None, || None, true).is_none());
         assert!(stale_as("engine = { source = \"ab\" }\n", || None, || None, true).is_none());
         assert!(
             stale_as(

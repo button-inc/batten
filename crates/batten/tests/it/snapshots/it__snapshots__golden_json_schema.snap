@@ -1622,6 +1622,24 @@ expression: stdout_of(&output)
           "data_channel": false,
           "flags": [],
           "subcommands": []
+        },
+        {
+          "path": "engine use",
+          "id": "engine.use",
+          "about": "Record whether this worktree's invocations run the pinned release or the checkout's own build",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "engine",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The engine this worktree's invocations mediate with: `release`, the pinned release, or `tree`, the checkout's own target/release build"
+            }
+          ],
+          "subcommands": []
         }
       ]
     },

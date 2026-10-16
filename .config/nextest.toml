@@ -69,9 +69,11 @@ experimental = ["setup-scripts"]
 # and so is `tmp/tmp`, which would be a fixture of the native run's own.
 #
 # `BATTEN_ENGINE=local` (CLOUD-2232) is Go's `GOTOOLCHAIN=local`: the suite tests
-# the engine it built, so a branch's SOURCE pin is not enforced on it. The
-# engine-pin cases unset it, since enforcement is what they test; a release pin
-# is enforced either way.
+# the engine it built, so a branch's SOURCE pin is not enforced on it, and a
+# RELEASE pin holds it to the pin's version rather than the release stamp only
+# a verified install carries (CLOUD-2398). The engine-pin cases unset it, since
+# enforcement is what they test; a release pin naming another version is
+# refused either way.
 #
 # `BATTEN_SCRATCH_ROOTS` is what this run COVERS, collected or deferred, as
 # `:`-separated `pwd -P` paths, so `scratch_hygiene.rs` can assert that the

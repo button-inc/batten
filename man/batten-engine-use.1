@@ -1,0 +1,16 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-engine-use 1  batten 
+.SH NAME
+batten\-engine\-use \- Record whether this worktree\*(Aqs invocations run the pinned release or the checkout\*(Aqs own build
+.SH SYNOPSIS
+\fBbatten engine use\fR [\fB\-h\fR|\fB\-\-help\fR] <\fIengine\fR> 
+.SH DESCRIPTION
+Record whether this worktree\*(Aqs invocations run the pinned release or the checkout\*(Aqs own build
+.SH OPTIONS
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fIengine\fR>
+The engine this worktree\*(Aqs invocations mediate with: `release`, the pinned release, or `tree`, the checkout\*(Aqs own target/release build

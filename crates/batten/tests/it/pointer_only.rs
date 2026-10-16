@@ -2206,6 +2206,14 @@ const CENSUS: &[Verb] = &[
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
+    // CLOUD-2398: `release` removes the state record and prints nothing; `tree`
+    // prints the record's path. No byte of the tree in either.
+    Verb {
+        path: "engine use",
+        args: &["release"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
     // CLOUD-2063: with no pin in the corpus both are no-ops that print nothing;
     // a finding is the config path, a token and the pin.
     Verb {

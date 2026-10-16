@@ -49,6 +49,7 @@ fn install_as(
         .env_remove("BATTEN_VERSION")
         .env_remove("BATTEN_RELEASES")
         .env_remove("BATTEN_REQUIRE")
+        .env_remove("BATTEN_VERIFIED_RELEASE")
         .env("PATH", joined);
     for (name, value) in env {
         command.env(name, value);
@@ -62,13 +63,12 @@ fn install_as(
         .expect("run batten engine install")
 }
 
-/// A private copy of the binary in `dir`, stamped as release `tag` the way
-/// `install.sh` stamps its verified download before running it.
-fn stamped_copy(dir: &Path, tag: &str) -> PathBuf {
-    let copy = dir.join("download").join(binary());
-    std::fs::create_dir_all(copy.parent().unwrap()).unwrap();
+/// A private copy of the binary standing in for `install.sh`'s download: in its
+/// own scratch directory, OUTSIDE the case's worktree, because a binary under
+/// the worktree is an installed engine repaired in place.
+fn downloaded_copy(name: &str) -> PathBuf {
+    let copy = common::scratch(name).join(binary());
     std::fs::copy(env!("CARGO_BIN_EXE_batten"), &copy).unwrap();
-    batten::engine::stamp_release(&copy, tag).unwrap();
     copy
 }
 
@@ -476,20 +476,24 @@ fn the_ref_outranks_the_worktree_pin() {
 /// The bootstrap's download is placed even when the worktree pins exactly the
 /// running release: a download is never "already installed" just because it is
 /// current, and it runs off `PATH`. The download is the one `install.sh`
-/// stamped as the release (CLOUD-2398), and the placed copy carries the stamp.
+/// verified and names in `BATTEN_VERIFIED_RELEASE` (CLOUD-2398), and the
+/// placed copy carries the release stamp.
 #[test]
 fn the_bootstrap_places_a_running_pin() {
     let home = common::scratch_repo("engine-install-running-pin");
     let running = format!("v{}", env!("CARGO_PKG_VERSION"));
     pin_worktree(&home, &running);
-    let download = stamped_copy(&home, &running);
+    let download = downloaded_copy("engine-install-running-pin-download");
     let named = home.join("bin");
     let named_str = named.display().to_string();
     let output = install_as(
         &download,
         &home,
         std::slice::from_ref(&named),
-        &[("BATTEN_INSTALL_DIR", &named_str)],
+        &[
+            ("BATTEN_INSTALL_DIR", &named_str),
+            ("BATTEN_VERIFIED_RELEASE", &running),
+        ],
     );
     assert!(
         output.status.success(),

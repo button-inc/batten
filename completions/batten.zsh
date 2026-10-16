@@ -9107,6 +9107,36 @@ trace\:"Add everything"))' \
 '--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
 ;;
+(use)
+_arguments "${_arguments_options[@]}" : \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+':engine -- The engine this worktree'\''s invocations mediate with\: `release`, the pinned release, or `tree`, the checkout'\''s own target/release build:_default' \
+&& ret=0
+;;
 (gate)
 _arguments "${_arguments_options[@]}" : \
 '*--lane=[A workflow that runs the released binary; every verb its command lines invoke must exist in the pinned release (repeatable)]:lane:_default' \
@@ -9166,6 +9196,10 @@ _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
 (install)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(use)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -10808,6 +10842,10 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
+(use)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
 (gate)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
@@ -11710,6 +11748,7 @@ _batten__subcmd__engine_commands() {
 'update:Move this config'\''s release pin forward to the latest release, then install it' \
 'pin:Set the config'\''s engine pin, or refresh a declared source pin to this tree'\''s digest' \
 'install:Install the engine the batten.toml pin names, from its release or from this tree' \
+'use:Record whether this worktree'\''s invocations run the pinned release or the checkout'\''s own build' \
 'gate:Refuse a source pin, or a release pin that cannot load this config or lacks a verb the released lanes call' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
@@ -11733,6 +11772,7 @@ _batten__subcmd__engine__subcmd__help_commands() {
 'update:Move this config'\''s release pin forward to the latest release, then install it' \
 'pin:Set the config'\''s engine pin, or refresh a declared source pin to this tree'\''s digest' \
 'install:Install the engine the batten.toml pin names, from its release or from this tree' \
+'use:Record whether this worktree'\''s invocations run the pinned release or the checkout'\''s own build' \
 'gate:Refuse a source pin, or a release pin that cannot load this config or lacks a verb the released lanes call' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
@@ -11773,6 +11813,11 @@ _batten__subcmd__engine__subcmd__help__subcmd__update_commands() {
     local commands; commands=()
     _describe -t commands 'batten engine help update commands' commands "$@"
 }
+(( $+functions[_batten__subcmd__engine__subcmd__help__subcmd__use_commands] )) ||
+_batten__subcmd__engine__subcmd__help__subcmd__use_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten engine help use commands' commands "$@"
+}
 (( $+functions[_batten__subcmd__engine__subcmd__install_commands] )) ||
 _batten__subcmd__engine__subcmd__install_commands() {
     local commands; commands=()
@@ -11792,6 +11837,11 @@ _batten__subcmd__engine__subcmd__stamp_commands() {
 _batten__subcmd__engine__subcmd__update_commands() {
     local commands; commands=()
     _describe -t commands 'batten engine update commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__engine__subcmd__use_commands] )) ||
+_batten__subcmd__engine__subcmd__use_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten engine use commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__exec_commands] )) ||
 _batten__subcmd__exec_commands() {
@@ -12296,6 +12346,7 @@ _batten__subcmd__help__subcmd__engine_commands() {
 'update:Move this config'\''s release pin forward to the latest release, then install it' \
 'pin:Set the config'\''s engine pin, or refresh a declared source pin to this tree'\''s digest' \
 'install:Install the engine the batten.toml pin names, from its release or from this tree' \
+'use:Record whether this worktree'\''s invocations run the pinned release or the checkout'\''s own build' \
 'gate:Refuse a source pin, or a release pin that cannot load this config or lacks a verb the released lanes call' \
     )
     _describe -t commands 'batten help engine commands' commands "$@"
@@ -12329,6 +12380,11 @@ _batten__subcmd__help__subcmd__engine__subcmd__stamp_commands() {
 _batten__subcmd__help__subcmd__engine__subcmd__update_commands() {
     local commands; commands=()
     _describe -t commands 'batten help engine update commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__engine__subcmd__use_commands] )) ||
+_batten__subcmd__help__subcmd__engine__subcmd__use_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help engine use commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__help__subcmd__exec_commands] )) ||
 _batten__subcmd__help__subcmd__exec_commands() {

@@ -924,6 +924,26 @@ fn pinned_by(pin: Option<engine::Pin>) -> Result<Option<Want>> {
     })
 }
 
+/// The variable `install.sh` sets on its verified download, naming the tag whose
+/// `SHA256SUMS` it checked the archive against (CLOUD-2398).
+const VERIFIED_RELEASE: &str = "BATTEN_VERIFIED_RELEASE";
+
+/// The release the bootstrap verified this download as, when it named one.
+fn verified_download() -> Option<String> {
+    std::env::var(VERIFIED_RELEASE)
+        .ok()
+        .filter(|tag| !tag.is_empty())
+}
+
+/// Whether the running binary IS release `tag`: by its release stamp, or — on
+/// the bootstrap's own download only, never an installed engine — by the tag
+/// `install.sh` verified it as. The version it reports is never the answer: a
+/// tree build reports the last release's too.
+fn running_is(tag: &str, bootstrap: bool) -> bool {
+    engine::running_release().as_deref() == Some(tag)
+        || (bootstrap && verified_download().as_deref() == Some(tag))
+}
+
 /// The verified bytes of release `tag`: the running binary when it IS that
 /// release, else fetched from `repository` and checked against its
 /// `SHA256SUMS`. A tag the host does not publish is refused (CLOUD-2033), never
@@ -933,9 +953,9 @@ fn pinned_by(pin: Option<engine::Pin>) -> Result<Option<Want>> {
 /// reports the last release's version, and copying it here installed the build
 /// where the hook runs under the release's name.
 //MUTANT-SUITE crates/batten/tests/it/engine_install.rs
-//MUTANT release-bytes-copies-unstamped|s@^    if engine::running_release().as_deref() == Some(tag) {$@    if tag == engine::release() {@|an_install_from_an_unstamped_build_fetches_the_release
-fn release_bytes(tag: &str, exe: &Path, repository: &str) -> Result<Vec<u8>> {
-    if engine::running_release().as_deref() == Some(tag) {
+//MUTANT release-bytes-copies-unstamped|s@^    if running_is(tag, bootstrap) {$@    if tag == engine::release() {@|an_install_from_an_unstamped_build_fetches_the_release
+fn release_bytes(tag: &str, exe: &Path, repository: &str, bootstrap: bool) -> Result<Vec<u8>> {
+    if running_is(tag, bootstrap) {
         return Ok(std::fs::read(exe)?);
     }
     match engine::fetch_published(repository, tag)? {
@@ -996,7 +1016,7 @@ fn engine_install(out: &mut dyn Write) -> Result<ExitCode> {
             None => Ok(ExitCode::Success),
         },
         Want::Release(tag) => {
-            let bytes = release_bytes(&tag, &exe, &repository)?;
+            let bytes = release_bytes(&tag, &exe, &repository, false)?;
             let fence = root.unwrap_or_else(|| exe.with_file_name(""));
             for target in engine::install_targets(&exe, path.as_deref(), &fence) {
                 if std::fs::read(&target).ok().as_deref() == Some(bytes.as_slice()) {
@@ -1051,12 +1071,12 @@ fn place_download(
     // download is). Only those get a release stamp (CLOUD-2398).
     let (tag, bytes, verified) = match want {
         Want::Running | Want::Source(_) => {
-            let running = engine::running_release();
+            let running = engine::running_release().or_else(verified_download);
             let tag = running.clone().unwrap_or_else(engine::release);
             (tag, std::fs::read(exe)?, running.is_some())
         }
         Want::Release(tag) => {
-            let bytes = release_bytes(&tag, exe, repository)?;
+            let bytes = release_bytes(&tag, exe, repository, true)?;
             (tag, bytes, true)
         }
     };
