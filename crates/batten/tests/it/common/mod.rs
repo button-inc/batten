@@ -3108,3 +3108,20 @@ pub(crate) fn tls_www(tls: &Path, root: &Path) -> TlsWww {
     }
     panic!("the TLS listener never came up");
 }
+
+/// A directory link on every host the suite runs on: Windows names the kind at
+/// creation, so a case whose subject compiles everywhere need not be cfg-gated.
+pub(crate) fn link_dir(target: impl AsRef<Path>, link: impl AsRef<Path>) {
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(target, link).expect("the link is made");
+    #[cfg(windows)]
+    std::os::windows::fs::symlink_dir(target, link).expect("the link is made");
+}
+
+/// A file link, which may dangle: its target need not exist.
+pub(crate) fn link_file(target: impl AsRef<Path>, link: impl AsRef<Path>) {
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(target, link).expect("the link is made");
+    #[cfg(windows)]
+    std::os::windows::fs::symlink_file(target, link).expect("the link is made");
+}

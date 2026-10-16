@@ -174,23 +174,6 @@ fn a_dot_dot_spelling_through_a_missing_directory_signals_too() {
     assert_signals_at(&dir, "mise-tasks/not-yet/../ready-lint.sh");
 }
 
-/// A directory link, made on every host the suite runs on: Windows names the
-/// kind at creation, and its CI leg makes links (`session_drain.rs`'s `park`).
-fn link_dir(target: &Path, link: &Path) {
-    #[cfg(unix)]
-    std::os::unix::fs::symlink(target, link).expect("the link is made");
-    #[cfg(windows)]
-    std::os::windows::fs::symlink_dir(target, link).expect("the link is made");
-}
-
-/// A file link, which may dangle: its target need not exist.
-fn link_file(target: impl AsRef<Path>, link: impl AsRef<Path>) {
-    #[cfg(unix)]
-    std::os::unix::fs::symlink(target, link).expect("the link is made");
-    #[cfg(windows)]
-    std::os::windows::fs::symlink_file(target, link).expect("the link is made");
-}
-
 /// And a `..` AFTER a symlink climbs the link's target, not its spelling. `hop`
 /// points at `a/b`, so `hop/../../mise-tasks/` is the bench's own `mise-tasks/`
 /// — where the host writes — while a lexical pass over the whole path would
@@ -203,7 +186,7 @@ fn a_dot_dot_after_a_symlink_climbs_the_target() {
         .expect("the bench root resolves")
         .join("a/b");
     std::fs::create_dir_all(&target).expect("the link target is made");
-    link_dir(&target, &dir.join("hop"));
+    common::link_dir(&target, dir.join("hop"));
     assert_signals_at(&dir, "hop/../../mise-tasks/ready-lint.sh");
 }
 
@@ -219,7 +202,7 @@ fn a_link_after_a_dot_dot_through_a_missing_directory_resolves() {
         .expect("the bench root resolves")
         .join("mise-tasks");
     std::fs::create_dir_all(&target).expect("the link target is made");
-    link_dir(&target, &dir.join("door"));
+    common::link_dir(&target, dir.join("door"));
     assert_signals_at(&dir, "not-yet/../door/ready-lint.sh");
 }
 
@@ -230,7 +213,7 @@ fn a_link_after_a_dot_dot_through_a_missing_directory_resolves() {
 #[test]
 fn a_write_through_a_dangling_link_lands_at_its_target() {
     let dir = bench("swa-a_write_through_a_dangling_link_la");
-    link_file("mise-tasks/new.sh", dir.join("dangling"));
+    common::link_file("mise-tasks/new.sh", dir.join("dangling"));
     assert_signals_at(&dir, "dangling");
 }
 
@@ -243,7 +226,7 @@ fn an_absolute_dangling_link_lands_at_its_target() {
         .canonicalize()
         .expect("the bench root resolves")
         .join("mise-tasks/new.sh");
-    link_file(&target, dir.join("dangling"));
+    common::link_file(&target, dir.join("dangling"));
     assert_signals_at(&dir, "dangling");
 }
 
@@ -255,8 +238,8 @@ fn a_dangling_link_loop_ends_at_the_hop_bound() {
     let dir = bench("swa-a_dangling_link_loop_ends_at_the_h");
     let tasks = dir.join("mise-tasks");
     std::fs::create_dir_all(&tasks).expect("the governed directory is made");
-    link_file("loop-b", tasks.join("loop-a"));
-    link_file("loop-a", tasks.join("loop-b"));
+    common::link_file("loop-b", tasks.join("loop-a"));
+    common::link_file("loop-a", tasks.join("loop-b"));
     assert_signals_at(&dir, "mise-tasks/loop-a");
 }
 
