@@ -760,8 +760,8 @@ fn follow_pin(may_build: bool) -> Result<Option<ExitCode>> {
 /// that disagrees is named by `path:line` and NOTHING is written, because a
 /// stale copy left silently is the defect this verb exists to close.
 ///
-/// The config is written before the install, so an install that fails leaves
-/// the right pin and a re-runnable `engine install`.
+/// The config is written before the install, which reads its pin from it, and
+/// put back when the install fails: the update is all of it or none.
 //MUTANT-SUITE crates/batten/tests/it/engine_install.rs
 //MUTANT update-skips-the-bump|s@^    durable::replace(&path, &synced)?;$@@|an_update_moves_an_older_pin_forward_and_installs_it
 //MUTANT update-moves-the-pin-backward|s@^    let target = if engine::is_newer(&latest, &current)? {$@    let target = if latest != current {@|an_update_never_moves_a_pin_backward
@@ -850,9 +850,14 @@ fn engine_update(out: &mut dyn Write) -> Result<ExitCode> {
     writeln!(out, "{}", path.display())?;
     // AN INSTALL THAT FAILS PUTS THE CONFIG BACK: a raised floor over a binary
     // that never arrived would leave every gate in the session refusing this
-    // build as too old, so the update is all of it or none.
-    engine_install(out).inspect_err(|_| {
-        let _ = durable::replace(&path, &text);
+    // build as too old, so the update is all of it or none — and a restore that
+    // fails too is said, never left for the next gate to discover.
+    engine_install(out).map_err(|why| match durable::replace(&path, &text) {
+        Ok(()) => why,
+        Err(restore) => why.context(format!(
+            "engine update: {} still names {target}; restoring it failed: {restore}",
+            path.display()
+        )),
     })
 }
 
