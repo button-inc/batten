@@ -793,7 +793,9 @@ fn open_isolated(dir: &Path, ceilings: Vec<PathBuf>, remember: bool) -> Result<g
     let start = dir.canonicalize();
     let start = start.as_deref().unwrap_or(dir);
     let refused = || UsageError::raise(format!("{} is not a git repository", dir.display()));
-    if !remember {
+    // NO SCOPE, NO MEMO WORK: outside a hook call this is the plain open, without
+    // a second walk or the config reads a remembered entry would need.
+    if !remember || with_opens(|_| ()).is_none() {
         return gix::discover_opts(start, discovery(&ceilings), gix::open::Options::isolated())
             .map_err(|_| refused());
     }
@@ -944,6 +946,8 @@ fn read_by_open(git_dir: &Path) -> Vec<Option<Vec<u8>>> {
     read.iter().map(|path| std::fs::read(path).ok()).collect()
 }
 
+//MUTANT common-config-unread|s@^        read.push(common.join("config"));$@@|a_linked_worktree_is_remembered
+//MUTANT nested-scope-resets|s@^        if opens.is_some() {$@        if false {@|a_nested_scope_does_not_end_the_outer_one
 //MUTANT repository-memo-never-hits|s@^        (opened.read == now).then@        false.then@|a_repository_opened_twice_is_opened_once
 //MUTANT repository-memo-ignores-config|s@^        (opened.read == now).then@        true.then@|a_config_edited_after_open_is_read_again
 impl Opens {
@@ -2720,7 +2724,8 @@ pub fn check_ignore(dir: &Path, path: &str) -> Result<bool> {
 /// backend will not move. A note that did not land is one a later read will not
 /// find, so every failure is an error rather than a skip.
 pub fn append_note(dir: &Path, name: &str, commit: &str, body: &str) -> Result<()> {
-    let repo = open(dir)?;
+    // A write: never a hook call's remembered handle (CLOUD-2433).
+    let repo = open_for_write(dir)?;
     let reference = format!("refs/notes/{name}");
     // Parsed for its REFUSAL rather than its value: a caller handing this a
     // branch name or a short sha would otherwise write a note under a tree entry
@@ -6204,6 +6209,20 @@ mod tests {
             with_opens(|opens| opens.0.len()),
             Some(1),
             "the linked worktree's open is remembered"
+        );
+        // The COMMON config is the one a linked worktree's open parses, and an
+        // edit to it — not to the worktree's own git dir — must be a miss.
+        let key = with_opens(|opens| opens.0.keys().next().cloned())
+            .flatten()
+            .expect("one key");
+        let config = dir.join(".git/config");
+        let text = fs::read_to_string(&config).expect("config");
+        let edited = text.replacen("bare = false", "bare = fals0", 1);
+        assert_ne!(text, edited, "the premise: the edit changes a byte");
+        fs::write(&config, edited).expect("edit");
+        assert!(
+            with_opens(|opens| opens.get(&key)).flatten().is_none(),
+            "an edited common config is a miss for the linked worktree"
         );
     }
 
