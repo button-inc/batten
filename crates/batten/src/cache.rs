@@ -83,7 +83,7 @@ const USE_MARK: &str = "used";
 /// least recently used evicted first. A partition without a mark — written
 /// before marks existed — takes that path too, and gains one.
 //MUTANT partitions-never-pruned|s@^    prune(\&root, name);$@@|a_new_partition_keeps_its_neighbours_up_to_the_bound
-//MUTANT partition-mark-never-made|s@^    if crate::durable::create_exclusive_as(\&mark, b"", crate::durable::Persist::Atomic).is_err() {$@    if false {@|a_partition_without_a_mark_gains_one
+//MUTANT partition-mark-never-made|s@^        .create_new(true)$@        .create_new(true).write(false)@|a_partition_without_a_mark_gains_one
 #[must_use]
 pub fn root_under(parent: &Path) -> Option<PathBuf> {
     // A binary that cannot name itself has no partition, so it caches nothing
@@ -103,10 +103,17 @@ pub fn root_under(parent: &Path) -> Option<PathBuf> {
     if !tag.exists() {
         let _ = crate::durable::replace_as(&tag, CACHEDIR_TAG, crate::durable::Persist::Atomic);
     }
-    // A partition that cannot be marked is still served, but does not prune:
-    // without a mark every call lands here, and a directory scan per call is
-    // the cost the warm path exists to avoid. It ranks by its directory.
-    if crate::durable::create_exclusive_as(&mark, b"", crate::durable::Persist::Atomic).is_err() {
+    // `create_new`, not `durable`'s temp-and-link: the mark is zero bytes, so
+    // there is no content to tear, and a link would make marking depend on a
+    // filesystem that has hard links. A partition that cannot be marked is
+    // still served but does not prune: without a mark every call lands here,
+    // and a directory scan per call is the cost the warm path exists to avoid.
+    if std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&mark)
+        .is_err()
+    {
         return Some(own);
     }
     prune(&root, name);
@@ -123,6 +130,11 @@ const USE_REFRESH: std::time::Duration = std::time::Duration::from_mins(1);
 /// [`prune`] ranks partitions by LAST USE (code review of CLOUD-2315): a binary
 /// that only reads — the installed hook, warm — otherwise ranked as the oldest
 /// and was the one pruned.
+///
+/// The partition DIRECTORY's time moves too, best-effort: a release before
+/// CLOUD-2361 ranks by it, and sharing a cache with one, a partition marked
+/// only through its file would read to that release as never used. Windows
+/// refuses to open a directory, and that failure is ignored.
 //MUTANT partition-use-never-refreshed|s@^    if stale {$@    if false {@|a_partition_in_use_is_refreshed_and_survives_the_prune
 fn refresh_use(mark: &Path, meta: &std::fs::Metadata) {
     let stale = meta
@@ -131,11 +143,26 @@ fn refresh_use(mark: &Path, meta: &std::fs::Metadata) {
         .and_then(|modified| modified.elapsed().ok())
         .is_some_and(|age| age > USE_REFRESH);
     if stale {
-        let _ = std::fs::File::options()
-            .write(true)
-            .open(mark)
-            .and_then(|file| file.set_modified(std::time::SystemTime::now()));
+        let now = std::time::SystemTime::now();
+        let _ = touch(mark, now);
+        if let Some(partition) = mark.parent() {
+            let _ = touch(partition, now);
+        }
     }
+}
+
+/// Set `path`'s modification time. Read-only first — enough for the owner on
+/// unix, and the only open a read-only mark allows — then for writing, which
+/// Windows needs to set a file's times.
+fn touch(path: &Path, at: std::time::SystemTime) -> std::io::Result<()> {
+    std::fs::File::open(path)
+        .and_then(|file| file.set_modified(at))
+        .or_else(|_| {
+            std::fs::File::options()
+                .write(true)
+                .open(path)
+                .and_then(|file| file.set_modified(at))
+        })
 }
 
 /// The running binary's partition name: a short digest of its identity, which
