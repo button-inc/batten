@@ -828,7 +828,14 @@ pub fn run_gaps(root: &Path, out: &mut dyn Write) -> Result<ExitCode> {
         b_count.cmp(a_count).then_with(|| a_key.cmp(b_key))
     });
     for ((rule, subject), (count, last)) in lines {
-        writeln!(out, "{rule} at {subject} {count} last {last}")?;
+        // A counting rule that names no subject prints no ` at ` clause, as a
+        // refusal line does.
+        let at = if subject.is_empty() {
+            String::new()
+        } else {
+            format!(" at {subject}")
+        };
+        writeln!(out, "{rule}{at} {count} last {last}")?;
     }
     Ok(ExitCode::Success)
 }

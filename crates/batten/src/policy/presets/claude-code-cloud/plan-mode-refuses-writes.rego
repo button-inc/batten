@@ -52,7 +52,7 @@ violation contains {
 #
 # One clause, so the list is built once and a call with no `programs` still
 # names its tool rather than leaving the refusal with no subject at all.
-refused_subject(call) := array.concat(not_reads(object.get(call, "programs", [])), [call.tool])[0]
+refused_subject(call) := array.concat(not_reads(object.get(call, "programs", [])), [object.get(call, "tool", "")])[0]
 
 # The names of the programs that do not read, in order.
 not_reads(programs) := [programs[i].name | programs[i]; not reads(programs[i])]

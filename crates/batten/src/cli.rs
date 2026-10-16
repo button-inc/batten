@@ -2432,7 +2432,7 @@ pub enum DoctorCommand {
         /// Emit the diagnosis as byte-stable JSON.
         json: bool,
     },
-    /// What plan mode refused, by program, counted (CLOUD-2292).
+    /// The refusals a rule marks counted, by rule and subject (CLOUD-2292).
     ///
     /// APPENDED LAST, for the reason [`DoctorCommand::Egress`] records.
     Gaps,

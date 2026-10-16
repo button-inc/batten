@@ -4727,14 +4727,8 @@ pub const SURFACE: &[CommandDecl] = &[
         effect: Effect::Read,
         flags: &[JSON],
     },
-    // WHETHER THE FORGE CREDENTIAL CARRIES THE CLAIMS THE TASKS NEED (CLOUD-843,
-    // retiring `gh-preflight`). `read`: it issues GETs against the endpoints the
-    // committed `[[forge.probe]]` rows name and never a write — a row declaring
-    // a write claim is reported as declared and never called. `doctor *`'s exit
-    // set, for its siblings' reason: a missing claim is a failed diagnosis, and a
-    // diagnosis renders no policy verdict, so it cannot mint a `2`.
-    // CLOUD-2292. Folds one journal family and prints a count per pointer:
-    // `read` structurally, no spawn and no network.
+    // CLOUD-2292. Folds one journal family under the git dir and prints a count
+    // per pointer: `read`, no spawn and no network.
     // unreached: "doctor gaps" CLOUD-2292 a reader runs it to see which reads plan mode
     // lacks; nothing in the tree should act on its list unasked.
     CommandDecl {
@@ -4746,6 +4740,12 @@ pub const SURFACE: &[CommandDecl] = &[
         effect: Effect::Read,
         flags: &[],
     },
+    // WHETHER THE FORGE CREDENTIAL CARRIES THE CLAIMS THE TASKS NEED (CLOUD-843,
+    // retiring `gh-preflight`). `read`: it issues GETs against the endpoints the
+    // committed `[[forge.probe]]` rows name and never a write — a row declaring
+    // a write claim is reported as declared and never called. `doctor *`'s exit
+    // set, for its siblings' reason: a missing claim is a failed diagnosis, and a
+    // diagnosis renders no policy verdict, so it cannot mint a `2`.
     CommandDecl {
         path: "doctor forge",
         id: "doctor.forge",

@@ -1340,7 +1340,8 @@ impl Refusal {
             && self.routes == other.routes
             && self.fix == other.fix
             && self.gloss == other.gloss
-            && self.readers == other.readers;
+            && self.readers == other.readers
+            && self.counted == other.counted;
         if !same || self.verdict.is_none() {
             return false;
         }
