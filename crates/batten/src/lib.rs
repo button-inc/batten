@@ -820,16 +820,18 @@ fn engine_update(out: &mut dyn Write) -> Result<ExitCode> {
         let body = engine::release_sums(&repository, &target)?;
         Ok(fetched.get_or_init(|| body).clone())
     };
-    let synced = sync_declarations(&text, &target, sums)?;
+    let synced = sync_declarations(&text, &target, &sums)?;
+    let mut published = std::collections::BTreeSet::new();
     let mut stale = Vec::new();
     for workflow in workflow_files(&root) {
         let body = std::fs::read_to_string(root.join(&workflow))?;
-        let digests = if body.contains("BATTEN_SHA256") {
-            sums()?
-        } else {
-            String::new()
-        };
-        for (line, key) in engine::workflow_literals(&body, &target, &digests) {
+        if !body.contains("BATTEN_") {
+            continue;
+        }
+        if published.is_empty() && body.contains("BATTEN_SHA256") {
+            published = engine::published_digests(&sums()?);
+        }
+        for (line, key) in engine::workflow_literals(&body, &target, &published) {
             stale.push(format!(
                 "{workflow}:{line} {key} disagrees with {target}, and the update cannot rewrite it"
             ));
@@ -869,15 +871,23 @@ fn workflow_files(root: &Path) -> Vec<String> {
 struct Outdated {
     /// Speak at most once per TTL, always exit 0, fail open.
     notice: bool,
-    /// The record family to write the freshness line into.
-    record: Option<String>,
-    /// More releases behind than this is stale.
-    max_releases: Option<u64>,
-    /// More days behind than this is stale.
-    max_days: Option<u64>,
+    /// Where to write the freshness line, and what it is judged by.
+    record: Option<Record>,
 }
 
-/// How long a spoken notice stays spoken.
+/// `engine outdated --record`: the family the line goes to and the consumer's
+/// thresholds, which arrive together or not at all.
+struct Record {
+    /// The declared record family, one path component.
+    family: String,
+    /// More releases behind than this is stale.
+    max_releases: u64,
+    /// More days behind than this is stale.
+    max_days: u64,
+}
+
+/// How long one lookup answers for: the notice speaks, and the record is
+/// refreshed, at most once in it.
 const NOTICE_TTL: u64 = 24 * 60 * 60;
 
 /// How long the notice waits for its lookup before it fails open.
@@ -892,10 +902,8 @@ struct Distance {
     newer: Vec<engine::Heading>,
 }
 
-/// The releases between `tag` and `main`'s pin.
-///
-/// A changelog that lags `main`'s pin still counts the pin: being behind is
-/// never answered as current because a heading is missing.
+/// The releases between `tag` and `main`'s pin. The changelog is read only
+/// when the pin is behind.
 fn distance(repository: &str, tag: &str) -> Result<Distance> {
     let latest = engine::ref_release(repository, "main")?;
     if !engine::is_newer(&latest, tag)? {
@@ -905,13 +913,7 @@ fn distance(repository: &str, tag: &str) -> Result<Distance> {
         });
     }
     let headings = engine::ref_changelog(repository, "main")?;
-    let mut newer = engine::releases_between(&headings, tag, &latest)?;
-    if newer.is_empty() {
-        newer.push(engine::Heading {
-            version: ::semver::Version::parse(latest.trim_start_matches('v'))?,
-            date: None,
-        });
-    }
+    let newer = engine::releases_between(&headings, tag, &latest)?;
     Ok(Distance { latest, newer })
 }
 
@@ -926,19 +928,13 @@ fn distance_bounded(repository: &str, tag: &str) -> Option<Distance> {
     rx.recv_timeout(NOTICE_LOOKUP).ok()?.ok()
 }
 
-/// Seconds since the epoch, or zero for a clock before it.
-fn now_seconds() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |since| since.as_secs())
-}
-
 /// Whether the notice may speak in this run: never in CI, never when
 /// [`NO_UPDATE_NOTICE`] is set, never when the config's `update_notice` is
 /// `false` — the local override's word before the committed one's.
 ///
-/// THE CONFIG IS READ RAW, never loaded: a notice exists for a pin that is
-/// behind, and a config this engine cannot load must not silence it.
+/// THE KEY IS READ RAW, by [`engine::top_level`], never through a load: a
+/// notice exists for a pin that is behind, and a config this engine cannot
+/// load must not silence it.
 //MUTANT-SUITE crates/batten/tests/it/engine_install.rs
 //MUTANT notice-speaks-in-ci|s@^    if var("CI").is_some() {$@    if false {@|the_notice_speaks_once_per_ttl_and_never_in_ci
 fn notice_enabled(root: &Path, text: &str) -> bool {
@@ -949,12 +945,7 @@ fn notice_enabled(root: &Path, text: &str) -> bool {
     if var(NO_UPDATE_NOTICE).is_some() {
         return false;
     }
-    let key = |text: &str| {
-        toml::from_str::<toml::Table>(text)
-            .ok()?
-            .get("update_notice")?
-            .as_bool()
-    };
+    let key = |text: &str| engine::top_level(text, "update_notice")?.as_bool();
     let local = std::fs::read_to_string(root.join(resolve::LOCAL_CONFIG_FILE)).ok();
     local
         .as_deref()
@@ -972,29 +963,23 @@ fn notice_due(stamp: &Path, now: u64) -> bool {
     last.is_none_or(|last| now.saturating_sub(last) >= NOTICE_TTL)
 }
 
-/// Write the `engine-fresh` line into `family`: stale when the pin is more
-/// releases or more days behind than `ask` allows. Days count from the date of
-/// the first release newer than the pin.
-fn record_freshness(
-    ask: &Outdated,
-    family: &str,
-    tag: &str,
-    found: &Distance,
-    now: u64,
-) -> Result<()> {
+/// Write the `engine-fresh` line into the record's family: stale when the pin
+/// is more releases or more days behind than it allows. Days count from the
+/// date of the first release newer than the pin.
+fn record_freshness(record: &Record, tag: &str, found: &Distance, now: u64) -> Result<()> {
     let behind = found.newer.len();
     let days = found
         .newer
         .first()
         .and_then(|first| first.date.as_deref())
-        .and_then(|date| engine::days_since(date, i64::try_from(now).unwrap_or(i64::MAX)))
+        .and_then(|date| engine::days_since(date, now))
         .unwrap_or(0);
-    let stale = u64::try_from(behind).unwrap_or(u64::MAX) > ask.max_releases.unwrap_or(0)
-        || days > ask.max_days.unwrap_or(0);
+    let stale =
+        u64::try_from(behind).unwrap_or(u64::MAX) > record.max_releases || days > record.max_days;
     let verdict = if stale { "stale" } else { "fresh" };
     record::store_named(
         "engine outdated",
-        family,
+        &record.family,
         &format!(
             "engine-fresh\t{verdict}\t{tag}\t{}\t{behind}\t{days}\n",
             found.latest
@@ -1002,27 +987,55 @@ fn record_freshness(
     )
 }
 
-/// The session notice's one line, then its stamp, so the next day speaks again.
-fn speak_notice(
-    out: &mut dyn Write,
+/// `engine outdated --notice`: the session's half, which ALWAYS exits 0.
+///
+/// ONE LOOKUP PER [`NOTICE_TTL`], stamped in the repository's state directory
+/// however it came out, so a session start inside the day spends no network:
+/// the record it last wrote stands, and the notice it last spoke is not
+/// repeated. A suppressed notice with no record to write looks at nothing.
+fn outdated_notice(
+    ask: &Outdated,
+    root: &Path,
+    text: &str,
     tag: &str,
-    found: &Distance,
-    stamp: Option<&Path>,
-    now: u64,
-) -> Result<()> {
-    writeln!(
-        out,
-        "batten: the engine pin {tag} is {} release(s) behind {}; run `batten engine update`",
-        found.newer.len(),
-        found.latest
-    )?;
-    if let Some(stamp) = stamp {
-        if let Some(parent) = stamp.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        durable::replace(stamp, format!("{now}\n"))?;
+    out: &mut dyn Write,
+) -> Result<ExitCode> {
+    let now = now_unix();
+    let Some(stamp) = state::repo_state_dir(root)
+        .ok()
+        .map(|dir| dir.join("engine").join("update-notice"))
+    else {
+        return Ok(ExitCode::Success);
+    };
+    if !notice_due(&stamp, now) {
+        return Ok(ExitCode::Success);
     }
-    Ok(())
+    let speak = notice_enabled(root, text);
+    if !speak && ask.record.is_none() {
+        return Ok(ExitCode::Success);
+    }
+    let Some(found) = distance_bounded(&releases_repository(), tag) else {
+        if let Some(record) = &ask.record {
+            record::clear_named("engine outdated", &record.family)?;
+        }
+        return Ok(ExitCode::Success);
+    };
+    if let Some(record) = &ask.record {
+        record_freshness(record, tag, &found, now)?;
+    }
+    if speak && !found.newer.is_empty() {
+        writeln!(
+            out,
+            "batten: the engine pin {tag} is {} release(s) behind {}; run `batten engine update`",
+            found.newer.len(),
+            found.latest
+        )?;
+    }
+    if let Some(parent) = stamp.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    durable::replace(&stamp, format!("{now}\n"))?;
+    Ok(ExitCode::Success)
 }
 
 /// `batten engine outdated` (CLOUD-2279): the pin against the latest published
@@ -1033,30 +1046,15 @@ fn speak_notice(
 /// - No release pin: exit 2, `no engine pin` — a finding about the config.
 /// - Could not look: exit 3.
 ///
-/// `--notice` is the session's half: one line naming `batten engine update`, at
-/// most once per [`NOTICE_TTL`], the lookup bounded by [`NOTICE_LOOKUP`], and
-/// ALWAYS exit 0 — it never installs and never blocks. `--record` writes the
-/// `engine-fresh` line the `engine-hygiene` preset reads, with the consumer's
-/// thresholds, and clears it on a run that could not look.
+/// `--notice` is [`outdated_notice`]. `--record` writes the `engine-fresh` line
+/// the `engine-hygiene` preset reads, with the consumer's thresholds, and
+/// clears it on a run that could not look.
 //MUTANT-SUITE crates/batten/tests/it/engine_install.rs
 //MUTANT outdated-silent-without-pin|s@^        writeln!(out, "{} no engine pin", path.display())?;$@        return Ok(ExitCode::Success);@|outdated_exits_by_the_pins_distance_from_main
 fn engine_outdated(ask: &Outdated, out: &mut dyn Write) -> Result<ExitCode> {
-    if ask.record.is_some() && (ask.max_releases.is_none() || ask.max_days.is_none()) {
-        return Err(UsageError::raise(String::from(
-            "engine outdated: --record needs --max-releases and --max-days, the thresholds the \
-             record is judged by",
-        )));
-    }
-    let family = ask
-        .record
-        .as_deref()
-        .map(|family| record::safe_component("family", family))
-        .transpose()?;
-    let clear = |family: Option<&str>| -> Result<()> {
-        match family {
-            Some(family) => record::clear_named("engine outdated", family),
-            None => Ok(()),
-        }
+    let clear = || match &ask.record {
+        Some(record) => record::clear_named("engine outdated", &record.family),
+        None => Ok(()),
     };
     let root = match git::worktree_root(Path::new(".")) {
         Ok(root) => root,
@@ -1065,60 +1063,34 @@ fn engine_outdated(ask: &Outdated, out: &mut dyn Write) -> Result<ExitCode> {
     };
     let path = root.join(config::CONFIG_FILE);
     let text = std::fs::read_to_string(&path).unwrap_or_default();
-    let tag = match engine::declared(&text) {
-        Some(engine::Pin {
-            release: Some(tag),
-            source: None,
-        }) => Some(tag),
-        _ => None,
-    };
-    let Some(tag) = tag else {
-        clear(family.as_deref())?;
+    let Some(engine::Pin {
+        release: Some(tag),
+        source: None,
+    }) = engine::declared(&text)
+    else {
+        clear()?;
         if ask.notice {
             return Ok(ExitCode::Success);
         }
         writeln!(out, "{} no engine pin", path.display())?;
         return Ok(ExitCode::Violation);
     };
-    let now = now_seconds();
-    let stamp = state::repo_state_dir(&root)
-        .ok()
-        .map(|dir| dir.join("engine").join("update-notice"));
-    let speak = ask.notice
-        && notice_enabled(&root, &text)
-        && stamp.as_deref().is_some_and(|stamp| notice_due(stamp, now));
-    if ask.notice && !speak && family.is_none() {
-        return Ok(ExitCode::Success);
+    if ask.notice {
+        return outdated_notice(ask, &root, &text, &tag, out);
     }
-    let repository = releases_repository();
-    let found = if ask.notice {
-        distance_bounded(&repository, &tag).ok_or_else(|| anyhow::anyhow!("no answer"))
-    } else {
-        distance(&repository, &tag)
-    };
-    let found = match found {
+    let found = match distance(&releases_repository(), &tag) {
         Ok(found) => found,
         Err(why) => {
-            clear(family.as_deref())?;
-            if ask.notice {
-                return Ok(ExitCode::Success);
-            }
+            clear()?;
             return Err(anyhow::anyhow!(
                 "engine outdated: could not look up the latest release ({why:#})"
             ));
         }
     };
-    let behind = found.newer.len();
-    if let Some(family) = family.as_deref() {
-        record_freshness(ask, family, &tag, &found, now)?;
+    if let Some(record) = &ask.record {
+        record_freshness(record, &tag, &found, now_unix())?;
     }
-    if ask.notice {
-        if speak && behind > 0 {
-            speak_notice(out, &tag, &found, stamp.as_deref(), now)?;
-        }
-        return Ok(ExitCode::Success);
-    }
-    if behind == 0 {
+    if found.newer.is_empty() {
         return Ok(ExitCode::Success);
     }
     writeln!(out, "{tag} → {}", found.latest)?;
@@ -1133,12 +1105,11 @@ fn engine_outdated(ask: &Outdated, out: &mut dyn Write) -> Result<ExitCode> {
     Ok(ExitCode::Violation)
 }
 
-/// Replace a string value in place, keeping the comment and spacing around it.
+/// Replace a string value in place, through the config editor's one rule for
+/// keeping the comment and spacing around it.
 fn set_str(item: &mut toml_edit::Item, new: &str) {
     if let Some(value) = item.as_value_mut() {
-        let decor = value.decor().clone();
-        *value = toml_edit::Value::from(new);
-        *value.decor_mut() = decor;
+        config_edit::replace_value(value, toml_edit::Value::from(new));
     }
 }
 
@@ -1148,7 +1119,7 @@ fn sync_artifact(
     artifact: &mut dyn toml_edit::TableLike,
     old: &str,
     new: &str,
-    sums: &mut dyn FnMut() -> Result<String>,
+    sums: &dyn Fn() -> Result<String>,
 ) -> Result<()> {
     let Some(url) = artifact
         .get("url")
@@ -1178,7 +1149,8 @@ fn sync_artifact(
 /// URLs with the version substituted, and each `sha256` from the release's
 /// `SHA256SUMS`; and `min_batten_version`, raised and never lowered.
 ///
-/// `sums` is asked for only when a provision row needs a digest, and once.
+/// `sums` is asked for only when a provision row needs a digest; the caller
+/// owns the one fetch it stands for.
 ///
 /// # Errors
 ///
@@ -1188,38 +1160,18 @@ fn sync_artifact(
 //MUTANT-SUITE crates/batten/tests/it/engine_install.rs
 //MUTANT update-leaves-provision-stale|s@^                set_str(item, &fresh);$@@|an_update_brings_every_batten_declaration_to_the_release
 //MUTANT update-lowers-min-version|s@^        .is_some_and(\x7cfloor\x7c floor < version);$@        .is_some_and(\x7cfloor\x7c floor != version);@|an_update_never_lowers_min_batten_version
-fn sync_declarations(
-    text: &str,
-    tag: &str,
-    sums: impl FnOnce() -> Result<String>,
-) -> Result<String> {
-    let version = ::semver::Version::parse(tag.trim_start_matches('v')).map_err(|_| {
-        UsageError::raise(format!(
-            "engine update: {tag} is not a release tag (v0.0.201)"
-        ))
-    })?;
+fn sync_declarations(text: &str, tag: &str, sums: &dyn Fn() -> Result<String>) -> Result<String> {
+    let version = engine::release_version(tag)?;
     let bare = version.to_string();
     let mut doc: toml_edit::DocumentMut = text
         .parse()
         .map_err(|why| UsageError::raise(format!("engine update: batten.toml: {why}")))?;
-    let mut fetch = Some(sums);
-    let mut fetched: Option<String> = None;
-    let mut sums = || -> Result<String> {
-        if let Some(body) = &fetched {
-            return Ok(body.clone());
-        }
-        let body = fetch
-            .take()
-            .map_or_else(|| Ok(String::new()), |fetch| fetch())?;
-        fetched = Some(body.clone());
-        Ok(body)
-    };
     if let Some(rows) = doc
         .get_mut("provision")
         .and_then(toml_edit::Item::as_array_of_tables_mut)
     {
         for row in rows.iter_mut() {
-            if row.get("name").and_then(toml_edit::Item::as_str) != Some("batten") {
+            if !engine::is_batten_row(row) {
                 continue;
             }
             let Some(old) = row
@@ -1231,14 +1183,14 @@ fn sync_declarations(
             };
             let old_bare = old.trim_start_matches('v').to_owned();
             if old_bare != bare {
-                sync_artifact(row, &old_bare, &bare, &mut sums)?;
+                sync_artifact(row, &old_bare, &bare, sums)?;
                 if let Some(platforms) = row
                     .get_mut("platforms")
                     .and_then(toml_edit::Item::as_table_like_mut)
                 {
                     for (_, artifact) in platforms.iter_mut() {
                         if let Some(artifact) = artifact.as_table_like_mut() {
-                            sync_artifact(artifact, &old_bare, &bare, &mut sums)?;
+                            sync_artifact(artifact, &old_bare, &bare, sums)?;
                         }
                     }
                 }
@@ -1602,7 +1554,12 @@ fn run_engine(command: cli::EngineCommand, out: &mut dyn Write) -> Result<ExitCo
     match command {
         cli::EngineCommand::Install => return engine_install(out),
         cli::EngineCommand::Update => return engine_update(out),
-        cli::EngineCommand::Outdated { .. } => return run_outdated(command, out),
+        cli::EngineCommand::Outdated {
+            notice,
+            record,
+            max_releases,
+            max_days,
+        } => return run_outdated(notice, record, max_releases, max_days, out),
         _ => {}
     }
     let root = git::worktree_root(Path::new("."))?;
@@ -1620,22 +1577,25 @@ fn run_engine(command: cli::EngineCommand, out: &mut dyn Write) -> Result<ExitCo
         }
         cli::EngineCommand::Gate { lanes } => return engine_gate(&root, &lanes, out),
         cli::EngineCommand::Install => return engine_install(out),
-        cli::EngineCommand::Outdated { .. } => return run_outdated(command, out),
+        cli::EngineCommand::Outdated {
+            notice,
+            record,
+            max_releases,
+            max_days,
+        } => return run_outdated(notice, record, max_releases, max_days, out),
     }
     Ok(ExitCode::Success)
 }
 
-/// `engine outdated`'s flags, read into an [`Outdated`] request.
-fn run_outdated(command: cli::EngineCommand, out: &mut dyn Write) -> Result<ExitCode> {
-    let cli::EngineCommand::Outdated {
-        notice,
-        record,
-        max_releases,
-        max_days,
-    } = command
-    else {
-        return Ok(ExitCode::Success);
-    };
+/// `engine outdated`'s flags, read into an [`Outdated`] request: `--record` and
+/// its two thresholds arrive together or are refused.
+fn run_outdated(
+    notice: bool,
+    record: Option<String>,
+    max_releases: Option<String>,
+    max_days: Option<String>,
+    out: &mut dyn Write,
+) -> Result<ExitCode> {
     let count = |flag: &str, value: Option<String>| -> Result<Option<u64>> {
         value
             .map(|value| {
@@ -1647,13 +1607,25 @@ fn run_outdated(command: cli::EngineCommand, out: &mut dyn Write) -> Result<Exit
             })
             .transpose()
     };
-    let ask = Outdated {
-        notice,
-        record,
-        max_releases: count("max-releases", max_releases)?,
-        max_days: count("max-days", max_days)?,
+    let thresholds = (
+        count("max-releases", max_releases)?,
+        count("max-days", max_days)?,
+    );
+    let record = match (record, thresholds) {
+        (None, _) => None,
+        (Some(family), (Some(max_releases), Some(max_days))) => Some(Record {
+            family: record::safe_component("family", &family)?,
+            max_releases,
+            max_days,
+        }),
+        (Some(_), _) => {
+            return Err(UsageError::raise(String::from(
+                "engine outdated: --record needs --max-releases and --max-days, the thresholds \
+                 the record is judged by",
+            )));
+        }
     };
-    engine_outdated(&ask, out)
+    engine_outdated(&Outdated { notice, record }, out)
 }
 
 /// `batten engine pin` (CLOUD-2063): write the config's one `engine` line.

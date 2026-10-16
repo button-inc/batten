@@ -275,6 +275,17 @@ fn split(path: &[String]) -> Result<(&[String], &str)> {
     Ok((parents, leaf.as_str()))
 }
 
+/// Replace `existing` with `new`, keeping the existing value's decor (the space
+/// after `=` and any trailing comment) so that only the value itself changes.
+///
+/// The one spelling of that rule, for [`set`] and for every other TOML writer
+/// that edits a value in place (`engine update`, CLOUD-2279).
+pub(crate) fn replace_value(existing: &mut toml_edit::Value, new: toml_edit::Value) {
+    let decor = existing.decor().clone();
+    *existing = new;
+    *existing.decor_mut() = decor;
+}
+
 fn set(root: &mut toml_edit::Table, path: &[String], value: &Scalar) -> Result<()> {
     let (parents, leaf) = split(path)?;
     let mut table: &mut dyn toml_edit::TableLike = root;
@@ -288,13 +299,7 @@ fn set(root: &mut toml_edit::Table, path: &[String], value: &Scalar) -> Result<(
     }
     let new = value_of(value);
     match table.get_mut(leaf) {
-        Some(Item::Value(existing)) => {
-            // Keep the existing value's decor (the space after `=` and any
-            // trailing comment) so that only the value itself changes.
-            let decor = existing.decor().clone();
-            *existing = new;
-            *existing.decor_mut() = decor;
-        }
+        Some(Item::Value(existing)) => replace_value(existing, new),
         Some(Item::None) | None => {
             table.insert(leaf, Item::Value(new));
         }

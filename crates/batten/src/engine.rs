@@ -186,14 +186,18 @@ pub fn is_installed(running: &Path, path: Option<&std::ffi::OsStr>, root: Option
 ///
 /// A [`UsageError`] naming a tag that is not a version.
 pub fn is_newer(latest: &str, current: &str) -> Result<bool> {
-    let parse = |tag: &str| {
-        semver::Version::parse(tag.trim_start_matches('v')).map_err(|_| {
-            UsageError::raise(format!(
-                "engine update: {tag} is not a release tag (v0.0.201)"
-            ))
-        })
-    };
-    Ok(parse(latest)? > parse(current)?)
+    Ok(release_version(latest)? > release_version(current)?)
+}
+
+/// The version a release tag names, with or without its `v` (CLOUD-2279): the
+/// one reading of the tag grammar every engine verb shares.
+///
+/// # Errors
+///
+/// A [`UsageError`] naming a tag that is not a version.
+pub fn release_version(tag: &str) -> Result<semver::Version> {
+    semver::Version::parse(tag.trim_start_matches('v'))
+        .map_err(|_| UsageError::raise(format!("engine: {tag} is not a release tag (v0.0.201)")))
 }
 
 /// Write `digest` as the stamp beside `binary`.
@@ -212,16 +216,27 @@ pub fn stamp(binary: &Path, digest: &str) -> Result<()> {
 /// there; an `engine` line past it belongs to some table and is not the pin.
 #[must_use]
 pub fn declared(text: &str) -> Option<Pin> {
+    top_level(text, "engine")?.try_into().ok()
+}
+
+/// One top-level key of a config, read from its raw text without parsing the
+/// rest (CLOUD-2279): the scan [`declared`] makes, for any key.
+///
+/// It survives a file that does not parse as a whole, which is what a reader
+/// running before the load needs; a key past the first table header is that
+/// table's, not the top level's.
+#[must_use]
+pub fn top_level(text: &str, key: &str) -> Option<toml::Value> {
     let line = text
         .lines()
         .take_while(|line| !line.trim_start().starts_with('['))
         .find(|line| {
             line.trim_start()
-                .strip_prefix("engine")
+                .strip_prefix(key)
                 .is_some_and(|rest| rest.trim_start().starts_with('='))
         })?;
-    let table: toml::Table = toml::from_str(line).ok()?;
-    table.get("engine")?.clone().try_into().ok()
+    let mut table: toml::Table = toml::from_str(line).ok()?;
+    table.remove(key)
 }
 
 /// The engine's own repair for a pin this build does not satisfy (CLOUD-2116).
@@ -653,18 +668,14 @@ pub fn ref_changelog(repository: &str, reference: &str) -> Result<Vec<Heading>> 
 
 /// The releases newer than `pin` and no newer than `latest`, oldest first.
 ///
+/// A changelog that lags `latest` still counts it: being behind is never
+/// answered as current because a heading is missing.
+///
 /// # Errors
 ///
 /// A [`UsageError`] naming a tag that is not a version.
 pub fn releases_between(headings: &[Heading], pin: &str, latest: &str) -> Result<Vec<Heading>> {
-    let parse = |tag: &str| {
-        semver::Version::parse(tag.trim_start_matches('v')).map_err(|_| {
-            UsageError::raise(format!(
-                "engine outdated: {tag} is not a release tag (v0.0.201)"
-            ))
-        })
-    };
-    let (pin, latest) = (parse(pin)?, parse(latest)?);
+    let (pin, latest) = (release_version(pin)?, release_version(latest)?);
     let mut newer: Vec<Heading> = headings
         .iter()
         .filter(|heading| heading.version > pin && heading.version <= latest)
@@ -672,15 +683,43 @@ pub fn releases_between(headings: &[Heading], pin: &str, latest: &str) -> Result
         .collect();
     newer.sort_by(|left, right| left.version.cmp(&right.version));
     newer.dedup_by(|left, right| left.version == right.version);
+    if newer.is_empty() && latest > pin {
+        newer.push(Heading {
+            version: latest,
+            date: None,
+        });
+    }
     Ok(newer)
 }
 
-/// Whole days from `date` (`YYYY-MM-DD`, UTC midnight) to `now`, never below
-/// zero; `None` for a date that will not parse.
+/// Whole days from `date` (`YYYY-MM-DD`, UTC midnight) to `now` (Unix
+/// seconds), never below zero; `None` for a date that will not parse.
 #[must_use]
-pub fn days_since(date: &str, now: i64) -> Option<u64> {
-    let then = crate::ci_signal::epoch(&format!("{date}T00:00:00Z"))?;
-    Some(u64::try_from(now.saturating_sub(then) / 86_400).unwrap_or(0))
+pub fn days_since(date: &str, now: u64) -> Option<u64> {
+    let then = crate::landed::day_of(date)?;
+    let today = i64::try_from(now / 86_400).ok()?;
+    Some(u64::try_from(today.saturating_sub(then)).unwrap_or(0))
+}
+
+/// Every digest a `SHA256SUMS` body publishes, lowercased: the set
+/// [`published_digest`] looks one name up in.
+#[must_use]
+pub fn published_digests(sums: &str) -> std::collections::BTreeSet<String> {
+    sums.lines()
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            let digest = fields.next()?;
+            fields.next()?;
+            Some(digest.to_ascii_lowercase())
+        })
+        .collect()
+}
+
+/// Whether a `[[provision]]` row provisions batten itself (CLOUD-2279): the one
+/// test `engine update` rewrites by and `engine gate` refuses by.
+#[must_use]
+pub fn is_batten_row(row: &dyn toml_edit::TableLike) -> bool {
+    row.get("name").and_then(toml_edit::Item::as_str) == Some("batten")
 }
 
 /// The `SHA256SUMS` body release `tag` publishes (CLOUD-2279).
@@ -807,55 +846,44 @@ pub fn rewrite(text: &str, pin: &Pin) -> String {
 /// (CLOUD-2279): a `[[provision]] name = "batten"` row whose `version` is not
 /// the pin, and a `min_batten_version` above it. Each is its 1-based line and
 /// what it says.
+///
+/// The document is parsed once, so a row is found however it is spelled, by
+/// the same [`is_batten_row`] `engine update` rewrites by; a config that will
+/// not parse is the load's to refuse, and has no findings here.
 #[must_use]
 pub fn disagreements(text: &str, tag: &str) -> Vec<(usize, String)> {
-    let Ok(pin) = semver::Version::parse(tag.trim_start_matches('v')) else {
+    let (Ok(pin), Ok(doc)) = (release_version(tag), toml_edit::Document::parse(text)) else {
         return Vec::new();
     };
-    let value = |line: &str| -> Option<(String, String)> {
-        let table: toml::Table = toml::from_str(line.trim()).ok()?;
-        let (key, value) = table.into_iter().next()?;
-        Some((key, value.as_str()?.to_owned()))
+    let line = |item: &toml_edit::Item| {
+        item.span().map_or(0, |span| {
+            text.get(..span.start)
+                .unwrap_or_default()
+                .matches('\n')
+                .count()
+                + 1
+        })
     };
     let mut found = Vec::new();
-    let mut top = true;
-    let mut block: Option<(bool, Option<(usize, String)>)> = None;
-    let close = |block: &mut Option<(bool, Option<(usize, String)>)>,
-                 found: &mut Vec<(usize, String)>| {
-        if let Some((true, Some((at, version)))) = block.take()
-            && semver::Version::parse(version.trim_start_matches('v')).ok() != Some(pin.clone())
+    if let Some(item) = doc.get("min_batten_version")
+        && let Some(floor) = item.as_str()
+        && semver::Version::parse(floor).is_ok_and(|floor| floor > pin)
+    {
+        found.push((line(item), format!("min_batten_version {floor}")));
+    }
+    let rows = doc
+        .get("provision")
+        .and_then(toml_edit::Item::as_array_of_tables)
+        .into_iter()
+        .flat_map(toml_edit::ArrayOfTables::iter);
+    for row in rows.filter(|row| is_batten_row(*row)) {
+        if let Some(item) = row.get("version")
+            && let Some(version) = item.as_str()
+            && release_version(version).ok().as_ref() != Some(&pin)
         {
-            found.push((at, format!("provision batten {version}")));
-        }
-    };
-    for (index, line) in text.lines().enumerate() {
-        let trimmed = line.trim();
-        if trimmed.starts_with('[') {
-            top = false;
-            if trimmed == "[[provision]]" {
-                close(&mut block, &mut found);
-                block = Some((false, None));
-            } else if !trimmed.starts_with("[provision.") {
-                close(&mut block, &mut found);
-            }
-            continue;
-        }
-        let Some((key, text)) = value(trimmed) else {
-            continue;
-        };
-        if top && key == "min_batten_version" {
-            if semver::Version::parse(&text).is_ok_and(|floor| floor > pin) {
-                found.push((index + 1, format!("min_batten_version {text}")));
-            }
-        } else if let Some((batten, version)) = block.as_mut() {
-            match key.as_str() {
-                "name" => *batten = text == "batten",
-                "version" => *version = Some((index + 1, text)),
-                _ => {}
-            }
+            found.push((line(item), format!("provision batten {version}")));
         }
     }
-    close(&mut block, &mut found);
     found.sort();
     found
 }
@@ -865,16 +893,15 @@ pub fn disagreements(text: &str, tag: &str) -> Vec<(usize, String)> {
 ///
 /// A value is a literal only when it is a version (`v?X.Y.Z`) or a 64-hex
 /// digest; an expression (`${{ … }}`) is not one, and a longer key such as
-/// `BATTEN_VERSION_FROM_REF` is another key. A digest agrees when the release's
-/// `SHA256SUMS` publishes it for any asset.
+/// `BATTEN_VERSION_FROM_REF` is another key. A digest agrees when it is one of
+/// `published`, the release's [`published_digests`].
 #[must_use]
-pub fn workflow_literals(text: &str, tag: &str, sums: &str) -> Vec<(usize, &'static str)> {
+pub fn workflow_literals(
+    text: &str,
+    tag: &str,
+    published: &std::collections::BTreeSet<String>,
+) -> Vec<(usize, &'static str)> {
     let want = tag.trim_start_matches('v');
-    let published: std::collections::BTreeSet<String> = sums
-        .lines()
-        .filter_map(|line| line.split_whitespace().next())
-        .map(str::to_ascii_lowercase)
-        .collect();
     let mut found = Vec::new();
     for (index, line) in text.lines().enumerate() {
         for key in ["BATTEN_VERSION", "BATTEN_SHA256"] {
