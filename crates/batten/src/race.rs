@@ -546,9 +546,6 @@ pub fn with_logs(
                         // A `None` IS NOT SENT, so it never counts as an
                         // answer and the fill comes back incomplete. That is
                         // the whole of how a failed read reaches the caller.
-                        // A `None` IS NOT SENT, so it never counts as an
-                        // answer and the fill comes back incomplete. That is
-                        // the whole of how a failed read reaches the caller.
                         if let Some(log) = fetch(number) {
                             drop(tx.send((slot, log)));
                         }

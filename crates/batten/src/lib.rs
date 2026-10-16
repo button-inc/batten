@@ -7184,7 +7184,21 @@ fn run_claim_race(
     let grammar = board_grammar(overrides)?;
     // Taken by value before the listing is rebuilt below: `me` borrows it.
     let mine_number = me.number.clone();
-    let log = bot::forge::commit_messages(&slug, &mine_number).unwrap_or_default();
+    // THE SELF SIDE IS HELD TO THE SAME READ AS THE COMPETITORS, and
+    // `unwrap_or_default` here was the same defect one run earlier. If this read
+    // fails, `mine` is computed without the `Refs:` trailer — the source that
+    // actually resolves claims here, per the comment below — and the verb either
+    // exits at "this branch claims no issue" or carries a claim set silently
+    // short, so a collision on a trailer-only key reads as no race. Neither is
+    // reachable from `Filled::complete`, which covers the fan-out downstream of
+    // this. Could-not-look, like every other arm.
+    let Ok(log) = bot::forge::commit_messages(&slug, &mine_number) else {
+        return clean(
+            out,
+            "claim race: this branch's own commit log could not be read — could not look, which \
+             is not a verdict",
+        );
+    };
     let mine = race::claimed(&me.head_ref, &me.title, &log, &me.body, &grammar);
     if mine.is_empty() {
         return clean(
@@ -7237,8 +7251,15 @@ fn run_claim_race(
     // THE FALSE GREEN THAT WORRIED THAT REVISION IS CLOSED BY THE LINE ABOVE,
     // not by the exit code: a collision this run could actually see still
     // refuses at `Violation`, because `races` is computed before this. What
-    // allows is only "no race found over a reading that was incomplete", which
-    // is a could-not-look and says so on stdout.
+    // allows is only "no race found over a reading that was incomplete".
+    //
+    // THAT LINE IS LEGIBLE ON A DIRECT `batten claim race` AND NOWHERE ELSE, so
+    // the allow is not self-announcing at the gate. Through `claim mint twice`,
+    // `rules::run_once` spawns the check with both streams `Stdio::null()` and
+    // branches on the exit code alone, so this message is discarded unread there
+    // and `Success` is indistinguishable from "looked and found none". That is
+    // the accepted cost of not failing a pre-flight on a forge hiccup; the
+    // undiscriminated surface is `rules::run_once`'s to fix, not this arm's.
     if races.is_empty() && !complete {
         return clean(
             out,
