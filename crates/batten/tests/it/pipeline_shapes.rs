@@ -657,6 +657,11 @@ fn a_redirection_is_not_an_operand_and_never_the_named_target() {
     // a substitution — nothing was read instead of reaching for a tool.
     allow_in(&dir, "grep -c CLOUD > counts.txt");
     allow_in(&dir, "sort < input.txt");
+    // Dropped where it stands, never a cut: a redirection BEFORE the operands
+    // hides neither find's start point nor grep's file.
+    allow_in(&dir, "find 2>/dev/null /tmp -name '*.log'");
+    deny_in(&dir, "grep 2>/dev/null needle crates/batten/src/lib.rs");
+    deny_in(&dir, "grep 2> err.txt needle crates/batten/src/lib.rs");
 }
 
 #[test]
