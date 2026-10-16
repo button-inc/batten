@@ -147,6 +147,70 @@ struct Record {
     configs: Vec<PathBuf>,
     /// The answer.
     programs: BTreeSet<String>,
+    /// The keyed files' stat identity when `key` was derived ([`stamped`]).
+    /// Absent from a record written before CLOUD-2440, which is then believed
+    /// only by its key.
+    #[serde(default)]
+    stamps: Stamps,
+}
+
+/// Each keyed path with its stat identity, an absent file as `None` — what a
+/// record was keyed over, as `crate::cache::stamp` sees it (CLOUD-2440).
+pub(crate) type Stamps = Vec<(PathBuf, Option<String>)>;
+
+/// The keyed files' stamps as they stand.
+fn stamps_now(configs: &[PathBuf]) -> Vec<(PathBuf, Option<crate::cache::Stamp>)> {
+    keyed_paths(configs)
+        .into_iter()
+        .map(|path| {
+            let stamp = crate::cache::stamp(&path);
+            (path, stamp)
+        })
+        .collect()
+}
+
+/// The stamps to record beside a key derived at `at`, taken BEFORE the key's
+/// read — or none, where a file changed too close to `at` for a later change in
+/// the same timestamp tick to show in its stamp (git's racy rule,
+/// `crate::cache::Stamp::racily_clean`). A record with no stamps is believed
+/// by its key alone.
+//MUTANT stamped-record-believes-racy|s@^    if racy {$@    if false {@|a_record_stamped_in_its_racy_window_is_hashed
+pub(crate) fn stamped(configs: &[PathBuf], at: std::time::Duration) -> Stamps {
+    let now = stamps_now(configs);
+    let racy = now
+        .iter()
+        .any(|(_, stamp)| stamp.as_ref().is_some_and(|stamp| stamp.racily_clean(at)));
+    if racy {
+        return Stamps::new();
+    }
+    now.into_iter()
+        .map(|(path, stamp)| (path, stamp.map(|stamp| stamp.fields)))
+        .collect()
+}
+
+/// Whether a record keyed `key` over `configs`, with `stamps`, is about the
+/// files as they stand (CLOUD-2440).
+///
+/// BY STAT IDENTITY FIRST: the hook believed two records a call by re-reading
+/// and re-hashing the manifests whole, 2.07M of 43.2M instructions, though
+/// nothing had changed. Recorded stamps that equal the files' stamps now prove
+/// the same in a few `stat`s; anything else — no stamps, or any one moved — is
+/// today's answer, the key recomputed from the bytes.
+//MUTANT stamped-record-never-believed|s@^    if !stamps.is_empty() \&\& current == stamps {$@    if false {@|a_record_whose_configs_are_unchanged_is_believed_without_reading
+//MUTANT stamped-record-ignores-stamps|s@^    if !stamps.is_empty() \&\& current == stamps {$@    if !stamps.is_empty() {@|a_config_edited_after_the_record_is_a_miss
+pub(crate) fn still_keyed(
+    configs: &[PathBuf],
+    key: &str,
+    stamps: &[(PathBuf, Option<String>)],
+) -> bool {
+    let current: Stamps = stamps_now(configs)
+        .into_iter()
+        .map(|(path, stamp)| (path, stamp.map(|stamp| stamp.fields)))
+        .collect();
+    if !stamps.is_empty() && current == stamps {
+        return true;
+    }
+    self::key(configs).as_deref() == Some(key)
 }
 
 /// Every file that decides the key, given the configs the pin reported.
@@ -253,7 +317,7 @@ pub fn cached(root: &Path) -> PinnedFacts {
     // Recomputed from the RECORDED configs rather than by asking the pin again,
     // which is what keeps this function free of the `Effect` its own doc says it
     // may not pay.
-    if key(&record.configs).as_ref() != Some(&record.key) {
+    if !still_keyed(&record.configs, &record.key, &record.stamps) {
         return Look::CouldNotLook;
     }
     // An EMPTY recorded set is could-not-look rather than "the pin provides
@@ -470,6 +534,7 @@ fn memoised(root: &Path, ask: impl FnOnce(&Path) -> PinnedFacts) -> PinnedFacts 
 /// should not have to infer it.
 #[must_use]
 pub fn record(root: &Path, configs: &[PathBuf], programs: &BTreeSet<String>) -> bool {
+    let stamps = stamped(configs, crate::cache::now());
     let (Some(key), Some(path)) = (key(configs), record_path(root)) else {
         return false;
     };
@@ -477,6 +542,7 @@ pub fn record(root: &Path, configs: &[PathBuf], programs: &BTreeSet<String>) -> 
         key,
         configs: configs.to_vec(),
         programs: programs.clone(),
+        stamps,
     };
     let Ok(body) = serde_json::to_string(&record) else {
         return false;
@@ -653,6 +719,64 @@ mod tests {
             "one member present keys"
         );
         assert_ne!(absent, present, "absent and present-as-`-` are two answers");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A manifest in a scratch directory, and the moment well past its racy
+    /// window that a record "written later" is stamped at.
+    #[expect(
+        clippy::expect_used,
+        reason = "a fixture that cannot be written is a broken test"
+    )]
+    fn manifest(name: &str) -> (PathBuf, Vec<PathBuf>, std::time::Duration) {
+        let dir = crate::scratch::scratch(name);
+        std::fs::write(dir.join("mise.toml"), "[tools]\n").expect("manifest");
+        let configs = vec![dir.join("mise.toml")];
+        let later = crate::cache::now() + std::time::Duration::from_hours(1);
+        (dir, configs, later)
+    }
+
+    /// CLOUD-2440: unchanged stamps believe the record without the hash — a key
+    /// the bytes would refuse still answers, because nothing was read.
+    #[test]
+    fn a_record_whose_configs_are_unchanged_is_believed_without_reading() {
+        let (dir, configs, later) = manifest("pinned-stamped-hit");
+        let stamps = stamped(&configs, later);
+        assert!(!stamps.is_empty(), "the premise: stamps were recorded");
+        assert!(
+            still_keyed(&configs, "not-the-key", &stamps),
+            "unchanged stamps are believed without recomputing the key"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An edit after the stamps were taken is a miss, so the key decides.
+    #[test]
+    #[expect(
+        clippy::expect_used,
+        reason = "a fixture that cannot be written is a broken test"
+    )]
+    fn a_config_edited_after_the_record_is_a_miss() {
+        let (dir, configs, later) = manifest("pinned-stamped-edited");
+        let stamps = stamped(&configs, later);
+        std::fs::write(dir.join("mise.toml"), "[tools]\nnode = \"22\"\n").expect("edit");
+        assert!(
+            !still_keyed(&configs, "not-the-key", &stamps),
+            "an edited manifest falls through to the key, which refuses"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Stamps taken within a timestamp tick of the files' last change are not
+    /// recorded: a second change in that tick would not show in them.
+    #[test]
+    fn a_record_stamped_in_its_racy_window_is_hashed() {
+        let (dir, configs, _) = manifest("pinned-stamped-racy");
+        let stamps = stamped(&configs, crate::cache::now());
+        assert!(
+            !still_keyed(&configs, "not-the-key", &stamps),
+            "racy stamps are not recorded, so the key decides"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
