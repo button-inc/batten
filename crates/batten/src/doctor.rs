@@ -2824,7 +2824,7 @@ enum TaskEvidence {
 //MUTANT transcript-zero-ignores-task-calls|s@^    if called {$@    if false {@|a_transcript_that_declared_a_task_never_reads_as_zero
 //MUTANT transcript-zero-on-empty-stream|s@^    if stream.records.is_empty() {$@    if false {@|an_empty_transcript_is_not_evidence
 //MUTANT transcript-zero-any-session|s@^    if expected != target.to_string_lossy() {$@    if false {@|another_sessions_transcript_is_not_evidence
-//MUTANT transcript-partial-line-dropped|s@^    if !partial.trim().is_empty() {$@    if false {@|a_half_written_task_call_is_not_zero
+//MUTANT transcript-partial-line-dropped|s@^    if !partial.trim_ascii().is_empty() {$@    if false {@|a_half_written_task_call_is_not_zero
 //MUTANT transcript-sessionless-template-matches|s@ || !template.contains("{session}") {$@ {@|a_sessionless_template_is_not_evidence
 fn transcript_evidence(
     dir: &Path,
@@ -2849,13 +2849,24 @@ fn transcript_evidence(
     if tools.is_empty() || !template.contains("{session}") {
         return TaskEvidence::Unknown;
     }
-    let Ok(body) = std::fs::read_to_string(dir.join(path)) else {
+    // BYTES FIRST, THEN TEXT: a write paused inside a multibyte character leaves
+    // a tail that is not UTF-8, and decoding the whole file first would read
+    // that torn tail as an unreadable transcript rather than as `Torn`.
+    let Ok(bytes) = std::fs::read(dir.join(path)) else {
         return TaskEvidence::Unknown;
     };
-    let (complete, partial) = body.split_at(body.rfind('\n').map_or(0, |at| at + 1));
-    if !partial.trim().is_empty() {
+    let (complete, partial) = bytes.split_at(
+        bytes
+            .iter()
+            .rposition(|&b| b == b'\n')
+            .map_or(0, |at| at + 1),
+    );
+    if !partial.trim_ascii().is_empty() {
         return TaskEvidence::Torn;
     }
+    let Ok(complete) = std::str::from_utf8(complete) else {
+        return TaskEvidence::Unknown;
+    };
     let Ok(stream) = crate::transcript::parse(complete, path, shape) else {
         return TaskEvidence::Unknown;
     };

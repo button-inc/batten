@@ -366,6 +366,26 @@ fn a_half_written_task_call_is_not_zero() {
     assert_eq!(output.status.code(), Some(3), "got: {}", stdout(&output));
 }
 
+/// A write paused inside a multibyte character is still a torn tail, never an
+/// unreadable transcript that falls back to the parent test.
+///
+/// Fails by: decoding the whole file before splitting off the tail.
+#[cfg(unix)]
+#[test]
+fn a_tail_torn_inside_a_character_is_not_zero() {
+    let mut body = transcript(&["Bash"]).into_bytes();
+    body.extend_from_slice(
+        br#"{"type":"assistant","sessionId":"s-1","message":{"role":"assistant","content":[{"type":"tool_use","id":"t9","name":"TaskCreate","input":{"subject":"a "#,
+    );
+    // The first two bytes of the three-byte em dash.
+    body.extend_from_slice(&[0xE2, 0x80]);
+    let dir = rootless("transcript-torn-utf8", "", true);
+    std::fs::write(dir.join(".claude/.transcript.jsonl"), body).unwrap();
+
+    let output = session(&dir, &[]);
+    assert_eq!(output.status.code(), Some(3), "got: {}", stdout(&output));
+}
+
 /// A hook's refusal does not prove the call wrote nothing: a post-call block
 /// records the same refusal after the tool ran, so the call still counts.
 #[cfg(unix)]
