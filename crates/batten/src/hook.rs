@@ -2808,7 +2808,11 @@ fn relative_to(root: &Path, path: &str) -> Option<String> {
         // `..` included (CLOUD-2390), is replayed onto it. Only AFTER the
         // canonical base, never over the whole path: a `..` past a symlink
         // climbs the link's target, while the component just past the base does
-        // not exist, so it is no symlink and popping it lexically is right.
+        // not exist, so it is no symlink and popping it lexically is right. A
+        // component AFTER that `..` may exist and be a link, and is replayed
+        // lexically too; the host cannot write through the missing component
+        // until the same command creates it, so that spelling is not honest
+        // error, which is the threat this reading answers.
         candidate.ancestors().skip(1).find_map(|ancestor| {
             let base = ancestor.canonicalize().ok()?;
             let tail = candidate.strip_prefix(ancestor).ok()?;
