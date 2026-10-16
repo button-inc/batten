@@ -2279,7 +2279,8 @@ enum Raced {
     Stalled(u32),
 }
 
-/// Where the watcher arm reports, bundled so its signature stays readable.
+/// Where the racing arms (watcher and stall) report, bundled so their
+/// signatures stay readable.
 #[derive(Clone)]
 struct Arms<'a> {
     /// Who won the race.

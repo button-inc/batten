@@ -11673,10 +11673,6 @@ fn run_land_lap(
     let Some(guard) = run_land_singleton(root, out, err)? else {
         return Ok(ExitCode::Violation);
     };
-    // WHAT A LAP THAT NEVER RETURNED LEFT SPENDING, reconciled once after the
-    // lock (CLOUD-2371): `unwind_lap` is the fast path on a normal return.
-    reconcile_at_entry(root, branch, out)?;
-
     // THE RECLAIM CENSUS'S WINDOW, opened and closed HERE and nowhere inside the
     // laps (CLOUD-843, round-2 review). See `land_census_window`. After the
     // singleton, because the census store is this worktree's and the singleton is
@@ -11699,6 +11695,10 @@ fn run_land_lap(
         .ok()
         .and_then(|resolved| resolved.prune);
     land_census_window(root, &beat_note, &stop_note, || {
+        // WHAT A LAP THAT NEVER RETURNED LEFT SPENDING, reconciled once after the
+        // lock and inside the window, so its forge writes read as in flight
+        // (CLOUD-2371): `unwind_lap` is the fast path on a normal return.
+        reconcile_at_entry(root, branch, out)?;
         let (ended, lines) = disk_watch::around(disk_watcher(root, prune_rules.as_ref()), || {
             run_land_laps(run, out, err)
         });
@@ -11781,7 +11781,7 @@ fn abandon_runs(repo: &str, sha: &str, what: &str, out: &mut dyn Write) -> Resul
     // compares against a run's `path`, so reading the check name
     // here made the comparison unsatisfiable — `spared` was always
     // 0 and the fan-in's own run was cancelled with the rest, which
-    // is exactly the wedge this whole arm exists to prevent: the
+    // is exactly the wedge this helper exists to prevent: the
     // fan-in is the one context branch protection requires, so
     // cancelling it leaves it ungraded and the pull request stuck.
     //
@@ -12527,7 +12527,8 @@ fn charge_or_refuse(
     Ok(Some(ExitCode::Internal))
 }
 
-/// Run one step of the lap, and hand back what only the wait produces.
+/// Run one step of the lap, and hand back what only the wait produces — and
+/// whether the verify stopped on its own stall (CLOUD-2369).
 ///
 /// Split out of [`run_land_lap`] on this tree's own precedent — `trust.rs` and
 /// `cli.rs` both record splitting rather than suppressing `too_many_lines`, and
@@ -13858,7 +13859,7 @@ fn verify_stall(root: &Path) -> Option<land::Stall> {
     Some(land::Stall {
         git_dir,
         pid,
-        beat: std::time::Duration::from_secs(u64::try_from(beat).unwrap_or(30)),
+        beat: std::time::Duration::from_secs(beat.unsigned_abs()),
         beats,
     })
 }
