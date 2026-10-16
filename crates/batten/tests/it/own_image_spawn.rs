@@ -90,7 +90,12 @@ fn a_command_row_naming_batten_runs_the_image_and_not_the_one_on_path() {
     // The decoy first, then the system directories the decoy's own `#!/bin/sh`
     // needs. Nothing else: an ambient `batten` on the developer's `PATH` would
     // make the decoy unreachable and the case vacuous.
-    let path = format!("{}:/usr/bin:/bin", decoy.display());
+    //
+    // `join_paths` rather than an interpolated `:` — `primitives.rs`'s own gate,
+    // and the separator this would otherwise hard-code is the one that made
+    // seven `judge_kind` cases report a missing program instead of their verdict.
+    let path = std::env::join_paths([decoy.as_path(), Path::new("/usr/bin"), Path::new("/bin")])
+        .expect("the decoy PATH composes");
     let output = batten()
         .state_home(&home)
         .args(["enforce"])
