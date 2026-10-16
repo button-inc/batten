@@ -2531,10 +2531,33 @@ fn wait_bounded(
         }
         Err(_) => true,
     };
+    if timed_out {
+        // A RUNNER THAT LEADS ITS OWN GROUPS IS ASKED FIRST. nextest starts each
+        // test in a process group of its own, so a `SIGKILL` to the runner's
+        // group leaves a hung test binary, and whatever it spawned, alive under
+        // init (measured 2026-10-16 once the declared Cargo arm moved onto
+        // nextest). `SIGTERM` is what nextest answers by ending every group it
+        // started. The grace is bounded, and the `SIGKILL` below still follows.
+        terminate_group(pid);
+        let _ = exits.recv_timeout(TERMINATE_GRACE);
+    }
     kill_group(pid);
     let _ = worker.join();
     let status = child.wait()?;
     Ok((status, timed_out))
+}
+
+/// How long a timed-out runner has to end what it started before `SIGKILL`.
+#[cfg(unix)]
+const TERMINATE_GRACE: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// `SIGTERM` the process group `leader` leads. Best effort, as [`kill_group`].
+//MUTANT runner-not-asked-first|s@^        let _ = rustix::process::kill_process_group(group, rustix::process::Signal::TERM);$@        let _ = group;@|a_suite_that_hangs_is_ended_by_the_sweeps_own_bound
+#[cfg(unix)]
+fn terminate_group(leader: u32) {
+    if let Some(group) = rustix::process::Pid::from_raw(i32::try_from(leader).unwrap_or_default()) {
+        let _ = rustix::process::kill_process_group(group, rustix::process::Signal::TERM);
+    }
 }
 
 /// [`wait_bounded`] off unix, as it was: no `waitid`, no group, and no `kill(2)`
@@ -2906,9 +2929,9 @@ fn run_suite(staged: &Staged, root: &Path, suite: &Suite, want: &str) -> Selecti
     };
     let selection = match suite {
         Suite::Cargo { .. } => Selection {
-            selected: libtest_lines(&ran.output),
+            selected: libtest_lines(&ran.output) + nextest_lines(&ran.output),
             ok: ran.passed() && !ran.output.contains("error: could not compile"),
-            reach: Reach::of(libtest_ran(&ran.output), false),
+            reach: Reach::of(libtest_ran(&ran.output) || nextest_ran(&ran.output), false),
         },
         Suite::Tofu { .. } => tofu_verdict(&ran.output, want),
         Suite::Kyverno { .. } => kyverno_verdict(&ran.output, want),
@@ -2941,7 +2964,31 @@ fn invocation(dir: &Path, suite: &Suite, want: &str, junit: &Path) -> (PathBuf, 
         // match nothing is their startup. A target selecting no case is not a
         // pass either: `selected` stays 0 and the caller reports
         // `names-no-case`, which is a could-not-look.
-        Suite::Cargo { .. } => (dir.to_path_buf(), argv(&["cargo", "test", "--", want])),
+        //
+        // UNDER NEXTEST, AS CARGO-MUTANTS ALREADY RUNS (CLOUD-1746). Plain
+        // `cargo test` skips a repository's nextest setup scripts, and a suite
+        // whose cases depend on what one exports then reds unmutated: measured
+        // 2026-10-16, a `one_pr.rs` case passed under nextest and failed in the
+        // staged tree for want of the variable its setup script sets, so the row
+        // read `case-already-red`. `test(<want>)` matches by containment, the
+        // filter libtest applied; `--no-tests=pass` leaves an empty selection
+        // to `names-no-case` rather than to nextest's own error.
+        Suite::Cargo { .. } => {
+            let filter = format!("test({want})");
+            (
+                dir.to_path_buf(),
+                argv(&[
+                    "cargo",
+                    "nextest",
+                    "run",
+                    "--no-fail-fast",
+                    "--no-tests=pass",
+                    "--color=never",
+                    "-E",
+                    &filter,
+                ]),
+            )
+        }
         // `tofu test` runs in the module's root, and a test file lives there or
         // in its `tests/` directory — so the root is read off the path and
         // `-filter` names the file relative to it. `-filter` selects a FILE,
@@ -3027,6 +3074,35 @@ fn libtest_lines(output: &str) -> usize {
 /// one that filters out every case, so its absence means nothing ran.
 fn libtest_ran(output: &str) -> bool {
     output.lines().any(|line| line.contains("test result: "))
+}
+
+/// Case result lines in a nextest run: a status word, then the bracketed
+/// duration, once per selected case whatever its outcome.
+fn nextest_lines(output: &str) -> usize {
+    const STATUS: [&str; 6] = [
+        "PASS [",
+        "FAIL [",
+        "TIMEOUT [",
+        "SIGSEGV [",
+        "SIGABRT [",
+        "SIGKILL [",
+    ];
+    output
+        .lines()
+        .filter(|line| {
+            STATUS
+                .iter()
+                .any(|word| line.trim_start().starts_with(word))
+        })
+        .count()
+}
+
+/// Whether a nextest run printed its summary, which it does for an empty
+/// selection under `--no-tests=pass` too; absent, nothing ran.
+fn nextest_ran(output: &str) -> bool {
+    output
+        .lines()
+        .any(|line| line.trim_start().starts_with("Summary ["))
 }
 
 /// The named `run`'s verdict out of `tofu test -json`'s machine-readable lines.
@@ -4284,6 +4360,23 @@ fn engine_undeclared(root: &Path, censused: &BTreeMap<String, String>) -> usize 
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// Fails by: a nextest run read as libtest, which counts no case and finds
+    /// no summary, so every declared Cargo row reads `suite-did-not-run`.
+    #[test]
+    fn a_nextest_run_is_read_for_its_cases_and_its_summary() {
+        let ran = "    Starting 2 tests across 1 binary\n        \
+                   PASS [   0.004s] batten::it one_pr::a\n        \
+                   FAIL [   0.010s] batten::it one_pr::b\n────────────\n     \
+                   Summary [   0.012s] 2 tests run: 1 passed, 1 failed, 8 skipped\n";
+        assert_eq!(nextest_lines(ran), 2);
+        assert!(nextest_ran(ran));
+        let empty = "    Starting 0 tests across 1 binary\n     \
+                     Summary [   0.000s] 0 tests run: 0 passed, 9 skipped\n";
+        assert_eq!(nextest_lines(empty), 0);
+        assert!(nextest_ran(empty));
+        assert!(!nextest_ran("error: could not compile `batten`\n"));
+    }
 
     /// A selected result with no readable verdict outranks its passing
     /// siblings (CLOUD-2264), rather than vanishing from the set.
