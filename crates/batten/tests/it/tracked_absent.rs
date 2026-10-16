@@ -234,8 +234,9 @@ fn agreeing_pins_no_docs_and_no_sentinel_are_clean() {
 // hk-version.
 // ---------------------------------------------------------------------------
 
-/// Both halves of the URL drift, so arms A and A2 both fire on one line and
-/// collapse to one finding.
+/// Both halves of the URL disagree with the pin — the fixture moves `[tools]`,
+/// not the URL — so arms A and A2 both fire on one line and collapse to one
+/// finding.
 ///
 /// It does NOT carry `#MUTANT hk-pin-disagreement-passes` any more, and that is
 /// the point: `amends()` writes one version into both halves, so A2 masks A

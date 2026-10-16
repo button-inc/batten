@@ -800,7 +800,8 @@ duplicate_close_window = "{{ get_env(name='DUPLICATE_CLOSE_WINDOW', default='19'
 # consumers interpolate it with no space of their own. The path is QUOTED for
 # the same class of reason — these render into a string `run`, so an unquoted
 # bundle path containing a space would word-split and fail the fetch, taking
-# `hooks` and `record-verdicts` with it through their `depends`.
+# `hooks`, `record-verdicts` and `fix-selection-check` with it through their
+# `depends`.
 pkl_ca = "{% if env.BATTEN_CA_BUNDLE and env.BATTEN_CA_BUNDLE is file %}--ca-certificates '{{env.BATTEN_CA_BUNDLE}}' {% elif env.SSL_CERT_FILE and env.SSL_CERT_FILE is file %}--ca-certificates '{{env.SSL_CERT_FILE}}' {% endif %}"
 
 [tasks.fmt]
@@ -1087,13 +1088,20 @@ description = "hk's `fix` hook selects exactly the gate's fixer-bearing steps �
 # is declared; it was spelled out here and at `pkl-package` until CLOUD-2409
 # folded both into the var.
 #
-# THE FETCH COMES FIRST HERE TOO, and this is the THIRD caller (CLOUD-2311).
+# THE FETCH IS A NAMED STEP HERE, AND THAT IS ALL IT IS (CLOUD-2311).
 # `hk-fix-selection.pkl` imports `hk.pkl`, so evaluating it resolves the same
-# `package://` package the validator does — and `gate fix missing` reads this
-# command's non-zero as a verdict about the bytes, exactly as
-# `validator-verdict-clean` read `record validate`'s. A cold cache would be
-# recorded as drift in the fix selection. The CA selection alone does not close
-# that: it fixes the handshake, not the fetch happening at verdict time.
+# `package://` package the validator does. The `depends` makes that fetch its
+# own step, so a cold-cache failure is reported as `pkl-package` rather than as
+# an opaque non-zero from the eval.
+#
+# IT DOES NOT BUY WHAT THE VALIDATOR'S `depends` BUYS, and an earlier version of
+# this comment claimed it did. There the ordering sits on `hooks` and
+# `record-verdicts`, which are NOT the command whose exit code becomes the
+# verdict — a failed fetch fails those tasks before `record validate` runs, so
+# nothing is recorded. Here `gate fix missing` reads THIS task's exit code, and
+# mise folds a failed `depends` into it, so a cold cache still denies on
+# `hk.pkl` exactly as it did before. Closing that would mean moving the
+# ordering ahead of `batten check` itself, which is a different row's change.
 depends = ["pkl-package"]
 run = "mise exec pkl -- pkl eval {{vars.pkl_ca}}hk-fix-selection.pkl"
 
