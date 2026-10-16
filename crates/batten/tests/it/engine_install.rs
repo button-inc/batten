@@ -133,10 +133,26 @@ const SHIPPED: &[u8] = b"#!/bin/sh\necho the fixture release\n";
 /// The date `main`'s changelog gives `main`'s own release.
 const MAIN_DATE: &str = "2020-02-01";
 
-/// The platforms a fixture provision row names, beside this build's own. NEVER
-/// A LINUX TRIPLE: the cases run only on linux, and a target equal to this
-/// build's would publish its archive twice in `SHA256SUMS` under two digests.
-const PROVISION_TARGETS: &[&str] = &["x86_64-pc-windows-msvc", "aarch64-apple-darwin"];
+/// The platforms a fixture provision row may name, beside this build's own.
+/// Read through [`provision_targets`], never directly.
+const PROVISION_TARGETS: &[&str] = &[
+    "x86_64-unknown-linux-musl",
+    "aarch64-apple-darwin",
+    "x86_64-pc-windows-msvc",
+];
+
+/// [`PROVISION_TARGETS`] less this build's own target: [`release_host`]
+/// publishes this build's archive under its real digest, so a provision
+/// platform equal to it would list that asset twice in `SHA256SUMS` under two
+/// digests. The fixture, the config and the assertions all read this one list.
+fn provision_targets() -> Vec<&'static str> {
+    let running = batten::engine::running_target();
+    PROVISION_TARGETS
+        .iter()
+        .copied()
+        .filter(|target| *target != running)
+        .collect()
+}
 
 /// The digest the fixture release publishes for `target`'s archive.
 fn platform_digest(target: &str) -> String {
@@ -218,7 +234,7 @@ fn release_host(
     // provision row names an archive per platform, and `engine update` pins each
     // one's digest from this manifest.
     let mut sums = format!("{}  {asset}\n", batten::provision::digest(&bytes));
-    for target in PROVISION_TARGETS {
+    for target in provision_targets() {
         use std::fmt::Write as _;
         writeln!(
             sums,
@@ -609,14 +625,14 @@ fn an_update_refuses_a_source_pin() {
 }
 
 /// A worktree pinned at v8.8.8 with every other batten declaration on v8.8.8
-/// too: a provision row across [`PROVISION_TARGETS`] and the floor, plus
+/// too: a provision row across [`provision_targets`] and the floor, plus
 /// `extra` appended.
 fn pin_every_copy(home: &Path, floor: &str, extra: &str) {
     use std::fmt::Write as _;
     let mut config = format!(
         "version = 1\nmin_batten_version = \"{floor}\"\nengine = {{ release = \"v8.8.8\" }}\n\n[[provision]]\nname = \"batten\"\nversion = \"8.8.8\"\nbinary = \"batten\"\n"
     );
-    for target in PROVISION_TARGETS {
+    for target in provision_targets() {
         writeln!(
             config,
             "\n[provision.platforms.{target}]\n# the platform's archive\nurl = \"https://example.invalid/releases/download/v8.8.8/{}\"\nsha256 = \"{}\"",
@@ -684,7 +700,7 @@ fn an_update_brings_every_batten_declaration_to_the_release() {
         "{config}"
     );
     assert!(config.contains("version = \"9.9.9\"\nbinary"), "{config}");
-    for target in PROVISION_TARGETS {
+    for target in provision_targets() {
         assert!(
             config.contains(&format!(
                 "url = \"https://example.invalid/releases/download/v9.9.9/{}\"",
