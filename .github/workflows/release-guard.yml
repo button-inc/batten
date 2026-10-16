@@ -25,9 +25,10 @@ name: release-guard
 # they ship in a release, so `mise run batten --` builds them from the trunk's
 # own source rather than installing the pinned release.
 
+# NO `push` TRIGGER (CLOUD-2319). Both jobs ask about the world — the release
+# the pin names, the repository's settings — not about a commit, and AGENTS.md
+# forbids a verdict job on push to the trunk. The hourly run answers both.
 on:
-  push:
-    branches: [main]
   schedule:
     - cron: "17 * * * *"
   workflow_dispatch:
@@ -69,11 +70,13 @@ jobs:
           BATTEN_GITHUB_TOKEN: ${{ github.token }}
         run: mise run batten -- ci step --arg-env GITHUB_SHA -- mise run batten -- release path --post
       # Administration: read is what `bypass_actors` and `immutable-releases`
-      # need, which the job token never carries.
-      - name: Is every server-side item in place, and does the probe get refused?
+      # need, which the job token never carries. No `--probe`: it proves a
+      # `release-path` ruleset, and none is owed — `final` carries the release
+      # path (CLOUD-2319).
+      - name: Is every server-side item in place?
         env:
           BATTEN_GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
-        run: mise run batten -- release settings --probe
+        run: mise run batten -- release settings
 
   pinned:
     name: pinned

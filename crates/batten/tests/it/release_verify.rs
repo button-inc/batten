@@ -1003,15 +1003,15 @@ fn holding() -> Facts {
 #[test]
 fn settings_name_every_owed_item() {
     assert!(release_guard::owed(&holding()).is_empty());
-    let mut drifted = holding();
-    drifted.probe_requires = Some(Required {
-        context: String::from("release-path"),
-        integration_id: None,
-    });
-    assert_eq!(
-        release_guard::owed(&drifted).len(),
-        1,
-        "a probe entry that differs from the trunk's measures another rule"
+    // CLOUD-2319: `final` carries the release path, so neither the trunk nor a
+    // probe ruleset owes a `release-path` entry of its own.
+    let mut unruled = holding();
+    unruled.trunk_requires = None;
+    unruled.probe_requires = None;
+    assert!(
+        release_guard::owed(&unruled).is_empty(),
+        "no release-path ruleset is owed: {:?}",
+        release_guard::owed(&unruled)
     );
     let mut bypassed = holding();
     bypassed.bypassed = vec![String::from("protect-main")];
@@ -1021,7 +1021,11 @@ fn settings_name_every_owed_item() {
             .any(|item| item.contains("protect-main"))
     );
     let empty = Facts::default();
-    assert_eq!(release_guard::owed(&empty).len(), 5);
+    assert_eq!(
+        release_guard::owed(&empty).len(),
+        3,
+        "non-fast-forward, the v* tag ruleset and immutable releases"
+    );
 }
 
 #[test]
