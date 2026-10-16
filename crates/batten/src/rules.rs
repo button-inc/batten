@@ -12309,7 +12309,15 @@ pub(crate) fn spawn_resolving<T>(
     // THE IMAGE THAT ASKS, for rung -1 (CLOUD-2386). `ok()` rather than a
     // refusal: an unreadable `/proc` is a fact about this process, not about the
     // row, and the ladder then decides exactly as it did before the rung existed.
-    let running = std::env::current_exe().ok();
+    //
+    // ASKED ONLY WHERE THE RUNG CAN FIRE, for the reason the `unread` bool above
+    // is a bool: the overwhelming majority of declared programs are `hk`, a
+    // judge stub, a sweep row — never `batten` — and a readlink of
+    // `/proc/self/exe` plus its allocation on every one of them buys a branch
+    // that rarely runs.
+    let running = (program == crate::surface::BINARY)
+        .then(std::env::current_exe)
+        .and_then(Result::ok);
     let mut spawn = spawn;
     let first = spawn_resolving_on_image(
         path.as_deref(),
@@ -12376,14 +12384,11 @@ pub(crate) fn spawn_resolving<T>(
 /// when the two rungs were independent `if`s. Testing it here means the Windows
 /// ladder is falsifiable on a Linux host rather than only on a runner.
 ///
-/// NO RUNNING IMAGE, AND THAT IS WHAT KEEPS THIS THE SEAM IT ALREADY WAS
-/// (CLOUD-2386). Rung -1 needs one fact more than the rest of the ladder, and
-/// threading it through here would have rewritten every case written against
-/// this arity for a rung none of them exercises — which `test-expectation-changed`
-/// reads as six changed expectations, because a base body spliced into a tree
-/// whose signature moved will not build. [`spawn_resolving_on_image`] is the
-/// whole ladder; this is that ladder with no image, which is also what a caller
-/// holding no readable `/proc` has.
+/// NO RUNNING IMAGE (CLOUD-2386). [`spawn_resolving_on_image`] is the whole
+/// ladder; this is that ladder with no image, which is what a caller holding no
+/// readable `/proc` has — and what the CLOUD-1371 re-resolve retry wants, since
+/// rung -1 has already had its turn by then. Keeping this arity also keeps every
+/// case written against it running unmodified.
 fn spawn_resolving_on<T>(
     path: Option<&std::ffi::OsStr>,
     root: Option<&Path>,
@@ -12393,6 +12398,16 @@ fn spawn_resolving_on<T>(
     spawn: impl FnMut(&str, &[&str]) -> std::io::Result<T>,
 ) -> std::io::Result<T> {
     spawn_resolving_on_image(path, root, None, program, extensions, pinned, spawn)
+}
+
+/// Whether a declared program names this engine, and so resolves to the running
+/// image rather than to `PATH` or the pin (CLOUD-2386).
+///
+/// One definition, because `doctor` mirrors this rung in two probes and a grep
+/// for the predicate has to find them: a widening here that the probes missed is
+/// exactly the disagreement `handler_program_resolves` exists to refuse.
+pub(crate) fn is_own_image(program: &str) -> bool {
+    program == crate::surface::BINARY
 }
 
 /// [`spawn_resolving_on`], plus the image that asked — the full ladder, rung -1
@@ -12431,19 +12446,19 @@ fn spawn_resolving_on_image<T>(
     // `batten` the pin provides and `PATH` cannot see would otherwise be spawned
     // through the mediator — the pinned release, not this image.
     //
-    // AN IMAGE THAT CANNOT BE READ OR CANNOT BE SPAWNED FALLS THROUGH rather than
-    // refusing. The declared name is still a program, and `current_exe` failing
-    // is a fact about `/proc`, not about the row. The same for a spawn error:
-    // after `engine update` replaces the file, Linux reads `/proc/self/exe` as
-    // `… (deleted)` and the spawn fails `NotFound`. Either way the ladder below
-    // decides and the image is not retried, so CLOUD-1371's re-resolve branch
-    // sees only the ladder's own result.
+    // AN IMAGE THAT CANNOT BE SPAWNED FALLS THROUGH, AND IS NOT RETRIED. After
+    // `engine update` replaces the file, Linux resolves `/proc/self/exe` to a
+    // path marked `… (deleted)` and the spawn fails `NotFound` — and the ladder
+    // then reaches the release the operator just installed, which is the right
+    // answer rather than a consolation. CLOUD-1371's re-resolve branch therefore
+    // sees only the ladder's own result. (The unreadable case is decided at the
+    // `.ok()` in `spawn_resolving`, where the image is read.)
     //
     // UNDER `cargo test`, `current_exe` IS THE TEST BINARY, so a library unit
     // test sending a bare `batten` through the real resolver would spawn libtest.
     // No such test exists; the integration tests spawn `CARGO_BIN_EXE_batten`,
     // whose `current_exe` is batten.
-    if program == crate::surface::BINARY
+    if is_own_image(program)
         && let Some(image) = running.and_then(Path::to_str)
         && let Ok(ok) = spawn(image, &[])
     {
@@ -18492,17 +18507,17 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
     /// A `PATH` directory holding a `batten` stub, and the path of an image that
     /// is deliberately NEVER created: the ladder is asked what it SPAWNS, and the
     /// spawn is [`ladder_walk`]'s closure, which reads no file.
-    fn rung_minus_one_fixture() -> (std::path::PathBuf, std::path::PathBuf) {
-        let dir =
-            std::env::temp_dir().join(format!("batten-rung-minus-one-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("the stub directory is created");
-        let stub = dir.join(crate::surface::BINARY);
-        std::fs::write(&stub, "#!/bin/sh\nexit 0\n").expect("the stub is written");
+    fn rung_minus_one_fixture() -> (PathBuf, PathBuf) {
+        let dir = temp_dir("rung-minus-one");
+        write(&dir, crate::surface::BINARY, "#!/bin/sh\nexit 0\n");
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755))
-                .expect("the stub is executable");
+            fs::set_permissions(
+                dir.join(crate::surface::BINARY),
+                fs::Permissions::from_mode(0o755),
+            )
+            .expect("the stub is executable");
         }
         let image = dir.join("image").join(crate::surface::BINARY);
         (dir, image)
@@ -18513,13 +18528,21 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
     /// `runnable` is the ONE program the fake loader admits; everything else
     /// reports `NotFound`, so the log is the whole route rather than just its
     /// head — which is what lets a case assert ORDER and not only outcome.
+    ///
+    /// The pin provides `batten` AND `hk`, so one fact serves both the arm that
+    /// asks whether the image beats the pin and the arm that asks whether any
+    /// other program still reaches it.
     fn ladder_walk(
         path: &str,
         running: Option<&Path>,
         program: &str,
-        pinned: &crate::pinned::PinnedFacts,
         runnable: Option<&str>,
     ) -> (bool, Vec<String>) {
+        let pinned = crate::facts::Look::Is(
+            [crate::surface::BINARY.to_owned(), "hk".to_owned()]
+                .into_iter()
+                .collect::<std::collections::BTreeSet<_>>(),
+        );
         let log = std::cell::RefCell::new(Vec::new());
         let out = spawn_resolving_on_image(
             Some(std::ffi::OsStr::new(path)),
@@ -18527,7 +18550,7 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
             running,
             program,
             &[".EXE".to_owned()],
-            pinned,
+            &pinned,
             |program: &str, _extra: &[&str]| {
                 log.borrow_mut().push(program.to_owned());
                 if runnable == Some(program) {
@@ -18543,13 +18566,7 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
     /// A declared `batten` runs the image that asked — before `PATH`, before the
     /// pin.
     ///
-    /// **`run = ["batten", …]` is the engine asking itself a question**
-    /// (CLOUD-1326, CLOUD-2386), and a `PATH` or pin answer is whatever RELEASE
-    /// is installed: a verb added in the same commit as the row calling it
-    /// cannot run until the next release, and a verb whose answer changed keeps
-    /// reporting the old one. `handler.rs` mapped the name to `current_exe` at
-    /// its one spawn site; every other declared argv — the sweep rows, the lease
-    /// notes, a declared repair — reached this resolver and got the release.
+    /// Why the rung exists: see [`spawn_resolving_on_image`]'s rung -1.
     ///
     /// Five arms, because each is a way the rung can be written wrong: deleting
     /// it, matching on any program, ordering it after the pin, dropping the
@@ -18559,15 +18576,7 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
     fn a_declared_batten_resolves_to_the_running_image_before_the_pin() {
         let (dir, image) = rung_minus_one_fixture();
         let image_name = image.display().to_string();
-        let pinned = crate::facts::Look::Is(
-            [crate::surface::BINARY.to_owned(), "hk".to_owned()]
-                .into_iter()
-                .collect::<std::collections::BTreeSet<_>>(),
-        );
-        let attempts =
-            |path: &str, running: Option<&Path>, program: &str, runnable: Option<&str>| {
-                ladder_walk(path, running, program, &pinned, runnable)
-            };
+        let attempts = ladder_walk;
 
         let on_path = dir.to_str().expect("the temp path is UTF-8");
 
@@ -18628,8 +18637,7 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
         // 5. AN UNSPAWNABLE IMAGE FALLS THROUGH, and is not retried. After
         //    `engine update` replaces the file, `/proc/self/exe` reads
         //    `… (deleted)` and this is the live case, not a hypothetical.
-        let (ok, walked) = attempts("", Some(image.as_path()), crate::surface::BINARY, None);
-        assert!(!ok, "nothing here can run");
+        let (_, walked) = attempts("", Some(image.as_path()), crate::surface::BINARY, None);
         assert_eq!(
             walked.first().map(String::as_str),
             Some(image_name.as_str()),
