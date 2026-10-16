@@ -184,15 +184,17 @@ fn every_step_is_argv() {
     }
 }
 
-/// CLOUD-2311: the pkl package is fetched before anything runs the validator.
+/// CLOUD-2311: every task that resolves the hk package fetches it as a step.
 ///
-/// Both callers of `record validate config-validator` depend on the fetch: hk's
-/// `pkl` step, reached through `hooks`, and `record-verdicts`. Why the fetch is
-/// a task at all, and why it is a task `depends` rather than an hk step, is
-/// argued beside the declarations in `mise.toml`.
+/// Two of the three callers run `record validate config-validator` — hk's `pkl`
+/// step, reached through `hooks`, and `record-verdicts` — and for those the
+/// ordering is what keeps a cold-cache failure out of the record. The third,
+/// `fix-selection-check`, evaluates a module that imports `hk.pkl`; there the
+/// `depends` only names the fetch as its own step, which `mise.toml` says.
 ///
-/// Removing any of the three fails this. It carries `mutation: none`: it asserts
-/// committed config, which no source mutant reaches.
+/// Removing any of the four — the fetch step or any of the three callers —
+/// fails this. It carries `mutation: none`: it asserts committed config, which
+/// no source mutant reaches.
 #[test]
 fn the_pkl_validator_runs_only_after_its_package_is_fetched() {
     // Panics unless the task is declared: presence is half the claim. `step_at`
