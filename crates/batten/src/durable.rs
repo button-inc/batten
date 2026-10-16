@@ -13,7 +13,7 @@
 //! two appenders interleaving between the `write(2)` calls of one line. The host
 //! wrote that file, but this crate had the same shape in its own appenders.
 //!
-//! # The two operations
+//! # The operations
 //!
 //! * [`append`] — the complete record in ONE `write(2)` on an `O_APPEND` handle,
 //!   then `fsync`. On a local filesystem the kernel positions and writes a single
@@ -28,9 +28,8 @@
 //! Both are synced before returning: persist-before-emit, so a caller that reports
 //! a record as written has it on disk rather than in a page cache a reboot drops.
 //!
-//! `open_handle` is the third, smaller mutation: a file or directory opened for
-//! its lock or its times, which Windows takes only through a handle `std`'s plain
-//! open does not make.
+//! Beside them, the crate-private `open_handle` opens a file or directory for its
+//! lock or its times.
 //!
 //! # Enforced, not remembered
 //!
