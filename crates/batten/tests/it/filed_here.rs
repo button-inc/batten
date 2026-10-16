@@ -502,6 +502,41 @@ fn a_row_the_pr_closes_is_exempt() {
     );
 }
 
+/// ONLY THE NEWEST MEASURED BODY EXEMPTS (CLOUD-2356): the recorder appends a
+/// line per fetch, and a row an older body closed and the latest dropped is no
+/// longer landing, so the union's exemption was the fail-open direction.
+#[test]
+fn a_key_dropped_from_the_latest_body_exempts_nothing() {
+    let root = repo(
+        "closed-then-dropped",
+        "work",
+        &["src/a.rs"],
+        &[&format!(
+            "issue CLOUD-1 {AFTER} ready 1,src/a.rs - 1,src/a.rs"
+        )],
+        &["closes 1:CLOUD-1", "closes 1:CLOUD-9"],
+    );
+    assert!(
+        !verdicts(&root).is_empty(),
+        "the latest body no longer closes CLOUD-1, so its proximity is priced"
+    );
+}
+
+/// ANTI-VACUITY: the same two fetches in the other order keep the exemption.
+#[test]
+fn a_key_in_the_latest_body_still_exempts() {
+    let root = repo(
+        "dropped-then-closed",
+        "work",
+        &["src/a.rs"],
+        &[&format!(
+            "issue CLOUD-1 {AFTER} ready 1,src/a.rs - 1,src/a.rs"
+        )],
+        &["closes 1:CLOUD-9", "closes 1:CLOUD-1"],
+    );
+    assert!(verdicts(&root).is_empty(), "{:?}", verdicts(&root));
+}
+
 /// CLOUD-1126's discriminating pair, and the first arm is the reproduction.
 ///
 /// The `pr-closes` record is ABSENT here, exactly as it is on a host with no

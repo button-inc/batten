@@ -63,6 +63,7 @@
 #MUTANT blocked-recorder-still-priced|s@^\tnot closes_unreadable$@\ttrue@|a_blocked_closes_recorder_withholds_the_proximity_refusal
 #MUTANT left-open-arm-unpartitioned|s@^\tcites_only(id)$@\ttrue@|a_row_recorded_after_the_base_whose_sec1_names_the_diff_still_refuses
 #MUTANT left-open-judges-an-unread-body|s@^\tbody_read$@\ttrue@|an_unread_pr_body_leaves_the_set_unjudged
+#MUTANT older-body-still-exempts|s@^\traw := measured_closes\[count(measured_closes) - 1\]$@\tsome raw in measured_closes@|a_key_dropped_from_the_latest_body_exempts_nothing
 
 # METADATA
 # description: |
@@ -158,12 +159,24 @@ changed contains path if {
 # The record is `<count>:<key>,<key>` from the boundary's own capture of what the
 # forge returned. Absent — no PR yet, or a fetch that could not run — means no
 # exemption, exactly as the shell behaved with stdin closed.
+#
+# ONLY THE NEWEST MEASURED FETCH (CLOUD-2356, as CLOUD-2282 for
+# `obligations-bound`). The recorder appends one line per body fetch, so a union
+# kept exempting a row an older body closed and the latest dropped: the PR no
+# longer lands it, and the exemption is the fail-open direction.
 closes contains key if {
-	some raw in input.tree.records["pr-closes"]
+	raw := measured_closes[count(measured_closes) - 1]
 	columns := split(raw, " ")
-	columns[0] == "closes"
 	some key in split(substring(columns[1], indexof(columns[1], ":") + 1, -1), ",")
 }
+
+# Every `closes` line whose keys were read, in fetch order. A `closes -` is a
+# fetch whose key reader could not run, so it never overrides an earlier reading.
+measured_closes := [raw |
+	some raw in input.tree.records["pr-closes"]
+	startswith(raw, "closes ")
+	raw != "closes -"
+]
 
 # THE BODY WAS READ, so "this PR closes nothing" is a MEASUREMENT rather than an
 # absence — the third state the `pr-closes` recorder writes `zero-is-a-count` for.
@@ -179,10 +192,7 @@ closes contains key if {
 # `-` is the recorder saying it could not read the keys and leaves the set
 # unjudged; `0` is a measured nothing and judges it.
 body_read if {
-	some raw in input.tree.records["pr-closes"]
-	columns := split(raw, " ")
-	columns[0] == "closes"
-	columns[1] != "-"
+	count(measured_closes) > 0
 }
 
 # `filed-unrefined`: a row this branch created was never groomed to Ready.
@@ -419,6 +429,38 @@ test_a_row_this_pr_closes_is_the_work_landing if {
 	count(violation) == 0 with input as with_diff(
 		["issue CLOUD-1 2026-02-01T00:00:00Z ready 1,src/a.rs - 1,src/a.rs"],
 		["closes 1:CLOUD-1"],
+		["src/a.rs"],
+		"2026-01-01T00:00:00Z",
+	)
+}
+
+# ONLY THE NEWEST MEASURED FETCH EXEMPTS (CLOUD-2356): a row an older body
+# closed and the latest dropped is no longer landing, so it is priced again.
+test_a_key_dropped_from_the_latest_body_exempts_nothing if {
+	some v in violation with input as with_diff(
+		["issue CLOUD-1 2026-02-01T00:00:00Z ready 1,src/a.rs - 1,src/a.rs"],
+		["closes 1:CLOUD-1", "closes 1:CLOUD-9"],
+		["src/a.rs"],
+		"2026-01-01T00:00:00Z",
+	)
+	v.verdict == "issue file same"
+}
+
+# ANTI-VACUITY: the same fetches in the other order leave the row exempt.
+test_a_key_in_the_latest_body_still_exempts if {
+	count(violation) == 0 with input as with_diff(
+		["issue CLOUD-1 2026-02-01T00:00:00Z ready 1,src/a.rs - 1,src/a.rs"],
+		["closes 1:CLOUD-9", "closes 1:CLOUD-1"],
+		["src/a.rs"],
+		"2026-01-01T00:00:00Z",
+	)
+}
+
+# A NEWEST `closes -` IS COULD-NOT-LOOK and leaves the earlier reading standing.
+test_a_newest_unread_fetch_keeps_the_earlier_exemption if {
+	count(violation) == 0 with input as with_diff(
+		["issue CLOUD-1 2026-02-01T00:00:00Z ready 1,src/a.rs - 1,src/a.rs"],
+		["closes 1:CLOUD-1", "closes -"],
 		["src/a.rs"],
 		"2026-01-01T00:00:00Z",
 	)
