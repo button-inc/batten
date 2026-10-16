@@ -375,11 +375,16 @@ pub const FETCH_WIDTH: usize = 8;
 /// short bundle, where that spread does not arise and the wave's free ordering
 /// is worth more than it is here.
 ///
-/// **The fixture seam is not concurrency-safe on its call-order path.**
-/// `rest::from_fixture` read-modify-writes a `calls` counter to answer by call
-/// ORDER; its `routes` path answers by endpoint and is safe. No suite drives
-/// `claim race` through the fixture today, and one with several competitors
-/// must route by URL rather than by order.
+/// **The fixture seam is not concurrency-safe, and routing by URL is only half
+/// the remedy.** `rest::from_fixture` read-modify-writes a `calls` counter to
+/// answer by call ORDER, which concurrent callers tear outright. Its `routes`
+/// path is safe about WHICH answer each request gets — it matches on the URL —
+/// but it also appends every request to one shared `args` file and replaces one
+/// `<file>.request` per route, so what a suite READS BACK afterwards is in
+/// scheduler order, and a last writer wins where two requests route to one
+/// file. No suite drives `claim race` through the fixture today; one with
+/// several competitors must route by URL *and* assert over `args` as a set
+/// rather than a sequence.
 ///
 /// # What is decided where
 ///
@@ -446,10 +451,22 @@ pub fn with_logs(
     // would make the peak the listing's length. An empty `eligible` spawns
     // nothing and falls through both loops, so it needs no arm of its own.
     let next = std::sync::atomic::AtomicUsize::new(0);
-    // EACH ANSWER IS PUBLISHED AS IT ARRIVES, never batched per worker. A
-    // worker that panics then costs the one fetch it died in; returning a vector
-    // per worker cost every answer that worker had ALREADY collected, which is a
-    // far wider silence than the failed fetch it is meant to read like.
+    // EACH ANSWER IS PUBLISHED AS IT ARRIVES, never batched per worker, so a
+    // worker that panics keeps the answers it had already sent — returning a
+    // vector per worker lost every one of them.
+    //
+    // THAT NARROWS THE LOSS; IT DOES NOT BOUND IT AT ONE FETCH. A worker that
+    // unwinds is gone and takes no further index, so the pool runs one narrower
+    // and the real cost is its in-flight fetch PLUS whatever no surviving worker
+    // reaches. With every worker dead the remaining competitors keep empty logs
+    // and this verb says "no open pull request races this branch's claim" at
+    // exit 0 — a false green on a completion gate, where the sequential fill
+    // would have propagated the panic instead. It is tolerated anyway because
+    // the alternative is a panic through `verify`'s whole pre-flight, and
+    // because `fetch` is already error-free by contract here: the caller
+    // collapses a failed read to `""`, so only a defect inside the forge path
+    // can unwind at all, and that defect is its own bug rather than this one's
+    // to carry.
     //
     // A CHANNEL RATHER THAN A `Mutex<Vec<_>>`, which is how this crate already
     // spells "workers publish answers to the calling thread" — `land::wait`'s
@@ -478,14 +495,14 @@ pub fn with_logs(
                 })
             })
             .collect();
-        // JOINED, AND THE RESULT CONSUMED. A scope re-panics for a panicked
-        // thread nobody joined, and this runs inside `verify`, where that would
-        // cost the whole pre-flight — so a worker's panic is absorbed into the
-        // reading a competitor with no log already gets, which is the
-        // could-not-look direction this verb allows everywhere else. Never
-        // `unwrap`. The tolerance is live in the dev and test profiles, which
-        // unwind; `[profile.dist]` aborts, so there it is the abort that
-        // decides and this only has to not make things worse.
+        // JOINED, AND THE RESULT CONSUMED: a scope re-panics for a panicked
+        // thread nobody joined, and `join` is what takes the payload out of the
+        // packet, so this is the line that absorbs it rather than ceremony
+        // around one. Never `unwrap`. Live only where the profile unwinds —
+        // dev and test, which is what `mise run claim-race` builds;
+        // `[profile.dist]` aborts, so a shipped binary never reaches here and
+        // this only has to not make that case worse. The bound on what the
+        // absorption costs is stated above, with the false-green it admits.
         for handle in handles {
             drop(handle.join());
         }
