@@ -555,6 +555,84 @@ fn an_unconfigured_gate_refuses_rather_than_guessing_and_writes_no_record() {
     );
 }
 
+/// A gate program in the fixture with `body` as its script.
+fn script(repo: &Path, name: &str, body: &str) -> String {
+    let path = repo.join(name);
+    std::fs::write(&path, format!("#!/bin/sh\n{body}")).expect("write the gate");
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+            .expect("make the gate executable");
+    }
+    path.display().to_string()
+}
+
+/// `batten land verify` under a registered task, with the self-stall bound
+/// and a one-second beat (CLOUD-2369).
+fn land_verify_supervised(repo: &Path, gate: &str, task: &str, beats: &str) -> (i32, String) {
+    let registered = batten()
+        .args(["task", "register", "land", task, "verify"])
+        .current_dir(repo)
+        .output()
+        .expect("register the supervising task");
+    assert!(registered.status.success(), "{}", stderr(&registered));
+    let output = batten()
+        .args(["land", "verify"])
+        .env("LAND_VERIFY", gate)
+        .env("BATTEN_TASK_PID", task)
+        .env("LAND_SELF_STALL_BEATS", beats)
+        .env("LAND_LOCK_HEARTBEAT", "1")
+        .current_dir(repo)
+        .output()
+        .expect("run batten land verify");
+    (output.status.code().expect("exit code"), stdout(&output))
+}
+
+/// **A verify whose task never advances stops itself** (CLOUD-2369). The gate
+/// here never exits and starts no step, so its task's stamps stand still; after
+/// two still beats the gate is cancelled and the verify answers exit 3, never a
+/// verdict about the tree, with the stall on the lap record.
+#[test]
+fn a_verify_that_never_advances_stops_itself() {
+    let repo = repo("land-verify-stalls");
+    let marker = repo.join("gate.pid");
+    let gate = script(
+        &repo,
+        "wedged.sh",
+        &format!("echo $$ > {}\nexec sleep 600\n", marker.display()),
+    );
+    let (code, out) = land_verify_supervised(&repo, &gate, "424242", "2");
+    assert_eq!(code, 3, "a stall is could-not-finish, not a verdict: {out}");
+    assert!(out.contains("verify stalled"), "the stop says why: {out}");
+    assert!(
+        lap_record(&repo, &branch_of(&repo)).contains("verify stalled "),
+        "the stall reaches the lap record"
+    );
+    let gate_pid = std::fs::read_to_string(&marker).expect("the gate started");
+    if cfg!(target_os = "linux") {
+        assert!(
+            !Path::new(&format!("/proc/{}", gate_pid.trim())).exists(),
+            "the wedged gate was cancelled, not left running"
+        );
+    }
+}
+
+/// THE MIRROR: a gate that keeps advancing its task's phase every second runs to
+/// completion under the same bound, so the stall is a count of still beats and
+/// never a deadline.
+#[test]
+fn a_verify_that_keeps_advancing_is_never_stalled() {
+    let repo = repo("land-verify-advances");
+    let gate = script(
+        &repo,
+        "moving.sh",
+        "for step in 1 2 3 4 5; do \"$BATTEN_BIN\" task phase 424243 \"step$step\"; sleep 1; done\n",
+    );
+    let (code, out) = land_verify_supervised(&repo, &gate, "424243", "3");
+    assert_eq!(code, 0, "a gate that advances finishes: {out}");
+    assert!(!out.contains("verify stalled"), "{out}");
+}
+
 /// `batten land verify` with a receipt name declared, over a gate that REFUSES —
 /// so an exit `0` can only have come from the receipt.
 fn land_verify_receipted(repo: &Path, gate: &str) -> (i32, String, String) {

@@ -12507,7 +12507,13 @@ fn run_the_step(
             out,
             err,
         )?,
-        land::Step::Verify => run_land_verify(root, bet, branch, Some(reference), out, err)?,
+        // A STALLED GATE CARRIES ITS DEAD END (CLOUD-2369), the wait's reading
+        // reused: `progress_of` stops on it where a bare exit 3 would lap.
+        land::Step::Verify => {
+            let (code, stalled) =
+                run_land_verify_seen(root, bet, branch, Some(reference), out, err)?;
+            return Ok((code, stalled.then_some(land::TapVerdict::DeadEnd), None));
+        }
         land::Step::Lease => run_land_lease(root, branch, out, err)?,
         land::Step::Ready => run_land_ready(root, branch, bet, ledger, out, err)?,
         land::Step::Push => run_land_push(root, url, branch, out)?,
@@ -13757,6 +13763,56 @@ fn run_land_verify(
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
+    run_land_verify_seen(root, bet, branch, reference, out, err).map(|(code, _)| code)
+}
+
+/// The self-stall terms for this verify (CLOUD-2369), or `None` where the bound
+/// is switched off.
+///
+/// The task whose stamps are read is the one the gate's steps announce under:
+/// `$BATTEN_TASK_PID` where a supervising task already exported it, otherwise
+/// this process, which is the pid `land` registered. The beat is the lease's.
+fn verify_stall(root: &Path) -> Option<(land::Stall, String)> {
+    let beats = std::env::var("LAND_SELF_STALL_BEATS")
+        .ok()
+        .and_then(|raw| raw.trim().parse::<u32>().ok())
+        .unwrap_or(240);
+    if beats == 0 {
+        return None;
+    }
+    let pid = std::env::var("BATTEN_TASK_PID")
+        .ok()
+        .and_then(|raw| raw.trim().parse::<u32>().ok())
+        .unwrap_or_else(std::process::id);
+    let beat = lease::terms(root)
+        .ok()
+        .map(|terms| terms.beat)
+        .or_else(|| lease::env_secs("LAND_LOCK_HEARTBEAT"))
+        .and_then(|secs| u64::try_from(secs).ok())
+        .filter(|secs| *secs > 0)
+        .unwrap_or(30);
+    let git_dir = crate::git::git_dir(root).ok()?;
+    Some((
+        land::Stall {
+            git_dir,
+            pid,
+            beat: std::time::Duration::from_secs(beat),
+            beats,
+        },
+        pid.to_string(),
+    ))
+}
+
+/// [`run_land_verify`], and whether the gate was cancelled for stalling: the
+/// one fact the lap needs that the exit code cannot carry (CLOUD-2369).
+fn run_land_verify_seen(
+    root: &Path,
+    bet: &speculation::Bet,
+    branch: &str,
+    reference: Option<&str>,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<(ExitCode, bool)> {
     let declared = std::env::var("LAND_VERIFY").unwrap_or_default();
     let command: Vec<String> = declared.split_whitespace().map(str::to_owned).collect();
     if command.is_empty() {
@@ -13764,31 +13820,38 @@ fn run_land_verify(
             err,
             "::error:: land verify: $LAND_VERIFY names no command, and this engine does not know what verifying means in this repository"
         )?;
-        return Ok(ExitCode::Usage);
+        return Ok((ExitCode::Usage, false));
     }
     // A STEP THE VOLUME CANNOT HOLD NEVER STARTS (CLOUD-2197): below `[prune]
     // min_free_mb` the collector runs first, and a volume it cannot bring back
     // above the minimum refuses the gate as the environment's failure, before
     // the gate spends its minutes dying of a full disk.
     if !disk_admits(root, "land verify", err)? {
-        return Ok(ExitCode::Violation);
+        return Ok((ExitCode::Violation, false));
     }
     // A HEAD THE GATE ALREADY PROVED IS ANSWERED FROM ITS RECEIPT (CLOUD-1891),
     // with the same line a run would print, so the lap reads identically.
     let receipt = std::env::var("LAND_VERIFY_RECEIPT").unwrap_or_default();
     if let Some(land::Verified::Clean(head)) = land::verified_by_receipt(root, branch, &receipt)? {
         writeln!(out, "land: {head} passed the configured gate")?;
-        return Ok(ExitCode::Success);
+        return Ok((ExitCode::Success, false));
     }
     // THE PUBLICATION IS A FUNCTION OF THE BET, never a side effect kept in step
     // with it. `Bet::published` is `None` with no bet outstanding, so the variable
     // is simply absent from the gate's environment — the predecessor called a
     // `publish_speculation` at every point a bet was placed or cleared precisely
     // because the two could disagree.
-    let published: Vec<(String, String)> = bet
+    let mut published: Vec<(String, String)> = bet
         .published()
         .map(|base| vec![(speculation::PUBLISHED_AS.to_owned(), base.to_owned())])
         .unwrap_or_default();
+    // THE GATE'S STEPS ANNOUNCE UNDER THIS TASK (CLOUD-2369): `step::announce`
+    // reads `$BATTEN_TASK_PID`, which nothing set, so a verify's steps never
+    // moved the registry the stall arm reads.
+    let stall = verify_stall(root);
+    if let Some((_, pid)) = &stall {
+        published.push((String::from("BATTEN_TASK_PID"), pid.clone()));
+    }
     let environment = verify_environment(root);
     // RACED AGAINST THE BASE, which is CLOUD-423's other half (CLOUD-1586).
     // `land::stale` runs as a PRECHECK on the step after this one and saves the
@@ -13804,7 +13867,15 @@ fn run_land_verify(
     let raced = reference
         .and_then(|reference| repo_slug(root).map(|slug| trunk_watch(reference, "", &slug, 1)));
     let trunk = raced.as_ref().zip(reference);
-    let verified = land::verify_raced(root, branch, &command, &published, &environment, trunk)?;
+    let verified = land::verify_raced(
+        root,
+        branch,
+        &command,
+        &published,
+        &environment,
+        trunk,
+        stall.as_ref().map(|(stall, _)| stall),
+    )?;
     // THE GATE'S LOG AS A POINTER (CLOUD-2223): its bytes are stored, never
     // streamed, and this is the one line that names where.
     let log = land::verify_log(root, branch, verified.sha());
@@ -13818,7 +13889,16 @@ fn run_land_verify(
     match verified {
         land::Verified::Clean(head) => {
             writeln!(out, "land: {head} passed the configured gate")?;
-            Ok(ExitCode::Success)
+            Ok((ExitCode::Success, false))
+        }
+        // NOT A VERDICT ABOUT THE TREE (CLOUD-2369): nothing advanced, the gate
+        // was cancelled, and the landing stops at exit 3 to be run again.
+        land::Verified::Stalled { beats, .. } => {
+            writeln!(
+                out,
+                "land: verify stalled — no step advanced in {beats} beats; run this again"
+            )?;
+            Ok((ExitCode::Internal, true))
         }
         // A REFUSAL IS A VERDICT ABOUT THE REPOSITORY, so `2`. The gate's own
         // output reached the caller's terminal — `land::verify` tees for exactly
@@ -13846,7 +13926,7 @@ fn run_land_verify(
                 "land: main moved under {}, so this lap's gate raced it; replaying onto the new trunk",
                 short(&sha)
             )?;
-            Ok(ExitCode::Internal)
+            Ok((ExitCode::Internal, false))
         }
         land::Verified::Refused { sha, cause } => {
             // ONE CLASSED LINE ON STDERR (CLOUD-2078): the head is a subject
@@ -13859,7 +13939,7 @@ fn run_land_verify(
                     refused.render_finding(refusal::Arm::Full)
                 ),
             )?;
-            Ok(ExitCode::Violation)
+            Ok((ExitCode::Violation, false))
         }
     }
 }

@@ -1616,6 +1616,15 @@ pub enum Verified {
         /// What KIND of refusal it was, which decides the advice.
         cause: Refusal,
     },
+    /// The gate made no registry progress for `beats` beats and was cancelled
+    /// (CLOUD-2369). Not a verdict about the tree: the landing stops and asks
+    /// to be run again.
+    Stalled {
+        /// The head the gate was run over.
+        sha: String,
+        /// How many beats passed with nothing advancing.
+        beats: u32,
+    },
 }
 
 /// What kind of refusal a gate returned.
@@ -1684,7 +1693,7 @@ impl Verified {
     #[must_use]
     pub fn sha(&self) -> &str {
         match self {
-            Self::Clean(sha) | Self::Refused { sha, .. } => sha,
+            Self::Clean(sha) | Self::Refused { sha, .. } | Self::Stalled { sha, .. } => sha,
         }
     }
 
@@ -1708,6 +1717,7 @@ impl Verified {
         match self {
             Self::Clean(sha) => format!("verify clean {sha} -"),
             Self::Refused { sha, .. } => format!("verify refused {sha} -"),
+            Self::Stalled { sha, .. } => format!("verify stalled {sha} -"),
         }
     }
 }
@@ -1988,6 +1998,7 @@ pub fn verify_raced(
     published: &[(String, String)],
     environment: &[crate::outputs::OutputPattern],
     trunk: Option<(&crate::main_watch::Config, &str)>,
+    stall: Option<&Stall>,
 ) -> Result<Verified> {
     let head = crate::git::head_commit(root).context("land: read this clone's HEAD")?;
     let watched = trunk.map(|(trunk, reference)| {
@@ -2001,7 +2012,7 @@ pub fn verify_raced(
     // THE DISK IS NOT THIS RACE'S ARM ANY MORE (CLOUD-2197): one watcher spans
     // the whole landing (`disk_watch::around`), and a volume that cannot hold
     // the gate is refused before it starts by the step's own pre-check.
-    if watched.is_none() {
+    if watched.is_none() && stall.is_none() {
         // No trunk to read, so a gate's "main moved" cannot be confirmed — and
         // an unconfirmed `2` is a refusal of the tree (see [`confirmed`]).
         return verify(root, branch, command, published, environment)
@@ -2035,6 +2046,14 @@ pub fn verify_raced(
             cancelled,
             stop,
         };
+        if let Some(stall) = stall {
+            let stalls = Arms {
+                raced: arms.raced.clone(),
+                cancelled: arms.cancelled.clone(),
+                stop,
+            };
+            drop(scope.spawn(move || stall_arm(root, stall, &stalls)));
+        }
         drop(scope.spawn(move || watch_arm(root, watched.as_ref(), started, &arms)));
 
         drop(tx);
@@ -2103,6 +2122,25 @@ fn settle_race(settle: &Settle<'_>, raced: Option<Raced>) -> Result<Verified> {
             )?;
             Ok(verified)
         }
+        // THE TASK STOPPED ADVANCING (CLOUD-2369). Recorded like the move, with
+        // whether the cancel reclaimed the gate, and never a verdict about the
+        // tree: the caller stops the landing and asks to be run again.
+        Some(Raced::Stalled(beats)) => {
+            let verified = Verified::Stalled {
+                sha: settle.head.clone(),
+                beats,
+            };
+            let reclaimed = settle.reclaimed.try_recv().unwrap_or(false);
+            append(
+                settle.root,
+                settle.branch,
+                &[
+                    verified.line(),
+                    format!("{LAP_RECORD} gate-stalled {beats} {reclaimed}"),
+                ],
+            )?;
+            Ok(verified)
+        }
         // BOTH ARMS CLOSED WITHOUT ANSWERING is could-not-look about the RACE,
         // never a clean tree: the gate is the arm that cannot abstain, so this is
         // reachable only if its thread died without sending.
@@ -2163,11 +2201,45 @@ fn confirmed(
     }
 }
 
+/// Whether the last `beats` intervals of a task's progress stamps all stood
+/// still (CLOUD-2369): the last `beats + 1` observations are equal.
+///
+/// A COUNT, NEVER A DEADLINE. Any advance breaks the run, so a verify that keeps
+/// starting steps never trips it however long it runs; too few observations is
+/// no evidence, and `0` beats is a bound that never fires.
+//MUTANT self-stall-never-wins|s@^    beats > 0 \&\& advances.len() >= needed \&\& recent.all(\x7cseen\x7c seen == last)$@    false@|a_frozen_advance_stalls_and_a_moving_one_does_not
+#[must_use]
+pub fn stalled(advances: &[i64], beats: u32) -> bool {
+    let needed = usize::try_from(beats)
+        .unwrap_or(usize::MAX)
+        .saturating_add(1);
+    let mut recent = advances.iter().rev().take(needed);
+    let Some(last) = recent.next() else {
+        return false;
+    };
+    beats > 0 && advances.len() >= needed && recent.all(|seen| seen == last)
+}
+
+/// The self-stall arm's terms (CLOUD-2369): whose registry stamps to read, how
+/// often, and how many still beats end the gate.
+#[derive(Debug, Clone)]
+pub struct Stall {
+    /// The clone's git directory, where the registry lives.
+    pub git_dir: std::path::PathBuf,
+    /// The registered task whose progress the gate's steps announce under.
+    pub pid: u32,
+    /// The pause between readings: the lease's beat.
+    pub beat: std::time::Duration,
+    /// How many beats with no advance stall the gate.
+    pub beats: u32,
+}
+
 /// Which arm of a raced gate answered. The gate's `Result` travels whole so a
 /// boundary failure stays a boundary failure rather than becoming a refusal.
 enum Raced {
     Gate(Result<Verified>),
     Moved(String),
+    Stalled(u32),
 }
 
 /// Where the watcher arm reports, bundled so its signature stays readable.
@@ -2237,6 +2309,38 @@ fn watch_arm(
             return;
         }
         crate::pr_watch::pause_until(pause, arms.stop);
+    }
+}
+
+/// The self-stall arm of [`verify_raced`] (CLOUD-2369): the task's registry
+/// stamps, read once a beat, and the gate cancelled once [`stalled`] says they
+/// stood still for `beats` beats.
+///
+/// **A missing record is no evidence of a stall** ([`crate::lease::progress_of`]'s
+/// own reading), so it clears the run rather than extending it. The pause is
+/// the crate's one sanctioned delay, bounded by the gate through `stop`, so this
+/// arm never outlives the gate it watches.
+fn stall_arm(root: &Path, stall: &Stall, arms: &Arms<'_>) {
+    let needed = usize::try_from(stall.beats)
+        .unwrap_or(usize::MAX)
+        .saturating_add(1);
+    let mut advances: Vec<i64> = Vec::new();
+    while !arms.stop.load(std::sync::atomic::Ordering::Relaxed) {
+        match crate::lease::progress_of(&stall.git_dir, stall.pid) {
+            Some(progress) => advances.push(progress.advance),
+            None => advances.clear(),
+        }
+        if advances.len() > needed {
+            advances.remove(0);
+        }
+        if stalled(&advances, stall.beats) {
+            arms.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+            let reclaimed = crate::exec::cancel_owned_group(root);
+            let _ = arms.cancelled.send(reclaimed);
+            drop(arms.raced.send(Raced::Stalled(stall.beats)));
+            return;
+        }
+        crate::pr_watch::pause_until(stall.beat.as_secs_f64(), arms.stop);
     }
 }
 
@@ -2514,6 +2618,8 @@ pub const fn poisons_this_clone(
     )
 }
 
+//MUTANT-SUITE crates/batten/src/land.rs
+//MUTANT stall-laps|s@^        Step::Wait \x7c Step::Verify,$@        Step::Wait,@|a_stalled_verify_stops_the_landing
 #[must_use]
 pub const fn progress_of(
     step: Step,
@@ -2545,7 +2651,10 @@ pub const fn progress_of(
     // lease's rolling TTL renews from a live process rather than from progress —
     // so the stop IS the release, and inventing a variant that did not unwind
     // would have fixed the poll and kept the fleet-scale half of the defect.
-    if let (Step::Wait, crate::exit::ExitCode::Internal, Some(TapVerdict::DeadEnd)) =
+    // A STALLED VERIFY IS THE SAME CELL FOR THE SAME REASON (CLOUD-2369): its
+    // gate was cancelled because nothing advanced, and a lap would re-run the
+    // same wedge. Exit 3 from `Verify` otherwise laps, as a reclaimed gate.
+    if let (Step::Wait | Step::Verify, crate::exit::ExitCode::Internal, Some(TapVerdict::DeadEnd)) =
         (step, code, seen)
     {
         return Progress::Stop;
@@ -3801,8 +3910,39 @@ mod mutate_tests {
 
 #[cfg(test)]
 mod lap_tests {
-    use super::{Basis, Progress, Step, progress, progress_of};
+    use super::{Basis, Progress, Step, TapVerdict, progress, progress_of, stalled};
     use crate::exit::ExitCode::{Internal, Success, Usage, Violation};
+
+    /// CLOUD-2369: `beats` intervals of equal stamps stall; one advance among
+    /// them, or too few observations, does not.
+    #[test]
+    fn a_frozen_advance_stalls_and_a_moving_one_does_not() {
+        let t = 1_700_000_000;
+        assert!(stalled(&[t, t, t], 2));
+        assert!(!stalled(&[t, t, t + 1], 2), "an advance resets the run");
+        assert!(!stalled(&[t, t], 2), "too few observations");
+        assert!(!stalled(&[t, t, t], 0), "a zero bound never fires");
+    }
+
+    /// CLOUD-2369: a verify whose gate was cancelled for stalling ends the
+    /// landing; the same exit 3 without the dead end is a reclaimed gate, which
+    /// laps.
+    #[test]
+    fn a_stalled_verify_stops_the_landing() {
+        assert_eq!(
+            progress_of(
+                Step::Verify,
+                Internal,
+                Some(TapVerdict::DeadEnd),
+                Basis::Own
+            ),
+            Progress::Stop
+        );
+        assert_eq!(
+            progress_of(Step::Verify, Internal, None, Basis::Own),
+            Progress::Lap
+        );
+    }
 
     /// **The discriminating claim: a refusal a rebase would clear laps, and one
     /// it would not stops.**
