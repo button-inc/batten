@@ -1512,17 +1512,14 @@ preset = "claude-code-cloud"
 severity = "deny"
 "#;
 
-/// The closure of `plan-mode-refuses-writes` in the shipped preset: the two
-/// modules it calls; `allowed-call-is-preapproved`, which calls
-/// `some_output_redirect` out of `read-only-is-preapproved` and so cannot stay
-/// vendored once that module leaves; and `write-is-preapproved`, which declares
-/// `call grant now` beside it, an id two bundles cannot both claim.
+/// The closure of `plan-mode-refuses-writes` in the shipped preset: itself and
+/// `unwatch-is-preapproved`, the one module it calls. It used to call
+/// `read_only` too, which dragged in `read-only-is-preapproved` and, through
+/// it, two more; since CLOUD-2398 what plan mode admits is the engine's
+/// projected `input.call.admission`, so no sibling's list rides the eject.
 const PLAN_CLOSURE: &[&str] = &[
-    "policy/claude-code-cloud/allowed-call-is-preapproved.rego",
     "policy/claude-code-cloud/plan-mode-refuses-writes.rego",
-    "policy/claude-code-cloud/read-only-is-preapproved.rego",
     "policy/claude-code-cloud/unwatch-is-preapproved.rego",
-    "policy/claude-code-cloud/write-is-preapproved.rego",
 ];
 
 /// Eject into a fresh repository holding only [`CLOUD_CONFIG`].
@@ -1546,10 +1543,9 @@ fn ejected(name: &str) -> PathBuf {
     dir
 }
 
-/// `plan-mode-refuses-writes` calls `read_only` and `unwatch_method`, which two
-/// siblings define, so ejecting it alone would not compile. The eject carries
-/// both, excepts all three, and the copies decide a plan-mode write exactly as
-/// the vendored modules did.
+/// `plan-mode-refuses-writes` calls `unwatch_method`, which a sibling defines,
+/// so ejecting it alone would not compile. The eject carries it, excepts both,
+/// and the copies decide a plan-mode write exactly as the vendored modules did.
 #[test]
 fn ejecting_plan_mode_refuses_writes_carries_its_call_closure() {
     let dir = ejected("eject-closure");
@@ -1578,13 +1574,7 @@ fn ejecting_plan_mode_refuses_writes_carries_its_call_closure() {
         .expect("kept");
     assert_eq!(
         cloud.except,
-        [
-            "allowed-call-is-preapproved",
-            "plan-mode-refuses-writes",
-            "read-only-is-preapproved",
-            "unwatch-is-preapproved",
-            "write-is-preapproved"
-        ]
+        ["plan-mode-refuses-writes", "unwatch-is-preapproved"]
     );
     let bundles = policy::load(
         &dir,

@@ -53,6 +53,34 @@ test_an_unproven_call_is_not if {
 	count(preapprove) == 0 with input as {"call": {"event": "pre-tool", "tool": "Edit", "admission": null}}
 }
 
+# The shell shape the engine projects: segments and programs beside the
+# `admission` it computed from them. The module grants on `admission` alone, so
+# a writer the engine refused to call a read stays ungranted whatever its argv.
+test_a_read_pipeline_the_engine_admitted_is_preapproved if {
+	"call read now" in preapprove with input as {"call": {
+		"event": "pre-tool", "tool": "Bash", "admission": "read",
+		"command": "cd /x && git status | head",
+		"segments": [{"words": ["cd", "/x"]}, {"words": ["git", "status"]}, {"words": ["head"]}],
+		"programs": [
+			{"name": "cd", "arguments": ["/x"], "reads-only": false},
+			{"name": "git", "arguments": ["status"], "reads-only": false},
+			{"name": "head", "arguments": [], "reads-only": true},
+		],
+	}}
+}
+
+test_a_shell_writer_the_engine_did_not_admit_is_not if {
+	count(preapprove) == 0 with input as {"call": {
+		"event": "pre-tool", "tool": "Bash", "admission": null,
+		"command": "ls && rm x",
+		"segments": [{"words": ["ls"]}, {"words": ["rm", "x"]}],
+		"programs": [
+			{"name": "ls", "arguments": [], "reads-only": true},
+			{"name": "rm", "arguments": ["x"], "reads-only": false},
+		],
+	}}
+}
+
 test_a_call_with_no_admission_key_is_not if {
 	count(preapprove) == 0 with input as {"call": {"event": "pre-tool", "tool": "Read"}}
 }

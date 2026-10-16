@@ -641,6 +641,21 @@ fn a_background_row_is_named_and_never_run_by_session_start() {
 #[test]
 fn an_edit_waits_until_every_background_row_is_launched() {
     let bench = handoff_bench("session-handoff-gate");
+
+    // NOT ARMED YET: a session never told what to launch is not gated, so a
+    // fixture replaying one pre-tool envelope against a config with background
+    // rows is not refused for setup it never heard of.
+    let unarmed = bench.pre_tool(
+        "Edit",
+        &serde_json::json!({ "file_path": bench.repo.join("notes.md"), "old_string": "a", "new_string": "b" }),
+    );
+    assert!(
+        !unarmed.out.contains("setup launch missing"),
+        "a session whose start never named the rows is not held: {}",
+        unarmed.out
+    );
+
+    bench.session_start();
     let edit = serde_json::json!({
         "file_path": bench.repo.join("notes.md"),
         "old_string": "a",

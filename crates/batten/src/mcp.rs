@@ -188,9 +188,7 @@ impl Local {
     #[must_use]
     pub fn routes_path(&self, path: &str) -> bool {
         self.routes.iter().any(|glob| {
-            globset::Glob::new(glob)
-                .map(|compiled| compiled.compile_matcher().is_match(path))
-                .unwrap_or(false)
+            globset::Glob::new(glob).is_ok_and(|compiled| compiled.compile_matcher().is_match(path))
         })
     }
 

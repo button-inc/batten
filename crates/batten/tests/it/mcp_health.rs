@@ -23,7 +23,7 @@ use crate::common;
 
 use std::path::{Path, PathBuf};
 
-use common::{git_in, scratch, stdout, write};
+use common::{Fixture, stdout, write};
 
 /// A stub stdio server that answers `initialize` once and exits on end of input.
 const ANSWERS: &str =
@@ -35,27 +35,23 @@ const DIES: &str = "exit 1\n";
 /// A fixture repository declaring one local server, `stub`, whose launch line
 /// is `./stub-server` and whose memory tree is `memo/**`.
 fn fixture(name: &str, server: &str) -> PathBuf {
-    let repo = scratch(name).join("repo");
-    std::fs::create_dir_all(&repo).expect("the fixture repo");
-    write(
-        &repo,
-        "batten.toml",
-        "version = 1\n\
-         \n\
-         [[mcp.local]]\n\
-         server = \"stub\"\n\
-         install = [[\"steps/install\"]]\n\
-         routes = [\"memo/**\"]\n",
-    );
-    write(
-        &repo,
-        ".mcp.json",
-        r#"{"mcpServers":{"stub":{"command":"./stub-server","args":[]}}}"#,
-    );
-    write(&repo, "memo/a.md", "a memory\n");
-    write(&repo, "notes.md", "not routed\n");
+    let repo = Fixture::new(name)
+        .config(
+            "version = 1\n\
+             \n\
+             [[mcp.local]]\n\
+             server = \"stub\"\n\
+             install = [[\"steps/install\"]]\n\
+             routes = [\"memo/**\"]\n",
+        )
+        .file(
+            ".mcp.json",
+            r#"{"mcpServers":{"stub":{"command":"./stub-server","args":[]}}}"#,
+        )
+        .file("memo/a.md", "a memory\n")
+        .file("notes.md", "not routed\n")
+        .build();
     stub(&repo, server);
-    git_in(&repo, &["init", "-q", "-b", "main", "."]);
     repo
 }
 

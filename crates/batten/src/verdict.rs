@@ -3592,6 +3592,10 @@ mod tests {
     /// match would compile past a new class, and a list with no match beside it
     /// would go stale silently.
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one match arm per class, no wildcard, is the exhaustiveness this case exists to assert"
+    )]
     fn every_native_class_is_listed() {
         for native in Native::ALL {
             let named = match native {
