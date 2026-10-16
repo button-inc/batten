@@ -282,6 +282,12 @@ pub enum Precheck {
     /// where the bet failed to pay off — precisely where carrying the borrowed
     /// range is worthless AND harmful.
     ///
+    /// **AND THE SECOND REASON A HEAD IS NOT FIT TO PUBLISH** (CLOUD-2436): a
+    /// push that buys a run on a ready pull request owes the review receipts
+    /// its ready would — [`crate::land_push_owes`] says which pushes buy one.
+    /// One row, one slot, one question with two reasons; moving this variant
+    /// off the Push row drops both.
+    ///
     /// [`Settle::Lost`]: crate::speculation::Settle::Lost
     /// [`Settle::Pending`]: crate::speculation::Settle::Pending
     /// [`Settle::Landed`]: crate::speculation::Settle::Landed

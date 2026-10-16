@@ -14490,9 +14490,9 @@ fn spend_the_matrix(
     // THE READING THIS LAP ALREADY OWNS. A verdict that cannot be taken is
     // `None`, which `buys_a_matrix` answers `Nothing` to — the same posture the
     // tap takes one direction over, and for the same reason.
-    // **THE FORGE'S HEAD, NEVER THIS CLONE'S**: `Readiness::head` says why. On a
-    // ready pull request this reads the push's run as `Running` and buys
-    // `Nothing`, so the push's receipts are asked by its precheck (CLOUD-2436).
+    // **THE FORGE'S HEAD, NEVER THIS CLONE'S**: `Readiness::head` says why. A
+    // ready pull request's push that bought a run is asked its receipts by the
+    // Push row's precheck (CLOUD-2436), since this may then buy `Nothing`.
     let reading = verdict_for(&repo, &head);
     let spend = land::buys_a_matrix(Some(is_draft), reading.as_ref());
     // THE RECEIPTS `gh pr ready` OWES, asked of this ready too (CLOUD-2293), and
@@ -15314,19 +15314,35 @@ fn asks_before_the_step(
             bet.declined = true;
             Ok(Answered::Lap)
         }
-        // AND AN UNREVIEWED HEAD IS NOT PUBLISHABLE (CLOUD-2436). The same row's
-        // question, "is this head fit to publish", for the second reason it can
-        // be no. On a pull request already ready the push itself starts CI, and
-        // the Ready after it reads that run as in flight and asks nothing. On a
-        // draft this asks one step early what that Ready would ask (a draft is
-        // always readied, `land::buys_a_matrix`), over the same local head, so
-        // it refuses nothing the lap would not, and needs no forge read.
+        // AND AN UNREVIEWED HEAD IS NOT PUBLISHABLE TO A READY PULL REQUEST
+        // (CLOUD-2436). The same row's question, "is this head fit to publish",
+        // for the second reason it can be no: there the push itself starts CI,
+        // and the Ready after it reads that run as in flight and asks nothing.
+        // `land_push_owes` says which pushes buy a run.
+        //
+        // AN ERROR STOPS THROUGH THE UNWIND rather than out past it with `?`,
+        // because the lease is held by now and only the unwind hands it back.
         Some(pipeline::Precheck::BetLive) => {
-            if let Some(owed) = land_ready_owes(root, std::time::SystemTime::now())? {
-                report_owed(err, &owed)?;
-                return Ok(Answered::Stop(exit::ExitCode::Violation));
+            let local = git::head_commit(root).ok();
+            let forge = || {
+                let repo = repo_or_placeholder(root);
+                fast_forward::open_pull_request(&repo, branch)
+                    .and_then(|pr| land::draft_state(&repo, &pr))
+            };
+            match land_push_owes(root, std::time::SystemTime::now(), local.as_deref(), forge) {
+                Ok(None) => Ok(Answered::Go),
+                Ok(Some(owed)) => {
+                    report_owed(err, &owed)?;
+                    Ok(Answered::Stop(exit::ExitCode::Violation))
+                }
+                Err(error) => {
+                    writeln!(
+                        err,
+                        "::error:: land: the push's review receipts could not be asked: {error:#}"
+                    )?;
+                    Ok(Answered::Stop(exit::ExitCode::Internal))
+                }
             }
-            Ok(Answered::Go)
         }
         _ => Ok(Answered::Go),
     }
@@ -28389,6 +28405,44 @@ pub fn land_spent_refusal(laps: u32, ledger: &land::Ledger) -> crate::refusal::R
     )
 }
 
+/// The refusal a lap's PUSH draws, for the Push row's precheck to stop on
+/// (CLOUD-2436); `None` when nothing is owed.
+///
+/// **ONLY A PUSH THAT BUYS A RUN OWES ITS REVIEWS.** The lap pushes before it
+/// readies, and a push buys a run only on a pull request already ready whose
+/// forge head is not this one:
+///
+/// * A DRAFT owes nothing here. Its push buys no run, the Ready after it asks
+///   [`land_ready_owes`] itself, and withholding it would leave the work
+///   unpublished for a reclaim to take.
+/// * A ready pull request already AT this head owes nothing. The push publishes
+///   nothing new and buys nothing, so a receipt that aged out since the run was
+///   graded must not stop a landing over a head the forge has answered.
+/// * Anything else owes what `gh pr ready` would, and that includes a forge
+///   that could not say: an unreadable draft state asks, rather than letting an
+///   unreviewed push through to a pull request that may be ready.
+///
+/// `forge` is called only when something is owed, because it is a network read
+/// and the common lap owes nothing.
+///
+/// # Errors
+///
+/// As [`land_ready_owes`].
+pub fn land_push_owes(
+    root: &Path,
+    now: std::time::SystemTime,
+    local_head: Option<&str>,
+    forge: impl FnOnce() -> Option<land::Readiness>,
+) -> Result<Option<refusal::Refusal>> {
+    let Some(owed) = land_ready_owes(root, now)? else {
+        return Ok(None);
+    };
+    let buys_nothing = forge().is_some_and(|readiness| {
+        readiness.draft || local_head.is_some_and(|local| local == readiness.head)
+    });
+    Ok((!buys_nothing).then_some(owed))
+}
+
 /// Write the receipt refusal `land` stops on, in the one shape both its ready
 /// and its push report.
 fn report_owed(err: &mut dyn Write, owed: &refusal::Refusal) -> Result<()> {
@@ -28424,7 +28478,8 @@ fn report_owed(err: &mut dyn Write, owed: &refusal::Refusal) -> Result<()> {
 /// # Errors
 ///
 /// Returns the error a committed authority that will not resolve carries: a
-/// gate whose rows cannot be read must not read as owing nothing.
+/// gate whose rows cannot be read must not read as owing nothing. And an error
+/// if the envelope this builds will not decode, which is a bug (CLOUD-2437).
 pub fn land_ready_owes(
     root: &Path,
     now: std::time::SystemTime,

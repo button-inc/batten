@@ -549,6 +549,86 @@ reason = "dispatch the code-review skill"
     );
 }
 
+/// **ONLY A PUSH THAT BUYS A RUN OWES ITS REVIEWS** (CLOUD-2436).
+///
+/// Through `land_push_owes`, the question the Push row's precheck asks: a whole
+/// lap needs a forge this tier does not stand up, so the forge read is handed
+/// in. On `main` the lap's push asked nothing, so a new head on an
+/// already-ready pull request started CI with no review on file.
+#[test]
+fn the_laps_push_is_refused_by_a_missing_review_receipt() {
+    let dir = common::Fixture::new("land-lap-push-receipt")
+        .config(
+            r#"version = 1
+
+[[mint]]
+name = "code-review"
+tool = "Skill"
+selects_at = "skill"
+selects = "code-review"
+key = "delta"
+key_base = "refs/remotes/origin/main"
+mode = "replace"
+body = "{git:HEAD} {now}"
+
+[[rule]]
+id = "review ask missing"
+kind = "receipt"
+scope = "mediated_call"
+severity = "deny"
+pattern = "gh pr ready"
+checks = ["code-review"]
+key = "delta"
+key_base = "refs/remotes/origin/main"
+reason = "dispatch the code-review skill"
+"#,
+        )
+        .file("README.md", "base\n")
+        .git()
+        .base_commit()
+        .file("lib.rs", "fn a() {}\n")
+        .work_commit()
+        .build();
+    std::env::set_current_dir(&dir).expect("enter the fixture");
+    let now = std::time::UNIX_EPOCH;
+    let local = "local-head";
+    let read = |draft: bool, head: &str| {
+        let head = head.to_owned();
+        move || {
+            Some(batten::land::Readiness {
+                draft,
+                node: "PR_node".to_owned(),
+                head: head.clone(),
+            })
+        }
+    };
+    let owes = |forge: &dyn Fn() -> Option<batten::land::Readiness>| {
+        batten::land_push_owes(&dir, now, Some(local), forge).expect("the authority resolves")
+    };
+
+    let refusal = owes(&read(false, "an-older-head"))
+        .expect("a new head on a ready pull request owes its review");
+    assert_eq!(refusal.rule(), "review ask missing");
+    assert!(
+        owes(&|| None).is_some(),
+        "a forge that cannot say still asks"
+    );
+    assert!(
+        owes(&read(true, "an-older-head")).is_none(),
+        "a draft push buys no run"
+    );
+    assert!(
+        owes(&read(false, local)).is_none(),
+        "a ready pull request already at this head buys nothing"
+    );
+
+    common::dispatch_skill(&dir, "code-review");
+    assert!(
+        owes(&read(false, "an-older-head")).is_none(),
+        "a reviewed head owes the push nothing"
+    );
+}
+
 /// **A LAP NEVER RUNS FROM THE TRUNK.**
 ///
 /// Over the compiled binary, because this is the one property in the file whose
