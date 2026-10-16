@@ -7201,6 +7201,13 @@ fn run_claim_race(
     // risks a false REFUSAL on a key this branch does not claim. The competitor
     // arm's subset property, which is what lets it judge first, simply does not
     // hold on this side. Could-not-look, and nothing judged.
+    //
+    // Hoisted out of the guard below rather than asked inside it: the call is
+    // pure over four strings this scope already holds, so paying it on the
+    // read-succeeded path costs nothing a reader has to weigh.
+    let closing = race::Source::ClosingOnly;
+    let closes_nothing =
+        race::claimed_from(&me.head_ref, &me.title, "", &me.body, &grammar, closing).is_empty();
     // `Option` RATHER THAN A PARALLEL FLAG, for the vocabulary `with_logs`
     // already argues forty lines down: a read that failed is not a log that is
     // empty, and `Some("")` is an answer. Two values could disagree — nothing
@@ -7218,17 +7225,7 @@ fn run_claim_race(
         // Only a body that closes NOTHING falls through to branch and title,
         // and that is the inverting case the block above describes. It alone is
         // could-not-look.
-        Err(_)
-            if race::claimed_from(
-                &me.head_ref,
-                &me.title,
-                "",
-                &me.body,
-                &grammar,
-                race::Source::ClosingOnly,
-            )
-            .is_empty() =>
-        {
+        Err(_) if closes_nothing => {
             return clean(
                 out,
                 "claim race: this branch's own commit log could not be read and its body closes \
@@ -7248,13 +7245,8 @@ fn run_claim_race(
         // declines.
         Err(_) => None,
     };
-    let mine = race::claimed(
-        &me.head_ref,
-        &me.title,
-        log.as_deref().unwrap_or_default(),
-        &me.body,
-        &grammar,
-    );
+    let own = log.as_deref().unwrap_or_default();
+    let mine = race::claimed(&me.head_ref, &me.title, own, &me.body, &grammar);
     if mine.is_empty() {
         return clean(
             out,
