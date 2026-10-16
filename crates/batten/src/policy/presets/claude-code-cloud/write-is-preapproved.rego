@@ -73,9 +73,7 @@ preapprove contains "call grant now" if {
 	input.call["permission-mode"] != "plan"
 }
 
-memory_write_tool(tool) if tool in {
-	"mcp__serena__write_memory", "mcp__serena__edit_memory", "mcp__serena__rename_memory",
-}
+memory_write_tool(tool) if tool in {"mcp__serena__write_memory", "mcp__serena__edit_memory", "mcp__serena__rename_memory"}
 
 # What discards data or processes with no batten alternative, by program name.
 # git is excluded so its calls are judged by the git preset alone.
@@ -122,25 +120,17 @@ test_a_write_is_not_granted_in_plan if {
 
 test_a_memory_write_is_granted_in_default_and_auto if {
 	every mode in ["default", "auto", "acceptEdits"] {
-		"call grant now" in preapprove with input as {"call": {
-			"event": "pre-tool", "tool": "mcp__serena__edit_memory", "permission-mode": mode,
-		}}
+		"call grant now" in preapprove with input as {"call": {"event": "pre-tool", "tool": "mcp__serena__edit_memory", "permission-mode": mode}}
 	}
 }
 
 test_a_memory_write_is_not_granted_in_plan if {
-	count(preapprove) == 0 with input as {"call": {
-		"event": "pre-tool", "tool": "mcp__serena__write_memory", "permission-mode": "plan",
-	}}
+	count(preapprove) == 0 with input as {"call": {"event": "pre-tool", "tool": "mcp__serena__write_memory", "permission-mode": "plan"}}
 }
 
 test_a_memory_delete_and_a_connector_write_are_left_to_the_host if {
-	count(preapprove) == 0 with input as {"call": {
-		"event": "pre-tool", "tool": "mcp__serena__delete_memory", "permission-mode": "default",
-	}}
-	count(preapprove) == 0 with input as {"call": {
-		"event": "pre-tool", "tool": "mcp__Linear__save_comment", "permission-mode": "default",
-	}}
+	count(preapprove) == 0 with input as {"call": {"event": "pre-tool", "tool": "mcp__serena__delete_memory", "permission-mode": "default"}}
+	count(preapprove) == 0 with input as {"call": {"event": "pre-tool", "tool": "mcp__Linear__save_comment", "permission-mode": "default"}}
 }
 
 test_a_shell_write_is_granted_in_auto if {
