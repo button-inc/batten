@@ -775,9 +775,10 @@ mod tests {
     /// On unix the directories' times are SET in creation order too: made
     /// microseconds apart they would tie on a coarse clock, and a tie leaves
     /// ranking by directory to `read_dir`'s order, which could evict the same
-    /// partition as ranking by mark. Windows will not open a directory to set
-    /// its time, so there the case holds the bound and the mark order but cannot
-    /// tell the two rankings apart.
+    /// partition as ranking by mark. Off unix `std` opens no directory to set its
+    /// time, so there each directory keeps the time its mark's creation gave it:
+    /// in creation order on a fine clock, which still tells the two rankings
+    /// apart, and tied on a coarse one, which may not.
     #[test]
     fn a_new_partition_keeps_its_neighbours_up_to_the_bound() {
         let dir = scratch("partitions");
@@ -786,7 +787,7 @@ mod tests {
         // Made first to last; marked newest to oldest.
         for (made, name) in (1..).zip(&others) {
             let partition = root.join(name);
-            marked(&partition, KEPT_PARTITIONS as u64 + 1 - made);
+            marked(&partition, others.len() as u64 + 1 - made);
             if cfg!(unix) {
                 touch(&partition, stepped(made)).expect("age the directory");
             }
