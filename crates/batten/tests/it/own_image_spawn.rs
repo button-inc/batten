@@ -36,6 +36,7 @@
 
 use crate::common;
 
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use common::{Fixture, StateHome, batten, scratch};
@@ -56,7 +57,6 @@ fn decoy_dir(root: &Path) -> PathBuf {
     let decoy = dir.join("batten");
     std::fs::write(&decoy, format!("#!/bin/sh\nexit {DECOY_CODE}\n"))
         .expect("the decoy is written");
-    use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(&decoy, std::fs::Permissions::from_mode(0o755))
         .expect("the decoy is executable");
     dir
@@ -93,7 +93,7 @@ fn a_command_row_naming_batten_runs_the_image_and_not_the_one_on_path() {
     let path = format!("{}:/usr/bin:/bin", decoy.display());
     let output = batten()
         .state_home(&home)
-        .args(&["enforce"])
+        .args(["enforce"])
         .current_dir(&repo)
         .env("PATH", &path)
         .env_remove("BATTEN_FAIL_ON_WARNING")
