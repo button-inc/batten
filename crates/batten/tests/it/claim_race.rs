@@ -429,7 +429,7 @@ fn competitor_logs_are_fetched_concurrently_once_each_and_returned_in_listing_or
     let race::Filled {
         pulls: filled,
         complete,
-    } = race::with_logs(pulls.clone(), "1", &Fake, fetch);
+    } = race::with_logs(pulls.clone(), "1", &[], &Fake, fetch);
 
     assert!(
         complete,
@@ -509,7 +509,7 @@ fn a_fill_that_lost_a_worker_is_not_complete_and_keeps_the_answers_it_got() {
     let race::Filled {
         pulls: filled,
         complete,
-    } = race::with_logs(pulls, "1", &Fake, |number| {
+    } = race::with_logs(pulls, "1", &[], &Fake, |number| {
         assert!(number != "2", "a deliberate panic inside one worker");
         Some(format!("Refs: CLOUD-{number}"))
     });
@@ -553,7 +553,7 @@ fn a_read_that_failed_is_not_a_competitor_that_claims_nothing() {
         pull("2", "user/branch-two", "sha2"),
     ];
 
-    let refused = race::with_logs(pulls.clone(), "1", &Fake, |_| None);
+    let refused = race::with_logs(pulls.clone(), "1", &[], &Fake, |_| None);
     assert!(
         !refused.complete,
         "a read that failed leaves the fill a could-not-look, never a verdict"
@@ -563,11 +563,73 @@ fn a_read_that_failed_is_not_a_competitor_that_claims_nothing() {
         "and nothing is invented for the competitor that was not read"
     );
 
-    let answered = race::with_logs(pulls, "1", &Fake, |_| Some(String::new()));
+    let answered = race::with_logs(pulls, "1", &[], &Fake, |_| Some(String::new()));
     assert!(
         answered.complete,
         "an empty log is an ANSWER — a competitor whose commits name no key reads \
          exactly that way, and conflating the two is the defect this fixes"
+    );
+}
+
+/// A competitor whose cheap key COLLIDES with this branch's is fetched even
+/// though the cheap sources answered, and one whose cheap key collides with
+/// nothing is still skipped (CLOUD-2382).
+///
+/// # Why the widening is free
+///
+/// The skip reads a competitor under its branch where its COMMITS close another
+/// key, which misjudges in both directions — and the refusing direction is a
+/// false `Violation` inside `verify` over a collision that does not exist. Only
+/// a competitor whose cheap key is one THIS BRANCH claims can refuse anything,
+/// so those are the only ones worth the round trip, and a run that answers
+/// clean has none of them. That is what the second assertion pins: `"3"` names
+/// a key nobody claims and must stay unfetched, or the widening has quietly
+/// become "fetch every competitor" and the bound this row exists for is gone.
+#[test]
+fn a_competitor_whose_cheap_key_collides_is_fetched_and_one_that_collides_with_nothing_is_not() {
+    let pulls = vec![
+        pull("1", "user/branch-one", "sha1"),
+        Pull {
+            title: "feat: somebody else on PROJ-7".to_owned(),
+            ..pull("2", "user/branch-two", "sha2")
+        },
+        Pull {
+            title: "fix: and someone on PROJ-8".to_owned(),
+            ..pull("3", "user/branch-three", "sha3")
+        },
+    ];
+    let asked = std::sync::Mutex::new(Vec::new());
+
+    let filled = race::with_logs(pulls, "1", &["PROJ-7".to_owned()], &Fake, |number| {
+        asked
+            .lock()
+            .expect("the fixture lock")
+            .push(number.to_owned());
+        Some(format!("Closes PROJ-{number}0"))
+    });
+
+    assert_eq!(
+        *asked.lock().expect("the fixture lock"),
+        vec!["2".to_owned()],
+        "only the competitor whose cheap key this branch also claims is worth a round trip"
+    );
+    assert!(
+        filled.complete,
+        "the one eligible competitor answered, so this fill is a reading"
+    );
+    // AND THE ANSWER IS USED, which is the whole point: #2 read as claiming
+    // PROJ-7 from its title, and its log closes PROJ-20 — so the race the cheap
+    // sources would have reported against PROJ-7 is gone.
+    assert_eq!(
+        race::claimed(
+            &filled.pulls[1].head_ref,
+            &filled.pulls[1].title,
+            &filled.pulls[1].log,
+            &filled.pulls[1].body,
+            &Fake
+        ),
+        vec!["PROJ-20".to_owned()],
+        "the fetched log outranks the title it was fetched to check"
     );
 }
 

@@ -7202,12 +7202,17 @@ fn run_claim_race(
     // arm's subset property, which is what lets it judge first, simply does not
     // hold on this side. Could-not-look, and nothing judged.
     //
-    // Hoisted out of the guard below rather than asked inside it: the call is
-    // pure over four strings this scope already holds, so paying it on the
+    // Hoisted out of the guard below rather than asked inside it: the call is a
+    // regex over one string this scope already holds, so paying it on the
     // read-succeeded path costs nothing a reader has to weigh.
-    let closing = race::Source::ClosingOnly;
+    //
+    // The branch and title go in EMPTY, as they do at every other
+    // `ClosingOnly` call site: that source returns before `claimed_from` reads
+    // them, so passing the real ones would put two dead arguments in a
+    // predicate whose neighbours argue at length about branch-versus-body
+    // precedence. This question is about the body alone, and says so.
     let closes_nothing =
-        race::claimed_from(&me.head_ref, &me.title, "", &me.body, &grammar, closing).is_empty();
+        race::claimed_from("", "", "", &me.body, &grammar, race::Source::ClosingOnly).is_empty();
     // `Option` RATHER THAN A PARALLEL FLAG, for the vocabulary `with_logs`
     // already argues forty lines down: a read that failed is not a log that is
     // empty, and `Some("")` is an answer. Two values could disagree — nothing
@@ -7245,8 +7250,8 @@ fn run_claim_race(
         // declines.
         Err(_) => None,
     };
-    let own = log.as_deref().unwrap_or_default();
-    let mine = race::claimed(&me.head_ref, &me.title, own, &me.body, &grammar);
+    let own_log = log.as_deref().unwrap_or_default();
+    let mine = race::claimed(&me.head_ref, &me.title, own_log, &me.body, &grammar);
     if mine.is_empty() {
         return clean(
             out,
@@ -7276,7 +7281,7 @@ fn run_claim_race(
     // `Refs:` trailer that actually resolves a claim lives in the log that read
     // did not return. `None` is carried out as an incomplete fill instead.
     let race::Filled { pulls, complete } =
-        race::with_logs(pulls, &mine_number, &grammar, |number| {
+        race::with_logs(pulls, &mine_number, &mine, &grammar, |number| {
             bot::forge::commit_messages(&slug, number).ok()
         });
     // JUDGED FIRST, AND THE INCOMPLETE ARM ONLY REPLACES THE CLEAN ONE. An
@@ -7287,13 +7292,18 @@ fn run_claim_race(
     //
     // **THAT PROPERTY IS THE ELIGIBILITY FILTER'S, NOT THE EMPTY LOG'S**, and
     // the coupling is worth naming because `with_logs`'s own doc prescribes
-    // dropping that filter as the fix for the miss it records. A competitor is
-    // fetched only when its branch, title and body resolve to NOTHING, so an
-    // unanswered one contributes no key at all. Fetch every competitor instead
-    // and that stops holding: `user/cloud-100-x` whose commits close CLOUD-200
-    // would read as claiming CLOUD-100 on a failed read, and judging first would
-    // then risk the false refusal this side is arranged to avoid. Whoever widens
-    // the fetch set moves this arm above `races` in the same change.
+    // dropping that filter as the fix for the miss it still records. A
+    // competitor is fetched only when its cheap sources resolve to NOTHING, or
+    // when they resolve to a key THIS BRANCH CLAIMS — so an unanswered one
+    // contributes no key it was not already contributing, which is what the
+    // paragraph above needs. The `claims` half is why it reads that way rather
+    // than "no key at all": a collider that goes unanswered keeps the cheap key
+    // it had, and the race it produces today it still produces.
+    //
+    // Fetch EVERY competitor and that stops holding: `user/cloud-100-x` whose
+    // commits close CLOUD-200 would read as claiming CLOUD-100 on a failed
+    // read, over a key it was contributing to nothing before. Whoever widens
+    // the fetch set that far moves this arm above `races` in the same change.
     let races = race::races(&mine, &pulls, Some(&mine_number), &grammar);
     // AND AN INCOMPLETE FILL ALLOWS, exactly like the four arms above it. Once
     // `fetch` answers an `Option`, this arm's common cause is a forge that
@@ -7318,17 +7328,14 @@ fn run_claim_race(
     // the accepted cost of not failing a pre-flight on a forge hiccup; the
     // undiscriminated surface is `rules::run_once`'s to fix, not this arm's.
     //
-    // THE SELF SIDE'S DEGRADED READ JOINS IT HERE — one arm, because the remedy
-    // is one: look again. The arm the match above states is why; what is left to
-    // say here is that the message must then name WHICH log went unread, and a
-    // refused token refuses both reads in the same run, so all three failing
-    // states are spelled rather than two.
+    // THE SELF SIDE'S DEGRADED READ JOINS IT HERE, for the reason its own match
+    // arm states; [`unread_log`] owns which sentence that earns.
     if races.is_empty() && !(complete && log.is_some()) {
         return clean(
             out,
             &format!(
                 "claim race: {} — could not look, which is not a verdict",
-                unread_log(complete, log.is_some())
+                unread_log(complete, log.as_deref())
             ),
         );
     }
@@ -7359,23 +7366,34 @@ fn run_claim_race(
 /// WHICH log went unread, for [`run_claim_race`]'s one arm that declines to call
 /// an incomplete reading clean.
 ///
-/// Called only where at least one of the two is false, which is why there is no
-/// fourth sentence: `complete` true means `own` is the one that failed. Both
-/// causes share an arm because they share a remedy — look again — and all three
-/// failing states are spelled rather than two because one refused token refuses
-/// this branch's read and every competitor's in the same run, which is the
-/// LIKELIEST joint state rather than an exotic one.
+/// Called only where at least one side failed, which is why three sentences
+/// cover it: `complete` and a `Some` log together is the state the caller does
+/// not ask about. Both causes share one arm because they share one remedy —
+/// look again — and the third sentence exists because one refused token refuses
+/// this branch's read AND every competitor's in the same run, which is the
+/// likeliest joint state rather than an exotic one.
 ///
-/// The competitor sentence is byte-for-byte the one this arm has printed since
-/// it was the only cause (§6: a verdict's bytes are stable).
-fn unread_log(complete: bool, own: bool) -> &'static str {
-    if complete {
-        "this branch's own commit log could not be read, so its claim is only what the body closes"
-    } else if own {
-        "a competitor's commit log could not be read, so not every open pull request was judged"
-    } else {
-        "neither this branch's own commit log nor every competitor's could be read, so its claim \
-         is only what the body closes and not every open pull request was judged"
+/// `own` is the log itself rather than a second `bool`, so the two parameters
+/// cannot be swapped at the call site and the `Option` the read produces stays
+/// the vocabulary all the way to the bytes. The competitor sentence is
+/// byte-for-byte the one this arm printed when it was the only cause (§6).
+fn unread_log(complete: bool, own: Option<&str>) -> &'static str {
+    match (own.is_some(), complete) {
+        (false, true) => {
+            "this branch's own commit log could not be read, so its claim is only what the body \
+             closes"
+        }
+        (true, false) => {
+            "a competitor's commit log could not be read, so not every open pull request was judged"
+        }
+        // `(true, true)` is not a failing state and the caller never asks it.
+        // It falls here with `(false, false)` rather than into an arm of its
+        // own, because naming both halves over-reports where the first two
+        // arms would each name the wrong one.
+        _ => {
+            "neither this branch's own commit log nor every competitor's could be read, so its \
+             claim is only what the body closes and not every open pull request was judged"
+        }
     }
 }
 

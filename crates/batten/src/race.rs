@@ -440,7 +440,10 @@ pub struct Filled {
 /// index rather than a synchronised one.
 ///
 /// `mine` is this branch's own pull request number. It is never fetched — the
-/// caller has already read its log, and a branch cannot race itself.
+/// caller has already read its log, and a branch cannot race itself. `claims`
+/// is the key set this branch claims, and it only ever WIDENS the fetch set:
+/// passing `&[]` fetches the key-less competitors and nothing more, which is
+/// the bound below without its one soundness clause.
 ///
 /// # Order is the input's, whatever the scheduler does
 ///
@@ -466,6 +469,7 @@ pub struct Filled {
 pub fn with_logs(
     pulls: Vec<Pull>,
     mine: &str,
+    claims: &[String],
     keys: &dyn Keys,
     fetch: impl Fn(&str) -> Option<String> + Sync,
 ) -> Filled {
@@ -482,23 +486,31 @@ pub fn with_logs(
     // whose commits close a different key than its branch names is judged under
     // its branch's.
     //
-    // **THAT MISJUDGEMENT RUNS BOTH WAYS, AND THE WORSE WAY IS A FALSE
-    // REFUSAL.** A race on the key the commits close reads as no race — the half
-    // this used to record — but a branch claiming the key the COMPETITOR'S NAME
-    // carries is refused at `Violation` inside `verify` over a collision that
-    // does not exist, and `complete` is `true` in both cases, because an
-    // unfetched competitor is not an unanswered one. The arm in
-    // `run_claim_race` that judges before declining to judge rests on the
-    // subset property of UNANSWERED competitors, which is a different set.
+    // **THAT MISJUDGEMENT RUNS BOTH WAYS, AND ONE WAY IS FREE TO CLOSE.** A race
+    // on the key the commits close reads as no race; and a branch claiming the
+    // key the COMPETITOR'S NAME carries is refused at `Violation` inside
+    // `verify` over a collision that does not exist. `complete` is `true` for
+    // both, because an unfetched competitor is not an unanswered one — which is
+    // why `run_claim_race`'s judge-first arm, sound over UNANSWERED competitors,
+    // never reaches this.
     //
-    // The skip is carried from the sequential fill this replaces, byte for byte
-    // in both directions, so this changes nothing about it. The exact fix is to
-    // decide eligibility on `closed(body)` alone rather than on all three cheap
-    // sources: where a body closes a key the log can only ADD to that set, so
-    // the skip under-reports and cannot invert. Its cost is the whole of the
-    // skip — the pulls it currently spares are spared by their BRANCH, not their
-    // body — so the fetch set becomes every open pull request, which is a
-    // latency decision for the row that owns it rather than for this one.
+    // THE REFUSING HALF IS CLOSED HERE, BY `claims`. A false refusal needs the
+    // competitor's cheap key to collide with the set this branch claims, so
+    // those are the only pulls whose misjudgement can refuse anything — and they
+    // are exactly the ones a run that answers clean does not have. The widening
+    // therefore costs ZERO round trips on every run that prints "no open pull
+    // request races this branch's claim", and one per reported race on a run
+    // already about to block someone. A fetch that FAILS on such a pull leaves
+    // its log empty and its cheap key standing, so the race is still reported:
+    // the widening cannot lose a refusal it would otherwise have made.
+    //
+    // THE MISSING HALF IS NOT CLOSED, and it is the one that costs. A competitor
+    // whose branch names a key nobody here claims, and whose commits close one
+    // this branch does, is invisible to the collision test above and stays
+    // unfetched. Reaching it means deciding eligibility on `closed(body)` alone,
+    // which spares only the pulls whose BODY closes a key — a latency decision
+    // for the row that owns latency, since what it costs depends on how many
+    // open pull requests are spared by their branch rather than their body.
     //
     // EACH ENTRY CARRIES ITS DESTINATION, not its queue position. Two parallel
     // vectors — slots here, numbers there — would have to stay in step for the
@@ -508,8 +520,9 @@ pub fn with_logs(
         .iter()
         .enumerate()
         .filter(|(_, pull)| {
+            let cheap = claimed(&pull.head_ref, &pull.title, "", &pull.body, keys);
             pull.number != mine
-                && claimed(&pull.head_ref, &pull.title, "", &pull.body, keys).is_empty()
+                && (cheap.is_empty() || cheap.iter().any(|key| claims.contains(key)))
         })
         .map(|(slot, pull)| (slot, pull.number.as_str()))
         .collect();
