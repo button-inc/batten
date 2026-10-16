@@ -10924,9 +10924,8 @@ fn run_land_singleton(
         .unwrap_or_default();
     // ONLY A GROUP `reapable` PROVES THE ORPHAN IS SIGNALLED (CLOUD-2366), and
     // it is ASKED AGAIN BEFORE EACH PASS: a group the TERM emptied may be reused
-    // before the KILL. A record that fails it is not signalled, and it is KEPT
-    // while its group lives (below), so a group declined today is looked at again
-    // by the next landing rather than forgotten after one look.
+    // before the KILL. A record that fails it is not signalled; when it is
+    // forgotten is the unregister below.
     let own_group = task::process_group(&pid);
     // TWO PASSES OVER THE WHOLE SET, NEVER A GRACE PERIOD PER GROUP. Signalling
     // every group before re-observing any of it is what gives each one its
@@ -10948,8 +10947,9 @@ fn run_land_singleton(
         if reapable(entry, &own_group) && exec::escalate_group(&entry.pgid) {
             escalated += 1;
         }
-        // Forgotten only once nothing holds its group, and only after both passes,
-        // so a record survives long enough for both to read it.
+        // FORGOTTEN ONLY ONCE NOTHING HOLDS ITS GROUP, so a group declined today
+        // is looked at again by the next landing rather than lost after one look;
+        // and only after both passes, so a record survives long enough for both.
         if exec::recorded_group_gone(&entry.pgid) {
             task::unregister(&git_dir, &entry.pid);
         }

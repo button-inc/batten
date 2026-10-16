@@ -506,8 +506,7 @@ fn group_is_empty(pgid: rustix::process::Pid) -> bool {
 
 /// Whether the group a record names is gone: no process holds it, or the number
 /// is one no signal could reach (unparseable, or not a positive `i32`). What
-/// `land` asks before it forgets a record (CLOUD-2366), so a group it declined to
-/// signal is looked at again rather than lost.
+/// `land` asks before it forgets a record (CLOUD-2366).
 #[cfg(unix)]
 pub(crate) fn recorded_group_gone(pgid: &str) -> bool {
     resolve_group(pgid).is_none_or(group_is_empty)

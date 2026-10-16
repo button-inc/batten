@@ -1464,16 +1464,23 @@ mod tests {
         assert!(!began_before(1_700_009_877));
     }
 
+    /// A `/proc/<pid>/stat` line for `pid` in `group`, begun `ticks` after boot.
+    fn stat_line(pid: &str, group: u32, ticks: u64) -> String {
+        format!(
+            "{pid} (x) S 1 {group} {group} 0 -1 4194560 100 0 0 0 5 3 0 0 20 0 1 0 {ticks} 1000 100"
+        )
+    }
+
     /// CLOUD-2366: the record's strings reach the predicate as `exec` would
     /// signal them. A synthetic orphan (group 42, registrant 43 gone, a member
     /// at second `1_700_000_001` before a stamp at `1_700_000_100`) is proven
     /// only through a positive group and a readable registrant.
     #[test]
     fn a_record_is_read_as_exec_would_signal_it() {
-        let survivor = ["44 (x) S 1 42 42 0 -1 4194560 100 0 0 0 5 3 0 0 20 0 1 0 100 1000 100"];
+        let survivor = [stat_line("44", 42, 100)];
         let orphaned = |pgid, registrant| {
             super::orphaned_in(
-                survivor,
+                &survivor,
                 pgid,
                 registrant,
                 1_700_000_000,
@@ -1504,11 +1511,7 @@ mod tests {
     /// group (42) is the orphan only with its leader and registrant (43) gone.
     #[test]
     fn an_orphan_needs_its_leader_and_registrant_gone() {
-        let line = |pid: u32, group: u32, ticks: u64| {
-            format!(
-                "{pid} (x) S 1 {group} {group} 0 -1 4194560 100 0 0 0 5 3 0 0 20 0 1 0 {ticks} 1000 100"
-            )
-        };
+        let line = |pid: u32, group: u32, ticks: u64| stat_line(&pid.to_string(), group, ticks);
         let orphaned = |stats: &[String]| {
             proc_stat::orphaned(stats, 42, 43, 1_700_000_000, 100, 1_700_000_100)
         };
@@ -1527,8 +1530,7 @@ mod tests {
             "every member began after the stamp"
         );
         assert!(!orphaned(&[line(44, 41, 100)]), "another group's member");
-        let unread =
-            String::from("x (x) S 1 42 42 0 -1 4194560 100 0 0 0 5 3 0 0 20 0 1 0 100 1000 100");
+        let unread = stat_line("x", 42, 100);
         assert!(
             !orphaned(&[line(44, 42, 100), unread]),
             "a member whose pid cannot be read"
