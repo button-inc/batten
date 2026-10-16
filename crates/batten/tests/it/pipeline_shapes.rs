@@ -449,6 +449,14 @@ fn a_find_expression_operand_is_never_a_target() {
         "the pattern is never named: {inside}"
     );
     deny_in(&dir, "find -L crates/batten -type f");
+    // NO START POINT: `find` searches `.`, the repository it runs in, so the
+    // search is refused rather than allowed for naming no path.
+    deny_in(&dir, "find -name '*.rs'");
+    deny_in(&dir, "find -type f");
+    // The global options carrying a value or a level are skipped, so the start
+    // point after them is still the one judged: outside the repository here.
+    allow_in(&dir, "find -D tree /tmp -name x.md");
+    allow_in(&dir, "find -O3 /tmp -name x.md");
 }
 
 #[test]

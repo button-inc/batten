@@ -4373,9 +4373,11 @@ impl Policy {
 
     /// Whether this policy can deny anything at all.
     ///
-    /// Both halves must be empty. The protected gate needs *both* its tables to
-    /// bite, so a repository declaring verbs but no protected paths (or the
-    /// reverse) can deny nothing through it — but a shape row alone still can.
+    /// Every table a gate denies through must be empty: the shape rows, the
+    /// registered bundles, the protected gate, and any `[[redirect]]` declaring
+    /// a `read` route. The protected gate needs *both* its tables to bite, so a
+    /// repository declaring verbs but no protected paths (or the reverse) can
+    /// deny nothing through it — but a shape row alone still can.
     ///
     /// This holds for the write gate too, and deliberately: a write tool is
     /// classified through the same `[[verb]]` table a shell program is, so
@@ -6312,6 +6314,18 @@ fn followed_cd(
     current.map(|here| here.join(target))
 }
 
+// `Policy::is_empty`'s redirect conjunct (CLOUD-2362), declared here because a
+// row inside an `impl` block is indented by rustfmt and then read by nothing;
+// it moves back beside the conjunct once mutate reads indented rows (CLOUD-1964).
+// Its case lives in `mediated_verbs.rs`, so it carries that suite, and the
+// suite this section's own rows are judged under is declared again after it.
+//MUTANT-SUITE crates/batten/tests/it/mediated_verbs.rs
+//MUTANT read-route-only-policy-empty|s@^            && !self.redirects.iter().any(\x7crow\x7c row.read.is_some())$@@|a_generic_read_of_a_memory_is_refused_and_names_the_tool_that_answers
+//MUTANT-SUITE crates/batten/tests/it/pipeline_shapes.rs
+
+/// Where a `find` with no start point searches: the directory it runs in.
+const IMPLICIT_FIND_START: &[&str] = &["./"];
+
 /// The operands of a `find` that name where it searches, and nothing after them
 /// (CLOUD-2362).
 ///
@@ -6324,12 +6338,10 @@ fn followed_cd(
 /// The leading global options (`-H`, `-L`, `-P`, `-O<n>`, and `-D` with its
 /// value) come before the start points and are skipped. The first token after
 /// them that begins with `-`, `(` or `!` opens the expression and ends the
-/// list.
-// `Policy::is_empty`'s redirect conjunct (CLOUD-2362), declared here because a
-// row inside an `impl` block is indented by rustfmt and then read by nothing;
-// it moves back beside the conjunct once mutate reads indented rows (CLOUD-1964).
-//MUTANT read-route-only-policy-empty|s@^            && !self.redirects.iter().any(\x7crow\x7c row.read.is_some())$@@|a_generic_read_of_a_memory_is_refused_and_names_the_tool_that_answers
+/// list. With no start point at all, `find` searches `.`, so the answer is
+/// [`IMPLICIT_FIND_START`] rather than nothing.
 //MUTANT find-expression-read-as-target|s@^    &rest\[\.\.end\]$@    rest@|a_find_expression_operand_is_never_a_target
+//MUTANT find-implicit-start-unread|s@^        return IMPLICIT_FIND_START;$@        return \&rest[..0];@|a_find_expression_operand_is_never_a_target
 fn find_start_points<'a>(operands: &'a [&'a str]) -> &'a [&'a str] {
     let mut rest = operands;
     loop {
@@ -6347,6 +6359,9 @@ fn find_start_points<'a>(operands: &'a [&'a str]) -> &'a [&'a str] {
         .iter()
         .position(|token| token.starts_with(['-', '(', '!']))
         .unwrap_or(rest.len());
+    if end == 0 {
+        return IMPLICIT_FIND_START;
+    }
     &rest[..end]
 }
 

@@ -151,24 +151,18 @@ fn ceiling_root() -> PathBuf {
 /// `config` with `read = "read_memory"` restored on its memories `[[redirect]]`
 /// row, the line CLOUD-2362 removed from this repository's copy.
 fn with_memory_read_route(config: &str) -> String {
-    let mut out = Vec::new();
-    let mut in_memories = false;
-    let mut added = false;
-    for line in config.lines() {
-        out.push(line.to_owned());
-        if line.trim() == "glob = \".serena/memories/**\"" {
-            in_memories = true;
-        } else if in_memories && line.starts_with("mutation = ") {
-            out.push("read = \"read_memory\"".to_owned());
-            in_memories = false;
-            added = true;
-        }
-    }
-    assert!(
-        added,
-        "the committed config carries the memories redirect row"
-    );
-    out.join("\n") + "\n"
+    let mut config: toml_edit::DocumentMut = config.parse().expect("the config is TOML");
+    let row = config
+        .get_mut("redirect")
+        .and_then(toml_edit::Item::as_array_of_tables_mut)
+        .and_then(|rows| {
+            rows.iter_mut().find(|row| {
+                row.get("glob").and_then(toml_edit::Item::as_str) == Some(".serena/memories/**")
+            })
+        })
+        .expect("the committed config carries the memories redirect row");
+    row.insert("read", toml_edit::value("read_memory"));
+    config.to_string()
 }
 
 /// The declared ceiling, read from the committed config rather than re-typed.
