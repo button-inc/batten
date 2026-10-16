@@ -559,6 +559,46 @@ fn a_latest_body_closing_nothing_exempts_nothing() {
     );
 }
 
+/// A MEASURED NOTHING CARRIES NO KEY (CLOUD-2444, review of #1206): without the
+/// `:` guard, `closes 0` reads as the key `0`, so a row whose id is literally `0`
+/// was exempt. The only row that can see the defect, so the only one that pins it.
+#[test]
+fn a_measured_nothing_exempts_no_row_named_zero() {
+    let root = repo(
+        "nothing-is-not-zero",
+        "work",
+        &["src/a.rs"],
+        &[&format!("issue 0 {AFTER} ready 1,src/a.rs - 1,src/a.rs")],
+        &["closes 0"],
+    );
+    assert!(
+        verdicts(&root).iter().any(|rule| rule == "issue file same"),
+        "{:?}",
+        verdicts(&root)
+    );
+}
+
+/// A BLOCKED FETCH NEVER OUTRANKS A NEWER MEASURED ONE (review of #1206): the
+/// could-not-look channel withholds the refusal only while nothing was measured.
+#[test]
+fn a_measured_body_outranks_an_earlier_blocked_fetch() {
+    let root = repo(
+        "blocked-then-measured",
+        "work",
+        &["src/a.rs"],
+        &[&format!(
+            "issue CLOUD-1 {AFTER} ready 1,src/a.rs - 1,src/a.rs"
+        )],
+        &["closes 1:CLOUD-9"],
+    );
+    write_blocked(&root, "work", &["pr-body-closes required-absent"]);
+    assert!(
+        verdicts(&root).iter().any(|rule| rule == "issue file same"),
+        "{:?}",
+        verdicts(&root)
+    );
+}
+
 /// ANTI-VACUITY: the same two fetches in the other order keep the exemption.
 #[test]
 fn a_key_in_the_latest_body_still_exempts() {

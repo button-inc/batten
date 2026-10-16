@@ -64,7 +64,9 @@
 #MUTANT left-open-arm-unpartitioned|s@^\tcites_only(id)$@\ttrue@|a_row_recorded_after_the_base_whose_sec1_names_the_diff_still_refuses
 #MUTANT left-open-judges-an-unread-body|s@^\tbody_read$@\ttrue@|an_unread_pr_body_leaves_the_set_unjudged
 #MUTANT older-body-still-exempts|s@^\traw := measured_closes\[count(measured_closes) - 1\]$@\tsome raw in measured_closes@|a_key_dropped_from_the_latest_body_exempts_nothing
-#MUTANT unread-fetch-measured|s@^\traw != "closes -"$@\ttrue@|a_newest_unread_fetch_keeps_the_earlier_exemption
+#MUTANT unread-fetch-measured|s@^\tcolumns\[1\] != "-"$@\ttrue@|a_newest_unread_fetch_keeps_the_earlier_exemption
+#MUTANT nothing-read-as-zero|s@^\tcontains(columns\[1\], ":")$@\ttrue@|a_measured_nothing_exempts_no_row_named_zero
+#MUTANT blocked-outranks-measured|s@^\tcount(measured_closes) == 0$@\ttrue@|a_measured_body_outranks_an_earlier_blocked_fetch
 
 # METADATA
 # description: |
@@ -178,8 +180,9 @@ closes contains key if {
 # fetch whose key reader could not run, so it never overrides an earlier reading.
 measured_closes := [raw |
 	some raw in input.tree.records["pr-closes"]
-	startswith(raw, "closes ")
-	raw != "closes -"
+	columns := split(trim_space(raw), " ")
+	columns[0] == "closes"
+	columns[1] != "-"
 ]
 
 # THE BODY WAS READ, so "this PR closes nothing" is a MEASUREMENT rather than an
@@ -315,8 +318,13 @@ violation contains {
 #
 # A PRESENT entry, never an inferred one: an id absent from `records-blocked` is
 # not blocked, because the store is written only when a row is.
+#
+# AND ONLY WHILE NOTHING WAS MEASURED (review of #1206): the blocked store has no
+# order, so one failed fetch would otherwise withhold the refusal for the rest of
+# the branch, outranking every measured body that came after it.
 closes_unreadable if {
 	input.tree["records-blocked"]["pr-body-closes"]
+	count(measured_closes) == 0
 }
 
 # `filed-and-left-open`: a row this branch filed, that this branch does not close.
