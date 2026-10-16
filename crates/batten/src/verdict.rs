@@ -3592,101 +3592,9 @@ mod tests {
     /// match would compile past a new class, and a list with no match beside it
     /// would go stale silently.
     #[test]
-    #[expect(
-        clippy::too_many_lines,
-        reason = "one match arm per class, no wildcard, is the exhaustiveness this case exists to assert"
-    )]
     fn every_native_class_is_listed() {
         for native in Native::ALL {
-            let named = match native {
-                Native::ProtectedMutation
-                | Native::InitWouldOverwrite
-                | Native::HandlerDenied
-                | Native::SetupLaunchMissing
-                | Native::ServerProbeFailed
-                | Native::ScannerUnpinned
-                | Native::ScannerUnprovisioned
-                | Native::SpawningRuleOnReadVerb
-                | Native::StopConditionUnmet
-                | Native::HistoryDropUnpushed
-                | Native::SingletonHeld
-                | Native::ReceiptUnusable
-                | Native::ReceiptExpired
-                | Native::ReceiptRefuted
-                | Native::ReceiptSuperseded
-                | Native::ReceiptOffTrunk
-                | Native::ToolSubstituted
-                | Native::ReadRedirected
-                | Native::VerdictPiped
-                | Native::VerdictTrailing
-                | Native::RunOrphaned
-                | Native::CeilingExceeded
-                | Native::ConfigUnreadable
-                | Native::ShapeRefused
-                | Native::CallRetryNow
-                | Native::CallFixSilent
-                | Native::ContentRefused
-                | Native::PlanReadStale
-                | Native::OutcomeTableRefused
-                | Native::KeyMissing
-                | Native::VerbTableRefused
-                | Native::PatternTableRefused
-                | Native::TraversalTableRefused
-                | Native::RegisterTableRefused
-                | Native::RuleReadMissing
-                | Native::UsageRefused
-                | Native::RunBroken
-                | Native::IssueFileRefused
-                | Native::LayerCarryRefused
-                | Native::ProvisionPinOther
-                | Native::CommitShipMissing
-                | Native::IssueListUnclear
-                | Native::HookReportNow
-                | Native::HookAnswerBroken
-                | Native::OutputWriteMissing
-                | Native::WorkspaceStateBroken
-                | Native::CallGrantNow
-                | Native::CommitPortBlocked
-                | Native::CheckRunRed
-                | Native::JobRunRed
-                | Native::LaneCountSpent
-                | Native::ContractReadStale
-                | Native::HookRunMissing
-                | Native::DrainFitBroken
-                | Native::IssueGradeRefused
-                | Native::IssueGradePartial
-                | Native::ClaimMintRefused
-                | Native::OutputPointNow
-                | Native::CargoRetireNow
-                | Native::VerdictTableRefused
-                | Native::RedirectTableRefused
-                | Native::DeferralTableRefused
-                | Native::RemedyUnresolved
-                | Native::MarkerTableRefused
-                | Native::RuleTableRefused
-                | Native::OutputTableRefused
-                | Native::VerifyEnvironmentTableRefused
-                | Native::WaiverTableRefused
-                | Native::FactTableRefused
-                | Native::MintTableRefused
-                | Native::RecorderTableRefused
-                | Native::RecordTableRefused
-                | Native::ProvisionTableRefused
-                | Native::StartupTableRefused
-                | Native::StepTableRefused
-                | Native::ProgramUnknown
-                | Native::SubjectUnconventional
-                | Native::CommitUnclaimed
-                | Native::ArticulationMissing
-                | Native::ArticulationTampered
-                | Native::ArmSelfAuthorized
-                | Native::IdentityDenied
-                | Native::TrailerDenied
-                | Native::BodyDenied
-                | Native::TaggerUnaccountable
-                | Native::TaggerUnannotated
-                | Native::ProseColumnRefused => native.id(),
-            };
+            let named = listed(*native);
             // The prefix is gone (CLOUD-1284), so what makes this a token is the
             // ARITY: exactly three words. Asserting that here rather than a
             // prefix keeps the native half held to the same shape the consumer
@@ -3698,11 +3606,107 @@ mod tests {
                 "{named} is not a three-word verdict name"
             );
         }
+        // Two native classes sharing a token make a refusal under it unattributable.
         assert_eq!(
             native_tokens().len(),
             Native::ALL.len(),
-            "two native classes share a token, so a refusal under it is unattributable"
+            "two classes share a token"
         );
+    }
+
+    /// [`every_native_class_is_listed`]'s match, apart so the case stays
+    /// readable as the class list grows. NO WILDCARD: a new variant fails to
+    /// compile here.
+    fn listed(native: Native) -> &'static str {
+        match native {
+            Native::ProtectedMutation
+            | Native::InitWouldOverwrite
+            | Native::HandlerDenied
+            | Native::SetupLaunchMissing
+            | Native::ServerProbeFailed
+            | Native::ScannerUnpinned
+            | Native::ScannerUnprovisioned
+            | Native::SpawningRuleOnReadVerb
+            | Native::StopConditionUnmet
+            | Native::HistoryDropUnpushed
+            | Native::SingletonHeld
+            | Native::ReceiptUnusable
+            | Native::ReceiptExpired
+            | Native::ReceiptRefuted
+            | Native::ReceiptSuperseded
+            | Native::ReceiptOffTrunk
+            | Native::ToolSubstituted
+            | Native::ReadRedirected
+            | Native::VerdictPiped
+            | Native::VerdictTrailing
+            | Native::RunOrphaned
+            | Native::CeilingExceeded
+            | Native::ConfigUnreadable
+            | Native::ShapeRefused
+            | Native::CallRetryNow
+            | Native::CallFixSilent
+            | Native::ContentRefused
+            | Native::PlanReadStale
+            | Native::OutcomeTableRefused
+            | Native::KeyMissing
+            | Native::VerbTableRefused
+            | Native::PatternTableRefused
+            | Native::TraversalTableRefused
+            | Native::RegisterTableRefused
+            | Native::RuleReadMissing
+            | Native::UsageRefused
+            | Native::RunBroken
+            | Native::IssueFileRefused
+            | Native::LayerCarryRefused
+            | Native::ProvisionPinOther
+            | Native::CommitShipMissing
+            | Native::IssueListUnclear
+            | Native::HookReportNow
+            | Native::HookAnswerBroken
+            | Native::OutputWriteMissing
+            | Native::WorkspaceStateBroken
+            | Native::CallGrantNow
+            | Native::CommitPortBlocked
+            | Native::CheckRunRed
+            | Native::JobRunRed
+            | Native::LaneCountSpent
+            | Native::ContractReadStale
+            | Native::HookRunMissing
+            | Native::DrainFitBroken
+            | Native::IssueGradeRefused
+            | Native::IssueGradePartial
+            | Native::ClaimMintRefused
+            | Native::OutputPointNow
+            | Native::CargoRetireNow
+            | Native::VerdictTableRefused
+            | Native::RedirectTableRefused
+            | Native::DeferralTableRefused
+            | Native::RemedyUnresolved
+            | Native::MarkerTableRefused
+            | Native::RuleTableRefused
+            | Native::OutputTableRefused
+            | Native::VerifyEnvironmentTableRefused
+            | Native::WaiverTableRefused
+            | Native::FactTableRefused
+            | Native::MintTableRefused
+            | Native::RecorderTableRefused
+            | Native::RecordTableRefused
+            | Native::ProvisionTableRefused
+            | Native::StartupTableRefused
+            | Native::StepTableRefused
+            | Native::ProgramUnknown
+            | Native::SubjectUnconventional
+            | Native::CommitUnclaimed
+            | Native::ArticulationMissing
+            | Native::ArticulationTampered
+            | Native::ArmSelfAuthorized
+            | Native::IdentityDenied
+            | Native::TrailerDenied
+            | Native::BodyDenied
+            | Native::TaggerUnaccountable
+            | Native::TaggerUnannotated
+            | Native::ProseColumnRefused => native.id(),
+        }
     }
 
     /// The vendored table is held to its own validator.
