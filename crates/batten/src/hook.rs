@@ -6221,33 +6221,30 @@ fn substitution_decision(
         {
             continue;
         }
-        // Operands only, and the scan STOPS at the first redirection: everything
-        // past a `>` is a destination this call writes, never a target it read
-        // instead of reaching for a tool. `grep pat > out.txt` is stdin-fed and
-        // must allow, which a scan that merely skipped the `>` would not do.
+        // Operands only, CUT at the first redirection: everything past a `>` is
+        // a destination this call writes, never a target it read instead of
+        // reaching for a tool. `grep pat > out.txt` is stdin-fed and must allow,
+        // which a scan that merely skipped the `>` would not do. find's grammar
+        // is read over the same words, so `find --version 2>&1` is the flag alone.
         //
-        // THE ORDER IS LOAD-BEARING. `take_while` reads the RAW token
-        // deliberately, because `>` and `<` are syntax `program_token` may strip —
-        // normalising first could walk the scan PAST a redirect and refuse a
-        // destination the call writes. Only the `find` side, which asks whether
-        // the token names a repository path, sees the normalised form: that is
-        // where a trailing `)` would otherwise stop
-        // `(grep needle crates/batten/src/lib.rs)` from matching the path the row
-        // selected on.
+        // THE ORDER IS LOAD-BEARING. The cut reads the RAW token deliberately,
+        // because `>` and `<` are syntax `program_token` may strip — normalising
+        // first could walk the scan PAST a redirect and refuse a destination the
+        // call writes. Only the path test, which asks whether the token names a
+        // repository path, sees the normalised form: that is where a trailing
+        // `)` would otherwise stop `(grep needle crates/batten/src/lib.rs)` from
+        // matching the path the row selected on.
+        let words = operands
+            .iter()
+            .position(|token| token.contains(['>', '<']))
+            .map_or(operands, |cut| &operands[..cut]);
         let candidates = if program == "find" {
-            // find's grammar is read over its own words, never the
-            // redirections after them: `find --version 2>&1` is the flag alone.
-            let words = operands
-                .iter()
-                .position(|token| token.contains('>') || token.contains('<'))
-                .map_or(operands, |cut| &operands[..cut]);
             find_start_points(words)
         } else {
-            operands
+            words
         };
         let Some(target) = candidates
             .iter()
-            .take_while(|token| !token.contains('>') && !token.contains('<'))
             .map(|token| program_token(token))
             .find(|token| !token.starts_with('-') && names_a_repository_path(token, root, cwd))
         else {
