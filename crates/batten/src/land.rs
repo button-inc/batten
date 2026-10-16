@@ -3598,11 +3598,13 @@ pub fn draft_state(repo: &str, pr: &str) -> Option<Readiness> {
 /// What one read of a pull request says about whether readying it buys a run.
 ///
 /// **`head` is here because the READY FIRES AGAINST IT, not against this
-/// clone's HEAD** (review of #848). `Step::Ready` precedes `Step::Push`, so on
-/// every lap that replayed, the local head is a sha the forge has never seen —
-/// and reading the check verdict for it mints a run on the pull request's
-/// SUPERSEDED head, charges it to the ledger, and leaves it uncancellable:
-/// `Compensation::Abandon` reads `git::head_commit`, which is the other sha.
+/// clone's HEAD** (review of #848). When `Step::Ready` preceded `Step::Push`, on
+/// every lap that replayed the local head was a sha the forge had never seen —
+/// and reading the check verdict for it minted a run on the pull request's
+/// SUPERSEDED head, charged it to the ledger, and left it uncancellable:
+/// `Compensation::Abandon` reads `git::head_commit`, which is the other sha. The
+/// pipeline now pushes first (`pipeline.rs`); the forge's head is still the one
+/// the ready decision reads.
 ///
 /// Carried in the same struct as `draft` rather than fetched separately for
 /// [`crate::lease::adjudicate`]'s reason one module over: two reads of one

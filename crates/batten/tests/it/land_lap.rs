@@ -549,6 +549,71 @@ reason = "dispatch the code-review skill"
     );
 }
 
+/// **A READY PULL REQUEST'S PUSH OWES ITS REVIEWS; A DRAFT'S DOES NOT**
+/// (CLOUD-2436).
+///
+/// Through `land_publish_owes`, the question the Push row's precheck asks: a
+/// whole lap needs a forge this tier does not stand up. On `main` the lap's push
+/// asked nothing, so a new head on an already-ready pull request started CI with
+/// no review on file. A draft push owes nothing: the Ready after it asks.
+#[test]
+fn the_laps_push_is_refused_by_a_missing_review_receipt() {
+    let dir = common::Fixture::new("land-lap-push-receipt")
+        .config(
+            r#"version = 1
+
+[[mint]]
+name = "code-review"
+tool = "Skill"
+selects_at = "skill"
+selects = "code-review"
+key = "delta"
+key_base = "refs/remotes/origin/main"
+mode = "replace"
+body = "{git:HEAD} {now}"
+
+[[rule]]
+id = "review ask missing"
+kind = "receipt"
+scope = "mediated_call"
+severity = "deny"
+pattern = "gh pr ready"
+checks = ["code-review"]
+key = "delta"
+key_base = "refs/remotes/origin/main"
+reason = "dispatch the code-review skill"
+"#,
+        )
+        .file("README.md", "base\n")
+        .git()
+        .base_commit()
+        .build();
+    std::fs::write(dir.join("lib.rs"), "fn a() {}\n").expect("the change");
+    common::git_in(&dir, &["add", "-A"]);
+    common::git_in(&dir, &["commit", "-q", "-m", "change"]);
+    std::env::set_current_dir(&dir).expect("enter the fixture");
+    let now = std::time::UNIX_EPOCH;
+
+    let owed = batten::land_publish_owes(&dir, false, now)
+        .expect("the authority resolves")
+        .expect("a ready pull request's unreviewed head owes its review");
+    assert_eq!(owed.rule(), "review ask missing");
+    assert!(
+        batten::land_publish_owes(&dir, true, now)
+            .expect("the authority resolves")
+            .is_none(),
+        "a draft push owes nothing: the Ready after it asks"
+    );
+
+    common::dispatch_skill(&dir, "code-review");
+    assert!(
+        batten::land_publish_owes(&dir, false, now)
+            .expect("the authority resolves")
+            .is_none(),
+        "a reviewed head owes the push nothing"
+    );
+}
+
 /// **A LAP NEVER RUNS FROM THE TRUNK.**
 ///
 /// Over the compiled binary, because this is the one property in the file whose

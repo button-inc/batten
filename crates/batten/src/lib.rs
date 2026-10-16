@@ -14490,11 +14490,14 @@ fn spend_the_matrix(
     // THE READING THIS LAP ALREADY OWNS. A verdict that cannot be taken is
     // `None`, which `buys_a_matrix` answers `Nothing` to — the same posture the
     // tap takes one direction over, and for the same reason.
-    // **THE FORGE'S HEAD, NEVER THIS CLONE'S** (review of #848). `Ready` runs
-    // before `Push`, so on a lap that replayed, the local head is a sha the forge
-    // has never seen — and deciding from it mints a run on the pull request's
-    // superseded head that `Compensation::Abandon` can never cancel, because
-    // that reads `git::head_commit`. `Readiness::head` carries the reason.
+    // **THE FORGE'S HEAD, NEVER THIS CLONE'S** (review of #848). `Ready` used to
+    // run before `Push`, and a lap that replayed then held a local head the forge
+    // had never seen — deciding from it minted a run on the superseded head that
+    // `Compensation::Abandon` can never cancel. The pipeline now pushes first
+    // (`pipeline.rs`), and the forge's head is still the one read.
+    //
+    // A READY PULL REQUEST'S PUSH IS ASKED BEFORE IT HAPPENS (CLOUD-2436): this
+    // reads `Running` there and buys `Nothing`, so the Push row's precheck asks.
     let reading = verdict_for(&repo, &head);
     let spend = land::buys_a_matrix(Some(is_draft), reading.as_ref());
     // THE RECEIPTS `gh pr ready` OWES, asked of this ready too (CLOUD-2293), and
@@ -15321,6 +15324,32 @@ fn asks_before_the_step(
             // and unwinds again until the lap budget is spent.
             bet.declined = true;
             Ok(Answered::Lap)
+        }
+        // AND A READY PULL REQUEST'S NEW HEAD IS NOT PUBLISHABLE UNREVIEWED
+        // (CLOUD-2436). The same row's question, "is this head fit to publish",
+        // for the second reason it can be no: the push itself starts CI on a
+        // ready pull request, so it owes the receipts its ready did. A forge
+        // read that cannot answer goes on, `BaseMoved`'s posture: on a draft the
+        // Ready after this asks anyway.
+        Some(pipeline::Precheck::BetLive) => {
+            let repo = repo_or_placeholder(root);
+            let draft = match fast_forward::look_up_pull_request(&repo, branch) {
+                fast_forward::Lookup::Found(pr) => land::draft_state(&repo, &pr).map(|r| r.draft),
+                fast_forward::Lookup::None | fast_forward::Lookup::Unreadable(_) => None,
+            };
+            if let Some(is_draft) = draft
+                && let Some(owed) = land_publish_owes(root, is_draft, std::time::SystemTime::now())?
+            {
+                output::verdict(
+                    err,
+                    &format!(
+                        "::error:: land: {}",
+                        owed.render_finding(refusal::Arm::Full)
+                    ),
+                )?;
+                return Ok(Answered::Stop(exit::ExitCode::Violation));
+            }
+            Ok(Answered::Go)
         }
         _ => Ok(Answered::Go),
     }
@@ -28381,6 +28410,29 @@ pub fn land_spent_refusal(laps: u32, ledger: &land::Ledger) -> crate::refusal::R
         ],
         crate::refusal::Fix::Run(advice),
     )
+}
+
+/// The refusal a lap's PUSH draws, for the Push row's precheck to stop on
+/// (CLOUD-2436); `None` when nothing is owed.
+///
+/// **A DRAFT OWES NOTHING, A READY PULL REQUEST OWES WHAT ITS READY DID.** The
+/// lap pushes before it readies, so on a draft the push buys no run and the
+/// Ready that follows asks [`land_ready_owes`] itself. On a pull request that is
+/// already ready, the push IS the spend — CI starts on the new head, Ready then
+/// reads it as running and buys nothing, and without this nothing asked.
+///
+/// # Errors
+///
+/// As [`land_ready_owes`].
+pub fn land_publish_owes(
+    root: &Path,
+    is_draft: bool,
+    now: std::time::SystemTime,
+) -> Result<Option<refusal::Refusal>> {
+    if is_draft {
+        return Ok(None);
+    }
+    land_ready_owes(root, now)
 }
 
 /// The refusal `gh pr ready` would draw from its receipt rows, for the lap's own
