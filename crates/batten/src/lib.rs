@@ -11540,9 +11540,9 @@ fn run_land_singleton(
     // Absent, this reaps NOTHING rather than guessing. A wrong root makes
     // `matches_cmdline` miss every live task, so every entry reads as abandoned
     // and the reaper signals the group of a lap that is running — the direction
-    // a miss must never fail in. Nor does it forget: a crashed record nothing
-    // can signal stays visible to `alive`, because forgetting it hides its
-    // orphaned group rather than ending it (`task::abandoned`, CLOUD-1148).
+    // a miss must never fail in. Nor does it forget: without the root nothing
+    // tells an abandoned record from a live one, so `alive` keeps showing it
+    // until a landing that can tell runs.
     //
     // ONLY THE REAP IS CONDITIONAL. The lock and the registration below run
     // either way: `singleton_acquire` reclaims on `pid_exists`, which needs no
@@ -13863,7 +13863,18 @@ fn verify_stall(root: &Path) -> Option<land::Stall> {
         pid,
         beat: std::time::Duration::from_secs(beat.unsigned_abs()),
         beats,
+        progress: stall_progress,
     })
+}
+
+/// The token the self-stall arm compares (CLOUD-2369): the record's advance
+/// stamp and the phase it names. The name is what moves when a step starts
+/// within the second the lap entered verify, which the whole-second stamp
+/// cannot show.
+fn stall_progress(git_dir: &Path, pid: u32) -> Option<String> {
+    let advance = lease::progress_of(git_dir, pid)?.advance;
+    let phase = task::read_field(git_dir, &pid.to_string(), "phase").unwrap_or_default();
+    Some(format!("{advance} {phase}"))
 }
 
 /// [`run_land_verify`], and whether the gate was cancelled for stalling: the

@@ -582,7 +582,8 @@ fn land_verify_supervised(repo: &Path, gate: &str, task: &str, beats: &str) -> (
 }
 
 /// **A verify that stops advancing stops itself** (CLOUD-2369). The gate here
-/// reports one step and then never exits, so its task's stamps stand still;
+/// reports one step at once — within the second its task was registered, which
+/// only the phase name tells apart — and then never exits, so its task stands still;
 /// after two still beats the gate is cancelled and the verify answers exit 3,
 /// never a verdict about the tree, with the stall on the lap record.
 #[test]
@@ -593,7 +594,7 @@ fn a_verify_that_never_advances_stops_itself() {
         &repo,
         "wedged.sh",
         &format!(
-            "sleep 2\n\"$BATTEN_BIN\" task phase 424242 wedged\necho $$ > {}\nexec sleep 600\n",
+            "\"$BATTEN_BIN\" task phase 424242 wedged\necho $$ > {}\nexec sleep 600\n",
             marker.display()
         ),
     );

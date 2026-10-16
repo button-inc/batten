@@ -2031,6 +2031,9 @@ pub fn verify_raced(
     let stop = std::sync::atomic::AtomicBool::new(false);
     let stop = &stop;
 
+    // THE STALL ARM'S FIRST READING, taken before the gate starts, so a step
+    // that announces before the arm's first beat still reads as a move.
+    let seed = stall.and_then(|stall| still(None, (stall.progress)(&stall.git_dir, stall.pid)));
     let raced = std::thread::scope(|scope| {
         let gate = tx.clone();
         drop(scope.spawn(move || {
@@ -2048,7 +2051,7 @@ pub fn verify_raced(
         };
         if let Some(stall) = stall {
             let stalls = arms.clone();
-            drop(scope.spawn(move || stall_arm(root, stall, &stalls)));
+            drop(scope.spawn(move || stall_arm(root, stall, seed, &stalls)));
         }
         drop(scope.spawn(move || watch_arm(root, watched.as_ref(), started, &arms)));
 
@@ -2197,31 +2200,31 @@ fn confirmed(
     }
 }
 
-/// A task's progress stamp as the self-stall arm has watched it (CLOUD-2369).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// A task's progress as the self-stall arm has watched it (CLOUD-2369).
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Still {
-    /// The stamp last read.
-    stamp: i64,
+    /// The progress token last read ([`Stall::progress`]).
+    token: String,
     /// Beats it has stood still since it last moved.
     beats: u32,
     /// Whether it has moved at all while watched.
     reported: bool,
 }
 
-/// One beat's reading of a task's progress stamp folded into its run.
+/// One beat's reading of a task's progress folded into its run.
 ///
 /// A missing record is no evidence of a stall ([`crate::lease::progress_of`]'s
 /// own reading), so it clears the run rather than extending it.
 #[must_use]
-pub fn still(run: Option<Still>, seen: Option<i64>) -> Option<Still> {
+pub fn still(run: Option<Still>, seen: Option<String>) -> Option<Still> {
     let seen = seen?;
     Some(match run {
-        Some(run) if run.stamp == seen => Still {
+        Some(run) if run.token == seen => Still {
             beats: run.beats.saturating_add(1),
             ..run
         },
         moved => Still {
-            stamp: seen,
+            token: seen,
             beats: 0,
             reported: moved.is_some(),
         },
@@ -2241,7 +2244,7 @@ pub fn still(run: Option<Still>, seen: Option<i64>) -> Option<Still> {
 //MUTANT self-stall-never-wins|s@^    beats > 0 \&\& matches!(run, Some(run) if run.reported \&\& run.beats >= beats)$@    false@|a_frozen_advance_stalls_and_a_moving_one_does_not
 //MUTANT self-stall-on-silence|s@ if run.reported \&\& @ if @|a_frozen_advance_stalls_and_a_moving_one_does_not
 #[must_use]
-pub const fn stalled(run: Option<Still>, beats: u32) -> bool {
+pub const fn stalled(run: Option<&Still>, beats: u32) -> bool {
     beats > 0 && matches!(run, Some(run) if run.reported && run.beats >= beats)
 }
 
@@ -2298,6 +2301,12 @@ pub struct Stall {
     pub beat: std::time::Duration,
     /// How many beats with no advance stall the gate.
     pub beats: u32,
+    /// The task's progress as one comparable token, or `None` where there is
+    /// no record to read. Supplied by the caller, which owns the registry's
+    /// layout; it carries the phase NAME beside the stamp, because a stamp is
+    /// whole seconds and a step can start within the second the lap entered
+    /// verify.
+    pub progress: fn(&std::path::Path, u32) -> Option<String>,
 }
 
 /// Which arm of a raced gate answered. The gate's `Result` travels whole so a
@@ -2371,34 +2380,40 @@ fn watch_arm(
     }
 }
 
-/// An arm winning the race: stop its sibling, cancel the gate's group, and
-/// report whether the cancel reclaimed it before naming the winner.
+/// An arm winning the race: claim it, name the winner, then cancel the gate's
+/// group and report whether the cancel reclaimed it.
+///
+/// CLAIMED BY SWAP, so of two arms reaching here in one beat, or an arm and a
+/// gate that just finished, exactly one wins. NAMED BEFORE THE CANCEL, so the
+/// gate the cancel kills cannot answer first with a killed run read as a
+/// verdict; the cancel's own answer is read after the scope joins every arm.
 ///
 /// `let _` on the cancel's send rather than `drop`: its result is `Copy`, so
 /// dropping it does nothing. A receiver gone before either send lands is the
 /// race resolving without this arm, which the verdict already handles.
 fn win(root: &Path, arms: &Arms<'_>, raced: Raced) {
-    arms.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    if arms.stop.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
+    drop(arms.raced.send(raced));
     let reclaimed = crate::exec::cancel_owned_group(root);
     let _ = arms.cancelled.send(reclaimed);
-    drop(arms.raced.send(raced));
 }
 
-/// The self-stall arm of [`verify_raced`] (CLOUD-2369): the task's registry
-/// stamp, read once a beat, and the gate cancelled once [`stalled`] says it
-/// stood still for `beats` beats.
+/// The self-stall arm of [`verify_raced`] (CLOUD-2369): the task's progress,
+/// read once a beat from `seed` (the reading before the gate started), and the
+/// gate cancelled once [`stalled`] says it stood still for `beats` beats.
 ///
 /// Counted over the beats THIS gate saw, never [`crate::lease::bail`]'s age of
 /// the stamp: a stamp already old when the gate starts is the previous step's,
 /// not evidence this one is wedged. The pause is the crate's one sanctioned
 /// delay, bounded by the gate through `stop`, so this arm never outlives the
 /// gate it watches.
-fn stall_arm(root: &Path, stall: &Stall, arms: &Arms<'_>) {
-    let mut run = None;
+fn stall_arm(root: &Path, stall: &Stall, seed: Option<Still>, arms: &Arms<'_>) {
+    let mut run = seed;
     while !arms.stop.load(std::sync::atomic::Ordering::Relaxed) {
-        let seen = crate::lease::progress_of(&stall.git_dir, stall.pid);
-        run = still(run, seen.map(|progress| progress.advance));
-        if stalled(run, stall.beats) {
+        run = still(run, (stall.progress)(&stall.git_dir, stall.pid));
+        if stalled(run.as_ref(), stall.beats) {
             win(root, arms, Raced::Stalled(stall.beats));
             return;
         }
@@ -4034,23 +4049,32 @@ mod lap_tests {
     /// that never moved while watched does not.
     #[test]
     fn a_frozen_advance_stalls_and_a_moving_one_does_not() {
-        let t = 1_700_000_000;
-        let s = t + 1;
-        let run = |seen: &[i64]| seen.iter().fold(None, |run, at| still(run, Some(*at)));
-        assert!(stalled(run(&[t, s, s, s]), 2));
+        // Same second, new phase name: still a move.
+        let (t, s, u) = ("100 verify", "100 lint", "101 test");
+        let run = |seen: &[&str]| {
+            seen.iter()
+                .fold(None, |run, at| still(run, Some((*at).to_owned())))
+        };
+        assert!(stalled(run(&[t, s, s, s]).as_ref(), 2));
         assert!(
-            !stalled(run(&[t, s, s, s + 1]), 2),
+            !stalled(run(&[t, s, s, u]).as_ref(), 2),
             "an advance resets the run"
         );
-        assert!(!stalled(run(&[t, s, s]), 2), "too few observations");
-        assert!(!stalled(run(&[t, s, s, s]), 0), "a zero bound never fires");
         assert!(
-            !stalled(still(run(&[t, s, s, s]), None), 2),
+            !stalled(run(&[t, s, s]).as_ref(), 2),
+            "too few observations"
+        );
+        assert!(
+            !stalled(run(&[t, s, s, s]).as_ref(), 0),
+            "a zero bound never fires"
+        );
+        assert!(
+            !stalled(still(run(&[t, s, s, s]), None).as_ref(), 2),
             "a missing record clears the run"
         );
         assert!(
-            !stalled(run(&[t, t, t, t, t]), 2),
-            "a stamp that never moved is a gate that does not report"
+            !stalled(run(&[t, t, t, t, t]).as_ref(), 2),
+            "a token that never moved is a gate that does not report"
         );
     }
 
