@@ -352,9 +352,9 @@ reason = "read the row before writing it: mise run issue-read-check"
 /// subject would make the receipt path point somewhere the caller did not name,
 /// and `safe_subject` refuses rather than rewriting — rewriting could file two
 /// subjects under one receipt, which is the confusion the `named` key exists to
-/// prevent. Refusing resolves the whole receipt question to could-not-look, which
-/// allows, because a judgement about the shape of an argument is not a judgement
-/// about the receipt.
+/// prevent. Refusing resolves that check to could-not-look, which allows,
+/// because a judgement about the shape of an argument is not a judgement about
+/// the receipt. Other checks on the call are still judged (CLOUD-2437).
 #[test]
 fn an_unfileable_subject_is_could_not_look_and_allows() {
     let repo = Fixture::new("args-unsafe-subject")

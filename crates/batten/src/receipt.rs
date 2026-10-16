@@ -868,27 +868,37 @@ pub(crate) fn verdicts(
     let facts = repo_facts().ok()?;
     // Resolved once, and only when a branch-keyed row asked for it: a head-keyed
     // caller must not pay two extra git invocations for a question it never
-    // asks. `None` here resolves the WHOLE call to "could not look" rather than
-    // to a missing receipt — see [`branch_facts`] for why that direction is the
-    // safe one.
-    let branch = if checks.values().any(|key| *key == ReceiptKey::Branch) {
-        Some(branch_facts(&facts.main)?)
-    } else {
-        None
-    };
+    // asks. `None` here is "could not look" rather than a missing receipt — see
+    // [`branch_facts`] for why that direction is the safe one.
+    //
+    // COULD-NOT-LOOK FOR THE CHECKS THAT NEEDED IT, NEVER THE WHOLE CALL
+    // (CLOUD-2437). Taking the whole map to `None` here let one unresolvable
+    // subject allow every other row on the call: a `named` row keyed on an
+    // argument a bare `gh pr ready` does not carry switched off the `delta`-keyed
+    // review rows beside it. The checks below that read this answer `Valid`, the
+    // allow could-not-look already meant, and every other check is still judged.
+    let branch = checks
+        .values()
+        .any(|key| *key == ReceiptKey::Branch)
+        .then(|| branch_facts(&facts.main))
+        .flatten();
     // The same shape one line up, and the same reason (CLOUD-987): resolved only
-    // when a `named`-keyed row asked, and `None` takes the WHOLE call to
-    // could-not-look rather than to a missing receipt.
+    // when a `named`-keyed row asked, and `None` is could-not-look for the
+    // `named` checks alone.
     //
     // A subject this engine will not file under is not a receipt verdict — it is
     // not having looked. Refusing on it would turn a judgement about the shape of
     // an argument into a judgement about the receipt, and `safe_subject` explains
     // why the bad value is refused rather than rewritten.
-    let named = if checks.values().any(|key| *key == ReceiptKey::Named) {
-        Some(subject.filter(|value| safe_subject(value))?.to_owned())
-    } else {
-        None
-    };
+    let named = checks
+        .values()
+        .any(|key| *key == ReceiptKey::Named)
+        .then(|| {
+            subject
+                .filter(|value| safe_subject(value))
+                .map(ToOwned::to_owned)
+        })
+        .flatten();
     Some(
         checks
             .iter()
@@ -933,15 +943,14 @@ pub(crate) fn verdicts(
                             &facts.git_dir,
                         )
                     }
+                    // `None` above is could-not-look for THIS check alone, which
+                    // allows it, as a whole-call could-not-look always did.
                     ReceiptKey::Branch => {
-                        branch.as_ref().map_or(Validity::Missing, |(branch, own)| {
+                        branch.as_ref().map_or(Validity::Valid, |(branch, own)| {
                             branch_validity(&facts.git_dir, check, branch, &facts.head, *own)
                         })
                     }
-                    // Resolved once above, for `branch`'s reason, and `None` there
-                    // already took the whole call to could-not-look — so by here
-                    // the subject is present and safe.
-                    ReceiptKey::Named => named.as_ref().map_or(Validity::Missing, |value| {
+                    ReceiptKey::Named => named.as_ref().map_or(Validity::Valid, |value| {
                         named_validity(&facts.git_dir, check, value)
                     }),
                     // Resolved once per CHECK rather than once per call, which is

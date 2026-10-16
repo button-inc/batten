@@ -603,12 +603,53 @@ fn committed_ready_config() -> String {
 }
 
 fn committed_fixture(name: &str) -> PathBuf {
+    fixture_with(name, &committed_ready_config())
+}
+
+fn fixture_with(name: &str, config: &str) -> PathBuf {
     common::Fixture::new(name)
-        .config(&committed_ready_config())
+        .config(config)
         .file("README.md", "base\n")
         .git()
         .base_commit()
         .build()
+}
+
+/// A SUBJECT ONE ROW CANNOT READ IS COULD-NOT-LOOK FOR THAT ROW ALONE
+/// (CLOUD-2437).
+///
+/// A `named` row on the same `gh pr ready` selector, keyed on `input-id`, which a
+/// shell call never carries. On `main` that absent subject took the whole
+/// receipt map to could-not-look, so the ready was allowed with none of the
+/// three receipts the committed row owes.
+#[test]
+fn a_subjectless_named_row_does_not_switch_off_the_review_rows() {
+    let mut config: toml::Table = committed_ready_config()
+        .parse()
+        .expect("the fixture config parses");
+    let rules = config["rule"].as_array_mut().expect("the rule rows");
+    let mut named = rules[0].as_table().expect("the ready row").clone();
+    named.insert("id".into(), "issue read stale".into());
+    named.insert(
+        "checks".into(),
+        toml::Value::Array(vec!["issue-read".into()]),
+    );
+    named.insert("key".into(), "named".into());
+    named.insert("key_from".into(), "input-id".into());
+    named.remove("key_base");
+    rules.push(toml::Value::Table(named));
+    let dir = fixture_with(
+        "review-owes-three-beside-a-named-row",
+        &toml::to_string(&config).expect("the fixture config serialises"),
+    );
+    change(&dir, "fn a() {}\n");
+
+    let text = denied(&ready(&dir));
+    assert!(text.contains(" at simplify"), "{text}");
+    for skill in OWED {
+        dispatch(&dir, skill);
+    }
+    allowed(&ready(&dir));
 }
 
 /// EACH MISSING SKILL IS NAMED IN TURN, and only all three admit.

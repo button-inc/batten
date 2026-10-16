@@ -18002,8 +18002,9 @@ fn receipt_facts(
     // for fewer checks than a row requires has not proved the precondition — so
     // an omission is the strictest answer available, and it would make a
     // checkout with no resolvable HEAD refuse every `gh pr ready` for a property
-    // of the environment. This is `receipt::verdicts`'s own posture, where an
-    // unresolvable branch takes the call to could-not-look for the same reason.
+    // of the environment. `receipt::verdicts` answers an unresolvable branch or
+    // `named` subject the same way for that check alone (CLOUD-2437); here no
+    // store means no agent-sourced check can be answered at all.
     if !sourced.is_empty() && store.is_none() {
         return facts::Look::CouldNotLook;
     }
@@ -28444,8 +28445,10 @@ pub fn land_ready_owes(
         "tool_name": "Bash",
         "tool_input": {"command": "gh pr ready"},
     });
+    // AN ENVELOPE THIS FUNCTION BUILT, so one that will not decode is a bug, never
+    // could-not-look (CLOUD-2437): `Ok(None)` here readied with nothing asked.
     let Some(envelope) = hook::decode(harness, &raw.to_string()) else {
-        return Ok(None);
+        anyhow::bail!("land: the ready envelope this lap built does not decode");
     };
     let receipted = policy.required_checks_for(&envelope);
     let recency = Recency {
