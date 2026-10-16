@@ -714,7 +714,7 @@ mod tests {
                 // `Unclassified`, so it is off this list (CLOUD-51, CLOUD-780).
                 // The two `task` leaves that read: the registry's report, which
                 // deletes nothing since CLOUD-2372, and one field of one record.
-                // The noun's other four WRITE.
+                // The noun's other five WRITE.
                 "task alive".to_owned(),
                 "task read".to_owned(),
                 // CLOUD-1718's fold, and `read` in §5's strong sense rather than
