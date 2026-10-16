@@ -11540,7 +11540,9 @@ fn run_land_singleton(
     // Absent, this reaps NOTHING rather than guessing. A wrong root makes
     // `matches_cmdline` miss every live task, so every entry reads as abandoned
     // and the reaper signals the group of a lap that is running — the direction
-    // a miss must never fail in.
+    // a miss must never fail in. Nor does it forget: a crashed record nothing
+    // can signal stays visible to `alive`, because forgetting it hides its
+    // orphaned group rather than ending it (`task::abandoned`, CLOUD-1148).
     //
     // ONLY THE REAP IS CONDITIONAL. The lock and the registration below run
     // either way: `singleton_acquire` reclaims on `pid_exists`, which needs no

@@ -581,10 +581,10 @@ fn land_verify_supervised(repo: &Path, gate: &str, task: &str, beats: &str) -> (
     (output.status.code().expect("exit code"), stdout(&output))
 }
 
-/// **A verify whose task never advances stops itself** (CLOUD-2369). The gate
-/// here never exits and starts no step, so its task's stamps stand still; after
-/// two still beats the gate is cancelled and the verify answers exit 3, never a
-/// verdict about the tree, with the stall on the lap record.
+/// **A verify that stops advancing stops itself** (CLOUD-2369). The gate here
+/// reports one step and then never exits, so its task's stamps stand still;
+/// after two still beats the gate is cancelled and the verify answers exit 3,
+/// never a verdict about the tree, with the stall on the lap record.
 #[test]
 fn a_verify_that_never_advances_stops_itself() {
     let repo = repo("land-verify-stalls");
@@ -592,7 +592,10 @@ fn a_verify_that_never_advances_stops_itself() {
     let gate = script(
         &repo,
         "wedged.sh",
-        &format!("echo $$ > {}\nexec sleep 600\n", marker.display()),
+        &format!(
+            "sleep 2\n\"$BATTEN_BIN\" task phase 424242 wedged\necho $$ > {}\nexec sleep 600\n",
+            marker.display()
+        ),
     );
     let (code, out) = land_verify_supervised(&repo, &gate, "424242", "2");
     assert_eq!(code, 3, "a stall is could-not-finish, not a verdict: {out}");
@@ -623,6 +626,18 @@ fn a_verify_that_keeps_advancing_is_never_stalled() {
     );
     let (code, out) = land_verify_supervised(&repo, &gate, "424243", "3");
     assert_eq!(code, 0, "a gate that advances finishes: {out}");
+    assert!(!out.contains("verify stalled"), "{out}");
+}
+
+/// A gate that REPORTS NOTHING is no evidence of a stall: one that never moves
+/// its task's stamps runs past the bound and finishes, because a still stamp
+/// only counts once the gate has shown it reports at all (review of #1203).
+#[test]
+fn a_verify_that_never_reports_is_never_stalled() {
+    let repo = repo("land-verify-silent");
+    let gate = script(&repo, "silent.sh", "sleep 5\n");
+    let (code, out) = land_verify_supervised(&repo, &gate, "424244", "2");
+    assert_eq!(code, 0, "a silent gate finishes: {out}");
     assert!(!out.contains("verify stalled"), "{out}");
 }
 

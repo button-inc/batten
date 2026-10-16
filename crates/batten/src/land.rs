@@ -2197,23 +2197,52 @@ fn confirmed(
     }
 }
 
-/// Whether the last `beats` intervals of a task's progress stamps all stood
-/// still (CLOUD-2369): the last `beats + 1` observations are equal.
+/// A task's progress stamp as the self-stall arm has watched it (CLOUD-2369).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Still {
+    /// The stamp last read.
+    stamp: i64,
+    /// Beats it has stood still since it last moved.
+    beats: u32,
+    /// Whether it has moved at all while watched.
+    reported: bool,
+}
+
+/// One beat's reading of a task's progress stamp folded into its run.
 ///
-/// A COUNT, NEVER A DEADLINE. Any advance breaks the run, so a verify that keeps
-/// starting steps never trips it however long it runs; too few observations is
-/// no evidence, and `0` beats is a bound that never fires.
-//MUTANT self-stall-never-wins|s@^    beats > 0 \&\& advances.len() >= needed \&\& recent.all(\x7cseen\x7c seen == last)$@    false@|a_frozen_advance_stalls_and_a_moving_one_does_not
+/// A missing record is no evidence of a stall ([`crate::lease::progress_of`]'s
+/// own reading), so it clears the run rather than extending it.
 #[must_use]
-pub fn stalled(advances: &[i64], beats: u32) -> bool {
-    let needed = usize::try_from(beats)
-        .unwrap_or(usize::MAX)
-        .saturating_add(1);
-    let mut recent = advances.iter().rev().take(needed);
-    let Some(last) = recent.next() else {
-        return false;
-    };
-    beats > 0 && advances.len() >= needed && recent.all(|seen| seen == last)
+pub fn still(run: Option<Still>, seen: Option<i64>) -> Option<Still> {
+    let seen = seen?;
+    Some(match run {
+        Some(run) if run.stamp == seen => Still {
+            beats: run.beats.saturating_add(1),
+            ..run
+        },
+        moved => Still {
+            stamp: seen,
+            beats: 0,
+            reported: moved.is_some(),
+        },
+    })
+}
+
+/// Whether a [`still`] run has stood still for `beats` beats.
+///
+/// A COUNT, NEVER A DEADLINE. Any advance restarts the run, so a verify that
+/// keeps starting steps never trips it however long it runs, and `0` beats is a
+/// bound that never fires.
+///
+/// ONLY ONCE THE STAMP HAS MOVED WHILE WATCHED (review of #1203). A gate that
+/// reports no step under the task leaves the stamp as it found it however long
+/// it runs, so a still stamp is evidence of a stall only from a gate that has
+/// shown it reports at all.
+//MUTANT self-stall-never-wins|s@^    beats > 0 \&\& matches!(run, Some(run) if run.reported \&\& run.beats >= beats)$@    false@|a_frozen_advance_stalls_and_a_moving_one_does_not
+//MUTANT self-stall-on-silence|s@ if run.reported \&\& @ if @|a_frozen_advance_stalls_and_a_moving_one_does_not
+#[must_use]
+pub const fn stalled(run: Option<Still>, beats: u32) -> bool {
+    beats > 0 && matches!(run, Some(run) if run.reported && run.beats >= beats)
 }
 
 /// What a landing does at entry with the forge state a lap that never returned
@@ -2356,27 +2385,20 @@ fn win(root: &Path, arms: &Arms<'_>, raced: Raced) {
 }
 
 /// The self-stall arm of [`verify_raced`] (CLOUD-2369): the task's registry
-/// stamps, read once a beat, and the gate cancelled once [`stalled`] says they
+/// stamp, read once a beat, and the gate cancelled once [`stalled`] says it
 /// stood still for `beats` beats.
 ///
-/// **A missing record is no evidence of a stall** ([`crate::lease::progress_of`]'s
-/// own reading), so it clears the run rather than extending it. The pause is
-/// the crate's one sanctioned delay, bounded by the gate through `stop`, so this
-/// arm never outlives the gate it watches.
+/// Counted over the beats THIS gate saw, never [`crate::lease::bail`]'s age of
+/// the stamp: a stamp already old when the gate starts is the previous step's,
+/// not evidence this one is wedged. The pause is the crate's one sanctioned
+/// delay, bounded by the gate through `stop`, so this arm never outlives the
+/// gate it watches.
 fn stall_arm(root: &Path, stall: &Stall, arms: &Arms<'_>) {
-    let needed = usize::try_from(stall.beats)
-        .unwrap_or(usize::MAX)
-        .saturating_add(1);
-    let mut advances: Vec<i64> = Vec::new();
+    let mut run = None;
     while !arms.stop.load(std::sync::atomic::Ordering::Relaxed) {
-        match crate::lease::progress_of(&stall.git_dir, stall.pid) {
-            Some(progress) => advances.push(progress.advance),
-            None => advances.clear(),
-        }
-        if advances.len() > needed {
-            advances.remove(0);
-        }
-        if stalled(&advances, stall.beats) {
+        let seen = crate::lease::progress_of(&stall.git_dir, stall.pid);
+        run = still(run, seen.map(|progress| progress.advance));
+        if stalled(run, stall.beats) {
             win(root, arms, Raced::Stalled(stall.beats));
             return;
         }
@@ -2658,34 +2680,25 @@ pub const fn poisons_this_clone(
     )
 }
 
-/// Whether a step's answer is a verify whose gate was cancelled for stalling,
-/// which stops the landing (CLOUD-2369).
+/// [`progress_of`], with a verify whose gate was cancelled for stalling
+/// stopping the landing first (CLOUD-2369): what the lap does next with one
+/// step's whole answer.
 ///
-/// Its own signal rather than a [`TapVerdict`]: `seen` is the CI checks reading,
-/// latched across steps and read by the tap and the undo, and a local gate that
-/// stalled is not a fact about any check. The same exit 3 without it is a
-/// reclaimed gate, which laps.
+/// `gate_stalled` is its own signal rather than a [`TapVerdict`]: `seen` is the
+/// CI checks reading, latched across steps and read by the tap and the undo, and
+/// a local gate that stalled is not a fact about any check. Only the verify
+/// raises it; the same exit 3 without it is a reclaimed gate, which laps.
 //MUTANT-SUITE crates/batten/src/land.rs
-//MUTANT stall-laps|s@(Step::Verify, crate::exit::ExitCode::Internal, true)@(Step::Verify, crate::exit::ExitCode::Internal, false)@|a_stalled_verify_stops_the_landing
-#[must_use]
-pub const fn stopped_by_stall(step: Step, code: crate::exit::ExitCode, stalled: bool) -> bool {
-    matches!(
-        (step, code, stalled),
-        (Step::Verify, crate::exit::ExitCode::Internal, true)
-    )
-}
-
-/// [`progress_of`], with a stalled verify ([`stopped_by_stall`]) stopping
-/// first: what the lap does next with one step's whole answer.
+//MUTANT stall-laps|s@^    if gate_stalled {$@    if false {@|a_stalled_verify_stops_the_landing
 #[must_use]
 pub const fn lap_progress(
     step: Step,
     code: crate::exit::ExitCode,
-    stalled: bool,
+    gate_stalled: bool,
     seen: Option<TapVerdict>,
     basis: Basis,
 ) -> Progress {
-    if stopped_by_stall(step, code, stalled) {
+    if gate_stalled {
         Progress::Stop
     } else {
         progress_of(step, code, seen, basis)
@@ -3979,7 +3992,7 @@ mod mutate_tests {
 
 #[cfg(test)]
 mod lap_tests {
-    use super::{Basis, Progress, Step, progress, progress_of, stalled, stopped_by_stall};
+    use super::{Basis, Progress, Step, lap_progress, progress, progress_of, stalled, still};
     use crate::exit::ExitCode::{Internal, Success, Usage, Violation};
 
     /// CLOUD-2371: only this branch's own superseded ready head is cancelled
@@ -4016,29 +4029,44 @@ mod lap_tests {
         );
     }
 
-    /// CLOUD-2369: `beats` intervals of equal stamps stall; one advance among
-    /// them, or too few observations, does not.
+    /// CLOUD-2369: `beats` intervals of equal stamps after a move stall; one
+    /// advance among them, too few observations, a missing record, or a stamp
+    /// that never moved while watched does not.
     #[test]
     fn a_frozen_advance_stalls_and_a_moving_one_does_not() {
         let t = 1_700_000_000;
-        assert!(stalled(&[t, t, t], 2));
-        assert!(!stalled(&[t, t, t + 1], 2), "an advance resets the run");
-        assert!(!stalled(&[t, t], 2), "too few observations");
-        assert!(!stalled(&[t, t, t], 0), "a zero bound never fires");
+        let s = t + 1;
+        let run = |seen: &[i64]| seen.iter().fold(None, |run, at| still(run, Some(*at)));
+        assert!(stalled(run(&[t, s, s, s]), 2));
+        assert!(
+            !stalled(run(&[t, s, s, s + 1]), 2),
+            "an advance resets the run"
+        );
+        assert!(!stalled(run(&[t, s, s]), 2), "too few observations");
+        assert!(!stalled(run(&[t, s, s, s]), 0), "a zero bound never fires");
+        assert!(
+            !stalled(still(run(&[t, s, s, s]), None), 2),
+            "a missing record clears the run"
+        );
+        assert!(
+            !stalled(run(&[t, t, t, t, t]), 2),
+            "a stamp that never moved is a gate that does not report"
+        );
     }
 
     /// CLOUD-2369: a verify whose gate was cancelled for stalling ends the
     /// landing; the same exit 3 without the stall is a reclaimed gate, which
-    /// laps, and no other step's answer is a stall.
+    /// laps.
     #[test]
     fn a_stalled_verify_stops_the_landing() {
-        assert!(stopped_by_stall(Step::Verify, Internal, true));
-        assert!(!stopped_by_stall(Step::Verify, Internal, false));
         assert_eq!(
-            progress_of(Step::Verify, Internal, None, Basis::Own),
+            lap_progress(Step::Verify, Internal, true, None, Basis::Own),
+            Progress::Stop
+        );
+        assert_eq!(
+            lap_progress(Step::Verify, Internal, false, None, Basis::Own),
             Progress::Lap
         );
-        assert!(!stopped_by_stall(Step::Wait, Internal, true));
     }
 
     /// **The discriminating claim: a refusal a rebase would clear laps, and one
