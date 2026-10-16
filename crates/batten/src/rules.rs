@@ -12306,10 +12306,15 @@ pub(crate) fn spawn_resolving<T>(
     };
     let path = std::env::var_os("PATH");
     let extensions = executable_extensions();
+    // THE IMAGE THAT ASKS, for rung -1 (CLOUD-2386). `ok()` rather than a
+    // refusal: an unreadable `/proc` is a fact about this process, not about the
+    // row, and the ladder then decides exactly as it did before the rung existed.
+    let running = std::env::current_exe().ok();
     let mut spawn = spawn;
     let first = spawn_resolving_on(
         path.as_deref(),
         root,
+        running.as_deref(),
         program,
         &extensions,
         &pinned,
@@ -12344,9 +12349,13 @@ pub(crate) fn spawn_resolving<T>(
     {
         let afresh = crate::pinned::re_resolved(root);
         if matches!(&afresh, crate::facts::Look::Is(programs) if programs.contains(program)) {
+            // `None`, because rung -1 already had its turn: this retry is
+            // reached only once the ladder itself failed, and re-offering the
+            // image would spawn a file that just declined to run (CLOUD-2386).
             return spawn_resolving_on(
                 path.as_deref(),
                 root.into(),
+                None,
                 program,
                 &extensions,
                 &afresh,
@@ -12369,11 +12378,56 @@ pub(crate) fn spawn_resolving<T>(
 fn spawn_resolving_on<T>(
     path: Option<&std::ffi::OsStr>,
     root: Option<&Path>,
+    running: Option<&Path>,
     program: &str,
     extensions: &[String],
     pinned: &crate::pinned::PinnedFacts,
     mut spawn: impl FnMut(&str, &[&str]) -> std::io::Result<T>,
 ) -> std::io::Result<T> {
+    // RUNG -1: A DECLARED `batten` IS THE ENGINE ASKING ITSELF, SO THE ENGINE
+    // THAT ASKS IS THE ONE THAT ANSWERS (CLOUD-1326, CLOUD-2386).
+    //
+    // `run = ["batten", ...]` is the engine asking itself a question. Resolved on
+    // `PATH` that is whatever RELEASE is installed, answering about a tree it was
+    // not built from: a row added in the same commit as the verb it calls is a
+    // handler that silently cannot run until the next release, and a row whose
+    // answer changed in the tree keeps reporting the old one. Structural version
+    // skew inside batten's own hook, and it is the quiet half of the same class
+    // that killed `.mcp.json` — quiet only because `doctor egress` happens to be
+    // released.
+    //
+    // ONE PREDICATE, HERE, RATHER THAN AT ONE SPAWN SITE (CLOUD-2386). This began
+    // as `handler.rs`'s own mapping, which left every other declared argv
+    // resolving on `PATH`: the `[[board.sweep]]` rows, the lease census notes, a
+    // declared repair, and the generic declared-argv spawns. Under a source pin,
+    // or after `engine update`, each of those children ran a different engine
+    // from the one that spawned it. Every caller of this resolver is covered now,
+    // the operator-typed `batten exec -- batten …` included, and that is intended.
+    //
+    // BEFORE THE PIN, which is what makes it a rung rather than a preference. The
+    // pin rung below fires only where `PATH` cannot resolve the program, so a
+    // `batten` the pin provides and `PATH` cannot see would otherwise be spawned
+    // through the mediator — the pinned release, not this image.
+    //
+    // AN IMAGE THAT CANNOT BE READ OR CANNOT BE SPAWNED FALLS THROUGH rather than
+    // refusing. The declared name is still a program, and `current_exe` failing
+    // is a fact about `/proc`, not about the row. The same for a spawn error:
+    // after `engine update` replaces the file, Linux reads `/proc/self/exe` as
+    // `… (deleted)` and the spawn fails `NotFound`. Either way the ladder below
+    // decides and the image is not retried, so CLOUD-1371's re-resolve branch
+    // sees only the ladder's own result.
+    //
+    // UNDER `cargo test`, `current_exe` IS THE TEST BINARY, so a library unit
+    // test sending a bare `batten` through the real resolver would spawn libtest.
+    // No such test exists; the integration tests spawn `CARGO_BIN_EXE_batten`,
+    // whose `current_exe` is batten.
+    if program == crate::surface::BINARY
+        && let Some(image) = running.and_then(Path::to_str)
+        && let Ok(ok) = spawn(image, &[])
+    {
+        return Ok(ok);
+    }
+
     // RUNG 0: THE PIN, AND IT IS FIRST RATHER THAN A FALLBACK (CLOUD-1324).
     //
     // A project that pins its tools gets the pinned ones, so where the pin
@@ -18167,6 +18221,7 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
         let out = spawn_resolving_on(
             Some(path.as_os_str()),
             Some(Path::new("/nowhere")),
+            None,
             "judge-stub",
             &[".EXE".to_owned()],
             &crate::facts::Look::CouldNotLook,
@@ -18205,6 +18260,7 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
         let err = spawn_resolving_on(
             Some(path.as_os_str()),
             None,
+            None,
             "stub",
             &[".EXE".to_owned()],
             &crate::facts::Look::CouldNotLook,
@@ -18222,6 +18278,7 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
         // lookup finds nothing, so the error never advances past rung 1.
         let absent = spawn_resolving_on(
             Some(path.as_os_str()),
+            None,
             None,
             "no-such-program-anywhere",
             &[".EXE".to_owned()],
@@ -18250,6 +18307,7 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
         let log = std::cell::RefCell::new(Vec::new());
         let out = spawn_resolving_on(
             Some(std::ffi::OsStr::new("")),
+            None,
             None,
             &scanner.display().to_string(),
             &[".EXE".to_owned()],
@@ -18283,6 +18341,7 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
         let out = spawn_resolving_on(
             Some(std::ffi::OsStr::new("")),
             Some(root.as_path()),
+            None,
             "bin/checker",
             &[".EXE".to_owned()],
             &crate::facts::Look::CouldNotLook,
@@ -18313,6 +18372,7 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
             let log = std::cell::RefCell::new(Vec::new());
             let _out = spawn_resolving_on(
                 Some(std::ffi::OsStr::new("")),
+                None,
                 None,
                 "hk",
                 &[".EXE".to_owned()],
@@ -18388,6 +18448,7 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
         let _out = spawn_resolving_on(
             Some(dir.as_os_str()),
             None,
+            None,
             "hk",
             &[".EXE".to_owned()],
             &pinned,
@@ -18408,6 +18469,153 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
                 .iter()
                 .any(|program| program == crate::pinned::MEDIATOR),
             "and the mediator is not reached at all on this path: {attempts:?}"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A declared `batten` runs the image that asked — before `PATH`, before the
+    /// pin.
+    ///
+    /// **`run = ["batten", …]` is the engine asking itself a question**
+    /// (CLOUD-1326, CLOUD-2386), and a `PATH` or pin answer is whatever RELEASE
+    /// is installed: a verb added in the same commit as the row calling it
+    /// cannot run until the next release, and a verb whose answer changed keeps
+    /// reporting the old one. `handler.rs` mapped the name to `current_exe` at
+    /// its one spawn site; every other declared argv — the sweep rows, the lease
+    /// notes, a declared repair — reached this resolver and got the release.
+    ///
+    /// Five arms, because each is a way the rung can be written wrong: deleting
+    /// it, matching on any program, ordering it after the pin, dropping the
+    /// `running = None` case, or returning the image's own spawn error rather
+    /// than falling through.
+    #[test]
+    fn a_declared_batten_resolves_to_the_running_image_before_the_pin() {
+        let dir =
+            std::env::temp_dir().join(format!("batten-rung-minus-one-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("the stub directory is created");
+        let stub = dir.join(crate::surface::BINARY);
+        std::fs::write(&stub, "#!/bin/sh\nexit 0\n").expect("the stub is written");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755))
+                .expect("the stub is executable");
+        }
+        // Never created, and it does not need to be: the ladder is asked what it
+        // SPAWNS, and the spawn is the closure below.
+        let image = dir.join("image").join(crate::surface::BINARY);
+        let image_name = image.display().to_string();
+
+        let pinned = crate::facts::Look::Is(
+            [crate::surface::BINARY.to_owned(), "hk".to_owned()]
+                .into_iter()
+                .collect::<std::collections::BTreeSet<_>>(),
+        );
+
+        // `runnable` is the ONE program the fake loader admits; everything else
+        // reports `NotFound`, so the log is the whole route the ladder walked
+        // rather than just its head.
+        let attempts =
+            |path: &str, running: Option<&Path>, program: &str, runnable: Option<&str>| {
+                let log = std::cell::RefCell::new(Vec::new());
+                let out = spawn_resolving_on(
+                    Some(std::ffi::OsStr::new(path)),
+                    None,
+                    running,
+                    program,
+                    &[".EXE".to_owned()],
+                    &pinned,
+                    |program: &str, _extra: &[&str]| {
+                        log.borrow_mut().push(program.to_owned());
+                        if runnable == Some(program) {
+                            Ok("ran")
+                        } else {
+                            Err(std::io::Error::from(std::io::ErrorKind::NotFound))
+                        }
+                    },
+                );
+                (out.is_ok(), log.into_inner())
+            };
+
+        let on_path = dir.to_str().expect("the temp path is UTF-8");
+
+        // 1. The image wins over a `batten` PATH can see and a pin that provides
+        //    it. Deleting the rung, or matching nothing, fails here.
+        let (ok, walked) = attempts(
+            on_path,
+            Some(image.as_path()),
+            crate::surface::BINARY,
+            Some(&image_name),
+        );
+        assert!(ok, "the image ran");
+        assert_eq!(
+            walked,
+            vec![image_name.clone()],
+            "the running image is spawned first and nothing else is tried"
+        );
+
+        // 2. ANY OTHER PROGRAM resolves exactly as it does today. A rung that
+        //    matched on more than the binary name fails here.
+        let (_, walked) = attempts(on_path, Some(image.as_path()), "hk", None);
+        assert_eq!(
+            walked.first().map(String::as_str),
+            Some(crate::pinned::MEDIATOR),
+            "`hk` is still the pin's, never the image's: {walked:?}"
+        );
+        assert!(
+            !walked.contains(&image_name),
+            "and the image is not reached for it at all: {walked:?}"
+        );
+
+        // 3. NO IMAGE, today's answer. `current_exe` failing is a fact about
+        //    `/proc`, not about the row.
+        let (_, walked) = attempts(on_path, None, crate::surface::BINARY, None);
+        assert_eq!(
+            walked.first().map(String::as_str),
+            Some(crate::surface::BINARY),
+            "without an image the PATH-resolved name is spawned as written: {walked:?}"
+        );
+
+        // 4. BEFORE THE PIN, which a `PATH` stub alone cannot show: rung 0 fires
+        //    only where `PATH` cannot resolve the program, so this is the only
+        //    shape that orders the two. A rung placed after the pin records the
+        //    mediator here.
+        let (ok, walked) = attempts(
+            "",
+            Some(image.as_path()),
+            crate::surface::BINARY,
+            Some(&image_name),
+        );
+        assert!(ok, "the image ran");
+        assert_eq!(
+            walked,
+            vec![image_name.clone()],
+            "the image is reached before the pin, not after it"
+        );
+
+        // 5. AN UNSPAWNABLE IMAGE FALLS THROUGH, and is not retried. After
+        //    `engine update` replaces the file, `/proc/self/exe` reads
+        //    `… (deleted)` and this is the live case, not a hypothetical.
+        let (ok, walked) = attempts("", Some(image.as_path()), crate::surface::BINARY, None);
+        assert!(!ok, "nothing here can run");
+        assert_eq!(
+            walked.first().map(String::as_str),
+            Some(image_name.as_str()),
+            "the image is still tried first: {walked:?}"
+        );
+        assert_eq!(
+            walked.get(1).map(String::as_str),
+            Some(crate::pinned::MEDIATOR),
+            "and the ladder then picks what it would have picked today: {walked:?}"
+        );
+        assert_eq!(
+            walked
+                .iter()
+                .filter(|program| **program == image_name)
+                .count(),
+            1,
+            "the image is tried once and never retried: {walked:?}"
         );
 
         std::fs::remove_dir_all(&dir).ok();
