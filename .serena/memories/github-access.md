@@ -299,12 +299,14 @@ probe error, not a fact.
 
 ## CI-checks scope gap (don't misdiagnose as a proxy problem)
 
-Reading CI checks needs **Checks: read**. A fine-grained PAT cannot carry it —
-`…/commits/<sha>/check-runs` and `gh pr checks --watch` 403 with
-`x-accepted-github-permissions: checks=read`, off-proxy included. That's a token
-capability, not a network block. Use a **classic PAT scoped `repo`** (bundles
-checks-read, so `--watch` works) or the MCP `get_check_runs` tool (carries the
-permission via App auth).
+Reading CI checks needs **Checks: read**, and THE INJECTED PAT CARRIES IT NOW.
+Re-measured 2026-10-15: `mise exec -- gh api repos/button-inc/batten/commits/<sha>/check-runs`
+answered 200 (47 runs) with `BATTEN_GITHUB_TOKEN`, and session start's
+`batten doctor forge` probes `checks=read` as `ok`. An earlier revision said a
+fine-grained PAT cannot carry it and sent readers to the MCP tools first; that
+was true of an older token, not of this one. If `check-runs` 403s with
+`x-accepted-github-permissions: checks=read`, the token changed: that is a token
+capability, not a network block, and `batten doctor forge` names it.
 
 **"Everything else works" is not quite true, and the second gap is `gh pr edit`.**
 Measured 2026-08-19 with a classic PAT scoped `repo,workflow`: `gh pr edit <n>
@@ -373,17 +375,16 @@ triggers were throttled, so `ready`/`synchronize` events were _dropped, not
 queued_ — they never replay, and CI only ran once a fresh push was made after
 recovery.)
 
-During a confirmed outage, **poll for recovery — do not wait on an event**: an
-outage has no "recovered" webhook, so waiting is a hang. This is the one deliberate
-exception to the event-driven CI rule. Poll **two** signals, since they fail
-independently: (1) the status-page component, and (2) the real endpoints
-(`actions/runs?branch=…`, `commits/<sha>/check-runs`) for your head SHA. The
-recovery team often leaves the advisory up for hours after service is actually
-restored, so an appearing run/check for your SHA is _stronger_ proof than the
-advisory clearing — treat either as recovery. Run the poll as a **bounded
-background loop** (background `sleep` allowed, foreground killed) so it survives and
-re-invokes you; then re-trigger CI with a fresh push (the original events were
-dropped), confirm green, and land.
+During a confirmed outage, an outage has no "recovered" webhook, so do not wait
+on one. **Do not poll with `sleep` either**: AGENTS.md refuses every sleep, in
+either posture, a loop included (CLOUD-1337), and an earlier revision of this
+paragraph that allowed a "bounded background loop" contradicted it. Check the
+two signals on demand instead, each time the session is woken for another
+reason: (1) the status-page component, and (2) the real endpoints
+(`actions/runs?branch=…`, `commits/<sha>/check-runs`) for your head SHA. A run or
+check appearing for your SHA is stronger proof than the advisory clearing. On
+recovery, re-trigger CI with a fresh push (the original events were dropped) and
+run `mise run land` again.
 
 ## Hygiene
 
@@ -393,25 +394,15 @@ dropped), confirm green, and land.
   token, which 403s any write it is not scoped for, including the landing lease's
   CAS. See §"Why the toolchain runs here" for the measurement and the credential
   helper. Interception applies on both routes, so fencing trades away nothing.
-- Confirming CI: **one continuous background `gh` poll, no timeout, never
-  event-driven.** Do not wait on the webhook / PR activity subscription — in this
-  ephemeral cloud env a webhook can only wake a session that still exists, and an
-  idle wait gets the VM reclaimed within minutes (before CI finishes), so the event
-  has nothing to wake and the landing stalls forever; webhooks also drop _successes_
-  outright (proven during the Aug-2026 outage). Instead, right after readying/push,
-  launch a **single unbounded background process** that loops
-  `gh api …/commits/<sha>/check-runs` on an interval and exits _only_ when every
-  check reaches a terminal state — **no `MAX`/iteration cap, no wall-clock
-  timeout** (a timeout just reintroduces the reap gap; the loop is already bounded
-  by CI completing). Poll the **`final`** aggregate, not just
-  `ci`/`cross`/`commit-lint` — it's the authoritative all-green signal. On the
-  process's exit it re-invokes you; read conclusions once, then land. Only the
-  _foreground_ busy-poll/`sleep` is banned; a backgrounded poll is the durability
-  mechanism. Script gotchas that bit us: feed the JSON to `python3` via a pipe, not
-  a `<<'PY'` heredoc (the heredoc _is_ stdin, so `sys.stdin` reads empty); and avoid
-  backslashes inside f-strings. (A superseded run shows `ci`/`cross` `cancelled` and
-  `final` `failure` from CI's concurrency `cancel-in-progress` — not a real failure,
-  just the old SHA dropped when you pushed a new head.)
+- Confirming CI is **`mise run land`'s job, never a hand-rolled poll.** `land`
+  readies the PR, waits on the head's checks by counts (no wall clock, never the
+  webhook), and stops on red. An earlier revision of this bullet prescribed "one
+  continuous background `gh` poll" of `check-runs`. AGENTS.md now forbids that:
+  no heartbeats, no bespoke wait logic around the lifecycle tasks. To read CI
+  between laps, fetch it on demand: `mise exec -- gh run view <id> --log-failed`
+  for a red job. (A superseded run shows `ci`/`cross` `cancelled` and `final`
+  `failure` from CI's concurrency `cancel-in-progress`. That is not a real
+  failure, only the old SHA dropped when a new head was pushed.)
 - Never echo a credential. Check presence with `${VAR:+SET}` — never a bare
   `$VAR` or a `${VAR:-…}` that expands the value into the transcript.
 - **`${VAR:+SET}${VAR:-UNSET}` LEAKS THE VALUE, and it reads as safe.** Measured
