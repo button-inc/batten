@@ -2638,6 +2638,11 @@ pub struct Envelope {
     /// when the host says. `resume` and `fork` keep the sighting epoch; every
     /// other source closes it (CLOUD-2145).
     pub start_source: Option<String>,
+    /// The longest background `timeout` this host honours, in milliseconds,
+    /// where the host has one to report (CLOUD-2365). Claude Code's alone today,
+    /// resolved by its adapter at decode from the variables it reads; `None` on
+    /// every other host, so the core carries no host's arithmetic.
+    pub background_ceiling: Option<u64>,
 }
 
 /// The mode a host names when the turn may propose but not perform.
@@ -3376,6 +3381,18 @@ pub fn decode_value(harness: Harness, value: &Value) -> Option<Envelope> {
         // CLOUD-2075: the sightings context and the SessionStart source.
         agent: present_str(value, "agent_id"),
         start_source: present_str(value, "source"),
+        background_ceiling: background_ceiling(harness),
+    })
+}
+
+/// The host's background ceiling, for the one host that reports one
+/// (CLOUD-2365): Claude Code, from the two variables its hook spawn inherits.
+fn background_ceiling(harness: Harness) -> Option<u64> {
+    (harness == Harness::ClaudeCode).then(|| {
+        background_max(
+            std::env::var("BASH_MAX_TIMEOUT_MS").ok().as_deref(),
+            std::env::var("BASH_DEFAULT_TIMEOUT_MS").ok().as_deref(),
+        )
     })
 }
 
@@ -7695,14 +7712,11 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
             // none (CLOUD-2157). A number cannot carry a secret, and it is what
             // tells a call that took the host's default from one that chose.
             "timeout": envelope.input.get("timeout").and_then(Value::as_u64),
-            // THE HOST'S BACKGROUND MAXIMUM, in milliseconds (CLOUD-2365): what a
-            // backgrounded call may ask for before the host stops it. Read from
-            // this process's environment, which the host's hook spawn inherits,
-            // so a raised `BASH_MAX_TIMEOUT_MS` reaches the module that pins it.
-            "background-max": background_max(
-                std::env::var("BASH_MAX_TIMEOUT_MS").ok().as_deref(),
-                std::env::var("BASH_DEFAULT_TIMEOUT_MS").ok().as_deref(),
-            ),
+            // THE HOST'S BACKGROUND MAXIMUM, in milliseconds, or `null` where the
+            // host reported none (CLOUD-2365). The adapter resolved it at decode,
+            // from the variables the host's hook spawn inherits, so a raised
+            // `BASH_MAX_TIMEOUT_MS` reaches the module that pins it.
+            "background-max": envelope.background_ceiling,
             // THE SEGMENTATION THE ENGINE ALREADY COMPUTES (CLOUD-857).
             //
             // `command` above is the line EXACTLY as written, and for two years
@@ -7898,7 +7912,7 @@ pub(crate) fn background_max(max: Option<&str>, default: Option<&str>) -> u64 {
             .filter(|value| *value > 0)
     };
     let default = positive(default).unwrap_or(120_000);
-    let maximum = positive(max).map_or(600_000.max(default), |value| value.max(default));
+    let maximum = positive(max).unwrap_or(600_000).max(default);
     maximum.clamp(7_200_000, 2_147_483_647)
 }
 
@@ -11577,6 +11591,7 @@ mod tests {
             session: None,
             agent: None,
             start_source: None,
+            background_ceiling: None,
             // The Stop-path fields (CLOUD-479) are absent on a PreTool envelope,
             // which is the honest shape rather than a filler value.
             stop_active: None,
@@ -11622,6 +11637,7 @@ mod tests {
             session: None,
             agent: None,
             start_source: None,
+            background_ceiling: None,
             stop_active: None,
             last_message: None,
             transcript: None,
@@ -16988,6 +17004,7 @@ deny contains "refused by themodule" if {
             session: None,
             agent: None,
             start_source: None,
+            background_ceiling: None,
             stop_active: None,
             last_message: None,
             transcript: None,

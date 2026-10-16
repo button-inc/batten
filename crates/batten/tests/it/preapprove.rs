@@ -62,7 +62,22 @@ fn documents(payload: &str) -> Vec<serde_json::Value> {
         &["adjudicate", "--harness", "claude-code"],
         payload,
     );
-    stdout(&outcome)
+    parsed(&outcome)
+}
+
+/// [`documents`], through a hook the caller has already configured.
+fn documents_from(hook: &mut common::Batten, payload: &str) -> Vec<serde_json::Value> {
+    let outcome = common::stdin_run(
+        hook,
+        &root(),
+        &["adjudicate", "--harness", "claude-code"],
+        payload,
+    );
+    parsed(&outcome)
+}
+
+fn parsed(outcome: &std::process::Output) -> Vec<serde_json::Value> {
+    stdout(outcome)
         .lines()
         .filter(|line| !line.trim().is_empty())
         .map(|line| serde_json::from_str(line).expect("the host reads JSON"))
@@ -118,7 +133,11 @@ fn assert_not_plan_refused(payload: &str) {
 
 /// The `updatedInput` the grant carries, or `None` where it carries none.
 fn updated_input(payload: &str) -> Option<serde_json::Value> {
-    documents(payload).into_iter().find_map(|document| {
+    updated_in(documents(payload))
+}
+
+fn updated_in(documents: Vec<serde_json::Value>) -> Option<serde_json::Value> {
+    documents.into_iter().find_map(|document| {
         document
             .get("hookSpecificOutput")?
             .get("updatedInput")
@@ -162,23 +181,8 @@ fn a_raised_host_maximum_is_the_pinned_timeout() {
     }));
     let mut hook = common::batten();
     hook.env("BASH_MAX_TIMEOUT_MS", "604800000");
-    let outcome = common::stdin_run(
-        &mut hook,
-        &root(),
-        &["adjudicate", "--harness", "claude-code"],
-        &payload,
-    );
-    let updated = stdout(&outcome)
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
-        .find_map(|document| {
-            document
-                .get("hookSpecificOutput")?
-                .get("updatedInput")
-                .cloned()
-        })
-        .expect("the grant carries the rewrite");
+    let updated =
+        updated_in(documents_from(&mut hook, &payload)).expect("the grant carries the rewrite");
     assert_eq!(updated["timeout"], 604_800_000, "{updated}");
 }
 

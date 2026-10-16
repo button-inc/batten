@@ -9,7 +9,10 @@
       "properties": {
         "arguments": {},
         "background-max": {
-          "type": "integer"
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "command": {},
         "event": {
