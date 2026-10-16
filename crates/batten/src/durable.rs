@@ -423,9 +423,12 @@ fn sync_directory(directory: &Path) {
 mod tests {
     use super::*;
 
-    /// The crate's reaped scratch root, so no case leaves a directory in `/tmp`.
+    /// A directory under the crate's shared scratch root, which a later run reaps
+    /// once this process is gone, rather than one more loose `/tmp` entry per run.
     fn scratch(name: &str) -> PathBuf {
-        crate::scratch::scratch(&format!("durable-{name}"))
+        let dir = crate::scratch::scratch(&format!("durable-{name}"));
+        assert!(dir.is_dir(), "scratch");
+        dir
     }
 
     /// THE GLUE CASE (CLOUD-843, round-2 review): a fragment a killed writer left
