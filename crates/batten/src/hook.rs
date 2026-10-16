@@ -4380,6 +4380,7 @@ impl Policy {
     /// This holds for the write gate too, and deliberately: a write tool is
     /// classified through the same `[[verb]]` table a shell program is, so
     /// "which calls mutate" stays one declared list rather than two.
+    //MUTANT read-route-only-policy-empty|s@^            && !self.redirects.iter().any(\x7crow\x7c row.read.is_some())$@@|a_generic_read_of_a_memory_is_refused_and_names_the_tool_that_answers
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.shapes.is_empty()
@@ -4391,6 +4392,12 @@ impl Policy {
             // is the case the unit tests over `policy::deny` cannot make.
             && self.bundles.is_empty()
             && (self.verbs.is_empty() || self.protected.is_empty())
+            // The same class once more (CLOUD-2362): a `[[redirect]]` row that
+            // declares a `read` route refuses a generic read through
+            // `redirected_read`, which runs only past this short-circuit. A
+            // repository whose only policy is such a row was read as empty and
+            // its read gate silently refused nothing.
+            && !self.redirects.iter().any(|row| row.read.is_some())
     }
 
     /// This policy with every row whose declared hatch is in `set` removed
@@ -6319,23 +6326,25 @@ fn followed_cd(
 /// value) come before the start points and are skipped. The first token after
 /// them that begins with `-`, `(` or `!` opens the expression and ends the
 /// list.
-//MUTANT find-expression-read-as-target|s@^    &operands\[start\.\.end\]$@    \&operands[start..]@|a_find_expression_operand_is_never_a_target
+//MUTANT find-expression-read-as-target|s@^    &rest\[\.\.end\]$@    rest@|a_find_expression_operand_is_never_a_target
 fn find_start_points<'a>(operands: &'a [&'a str]) -> &'a [&'a str] {
-    let mut start = 0;
-    while let Some(token) = operands.get(start) {
-        match *token {
-            "-H" | "-L" | "-P" => start += 1,
-            "-D" => start += 2,
-            option if option.starts_with("-O") => start += 1,
+    let mut rest = operands;
+    loop {
+        rest = match rest {
+            ["-D", _, tail @ ..] => tail,
+            [option, tail @ ..]
+                if matches!(*option, "-H" | "-L" | "-P") || option.starts_with("-O") =>
+            {
+                tail
+            }
             _ => break,
-        }
+        };
     }
-    let start = start.min(operands.len());
-    let end = operands[start..]
+    let end = rest
         .iter()
         .position(|token| token.starts_with(['-', '(', '!']))
-        .map_or(operands.len(), |offset| start + offset);
-    &operands[start..end]
+        .unwrap_or(rest.len());
+    &rest[..end]
 }
 
 /// Does this `substitutes` entry select this invocation?

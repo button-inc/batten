@@ -81,7 +81,12 @@ fn parsed(outcome: &std::process::Output) -> Vec<serde_json::Value> {
 
 /// The one verdict document, or `None` when the hook said nothing verdict-shaped.
 fn verdict(payload: &str) -> Option<(String, String)> {
-    documents(payload).iter().find_map(|document| {
+    verdict_in(&documents(payload))
+}
+
+/// [`verdict`], over documents the caller already has.
+fn verdict_in(documents: &[serde_json::Value]) -> Option<(String, String)> {
+    documents.iter().find_map(|document| {
         let inner = document.get("hookSpecificOutput")?;
         Some((
             inner.get("permissionDecision")?.as_str()?.to_owned(),
@@ -745,39 +750,20 @@ reason = "a fixture substitution row"
 #[test]
 fn a_refused_call_is_never_preapproved() {
     let dir = common::scratch("preapprove-refused");
-    let home = common::scratch("preapprove-refused-home");
     common::write(&dir, "batten.toml", REFUSING_CONFIG);
     common::init_repo(&dir);
-    let mut invocation = common::batten();
-    invocation
-        .current_dir(&dir)
-        .state_home(&home)
-        .args(["adjudicate", "--harness", "claude-code"])
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
-    let mut child = invocation.spawn().expect("spawn batten adjudicate");
-    {
-        use std::io::Write as _;
-        child
-            .stdin
-            .take()
-            .expect("the child's stdin")
-            .write_all(shell("default", "grep foo docs/README.md").as_bytes())
-            .expect("write the envelope");
-    }
-    let outcome = child.wait_with_output().expect("run batten adjudicate");
-    let inner = stdout(&outcome)
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("the host reads JSON"))
-        .find_map(|document| document.get("hookSpecificOutput").cloned())
-        .unwrap_or_default();
-    assert_eq!(
-        inner["permissionDecision"], "deny",
-        "the refusal must outrank the grant: {inner}"
+    let outcome = common::stdin_run(
+        &mut common::batten(),
+        &dir,
+        &["adjudicate", "--harness", "claude-code"],
+        &shell("default", "grep foo README.md"),
     );
-    assert!(inner.to_string().contains("tool run loose"), "{inner}");
+    let (decision, reason) = verdict_in(&parsed(&outcome)).unwrap_or_default();
+    assert_eq!(
+        decision, "deny",
+        "the refusal must outrank the grant: {reason}"
+    );
+    assert!(reason.contains("tool run loose"), "{reason}");
 }
 
 /// A warn-severity module of the fixture's own, so the advice this case needs

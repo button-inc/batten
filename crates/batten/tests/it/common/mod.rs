@@ -1611,6 +1611,32 @@ pub(crate) fn without_session_handlers(config: &str) -> String {
     out
 }
 
+/// The substitution row this repository carried until CLOUD-2362 retired it,
+/// verbatim in everything the engine reads.
+///
+/// ONE COPY for every suite that still exercises the engine's `substitutes`
+/// family: three hand-typed copies had already drifted in their program list
+/// and their reason. The engine still offers the family to any consumer that
+/// declares it, and this is such a consumer's row.
+pub(crate) const RETIRED_SUBSTITUTION_ROW: &str = r#"
+[[rule]]
+id = "tool select other"
+kind = "pipeline"
+scope = "mediated_call"
+severity = "deny"
+substitutes = ["cat", "head", "tail", "sed:-n", "grep", "rg", "find", "ls", "wc"]
+reason = "Use the structured surface this session offers: a range of one file, a pattern across the tree, paths by glob, or what a name resolves to; `rules/scanning.md` picks between them. After a pipe these utilities are allowed."
+"#;
+
+/// A repository whose only rule is [`RETIRED_SUBSTITUTION_ROW`], named `name`.
+pub(crate) fn substitution_repo(name: &str) -> PathBuf {
+    Fixture::new(&format!("substitution-{name}"))
+        .config(&format!("version = 1\n{RETIRED_SUBSTITUTION_ROW}"))
+        .git()
+        .base_commit()
+        .build()
+}
+
 /// A home whose `.claude.json` declares a `serena` server, so the
 /// `claude-code-local` MCP source resolves it (CLOUD-2229): the memories row is
 /// refused only where its read route can be taken.
