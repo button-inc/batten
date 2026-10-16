@@ -6272,12 +6272,69 @@ fn first_stages<'a>(parsed: &'a [Segment], cwd: Option<&Path>) -> Vec<FirstStage
     stages
 }
 
-/// The argv words that hand an interpreter its program INLINE, or point it at a
-/// module or stdin — no script file follows (CLOUD-2304). One table for both
-/// readers: [`script_texts`] reads the program text after one, and
-/// [`script_operand`] stops at one, so the two cannot disagree about which form
-/// is inline.
-const INLINE_PROGRAM_FLAGS: &[&str] = &["-c", "-e", "-E", "-p", "--command", "--eval", "--print"];
+/// How one interpreter family spells its options, as far as finding the script
+/// operand needs (CLOUD-2304).
+///
+/// PER FAMILY, because one table cannot serve them: `-E` is an inline program
+/// to perl, an encoding to ruby and "ignore the environment" to python; `-p` is
+/// an inline program to node and a loop flag to perl and ruby; `-I` takes a
+/// directory everywhere but python, where it is isolated mode. Reading every
+/// family through one table admitted `python3 -E /tmp/x.py` and refused
+/// `perl -ne '/re/ …' file`, whose program text it took for a script path.
+struct Grammar {
+    /// Short options that make the program INLINE, or point it at a module or
+    /// stdin — no script file follows. Read inside a bundle too (`-ne`, `-Bc`).
+    inline: &'static str,
+    /// Long options that do the same.
+    inline_long: &'static [&'static str],
+    /// Short options whose value is the rest of the bundle or the next word.
+    valued: &'static str,
+    /// Long options whose value is the next word.
+    valued_long: &'static [&'static str],
+}
+
+/// The grammar `program` is read through: its family's, or a conservative one
+/// for an interpreter a consumer declared that no family describes.
+fn grammar(program: &str) -> Grammar {
+    match program {
+        python if python.starts_with("python") => Grammar {
+            inline: "cm",
+            inline_long: &[],
+            valued: "WX",
+            valued_long: &["--check-hash-based-pycs"],
+        },
+        "node" | "nodejs" => Grammar {
+            inline: "ep",
+            inline_long: &["--eval", "--print"],
+            valued: "rC",
+            valued_long: &[
+                "--require",
+                "--import",
+                "--loader",
+                "--conditions",
+                "--input-type",
+            ],
+        },
+        "perl" => Grammar {
+            inline: "eE",
+            inline_long: &[],
+            valued: "",
+            valued_long: &[],
+        },
+        "ruby" => Grammar {
+            inline: "e",
+            inline_long: &[],
+            valued: "rIEC",
+            valued_long: &["--encoding"],
+        },
+        _ => Grammar {
+            inline: "ce",
+            inline_long: &["--command", "--eval"],
+            valued: "",
+            valued_long: &[],
+        },
+    }
+}
 
 /// Does any first stage run a declared interpreter on a script FILE outside the
 /// repository? (CLOUD-2304)
@@ -6307,7 +6364,8 @@ fn interpreter_decision(
         if !interprets.iter().any(|entry| entry == program) {
             continue;
         }
-        let Some(operand) = script_operand(&stage.tokens[stage.program + 1..]) else {
+        let Some(operand) = script_operand(&grammar(program), &stage.tokens[stage.program + 1..])
+        else {
             continue;
         };
         let Some(resolved) = shell_resolved(operand, stage.cwd.as_deref()) else {
@@ -6332,22 +6390,42 @@ fn interpreter_decision(
     None
 }
 
-/// The script file an interpreter's argv names, or `None` when it runs an
-/// inline program, a module or stdin, or names nothing this can place.
-fn script_operand<'a>(arguments: &[&'a str]) -> Option<&'a str> {
-    let mut words = arguments.iter().copied();
+/// The script file an interpreter's argv names, read through its `grammar`, or
+/// `None` when it runs an inline program, a module or stdin, or names nothing
+/// this can place. Each word is NORMALISED as the program is: a grouped
+/// command's closing paren rides on its last word.
+fn script_operand<'a>(grammar: &Grammar, arguments: &[&'a str]) -> Option<&'a str> {
+    let mut words = arguments.iter().map(|word| program_token(word));
     while let Some(word) = words.next() {
-        match word {
-            inline if INLINE_PROGRAM_FLAGS.contains(&inline) => return None,
-            // A module or stdin: no script file either.
-            "-m" | "-" => return None,
-            // Flags whose value is the next word.
-            "-W" | "-X" | "-r" | "-I" | "--require" | "--import" | "--loader" => {
-                words.next();
+        if word == "--" {
+            return words.next().filter(|word| placeable(word));
+        }
+        if word == "-" || grammar.inline_long.contains(&word) {
+            return None;
+        }
+        if grammar.valued_long.contains(&word) {
+            words.next();
+            continue;
+        }
+        if word.starts_with("--") {
+            continue;
+        }
+        let Some(bundle) = word.strip_prefix('-') else {
+            return placeable(word).then_some(word);
+        };
+        // A short bundle, read left to right: an inline option ends the search,
+        // and a valued one takes the rest of the bundle or, at its end, the next
+        // word.
+        for (at, flag) in bundle.char_indices() {
+            if grammar.inline.contains(flag) {
+                return None;
             }
-            "--" => return words.next().filter(|word| placeable(word)),
-            flag if flag.starts_with('-') => {}
-            operand => return placeable(operand).then_some(operand),
+            if grammar.valued.contains(flag) {
+                if at + flag.len_utf8() == bundle.len() {
+                    words.next();
+                }
+                break;
+            }
         }
     }
     None
@@ -6362,9 +6440,12 @@ fn placeable(word: &str) -> bool {
         && !word.contains('<')
 }
 
-/// Whether `path` lies outside `root`, an existing directory.
+/// Whether `path` lies outside `root`, an existing directory. The root ITSELF
+/// is inside — `node .` runs the package's own entry — though `relative_to`
+/// answers `None` for its empty remainder.
 fn outside_repository(path: &Path, root: &Path) -> bool {
     relative_to(root, &path.display().to_string()).is_none()
+        && crate::git::canonical(path) != crate::git::canonical(root)
 }
 
 /// The directory a top-level `cd <dir>` moves the NEXT stage into, or `None`
@@ -8804,11 +8885,11 @@ fn protected_mutation(policy: &Policy, command: &str) -> Decision {
 }
 
 /// The script an interpreter runs from its argv or its stdin: the value after
-/// any [`INLINE_PROGRAM_FLAGS`] word, and every stdin text its segment binds.
+/// `-c`, `-e`, `--command` or `--eval`, and every stdin text its segment binds.
 fn script_texts(arguments: &[&str], stdin: &[String]) -> Vec<String> {
     let mut texts: Vec<String> = arguments
         .windows(2)
-        .filter(|pair| INLINE_PROGRAM_FLAGS.contains(&pair[0]))
+        .filter(|pair| matches!(pair[0], "-c" | "-e" | "-E" | "--command" | "--eval"))
         .map(|pair| pair[1].to_owned())
         .collect();
     texts.extend(stdin.iter().cloned());
@@ -14512,16 +14593,25 @@ deny contains "refused by themodule" if {
 
     /// CLOUD-2304: a script file outside the repository carries its writes past
     /// every edit guard, so the interpreter running it is refused, whichever way
-    /// the operand is spelled.
+    /// the operand is spelled. The name is the Ready block's; the inline forms
+    /// it lists stay with CLOUD-2231's scan, and "untracked" is containment.
     #[test]
     fn an_interpreter_running_an_inline_or_untracked_script_is_refused() {
         for command in [
             "python3 /tmp/x.py",
             "python3 -u /tmp/x.py --flag",
+            // A family's own no-value flags, which one shared table misread.
+            "python3 -E /tmp/x.py",
+            "python3 -I /tmp/x.py",
+            "python3 -W ignore /tmp/x.py",
+            "perl -p /tmp/x.pl",
+            "ruby -W /tmp/x.rb",
             "node /tmp/x.js",
+            "node --require ./hook.js /tmp/x.js",
             "perl ../outside.pl",
             "cd /tmp && ruby x.rb",
             "git status && python /tmp/x.py",
+            "(python3 /tmp/x.py)",
         ] {
             let decision = rooted(command);
             assert!(
@@ -14536,6 +14626,13 @@ deny contains "refused by themodule" if {
             );
             assert_eq!(refused.rule(), SCRIPT_ROW, "{command}");
         }
+        // The pointer is the operand, never its grouping paren.
+        let grouped = denial(rooted("(python3 /tmp/x.py)"));
+        let pointer = grouped.subjects_text();
+        assert!(
+            pointer.contains("/tmp/x.py") && !pointer.contains("x.py)"),
+            "{pointer}"
+        );
     }
 
     /// CLOUD-2304's other half: a script the repository holds is reviewed code,
@@ -14550,7 +14647,14 @@ deny contains "refused by themodule" if {
             "git log | python3 /tmp/x.py",
             "python3 -c 'print(1)'",
             "python3 -m json.tool",
+            "python3 -Bc 'print(1)'",
             "node -e 'console.log(1)'",
+            "node --print 1",
+            // A bundled inline program whose text starts like an absolute path.
+            "perl -ne '/TODO/ and print' tools/x.py",
+            "ruby -ne 'print' tools/x.py",
+            // The root itself: the package's own entry.
+            "node .",
             "python3 \"$SCRIPT\"",
             "cat /tmp/x.py",
         ] {
