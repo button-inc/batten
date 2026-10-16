@@ -391,15 +391,11 @@ original events were dropped) and run `mise run land` again.
   CAS. See §"Why the toolchain runs here" for the measurement and the credential
   helper. Interception applies on both routes, so fencing trades away nothing.
 - Confirming CI is **`mise run land`'s job** (AGENTS.md, "Workflow contract").
-  Between laps, `SHA=<pushed head> mise run checks-green` answers "is this
-  head green" (unset, it judges the local HEAD, which may not be what `land`
-  is waiting on). It reads the required roster, so a green `ci` job alone is
-  not green: `final`, the fan-in over the others, is. For a red run,
-  `mise exec -- gh run list --branch <branch>` names the workflow-run id, and
-  `mise exec -- gh run view <id> --log-failed` reads it (a check-run id is not
-  a run id). A superseded head reads as cancelled siblings under a failed
-  `final`, which `checks-green` reports as a dead end rather than red: it is
-  the old SHA dropped by CI's `cancel-in-progress` when a new head was pushed.
+  On demand, `SHA=<pushed head> mise run checks-green` (backgrounded, like every
+  `mise` call) judges that head over the declared roster `land` also reads.
+  Read its stdout verdict, not only its exit code. For a red run,
+  `mise exec -- gh run list --commit <sha>` names that head's workflow runs, and
+  `mise exec -- gh run view <id> --log-failed` reads one.
 - Never echo a credential. Check presence with `${VAR:+SET}` — never a bare
   `$VAR` or a `${VAR:-…}` that expands the value into the transcript.
 - **`${VAR:+SET}${VAR:-UNSET}` LEAKS THE VALUE, and it reads as safe.** Measured

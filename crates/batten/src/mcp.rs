@@ -2082,9 +2082,9 @@ const SPAWN_LEDGER: &str = "batten-mcp-spawns";
 // third, exec-rather-than-fork, is `exec::become_argv`'s and sits there. The
 // cases are `mcp spawn`'s compiled-binary tier, which `cargo test` selects by
 // name. Each row is judged under the `MUTANT-SUITE` line nearest above it
-// (CLOUD-2193), and that line is what re-sweeps a row when its suite changes,
-// so this tier is declared here (CLOUD-2347). `is_exec_failure`'s rows below
-// switch to its unit test's file; the declaration after them restores this one.
+// (CLOUD-2193), so both `mcp_spawn.rs` declarations in this file are needed:
+// without either, the rows under it are judged against a file that lacks
+// their cases.
 //MUTANT-SUITE crates/batten/tests/it/mcp_spawn.rs
 //MUTANT spawn-record-never-written|s@^    drop(crate::durable::append(&ledger, &line));$@    drop((\&ledger, \&line));@|a_launch_appends_one_record_naming_the_server_and_becomes_the_launch_line
 //MUTANT spawn-siblings-always-zero|s@now - \*stamp <= SPAWN_WINDOW@false@|a_launch_inside_the_window_counts_the_earlier_one_as_a_sibling
