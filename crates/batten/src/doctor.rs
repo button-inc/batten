@@ -1677,14 +1677,26 @@ pub fn diagnose(dir: &Path) -> Report {
     // names turns the same walk into a diagnosis a reader can fix, and they are
     // this consumer's own declared tokens rather than anything the check read
     // out of a file.
-    // REACHABLE MEANS REACHABLE THE WAY THE SPAWN REACHES IT, which is `PATH` OR
-    // the pin (CLOUD-1324). Nothing a toolchain manager provides is on bare
-    // `PATH` — nor should it be — so without the second arm every pinned program
-    // reads as missing and the whole check is noise.
+    // REACHABLE MEANS REACHABLE THE WAY THE SPAWN REACHES IT, which is the
+    // RUNNING IMAGE, `PATH`, OR the pin (CLOUD-1324, CLOUD-2386). Nothing a
+    // toolchain manager provides is on bare `PATH` — nor should it be — so
+    // without the pin arm every pinned program reads as missing and the whole
+    // check is noise.
+    //
+    // AND A ROW NAMING `batten` RESOLVES, BECAUSE THE SPAWN NEVER LOOKS IT UP.
+    // `spawn_resolving`'s rung -1 runs the running image for that name, so a
+    // `PATH` probe here would ask a question the spawn does not and fail a row
+    // the dispatch would have run — exactly what `handler_program_resolves`
+    // already refuses to do for the handler surface, and for the same reason:
+    // the doctor asking is itself that image.
     let unreachable: Vec<String> = rules
         .iter()
         .filter_map(Rule::program)
-        .filter(|program| !on_path(program) && !provided_by_pin(dir, program))
+        .filter(|program| {
+            *program != crate::surface::BINARY
+                && !on_path(program)
+                && !provided_by_pin(dir, program)
+        })
         .map(str::to_owned)
         .collect();
     let unreachable_names = unreachable.clone();
