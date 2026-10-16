@@ -76,10 +76,11 @@ const MARKER: &str = "the-crashing-build-spoke";
 ///
 /// `101` rather than an invented number because it is what a Rust panic
 /// actually exits with, which is the shape this defect was found in.
-fn crashing_build(dir: &Path, at: &Path, stamp: &str) {
-    std::fs::create_dir_all(at).unwrap();
+fn crashing_build(dir: &Path, stamp: &str) {
+    let at = dir.join("target").join("release");
+    std::fs::create_dir_all(&at).unwrap();
     common::write(
-        at,
+        &at,
         "batten",
         &format!(
             "#!/bin/sh\necho ran >> \"{}\"\necho \"{MARKER}\"\nexit 101\n",
@@ -87,7 +88,7 @@ fn crashing_build(dir: &Path, at: &Path, stamp: &str) {
         ),
     );
     make_executable(&at.join("batten"));
-    common::write(at, "batten.source", &format!("{stamp}\n"));
+    common::write(&at, "batten.source", &format!("{stamp}\n"));
 }
 
 /// A checkout build that ANSWERS, used where the case is about the path to it
@@ -167,12 +168,8 @@ fn run(binary: &Path, dir: &Path, args: &[&str], stdin: &str) -> Output {
     run_from(binary, dir, dir, args, stdin, &[])
 }
 
-fn out(output: &Output) -> String {
-    String::from_utf8_lossy(&output.stdout).into_owned()
-}
-
 fn text(output: &Output) -> String {
-    format!("{}{}", out(output), common::stderr(output))
+    format!("{}{}", common::stdout(output), common::stderr(output))
 }
 
 /// The adjudication verb, as a harness spells it.
@@ -189,7 +186,7 @@ fn a_crash_decided_nothing(output: &Output, dir: &Path, arm: &str) {
         text(output)
     );
     assert!(
-        !out(output).contains(MARKER),
+        !common::stdout(output).contains(MARKER),
         "{arm}: a crashed child said nothing the harness reads: {}",
         text(output)
     );
@@ -201,10 +198,16 @@ fn a_crash_decided_nothing(output: &Output, dir: &Path, arm: &str) {
     );
 }
 
-fn bash_envelope(session: &str, command: &str) -> String {
+/// A `PreToolUse` envelope, as a harness writes one. The session id is what the
+/// hook resolves the authority by, so every case's envelopes must agree on it.
+fn envelope(session: &str, tool: &str, input: &str) -> String {
     format!(
-        r#"{{"hook_event_name":"PreToolUse","session_id":"{session}","permission_mode":"default","tool_name":"Bash","tool_input":{{"command":"{command}"}}}}"#
+        r#"{{"hook_event_name":"PreToolUse","session_id":"{session}","permission_mode":"default","tool_name":"{tool}","tool_input":{input}}}"#
     )
+}
+
+fn bash_envelope(session: &str, command: &str) -> String {
+    envelope(session, "Bash", &format!(r#"{{"command":"{command}"}}"#))
 }
 
 /// A CRASHING BUILD NEVER BECOMES THE HOOK'S OWN ANSWER (CLOUD-2376).
@@ -228,7 +231,7 @@ fn a_crashing_checkout_build_never_fails_the_hook_open() {
     let installed = common::scratch_outside_tree("engine-2376", "crash-follow-installed");
     let binary = private_binary(&installed);
     pin_source(&dir, &"1".repeat(64));
-    crashing_build(&dir, &dir.join("target").join("release"), &"2".repeat(64));
+    crashing_build(&dir, &"2".repeat(64));
 
     let output = run(
         &binary,
@@ -245,16 +248,17 @@ fn a_crashing_checkout_build_never_fails_the_hook_open() {
     let installed = common::scratch_outside_tree("engine-2376", "crash-handoff-installed");
     let binary = private_binary(&installed);
     // The session records its authority from inside the repository first,
-    // unpinned, exactly as `a_hook_outside_the_checkout_hands_off_to_the_authoritys_build` does.
-    let first = run(
+    // unpinned, exactly as `a_hook_outside_the_checkout_hands_off_to_the_authoritys_build`
+    // does. Nothing is asserted of it: no crashing build exists yet, so an
+    // assertion that its marker is absent would be asserting its own premise.
+    run(
         &binary,
         &dir,
         &ADJUDICATE,
         &bash_envelope("crash-handoff", "ls"),
     );
-    assert!(!out(&first).contains(MARKER), "{}", text(&first));
     pin_source(&dir, &"1".repeat(64));
-    crashing_build(&dir, &dir.join("target").join("release"), &"2".repeat(64));
+    crashing_build(&dir, &"2".repeat(64));
 
     let output = run_from(
         &binary,
@@ -269,9 +273,13 @@ fn a_crashing_checkout_build_never_fails_the_hook_open() {
     // THE FLOOR STILL DECIDES, which is what makes dropping the crash safe
     // rather than merely quiet: a write to a path that is not the config is
     // refused, and a read proceeds.
-    let write = format!(
-        r#"{{"hook_event_name":"PreToolUse","session_id":"crash-handoff","permission_mode":"default","tool_name":"Write","tool_input":{{"file_path":"{}","content":"x"}}}}"#,
-        dir.join("src.txt").display()
+    let write = envelope(
+        "crash-handoff",
+        "Write",
+        &format!(
+            r#"{{"file_path":"{}","content":"x"}}"#,
+            dir.join("src.txt").display()
+        ),
     );
     let refused = run_from(&binary, &dir, &installed, &ADJUDICATE, &write, &[]);
     assert!(
@@ -279,9 +287,10 @@ fn a_crashing_checkout_build_never_fails_the_hook_open() {
         "the floor refuses a write it has no rules for: {}",
         text(&refused)
     );
-    let read = format!(
-        r#"{{"hook_event_name":"PreToolUse","session_id":"crash-handoff","permission_mode":"default","tool_name":"Read","tool_input":{{"file_path":"{}"}}}}"#,
-        dir.join("src.txt").display()
+    let read = envelope(
+        "crash-handoff",
+        "Read",
+        &format!(r#"{{"file_path":"{}"}}"#, dir.join("src.txt").display()),
     );
     let admitted = run_from(&binary, &dir, &installed, &ADJUDICATE, &read, &[]);
     assert!(
@@ -327,7 +336,7 @@ fn a_followed_exec_still_passes_its_childs_code_and_bytes_through() {
         text(&output)
     );
     assert!(
-        out(&output).contains('x'),
+        common::stdout(&output).contains('x'),
         "and its bytes do too: {}",
         text(&output)
     );
