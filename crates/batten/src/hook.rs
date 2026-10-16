@@ -2802,35 +2802,34 @@ fn relative_to(root: &Path, path: &str) -> Option<String> {
         return None;
     }
     let root = root.canonicalize().ok()?;
-    let resolved = candidate.canonicalize().ok().or_else(|| {
-        // The DEEPEST ancestor that canonicalizes resolves the most symlinks,
-        // which is the reading the prefix test below needs; the tail, `.` and
-        // `..` included (CLOUD-2390), is replayed onto it one component at a
-        // time. Only AFTER the canonical base, never over the whole path: a `..`
-        // past a symlink climbs the link's target. The component just past the
-        // base does not exist, so popping it lexically is right — but one AFTER
-        // that `..` can exist and be a link (`missing/../link/x`, which a `Write`
-        // that creates its parent directories really writes through), so each
-        // pushed component that now resolves is canonicalized before the next
-        // `..` climbs it.
-        candidate.ancestors().skip(1).find_map(|ancestor| {
-            let mut resolved = ancestor.canonicalize().ok()?;
-            for component in candidate.strip_prefix(ancestor).ok()?.components() {
-                match component {
-                    std::path::Component::CurDir => {}
-                    std::path::Component::ParentDir => {
-                        resolved.pop();
-                    }
-                    other => {
-                        resolved.push(other);
-                        if let Ok(real) = resolved.canonicalize() {
-                            resolved = real;
-                        }
+    // The DEEPEST ancestor that canonicalizes, the path itself first, resolves
+    // the most symlinks, which is the reading the prefix test below needs; the
+    // tail, `.` and `..` included (CLOUD-2390), is replayed onto it one
+    // component at a time. Only AFTER the canonical base, never over the whole
+    // path: a `..` past a symlink climbs the link's target. The component just
+    // past the base does not exist, so popping it lexically is right — but one
+    // AFTER that `..` can exist and be a link (`missing/../link/x`, which a
+    // `Write` that creates its parent directories really writes through), so
+    // each pushed component that now resolves is canonicalized before the next
+    // `..` climbs it. Every call here answers in one spelling, the verbatim one
+    // on Windows, so the prefix test compares like with like.
+    let resolved = candidate.ancestors().find_map(|ancestor| {
+        let mut walked = ancestor.canonicalize().ok()?;
+        for component in candidate.strip_prefix(ancestor).ok()?.components() {
+            match component {
+                std::path::Component::CurDir => {}
+                std::path::Component::ParentDir => {
+                    walked.pop();
+                }
+                other => {
+                    walked.push(other);
+                    if let Ok(real) = walked.canonicalize() {
+                        walked = real;
                     }
                 }
             }
-            Some(resolved)
-        })
+        }
+        Some(walked)
     })?;
     let relative = resolved.strip_prefix(&root).ok()?;
     // FORWARD SLASHES, NOT THE PLATFORM SEPARATOR (CLOUD-1141). Every reader of
