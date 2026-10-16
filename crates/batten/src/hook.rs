@@ -6221,20 +6221,10 @@ fn substitution_decision(
         {
             continue;
         }
-        // Operands only, WITHOUT their redirections: a `>` and the word it
-        // writes name a destination, never a target read instead of reaching for
-        // a tool, so `grep pat > out.txt` is stdin-fed and must allow. Each
-        // redirection is dropped where it stands rather than cutting the line
-        // there, so `find 2>/dev/null /tmp` still reads `/tmp` and `grep
-        // 2>/dev/null needle <path>` still reads the path.
-        //
-        // THE ORDER IS LOAD-BEARING. The redirection test reads the RAW token
-        // deliberately, because `>` and `<` are syntax `program_token` may strip
-        // — normalising first could keep a destination the call writes and
-        // refuse it. Only the path test, which asks whether the token names a
-        // repository path, sees the normalised form: that is where a trailing
-        // `)` would otherwise stop `(grep needle crates/batten/src/lib.rs)` from
-        // matching the path the row selected on.
+        // Operands only, redirections dropped (`without_redirections`). Only the
+        // path test sees `program_token`'s normalised form: that is where a
+        // trailing `)` would otherwise stop `(grep needle crates/batten/src/lib.rs)`
+        // from matching the path the row selected on.
         let words = without_redirections(operands);
         let candidates = if program == "find" {
             find_start_points(&words)
@@ -6341,7 +6331,7 @@ const IMPLICIT_FIND_START: &[&str] = &["./"];
 /// them that begins with `-`, `(` or `!` opens the expression and ends the
 /// list. With no start point at all, `find` searches `.`, so the answer is
 /// [`IMPLICIT_FIND_START`] rather than nothing. `operands` carry no redirection
-/// ([`without_redirections`]), or `find --version 2>&1` would read as a search.
+/// ([`without_redirections`]).
 //MUTANT find-expression-read-as-target|s@^    &rest\[\.\.end\]$@    rest@|a_find_expression_operand_is_never_a_target
 //MUTANT find-implicit-start-unread|s@^        return IMPLICIT_FIND_START;$@        return \&rest[..0];@|a_find_expression_operand_is_never_a_target
 //MUTANT find-informational-run-searched|s@^    if end == 0 && searches_cwd .$@    if end == 0 {@|a_find_expression_operand_is_never_a_target
@@ -6377,7 +6367,15 @@ fn find_start_points<'a>(operands: &'a [&'a str]) -> &'a [&'a str] {
 
 /// `operands` with every redirection dropped, and with it the word a bare
 /// operator (`>`, `2>`, `<`, `&>`) takes as its target (CLOUD-2362). A token
-/// carrying its own target (`>out.txt`, `2>&1`, `2>/dev/null`) is dropped alone.
+/// carrying its own target (`>out.txt`, `2>&1`) is dropped alone.
+///
+/// `command_words` appends a line's redirections after its words, so a cut at
+/// the first `>` or `<` would do — but an unquoted pattern carries those
+/// characters too, and `grep '-> Result' <path>` was cut before its path. Each
+/// token is judged where it stands instead. The test reads the RAW token:
+/// `program_token` may strip `>` and `<`, which would keep a destination the
+/// call writes. The parse knows the boundary and a string test re-derives it;
+/// carrying it on the line is the deeper fix, tracked on CLOUD-2362.
 //MUTANT redirection-target-kept|s@^            tokens.next\(\);$@@|the_three_allow_clauses_survive_the_per_line_walk
 fn without_redirections<'a>(operands: &[&'a str]) -> Vec<&'a str> {
     let mut words = Vec::with_capacity(operands.len());
