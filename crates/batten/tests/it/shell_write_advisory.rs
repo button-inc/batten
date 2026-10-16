@@ -248,7 +248,9 @@ fn an_absolute_dangling_link_lands_at_its_target() {
 
 /// And a dangling LOOP ends at `MAX_HOPS` rather than spinning: `loop-a` and
 /// `loop-b` read each other, so following links alone never terminates, and the
-/// answer that comes back is still a spelling inside the governed directory.
+/// answer that comes back is still a spelling inside the governed directory. The
+/// write enters through `entry`, whose own spelling is ungoverned, so the case
+/// fails unless the walk follows links before the bound stops it.
 #[test]
 fn a_dangling_link_loop_ends_at_the_hop_bound() {
     // Windows creates a link only with privilege, as `session_drain.rs` states.
@@ -260,7 +262,8 @@ fn a_dangling_link_loop_ends_at_the_hop_bound() {
     std::fs::create_dir_all(&tasks).expect("the governed directory is made");
     common::link_file("loop-b", tasks.join("loop-a"));
     common::link_file("loop-a", tasks.join("loop-b"));
-    assert_signals_at(&dir, "mise-tasks/loop-a");
+    common::link_file("mise-tasks/loop-a", dir.join("entry"));
+    assert_signals_at(&dir, "entry");
 }
 
 /// A bats suite is governed too.
