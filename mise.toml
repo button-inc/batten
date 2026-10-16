@@ -2563,13 +2563,29 @@ run = ["{{vars.batten}} engine pin"]
 # at a dead port. On a cold machine this is where the network failure surfaces,
 # under its own name, before anything is recorded.
 #
-# ONE ARGV, NO SHELL LOGIC. The URL is a third spelling of the hk pin, and
+# NO SHELL LOGIC. The URL is a third spelling of the hk pin, and
 # `policy/hk-pin-agreement.rego`'s arm D holds it equal to `[tools] hk` — so
 # bumping one without the others is refused as `tool pin other` rather than
 # silently fetching a package the binary did not ship against.
+#
+# THE CA SELECTION IS `hk-fix-selection`'s, VERBATIM, AND IS NOT OPTIONAL HERE.
+# `pkl` ships its own root bundle and ignores the system trust store, so in a
+# TLS-intercepting sandbox it cannot resolve the package at all — measured cold
+# on this container: a bare `download-package` fails the SSL handshake, and
+# `SSL_CERT_FILE`, `--http-no-proxy` and unsetting `HTTPS_PROXY` each leave it
+# failing. Only `--ca-certificates` works (`mem:github-access`). The flag
+# REPLACES pkl's roots, so it is passed only when a bundle NAMES A FILE (tera's
+# `is file`): a set-but-missing bundle handed to pkl fails the fetch, which is
+# the could-not-look-as-verdict this whole task exists to prevent. With neither
+# naming a file this stays the bare invocation, which is CI's case.
+#
+# It is the bare `pkl eval` in `batten.toml`'s `config-validator` row that
+# cannot carry this flag — the validator's argv is the consumer's declaration,
+# not a template — and it no longer needs to: once this task has run, that
+# evaluation reads a warm cache and makes no network call.
 [tasks.pkl-package]
 description = "Effect: fetch the hk config package `hk.pkl` amends, so the validator's own run reaches no network (CLOUD-2311)"
-run = "pkl download-package package://github.com/jdx/hk/releases/download/v1.56.1/hk@1.56.1"
+run = "mise exec pkl -- pkl download-package {% if env.BATTEN_CA_BUNDLE and env.BATTEN_CA_BUNDLE is file %}--ca-certificates {{env.BATTEN_CA_BUNDLE}} {% elif env.SSL_CERT_FILE and env.SSL_CERT_FILE is file %}--ca-certificates {{env.SSL_CERT_FILE}} {% endif %}package://github.com/jdx/hk/releases/download/v1.56.1/hk@1.56.1"
 
 [tasks.record-verdicts]
 description = "Effect: run each declared validator and record its exit code, then record the forge's answered verdicts for HEAD (CLOUD-1265)"
