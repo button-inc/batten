@@ -480,11 +480,25 @@ pub fn with_logs(
     // A CLOSING KEYWORD IN A LOG OUTRANKS BOTH, though — [`claimed_from`]
     // returns the closing set before it looks at the branch — so a competitor
     // whose commits close a different key than its branch names is judged under
-    // its branch's, and a real race on the closed key reads as no race. The
-    // skip is carried from the sequential fill this replaces, byte for byte in
-    // both directions, so this changes nothing about it; the fix is to fetch
-    // every competitor rather than the eligible subset, and this fan-out is
-    // what would make that affordable.
+    // its branch's.
+    //
+    // **THAT MISJUDGEMENT RUNS BOTH WAYS, AND THE WORSE WAY IS A FALSE
+    // REFUSAL.** A race on the key the commits close reads as no race — the half
+    // this used to record — but a branch claiming the key the COMPETITOR'S NAME
+    // carries is refused at `Violation` inside `verify` over a collision that
+    // does not exist, and `complete` is `true` in both cases, because an
+    // unfetched competitor is not an unanswered one. The arm in
+    // `run_claim_race` that judges before declining to judge rests on the
+    // subset property of UNANSWERED competitors, which is a different set.
+    //
+    // The skip is carried from the sequential fill this replaces, byte for byte
+    // in both directions, so this changes nothing about it. The exact fix is to
+    // decide eligibility on `closed(body)` alone rather than on all three cheap
+    // sources: where a body closes a key the log can only ADD to that set, so
+    // the skip under-reports and cannot invert. Its cost is the whole of the
+    // skip — the pulls it currently spares are spared by their BRANCH, not their
+    // body — so the fetch set becomes every open pull request, which is a
+    // latency decision for the row that owns it rather than for this one.
     //
     // EACH ENTRY CARRIES ITS DESTINATION, not its queue position. Two parallel
     // vectors — slots here, numbers there — would have to stay in step for the
