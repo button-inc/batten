@@ -2081,9 +2081,8 @@ const SPAWN_LEDGER: &str = "batten-mcp-spawns";
 // (`mise-tasks/serena-mcp.sh`, CLOUD-843) onto the Rust that now makes them. The
 // third, exec-rather-than-fork, is `exec::become_argv`'s and sits there. The
 // cases are `mcp spawn`'s compiled-binary tier, which `cargo test` selects by
-// name. Their suite is that tier, declared here, so a change to it re-sweeps
-// these rows (CLOUD-2347). `is_exec_failure`'s rows below switch to its unit
-// test's file and then restore this one.
+// name; each row is judged under the `MUTANT-SUITE` line nearest above it
+// (CLOUD-2193).
 //MUTANT-SUITE crates/batten/tests/it/mcp_spawn.rs
 //MUTANT spawn-record-never-written|s@^    drop(crate::durable::append(&ledger, &line));$@    drop((\&ledger, \&line));@|a_launch_appends_one_record_naming_the_server_and_becomes_the_launch_line
 //MUTANT spawn-siblings-always-zero|s@now - \*stamp <= SPAWN_WINDOW@false@|a_launch_inside_the_window_counts_the_earlier_one_as_a_sibling

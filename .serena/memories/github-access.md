@@ -391,11 +391,9 @@ original events were dropped) and run `mise run land` again.
   CAS. See §"Why the toolchain runs here" for the measurement and the credential
   helper. Interception applies on both routes, so fencing trades away nothing.
 - Confirming CI is **`mise run land`'s job** (AGENTS.md, "Workflow contract").
-  To read CI between laps, fetch it on demand:
-  `mise exec -- gh api repos/{o}/{r}/commits/<sha>/check-runs` for the head,
-  where the `final` aggregate is the authoritative all-green signal (a lone
-  `ci` job is not), and `mise exec -- gh run view <id> --log-failed` for a red
-  run, the id coming from the check run's `details_url`. A superseded run
+  Between laps, `SHA=<sha> mise run checks-green` answers "is this head
+  green" over the same required set and answered conclusions `land` reads, and
+  `mise exec -- gh run view <id> --log-failed` reads a red run. A superseded run
   shows `ci`/`cross` `cancelled` and `final` `failure` from CI's concurrency
   `cancel-in-progress`. That is not a real failure, only the old SHA dropped
   when a new head was pushed.
