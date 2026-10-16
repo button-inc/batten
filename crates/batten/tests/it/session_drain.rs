@@ -203,9 +203,9 @@ fn a_pointer_at_an_unwritten_store_is_zero_and_never_could_not_look() {
 /// path this host has never had must never read as "no work left", which is the
 /// false clean CLOUD-1376 exists to refuse.
 ///
-/// This is also the bound the fix does not close: on a machine where the store
-/// root has itself never existed, a genuinely empty session still reads `3`. That
-/// is narrower than refusing every session and it fails in the safe direction.
+/// It holds with no transcript present: that bound is closed by the session's
+/// own transcript where one exists (CLOUD-1820, the cases below), never by the
+/// parent test.
 ///
 /// Fails by: dropping the `parent().is_some_and(Path::is_dir)` conjunct, which
 /// turns every dangling pointer into a clean answer.
@@ -225,26 +225,41 @@ fn a_pointer_whose_parent_is_absent_too_stays_could_not_look() {
     );
 }
 
-/// A session transcript in the host's surveyed grammar, carrying `tool` calls.
-fn transcript(tools: &[&str]) -> String {
-    let mut lines = vec![String::from(
-        r#"{"type":"user","sessionId":"s-1","message":{"role":"user","content":"land the bundle"}}"#,
+/// Session `session`'s transcript in the host's surveyed grammar, carrying
+/// `tool` calls.
+fn transcript_of(session: &str, tools: &[&str]) -> String {
+    let mut lines = vec![format!(
+        r#"{{"type":"user","sessionId":"{session}","message":{{"role":"user","content":"land the bundle"}}}}"#
     )];
     for (n, tool) in tools.iter().enumerate() {
         lines.push(format!(
-            r#"{{"type":"assistant","sessionId":"s-1","message":{{"role":"assistant","content":[{{"type":"tool_use","id":"t{n}","name":"{tool}","input":{{}}}}]}}}}"#
+            r#"{{"type":"assistant","sessionId":"{session}","message":{{"role":"assistant","content":[{{"type":"tool_use","id":"t{n}","name":"{tool}","input":{{}}}}]}}}}"#
         ));
     }
     lines.join("\n") + "\n"
 }
 
-/// A repository with `body` as its session transcript and the tasks link parked
-/// at a store whose ROOT has never existed: the fresh web container (CLOUD-1820).
+/// Session `s-1`'s transcript, the session the fixture's link is parked for.
+fn transcript(tools: &[&str]) -> String {
+    transcript_of("s-1", tools)
+}
+
+/// A repository with `body` as its session transcript and the tasks link parked,
+/// as the hook parks it, at the template substituted with session `s-1`: a store
+/// whose ROOT has never existed, the fresh web container (CLOUD-1820).
 #[cfg(unix)]
 fn rootless(name: &str, body: &str, parent_present: bool) -> PathBuf {
     let dir = scratch(name, DECLARED);
-    common::write(&dir, ".claude/.transcript.jsonl", body);
     let root = dir.join("store-root");
+    common::write(
+        &dir,
+        "batten.toml",
+        &format!(
+            "version = 1\n\n[transcript]\npath = \".claude/.transcript.jsonl\"\nharness = \"claude-code\"\ntasks = \"{}/{{session}}\"\n",
+            root.display()
+        ),
+    );
+    common::write(&dir, ".claude/.transcript.jsonl", body);
     if parent_present {
         std::fs::create_dir_all(&root).unwrap();
     }
@@ -288,6 +303,37 @@ fn a_transcript_that_declared_a_task_never_reads_as_zero() {
         "transcript-task",
         &transcript(&["Bash", "TaskCreate"]),
         true,
+    );
+
+    let output = session(&dir, &[]);
+    assert_eq!(output.status.code(), Some(3), "got: {}", stdout(&output));
+}
+
+/// Another session's transcript is evidence about that session, not this store.
+///
+/// The two links are refreshed separately, so the transcript can lag the
+/// pointer. Fails by: dropping the session match (`transcript-zero-any-session`).
+#[cfg(unix)]
+#[test]
+fn another_sessions_transcript_is_not_evidence() {
+    let dir = rootless("transcript-other", &transcript_of("s-2", &["Bash"]), false);
+
+    let output = session(&dir, &[]);
+    assert_eq!(output.status.code(), Some(3), "got: {}", stdout(&output));
+}
+
+/// A store that EXISTS and will not list is could-not-look, whatever the
+/// transcript says: only an absent store is the transcript's to answer.
+///
+/// Fails by: dropping the target test (`transcript-zero-over-a-present-store`).
+#[cfg(unix)]
+#[test]
+fn an_unreadable_store_is_never_zero() {
+    let dir = rootless("transcript-unreadable", &transcript(&["Bash"]), true);
+    common::write(
+        &dir,
+        "store-root/s-1",
+        "a file where the store directory belongs\n",
     );
 
     let output = session(&dir, &[]);

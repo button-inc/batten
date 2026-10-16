@@ -2817,28 +2817,56 @@ enum TaskEvidence {
 /// through the host's task tools and the transcript records every tool call, so
 /// a parsed transcript with none is a measured "declared no work". An empty
 /// stream observed nothing and answers [`TaskEvidence::Unknown`].
+///
+/// **THE SAME SESSION AS THE POINTER.** The two links are refreshed separately
+/// and either can lag, so the template is substituted with the transcript's own
+/// `sessionId` and must reproduce `target`; a transcript of another session is
+/// evidence about that session, not this store.
+///
+/// **COMPLETE LINES ONLY.** `doctor session` runs while the host is appending,
+/// and a half-written last line would fail a strict parse; it is dropped, as the
+/// incremental reader drops it.
 //MUTANT-SUITE crates/batten/tests/it/session_drain.rs
 //MUTANT transcript-zero-ignores-task-calls|s@^    if called {$@    if false {@|a_transcript_that_declared_a_task_never_reads_as_zero
 //MUTANT transcript-zero-on-empty-stream|s@^    if stream.records.is_empty() {$@    if false {@|an_empty_transcript_is_not_evidence
+//MUTANT transcript-zero-any-session|s@^    if expected != target.to_string_lossy() {$@    if false {@|another_sessions_transcript_is_not_evidence
 fn transcript_evidence(
     dir: &Path,
     transcript: &crate::transcript::TranscriptConfig,
+    target: &Path,
 ) -> TaskEvidence {
-    let Some(harness) = transcript.harness else {
+    let (Some(harness), Some(path), Some(template)) = (
+        transcript.harness,
+        transcript.path.as_deref(),
+        transcript.tasks.as_deref(),
+    ) else {
         return TaskEvidence::Unknown;
     };
     let crate::hook::PlanTools::Surveyed(tools) = harness.capabilities().plan_tools else {
         return TaskEvidence::Unknown;
     };
+    let crate::hook::TranscriptShape::Surveyed(shape) = harness.transcript_shape() else {
+        return TaskEvidence::Unknown;
+    };
     if tools.is_empty() {
         return TaskEvidence::Unknown;
     }
-    let crate::transcript::Capability::Present(stream) =
-        crate::transcript::resolve(dir, transcript.path.as_deref(), Some(harness))
-    else {
+    let Ok(body) = std::fs::read_to_string(dir.join(path)) else {
+        return TaskEvidence::Unknown;
+    };
+    let complete = &body[..body.rfind('\n').map_or(0, |at| at + 1)];
+    let Ok(stream) = crate::transcript::parse(complete, path, shape) else {
         return TaskEvidence::Unknown;
     };
     if stream.records.is_empty() {
+        return TaskEvidence::Unknown;
+    }
+    let Some(session) = stream.session.as_deref() else {
+        return TaskEvidence::Unknown;
+    };
+    let expected =
+        crate::transcript::tasks_dir(template, session, std::env::var_os("HOME").as_deref());
+    if expected != target.to_string_lossy() {
         return TaskEvidence::Unknown;
     }
     let called = stream.records.iter().any(|record| {
@@ -2862,20 +2890,24 @@ fn transcript_evidence(
 ///
 /// The transcript decides instead, and it gates BOTH arms: a task call writes
 /// the store, so a store absent after one means the pointer does not reach it,
-/// whatever its parent shows. The link must be a parked symlink, so the pointer
-/// and the transcript come from the same `Stop`.
+/// whatever its parent shows. Only a parked link whose target is ABSENT reaches
+/// either arm: a target that exists and still will not list is could-not-look.
 //MUTANT-SUITE crates/batten/tests/it/session_drain.rs
 //MUTANT transcript-arm-dropped|s@^        TaskEvidence::NoTaskCall => true,$@        TaskEvidence::NoTaskCall => store_is_merely_unwritten(link),@|a_transcript_with_no_task_call_is_zero_without_a_store_root
 //MUTANT transcript-zero-without-a-transcript|s@^        TaskEvidence::Unknown => store_is_merely_unwritten(link),$@        TaskEvidence::Unknown => true,@|a_pointer_whose_parent_is_absent_too_stays_could_not_look
+//MUTANT transcript-zero-over-a-present-store|s@^    if target.exists() {$@    if false {@|an_unreadable_store_is_never_zero
 fn absent_store_is_zero(
     dir: &Path,
     transcript: &crate::transcript::TranscriptConfig,
     link: &Path,
 ) -> bool {
-    if std::fs::read_link(link).is_err() {
+    let Ok(target) = std::fs::read_link(link) else {
+        return false;
+    };
+    if target.exists() {
         return false;
     }
-    match transcript_evidence(dir, transcript) {
+    match transcript_evidence(dir, transcript, &target) {
         TaskEvidence::NoTaskCall => true,
         TaskEvidence::TaskCalled => false,
         TaskEvidence::Unknown => store_is_merely_unwritten(link),
@@ -2932,12 +2964,11 @@ pub fn diagnose_session(dir: &Path) -> SessionReport {
     // per-session leaf is missing. `transcript::tasks_link` already takes exactly
     // this much structure from the declared path (rule 1).
     //
-    // THE REMAINING MISS IS STATED AND FAILS SAFE. Where the store root has
-    // itself never existed — no session on this machine has ever written a task —
-    // the parent is absent too and the answer stays could-not-look. That is
-    // narrower than refusing every session, and it is the right direction: a
-    // template that does not describe the host must never read as zero, which is
-    // the false clean CLOUD-1376 exists to refuse.
+    // WHERE THE STORE ROOT HAS NEVER EXISTED the parent says nothing, and the
+    // session's own transcript decides instead (CLOUD-1820, `absent_store_is_zero`):
+    // no task call in it is a measured zero, and anything weaker stays
+    // could-not-look, so a template that does not describe the host never reads
+    // as the false clean CLOUD-1376 exists to refuse.
     let entries = match std::fs::read_dir(&link) {
         Ok(entries) => entries,
         Err(_) if absent_store_is_zero(dir, transcript, &link) => {
