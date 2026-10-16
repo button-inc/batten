@@ -18804,11 +18804,15 @@ fn destructive_call_facts(
 }
 
 /// The per-call memos one `run_hook` holds for its life (CLOUD-2315): one config
-/// load, and one evaluation per bundle per input. The on-disk parse cache is
-/// switched on earlier, in [`run`], because the `[forge]` prologue reads it
-/// before this function is reached.
-fn hook_call_memos() -> (HookLoadScope, policy::AnswerScope) {
-    (HookLoads::scope(), policy::answer_scope())
+/// load, one evaluation per bundle per input, and one open per repository
+/// (CLOUD-2433). The on-disk parse cache is switched on earlier, in [`run`],
+/// because the `[forge]` prologue reads it before this function is reached.
+fn hook_call_memos() -> (HookLoadScope, policy::AnswerScope, git::OpenScope) {
+    (
+        HookLoads::scope(),
+        policy::answer_scope(),
+        git::open_scope(),
+    )
 }
 
 //MUTANT advice-beside-the-grant|s@^    if !matches!(decision, hook::Decision::Preapproved(_)) \x7c\x7c advice.is_empty() {$@    if true {@|a_preapproval_carries_the_calls_advice_in_one_document

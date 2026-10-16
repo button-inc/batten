@@ -801,7 +801,11 @@ fn open_upwards(dir: &Path, ceilings: Vec<PathBuf>) -> Result<gix::Repository> {
     let read = read_by_open(&key.git_dir);
     let repo = gix::discover_opts(start, discovery(&ceilings), gix::open::Options::isolated())
         .map_err(|_| refused())?;
-    let _ = with_opens(|opens| opens.remember(key, &repo, read));
+    // Only the repository the key names: a `.git` made or removed between the
+    // two walks would otherwise file another repository's handle under it.
+    if repo.git_dir() == key.git_dir {
+        let _ = with_opens(|opens| opens.remember(key, &repo, read));
+    }
     Ok(repo)
 }
 
@@ -826,16 +830,23 @@ struct OpenKey {
     cwd: Option<PathBuf>,
 }
 
-/// This thread's opened repositories, one per [`OpenKey`] (CLOUD-2433).
+/// The repositories one hook call opened, one per [`OpenKey`] (CLOUD-2433).
+///
+/// **SCOPED TO ONE HOOK CALL, never the thread** ([`open_scope`]), as the
+/// crate's other hook memos are. A remembered handle is handed out as a clone,
+/// and a clone SHARES gix's index, packed-refs and shallow snapshots, which
+/// reload only when a file's mtime moves forward — so a long-lived process that
+/// writes refs or the index and reads them back in the same tick would be
+/// answered from the old snapshot (code review of CLOUD-2433). Within one hook
+/// call, which only reads, a shared handle is what a single open used
+/// throughout would be; outside one, every open is fresh, as before.
 ///
 /// An entry is believed only while every file the isolated open reads holds the
 /// bytes it held before the open — absence included. BYTES, not a stat stamp:
 /// the files are a few hundred bytes, so a read costs about what a `stat` does,
 /// and a byte comparison has no racy window — a stamp-checked entry could not
 /// be made for two seconds after a write, so whether a call hit depended on the
-/// clock (CLOUD-2433's verify, `shell_retirement_cost`). The config snapshot is
-/// the one thing an open freezes: refs, `HEAD`, the index and the object
-/// database are read per lookup or refreshed on a miss, remembered or not.
+/// clock (CLOUD-2433's verify, `shell_retirement_cost`).
 #[derive(Default)]
 struct Opens(BTreeMap<OpenKey, Opened>);
 
@@ -846,21 +857,37 @@ struct Opened {
 }
 
 thread_local! {
-    /// PER THREAD, not per process: this build's gix handle is not `Send` (no
-    /// `parallel` feature), and the hook reads on one thread, so one open is
-    /// what it pays. A hit hands out a clone, which shares the handle's caches.
-    static OPENS: std::cell::RefCell<Opens> = std::cell::RefCell::default();
+    /// Thread-local because this build's gix handle is not `Send` (no
+    /// `parallel` feature); `Some` only while an [`OpenScope`] is alive.
+    static OPENS: std::cell::RefCell<Option<Opens>> = const { std::cell::RefCell::new(None) };
 }
 
-/// `with` over this thread's [`Opens`], or `None` where it cannot be reached —
-/// during thread teardown, or re-entered — which is a miss.
+/// The guard [`open_scope`] returns: the memo dies with it.
+pub(crate) struct OpenScope;
+
+impl Drop for OpenScope {
+    fn drop(&mut self) {
+        let _ = OPENS.try_with(|cell| cell.replace(None));
+    }
+}
+
+/// Remember this thread's repository opens for the life of the returned guard
+/// (CLOUD-2433). `run_hook` holds the only one, beside its other per-call memos.
+//MUTANT open-scope-never-opens|s@^    let _ = OPENS.try_with(.cell. cell.replace(Some(Opens::default())));$@@|a_repository_read_twice_in_one_scope_is_opened_once
+//MUTANT open-never-remembered|s@^        let _ = with_opens(.opens. opens.remember(key, \&repo, read));$@@|a_repository_read_twice_in_one_scope_is_opened_once
+pub(crate) fn open_scope() -> OpenScope {
+    let _ = OPENS.try_with(|cell| cell.replace(Some(Opens::default())));
+    OpenScope
+}
+
+/// `with` over this scope's [`Opens`], or `None` outside a scope, during thread
+/// teardown, or re-entered — each a miss.
 fn with_opens<R>(with: impl FnOnce(&mut Opens) -> R) -> Option<R> {
     OPENS
-        .try_with(|opens| {
-            opens
-                .try_borrow_mut()
+        .try_with(|cell| {
+            cell.try_borrow_mut()
                 .ok()
-                .map(|mut opens| with(&mut opens))
+                .and_then(|mut opens| opens.as_mut().map(with))
         })
         .ok()
         .flatten()
@@ -6045,6 +6072,38 @@ mod tests {
         assert_ne!(text, edited, "the premise: the edit changes a byte");
         fs::write(&config, edited).expect("edit");
         assert!(opens.get(&key).is_none(), "an edited config is a miss");
+    }
+
+    /// The real path: within a hook call's scope, `open_upwards` remembers what
+    /// it opened, so the next read of the repository is served from the memo.
+    #[test]
+    fn a_repository_read_twice_in_one_scope_is_opened_once() {
+        let dir = crate::scratch::scratch("git-memo-scoped");
+        crate::gitwrite::init_on_main(&dir).expect("init");
+        let _scope = open_scope();
+        open_upwards(&dir, Vec::new()).expect("first read");
+        assert_eq!(
+            with_opens(|opens| opens.0.len()),
+            Some(1),
+            "the first read is remembered for the rest of the call"
+        );
+    }
+
+    /// Outside a scope nothing is remembered, so a long-lived process never
+    /// reads an index or packed-refs snapshot a shared handle held stale.
+    #[test]
+    fn outside_a_scope_no_open_is_remembered() {
+        let dir = crate::scratch::scratch("git-memo-unscoped");
+        crate::gitwrite::init_on_main(&dir).expect("init");
+        {
+            let _scope = open_scope();
+        }
+        open_upwards(&dir, Vec::new()).expect("read");
+        assert_eq!(
+            with_opens(|opens| opens.0.len()),
+            None,
+            "a dropped scope leaves no memo behind"
+        );
     }
 
     /// The fence still holds where it applies: a directory below a ceiling, with no
