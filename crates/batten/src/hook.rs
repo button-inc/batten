@@ -6235,7 +6235,13 @@ fn substitution_decision(
         // `(grep needle crates/batten/src/lib.rs)` from matching the path the row
         // selected on.
         let candidates = if program == "find" {
-            find_start_points(operands)
+            // find's grammar is read over its own words, never the
+            // redirections after them: `find --version 2>&1` is the flag alone.
+            let words = operands
+                .iter()
+                .position(|token| token.contains('>') || token.contains('<'))
+                .map_or(operands, |cut| &operands[..cut]);
+            find_start_points(words)
         } else {
             operands
         };
