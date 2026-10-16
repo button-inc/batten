@@ -6327,9 +6327,14 @@ impl Grammar {
     /// inline one (the program follows), or the first valued one (the rest of
     /// the bundle, or the next word, is its value). The one reading both
     /// [`script_operand`] and [`inline_values`] take.
+    ///
+    /// Only the bundle's leading LETTERS are options: `-W:no-deprecated` and
+    /// `-d:Trace` attach a value after punctuation, and a letter inside that
+    /// value is not a flag.
     fn decisive(&self, bundle: &str) -> Option<(usize, char)> {
         bundle
             .char_indices()
+            .take_while(|(_, flag)| flag.is_ascii_alphanumeric())
             .find(|(_, flag)| self.inline.contains(*flag) || self.valued.contains(*flag))
     }
 }
@@ -6407,7 +6412,7 @@ fn interpreter_decision(
     let root = root?;
     for stage in first_stages(parsed, cwd) {
         let program = program_name(stage.program());
-        if !interprets.iter().any(|entry| entry == program) {
+        if !interprets.iter().any(|entry| declares(entry, program)) {
             continue;
         }
         let Some(operand) = script_operand(&grammar(program), stage.operands()) else {
@@ -6445,6 +6450,29 @@ fn interpreter_decision(
     None
 }
 
+/// A long option split at its `=`: `--eval=code` is `("--eval", Some("code"))`.
+/// Any other word is itself with nothing attached.
+fn long_option(word: &str) -> (&str, Option<&str>) {
+    match word.split_once('=') {
+        Some((name, value)) if name.starts_with("--") => (name, Some(value)),
+        _ => (word, None),
+    }
+}
+
+/// Whether the declared `entry` names `program`: exactly, or as a versioned
+/// spelling of it (`python3` declares `python3.12`), since a row lists the
+/// interpreter and not every minor version the host installs.
+fn declares(entry: &str, program: &str) -> bool {
+    program.strip_prefix(entry).is_some_and(|version| {
+        version.is_empty()
+            || (version.starts_with(['.', '-'])
+                || version.starts_with(|c: char| c.is_ascii_digit()))
+                && version
+                    .chars()
+                    .all(|c| c.is_ascii_digit() || c == '.' || c == '-')
+    })
+}
+
 /// The values of every INLINE option in an interpreter's argv: the program
 /// text it runs, read through the same [`grammar`] [`script_operand`] stops at,
 /// so the protected-path scan reads exactly what the operand gate leaves to it
@@ -6453,8 +6481,12 @@ fn inline_values(grammar: &Grammar, arguments: &[&str]) -> Vec<String> {
     let mut values = Vec::new();
     let mut words = arguments.iter().copied();
     while let Some(word) = words.next() {
-        if grammar.inline_long.contains(&word) {
-            values.extend(words.next().map(str::to_owned));
+        let (name, attached) = long_option(word);
+        if grammar.inline_long.contains(&name) {
+            match attached {
+                Some(value) => values.push(value.to_owned()),
+                None => values.extend(words.next().map(str::to_owned)),
+            }
             continue;
         }
         let Some(bundle) = grammar.shorts(word) else {
@@ -6490,11 +6522,14 @@ fn script_operand<'a>(grammar: &Grammar, arguments: &[&'a str]) -> Option<&'a st
         if word == "--" {
             return words.next().filter(|word| placeable(word));
         }
-        if word == "-" || grammar.inline_long.contains(&word) {
+        let (name, attached) = long_option(word);
+        if word == "-" || grammar.inline_long.contains(&name) {
             return None;
         }
-        if grammar.valued_long.contains(&word) {
-            words.next();
+        if grammar.valued_long.contains(&name) {
+            if attached.is_none() {
+                words.next();
+            }
             continue;
         }
         if word.starts_with("--") {
@@ -14626,6 +14661,7 @@ deny contains "refused by themodule" if {
             // forms this scan reads, through the same grammar.
             "node -p 'require(\"fs\").writeFileSync(\".serena/memories/core.md\", \"\")'",
             "node -pe 'require(\"fs\").writeFileSync(\".serena/memories/core.md\", \"\")'",
+            "node --eval='require(\"fs\").writeFileSync(\".serena/memories/core.md\", \"\")'",
             "perl -ne 'open(F, \">>.serena/memories/core.md\")'",
         ] {
             let decision = guarded(command);
@@ -14702,6 +14738,12 @@ deny contains "refused by themodule" if {
             "python3 -W ignore /tmp/x.py",
             "perl -p /tmp/x.pl",
             "perl -MFile::Temp /tmp/x.pl",
+            // A value attached after punctuation holds no flags.
+            "ruby -W:no-deprecated /tmp/x.rb",
+            "perl -d:Trace /tmp/x.pl",
+            // A versioned spelling of a declared interpreter.
+            "python3.12 /tmp/x.py",
+            "/usr/bin/python3.11 /tmp/x.py",
             "ruby -W /tmp/x.rb",
             "node /tmp/x.js",
             "node --require ./hook.js /tmp/x.js",

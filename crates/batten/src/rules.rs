@@ -16566,6 +16566,25 @@ mod tests {
         }
     }
 
+    /// CLOUD-2304: `interprets` alone is a whole substitution family, and an
+    /// empty list is refused rather than loading as a row that recognises no
+    /// interpreter.
+    #[test]
+    fn an_interprets_row_loads_alone_and_an_empty_one_is_refused() {
+        let mut rule = blank("loose script", RuleKind::Pipeline);
+        rule.scope = RuleScope::MediatedCall;
+        rule.interprets = Some(vec!["python3".to_owned()]);
+        rule.reason = Some("edit with the host's tools".to_owned());
+        if let Err(err) = rule.validate() {
+            panic!("an interprets-only row must load: {err}");
+        }
+        rule.interprets = Some(Vec::new());
+        let err = rule
+            .validate()
+            .expect_err("an empty interprets list is refused");
+        assert!(err.to_string().contains("`interprets`"), "{err}");
+    }
+
     /// A loadable receipt row with the trigger under test.
     fn receipt_row(trigger: Option<ReceiptTrigger>) -> Rule {
         let mut rule = blank("r", RuleKind::Receipt);
