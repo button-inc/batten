@@ -130,7 +130,6 @@ pub mod preflight;
 pub mod preset;
 pub mod probe;
 pub mod probe_verdict;
-pub mod proc_stat;
 pub mod propose;
 pub mod provision;
 pub mod prune;
@@ -10853,6 +10852,22 @@ impl Drop for LandSingleton {
 /// a lock working.
 const LAND_TASK: &str = "land";
 
+/// Whether an abandoned record's group is the orphan its registrant left, and
+/// so one the reaper may signal (CLOUD-2366).
+///
+/// The record's pgid was taken when the task registered, and once that group
+/// emptied its number could be reused by an unrelated group;
+/// [`collect::group_predates`] carries why a member that began before the
+/// registrant's last stamp can only be the orphan's. The caller's OWN group is
+/// never the orphan however old: a second run in the shell that ran the first
+/// shares its group, and signalling it would end the reaper.
+fn reapable(entry: &task::Entry, own_group: &str) -> bool {
+    entry.pgid != own_group
+        && entry
+            .last_alive()
+            .is_some_and(|alive_at| collect::group_predates(&entry.pgid, alive_at))
+}
+
 /// Reap what a dead lap left running, then take the lock, then register.
 ///
 /// **In that order, and the order is the design.** Reaping first is what makes
@@ -10908,19 +10923,11 @@ fn run_land_singleton(
     let abandoned = std::env::var("BATTEN_TASK_PROGRAM_ROOT")
         .map(|root| task::abandoned(&git_dir, &root))
         .unwrap_or_default();
-    // ONLY A GROUP THAT PREDATES THE RECORD'S LAST STAMP IS SIGNALLED
-    // (CLOUD-2366). The record's pgid was taken when the task registered, and
-    // once that group emptied its number could be reused by an unrelated group —
-    // the reaper's own task shell included. `proc_stat::group_predates` carries why a
-    // member that began before the registrant's last stamp can only be the
-    // orphan's. ASKED AGAIN BEFORE EACH PASS: a group the TERM emptied may be
-    // reused before the KILL. A record that fails it is still unregistered
-    // below; it is only not signalled.
-    let orphan = |entry: &task::Entry| {
-        entry
-            .last_alive()
-            .is_some_and(|alive_at| proc_stat::group_predates(&entry.pgid, alive_at))
-    };
+    // ONLY A GROUP `reapable` PROVES THE ORPHAN IS SIGNALLED (CLOUD-2366), and
+    // it is ASKED AGAIN BEFORE EACH PASS: a group the TERM emptied may be reused
+    // before the KILL. A record that fails it is still unregistered below; it is
+    // only not signalled.
+    let own_group = task::process_group(&std::process::id().to_string());
     // TWO PASSES OVER THE WHOLE SET, NEVER A GRACE PERIOD PER GROUP. Signalling
     // every group before re-observing any of it is what gives each one its
     // chance to act on the TERM — the walk itself, rather than a delay standing
@@ -10929,7 +10936,7 @@ fn run_land_singleton(
     // so a survivor is not a leaf mid-exit.
     let mut reaped = 0_usize;
     for entry in &abandoned {
-        if orphan(entry) && exec::terminate_group(&entry.pgid) {
+        if reapable(entry, &own_group) && exec::terminate_group(&entry.pgid) {
             reaped += 1;
         }
     }
@@ -10938,7 +10945,7 @@ fn run_land_singleton(
     // dropped.
     let mut escalated = 0_usize;
     for entry in &abandoned {
-        if orphan(entry) && exec::escalate_group(&entry.pgid) {
+        if reapable(entry, &own_group) && exec::escalate_group(&entry.pgid) {
             escalated += 1;
         }
         // Unregistered only now, so a record survives long enough for both
@@ -27890,6 +27897,27 @@ pub fn land_ready_owes(
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// CLOUD-2366: this process's own group predates any later second wherever
+    /// `/proc` dates it, so it is the reapable case under another caller and
+    /// never under itself; a record with no stamp proves nothing.
+    #[test]
+    fn the_reapers_own_group_is_never_reapable() {
+        let own = task::process_group(&std::process::id().to_string());
+        let entry = task::Entry {
+            pgid: own.clone(),
+            started_at: u64::MAX.to_string(),
+            ..task::Entry::default()
+        };
+        assert!(!reapable(&entry, &own), "the caller's own group");
+        let linux = cfg!(any(target_os = "linux", target_os = "android"));
+        assert_eq!(reapable(&entry, "0"), linux);
+        let stampless = task::Entry {
+            pgid: own,
+            ..task::Entry::default()
+        };
+        assert!(!reapable(&stampless, "0"), "no stamp, no proof");
+    }
 
     /// CLOUD-2207: the line a reduced read leaves names every indexed field
     /// with its view lines and size, then the routes to read one.

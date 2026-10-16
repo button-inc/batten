@@ -226,7 +226,7 @@ fn write_entry(git_dir: &Path, entry: &Entry) {
 /// (`clippy.toml`), and one per registration would be a cost the shell paid only
 /// because it had no alternative.
 #[cfg(unix)]
-fn process_group(pid: &str) -> String {
+pub(crate) fn process_group(pid: &str) -> String {
     let Ok(raw) = pid.parse::<i32>() else {
         return pid.to_owned();
     };
@@ -237,7 +237,7 @@ fn process_group(pid: &str) -> String {
 
 /// Off unix there is no process group to read, so the pid is the whole truth.
 #[cfg(not(unix))]
-fn process_group(pid: &str) -> String {
+pub(crate) fn process_group(pid: &str) -> String {
     pid.to_owned()
 }
 
