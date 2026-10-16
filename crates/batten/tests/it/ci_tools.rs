@@ -542,23 +542,13 @@ fn operand_at<'a>(
     at: usize,
     valued: &'a [&'a str],
 ) -> impl Iterator<Item = (usize, &'a str)> {
-    let mut skip_next = false;
+    let mut operand = is_operand(valued);
     words
         .iter()
         .enumerate()
         .skip(at + 1)
         .map(|(index, word)| (index, word.as_str()))
-        .filter(move |(_, word)| {
-            if std::mem::take(&mut skip_next) {
-                return false;
-            }
-            if word.starts_with('-') || word.starts_with('+') {
-                skip_next = valued.contains(word);
-                return false;
-            }
-            // A redirection (`<<'EOF'`, `>log`) is no operand.
-            !word.starts_with(['<', '>'])
-        })
+        .filter(move |(_, word)| operand(word))
 }
 
 /// The tasks `mise run` names after `words[at]`: the first word that is not a
@@ -594,13 +584,21 @@ fn batten_facts(args: &[String]) -> (bool, Vec<String>) {
         | (Some("test"), Some("replay"))
         | (Some("land"), Some("lap")) => (true, Vec::new()),
         (Some("enforce" | "check"), _) => {
-            let only = args
-                .windows(2)
-                .find(|w| w[0] == "--rule")
-                .map(|w| w[1].as_str());
+            // `--rule` repeats, and is spelled `--rule X` or `--rule=X`.
+            let only: Vec<&str> = args
+                .iter()
+                .enumerate()
+                .filter_map(|(at, word)| {
+                    word.strip_prefix("--rule=").or_else(|| {
+                        (word == "--rule")
+                            .then(|| args.get(at + 1).map(String::as_str))
+                            .flatten()
+                    })
+                })
+                .collect();
             rule_checks()
                 .iter()
-                .filter(|(id, _)| only.is_none_or(|only| only == id))
+                .filter(|(id, _)| only.is_empty() || only.contains(&id.as_str()))
                 .fold((false, Vec::new()), |(direct, mut tasks), (_, facts)| {
                     tasks.extend(facts.1.iter().cloned());
                     (direct || facts.0, tasks)
@@ -635,12 +633,21 @@ fn rule_checks() -> &'static [(String, Facts)] {
             .into_iter()
             .flatten()
             .filter_map(|rule| {
-                let check = rule.get("check")?.as_str()?;
+                let check = match rule.get("check")? {
+                    toml::Value::String(line) => line.clone(),
+                    // An argv array is the same command, word for word.
+                    toml::Value::Array(argv) => argv
+                        .iter()
+                        .filter_map(toml::Value::as_str)
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                    _ => return None,
+                };
                 let id = rule
                     .get("id")
                     .and_then(toml::Value::as_str)
                     .unwrap_or_default();
-                Some((id.to_owned(), suite_facts(check)))
+                Some((id.to_owned(), suite_facts(&check)))
             })
             .collect()
     })
@@ -648,17 +655,26 @@ fn rule_checks() -> &'static [(String, Facts)] {
 
 /// [`operands`] over a whole argument list.
 fn operands_of<'a>(args: &'a [String], valued: &'a [&'a str]) -> impl Iterator<Item = &'a str> {
+    let mut operand = is_operand(valued);
+    args.iter()
+        .map(String::as_str)
+        .filter(move |word| operand(word))
+}
+
+/// The one rule for what is an operand: not a flag (`-x`, `+toolchain`), not a
+/// value-taking flag's value, not a redirection (`<<'EOF'`, `>log`).
+fn is_operand<'a>(valued: &'a [&'a str]) -> impl FnMut(&str) -> bool + 'a {
     let mut skip_next = false;
-    args.iter().map(String::as_str).filter(move |word| {
+    move |word| {
         if std::mem::take(&mut skip_next) {
             return false;
         }
-        if word.starts_with('-') {
-            skip_next = valued.contains(word);
+        if word.starts_with('-') || word.starts_with('+') {
+            skip_next = valued.contains(&word);
             return false;
         }
-        true
-    })
+        !word.starts_with(['<', '>'])
+    }
 }
 
 /// mise's own subcommands, which `mise <word>` runs instead of a task.
@@ -709,15 +725,25 @@ const MISE_COMMANDS: &[&str] = &[
     "use",
     "u",
     "version",
-    "watch",
-    "w",
     "where",
     // Split, so the census does not read a `mise which` here.
     concat!("whi", "ch"),
 ];
 
 /// Flags that take the next word as their value, before the subcommand.
-const MISE_VALUED: &[&str] = &["-C", "--cd", "-E", "--env", "-j", "--jobs"];
+const MISE_VALUED: &[&str] = &[
+    "-C",
+    "--cd",
+    "-E",
+    "--env",
+    "-j",
+    "--jobs",
+    "-o",
+    "--output",
+    "-t",
+    "--tool",
+    "--timeout",
+];
 const CARGO_VALUED: &[&str] = &["-C", "--config", "--manifest-path", "-Z", "--color"];
 const BATTEN_VALUED: &[&str] = &["--config-from", "--config-in", "--strictness", "--rule"];
 const SHELL_VALUED: &[&str] = &["-o", "-O", "+o", "+O", "--rcfile", "--init-file"];
@@ -766,8 +792,11 @@ fn command_facts(words: &[String], stdin: &[String]) -> (bool, Vec<String>) {
             "bash" | "sh" => {
                 // `-c`, alone or in a cluster (`-ec`), takes the next word as
                 // the script; with neither a script nor a file, stdin is it.
+                // Only among the shell's own flags: after its script operand,
+                // a `-c` is the script's argument.
                 let inline = words[at + 1..]
                     .iter()
+                    .take_while(|w| w.starts_with('-') || w.starts_with('+'))
                     .position(|w| w.starts_with('-') && !w.starts_with("--") && w.contains('c'))
                     .and_then(|flag| words.get(at + 2 + flag));
                 if let Some(script) = inline {
@@ -791,7 +820,8 @@ fn command_facts(words: &[String], stdin: &[String]) -> (bool, Vec<String>) {
             "mise" => {
                 let mut next = operand_at(words, at, MISE_VALUED);
                 let named: Vec<String> = match next.next() {
-                    Some((sub, "run" | "r")) => tasks_after(words, sub),
+                    // `mise watch <task>` runs it on every change.
+                    Some((sub, "run" | "r" | "watch" | "w")) => tasks_after(words, sub),
                     Some((_, "tasks")) => match next.next() {
                         Some((sub, "run" | "r")) => tasks_after(words, sub),
                         _ => Vec::new(),
@@ -815,16 +845,31 @@ fn command_facts(words: &[String], stdin: &[String]) -> (bool, Vec<String>) {
 /// target/distrib/batten-installer.sh`), which runs no case, whatever an
 /// earlier local build left at that path.
 fn script_facts(path: &str) -> (bool, Vec<String>) {
+    static TRACKED: std::sync::OnceLock<BTreeSet<String>> = std::sync::OnceLock::new();
+    thread_local! {
+        static READING: std::cell::RefCell<BTreeSet<String>> = const {
+            std::cell::RefCell::new(BTreeSet::new())
+        };
+    }
     let relative = path.trim_start_matches("./");
     let root = common::at_root(".");
-    if common::git_in(&root, &["ls-files", "--", relative])
-        .trim()
-        .is_empty()
+    let tracked = TRACKED.get_or_init(|| {
+        common::git_in(&root, &["ls-files"])
+            .lines()
+            .map(str::to_owned)
+            .collect()
+    });
+    // Untracked, outside the tree, a glob, or already being read (a script
+    // that runs itself): nothing this census can read further.
+    if !tracked.contains(relative)
+        || !READING.with(|reading| reading.borrow_mut().insert(relative.to_owned()))
     {
         return (false, Vec::new());
     }
-    std::fs::read_to_string(root.join(relative))
-        .map_or_else(|_| (false, Vec::new()), |text| suite_facts(&text))
+    let facts = std::fs::read_to_string(root.join(relative))
+        .map_or_else(|_| (false, Vec::new()), |text| suite_facts(&text));
+    READING.with(|reading| reading.borrow_mut().remove(relative));
+    facts
 }
 
 /// Whether a `run` text runs the suite, given the mise tasks known to.
@@ -1126,11 +1171,15 @@ fn every_suite_job_installs_the_pinned_tools_its_cases_require() {
     // install, so a bare `cargo` reaches the pin wherever the suite runs.
     let programs: BTreeSet<&str> = pinned
         .iter()
-        .filter_map(|tool| match tool.as_str() {
-            "sh" => Some("shfmt"),
-            "cargo-dist" => Some("dist"),
-            "rust" => None,
-            other => Some(other),
+        .flat_map(|tool| match tool.as_str() {
+            "sh" => vec!["shfmt"],
+            "cargo-dist" => vec!["dist"],
+            "cli" => vec!["gh"],
+            "nextest" => vec!["cargo-nextest"],
+            "node" => vec!["node", "npm", "npx"],
+            "serena-agent" => vec!["serena"],
+            "rust" => Vec::new(),
+            other => vec![other],
         })
         .collect();
     let around: Vec<String> = spawned
@@ -1260,6 +1309,8 @@ fn a_suite_step_is_a_suite_task_or_a_suite_command() {
         "mise run {% if env.X %}lint{% else %}ci{% endif %}",
         // `enforce` runs the rules' checks, among them a filtered nextest run.
         "mise run batten -- enforce",
+        "mise run --output prefix ci",
+        "mise watch ci",
     ] {
         assert!(runs_suite(run, &suite), "{run}");
     }
@@ -1274,6 +1325,8 @@ fn a_suite_step_is_a_suite_task_or_a_suite_command() {
         "echo it\\'s # then mise run ci",
         "mise run batten -- ci step --summary \"x; cargo test\" -- mise run lint",
         "batten --config-in /tmp/c lease guard",
+        "bash /tmp/setup.sh",
+        "sh \"$HOME/x.sh\"",
         "mise exec -- pkl --version",
         "mise exec -- cargo llvm-cov report --summary-only",
         "./install.sh",
