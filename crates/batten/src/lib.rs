@@ -7215,21 +7215,26 @@ fn run_claim_race(
         });
     // AN INCOMPLETE FILL IS THIS VERB'S OWN DEFECT, AND EXITS AS ONE — not
     // `clean`, which the arms above use. Every could-not-look they report is a
-    // statement about the FORGE: no remote, no slug, no answer, a listing that
-    // may be truncated. Each allows because a forge this cannot reach must never
-    // be the reason a branch fails `verify`. An unanswered competitor is a
-    // different animal: a failed read answers `""` and still counts, so this
-    // arm means a fetch worker unwound, which is a bug in Batten rather than
-    // anything about the forge or the branch.
+    // statement about the FORGE, and each allows because a forge this cannot
+    // reach must never be the reason a branch fails `verify`. This arm is not
+    // that; [`race::Filled::complete`] says what it is instead.
     //
-    // `Internal` keeps that loud WITHOUT claiming a race. The sequential fill
-    // this replaced let the panic kill the run, so a non-zero exit is what the
-    // behaviour already was; answering `clean` here would quietly convert a
-    // crash into a pass that is byte-indistinguishable from "no races" to
-    // anything reading the exit code — a false green on a completion gate, which
-    // is the one direction `race.rs` exists to refuse. `1`/`3` are the codes a
-    // Batten failure produces and `2` alone is the policy verdict
-    // (`rules/rust.md`), so this blocks nothing it should not.
+    // THE LOAD-BEARING HALF IS NON-ZERO RATHER THAN CLEAN. The sequential fill
+    // let such a panic kill the run, so a non-zero exit is what the behaviour
+    // already was; answering `clean` would quietly convert a crash into a pass
+    // byte-indistinguishable from "no races" to anything reading the code — a
+    // false green on a completion gate, the one direction `race.rs` exists to
+    // refuse.
+    //
+    // WHAT IT DOES NOT BUY IS A DISTINCT READING AT THE GATE, and an earlier
+    // version of this comment claimed it did. Through `claim mint twice` — the
+    // `command` row that is this verb's only wired caller — `rules::run_once`
+    // spawns the check with both streams `Stdio::null()` and turns ANY non-zero
+    // status into one deny, with no exit-code branch. So the line below is
+    // discarded unread there, `3` is indistinguishable from `2`, and the agent
+    // is handed that row's board-resolution remedy for a collision that did not
+    // happen. The defect is legible only on a direct `batten claim race`. Fixing
+    // the undiscriminated surface belongs to `rules::run_once`, not here.
     if !complete {
         writeln!(
             err,
