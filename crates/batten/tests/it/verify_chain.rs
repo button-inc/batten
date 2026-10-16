@@ -199,12 +199,55 @@ fn the_pkl_validator_runs_only_after_its_package_is_fetched() {
     // over `one`, so a second fetch step would fail here rather than pass on the
     // first match.
     step_at(&steps("pkl-package"), "pkl download-package");
-    for caller in ["hooks", "record-verdicts"] {
+    // THREE callers, not two. `hooks` and `record-verdicts` reach `record
+    // validate config-validator`; `fix-selection-check` evaluates
+    // `hk-fix-selection.pkl`, which imports `hk.pkl` and so resolves the same
+    // package — and `gate fix missing` reads ITS non-zero as a verdict about
+    // the bytes, which is the same defect one validator over.
+    for caller in ["hooks", "record-verdicts", "fix-selection-check"] {
         let depends = depends_of(caller);
         assert!(
             depends.iter().any(|entry| entry == "pkl-package"),
-            "[tasks.{caller}] runs the validator, so it depends on pkl-package: {depends:?}"
+            "[tasks.{caller}] resolves the hk package, so it depends on pkl-package: {depends:?}"
         );
+    }
+}
+
+/// CLOUD-2311: the CA bundle names `vars.pkl_ca` reads must come from the
+/// shell, never from `[env]`.
+///
+/// `[vars]` renders before `[env]` resolves, so a bundle name moved into `[env]`
+/// would be invisible to the var: the selection renders empty, pkl falls back to
+/// its own roots, and the handshake fails on a cold cache — the
+/// could-not-look-as-verdict the `is file` guard exists to prevent,
+/// reintroduced through the factoring. The invariant is stated beside the var;
+/// this is the gate that makes it more than a comment.
+#[test]
+fn the_ca_bundle_names_are_never_set_in_env() {
+    let manifest = common::at_root("mise.toml");
+    let parsed: toml::Value =
+        toml::from_str(&std::fs::read_to_string(&manifest).expect("read mise.toml"))
+            .expect("mise.toml is TOML");
+
+    let mut tables: Vec<(String, &toml::Value)> = Vec::new();
+    if let Some(env) = parsed.get("env") {
+        tables.push(("[env]".to_owned(), env));
+    }
+    if let Some(tasks) = parsed.get("tasks").and_then(toml::Value::as_table) {
+        for (name, task) in tasks {
+            if let Some(env) = task.get("env") {
+                tables.push((format!("[tasks.{name}.env]"), env));
+            }
+        }
+    }
+
+    for (where_, env) in tables {
+        for name in ["BATTEN_CA_BUNDLE", "SSL_CERT_FILE"] {
+            assert!(
+                env.get(name).is_none(),
+                "{where_} sets {name}, which `vars.pkl_ca` cannot see: vars render before env"
+            );
+        }
     }
 }
 
