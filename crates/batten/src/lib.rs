@@ -7191,7 +7191,8 @@ fn run_claim_race(
     // at "this branch claims no issue" over a branch that claims one.
     //
     // **AND THE DEGRADED SET IS NOT MERELY SHORT, IT CAN BE WRONG, WHICH IS WHY
-    // THIS ARM RETURNS BEFORE `races` WHERE THE FAN-OUT'S RETURNS AFTER.**
+    // THE SILENT-BODY ARM RETURNS BEFORE `races` WHERE THE FAN-OUT'S RETURNS
+    // AFTER.**
     // `claimed_from` reads source 1 out of `body + log` and returns it BEFORE it
     // consults branch and title, so losing the log does not subtract keys — it
     // can invert the precedence. A branch `cloud-100-x` whose log closes
@@ -7200,8 +7201,8 @@ fn run_claim_race(
     // risks a false REFUSAL on a key this branch does not claim. The competitor
     // arm's subset property, which is what lets it judge first, simply does not
     // hold on this side. Could-not-look, and nothing judged.
-    let log = match bot::forge::commit_messages(&slug, &mine_number) {
-        Ok(log) => log,
+    let (log, self_read) = match bot::forge::commit_messages(&slug, &mine_number) {
+        Ok(log) => (log, true),
         // A BODY THAT CLOSES A KEY ANSWERS WITHOUT THE LOG, so a failed read is
         // not always fatal and refusing to judge on all of them discards sound
         // refusals. More text only adds matches, so `closed(body)` is a SUBSET
@@ -7230,7 +7231,18 @@ fn run_claim_race(
                  no key — could not look, which is not a verdict",
             );
         }
-        Err(_) => String::new(),
+        // **AND THE SUBSET IS CARRIED, NOT ABSORBED.** Under-reporting is what
+        // makes a race found over the short set sound, and it is the same
+        // property that makes a race NOT found unproven — the competitor arm's
+        // discipline, which this side owes symmetrically. A key the commits
+        // close and the body does not — a `Refs:` trailer, or a second `Closes`
+        // in a commit message — is missing from `mine`, so a competitor holding
+        // that key is compared against nothing and the run would print "no open
+        // pull request races this branch's claim" over the collision this verb
+        // exists to refuse. `false` joins the fan-out's `complete` at the clean
+        // exit below, so a refusal still refuses at 2 and only the clean answer
+        // declines.
+        Err(_) => (String::new(), false),
     };
     let mine = race::claimed(&me.head_ref, &me.title, &log, &me.body, &grammar);
     if mine.is_empty() {
@@ -7303,11 +7315,22 @@ fn run_claim_race(
     // and `Success` is indistinguishable from "looked and found none". That is
     // the accepted cost of not failing a pre-flight on a forge hiccup; the
     // undiscriminated surface is `rules::run_once`'s to fix, not this arm's.
-    if races.is_empty() && !complete {
+    //
+    // THE SELF SIDE'S DEGRADED READ JOINS IT HERE, for the same reason and with
+    // the same shape: `self_read` is `false` where this branch's own log went
+    // unread behind a closing body, which leaves `mine` possibly short and "no
+    // race" therefore unproven. One arm, because the remedy is one — look
+    // again — and the message says which log it was.
+    if races.is_empty() && !(complete && self_read) {
+        let unread = if self_read {
+            "a competitor's commit log could not be read, so not every open pull request was judged"
+        } else {
+            "this branch's own commit log could not be read, so its claim is only what the body \
+             closes"
+        };
         return clean(
             out,
-            "claim race: a competitor's commit log could not be read, so not every open pull \
-             request was judged — could not look, which is not a verdict",
+            &format!("claim race: {unread} — could not look, which is not a verdict"),
         );
     }
     if races.is_empty() {

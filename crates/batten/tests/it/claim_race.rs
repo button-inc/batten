@@ -23,7 +23,9 @@
 
 use batten::race::{self, Keys, Pull};
 
-use crate::common::{Fixture, batten, run, stderr, stdout};
+use crate::common::{
+    Fixture, batten, declared_patterns, git_in, run, scratch, stderr, stdout, write,
+};
 
 /// A [`Keys`] double, for `race.rs`'s own reason: `ready::Grammar` resolves ~18
 /// declared patterns, and a tier that had to build one would assert the
@@ -566,5 +568,146 @@ fn a_read_that_failed_is_not_a_competitor_that_claims_nothing() {
         answered.complete,
         "an empty log is an ANSWER — a competitor whose commits name no key reads \
          exactly that way, and conflating the two is the defect this fixes"
+    );
+}
+
+/// The repository the verb derives from `origin`, deliberately not this one's:
+/// a slug taken from the environment rather than from the remote would read as
+/// a passing case.
+const REPO: &str = "acme/widgets";
+
+/// One `-i`-style response, in the shape `rest`'s fixture seam reads.
+fn answer(status: u16, body: &str) -> String {
+    format!("HTTP/2 {status}\ncontent-type: application/json\n\n{body}\n")
+}
+
+/// A checkout that IS pull request #7, and a forge answering the two endpoints
+/// `batten claim race` asks: the open listing, and #7's own commit log — whose
+/// status the caller chooses.
+///
+/// **The listing is the collision in miniature.** #7's body closes CLOUD-1 while
+/// its COMMITS close CLOUD-2, and #8 names CLOUD-2 in its title. So whether this
+/// branch races turns entirely on whether its own log was read. #8 resolves from
+/// the cheap sources and is therefore never fetched, which keeps the fan-out
+/// `complete` and makes this pair a statement about the self side alone.
+///
+/// The REAL grammar rather than [`Fake`], because the subject here is the verb:
+/// the compiled binary resolves `[[pattern]]` rows out of the config it finds,
+/// and a fixture spelling its own would assert about a grammar nothing uses.
+fn self_log(name: &str, commits: u16) -> (std::path::PathBuf, std::path::PathBuf) {
+    let root = scratch(name);
+    let repo = Fixture::at(root.join("repo"))
+        .config("version = 1\n")
+        .config_append(&declared_patterns())
+        .git()
+        .base_commit()
+        .build();
+    git_in(
+        &repo,
+        &[
+            "remote",
+            "add",
+            "origin",
+            &format!("https://github.com/{REPO}.git"),
+        ],
+    );
+    let head = git_in(&repo, &["rev-parse", "HEAD"]);
+    let forge = root.join("forge");
+    write(
+        &forge,
+        "routes",
+        "pulls/7/commits\tcommits.json\npulls?\tpulls.json\n",
+    );
+    write(
+        &forge,
+        "pulls.json",
+        &answer(
+            200,
+            &format!(
+                r#"[{{"number":7,"title":"fix: the work","body":"Closes CLOUD-1.",
+                   "head":{{"ref":"user/topic","sha":"{head}"}}}},
+                  {{"number":8,"title":"feat: somebody else on CLOUD-2","body":"",
+                   "head":{{"ref":"user/rival","sha":"beef"}}}}]"#
+            ),
+        ),
+    );
+    write(
+        &forge,
+        "commits.json",
+        &answer(
+            commits,
+            r#"[{"commit":{"message":"fix: more of it\n\nCloses CLOUD-2"}}]"#,
+        ),
+    );
+    (repo, forge)
+}
+
+/// Run `batten claim race` in `repo` against `forge`.
+fn raced(repo: &std::path::Path, forge: &std::path::Path) -> std::process::Output {
+    batten()
+        .args(["claim", "race"])
+        .current_dir(repo)
+        .env("BATTEN_REST_FIXTURE", forge)
+        .output()
+        .expect("the compiled binary runs")
+}
+
+/// The branch races on a key only its OWN commits close, which is the half that
+/// gives the next case something to lose.
+#[test]
+fn a_key_closed_by_this_branch_s_commits_alone_still_races() {
+    let (repo, forge) = self_log("claim-race-self-log-read", 200);
+    let output = raced(&repo, &forge);
+
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "CLOUD-2 is claimed twice and the log says so: {}",
+        stderr(&output)
+    );
+    assert!(
+        stderr(&output).contains("CLOUD-2") && stderr(&output).contains("#8"),
+        "the refusal names the key and the competitor: {}",
+        stderr(&output)
+    );
+}
+
+/// And a self log that could NOT be read is could-not-look, never "no race"
+/// (CLOUD-2382).
+///
+/// # The pair is the case
+///
+/// The arm one commit back judged every failed self read whose body closes a
+/// key, on the sound ground that `closed(body)` is a SUBSET of
+/// `closed(body + log)` — so a race found over the short set is a true refusal.
+/// What it did not carry is the other half of a subset: a race NOT found over it
+/// is unproven. Here the body closes CLOUD-1, the commits close CLOUD-2, and
+/// #8 holds CLOUD-2 — so with the log unread the collision is compared against
+/// nothing, and the verb printed *"no open pull request races this branch's
+/// claim"* at exit 0 over the pull request it exists to refuse.
+///
+/// The two cases differ in ONE byte of fixture — the status of the commits
+/// endpoint — so neither the listing, the grammar, nor the fan-out can account
+/// for the difference. The third assertion is the load-bearing one: an arm that
+/// allowed while saying nothing would pass the first two.
+#[test]
+fn a_self_log_that_could_not_be_read_is_not_a_clean_board() {
+    let (repo, forge) = self_log("claim-race-self-log-refused", 403);
+    let output = raced(&repo, &forge);
+
+    assert!(
+        output.status.success(),
+        "a forge this cannot reach is never the reason a branch fails `verify`: {}",
+        stderr(&output)
+    );
+    assert!(
+        stdout(&output).contains("could not look"),
+        "and it says which arm it took: {}",
+        stdout(&output)
+    );
+    assert!(
+        !stdout(&output).contains("no open pull request races"),
+        "a claim set short of the keys its own commits close cannot report a clean board: {}",
+        stdout(&output)
     );
 }
