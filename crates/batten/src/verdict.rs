@@ -1268,10 +1268,6 @@ pub enum Native {
     InitWouldOverwrite,
     /// A configured hook handler denied the call.
     HandlerDenied,
-    /// A background session-start row has not been launched yet (CLOUD-2398).
-    SetupLaunchMissing,
-    /// A declared local MCP server failed its `initialize` probe (CLOUD-2398).
-    ServerProbeFailed,
     /// A `secrets` rule needs a scanner and the config pins none.
     ScannerUnpinned,
     /// The pinned scanner is not in the provision cache.
@@ -1581,6 +1577,10 @@ pub enum Native {
     /// Free space fell below `[prune] min_free_mb`, so the disk collector
     /// removed cargo units before the call ran (CLOUD-2197).
     CargoRetireNow,
+    /// A background session-start row has not been launched yet (CLOUD-2398).
+    SetupLaunchMissing,
+    /// A declared local MCP server failed its `initialize` probe (CLOUD-2398).
+    ServerProbeFailed,
 }
 
 impl Native {
@@ -1593,8 +1593,6 @@ impl Native {
         Native::ProtectedMutation,
         Native::InitWouldOverwrite,
         Native::HandlerDenied,
-        Native::SetupLaunchMissing,
-        Native::ServerProbeFailed,
         Native::ScannerUnpinned,
         Native::ScannerUnprovisioned,
         Native::SpawningRuleOnReadVerb,
@@ -1677,6 +1675,8 @@ impl Native {
         Native::ClaimMintRefused,
         Native::OutputPointNow,
         Native::CargoRetireNow,
+        Native::SetupLaunchMissing,
+        Native::ServerProbeFailed,
     ];
 
     /// The classes the CONFIG LOADER raises, in `parse_ungated` order.
