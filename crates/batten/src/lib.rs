@@ -7187,11 +7187,19 @@ fn run_claim_race(
     // THE SELF SIDE IS HELD TO THE SAME READ AS THE COMPETITORS, and
     // `unwrap_or_default` here was the same defect one run earlier. If this read
     // fails, `mine` is computed without the `Refs:` trailer — the source that
-    // actually resolves claims here, per the comment below — and the verb either
-    // exits at "this branch claims no issue" or carries a claim set silently
-    // short, so a collision on a trailer-only key reads as no race. Neither is
-    // reachable from `Filled::complete`, which covers the fan-out downstream of
-    // this. Could-not-look, like every other arm.
+    // actually resolves claims here, per the comment below — and the verb exits
+    // at "this branch claims no issue" over a branch that claims one.
+    //
+    // **AND THE DEGRADED SET IS NOT MERELY SHORT, IT CAN BE WRONG, WHICH IS WHY
+    // THIS ARM RETURNS BEFORE `races` WHERE THE FAN-OUT'S RETURNS AFTER.**
+    // `claimed_from` reads source 1 out of `body + log` and returns it BEFORE it
+    // consults branch and title, so losing the log does not subtract keys — it
+    // can invert the precedence. A branch `cloud-100-x` whose log closes
+    // CLOUD-200 resolves to CLOUD-200 with the log and CLOUD-100 without it, so
+    // the partial answer is not a subset of the true one and judging against it
+    // risks a false REFUSAL on a key this branch does not claim. The competitor
+    // arm's subset property, which is what lets it judge first, simply does not
+    // hold on this side. Could-not-look, and nothing judged.
     let Ok(log) = bot::forge::commit_messages(&slug, &mine_number) else {
         return clean(
             out,
